@@ -4,6 +4,45 @@
 
 ## Current state
 
+**Returns portal P2 — refund payment method (2026-10-10, branch `feat/portal-refund-method-p2` off origin/main cb5f28d;
+NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_portal_refund_method_dc.html` (privacy line
+"Shared only with {store}. Deleted 30 days after your refund."). Decisions 1–5 approved as proposed.
+- **V160:** `tenants.portal_refund_methods text[]` (CHECK ⊆ bank_transfer|instapay|wallet|cash, default {});
+  `return_requests.refund_method` (CHECK), `refund_details_encrypted`, `refund_details_hint` (≤ 40),
+  `refund_details_purged_at`; CHECK encrypted ⇒ method; partial index on held details. MigrationSmokeTest 159,
+  NotTracedBackfillTest 104.
+- **Rules:** `portal.RefundDetails` is THE validation (Egyptian mobile 01[0125]+8 after +20/0020/spaces; IBAN EG+27 digits
+  mod-97 or account 6–20 digits; InstaPay name@instapay or mobile; wallet provider vodafone_cash|orange_cash|e_and_cash|we_pay
+  + mobile; names ≤ 100); `portal/refund.ts` mirrors it (same vectors in both test suites). Asked only when the tenant
+  offers ≥ 1 method AND (refund, or exchange with refund_fallback_ok); then required, re-checked against the tenant's
+  methods at submit; a method sent when not asked → 400. `/config` carries `refundMethods` only when non-empty.
+- **Encryption:** `EncryptionService.encrypt/decrypt(text, aad)` (existing methods untouched); `RefundDetailsCipher` is the
+  only user (AAD = tenant_id|request_id; request id generated in Java before the INSERT). One JSON blob; hint "••••" + last 4
+  (InstaPay address: last 4 of the name part). `RefundDetails.toString` carries no PII.
+- **Merchant:** detail payload = refundMethod / refundHint / refundDetailsAvailable / refundDetailsPurgedAt only;
+  `GET /return-requests/{id}/refund-details` (owner/manager, no-store; 404 none / other tenant, 410 purged). RefundForm
+  prefills the METHOD only (never details — return_refunds stays merchant-typed). Drawer block `CustomerRefundChoice`
+  (Show / Hide, copy buttons, removed states). Settings: "Refund methods" row under "Allow exchanges", sent only when
+  changed.
+- **Purge:** `RefundDetailsPurgeJob` daily 03:45 Cairo (tenant ids on the owner pool, like the booking sweep) →
+  `RefundDetailsPurgeService.purgeTenant` under runAs: blob nulled + purged_at 30 days after the request ENDED —
+  refunded (refunded_at), closed (closed_at) and, beyond the prompt, rejected (decided_at) and exchanged ('exchanged'
+  event) so no details are kept forever; method + hint stay.
+- **GDPR:** customers/redact + shop/redact null blob + hint, stamp purged_at (method kept); data-request export decrypts
+  the details while held (`refund_details`), never exports the ciphertext.
+- **Tests:** `RefundDetailsTest` (4), `PortalRefundMethodTest` (9: s1–s3, d1, d2, a1, p1, g1, l1 — revert-checked:
+  offered re-check, not-asked guard, AAD, 30-day window, redact), frontend `portalRefundMethod.test.tsx` (5) +
+  `refundMethodMerchant.test.tsx` (5) — revert-checked (fallback, method in body, send-only-when-changed, prefill).
+  vitest 875/875, tsc + build clean; headless EN/AR renders in the session scratchpad `p2-renders/`. No image / blob / data
+  URL is used by P2 (inline SVG + lucide icons), so the CSP contract test needs no new case.
+- **Before merge (2026-10-10):** `PortalRefundMethodTest.l1` extended to every path — submit (bank, InstaPay, wallet, and a
+  rejected bad IBAN), detail read, refund-details read, purge, customers/redact — asserting no IBAN / account / holder /
+  bank / InstaPay / wallet value in the captured log output; shown RED with a deliberate `log.info` of the submitted
+  details in PortalService, GREEN with it removed. Privacy policy 1.3 (Effective 10 October 2026, `PolicyVersions.PRIVACY`):
+  §3 returns-portal refund details (collected only for a refund / refund fallback when the store asks, encrypted, shared
+  only with the store, owners/managers only) and §7 deletion 30 days after the request is finished. **English only —
+  no Arabic privacy policy exists; an AR policy is a follow-up (decided 2026-10-10).** No re-consent prompt (as 1.2).
+
 **Analytics pre-launch fixes (2026-10-10, branch `analytics/prelaunch-fixes`, merged to main; NOT deployed; no
 migration). Group D + phone build approved after the fact.**
 - **Stock health count:** `/stock/summary` `piecesMovedFourPlus` leaves out voided pieces — the same rule as

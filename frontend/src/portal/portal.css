@@ -429,3 +429,33 @@ img.pp-thumb--muted { opacity: 0.6; }
 .pp-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .pp-row3 .pp-optional { display: block; }
 .pp-addresschoice { margin-bottom: 14px; }
+
+/* P2 — refund method step (design/Traced_portal_refund_method_dc.html) */
+.pp-methods { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.pp-method {
+  border: 1px solid #E3E6EB;
+  border-radius: 14px;
+  background: #FFFFFF;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pp-method--on { border: 2px solid var(--brand); padding: 13px; }
+.pp-method__head { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 44px; }
+.pp-method__radio { width: 20px; height: 20px; margin: 0; flex-shrink: 0; accent-color: var(--brand); }
+.pp-method__ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.pp-method__t { display: block; font-size: 16px; font-weight: var(--pp-w600, 600); }
+.pp-method__s { display: block; font-size: 13px; line-height: 1.45; color: #5B6270; }
+.pp-method__body { display: flex; flex-direction: column; gap: 14px; }
+.pp-hint { margin: 0; font-size: 13px; color: #5B6270; }
+.pp-note--privacy p { font-size: 13px; }

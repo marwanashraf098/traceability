@@ -159,5 +159,62 @@
     "stepReview": "{{store}} reviews your request.",
     "stepCourier": "One Bosta courier brings your new size and takes the old one in the same visit.",
     "stepReady": "Keep the old item ready, unworn and with its tags. Nothing to pay."
+  },
+  "rf": {
+    "title": "How should we refund you?",
+    "lead": "{{store}} sends your refund after your return arrives.",
+    "titleFallback": "If we can't exchange it",
+    "leadFallback": "If your new size is sold out, {{store}} refunds you instead. How should they send it?",
+    "legend": "Refund method",
+    "methods": {
+      "bank_transfer": {
+        "title": "Bank transfer",
+        "sub": "To your bank account"
+      },
+      "instapay": {
+        "title": "InstaPay",
+        "sub": "Instant, to your InstaPay address or phone"
+      },
+      "wallet": {
+        "title": "Mobile wallet",
+        "sub": "Vodafone Cash, Orange Cash, e& cash, WE Pay"
+      },
+      "cash": {
+        "title": "Cash",
+        "sub": "Nothing to fill in — the store will arrange it"
+      }
+    },
+    "holderName": "Account holder name",
+    "bankName": "Bank name",
+    "account": "IBAN or account number",
+    "accountHint": "An IBAN starts with EG, or enter your account number",
+    "instapay": "InstaPay address or phone number",
+    "instapayHint": "Like name@instapay or 010 1234 5678",
+    "provider": "Wallet",
+    "walletNumber": "Wallet number",
+    "providers": {
+      "vodafone_cash": "Vodafone Cash",
+      "orange_cash": "Orange Cash",
+      "e_and_cash": "e& cash",
+      "we_pay": "WE Pay"
+    },
+    "privacy": "Shared only with {{store}}. Deleted 30 days after your refund.",
+    "chooseMethod": "Choose how you'd like your refund",
+    "errors": {
+      "holderMissing": "Enter the account holder's name.",
+      "holderLong": "Use at most 100 characters.",
+      "bankMissing": "Enter the bank's name.",
+      "bankLong": "Use at most 100 characters.",
+      "accountMissing": "Enter your IBAN or account number.",
+      "ibanInvalid": "This IBAN doesn't look right. Check it, or enter your account number instead.",
+      "accountInvalid": "An account number is 6 to 20 digits.",
+      "instapayMissing": "Enter your InstaPay address or phone number.",
+      "instapayInvalid": "Enter an address like name@instapay, or an Egyptian mobile number.",
+      "providerMissing": "Choose your wallet.",
+      "walletMissing": "Enter your wallet number.",
+      "walletInvalid": "Enter an Egyptian mobile number, like 010 1234 5678."
+    },
+    "summary": "Refund to",
+    "summaryLabel": "Refund"
   }
 }

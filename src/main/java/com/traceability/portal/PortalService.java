@@ -89,7 +89,7 @@ public class PortalService {
             Map<String, Object> t = jdbc.queryForMap(
                 "SELECT name, customer_return_window_days, portal_auto_approve, " +
                 "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
-                "       portal_exchanges_enabled, portal_font, " +
+                "       portal_exchanges_enabled, portal_font, portal_refund_methods, " +
                 "       (SELECT a.sha256 FROM portal_assets a " +
                 "        WHERE a.id = tenants.portal_logo_asset_id AND a.tenant_id = tenants.id) AS logo_sha256 " +
                 "FROM tenants WHERE id = ?", tenantId);
@@ -109,6 +109,11 @@ public class PortalService {
             // stores without exchanges get exactly the pre-5b config).
             if (Boolean.TRUE.equals(t.get("portal_exchanges_enabled"))) body.put("exchangesEnabled", true);
             body.put("font", t.get("portal_font"));
+            // P2: present only when the store asks how to refund (absent, not [], otherwise —
+            // stores without refund methods get exactly the P1 config).
+            List<String> stored = PortalSettingsService.textArray(t.get("portal_refund_methods"));
+            List<String> refundMethods = RefundDetails.METHODS.stream().filter(stored::contains).toList();
+            if (!refundMethods.isEmpty()) body.put("refundMethods", refundMethods);
             return body;
         })));
     }
@@ -403,7 +408,15 @@ public class PortalService {
      */
     public record SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
                                 String mode, UUID replacementVariantId, Boolean refundFallbackOk,
-                                String addressSource, CustomAddress customAddress) {
+                                String addressSource, CustomAddress customAddress,
+                                String refundMethod, com.fasterxml.jackson.databind.JsonNode refundDetails) {
+        /** The V117 shape (no refund method — P2). */
+        public SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
+                             String mode, UUID replacementVariantId, Boolean refundFallbackOk,
+                             String addressSource, CustomAddress customAddress) {
+            this(lines, email, note, districtId, mode, replacementVariantId, refundFallbackOk, addressSource,
+                customAddress, null, null);
+        }
         public SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
                              String mode, UUID replacementVariantId, Boolean refundFallbackOk) {
             this(lines, email, note, districtId, mode, replacementVariantId, refundFallbackOk, null, null);
@@ -552,18 +565,25 @@ public class PortalService {
             }
         }
 
+        // P2: the refund method — asked (and then required) only when the store offers methods and
+        // this is a refund, or an exchange the customer is happy to have refunded instead. Re-checked
+        // against the tenant's methods NOW; anything sent when it wasn't asked is refused.
+        RefundDetails refund = refundChoice(tenantId, req, replacement != null);
+
         // Step 5b: exchanges always wait for the merchant — auto-approve applies to refunds only.
         boolean autoApprove = replacement == null && Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT portal_auto_approve FROM tenants WHERE id = ?", Boolean.class, tenantId));
         String reference = newReference(tenantId);
-        UUID requestId = jdbc.queryForObject(
-            "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
+        UUID requestId = UUID.randomUUID();   // P2: the refund details' associated data needs it first
+        jdbc.update(
+            "INSERT INTO return_requests (id, tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
             "    decided_at, pickup_city_id, pickup_city_name, pickup_district_id, pickup_district_name, " +
             "    pickup_district_name_ar, refund_fallback_ok, pickup_address_source, custom_first_line, " +
-            "    custom_second_line, custom_building_number, custom_floor, custom_apartment) " +
-            "VALUES (?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?, " +
-            "        ?, ?, ?, ?, ?, ?) RETURNING id",
-            UUID.class, tenantId, orderId, replacement == null ? "refund" : "exchange",
+            "    custom_second_line, custom_building_number, custom_floor, custom_apartment, refund_method, " +
+            "    refund_details_encrypted, refund_details_hint) " +
+            "VALUES (?, ?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?, " +
+            "        ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            requestId, tenantId, orderId, replacement == null ? "refund" : "exchange",
             autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
             district == null ? null : offer.get().cityId(),
             district == null ? null : offer.get().cityName(),
@@ -576,7 +596,11 @@ public class PortalService {
             custom == null ? null : custom.secondLine(),
             custom == null ? null : custom.buildingNumber(),
             custom == null ? null : custom.floor(),
-            custom == null ? null : custom.apartment());
+            custom == null ? null : custom.apartment(),
+            refund == null ? null : refund.method(),
+            refund == null || !refund.hasDetails() ? null
+                : cipher().encrypt(tenantId, requestId, refund.toJson(refundMapper)),
+            refund == null ? null : refund.hint());
         for (Object[] it : items) {
             jdbc.update(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
@@ -599,6 +623,29 @@ public class PortalService {
             body.put("_bookRequestId", requestId);   // internal — removed before the response
         }
         return body;
+    }
+
+    /**
+     * P2 — the customer's refund choice, or null when it isn't asked. Asked when the tenant offers
+     * at least one method AND (a refund, or an exchange with the refund fallback ticked); then the
+     * method must be one the tenant offers right now and its details must pass RefundDetails.
+     * A method sent when it isn't asked is refused (never store details we didn't ask for).
+     */
+    private RefundDetails refundChoice(UUID tenantId, SubmitRequest req, boolean exchange) {
+        List<String> offered = PortalSettingsService.textArray(jdbc.queryForObject(
+            "SELECT portal_refund_methods FROM tenants WHERE id = ?", Object.class, tenantId));
+        boolean asked = !offered.isEmpty() && (!exchange || Boolean.TRUE.equals(req.refundFallbackOk()));
+        if (!asked) {
+            if (req.refundMethod() != null || req.refundDetails() != null) throw new InvalidSubmission();
+            return null;
+        }
+        if (req.refundMethod() == null || !offered.contains(req.refundMethod())) throw new InvalidSubmission();
+        return RefundDetails.parse(req.refundMethod(), req.refundDetails()).orElseThrow(InvalidSubmission::new);
+    }
+
+    private RefundDetailsCipher cipher() {
+        if (refundCipher == null) throw new IllegalStateException("RefundDetailsCipher not wired");
+        return refundCipher;
     }
 
     /**
@@ -760,6 +807,15 @@ public class PortalService {
                 byte[].class, rows.get(0).get("id"), tenantId);
             return new PublicLogo(contentType, etag, bytes, current);
         })));
+    }
+
+    private RefundDetailsCipher refundCipher;
+    private final com.fasterxml.jackson.databind.ObjectMapper refundMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** P2: encrypts the customer's refund details (absent in tests that never enable refund methods). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRefundDetailsCipher(RefundDetailsCipher refundCipher) {
+        this.refundCipher = refundCipher;
     }
 
     /** Lazy v0 for the delivery-city lookup (2026-10-04) — forwarded to this service's PickupAreaService. */

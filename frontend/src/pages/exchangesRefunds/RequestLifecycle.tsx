@@ -192,7 +192,10 @@ export function RefundForm({
   const { toast } = useToast()
   const id = useId()
   const currency = suggestion?.currency ?? detail.currency ?? 'EGP'
-  const [method, setMethod] = useState<RefundMethod | null>(null)
+  // P2: prefilled from the customer's choice (cash / instapay / wallet / bank_transfer are all
+  // ledger methods) — the merchant can change it. Only the METHOD: details never enter the ledger.
+  const [method, setMethod] = useState<RefundMethod | null>(
+    REFUND_METHODS.includes(detail.refundMethod as RefundMethod) ? detail.refundMethod as RefundMethod : null)
   const [amount, setAmount] = useState('')
   const [amountTouched, setAmountTouched] = useState(false)
   const [date, setDate] = useState(todayIso())
@@ -270,6 +273,9 @@ export function RefundForm({
           ))}
         </div>
         {errors.method && <p className="text-small text-critical mt-1" role="alert">{errors.method}</p>}
+        {!errors.method && detail.refundMethod && method === detail.refundMethod && (
+          <p className="text-small text-muted mt-1" data-testid="refund-method-prefilled">{t('exchangesRefunds.requests.asked.prefilled')}</p>
+        )}
       </fieldset>
 
       <div className="grid grid-cols-2 gap-4">

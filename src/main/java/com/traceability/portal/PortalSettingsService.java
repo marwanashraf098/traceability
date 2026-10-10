@@ -44,12 +44,24 @@ public class PortalSettingsService {
      * pickupBooking (Step 4c-3): "Book Bosta pickups when I approve". Also not full-replace —
      * absent leaves it as it is. Switching it on needs an active Bosta account and a saved
      * return location.
+     * refundMethods (P2, V160): the portal's refund methods, a subset of RefundDetails.METHODS
+     * (stored in that order, no duplicates); [] = the portal never asks. Not full-replace — absent
+     * leaves them as they are.
      * font (P1, V159): one of {@link #FONTS}. Not full-replace — absent leaves it as it is. The
      * uploaded logo has its own endpoints (PortalLogoService) and is never touched here.
      */
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                            String logoUrl, String brandColor, String policyText, String returnLocationId,
-                           Boolean pickupBooking, Boolean exchangesEnabled, String font) {
+                           Boolean pickupBooking, Boolean exchangesEnabled, String font,
+                           List<String> refundMethods) {
+        /** The P1 shape (no refund methods — P2): leaves the saved methods as they are. */
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText, String returnLocationId,
+                        Boolean pickupBooking, Boolean exchangesEnabled, String font) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId,
+                pickupBooking, exchangesEnabled, font, null);
+        }
+
         /** The Step 5c shape (no font — P1): leaves the saved font as it is. */
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                         String logoUrl, String brandColor, String policyText, String returnLocationId,
@@ -111,7 +123,8 @@ public class PortalSettingsService {
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_slug, portal_enabled, portal_auto_approve, customer_return_window_days, " +
             "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
-            "       portal_exchanges_enabled, portal_exchanges_since, portal_font, portal_logo_asset_id, name " +
+            "       portal_exchanges_enabled, portal_exchanges_since, portal_font, portal_logo_asset_id, name, " +
+            "       portal_refund_methods " +
             "FROM tenants WHERE id = ?", tenantId);
         Map<String, Object> location = jdbc.queryForList(
             "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
@@ -141,6 +154,7 @@ public class PortalSettingsService {
         // GET /tenant/portal-settings/logo; "version" changes whenever the logo does.
         body.put("font", t.get("portal_font"));
         body.put("storeName", t.get("name"));   // the settings preview's wordmark
+        body.put("refundMethods", textArray(t.get("portal_refund_methods")));
         body.put("logo", uploadedLogo(tenantId, (UUID) t.get("portal_logo_asset_id"), (String) t.get("portal_slug")));
         return body;
     }
@@ -182,6 +196,13 @@ public class PortalSettingsService {
         if (brandColor != null && !COLOR.matcher(brandColor).matches()) {
             throw bad("brandColor", "BRAND_COLOR", "The brand colour must be a hex colour like #1A2B3C.");
         }
+        List<String> refundMethods = null;
+        if (s.refundMethods() != null) {
+            if (s.refundMethods().stream().anyMatch(m -> m == null || !RefundDetails.METHODS.contains(m))) {
+                throw bad("refundMethods", "REFUND_METHODS", "Choose refund methods from the list.");
+            }
+            refundMethods = RefundDetails.METHODS.stream().filter(s.refundMethods()::contains).toList();
+        }
         String font = blankToNull(s.font());
         if (font != null && !FONTS.contains(font)) {
             throw bad("font", "FONT", "Choose one of the listed fonts.");
@@ -209,6 +230,10 @@ public class PortalSettingsService {
                 returnLocation.id(), returnLocation.name(), tenantId);
         }
         if (font != null) jdbc.update("UPDATE tenants SET portal_font = ? WHERE id = ?", font, tenantId);
+        if (refundMethods != null) {
+            jdbc.update("UPDATE tenants SET portal_refund_methods = ?::text[] WHERE id = ?",
+                refundMethods.toArray(new String[0]), tenantId);
+        }
         if (s.pickupBooking() != null) setPickupBooking(tenantId, s.pickupBooking());
         if (s.exchangesEnabled() != null) setExchanges(tenantId, s.exchangesEnabled());
         return get();
@@ -219,6 +244,17 @@ public class PortalSettingsService {
      * /config's logoUrl; null while there's no slug); "version" is its ?v=. Not "logoUrl": that key
      * is the Shopify Files link the merchant edits.
      */
+    /** A text[] column as a List (empty for NULL). */
+    static List<String> textArray(Object v) {
+        if (v == null) return List.of();
+        try {
+            Object a = v instanceof java.sql.Array arr ? arr.getArray() : v;
+            return a instanceof String[] strings ? List.of(strings) : List.of();
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private Map<String, Object> uploadedLogo(UUID tenantId, UUID assetId, String slug) {
         if (assetId == null) return null;
         return jdbc.query(

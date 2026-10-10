@@ -129,6 +129,8 @@ public class ReturnRequestService {
             "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
             "       rr.refund_fallback_ok, rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, " +
             "       rr.custom_building_number, rr.custom_floor, rr.custom_apartment, rr.pii_redacted_at, " +
+            "       rr.refund_method, rr.refund_details_hint, rr.refund_details_purged_at, " +
+            "       (rr.refund_details_encrypted IS NOT NULL) AS refund_details_held, " +
             "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
             "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
             "       (SELECT s.delivered_at FROM shipments s " +
@@ -245,6 +247,12 @@ public class ReturnRequestService {
             }
         }
         d.put("refundFallbackOk", Boolean.TRUE.equals(r.get("refund_fallback_ok")));
+        // P2: the customer's refund choice — method + hint + flags ONLY; the details themselves come
+        // from GET /return-requests/{id}/refund-details.
+        d.put("refundMethod", r.get("refund_method"));
+        d.put("refundHint", r.get("refund_details_hint"));
+        d.put("refundDetailsAvailable", Boolean.TRUE.equals(r.get("refund_details_held")));
+        d.put("refundDetailsPurgedAt", r.get("refund_details_purged_at"));
         d.put("items", items);
         d.put("events", requests.events(tenantId, id));
         // Step 4d-2: the same history newest first (R2 timeline), refunds, parcel, unexpected items.
@@ -523,6 +531,45 @@ public class ReturnRequestService {
     private static final Set<String> AREA_EDITABLE = Set.of("requested", "approved");
     /** Step 4c-3: once a pickup is booked (or being booked) the area is Bosta's, not ours to change. */
     private static final Set<String> AREA_LOCKED_BOOKING = Set.of("pending", "booked", "needs_review");
+
+    private RefundDetailsCipher refundCipher;
+    private final com.fasterxml.jackson.databind.ObjectMapper refundMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRefundDetailsCipher(RefundDetailsCipher refundCipher) {
+        this.refundCipher = refundCipher;
+    }
+
+    /**
+     * P2 — GET /return-requests/{id}/refund-details: the customer's decrypted refund details.
+     * 404 when the request isn't this tenant's or holds none (cash, not asked); 410 once purged
+     * (30 days after the request ended, or a privacy request). Never logged.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> refundDetails(UUID id) {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT refund_method, refund_details_encrypted, refund_details_purged_at FROM return_requests " +
+            "WHERE id = ? AND tenant_id = ?", id, tenantId);
+        if (rows.isEmpty() || rows.get(0).get("refund_method") == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No refund details");
+        }
+        Map<String, Object> r = rows.get(0);
+        String encrypted = (String) r.get("refund_details_encrypted");
+        if (encrypted == null) {
+            throw new ResponseStatusException(r.get("refund_details_purged_at") != null ? HttpStatus.GONE : HttpStatus.NOT_FOUND,
+                "No refund details");
+        }
+        if (refundCipher == null) throw new IllegalStateException("RefundDetailsCipher not wired");
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> details = refundMapper.readValue(refundCipher.decrypt(tenantId, id, encrypted), LinkedHashMap.class);
+            return details;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Unreadable refund details");   // no content in the message
+        }
+    }
+
 
     /**
      * GET /return-requests/{id}/pickup-areas — the pickup-available districts of the request's

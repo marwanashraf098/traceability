@@ -109,7 +109,8 @@ class PortalBrandingTest {
     @Test
     void invalidBranding_400_withField_andChangesNothing() {
         put("/api/v1/tenant/portal-settings", settings("snouts-4e", LOGO, "#112233", "Keep"), ownerA);
-        Map<String, Object> before = jdbc.queryForMap("SELECT * FROM tenants WHERE id = ?", a);
+        // The whole row as jsonb: value equality for every column, arrays included (a PgArray has none).
+        String before = jdbc.queryForObject("SELECT to_jsonb(t)::text FROM tenants t WHERE id = ?", String.class, a);
 
         record Case(Map<String, Object> body, String field, String code) {}
         List<Case> cases = List.of(
@@ -123,7 +124,7 @@ class PortalBrandingTest {
             assertThat(r.getStatusCode()).as(c.code()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(r.getBody()).containsEntry("field", c.field()).containsEntry("error", c.code());
         }
-        assertThat(jdbc.queryForMap("SELECT * FROM tenants WHERE id = ?", a)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT to_jsonb(t)::text FROM tenants t WHERE id = ?", String.class, a)).isEqualTo(before);
 
         // The limit itself is fine.
         assertThat(put("/api/v1/tenant/portal-settings", settings("snouts-4e", LOGO, "#445566", "x".repeat(2000)), ownerA)
