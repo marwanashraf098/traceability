@@ -260,7 +260,9 @@ class PortalOrderLeakTest {
                                                               + "the reference resolver filters internal:%"));
 
         // ── Exchanges (dashboard) ──────────────────────────────────────────
-        reg("GET /api/v1/exchanges",                     list("", "?status=needs_mapping"));
+        reg("GET /api/v1/exchanges",                     skip("exchanges domain (P4b): lists every exchanges row, including one Traced "
+                                                              + "booked for a portal order's request — wanted, like any request's exchange; "
+                                                              + "it carries the matched order's id only (no order fields, no link)"));
         reg("GET /api/v1/exchanges/{id}",                list());
         reg("GET /api/v1/exchanges/{id}/candidates",     list());
         reg("GET /api/v1/exchanges/{id}/outbound-candidates", list());
@@ -436,7 +438,8 @@ class PortalOrderLeakTest {
         final String tag;          // "A" / "B"
         String ownerToken, workerToken, shop;
         UUID tenantId, ownerId, workerId, storeId, variantId, pieceId, locationId, controlOrder, controlDelivered;
-        UUID exchangeId, packSessionId, requestId;
+        UUID exchangeId, packSessionId, requestId, replacementOrder, ownExchange;
+        String replacementNumber;
         long unlinkedId;
         String pieceBarcode;
         final List<UUID> portalOrders = new ArrayList<>();
@@ -607,6 +610,23 @@ class PortalOrderLeakTest {
 
     // ── 5. non-endpoint work ──────────────────────────────────────────────────
 
+    /**
+     * P4b — a portal order with a booked return leg AND an exchange whose replacement exists: the
+     * portal order still never shows (b_ / c_ above, the rows are already there), while the
+     * internal:exchange: replacement IS listed wherever a normal exchange replacement is — the
+     * Orders list and the Pick queue.
+     */
+    @Test
+    void i_exchangeReplacementOfAPortalOrder_isListedLikeAnyExchange() {
+        for (String ep : List.of("GET /api/v1/orders", "GET /api/v1/fulfill/queue")) {
+            String body = Objects.toString(call(ep, "", a, "owner", null).getBody(), "");
+            assertThat(body).as(ep + " lists the replacement").contains(a.replacementNumber);
+            assertThat(a.sentinels()).as(ep + " never the portal original").noneMatch(body::contains);
+        }
+        String orders = Objects.toString(call("GET /api/v1/orders", "?q=" + a.replacementNumber, a, "owner", null).getBody(), "");
+        assertThat(orders).as("flagged as an exchange, like any replacement").contains("\"isExchange\":true");
+    }
+
     /** Detector types that may legitimately name a portal order (MUST_INCLUDE in Guard 1). */
     static final Set<String> RETURN_SIDE_TYPES = Set.of(
         "request_item_to_receive", "return_to_receive", "pickup_booking_problem", "return_link_ambiguous",
@@ -681,8 +701,8 @@ class PortalOrderLeakTest {
 
         Map<UUID, VariantStockService.VariantStock> stock = TenantContext.runAs(a.tenantId, () -> variantStock.computeAll());
         assertThat(variantStock.forVariant(stock, a.variantId).committed())
-            .as("committed = the normal order's 1 unit only (the portal order's 2 units must not count)")
-            .isEqualTo(1);
+            .as("committed = the normal order's 1 unit + the exchange replacement's 1 (the portal order's 2 units must not count)")
+            .isEqualTo(2);
     }
 
     // ── seeding ───────────────────────────────────────────────────────────────
@@ -756,6 +776,23 @@ class PortalOrderLeakTest {
         Matcher m = Pattern.compile("\"(?:id|sessionId)\"\\s*:\\s*\"([0-9a-f-]{36})\"").matcher(ps.getBody());
         assertThat(m.find()).as("pack session id in " + ps.getBody()).isTrue();
         t.packSessionId = UUID.fromString(m.group(1));
+
+        // P4b: the replacement order of an exchange Traced will book for a portal order — a NORMAL
+        // internal:exchange: order with its forward leg (pickable), and its exchanges row. Seeded
+        // before the baseline (the replacement is merchant data, listed like any exchange); seedPortal
+        // links the row to the portal order's request afterwards.
+        String tn = "5556" + ("A".equals(t.tag) ? "1" : "2") + "00009";
+        t.replacementNumber = "EXC-" + tn;
+        t.replacementOrder = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, placed_at, raw) " +
+            "VALUES (?, ?, ?, ?, 'new', now(), '{}'::jsonb) RETURNING id",
+            UUID.class, t.tenantId, t.storeId, "internal:exchange:" + tn, t.replacementNumber);
+        item(t, t.replacementOrder, 1);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, 'created'::shipment_internal_state, 'forward')", t.tenantId, t.replacementOrder, tn);
+        t.ownExchange = jdbc.queryForObject("INSERT INTO exchanges (tenant_id, tracking_number, status, raw, outbound_order_id, " +
+            "    outbound_variant_id, inbound_variant_id) VALUES (?, ?, 'mapped', '{}'::jsonb, ?, ?, ?) RETURNING id",
+            UUID.class, t.tenantId, tn, t.replacementOrder, t.variantId, t.variantId);
     }
 
     /**
@@ -779,6 +816,13 @@ class PortalOrderLeakTest {
         UUID oi = jdbc.queryForObject("SELECT id FROM order_items WHERE order_id = ?", UUID.class, p1);
         jdbc.update("INSERT INTO return_request_items (tenant_id, request_id, order_item_id, unit_no, variant_id, reason_code) " +
             "VALUES (?, ?, ?, 1, ?, 'wrong_size')", t.tenantId, t.requestId, oi, t.variantId);
+        // 1b (P4b): an exchange request on the same portal order, booked (type 30) — its exchanges row
+        //     now names the portal order as the matched original and the request as its owner.
+        UUID exReq = jdbc.queryForObject("INSERT INTO return_requests (tenant_id, order_id, type, status, reference, " +
+            "    booking_status, bosta_tracking_number) VALUES (?, ?, 'exchange', 'pickup_booked', ?, 'booked', ?) RETURNING id",
+            UUID.class, t.tenantId, p1, "RR-LEAKX" + t.tag, "5556" + ("A".equals(t.tag) ? "1" : "2") + "00009");
+        jdbc.update("UPDATE exchanges SET return_request_id = ?, matched_order_id = ?, match_method = 'reference', " +
+            "    matched_at = now(), status = 'matched' WHERE id = ?", exReq, p1, t.ownExchange);
         // 2: held as blocked + Shopify edit conflict.
         UUID p2 = portal(t, 2, "new", false, true, "Blocked customer", raw);
         item(t, p2, 1);
