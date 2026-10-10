@@ -52,7 +52,9 @@ public class RefundSuggestionService {
     public Map<String, Object> suggest(UUID requestId) {
         UUID tenantId = TenantContext.require();
         Map<String, Object> rr = jdbc.queryForList(
-            "SELECT rr.id, rr.type, o.id AS order_id, o.external_id, o.store_id, o.raw::text AS raw, s.shop_domain, " +
+            // P4b: a portal pre-connect order's Shopify order is its shopify_order_gid (external_id is internal:portal:…).
+            "SELECT rr.id, rr.type, o.id AS order_id, COALESCE(o.shopify_order_gid, o.external_id) AS external_id, " +
+            "       o.store_id, o.raw::text AS raw, s.shop_domain, " +
             "       s.status::text AS store_status " +
             "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN stores s ON s.id = o.store_id AND s.tenant_id = o.tenant_id " +

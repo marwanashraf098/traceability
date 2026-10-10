@@ -1382,6 +1382,7 @@
         "actionFailed": "تعذّر الحفظ. حاول مرة أخرى.",
         "loadError": "تعذّر تحميل هذا الطلب",
         "changeArea": "تغيير المنطقة",
+        "orderedBeforeTraced": "تم الطلب قبل Traced",
         "areaLabel": "منطقة الاستلام",
         "areaPlaceholder": "اختر منطقة",
         "areaSave": "حفظ المنطقة",

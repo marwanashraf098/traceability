@@ -99,6 +99,12 @@ public class PickupAreaService {
 
     /** The order's delivery city and its pickup-available districts; empty when unknown or none. */
     public Optional<CityAreas> forOrder(UUID tenantId, UUID orderId) {
+        // P4b: a portal pre-connect order (V163) has no forward leg — the city / district are the
+        // original Bosta delivery's, stored in portal_delivery (same dropOffAddress shape).
+        List<Map<String, Object>> portal = portalDropOff(tenantId, orderId);
+        if (!portal.isEmpty()) {
+            return forCity((String) portal.get(0).get("city_id"), (String) portal.get(0).get("district_id"));
+        }
         List<Map<String, Object>> leg = forwardLeg(tenantId, orderId);
         if (leg.isEmpty()) return Optional.empty();
         // A v2 search copy without the city (2026-10-04): fetch Bosta's v0 delivery once, then read again.
@@ -108,6 +114,15 @@ public class PickupAreaService {
             leg = forwardLeg(tenantId, orderId);
         }
         return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
+    }
+
+    private List<Map<String, Object>> portalDropOff(UUID tenantId, UUID orderId) {
+        return jdbc.queryForList(
+            "SELECT o.portal_delivery->'dropOffAddress'->'city'->>'_id' AS city_id, " +
+            "       COALESCE(o.portal_delivery->'dropOffAddress'->'district'->>'_id', " +
+            "                o.portal_delivery->'dropOffAddress'->>'districtId') AS district_id " +
+            "FROM orders o WHERE o.tenant_id = ? AND o.id = ? AND o.origin = 'portal_pre_connect'",
+            tenantId, orderId);
     }
 
     private List<Map<String, Object>> forwardLeg(UUID tenantId, UUID orderId) {

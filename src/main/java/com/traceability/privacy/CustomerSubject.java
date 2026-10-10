@@ -51,8 +51,9 @@ public record CustomerSubject(
         String phone = ShipmentLinkService.normalizePhone(payloadPhone);
 
         Set<UUID> orders = new LinkedHashSet<>(jdbc.queryForList(
-            "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ANY(?::text[])",
-            UUID.class, tenantId, gids));
+            // P4b: a portal pre-connect order (V163) carries its Shopify GID in shopify_order_gid.
+            "SELECT id FROM orders WHERE tenant_id = ? AND (external_id = ANY(?::text[]) OR shopify_order_gid = ANY(?::text[]))",
+            UUID.class, tenantId, gids, gids));
         if (includePhoneMatches && phone != null) {
             orders.addAll(jdbc.queryForList(
                 "SELECT id FROM orders WHERE tenant_id = ? AND customer_phone IS NOT NULL AND "
@@ -77,10 +78,12 @@ public record CustomerSubject(
         if (phone != null) phones.add(phone);
         Set<String> numbers = new LinkedHashSet<>();
         for (var row : jdbc.queryForList(
-                "SELECT external_id, number, customer_phone FROM orders WHERE tenant_id = ? AND id = ANY(?::uuid[])",
+                "SELECT external_id, shopify_order_gid, number, customer_phone FROM orders WHERE tenant_id = ? AND id = ANY(?::uuid[])",
                 tenantId, all)) {
             String ext = (String) row.get("external_id");
             if (ext != null && ext.startsWith(GID_PREFIX)) outGids.add(ext);
+            String portalGid = (String) row.get("shopify_order_gid");
+            if (portalGid != null && portalGid.startsWith(GID_PREFIX)) outGids.add(portalGid);
             String p = ShipmentLinkService.normalizePhone((String) row.get("customer_phone"));
             if (p != null) phones.add(p);
             String n = (String) row.get("number");

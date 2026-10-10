@@ -133,10 +133,13 @@ public class ReturnRequestService {
             "       (rr.refund_details_encrypted IS NOT NULL) AS refund_details_held, " +
             "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
             "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
+            // P4b: a portal pre-connect order's delivery time is its original Bosta delivery (V163).
+            "       CASE WHEN o.origin = 'portal_pre_connect' THEN o.portal_delivered_at ELSE " +
             "       (SELECT s.delivered_at FROM shipments s " +
             "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
             "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
-            "         ORDER BY s.delivered_at DESC, s.id DESC LIMIT 1) AS delivered_at " +
+            "         ORDER BY s.delivered_at DESC, s.id DESC LIMIT 1) END AS delivered_at, " +
+            "       (o.origin = 'portal_pre_connect') AS ordered_before_traced " +
             "FROM return_requests rr " +
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN users u ON u.id = rr.decided_by " +
@@ -191,6 +194,9 @@ public class ReturnRequestService {
         // Step 4e-A (M2): phone, delivery date and pickup area for the merchant's drawer.
         d.put("customerPhone", r.get("customer_phone"));
         d.put("deliveredAt", r.get("delivered_at"));
+        // P4b: fetched by the portal for a purchase made before the store connected — not in the
+        // Orders list by design, so the drawer shows a badge instead of anything order-page-like.
+        d.put("orderedBeforeTraced", Boolean.TRUE.equals(r.get("ordered_before_traced")));
         d.put("pickupCity", r.get("address_city"));
         d.put("pickupZone", r.get("address_zone"));
         // Step 4c-2: the pickup area snapshot (null when none was chosen — the drawer then

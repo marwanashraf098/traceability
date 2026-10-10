@@ -601,6 +601,7 @@ public class ReturnPickupBookingService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, rr.type, " +
             "       o.number, o.customer_name, o.customer_phone, o.pii_redacted_at, t.portal_pickup_booking, " +
+            "       (o.origin = 'portal_pre_connect') AS portal_order, o.portal_delivery::text AS portal_delivery, " +
             "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available, " +
             "       rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, rr.custom_building_number, " +
             "       rr.custom_floor, rr.custom_apartment " +
@@ -636,10 +637,19 @@ public class ReturnPickupBookingService {
                 c.returnLocationId = (String) a.get("return_business_location_id");
             });
 
-        String raw = jdbc.queryForList(
+        // P4b: a portal pre-connect order (V163) has no forward leg — its delivery address is the
+        // original Bosta delivery's dropOffAddress kept in portal_delivery; the receiver is the
+        // order's own name / phone (receiver left null → receiverName / receiverPhone fall back).
+        boolean portalOrder = Boolean.TRUE.equals(r.get("portal_order"));
+        String raw = portalOrder ? null : jdbc.queryForList(
             "SELECT raw::text FROM shipments WHERE tenant_id = ? AND order_id = ? AND shipment_leg = 'forward' " +
             "  AND delivered_at IS NOT NULL AND raw IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
             String.class, tenantId, r.get("order_id")).stream().findFirst().orElse(null);
+        if (portalOrder && r.get("portal_delivery") != null) {
+            try {
+                c.drop = mapper.readTree((String) r.get("portal_delivery")).path("dropOffAddress");
+            } catch (Exception ignored) { /* treated as no address below */ }
+        }
         if (raw != null) {
             try {
                 JsonNode n = mapper.readTree(raw);

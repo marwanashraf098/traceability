@@ -552,6 +552,11 @@ function DrawerContent({
           <Field label={t('exchangesRefunds.requests.drawer.order')}>
             {/* Plain text, not the mockup's link: /orders/:id is intentionally unrouted. */}
             <bdi>{detail.orderNumber}</bdi>
+            {detail.orderedBeforeTraced && (
+              <span className="ms-1.5 align-middle" data-testid="ordered-before-traced">
+                <Badge tone="neutral" label={t('exchangesRefunds.requests.drawer.orderedBeforeTraced')} />
+              </span>
+            )}
             {detail.deliveredAt && (
               <span className="text-muted">
                 {' · '}{t('exchangesRefunds.requests.drawer.delivered', { date: shortDate(i18n.language, detail.deliveredAt) })}

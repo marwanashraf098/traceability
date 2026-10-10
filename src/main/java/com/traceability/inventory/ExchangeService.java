@@ -417,6 +417,14 @@ public class ExchangeService {
                 "SELECT raw::text FROM shipments WHERE tenant_id = ? AND order_id = ? AND shipment_leg = 'forward' " +
                 "  AND delivered_at IS NOT NULL AND raw IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
                 String.class, tenantId, originalOrderId).stream().findFirst().orElse(null);
+            if (forwardRaw == null) {
+                // P4b: a portal pre-connect original (V163) has no forward leg — its original Bosta
+                // delivery (same receiver / dropOffAddress shape) is kept in portal_delivery.
+                forwardRaw = jdbc.queryForList(
+                    "SELECT portal_delivery::text FROM orders WHERE tenant_id = ? AND id = ? " +
+                    "  AND origin = 'portal_pre_connect' AND portal_delivery IS NOT NULL",
+                    String.class, tenantId, originalOrderId).stream().findFirst().orElse(null);
+            }
             if (forwardRaw != null) {
                 try {
                     shipmentLinkService.populateConsigneePiiFromRaw(orderId, tenantId, mapper.readTree(forwardRaw));

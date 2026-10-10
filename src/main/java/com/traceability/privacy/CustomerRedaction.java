@@ -120,6 +120,7 @@ public final class CustomerRedaction {
                 customer_phone  = NULL,
                 address         = NULL,
                 shopify_address = NULL,
+                portal_delivery = NULL,
                 pii_source      = NULL,
                 pii_redacted_at = now(),
                 raw             = shopify_order_raw_redacted(raw)

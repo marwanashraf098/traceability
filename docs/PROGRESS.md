@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Returns portal P4b — stored portal pre-connect orders made workable (2026-10-11, branch `feat/portal-preconnect-p4b`
+off origin/main c15636a; NOT merged, NOT deployed). Migration V164.** Still no code path creates a portal row (P4c).
+- **Eligibility:** `PortalService.deliveredWithinWindow` — a portal row's window is `portal_delivered_at` (a forward leg is
+  never used for it); lines are its order_items through the untracked path (no allocations → untracked) — unchanged code.
+- **Pickup area / booking:** `PickupAreaService.forOrder` and `ReturnPickupBookingService.loadContext` read city / district /
+  address from `portal_delivery.dropOffAddress`; receiver = the order's name / phone (receiver left null → existing fallback).
+- **Linking (the P4a correction):** `ShipmentLinkService.tryMatchDelivery` step 0 — a CRP whose tracking number a request on a
+  portal order booked links to that order (return leg, request linked) before reference / phone+COD; exchanges (type 30)
+  already used `findOwnExchange`; `attachForRequest` copies the replacement's customer details from `portal_delivery`.
+- **Refund suggestion** by `COALESCE(shopify_order_gid, external_id)`. **Drawer** `orderedBeforeTraced` + "Ordered before
+  Traced" / "تم الطلب قبل Traced" badge (neutral Badge); order number stays plain text (no link — already none).
+- **GDPR / V164:** CustomerSubject matches `external_id OR shopify_order_gid` and carries the portal gid; REDACT_ORDERS clears
+  `portal_delivery`; V164 re-creates `shopify_event_keep_order_redacted` (gid OR external_id) and adds
+  `orders_keep_portal_delivery_redacted` (sticky NULL on a redacted order); export adds origin / gid / portal_delivered_at /
+  portal_delivery. No orders column change → merchant_orders untouched. Counts 163 / 108.
+- **Guard 1:** 4 new MUST_INCLUDE members (PortalService#deliveredWithinWindow, PickupAreaService#portalDropOff,
+  ExchangeService#attachForRequest, ShipmentLinkService#portalReturnLegOrder). **Leak test:** a portal order with a booked
+  return leg AND a booked exchange whose replacement exists — the portal order never shows; the internal:exchange: replacement
+  is in the Orders list (isExchange) and Pick queue (`i_`). Reclassified: `GET /api/v1/exchanges` LIST → SKIP (exchanges
+  domain lists every exchanges row, incl. one booked for a portal request; matched order id only, no link).
+- **Tests:** `PortalPreConnectWorkflowTest` (9) — mutation-checked: each fix removed turns its test red (REDACT_ORDERS'
+  `portal_delivery = NULL` alone is covered by the V164 trigger too — defense in depth); `orderedBeforeTracedDrawer.test.tsx` (3,
+  revert-checked). Gotcha: scratch-copy mutation runs need `touch` after `rsync -a` (older mtimes → stale classes).
+
 **Returns portal P4a — pre-connect orders: schema + merchant_orders exclusion + guards + leak test (2026-10-11, branch
 `feat/portal-preconnect-p4a` off origin/main 235984e; merged to main, no squash; NOT deployed). Migration V163.** No behaviour change:
 no code path can create a portal row yet (P4c adds the on-demand fetch).
