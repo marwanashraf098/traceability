@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Traced — Returns portal branding (P1) — Design Concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Mockup only: the build self-hosts every family via @fontsource (CSP font-src 'self'). -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600&family=Cairo:wght@400;600;700&family=Tajawal:wght@400;500;700&family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Almarai:wght@400;700&family=Readex+Pro:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* =========================================================================
+   Traced Design System v1.0 — LIGHT tokens (frontend/tailwind.config.js).
+   Merchant app: Geist, trace-blue #2563EB. Portal: its own plain CSS
+   (portal.css) — #F7F7F5 page, #141821 ink, brand colour from the merchant.
+   This file locks LAYOUT, HIERARCHY, COPY and STATES. The build binds to the
+   real tailwind tokens + ui.tsx primitives and portal.css, not these hexes.
+   ========================================================================= */
+:root{
+  --bg:#F7F8FA; --panel:#FFFFFF; --elevated:#F2F4F7; --line:#E5E7EB; --line-strong:#D1D5DB;
+  --text:#111827; --muted:#5B6675; --faint:#828B99;
+  --blue:#2563EB; --blue-hover:#1D4ED8; --blue-soft:#EFF4FF;
+  --critical:#DC2626; --critical-text:#B91C1C; --critical-soft:#FEF2F2;
+  --success:#16A34A; --success-text:#15803D; --success-soft:#F0FDF4;
+  --radius:12px; --radius-sm:8px;
+  /* portal (portal.css) */
+  --pp-page:#F7F7F5; --pp-line:#E6E7E3; --pp-ink:#141821; --pp-muted:#5B6270; --pp-input:#CDD3DC;
+  /* live preview state (driven by the controls below) */
+  --brand:#0F766E; --on-brand:#FFFFFF; --pf:'Readex Pro';
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;line-height:1.5}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+/* ── review chrome (NOT part of any screen) ── */
+.review{position:sticky;top:0;z-index:20;display:flex;gap:20px;align-items:center;flex-wrap:wrap;padding:12px 24px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.review b{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.review a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 10px;border-radius:6px}
+.review a:hover{background:var(--elevated);color:var(--text)}
+.review .note{margin-inline-start:auto;font-size:12px;color:var(--faint)}
+.frame-title{max-width:1280px;margin:48px auto 16px;padding:0 24px;display:flex;align-items:baseline;gap:12px}
+.frame-title span{font:600 12px/1 'Geist Mono',monospace;color:var(--blue);background:var(--blue-soft);padding:5px 8px;border-radius:6px}
+.frame-title h2{margin:0;font-size:20px;font-weight:600}
+.frame-title p{margin:0;color:var(--muted);font-size:14px}
+.annot{max-width:1280px;margin:12px auto 0;padding:0 24px;font-size:13px;color:var(--muted)}
+.annot li{margin:2px 0}
+
+/* ── merchant settings page ── */
+.page{max-width:1280px;margin:0 auto;padding:0 24px}
+.crumb{font-size:14px;color:var(--muted)}
+.crumb a{color:var(--blue);text-decoration:none}
+h1.page-h{margin:4px 0 20px;font-size:28px;font-weight:700;letter-spacing:-.01em}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.branding{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:0}
+.branding .form{padding:24px;display:flex;flex-direction:column;gap:28px;border-inline-end:1px solid var(--line)}
+.branding .preview{padding:24px;background:var(--elevated);border-radius:0 var(--radius) var(--radius) 0;display:flex;flex-direction:column;gap:14px}
+.sec-h{margin:0;font-size:18px;font-weight:600}
+.sec-sub{margin:4px 0 0;font-size:14px;color:var(--muted)}
+.field{display:flex;flex-direction:column;gap:8px}
+.label{font-size:15px;font-weight:500}
+.help{font-size:13px;color:var(--muted);margin:0}
+.err{font-size:13px;color:var(--critical-text);margin:0;display:flex;gap:6px;align-items:flex-start}
+.btn{height:40px;padding:0 16px;border-radius:var(--radius-sm);border:1px solid var(--line-strong);background:#fff;font-size:14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{background:var(--elevated)}
+.btn-primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn-primary:hover{background:var(--blue-hover)}
+.btn-ghost-danger{border-color:transparent;background:transparent;color:var(--critical-text)}
+.btn-ghost-danger:hover{background:var(--critical-soft)}
+.input{height:40px;padding:0 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-size:14px}
+
+/* logo uploader */
+.drop{border:1.5px dashed var(--line-strong);border-radius:var(--radius);background:#fff;padding:22px;display:flex;align-items:center;gap:16px;cursor:pointer;width:100%;text-align:start}
+.drop:hover,.drop.drag{border-color:var(--blue);background:var(--blue-soft)}
+.drop .ico{width:44px;height:44px;border-radius:10px;background:var(--elevated);display:grid;place-items:center;color:var(--muted);flex-shrink:0}
+.drop .t{font-size:15px;font-weight:500}
+.drop .t u{color:var(--blue);text-decoration:none;font-weight:600}
+.drop .s{font-size:13px;color:var(--muted)}
+.drop.is-error{border-color:var(--critical);background:var(--critical-soft)}
+.logo-row{display:flex;align-items:center;gap:16px;border:1px solid var(--line);border-radius:var(--radius);padding:14px;background:#fff}
+.logo-plate{width:200px;height:72px;border-radius:10px;background:#FFFFFF;border:1px solid var(--line);display:grid;place-items:center;padding:10px;flex-shrink:0}
+.logo-plate img{max-height:44px;max-width:170px;display:block}
+.logo-meta{flex:1;min-width:0}
+.logo-meta .n{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.logo-meta .d{font-size:13px;color:var(--muted)}
+.logo-actions{display:flex;gap:4px}
+.progress{height:6px;border-radius:999px;background:var(--elevated);overflow:hidden;margin-top:8px}
+.progress i{display:block;height:100%;width:62%;background:var(--blue);border-radius:999px}
+.saved-pill{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--success-text)}
+.linkalt{font-size:13px;color:var(--muted)}
+.linkalt summary{cursor:pointer;color:var(--blue);font-weight:500;list-style:none}
+.linkalt summary::-webkit-details-marker{display:none}
+
+/* font picker */
+.fonts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;border:0;padding:0;margin:0}
+.fonts legend{padding:0;margin-bottom:8px}
+.fopt{position:relative;border:1px solid var(--line-strong);border-radius:var(--radius);padding:12px 14px;background:#fff;cursor:pointer;display:flex;flex-direction:column;gap:6px;min-height:104px}
+.fopt:hover{border-color:var(--faint)}
+.fopt input{position:absolute;opacity:0;pointer-events:none}
+.fopt:has(input:checked){border-color:var(--blue);box-shadow:0 0 0 1px var(--blue);background:var(--blue-soft)}
+.fopt:has(input:focus-visible){outline:2px solid var(--blue);outline-offset:2px}
+.fopt .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.fopt .nm{font-size:15px;font-weight:600}
+.fopt .def{font:500 11px/1 'Geist',sans-serif;color:var(--muted);background:var(--elevated);padding:4px 6px;border-radius:5px}
+.fopt .chk{width:18px;height:18px;border-radius:999px;border:1.5px solid var(--line-strong);display:grid;place-items:center;flex-shrink:0}
+.fopt:has(input:checked) .chk{border-color:var(--blue);background:var(--blue)}
+.fopt:has(input:checked) .chk::after{content:"";width:6px;height:6px;border-radius:999px;background:#fff}
+.fopt .ar{font-size:17px;white-space:nowrap;line-height:1.5;direction:rtl;text-align:right}
+.fopt .en{font-size:14px;color:var(--muted)}
+
+/* colour */
+.color-row{display:flex;align-items:center;gap:10px}
+.swatch{width:40px;height:40px;border-radius:var(--radius-sm);border:1px solid var(--line-strong);padding:3px;background:#fff;cursor:pointer}
+.swatch input{width:100%;height:100%;border:0;padding:0;background:none;cursor:pointer}
+.mono{font-family:'Geist Mono',monospace}
+
+.footer-bar{display:flex;justify-content:flex-end;gap:12px;margin-top:16px}
+
+/* ── portal (mirrors portal.css .pp-*) ── */
+.pp{font-family:var(--pf),'Geist',sans-serif;color:var(--pp-ink);background:var(--pp-page)}
+.pp[dir="rtl"]{font-family:var(--pf),sans-serif}
+.pp-header{height:60px;padding-inline:20px 12px;display:flex;align-items:center;gap:4px;background:#fff;border-bottom:1px solid var(--pp-line)}
+.pp-logo{height:36px;max-width:180px;object-fit:contain;display:block}
+.pp-wordmark{font-size:17px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pp-spacer{flex:1}
+.pp-lang{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 8px;border:0;background:transparent;font-size:15px;font-weight:600;color:var(--brand)}
+.pp-lang[lang="ar"]{font-family:var(--pf),sans-serif}
+.pp-main{padding:20px 20px 16px;display:flex;flex-direction:column;gap:14px}
+.pp-h1{margin:0;font-size:28px;font-weight:700;line-height:1.2;letter-spacing:-.01em}
+.pp[dir="rtl"] .pp-h1{letter-spacing:0}
+.pp-lead{margin:0;font-size:16px;line-height:1.5;color:var(--pp-muted)}
+.pp-field{display:flex;flex-direction:column;gap:6px}
+.pp-label{font-size:15px;font-weight:600}
+.pp-input{height:52px;padding:0 14px;border:1px solid var(--pp-input);border-radius:10px;background:#fff;font-size:17px}
+.pp-input::placeholder{color:#8A8F98}
+.pp-btn{height:52px;border:0;border-radius:12px;background:var(--brand);color:var(--on-brand);font-size:17px;font-weight:600;width:100%}
+.pp-note{font-size:14px;line-height:1.5;color:var(--pp-muted);margin:0}
+.pp-foot{padding:16px 20px 24px;text-align:center;font-size:13px;color:#8A8F98;font-family:'Geist',sans-serif}
+
+/* mini preview (settings, right column) */
+.mini-h{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;display:flex;justify-content:space-between;align-items:center}
+.mini{border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(17,24,39,.05)}
+.mini .pp-header{height:48px;padding-inline:14px 6px}
+.mini .pp-logo{height:28px;max-width:140px}
+.mini .pp-wordmark{font-size:14px}
+.mini .pp-lang{font-size:13px;min-height:32px}
+.mini .pp-main{padding:14px;gap:10px}
+.mini .pp-h1{font-size:20px}
+.mini .pp-lead{font-size:13px}
+.mini .pp-label{font-size:13px}
+.mini .pp-input{height:38px;font-size:14px;border-radius:8px}
+.mini .pp-btn{height:40px;font-size:14px;border-radius:9px}
+
+/* phones */
+.phones{display:flex;gap:40px;justify-content:center;flex-wrap:wrap}
+.phone{width:390px;border-radius:36px;background:#0B0D12;padding:12px;box-shadow:0 20px 40px rgba(17,24,39,.15)}
+.phone .screen{border-radius:26px;overflow:hidden;min-height:760px;display:flex;flex-direction:column}
+.phone .bar{height:34px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font:600 13px/1 'Geist',sans-serif;color:#111}
+.phone .pp{flex:1;display:flex;flex-direction:column}
+.phone .pp-main{flex:1}
+.cap{text-align:center;font-size:13px;color:var(--muted);margin-top:10px}
+
+/* states */
+.states{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.state{padding:20px;display:flex;flex-direction:column;gap:14px}
+.state h3{margin:0;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+.state h3 em{font:600 11px/1 'Geist Mono',monospace;font-style:normal;color:var(--muted);background:var(--elevated);padding:4px 6px;border-radius:5px}
+.state .mini{max-width:360px}
+
+@media (max-width:1000px){.branding{grid-template-columns:1fr}.branding .form{border-inline-end:0;border-bottom:1px solid var(--line)}.branding .preview{border-radius:0 0 var(--radius) var(--radius)}.states{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<nav class="review" aria-label="Review sections">
+  <b>P1 · Portal branding</b>
+  <a href="#a">a · Settings → Branding</a>
+  <a href="#b">b · Portal lookup EN / AR</a>
+  <a href="#c">c · Logo states</a>
+  <span class="note">Font picker and colour are live — click to update the previews.</span>
+</nav>
+
+<!-- ===================================================================== -->
+<!-- (a) SETTINGS → RETURNS PORTAL → BRANDING                              -->
+<!-- ===================================================================== -->
+<div class="frame-title" id="a"><span>a</span><h2>Settings → Returns portal · Branding</h2><p>Merchant app, owner / manager. Logo shown in the saved state.</p></div>
+
+<div class="page">
+  <div class="crumb"><a href="#">Settings</a> / Returns portal</div>
+  <h1 class="page-h">Returns portal</h1>
+  <p class="help" style="margin:-12px 0 16px">… Portal link, return window, approvals and pickups sections above — unchanged …</p>
+
+  <section class="card branding" aria-labelledby="branding-title">
+    <div class="form">
+      <div>
+        <h2 class="sec-h" id="branding-title">Branding</h2>
+        <p class="sec-sub">How your returns page looks to customers.</p>
+      </div>
+
+      <!-- Logo -->
+      <div class="field">
+        <span class="label" id="logo-label">Logo</span>
+        <div class="logo-row" role="group" aria-labelledby="logo-label">
+          <div class="logo-plate"><img class="logo-img" alt="Nour Studio logo"></div>
+          <div class="logo-meta">
+            <div class="n">nour-studio-logo.png</div>
+            <div class="d">PNG · 600 × 180 · <span class="saved-pill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Saved</span></div>
+          </div>
+          <div class="logo-actions">
+            <button class="btn" type="button">Replace</button>
+            <button class="btn btn-ghost-danger" type="button">Remove</button>
+          </div>
+        </div>
+        <p class="help">PNG, JPG or WebP, up to 2 MB. A transparent PNG looks best. Your logo saves as soon as it uploads.</p>
+        <details class="linkalt">
+          <summary>Use a Shopify Files link instead</summary>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;max-width:520px">
+            <input class="input mono" placeholder="https://cdn.shopify.com/…" aria-label="Shopify Files logo link">
+            <p class="help">An uploaded logo is used first. The link is used only when no logo is uploaded.</p>
+          </div>
+        </details>
+      </div>
+
+      <!-- Font -->
+      <fieldset class="fonts" id="fonts">
+        <legend class="field" style="gap:4px">
+          <span class="label">Font</span>
+          <span class="help">Used on your returns page in English and Arabic.</span>
+        </legend>
+        <!-- options injected below so each one renders in its own font -->
+      </fieldset>
+
+      <!-- Brand colour (existing control) -->
+      <div class="field">
+        <label class="label" for="hex">Brand colour</label>
+        <div class="color-row">
+          <span class="swatch"><input type="color" id="picker" value="#0F766E" aria-label="Pick a brand colour"></span>
+          <input class="input mono" id="hex" value="#0F766E" style="width:130px">
+        </div>
+        <p class="help">Buttons and links. If the colour is too light to read, the default blue is used.</p>
+      </div>
+
+      <!-- Return policy (existing, unchanged) -->
+      <div class="field">
+        <label class="label" for="policy">Return policy</label>
+        <textarea id="policy" class="input" style="height:88px;padding:10px 12px;resize:vertical">Items can be returned within 14 days of delivery, unworn and with tags.</textarea>
+        <p class="help" style="align-self:flex-end">71 / 2000</p>
+      </div>
+    </div>
+
+    <!-- Live mini-preview -->
+    <aside class="preview" aria-label="Preview">
+      <div class="mini-h">Preview <span style="text-transform:none;letter-spacing:0;font-weight:500">Updates as you edit</span></div>
+      <div class="mini">
+        <div class="pp" dir="ltr" lang="en">
+          <div class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><span class="pp-lang" lang="ar">العربية</span></div>
+          <div class="pp-main">
+            <h3 class="pp-h1">Start a return</h3>
+            <p class="pp-lead">Enter your order number and the phone number you used when ordering.</p>
+            <div class="pp-field"><span class="pp-label">Order number</span><div class="pp-input" style="display:flex;align-items:center;color:#8A8F98">e.g. #1047</div></div>
+            <button class="pp-btn" type="button" tabindex="-1">Find my order</button>
+          </div>
+        </div>
+      </div>
+      <div class="mini">
+        <div class="pp" dir="rtl" lang="ar">
+          <div class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><span class="pp-lang" lang="en" style="font-family:'Geist',sans-serif">English</span></div>
+          <div class="pp-main">
+            <h3 class="pp-h1">ابدأ الإرجاع</h3>
+            <p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p>
+            <div class="pp-field"><span class="pp-label">رقم الطلب</span><div class="pp-input" style="display:flex;align-items:center;color:#8A8F98">مثال: ‎#1047</div></div>
+            <button class="pp-btn" type="button" tabindex="-1">ابحث عن طلبي</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <div class="footer-bar"><button class="btn btn-primary" type="button">Save changes</button></div>
+  <p class="help" style="text-align:end;margin-top:6px">Font, colour and policy save with “Save changes”. The logo saves on upload / remove.</p>
+</div>
+
+<ul class="annot">
+  <li>Font options: Cairo (default), Tajawal, IBM Plex Sans Arabic, Almarai, Readex Pro — each card set in its own font, Arabic + English sample.</li>
+  <li>Logo plate is a white card (the portal header is white), so a transparent PNG previews exactly as customers see it.</li>
+  <li>Precedence on the portal: uploaded logo → Shopify Files link → store-name wordmark. The link field stays (collapsed) for stores already using it.</li>
+  <li>Drag-and-drop and click both open the same upload; Replace opens the file picker; Remove asks nothing and falls back immediately (shown in c).</li>
+</ul>
+
+<!-- ===================================================================== -->
+<!-- (b) PUBLIC PORTAL LOOKUP                                              -->
+<!-- ===================================================================== -->
+<div class="frame-title" id="b"><span>b</span><h2>Portal lookup — uploaded logo, non-default font</h2><p>returns.tracedtech.com/nourstudio · font follows the picker above.</p></div>
+
+<div class="page">
+  <div class="phones">
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="ltr" lang="en">
+          <header class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><button class="pp-lang" lang="ar" type="button">العربية</button></header>
+          <main class="pp-main">
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+              <h3 class="pp-h1">Start a return</h3>
+              <p class="pp-lead">Enter your order number and the phone number you used when ordering.</p>
+            </div>
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" placeholder="e.g. #1047"></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" placeholder="01X XXXX XXXX" dir="ltr"></div>
+            <button class="pp-btn" type="button">Find my order</button>
+            <p class="pp-note">Returns are accepted within 14 days of delivery.</p>
+            <p class="pp-note">After approval, a Bosta courier collects the item from the area you choose.</p>
+          </main>
+          <div class="pp-foot">Powered by Traced</div>
+        </div>
+      </div></div>
+      <div class="cap">EN · LTR</div>
+    </div>
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="rtl" lang="ar">
+          <header class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><button class="pp-lang" lang="en" type="button" style="font-family:'Geist',sans-serif">English</button></header>
+          <main class="pp-main">
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+              <h3 class="pp-h1">ابدأ الإرجاع</h3>
+              <p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p>
+            </div>
+            <div class="pp-field"><label class="pp-label">رقم الطلب</label><input class="pp-input" placeholder="مثال: ‎#1047"></div>
+            <div class="pp-field"><label class="pp-label">رقم الهاتف</label><input class="pp-input" placeholder="01X XXXX XXXX" dir="ltr" style="text-align:right"></div>
+            <button class="pp-btn" type="button">ابحث عن طلبي</button>
+            <p class="pp-note">يُقبل الإرجاع خلال 14 يوم من التوصيل.</p>
+            <p class="pp-note">بعد الموافقة، يستلم مندوب بوسطة المنتج من المنطقة التي تختارها.</p>
+          </main>
+          <div class="pp-foot">مقدَّم من Traced</div>
+        </div>
+      </div></div>
+      <div class="cap">AR · RTL</div>
+    </div>
+  </div>
+</div>
+<ul class="annot">
+  <li>The chosen family is used for both languages (all five ship Latin + Arabic). “Powered by Traced” and Geist Mono stay as today.</li>
+  <li>The language switch label renders in its own script's font (العربية in the store font, “English” in Geist), as today.</li>
+  <li>Logo served from returns.tracedtech.com/api/v1/portal/nourstudio/logo — same origin, CSP unchanged.</li>
+</ul>
+
+<!-- ===================================================================== -->
+<!-- (c) STATES                                                            -->
+<!-- ===================================================================== -->
+<div class="frame-title" id="c"><span>c</span><h2>Logo states</h2><p>Settings field + what the portal header shows in that state.</p></div>
+
+<div class="page">
+  <div class="states">
+
+    <!-- c1 no logo -->
+    <section class="card state">
+      <h3><em>c1</em> No logo — wordmark fallback</h3>
+      <div class="field">
+        <span class="label">Logo</span>
+        <button class="drop" type="button" aria-describedby="c1-help">
+          <span class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
+          <span><span class="t">Drag your logo here, or <u>choose a file</u></span><br><span class="s" id="c1-help">PNG, JPG or WebP, up to 2 MB. A transparent PNG looks best.</span></span>
+        </button>
+      </div>
+      <div class="mini"><div class="pp" dir="ltr"><div class="pp-header"><div class="pp-wordmark">Nour Studio</div><div class="pp-spacer"></div><span class="pp-lang" lang="ar">العربية</span></div></div></div>
+      <div class="mini"><div class="pp" dir="rtl"><div class="pp-header"><div class="pp-wordmark" dir="auto">Nour Studio</div><div class="pp-spacer"></div><span class="pp-lang" style="font-family:'Geist',sans-serif">English</span></div></div></div>
+    </section>
+
+    <!-- c2 uploading -->
+    <section class="card state">
+      <h3><em>c2</em> Uploading</h3>
+      <div class="field">
+        <span class="label">Logo</span>
+        <div class="logo-row" aria-busy="true">
+          <div class="logo-plate" style="background:var(--elevated)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#828B99" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-dasharray="40 20"/></svg></div>
+          <div class="logo-meta">
+            <div class="n">nour-studio-logo.png</div>
+            <div class="d" role="status">Uploading… 1.1 of 1.8 MB</div>
+            <div class="progress"><i></i></div>
+          </div>
+          <div class="logo-actions"><button class="btn" type="button">Cancel</button></div>
+        </div>
+        <p class="help">Save changes stays available — other fields don't wait for the upload.</p>
+      </div>
+      <div class="mini"><div class="pp" dir="ltr"><div class="pp-header"><div class="pp-wordmark">Nour Studio</div><div class="pp-spacer"></div><span class="pp-lang" lang="ar">العربية</span></div></div></div>
+      <p class="help">The portal keeps showing the current logo (here: wordmark) until the upload is saved.</p>
+    </section>
+
+    <!-- c3 errors -->
+    <section class="card state">
+      <h3><em>c3</em> Upload error — wrong type / too big</h3>
+      <div class="field">
+        <span class="label">Logo</span>
+        <button class="drop is-error" type="button" aria-describedby="c3a">
+          <span class="ico" style="background:#fff;color:var(--critical)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
+          <span><span class="t">Drag your logo here, or <u>choose a file</u></span><br><span class="s">PNG, JPG or WebP, up to 2 MB.</span></span>
+        </button>
+        <p class="err" role="alert" id="c3a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>“logo.gif” isn't a PNG, JPG or WebP image. Choose another file.</p>
+      </div>
+      <div class="field">
+        <span class="help" style="font-weight:500">Other messages, same place:</span>
+        <p class="err">“banner.png” is 3.4 MB. Use a file up to 2 MB.</p>
+        <p class="err">This image is too large to process (over 40 megapixels). Use a smaller image.</p>
+        <p class="err">“logo.png” couldn't be read as an image. Choose another file.</p>
+        <p class="err">Couldn't upload. Check your connection and try again.</p>
+      </div>
+      <p class="help">A failed upload never changes the saved logo.</p>
+    </section>
+
+    <!-- c4 saved -->
+    <section class="card state">
+      <h3><em>c4</em> Saved</h3>
+      <div class="field">
+        <span class="label">Logo</span>
+        <div class="logo-row">
+          <div class="logo-plate"><img class="logo-img" alt="Nour Studio logo"></div>
+          <div class="logo-meta">
+            <div class="n">nour-studio-logo.png</div>
+            <div class="d">PNG · 600 × 180</div>
+          </div>
+          <div class="logo-actions">
+            <button class="btn" type="button">Replace</button>
+            <button class="btn btn-ghost-danger" type="button">Remove</button>
+          </div>
+        </div>
+        <div role="status" class="saved-pill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Logo saved — your returns page shows it now.</div>
+      </div>
+      <div class="mini"><div class="pp" dir="ltr"><div class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><span class="pp-lang" lang="ar">العربية</span></div></div></div>
+      <div class="mini"><div class="pp" dir="rtl"><div class="pp-header"><img class="pp-logo logo-img" alt="Nour Studio"><div class="pp-spacer"></div><span class="pp-lang" style="font-family:'Geist',sans-serif">English</span></div></div></div>
+      <p class="help">After Remove: the toast reads “Logo removed”, and the field returns to c1 (or the Shopify link, if one is saved).</p>
+    </section>
+  </div>
+</div>
+
+<div style="height:64px"></div>
+
+<script>
+// Sample transparent logo (stands in for an uploaded PNG).
+const LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="180" viewBox="0 0 600 180">' +
+  '<circle cx="90" cy="90" r="62" fill="#0F766E"/><path d="M62 120V60l56 60V60" fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<text x="180" y="112" font-family="Georgia,serif" font-size="74" font-weight="700" fill="#141821" letter-spacing="4">NOUR</text>' +
+  '<text x="184" y="150" font-family="Arial,sans-serif" font-size="22" fill="#5B6270" letter-spacing="10">STUDIO</text></svg>');
+document.querySelectorAll('img.logo-img').forEach(i => { i.src = LOGO });
+
+// Font picker — each option set in its own family.
+const FONTS = [
+  ['cairo', 'Cairo', true], ['tajawal', 'Tajawal'], ['ibm-plex-sans-arabic', 'IBM Plex Sans Arabic'],
+  ['almarai', 'Almarai'], ['readex-pro', 'Readex Pro'],
+];
+const box = document.getElementById('fonts');
+FONTS.forEach(([id, name, def]) => {
+  const l = document.createElement('label');
+  l.className = 'fopt';
+  l.style.fontFamily = `'${name}', sans-serif`;
+  l.innerHTML =
+    `<input type="radio" name="font" value="${id}" ${id === 'readex-pro' ? 'checked' : ''}>` +
+    `<span class="top"><span class="nm">${name}</span>${def ? '<span class="def">Default</span>' : '<span></span>'}<span class="chk" aria-hidden="true"></span></span>` +
+    `<span class="ar" lang="ar">ابدأ الإرجاع · ابحث عن طلبي</span>` +
+    `<span class="en">Start a return · Find my order</span>`;
+  l.querySelector('input').addEventListener('change', () =>
+    document.documentElement.style.setProperty('--pf', `'${name}'`));
+  box.appendChild(l);
+});
+
+// Brand colour — same contrast rule as portal/brand.ts (white or ink, else default blue).
+function lum(h){const n=parseInt(h.slice(1),16);return[16,8,0].map(s=>{const c=((n>>s)&255)/255;return c<=.03928?c/12.92:Math.pow((c+.055)/1.055,2.4)}).reduce((a,c,i)=>a+c*[.2126,.7152,.0722][i],0)}
+function con(a,b){const[x,y]=[lum(a),lum(b)].sort((p,q)=>q-p);return(x+.05)/(y+.05)}
+function applyColor(hex){
+  if(!/^#[0-9A-Fa-f]{6}$/.test(hex))return;
+  let brand=hex.toUpperCase(),on;const w=con(brand,'#FFFFFF'),k=con(brand,'#141821');
+  if(w>=4.5||k>=4.5){on=w>=k?'#FFFFFF':'#141821'}else{brand='#3656E0';on='#FFFFFF'}
+  const r=document.documentElement.style;r.setProperty('--brand',brand);r.setProperty('--on-brand',on);
+}
+const picker=document.getElementById('picker'),hex=document.getElementById('hex');
+picker.addEventListener('input',e=>{hex.value=e.target.value.toUpperCase();applyColor(hex.value)});
+hex.addEventListener('input',e=>{applyColor(e.target.value);if(/^#[0-9A-Fa-f]{6}$/.test(e.target.value))picker.value=e.target.value});
+
+// Drop zones: visual drag state only (mockup).
+document.querySelectorAll('.drop').forEach(d=>{
+  d.addEventListener('dragover',e=>{e.preventDefault();d.classList.add('drag')});
+  d.addEventListener('dragleave',()=>d.classList.remove('drag'));
+  d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('drag')});
+});
+</script>
+</body>
+</html>

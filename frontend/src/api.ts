@@ -29,6 +29,28 @@ export function refreshAccessToken(): Promise<string> {
 const RETRY_FLAG = Symbol('retry')
 type RetryOpts = RequestInit & { [RETRY_FLAG]?: true }
 
+/**
+ * The shared 401 handling: on a first 401, join (or start) the one in-flight refresh; if this was
+ * already the retry, or the refresh fails → clear the token and go to /login (no loop).
+ */
+async function refreshOrLogout(isRetry: boolean): Promise<void> {
+  if (isRetry) {
+    clearAccessToken()
+    window.location.href = '/login'
+    throw new Error('Unauthenticated')
+  }
+  try {
+    if (!refreshPromise) {
+      refreshPromise = doRefresh().finally(() => { refreshPromise = null })
+    }
+    await refreshPromise
+  } catch {
+    clearAccessToken()
+    window.location.href = '/login'
+    throw new Error('Unauthenticated')
+  }
+}
+
 export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T> {
   const token = getAccessToken()
   const res = await fetch(BASE + path, {
@@ -42,23 +64,7 @@ export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T>
   })
 
   if (res.status === 401) {
-    // If this IS the retry, the refresh itself failed → real logout (no loop).
-    if (opts[RETRY_FLAG]) {
-      clearAccessToken()
-      window.location.href = '/login'
-      throw new Error('Unauthenticated')
-    }
-    // Kick off one shared refresh, or join an already in-flight one.
-    try {
-      if (!refreshPromise) {
-        refreshPromise = doRefresh().finally(() => { refreshPromise = null })
-      }
-      await refreshPromise
-    } catch {
-      clearAccessToken()
-      window.location.href = '/login'
-      throw new Error('Unauthenticated')
-    }
+    await refreshOrLogout(!!opts[RETRY_FLAG])
     // Retry the original request exactly once with the new access token.
     return request<T>(path, { ...opts, [RETRY_FLAG]: true })
   }
@@ -3033,6 +3039,23 @@ export interface PortalSettings {
   /** Step 5c — "Allow exchanges" (needs pickup booking, Bosta and a return location). */
   exchangesEnabled?: boolean
   exchangesSince?: string | null
+  /** P1 — the portal font (both languages); absent from older backends. */
+  font?: string
+  /** P1 — tenants.name, for the preview's wordmark. Read-only. */
+  storeName?: string | null
+  /** P1 — the uploaded logo (its bytes: GET /tenant/portal-settings/logo); null when none. */
+  logo?: PortalLogoInfo | null
+}
+
+export interface PortalLogoInfo {
+  contentType: string
+  sizeBytes: number
+  width: number
+  height: number
+  /** Changes whenever the logo does. */
+  version: string
+  /** The public versioned URL the portal uses (null while there's no slug). */
+  url?: string | null
 }
 
 /**
@@ -3041,8 +3064,8 @@ export interface PortalSettings {
  */
 export type PortalSettingsInput =
   Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'
-    | 'exchangesEnabled' | 'exchangesSince'>
-  & { pickupBooking?: boolean; exchangesEnabled?: boolean }
+    | 'exchangesEnabled' | 'exchangesSince' | 'font' | 'storeName' | 'logo'>
+  & { pickupBooking?: boolean; exchangesEnabled?: boolean; font?: string }
 
 export interface BostaReturnLocation {
   id: string
@@ -3105,6 +3128,70 @@ export async function savePortalSettings(input: PortalSettingsInput): Promise<Po
     throw new PortalSettingsError(res.status, body?.field ?? null, body?.error ?? null)
   }
   return res.json()
+}
+
+/** P1 — the logo cap, same as the backend's (PortalLogoService.MAX_BYTES). */
+export const PORTAL_LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+/**
+ * P1 — PUT /tenant/portal-settings/logo (multipart "file"). XHR, not fetch, for upload progress.
+ * Resolves with the settings (as GET); rejects with PortalSettingsError (field "logo" + code, or
+ * FILE_TOO_LARGE on a 413), or an AbortError when cancelled.
+ */
+export function uploadPortalLogo(file: File, onProgress?: (loaded: number, total: number) => void) {
+  const xhr = new XMLHttpRequest()
+  const promise = new Promise<PortalSettings>((resolve, reject) => {
+    xhr.open('PUT', `${BASE}/tenant/portal-settings/logo`)
+    xhr.withCredentials = true
+    const token = getAccessToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress?.(e.loaded, e.total) }
+    xhr.onload = () => {
+      let body: { field?: string | null; error?: string } | null = null
+      try { body = JSON.parse(xhr.responseText) } catch { body = null }
+      if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body as unknown as PortalSettings)
+      else reject(new PortalSettingsError(xhr.status, body?.field ?? (xhr.status === 413 ? 'logo' : null), body?.error ?? null))
+    }
+    xhr.onerror = () => reject(new PortalSettingsError(0, 'logo', 'NETWORK'))
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'))
+    const form = new FormData()
+    form.append('file', file, file.name)
+    xhr.send(form)
+  })
+  return { promise, abort: () => xhr.abort() }
+}
+
+/** P1 — DELETE /tenant/portal-settings/logo; the settings back (logo: null). */
+export function removePortalLogo() {
+  return request<PortalSettings>('/tenant/portal-settings/logo', { method: 'DELETE' })
+}
+
+/**
+ * P1 — the uploaded logo for the settings thumbnail and preview, as a data: URL; null when there
+ * is none. Authenticated (Bearer, the shared refresh on a 401), and a data: URL because the app's
+ * CSP allows img-src data: but not blob: (an object URL was refused on app.tracedtech.com).
+ */
+export async function fetchPortalLogo(retry = false): Promise<string | null> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/tenant/portal-settings/logo`, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) {
+    await refreshOrLogout(retry)
+    return fetchPortalLogo(true)
+  }
+  if (!res.ok) return null
+  return blobToDataUrl(await res.blob())
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the logo'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 export interface PortalVariantRow {

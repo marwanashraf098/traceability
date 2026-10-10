@@ -118,6 +118,24 @@
             <artifactId>icu4j</artifactId>
             <version>74.2</version>
         </dependency>
+        <!-- Uploaded images (returns portal P1 logo; P3 photos): WebP and robust JPEG
+             (CMYK, odd encoders) readers for ImageIO, and EXIF orientation. Read-only use —
+             every upload is decoded and re-encoded by ImagePipeline. -->
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-webp</artifactId>
+            <version>3.12.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-jpeg</artifactId>
+            <version>3.12.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.drewnoakes</groupId>
+            <artifactId>metadata-extractor</artifactId>
+            <version>2.19.0</version>
+        </dependency>
         <!-- Sentry error tracking (NFR-6). DSN from SENTRY_DSN env var; disabled when absent. -->
         <dependency>
             <groupId>io.sentry</groupId>

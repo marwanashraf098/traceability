@@ -296,9 +296,11 @@ public class StockAnalyticsService {
             "  AND e.occurred_at >= ? AND e.occurred_at < ?",
             rs -> { rs.next(); return new Valued(rs.getLong("n"), moneyOrNull(rs.getBigDecimal("cost")), rs.getLong("costed")); },
             tid, Timestamp.from(period.startInclusive()), Timestamp.from(period.endExclusive()));
+        // The same rule as tripPieces(4, …) — the list the card opens: voided pieces don't count.
         Long moved = jdbc.queryForObject(
             "SELECT COUNT(*) FROM (SELECT e.piece_id FROM piece_events e WHERE e.tenant_id = ? AND " + trip("e") +
-            "GROUP BY e.piece_id HAVING COUNT(*) >= 4) x", Long.class, tid);
+            "GROUP BY e.piece_id HAVING COUNT(*) >= 4) x " +
+            "JOIN pieces p ON p.id = x.piece_id AND p.tenant_id = ? AND p.status <> 'voided'::piece_status", Long.class, tid, tid);
         Object avg = r.get("avg_age");
         Trust trust = trust(tid, now);
         return new Summary(true, period.range(), now, num(r, "in_wh"), locs, money(dec(r, "value_price")),
