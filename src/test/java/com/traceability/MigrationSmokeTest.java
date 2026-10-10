@@ -63,7 +63,8 @@ class MigrationSmokeTest {
             "tenant_ad_attribution",
             "untracked_unit_intakes",
             "transfer_shopify_syncs",
-            "portal_assets"
+            "portal_assets",
+            "return_request_photos"
     );
 
     @Test
