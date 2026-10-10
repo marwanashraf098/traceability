@@ -5,12 +5,14 @@
 ## Current state
 
 **Returns portal P4a — pre-connect orders: schema + merchant_orders exclusion + guards + leak test (2026-10-11, branch
-`feat/portal-preconnect-p4a` off origin/main 235984e; NOT merged, NOT deployed). Migration V163.** No behaviour change:
+`feat/portal-preconnect-p4a` off origin/main 235984e; merged to main, no squash; NOT deployed). Migration V163.** No behaviour change:
 no code path can create a portal row yet (P4c adds the on-demand fetch).
 - **V163:** `orders.origin` ('shopify' | 'portal_pre_connect', NOT NULL DEFAULT 'shopify'), `shopify_order_gid`
   (partial UNIQUE (tenant_id, gid)), `portal_fetched_at`, `portal_delivered_at`, `portal_delivery` jsonb (PII — P4b must
-  add it to redaction); CHECK portal ⇒ gid + `internal:portal:` external_id. View `merchant_orders` (security_invoker,
-  `WHERE origin <> 'portal_pre_connect'`, app_user SELECT/INSERT/UPDATE/DELETE). Counts 162 / 107.
+  add it to redaction); CHECK `(origin = 'portal_pre_connect') = (external_id LIKE 'internal:portal:%')` (both ways) +
+  `orders_portal_gid_check` (portal ⇒ gid). View `merchant_orders` (security_invoker, `WHERE external_id NOT LIKE
+  'internal:portal:%'` — NOT origin, see Perf; app_user SELECT/INSERT/UPDATE/DELETE); partial index
+  `orders_merchant_tenant_placed_at_idx` (tenant_id, placed_at) on the view's predicate. Counts 162 / 107.
 - **Exclusion:** 146 SQL references in 42 files moved to merchant_orders (reads AND updates). 74 references (67 members)
   stay on `orders`, each classified in `OrdersTableAccessGuardTest.ALLOWLIST`: MUST_INCLUDE 44 members (portal, Requests,
   Scan returns, returns cases, return detectors + the 5 leg-agnostic shipment detectors, GDPR, Overview exchanges tile),
@@ -34,14 +36,20 @@ no code path can create a portal row yet (P4c adds the on-demand fetch).
   filter / committed stock run directly with positive controls. Store cutoff NULL in the test on purpose (analytics floors
   at the cutoff — the test must prove the view, not the floor). Proof: Orders list reverted to `orders` → leak test AND
   Guard 1 red independently.
-- **Perf (30k-order tenant + 4×8k, before vs after, median):** Orders list +10–15% end-to-end (≈ +3 ms page query: the
-  view filter deforms every row to `origin`, the LAST column of a wide row; ≈ +11 ms JIT on the COUNT when JIT runs).
-  Queue / Overview within noise. A partial index doesn't help; filtering the view on `external_id NOT LIKE
-  'internal:portal:%'` (column 4) brings everything within 4% — needs sign-off (changes the approved view definition +
-  an origin ⇔ prefix CHECK).
-- **Next (P4b):** CRP / exchange webhooks for a portal order don't link today (OrderReference skips internal:%) — P4b must
-  link Traced-booked legs by return_requests.bosta_tracking_number; portal eligibility via portal_delivered_at; pickup area /
-  booking from portal_delivery; GDPR by shopify_order_gid; alerts on portal requests must not deep-link to the order page.
+- **Perf (30k-order tenant + 4×8k, before vs after, median; harness in scratch, not committed):** filtering the view on
+  `origin` (the LAST column of a wide row — every row deformed to the end, + extra JIT) cost the Orders list 10–15%;
+  decision 2026-10-11: filter on the external_id prefix (column 4) with the two-way CHECK, V163 edited in place (never
+  applied anywhere). That alone lost Overview's index-only scan on (tenant_id, placed_at) (12 → 963 buffers) → the
+  partial index restores it (12). Final: identical buffer counts for Orders list count / page, queue, late-to-pack,
+  top SKUs; timings within noise (measured under other sessions' load, before/after run concurrently).
+- **P4b REQUIREMENT (correction to Step 0b §5):** a Traced-booked return pickup (type 25) or exchange (type 30) on a
+  portal order does NOT link today — the webhook's strong match is by order reference and `OrderReference` skips
+  `internal:%`, so the leg would land in unlinked deliveries. P4b must link Traced-booked legs on portal orders by
+  `return_requests.bosta_tracking_number` (the request that booked it), never by order reference — before the
+  reference / phone+COD matchers run.
+- **Next (P4b), also:** portal eligibility via portal_delivered_at; pickup area / booking from portal_delivery; GDPR by
+  shopify_order_gid (CustomerSubject) + portal_delivery in redaction; refund suggestion by gid; alerts on portal requests
+  must not deep-link to the order page.
 
 **Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; merged to main,
 no squash; NOT deployed). Migration V162.** Privacy policy 1.4 (item photos; EN only, RP.39 tracks AR). Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;

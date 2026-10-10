@@ -20,7 +20,8 @@
 -- portal_delivery     the original Bosta delivery's tracking number, drop-off address and receiver
 --                     (pickup area + booking read it, P4b). Customer PII — redacted with the order.
 --
--- merchant_orders: every order EXCEPT portal rows. security_invoker, so RLS on orders applies as
+-- merchant_orders: every order EXCEPT portal rows (filtered on the external_id prefix, which the
+--   identity CHECK makes equivalent to origin; MerchantOrdersViewColumnsTest pins the predicate). security_invoker, so RLS on orders applies as
 --   the querying role (app_user); the WHERE also filters on BYPASSRLS owner pools and in tests.
 --   It is a simple view, so UPDATE through it works and can only touch visible rows. Every
 --   merchant-facing query reads and writes merchant_orders; only the classified allowlist in
@@ -44,16 +45,27 @@ ALTER TABLE orders
 ALTER TABLE orders
     ADD CONSTRAINT orders_origin_check
         CHECK (origin IN ('shopify', 'portal_pre_connect')),
+    -- origin and the external_id prefix mean the same thing, both ways — so merchant_orders can
+    -- filter on external_id (an early column, cheap to read) instead of origin (the LAST column of a
+    -- wide row: filtering on it cost the Orders list 10-15%, measured in P4a).
     ADD CONSTRAINT orders_portal_identity_check
-        CHECK (origin <> 'portal_pre_connect'
-               OR (shopify_order_gid IS NOT NULL AND external_id LIKE 'internal:portal:%'));
+        CHECK ((origin = 'portal_pre_connect') = (external_id LIKE 'internal:portal:%')),
+    ADD CONSTRAINT orders_portal_gid_check
+        CHECK (origin <> 'portal_pre_connect' OR shopify_order_gid IS NOT NULL);
 
 CREATE UNIQUE INDEX ux_orders_tenant_shopify_order_gid
     ON orders (tenant_id, shopify_order_gid)
     WHERE shopify_order_gid IS NOT NULL;
 
+-- The view's predicate needs the heap, so a query that was index-only on (tenant_id, placed_at)
+-- (Overview's order counts) would read every row. The same index, partial on the view's predicate,
+-- keeps it index-only (measured: 12 → 963 → 10 buffers).
+CREATE INDEX orders_merchant_tenant_placed_at_idx
+    ON orders (tenant_id, placed_at)
+    WHERE external_id NOT LIKE 'internal:portal:%';
+
 CREATE VIEW merchant_orders WITH (security_invoker = true) AS
-    SELECT * FROM orders WHERE origin <> 'portal_pre_connect';
+    SELECT * FROM orders WHERE external_id NOT LIKE 'internal:portal:%';
 
 -- Same privileges app_user has on orders (V1 grants SELECT, INSERT, UPDATE, DELETE).
 GRANT SELECT, INSERT, UPDATE, DELETE ON merchant_orders TO app_user;

@@ -21,14 +21,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * P4a Guard 2 — merchant_orders (V163) is "SELECT * FROM orders WHERE origin <> 'portal_pre_connect'",
+ * P4a Guard 2 — merchant_orders (V163) is "SELECT * FROM orders WHERE external_id NOT LIKE 'internal:portal:%'",
  * and Postgres freezes the * when the view is created. A migration that adds an orders column
  * without re-creating the view leaves merchant code unable to see it; this test catches that
  * (CLAUDE.md rule: re-create merchant_orders in the same migration).
  *
  * Also pins what the rest of P4a relies on: security_invoker (RLS on orders applies as app_user),
  * app_user's privileges equal its privileges on orders, a portal row is invisible and
- * un-updatable through the view, and the V163 constraints.
+ * un-updatable through the view, the view's predicate (external_id, never origin — origin is the last
+ * column of a wide row and filtering on it cost the Orders list 10-15%), and the V163 constraints.
  */
 @Testcontainers
 class MerchantOrdersViewColumnsTest {
@@ -73,6 +74,20 @@ class MerchantOrdersViewColumnsTest {
                 .as("merchant_orders must expose exactly the columns of orders. A migration that "
                     + "changed an orders column must re-create merchant_orders in the same migration.")
                 .containsExactlyElementsOf(table);
+        }
+    }
+
+    /** Nobody may silently swap the predicate back to origin (or anything else). */
+    @Test
+    void viewFiltersOnTheExternalIdPrefix() throws Exception {
+        try (Connection c = owner(); Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT pg_get_viewdef('public.merchant_orders'::regclass, true)")) {
+            rs.next();
+            String where = rs.getString(1).replaceAll("\\s+", " ");
+            where = where.substring(where.toUpperCase().lastIndexOf("WHERE"));
+            assertThat(where)
+                .as("merchant_orders must filter on the external_id prefix only (V163; see CLAUDE.md)")
+                .isEqualTo("WHERE external_id !~~ 'internal:portal:%'::text;");
         }
     }
 
@@ -140,13 +155,17 @@ class MerchantOrdersViewColumnsTest {
             s.execute("INSERT INTO tenants (id, name) VALUES ('" + tenant + "', 'v163 constraints')");
             s.execute("INSERT INTO stores (id, tenant_id, shop_domain) VALUES (gen_random_uuid(), '" + tenant
                 + "', 'v163c-" + tenant + ".myshopify.com')");
-            // a portal row needs its Shopify GID and an internal:portal: external_id
+            // origin and the internal:portal: prefix are equivalent BOTH ways
             assertThatThrownBy(() -> insertOrder(s, UUID.randomUUID(), tenant, "gid://shopify/Order/9", "#9",
                 "'portal_pre_connect'", "'gid://shopify/Order/9'"))
-                .hasMessageContaining("orders_portal_identity_check");
+                .as("a portal-origin row without the prefix").hasMessageContaining("orders_portal_identity_check");
+            assertThatThrownBy(() -> insertOrder(s, UUID.randomUUID(), tenant, "internal:portal:" + UUID.randomUUID(),
+                "#9", "'shopify'", "NULL"))
+                .as("a shopify-origin row with an internal:portal: id").hasMessageContaining("orders_portal_identity_check");
+            // a portal row needs its Shopify GID
             assertThatThrownBy(() -> insertOrder(s, UUID.randomUUID(), tenant, "internal:portal:" + UUID.randomUUID(),
                 "#9", "'portal_pre_connect'", "NULL"))
-                .hasMessageContaining("orders_portal_identity_check");
+                .hasMessageContaining("orders_portal_gid_check");
             assertThatThrownBy(() -> insertOrder(s, UUID.randomUUID(), tenant, "x:1", "#9", "'manual'", "NULL"))
                 .hasMessageContaining("orders_origin_check");
 
