@@ -317,17 +317,38 @@ public interface ShopifyGateway {
      * inventoryMoveQuantities. on_hand is unchanged — the unit leaves the sellable pool.
      * Location stays fixed (from and to are the same locationGid); only the state name changes.
      *
+     * Exactly one HTTP attempt (2026-10-10, D7) — classified like {@link #pushTransferOut}: HTTP 4xx,
+     * userErrors (insufficient-available included) and THROTTLED-only-with-no-data are definite
+     * ({@link ShopifyException}); a 5xx, a timeout / connection error, any other top-level GraphQL
+     * error or an unreadable / empty body is {@link ShopifyAmbiguousException}.
+     *
      * @param quantity must be > 0
+     * @param referenceDocumentUri traced://piece/{piece_id} — Shopify requires it on inventoryMoveQuantities
+     *                       (a null one was rejected in production, 2026-10-10)
      * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
      *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
      *                       same logical operation (Shopify dedupes server-side on this key).
      * @throws IllegalArgumentException if quantity <= 0 — checked BEFORE any network call
-     * @throws ShopifyException         on Shopify userErrors, including insufficient-available
-     *                                  (caller must treat this as a clean failure, never retry-forced)
+     * @throws ShopifyException         definite: nothing was applied (never retry-forced by the caller)
+     * @throws ShopifyAmbiguousException no confirmed response — the caller must never re-send it
      */
     void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
                                  String locationGid, int quantity, String reason,
-                                 String idempotencyKey);
+                                 String referenceDocumentUri, String idempotencyKey);
+
+    /**
+     * Piece sync (2026-10-10, D7) — +1 for ONE piece coming back to good (hold_exit, and since D5/D11
+     * piece_write_off_return / damaged_restore_increment). inventoryAdjustQuantities with a POSITIVE
+     * delta — the FR-17 v2 increment shape, not a decrement — sent in exactly one HTTP attempt and
+     * classified like {@link #pushTransferOut} (definite {@link ShopifyException} / ambiguous
+     * {@link ShopifyAmbiguousException}), so an unconfirmed +1 is never sent twice.
+     *
+     * @param positiveDelta        must be > 0 — checked BEFORE any network call
+     * @param referenceDocumentUri traced://piece/{piece_id}
+     */
+    void pushPieceIncrement(String shopDomain, String token, String inventoryItemGid,
+                            String locationGid, int positiveDelta, String reason,
+                            String referenceDocumentUri, String idempotencyKey);
 
     /** One variant's inventoryItem GID paired with its negative write-off delta. */
     record InventoryDelta(String inventoryItemGid, int negativeDelta) {}

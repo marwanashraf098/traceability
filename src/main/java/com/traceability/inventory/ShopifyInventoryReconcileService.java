@@ -332,6 +332,8 @@ public class ShopifyInventoryReconcileService {
 
             int superseded = supersedeIncrementClaims(tenantId, ctx.tracedLocationId(), snapshotAt,
                 seededVariants, onHandAtSnapshot.keySet())
+                + supersedePieceClaims(tenantId, ctx.tracedLocationId(), snapshotAt,
+                    seededVariants, onHandAtSnapshot.keySet())
                 + supersedeStockTakePushes(tenantId, ctx.tracedLocationId(), snapshotAt,
                     seededVariants, onHandAtSnapshot.keySet());
 
@@ -349,7 +351,7 @@ public class ShopifyInventoryReconcileService {
 
     /**
      * Marks 'superseded_by_seed' every increment claim (receiving_session / return_inspection /
-     * hold_exit — legacy or not) at the Traced location that never applied ('failed' or 'pending')
+     * stock_take_found / transfer_return — legacy or not; hold_exit is a piece claim since 2026-10-10) at the Traced location that never applied ('failed' or 'pending')
      * and was created at or before the on-hand snapshot, for a variant this run either
      *   - SEEDED: Shopify now holds Traced's on-hand, which already counts the claim's units (or
      *     they have since left on-hand) — a retry would double count; or
@@ -384,6 +386,40 @@ public class ShopifyInventoryReconcileService {
         int n = rows == null ? 0 : rows;
         if (n > 0) {
             log.info("Initial seed superseded {} unapplied increment claim(s): tenant={} location={} snapshot={}",
+                n, tenantId, tracedLocationId, snapshotAt);
+        }
+        return n;
+    }
+
+    /**
+     * Piece-sync claims (PieceShopifyRules.PIECE_TRIGGERS — the −1s, the damage moves and the +1s of
+     * Lookup adjustments) at the Traced location that were never sent or never confirmed ('queued',
+     * 'pending' or 'failed') and were created at or before the on-hand snapshot, for the same variants
+     * as {@link #supersedeIncrementClaims}: the seed pushed Traced's on-hand, which already reflects
+     * the piece's status, so sending the claim now would count it twice (D7, 2026-10-10).
+     */
+    private int supersedePieceClaims(UUID tenantId, UUID tracedLocationId, java.sql.Timestamp snapshotAt,
+                                     List<UUID> seededVariants, java.util.Set<UUID> onHandPositive) {
+        Integer rows = jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Integer>) con -> {
+            try (var ps = con.prepareStatement(
+                    "UPDATE shopify_inventory_adjustments SET status = 'superseded_by_seed', " +
+                    "       superseded_at = now(), next_attempt_at = NULL " +
+                    "WHERE tenant_id = ? AND location_id = ? " +
+                    "  AND trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL +
+                    "  AND status IN ('queued', 'pending', 'failed') " +
+                    "  AND created_at <= ? " +
+                    "  AND (variant_id = ANY(?) OR NOT (variant_id = ANY(?)))")) {
+                ps.setObject(1, tenantId);
+                ps.setObject(2, tracedLocationId);
+                ps.setTimestamp(3, snapshotAt);
+                ps.setArray(4, con.createArrayOf("uuid", seededVariants.toArray()));
+                ps.setArray(5, con.createArrayOf("uuid", onHandPositive.toArray()));
+                return ps.executeUpdate();
+            }
+        });
+        int n = rows == null ? 0 : rows;
+        if (n > 0) {
+            log.info("Initial seed superseded {} unsent piece claim(s): tenant={} location={} snapshot={}",
                 n, tenantId, tracedLocationId, snapshotAt);
         }
         return n;

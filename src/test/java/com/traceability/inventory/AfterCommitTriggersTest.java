@@ -116,7 +116,7 @@ class AfterCommitTriggersTest {
     void unhold_committed() throws Exception {
         T t = tenant("uc");
         String piece = heldPiece(t);
-        AtomicReference<String> seen = onShopify(t, piece, Call.ADJUST);
+        AtomicReference<String> seen = onShopify(t, piece, Call.INCREMENT);
 
         callLate(t, () -> adjust.unhold(piece, t.user()));
 
@@ -131,6 +131,7 @@ class AfterCommitTriggersTest {
         callRolledBack(t, () -> adjust.unhold(piece, t.user()));
         assertNothing(t, "hold_exit");
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
     }
 
     // ── adjustPiece available → damaged (damage_move) ─────────────────────────────
@@ -201,7 +202,7 @@ class AfterCommitTriggersTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────────
 
-    enum Call { ADJUST, DAMAGE, VOID, HOLD }
+    enum Call { ADJUST, INCREMENT, DAMAGE, VOID, HOLD }
 
     /** When the given Shopify call arrives, record the piece's COMMITTED status as seen then. */
     private AtomicReference<String> onShopify(T t, String piece, Call call) {
@@ -210,8 +211,10 @@ class AfterCommitTriggersTest {
         switch (call) {
             case ADJUST -> doAnswer(record).when(shopifyGateway)
                 .adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+            case INCREMENT -> doAnswer(record).when(shopifyGateway)
+                .pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
             case DAMAGE -> doAnswer(record).when(shopifyGateway)
-                .moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+                .moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
             case VOID -> doAnswer(record).when(shopifyGateway)
                 .pushVoidCorrection(any(), any(), any(), any(), anyInt(), any(), any());
             case HOLD -> doAnswer(record).when(shopifyGateway)
@@ -256,13 +259,13 @@ class AfterCommitTriggersTest {
 
     /** No claim of any trigger (or none of triggerType, when the fixture already holds others) and no Shopify write. */
     private void assertNothing(T t, String... triggerType) {
-        String sql = "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ?" +
+        String sql = "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type <> 'initial_seed'" +
             (triggerType.length > 0 ? " AND trigger_type = '" + triggerType[0] + "'" : "");
         assertThat(jdbc.queryForObject(sql, Integer.class, t.tenant())).as("a rolled-back caller creates no claim").isZero();
         if (triggerType.length == 0) {
             verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
         }
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
         verify(shopifyGateway, never()).pushVoidCorrection(any(), any(), any(), any(), anyInt(), any(), any());
         if (!(triggerType.length > 0 && "hold_exit".equals(triggerType[0]))) {
             verify(shopifyGateway, never()).pushHoldEnter(any(), any(), any(), any(), anyInt(), any(), any());
@@ -286,14 +289,19 @@ class AfterCommitTriggersTest {
             product, tenant, store, "gid://shopify/Product/" + shop);
         jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku, shopify_inventory_item_id) " +
             "VALUES (?, ?, ?, ?, 'V', ?, ?)", variant, tenant, product, "gid://shopify/ProductVariant/" + shop, "SKU-" + name, item);
+        // D4 (2026-10-10): piece sync writes only for a seeded main warehouse — seeded an hour ago.
+        jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
+            "trigger_type, trigger_id, status, created_at) VALUES (?, ?, ?, ?, 1, 'initial_seed', 'fixture-seed:' || ?, " +
+            "'applied', now() - interval '1 hour')", tenant, UUID.randomUUID(), variant, location, tenant.toString());
         return new T(tenant, store, shop, location, traced, user, variant, item);
     }
 
     private String piece(T t, String status, UUID receiptId) {
         int k = seq.incrementAndGet();
         String id = String.format("01AFTERCOMMIT%013d", k);
-        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, receipt_id) " +
-            "VALUES (?, ?, ?, ?::piece_status, ?, ?, ?, ?)", id, t.tenant(), t.variant(), status,
+        // Received a day ago — before the seed, so Shopify counts it (D4).
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, receipt_id, created_at) " +
+            "VALUES (?, ?, ?, ?::piece_status, ?, ?, ?, ?, now() - interval '1 day')", id, t.tenant(), t.variant(), status,
             "AC-" + k, String.format("A%07d", k), t.location(), receiptId);
         return id;
     }

@@ -193,6 +193,14 @@ class ShopifyInventoryTest {
             "VALUES (?, ?, 'Showroom', ?, 'linked', false)",
             locationNotFulfillment, tenantId, OTHER_GID);
 
+        // D4 (2026-10-10): piece sync writes only for a seeded main warehouse — an applied initial
+        // seed an hour ago; the damage pieces (seedAvailablePiece) were received before it.
+        jdbc.update(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, created_at) " +
+            "VALUES (?, ?, ?, ?, 5, 'initial_seed', 'seed:' || ?, 'applied', now() - interval '1 hour')",
+            tenantId, UUID.randomUUID(), variantA, locationId, tenantId.toString());
+
         // Piece for si4 (return inspection trigger).
         pieceId = "01HTEST0000000000000000001";
         jdbc.update(
@@ -413,9 +421,9 @@ class ShopifyInventoryTest {
     private String seedAvailablePiece(String barcode, UUID locationId) {
         String id = "01HTESTDMG" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+            "INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, created_at) " +
             "VALUES (?, ?, ?, 'available'::piece_status, ?, " +
-            "    'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?)",
+            "    'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?, now() - interval '1 day')",
             id, tenantId, variantA, barcode, id, locationId);
         return id;
     }
@@ -438,11 +446,12 @@ class ShopifyInventoryTest {
         }
 
         verify(shopifyGateway).moveAvailableToDamaged(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("damaged"), any());
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("damaged"),
+            eq("traced://piece/" + dmgPieceId), any());
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT status, trigger_type FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
             dmgPieceId, tenantId);
         assertThat(row.get("status")).isEqualTo("applied");
     }
@@ -475,10 +484,10 @@ class ShopifyInventoryTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
             Long.class, allocatedPieceId, tenantId);
         assertThat(count).as("si8: allocated piece never reaches a damage-move write").isZero();
     }
@@ -489,7 +498,7 @@ class ShopifyInventoryTest {
                 eq("gid://shopify/ProductVariant/101")))
             .thenReturn("gid://shopify/InventoryItem/201");
         doThrow(new ShopifyException("inventoryMoveQuantities failed: insufficient available quantity"))
-            .when(shopifyGateway).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+            .when(shopifyGateway).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
 
         String dmgPieceId = seedAvailablePiece("BC-SI9-001", locationId);
 
@@ -506,7 +515,7 @@ class ShopifyInventoryTest {
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT status, error FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
             dmgPieceId, tenantId);
         assertThat(row.get("status")).as("si9: fails cleanly, never forced").isEqualTo("failed");
         assertThat(row.get("error").toString()).contains("insufficient");
@@ -534,10 +543,10 @@ class ShopifyInventoryTest {
 
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
             Long.class, rpiPieceId, tenantId);
         assertThat(count).as("si10: return_pending_inspection->damaged never produces a damage_move row").isZero();
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
     }
 
     // ── si11: increment-only guard (core, source-level) ──────────────────────
@@ -653,10 +662,12 @@ class ShopifyInventoryTest {
             return "test-token";
         });
 
+        // Piece sync (D7): the claim is written in adjustPiece's transaction; its after-commit push is
+        // the "winner" and blocks inside preconditions with the claim already 'pending'.
         Thread winner = new Thread(() -> {
             TenantContext.set(tenantId);
             try {
-                service.onSellablePieceDamaged(tenantId, dmgPieceId, locationId).get(10, TimeUnit.SECONDS);
+                pieceAdjustService.adjustPiece(dmgPieceId, "damaged", "damaged_in_storage", null, null);
             } catch (Exception ignored) {
             } finally {
                 TenantContext.clear();
@@ -668,29 +679,31 @@ class ShopifyInventoryTest {
             .as("si13: winner must reach resolvePreconditions before the duplicate fires")
             .isTrue();
 
-        String statusWhilePending = jdbc.queryForObject(
-            "SELECT status FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
-            String.class, dmgPieceId, tenantId);
-        assertThat(statusWhilePending)
+        Map<String, Object> pending = jdbc.queryForMap(
+            "SELECT id, status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
+            dmgPieceId, tenantId);
+        assertThat(pending.get("status"))
             .as("si13: claim already committed as pending BEFORE Shopify is ever called")
             .isEqualTo("pending");
 
+        // The duplicate: the same claim sent again while the first send is in flight.
         TenantContext.set(tenantId);
         try {
-            service.onSellablePieceDamaged(tenantId, dmgPieceId, locationId).get(5, TimeUnit.SECONDS);
+            service.pushPieceClaim(tenantId, (Long) pending.get("id")).get(5, TimeUnit.SECONDS);
         } finally {
             TenantContext.clear();
         }
 
         releaseWinner.countDown();
         winner.join(10_000);
+        Thread.sleep(300);
 
         verify(shopifyGateway, times(1)).moveAvailableToDamaged(
-            anyString(), anyString(), anyString(), anyString(), eq(1), anyString(), any());
+            anyString(), anyString(), anyString(), anyString(), eq(1), anyString(), anyString(), any());
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            "WHERE trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ? AND tenant_id = ?",
             Long.class, dmgPieceId, tenantId);
         assertThat(count).as("si13: exactly one row — the duplicate never claimed").isEqualTo(1L);
     }

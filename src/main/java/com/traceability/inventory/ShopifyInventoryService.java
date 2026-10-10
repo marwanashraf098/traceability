@@ -3,6 +3,7 @@ package com.traceability.inventory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.shopify.ShopifyAdjustFailedException;
+import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -153,94 +154,45 @@ public class ShopifyInventoryService {
         return CompletableFuture.completedFuture(null);
     }
 
-    // ── Trigger 3: currently-sellable piece damaged in the warehouse ────────
+    // ── Piece sync (Lookup adjustments ↔ Shopify, 2026-10-10, D3/D7) ─────────
 
     /**
-     * Called once PieceAdjustService.adjustPiece()'s available→damaged transition has committed
-     * ({@link #afterCommit}). NOT called for return_pending_inspection→damaged (ReturnService.markDamaged
-     * has no call here — that verdict was never sellable in Shopify, so nothing moves).
+     * Claim-before-call for a piece LEAVING the sellable pool — void_correction (−1), hold_enter (−1),
+     * damage_move (available → damaged). Runs in the CALLER's transaction (the one that writes the
+     * piece event), before the transition: PieceShopifyRules.countedAtMain decides, and the claim row
+     * is written 'queued' (send it after commit — see {@link #pushPieceClaim}) or 'skipped' with its
+     * reason. Returns the claim id to push, or null when nothing is to be sent.
      */
-    @Async
-    public CompletableFuture<Void> onSellablePieceDamaged(UUID tenantId, String pieceId, UUID locationId) {
-        TenantContext.runAs(tenantId, () -> {
-            try {
-                processDamageMove(pieceId, locationId);
-            } catch (Exception e) {
-                log.error("Shopify inventory sync failed: trigger=damage_move piece={}", pieceId, e);
-            }
-        });
-        return CompletableFuture.completedFuture(null);
+    public Long claimPieceDeparture(UUID tenantId, String triggerType, String pieceId, String triggerId) {
+        if (!PieceShopifyRules.DEPARTURE_TRIGGERS.contains(triggerType)) {
+            throw new IllegalArgumentException("not a piece departure trigger: " + triggerType);
+        }
+        PieceShopifyRules.Verdict v = PieceShopifyRules.countedAtMain(jdbc, tenantId, pieceId);
+        int delta = "damage_move".equals(triggerType) ? 0 : -1;
+        return insertPieceClaim(tenantId, pieceId, v, delta, triggerType, triggerId);
     }
 
-    // ── Trigger: FR-13.x void correction (named decrement set — CLAUDE.md) ──
-
     /**
-     * Called once PieceAdjustService.voidPiece()'s available→voided transition has committed
-     * ({@link #afterCommit}).
-     * Decrements only if the piece's originating receiving increment actually applied
-     * (checked against shopify_inventory_adjustments for that piece's receipt session) —
-     * see processVoidCorrection() for the exact query. If the increment never fired, the
-     * on_hand count is already correct: no Shopify call, but still recorded ('skipped') here
-     * for audit.
+     * Claim-before-call for a piece coming BACK to available — hold_exit (+1). Same transaction rule
+     * as {@link #claimPieceDeparture}, called before the transition: PieceShopifyRules.departureReached
+     * decides (and cancels the departure claim if it was never sent).
      */
-    @Async
-    public CompletableFuture<Void> onPieceVoided(UUID tenantId, String pieceId, UUID locationId) {
-        TenantContext.runAs(tenantId, () -> {
-            try {
-                processVoidCorrection(pieceId, locationId);
-            } catch (Exception e) {
-                log.error("Shopify inventory sync failed: trigger=void_correction piece={}", pieceId, e);
-            }
-        });
-        return CompletableFuture.completedFuture(null);
+    public Long claimPieceReturn(UUID tenantId, String triggerType, String pieceId, String triggerId) {
+        if (!"hold_exit".equals(triggerType)) {
+            throw new IllegalArgumentException("not a piece return trigger: " + triggerType);
+        }
+        PieceShopifyRules.Verdict v = PieceShopifyRules.departureReached(jdbc, tenantId, pieceId);
+        return insertPieceClaim(tenantId, pieceId, v, 1, triggerType, triggerId);
     }
 
-    // ── Trigger: FR-13.x hold enter (named decrement set — CLAUDE.md) ───────
-
-    /**
-     * Called once PieceAdjustService.hold()'s available→on_hold transition has committed
-     * ({@link #afterCommit}).
-     * holdEventId scopes the trigger to THIS hold cycle — a piece can be held, released, and
-     * held again, so piece_id alone would collide with a prior cycle's already-'applied' claim
-     * row (the UNIQUE(trigger_type, trigger_id, variant_id, location_id) constraint only
-     * reclaims from 'failed' — see claim()'s javadoc).
-     */
+    /** Sends one piece claim after its transaction committed (registered via {@link #afterCommit}). */
     @Async
-    public CompletableFuture<Void> onHoldEnter(UUID tenantId, String pieceId, UUID locationId, UUID holdEventId) {
+    public CompletableFuture<Void> pushPieceClaim(UUID tenantId, long claimId) {
         TenantContext.runAs(tenantId, () -> {
             try {
-                processHoldEnter(pieceId, locationId, holdEventId);
+                pushPieceClaimNow(tenantId, claimId, false);
             } catch (Exception e) {
-                log.error("Shopify inventory sync failed: trigger=hold_enter piece={}", pieceId, e);
-            }
-        });
-        return CompletableFuture.completedFuture(null);
-    }
-
-    // ── Trigger: FR-13.x hold exit — EXISTING positive path, not a decrement ─
-
-    /**
-     * Called once PieceAdjustService.unhold()'s on_hold→available transition has committed
-     * ({@link #afterCommit}).
-     * Reuses the SAME positive-delta path as receiving/return-inspection (applyIncrementAdjustment)
-     * — this is an increment, not part of the named decrement set, needs no new gateway method.
-     * holdEventId must be the SAME id used by the onHoldEnter() call for this cycle so the two
-     * halves of one hold cycle claim distinct rows from any other cycle of the same piece.
-     */
-    @Async
-    public CompletableFuture<Void> onHoldExit(UUID tenantId, String pieceId, UUID locationId, UUID holdEventId) {
-        TenantContext.runAs(tenantId, () -> {
-            try {
-                UUID variantId = resolveVariantForPiece(pieceId);
-                if (variantId == null) {
-                    log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
-                    return;
-                }
-                UUID batchId = UUID.randomUUID();
-                applyIncrementAdjustment(batchId, variantId, locationId, 1,
-                                          "hold_exit", pieceId + ":" + holdEventId, "hold_exit");
-            } catch (Exception e) {
-                log.error("Shopify inventory sync failed: trigger=hold_exit piece={}", pieceId, e);
+                log.error("Shopify piece sync push failed unexpectedly claim={}", claimId, e);
             }
         });
         return CompletableFuture.completedFuture(null);
@@ -432,179 +384,225 @@ public class ShopifyInventoryService {
                    p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
     }
 
-    // ── Void correction processing ───────────────────────────────────────────
+    // ── Piece sync engine ────────────────────────────────────────────────────
 
-    private record PieceReceiptRow(UUID variantId, UUID receiptId) {}
-
-    private void processVoidCorrection(String pieceId, UUID locationId) {
-        UUID tenantId = TenantContext.require();
-        UUID batchId = UUID.randomUUID();
-
-        PieceReceiptRow row = tx.execute(status ->
-            jdbc.query(
-                "SELECT variant_id, receipt_id FROM pieces WHERE id = ? AND tenant_id = ?",
-                rs -> rs.next() ? new PieceReceiptRow(
-                    rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)) : null,
-                pieceId, tenantId));
-        if (row == null) {
-            log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
-            return;
+    /** Writes a piece claim — 'queued' when the verdict says send, 'skipped' + reason otherwise.
+     *  ON CONFLICT DO NOTHING: a repeat of the same trigger never claims twice. */
+    private Long insertPieceClaim(UUID tenantId, String pieceId, PieceShopifyRules.Verdict v, int delta,
+                                  String triggerType, String triggerId) {
+        UUID variantId = jdbc.queryForObject(
+            "SELECT variant_id FROM pieces WHERE id = ? AND tenant_id = ?", UUID.class, pieceId, tenantId);
+        if (isReviewFixtureVariant(tenantId, variantId, triggerType, triggerId)) return null;
+        ObjectNode payload = mapper.createObjectNode().put("piece_id", pieceId).put("delta", delta);
+        if (delta == 0) payload.put("moveQuantity", 1);
+        if (v.via() != null) payload.put("via", v.via());
+        List<Long> ids = jdbc.query(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, skip_reason) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?) " +
+            "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING RETURNING id",
+            (rs, i) -> rs.getLong(1),
+            tenantId, UUID.randomUUID(), variantId, v.locationId(), delta, triggerType, triggerId,
+            payload.toString(), v.write() ? "queued" : "skipped", v.skipReason());
+        if (ids.isEmpty()) {
+            log.debug("Shopify piece sync: {} {} already claimed", triggerType, triggerId);
+            return null;
         }
-
-        if (!isFulfillmentLocation(tenantId, locationId, "void_correction", pieceId)) {
-            return;
+        if (!v.write()) {
+            log.info("Shopify piece sync skipped: trigger={} triggerId={} reason={}", triggerType, triggerId, v.skipReason());
+            return null;
         }
-
-        ObjectNode initialPayload = mapper.createObjectNode().put("reason", "void").put("delta", -1);
-        if (!claim(tenantId, batchId, row.variantId(), locationId, -1, "void_correction", pieceId, initialPayload)) {
-            log.debug("Shopify inventory: void_correction already claimed, skipping duplicate call piece={}", pieceId);
-            return;
-        }
-
-        // Did this piece's originating receiving increment actually apply? Receiving syncs
-        // per (session, variant, location) — not per piece — so this is the closest per-piece
-        // signal available (see Step-0 diagnosis, section C.10): no per-piece flag exists.
-        boolean incrementApplied = row.receiptId() != null && Boolean.TRUE.equals(tx.execute(status ->
-            jdbc.query(
-                "SELECT EXISTS (SELECT 1 FROM shopify_inventory_adjustments " +
-                "WHERE tenant_id = ? AND trigger_type = 'receiving_session' AND trigger_id = ? " +
-                "  AND variant_id = ? AND location_id = ? AND status = 'applied')",
-                rs -> rs.next() && rs.getBoolean(1),
-                tenantId, row.receiptId().toString(), row.variantId(), locationId)));
-
-        if (!incrementApplied) {
-            markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId, null, null,
-                       "skipped", "Receiving increment never applied for this piece's session — on_hand already correct");
-            return;
-        }
-
-        Preconditions p = resolvePreconditions(tenantId, row.variantId(), locationId, "void_correction", pieceId);
-        if (p.error() != null) {
-            markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId,
-                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
-            return;
-        }
-
-        String status;
-        String error = null;
-        try {
-            String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, "void_correction", pieceId, row.variantId(), locationId);
-            shopify.pushVoidCorrection(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                        p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
-            status = "applied";
-        } catch (Exception e) {
-            status = "failed";
-            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            log.warn("Shopify inventory void correction failed: piece={} variant={} error={}",
-                     pieceId, row.variantId(), error);
-        }
-
-        markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId,
-                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+        return ids.get(0);
     }
-
-    // ── Hold enter processing ────────────────────────────────────────────────
-
-    private void processHoldEnter(String pieceId, UUID locationId, UUID holdEventId) {
-        UUID tenantId = TenantContext.require();
-        UUID batchId = UUID.randomUUID();
-        String triggerId = pieceId + ":" + holdEventId;
-
-        UUID variantId = resolveVariantForPiece(pieceId);
-        if (variantId == null) {
-            log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
-            return;
-        }
-
-        if (!isFulfillmentLocation(tenantId, locationId, "hold_enter", triggerId)) {
-            return;
-        }
-
-        ObjectNode initialPayload = mapper.createObjectNode().put("reason", "hold").put("delta", -1);
-        if (!claim(tenantId, batchId, variantId, locationId, -1, "hold_enter", triggerId, initialPayload)) {
-            log.debug("Shopify inventory: hold_enter already claimed, skipping duplicate call piece={}", pieceId);
-            return;
-        }
-
-        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "hold_enter", triggerId);
-        if (p.error() != null) {
-            markResult(tenantId, "hold_enter", triggerId, variantId, locationId,
-                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
-            return;
-        }
-
-        String status;
-        String error = null;
-        try {
-            String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, "hold_enter", triggerId, variantId, locationId);
-            shopify.pushHoldEnter(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                   p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
-            status = "applied";
-        } catch (Exception e) {
-            status = "failed";
-            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            log.warn("Shopify inventory hold enter failed: piece={} variant={} error={}",
-                     pieceId, variantId, error);
-        }
-
-        markResult(tenantId, "hold_enter", triggerId, variantId, locationId,
-                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
-    }
-
-    // ── Manual repush (FR-13.x exceptions center integration) ────────────────
 
     /**
-     * Manual, synchronous, one-shot re-attempt of a FAILED void_correction, hold_enter or
-     * (Step 5a) exchange_dispatch adjustment — a deliberate operator action after seeing the ExceptionService
-     * 'void_hold_sync_failed' detector fire, not a hot path (same "manual action" reasoning
-     * as ShopifyInventoryReconcileService.apply()). Full auto-repush parity (failed_ambiguous
-     * classification, scheduled retry) is explicitly deferred — this is a single re-attempt.
+     * ONE attempt for one piece claim: queued / failed → pending (a conditional UPDATE — the
+     * one-sender guard; failed only while attempts remain, unless {@code manual}), preconditions,
+     * the call, the outcome — classified exactly like the transfer push (TransferShopifySync):
+     *   applied | failed (definite — ShopifyException, or never sent) | failed_ambiguous (no confirmed
+     *   answer — ShopifyAmbiguousException or anything unexpected after the call started; NEVER sent
+     *   again, by the sweep or by hand). Legacy claims (before piece_sync_cutoff()) are never sent.
+     */
+    public void pushPieceClaimNow(UUID tenantId, long claimId, boolean manual) {
+        Map<String, Object> c = tx.execute(st -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "UPDATE shopify_inventory_adjustments sia SET status = 'pending', send_started_at = now(), " +
+                "    attempt_count = attempt_count + 1, first_attempt_at = COALESCE(first_attempt_at, now()), " +
+                "    last_attempt_at = now() " +
+                "WHERE sia.id = ? AND sia.tenant_id = ? AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL +
+                "  AND " + PieceShopifyRules.LIVE_SQL +
+                "  AND (sia.status = 'queued' OR (sia.status = 'failed' AND (sia.attempt_count < ? OR ?))) " +
+                "RETURNING trigger_type, trigger_id, variant_id, location_id, attempt_count",
+                claimId, tenantId, PieceShopifyRules.MAX_ATTEMPTS, manual);
+            return rows.isEmpty() ? null : rows.get(0);
+        });
+        if (c == null) return;   // sent / being sent / ambiguous / exhausted / legacy
+        String triggerType = (String) c.get("trigger_type");
+        String triggerId   = (String) c.get("trigger_id");
+        UUID variantId     = (UUID) c.get("variant_id");
+        UUID locationId    = (UUID) c.get("location_id");
+        int attempt        = ((Number) c.get("attempt_count")).intValue();
+        String pieceId     = triggerId.split(":", 2)[0];
+        if (!PieceShopifyRules.PIECE_TRIGGERS.contains(triggerType)) return;
+
+        Preconditions p;
+        try {
+            p = resolvePreconditions(tenantId, variantId, locationId, triggerType, triggerId);
+        } catch (RuntimeException e) {
+            markPieceResult(tenantId, claimId, "failed", "Not sent: " + messageOf(e), "never_sent", null, null);
+            return;
+        }
+        if (p.error() != null) {
+            markPieceResult(tenantId, claimId, "failed", "Not sent: " + p.error(), "never_sent",
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
+            return;
+        }
+        // The claim key for the first attempt; after a definite rejection (nothing applied) a fresh key
+        // per attempt, so Shopify never replays the rejected answer (IncrementRecoveryRules.retryKey).
+        String key = attempt <= 1
+            ? ShopifyGateway.idempotencyKey(tenantId, triggerType, triggerId, variantId, locationId)
+            : IncrementRecoveryRules.retryKey(tenantId, triggerType, triggerId, variantId, locationId, attempt);
+        String ref = "traced://piece/" + pieceId;
+
+        if ("hold_exit".equals(triggerType)) {
+            // Lazy activation (no quantity) — if it fails, the +1 was never sent: definite.
+            try {
+                shopify.activateInventoryItem(p.shopDomain(), p.token(), p.shopifyInventoryItemId(), p.shopifyLocationId(),
+                    ShopifyCatalogActivationService.activationKey(tenantId, variantId, p.shopifyLocationId()));
+            } catch (Exception e) {
+                markPieceResult(tenantId, claimId, "failed", "Not sent — activation at the Traced location failed: "
+                    + messageOf(e), "never_sent", p.shopifyInventoryItemId(), p.shopifyLocationId());
+                return;
+            }
+        }
+        try {
+            switch (triggerType) {
+                case "void_correction" -> shopify.pushVoidCorrection(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
+                case "hold_enter" -> shopify.pushHoldEnter(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
+                case "damage_move" -> shopify.moveAvailableToDamaged(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "damaged", ref, key);
+                case "hold_exit" -> shopify.pushPieceIncrement(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
+                default -> throw new IllegalArgumentException("no Shopify call for piece trigger " + triggerType);
+            }
+            markPieceResult(tenantId, claimId, "applied", null, null, p.shopifyInventoryItemId(), p.shopifyLocationId());
+        } catch (ShopifyAmbiguousException e) {
+            markPieceResult(tenantId, claimId, "failed_ambiguous", messageOf(e), "ambiguous",
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
+            log.error("Shopify piece sync AMBIGUOUS trigger={} triggerId={} — verify in Shopify, NOT re-sending: {}",
+                triggerType, triggerId, messageOf(e));
+        } catch (ShopifyException e) {
+            markPieceResult(tenantId, claimId, "failed", messageOf(e), "rejected",
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
+        } catch (IllegalArgumentException e) {
+            markPieceResult(tenantId, claimId, "failed", "Not sent: " + messageOf(e), "never_sent",
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
+        } catch (RuntimeException e) {
+            markPieceResult(tenantId, claimId, "failed_ambiguous", e.getClass().getSimpleName() + ": " + messageOf(e),
+                "ambiguous", p.shopifyInventoryItemId(), p.shopifyLocationId());
+        }
+    }
+
+    private static String messageOf(Throwable e) {
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+    }
+
+    /** The outcome of one attempt. A failure is recorded only over 'pending' (the seed may have
+     *  superseded the claim mid-flight); a success is always recorded — it is the truth. */
+    private void markPieceResult(UUID tenantId, long claimId, String status, String error, String failureClass,
+                                 String shopifyInventoryItemId, String shopifyLocationId) {
+        Integer n = tx.execute(st -> jdbc.update(
+            "UPDATE shopify_inventory_adjustments SET status = ?, error = ?, failure_class = ?, " +
+            "    shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+            "    shopify_location_id = COALESCE(?, shopify_location_id), " +
+            "    applied_at = CASE WHEN ? = 'applied' THEN now() ELSE applied_at END " +
+            "WHERE id = ? AND tenant_id = ? AND (status = 'pending' OR ? = 'applied')",
+            status, error, failureClass, shopifyInventoryItemId, shopifyLocationId, status,
+            claimId, tenantId, status));
+        if (!"applied".equals(status)) {
+            log.warn("Shopify piece sync recorded as {}: claim={} error={}", status, claimId, error);
+        } else if (n != null && n > 0) {
+            log.info("Shopify piece sync applied: claim={}", claimId);
+        }
+    }
+
+    /**
+     * The piece-sync sweep (PieceShopifySweepJob, every 10 min; tests call it directly): a claim
+     * 'pending' for 15+ minutes may have reached Shopify → failed_ambiguous (never re-sent); then
+     * sends this tenant's queued claims (a crash before the after-commit push) and re-sends definite
+     * failures while attempts remain. Legacy claims (before piece_sync_cutoff()) are never touched.
+     */
+    public int sweepPieceClaims(UUID tenantId) {
+        tx.execute(st -> jdbc.update(
+            "UPDATE shopify_inventory_adjustments sia SET status = 'failed_ambiguous', failure_class = 'ambiguous', " +
+            "    error = 'Send started but never confirmed — verify in Shopify' " +
+            "WHERE sia.tenant_id = ? AND sia.status = 'pending' AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL +
+            "  AND " + PieceShopifyRules.LIVE_SQL + " AND sia.send_started_at < now() - interval '15 minutes'",
+            tenantId));
+        List<Long> due = tx.execute(st -> jdbc.queryForList(
+            "SELECT sia.id FROM shopify_inventory_adjustments sia " +
+            "WHERE sia.tenant_id = ? AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL +
+            "  AND " + PieceShopifyRules.LIVE_SQL +
+            "  AND ((sia.status = 'queued' AND sia.created_at < now() - interval '1 minute') " +
+            "    OR (sia.status = 'failed' AND sia.attempt_count < ?)) " +
+            "ORDER BY sia.created_at, sia.id LIMIT 50", Long.class, tenantId, PieceShopifyRules.MAX_ATTEMPTS));
+        if (due == null) return 0;
+        for (Long id : due) pushPieceClaimNow(tenantId, id, false);
+        return due.size();
+    }
+
+    // ── Manual repush (exceptions center) ────────────────────────────────────
+
+    /**
+     * A person re-sends ONE failed claim after seeing the void_hold_sync_failed alert. Piece claims
+     * (PieceShopifyRules.PIECE_TRIGGERS): only a DEFINITE failure ('failed') of a live claim is ever
+     * re-sent — 'failed_ambiguous' is refused (Shopify may already hold it; a person checks Shopify),
+     * and a legacy claim (before piece sync existed) is reconciled by hand. exchange_dispatch keeps its
+     * Step 5a path (same claim key → same idempotency key).
      *
-     * Reuses claim()'s EXISTING "ON CONFLICT ... WHERE status = 'failed'" reclaim branch — no
-     * new claim mechanism, no new gateway call shape. Reads locationId off the STORED
-     * adjustment row (not the piece's current_location_id, which may have moved since) so the
-     * retry targets the exact same location the original attempt did.
-     *
-     * @throws ResponseStatusException 404 if no matching row; 409 if it is not currently 'failed'
+     * @throws ResponseStatusException 400 unknown trigger type; 404 no such claim; 409 not re-sendable
      */
     public void repushFailedVoidOrHold(String triggerType, String triggerId) {
         UUID tenantId = TenantContext.require();
-        if (!"void_correction".equals(triggerType) && !"hold_enter".equals(triggerType)
-                && !"exchange_dispatch".equals(triggerType)) {
+        boolean piece = PieceShopifyRules.PIECE_TRIGGERS.contains(triggerType);
+        if (!piece && !"exchange_dispatch".equals(triggerType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "triggerType must be void_correction, hold_enter or exchange_dispatch");
+                "triggerType must be a piece sync trigger or exchange_dispatch");
         }
 
-        record FailedRow(UUID locationId, String status) {}
+        record FailedRow(long id, UUID locationId, String status, boolean live) {}
         FailedRow row = tx.execute(status ->
             jdbc.query(
-                "SELECT location_id, status FROM shopify_inventory_adjustments " +
-                "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ?",
-                rs -> rs.next() ? new FailedRow(rs.getObject(1, UUID.class), rs.getString(2)) : null,
+                "SELECT id, location_id, status, created_at >= piece_sync_cutoff() AS live " +
+                "FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ?",
+                rs -> rs.next() ? new FailedRow(rs.getLong(1), rs.getObject(2, UUID.class), rs.getString(3),
+                                                 rs.getBoolean(4)) : null,
                 tenantId, triggerType, triggerId));
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "No adjustment found for " + triggerType + "/" + triggerId);
         }
+        if ("failed_ambiguous".equals(row.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Shopify never confirmed this update — it may already be applied. Check Shopify and fix it there; " +
+                "it is never re-sent.");
+        }
         if (!"failed".equals(row.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Adjustment is not in 'failed' status (current: " + row.status() + ")");
         }
-
-        if ("void_correction".equals(triggerType)) {
-            processVoidCorrection(triggerId, row.locationId());
-        } else if ("exchange_dispatch".equals(triggerType)) {
+        if (!piece) {
             // Same claim key → same deterministic idempotency key as the failed attempt.
             processExchangeDispatch(triggerId, row.locationId());
-        } else {
-            String[] parts = triggerId.split(":", 2);
-            if (parts.length != 2) {
-                throw new IllegalStateException("Malformed hold_enter trigger_id: " + triggerId);
-            }
-            processHoldEnter(parts[0], row.locationId(), UUID.fromString(parts[1]));
+            return;
         }
+        if (!row.live()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Recorded before automatic piece sync — reconcile it in Shopify by hand");
+        }
+        pushPieceClaimNow(tenantId, row.id(), true);
     }
 
     // ── Receiving session processing ─────────────────────────────────────────
@@ -724,18 +722,6 @@ public class ShopifyInventoryService {
             tenantId, batchId, variantId, locationId, triggerId,
             mapper.createObjectNode().put("reason", "restock").put("delta", 1).toString(),
             status, reason, orderId);
-    }
-
-    // ── Damage move processing ───────────────────────────────────────────────
-
-    private void processDamageMove(String pieceId, UUID locationId) {
-        UUID batchId = UUID.randomUUID();
-        UUID variantId = resolveVariantForPiece(pieceId);
-        if (variantId == null) {
-            log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
-            return;
-        }
-        applyDamageMove(batchId, variantId, locationId, pieceId);
     }
 
     private UUID resolveVariantForPiece(String pieceId) {
@@ -1073,7 +1059,6 @@ public class ShopifyInventoryService {
     private static String reasonFor(String triggerType) {
         return switch (triggerType) {
             case "receiving_session" -> "received";
-            case "hold_exit" -> "hold_exit";
             case "stock_take_found" -> "correction";
             case "transfer_return" -> "movement_received";
             default -> "restock";
@@ -1142,52 +1127,6 @@ public class ShopifyInventoryService {
         }
     }
 
-    // ── Trigger 3 core: available→damaged move ───────────────────────────────
-
-    private void applyDamageMove(UUID batchId, UUID variantId, UUID locationId, String pieceId) {
-        UUID tenantId = TenantContext.require();
-
-        if (!isFulfillmentLocation(tenantId, locationId, "damage_move", pieceId)) {
-            return;
-        }
-
-        ObjectNode initialPayload = mapper.createObjectNode()
-            .put("reason", "damaged").put("delta", 0).put("moveQuantity", 1);
-        if (!claim(tenantId, batchId, variantId, locationId, 0, "damage_move", pieceId, initialPayload)) {
-            log.debug("Shopify inventory: damage move already claimed, skipping duplicate call piece={}", pieceId);
-            return;
-        }
-
-        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "damage_move", pieceId);
-
-        if (p.error() != null) {
-            markResult(tenantId, "damage_move", pieceId, variantId, locationId,
-                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
-            return;
-        }
-
-        String status;
-        String error = null;
-        try {
-            // on_hand unchanged — the unit leaves the sellable pool (available -> damaged).
-            // Insufficient-available or any other Shopify userError fails cleanly here —
-            // never forced, never retried automatically. See ShopifyGateway.moveAvailableToDamaged.
-            String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, "damage_move", pieceId, variantId, locationId);
-            shopify.moveAvailableToDamaged(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                            p.shopifyLocationId(), 1, "damaged", idempotencyKey);
-            status = "applied";
-        } catch (Exception e) {
-            status = "failed";
-            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            log.warn("Shopify inventory damage move failed: piece={} variant={} error={}",
-                     pieceId, variantId, error);
-        }
-
-        markResult(tenantId, "damage_move", pieceId, variantId, locationId,
-                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
-    }
-
     // ── Shared guards / persistence ──────────────────────────────────────────
 
     /** Only is_fulfillment=true locations ever reach a Shopify call — any other location
@@ -1250,15 +1189,7 @@ public class ShopifyInventoryService {
         // Shopify — external_id isn't a gid://shopify/ id) are never synced: no claim row, so no
         // Shopify call and no failed claim / alert. Its real Shopify variants (the reviewer's store)
         // sync exactly as for any tenant. Callers treat "not claimed" as "nothing to do".
-        if (Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM tenant_courier_simulation WHERE tenant_id = ?) " +
-                "   AND EXISTS (SELECT 1 FROM variants WHERE id = ? AND tenant_id = ? " +
-                "                 AND external_id NOT LIKE 'gid://shopify/%')",
-                Boolean.class, tenantId, variantId, tenantId))) {
-            log.info("Review mode: skipped Shopify inventory claim for non-Shopify variant {} " +
-                     "(trigger={} triggerId={})", variantId, triggerType, triggerId);
-            return false;
-        }
+        if (isReviewFixtureVariant(tenantId, variantId, triggerType, triggerId)) return false;
 
         String payloadJsonTmp;
         try { payloadJsonTmp = mapper.writeValueAsString(initialPayload); }
@@ -1274,6 +1205,19 @@ public class ShopifyInventoryService {
             tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, payloadJsonTmp, sourceOrderId);
 
         return rows > 0;
+    }
+
+    private boolean isReviewFixtureVariant(UUID tenantId, UUID variantId, String triggerType, String triggerId) {
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM tenant_courier_simulation WHERE tenant_id = ?) " +
+                "   AND EXISTS (SELECT 1 FROM variants WHERE id = ? AND tenant_id = ? " +
+                "                 AND external_id NOT LIKE 'gid://shopify/%')",
+                Boolean.class, tenantId, variantId, tenantId))) {
+            log.info("Review mode: skipped Shopify inventory claim for non-Shopify variant {} " +
+                     "(trigger={} triggerId={})", variantId, triggerType, triggerId);
+            return true;
+        }
+        return false;
     }
 
     /** markResult() for an increment attempt (Part D): also records the failure class, the baseline
