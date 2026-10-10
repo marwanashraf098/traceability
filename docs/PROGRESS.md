@@ -4,6 +4,33 @@
 
 ## Current state
 
+**Analytics pre-launch fixes (2026-10-10, branch `analytics/prelaunch-fixes`, merged to main; NOT deployed; no
+migration). Group D + phone build approved after the fact.**
+- **Stock health count:** `/stock/summary` `piecesMovedFourPlus` leaves out voided pieces — the same rule as
+  `/pieces?minTrips=4`, the list the card opens (`StockAnalyticsService`). Test `PrelaunchFixesTest` (summary == list
+  total, voided excluded); revert-checked.
+- **Bad request parameters, app-wide:** `ApiExceptionHandler` maps `TypeMismatchException` (covers
+  `MethodArgumentTypeMismatchException`, query and path) and `MissingServletRequestParameterException` to 400
+  `{error: "BAD_REQUEST_PARAM", message: "Parameter 'x' has the wrong type" | "... is required"}` — names the parameter,
+  never echoes the value. Was the catch-all 500. Nothing relied on the 500 (grepped src/main, src/test, frontend).
+  Tested on analytics (`/analytics/pieces?minTrips=x`, `/analytics/variants/not-a-uuid/orders`, missing `by` on
+  `/analytics/revenue/breakdown`) and non-analytics (`/orders?page=abc`); both handlers revert-checked.
+- **Payout check wording confirmed, no change:** status Paid / Scheduled only; when Bosta's batch total exceeds Traced's
+  amount, a neutral info note "Bosta's batch also includes EGP X from shipments not tracked in Traced" (AR: "دفعة بوسطة
+  تشمل أيضًا X من شحنات لا يتتبعها Traced"). Guarded by `analyticsMoneyOrders.test.tsx` mo4 (no short/differ text, no
+  critical/warning/red class).
+- **Suites:** backend 2681, 4 failures = the ExchangeBackfillTest baseline + 3 clock-skew flakes
+  (BostaPollJobTest.p6, PasswordResetTest.resetPassword_expiredCode_rejected,
+  ShopifyMagicLinkTest.expiry_expiredToken_isMagicLinkInvalid) — all pass rerun alone; clean origin/main 40eca42 had only
+  the baseline. Frontend: 5 load timeouts (~251 s each, build took 18 min alongside) — the 4 files pass alone (61/61). After merging origin 2668cc7 (portal logo preview fix): tsc clean, vitest
+  865/865, build clean.
+- **Gotcha — clock skew after Mac sleep:** the Docker VM clock drifts from the JVM's ("clock leap" warnings). Code that
+  mixes DB `now()` with Java time then misbehaves in tests — e.g. `BostaStatusPollJob`'s safety net compares
+  `last_polled_at` (DB clock) with Java `cycleStart`. Proposed separately (not done): use one clock (the DB's) there.
+  Restart Docker Desktop before a full suite if the Mac slept.
+- **Still to do:** the flag flip (owner's build command above); requirements-checklist ticks skipped — the other session
+  has uncommitted edits to that file.
+
 **Phone build: collapsible shell menu, Orders ?order=<id>, analytics order links (2026-10-09, branch `analytics/phone-menu`,
 merged to main; NOT deployed).** Checked first: no worktree (main tree and the other session's included) had changes to
 Layout.tsx / Orders.tsx / App.tsx / OrderDrawer.tsx.
@@ -65,6 +92,7 @@ main behind the flag; NOT deployed, flag OFF). All eight analytics pages are bui
 - **Deferred to the post-D follow-up (with the phone menu):** the Orders page accepts `?order=<id>` and Analytics links
   order numbers to it.
 - **Gotcha:** `mvn test` downloads Node into `frontend/node/` (untracked) — never `git add frontend` wholesale.
+
 **Fix — portal logo preview broken in Settings (2026-10-10, branch `fix/portal-logo-preview`, merged to main; NOT
 deployed).** Live bug after P1: the uploaded logo showed as alt text in Settings → Branding and the preview header was
 empty. Cause: the settings page turned the authenticated logo into a `blob:` object URL, and app.tracedtech.com's CSP
