@@ -29,6 +29,28 @@ export function refreshAccessToken(): Promise<string> {
 const RETRY_FLAG = Symbol('retry')
 type RetryOpts = RequestInit & { [RETRY_FLAG]?: true }
 
+/**
+ * The shared 401 handling: on a first 401, join (or start) the one in-flight refresh; if this was
+ * already the retry, or the refresh fails → clear the token and go to /login (no loop).
+ */
+async function refreshOrLogout(isRetry: boolean): Promise<void> {
+  if (isRetry) {
+    clearAccessToken()
+    window.location.href = '/login'
+    throw new Error('Unauthenticated')
+  }
+  try {
+    if (!refreshPromise) {
+      refreshPromise = doRefresh().finally(() => { refreshPromise = null })
+    }
+    await refreshPromise
+  } catch {
+    clearAccessToken()
+    window.location.href = '/login'
+    throw new Error('Unauthenticated')
+  }
+}
+
 export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T> {
   const token = getAccessToken()
   const res = await fetch(BASE + path, {
@@ -42,23 +64,7 @@ export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T>
   })
 
   if (res.status === 401) {
-    // If this IS the retry, the refresh itself failed → real logout (no loop).
-    if (opts[RETRY_FLAG]) {
-      clearAccessToken()
-      window.location.href = '/login'
-      throw new Error('Unauthenticated')
-    }
-    // Kick off one shared refresh, or join an already in-flight one.
-    try {
-      if (!refreshPromise) {
-        refreshPromise = doRefresh().finally(() => { refreshPromise = null })
-      }
-      await refreshPromise
-    } catch {
-      clearAccessToken()
-      window.location.href = '/login'
-      throw new Error('Unauthenticated')
-    }
+    await refreshOrLogout(!!opts[RETRY_FLAG])
     // Retry the original request exactly once with the new access token.
     return request<T>(path, { ...opts, [RETRY_FLAG]: true })
   }
@@ -3048,6 +3054,8 @@ export interface PortalLogoInfo {
   height: number
   /** Changes whenever the logo does. */
   version: string
+  /** The public versioned URL the portal uses (null while there's no slug). */
+  url?: string | null
 }
 
 /**
@@ -3158,15 +3166,32 @@ export function removePortalLogo() {
   return request<PortalSettings>('/tenant/portal-settings/logo', { method: 'DELETE' })
 }
 
-/** P1 — the uploaded logo's bytes for the settings preview; null when there is none. */
-export async function fetchPortalLogo(): Promise<Blob | null> {
+/**
+ * P1 — the uploaded logo for the settings thumbnail and preview, as a data: URL; null when there
+ * is none. Authenticated (Bearer, the shared refresh on a 401), and a data: URL because the app's
+ * CSP allows img-src data: but not blob: (an object URL was refused on app.tracedtech.com).
+ */
+export async function fetchPortalLogo(retry = false): Promise<string | null> {
   const token = getAccessToken()
   const res = await fetch(`${BASE}/tenant/portal-settings/logo`, {
     credentials: 'include',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
+  if (res.status === 401) {
+    await refreshOrLogout(retry)
+    return fetchPortalLogo(true)
+  }
   if (!res.ok) return null
-  return res.blob()
+  return blobToDataUrl(await res.blob())
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the logo'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 export interface PortalVariantRow {

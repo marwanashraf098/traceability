@@ -94,8 +94,6 @@ beforeEach(() => {
   FakeXhr.sent = []
   uploadReply = { status: 200, body: { ...settings, logo: LOGO_INFO } }
   vi.stubGlobal('XMLHttpRequest', FakeXhr)
-  globalThis.URL.createObjectURL = vi.fn(() => 'blob:logo')
-  globalThis.URL.revokeObjectURL = vi.fn()
   stubFetchWithShellDefaults(vi.fn(backend))
 })
 
@@ -132,8 +130,8 @@ describe('Settings → Returns portal → Branding', () => {
     expect(FakeXhr.sent[0].file?.name).toBe('nour-logo.png')
     // Saved without "Save changes" — which stays disabled (nothing else changed).
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
-    await waitFor(() => expect(screen.getByTestId('preview-en-logo')).toHaveAttribute('src', 'blob:logo'))
-    expect(screen.getByTestId('preview-ar-logo')).toHaveAttribute('src', 'blob:logo')
+    await waitFor(() => expect(screen.getByTestId('preview-en-logo')).toHaveAttribute('src', 'data:image/png;base64,eA=='))
+    expect(screen.getByTestId('preview-ar-logo')).toHaveAttribute('src', 'data:image/png;base64,eA==')
 
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     expect(await screen.findByText('Logo removed')).toBeInTheDocument()

@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Fix — portal logo preview broken in Settings (2026-10-10, branch `fix/portal-logo-preview`, merged to main; NOT
+deployed).** Live bug after P1: the uploaded logo showed as alt text in Settings → Branding and the preview header was
+empty. Cause: the settings page turned the authenticated logo into a `blob:` object URL, and app.tracedtech.com's CSP
+(`deploy/nginx.conf`, app server block) allows `img-src 'self' data: …` — not `blob:`; the images had no onError, so
+the preview rendered an empty `<img alt="">`. The public portal was fine (same-origin `?v=` URL). Fix: `fetchPortalLogo`
+goes through the shared 401-refresh path (`refreshOrLogout`, extracted from `request()`, behaviour unchanged) and returns a
+`data:` URL (FileReader); createObjectURL / revoke removed; preview onError → store-name wordmark, thumbnail onError →
+neutral placeholder. Tests: `portalLogoPreview.test.tsx` (3: CSP contract — parses img-src from the app server block of
+nginx.conf and checks every logo src against it; the two onError fallbacks) — RED on the old code, GREEN after. Existing
+`portalBranding.test.tsx` edited (approved): the preview src is now the data: URL. vitest 835/835, tsc + build clean.
+**Lesson:** jsdom enforces no CSP and loads no images — any new image/script source on app.tracedtech.com needs the
+CSP contract check, not just an src assertion.
+
 **Returns portal P1 — branding: uploaded logo + portal font + per-IP lookup throttle (2026-10-09, branch
 `feat/portal-branding-p1` off origin/main 4755f0a; merged to main 2026-10-10, no squash; NOT deployed). Migration V159.** Mockup signed off:
 `design/Traced_portal_branding_dc.html`. Decisions (signed off): the Shopify Files link stays, folded under "Use a

@@ -1,6 +1,6 @@
 import { CSSProperties, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, CircleAlert, Upload } from 'lucide-react'
+import { Check, CircleAlert, Image as ImageIcon, Upload } from 'lucide-react'
 import {
   PORTAL_LOGO_MAX_BYTES, PortalSettings, PortalSettingsError, fetchPortalLogo, removePortalLogo, uploadPortalLogo,
 } from '../../api'
@@ -24,24 +24,27 @@ function formatSize(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-/** The saved logo's bytes as an object URL, refetched whenever its version changes. */
+/**
+ * The saved logo as a data: URL (fetchPortalLogo — authenticated; data: because the app's CSP
+ * allows img-src data: but not blob:), refetched whenever its version changes.
+ */
 export function useUploadedLogoUrl(version: string | null | undefined): string | null {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => {
     if (!version) { setUrl(null); return }
     let cancelled = false
-    let created: string | null = null
-    fetchPortalLogo().then(blob => {
-      if (cancelled || !blob) return
-      created = URL.createObjectURL(blob)
-      setUrl(created)
-    }).catch(() => { /* the preview falls back to the wordmark */ })
-    return () => {
-      cancelled = true
-      if (created) URL.revokeObjectURL(created)
-    }
+    fetchPortalLogo().then(dataUrl => {
+      if (!cancelled) setUrl(dataUrl)
+    }).catch(() => { if (!cancelled) setUrl(null) })   // the preview falls back to the wordmark
+    return () => { cancelled = true }
   }, [version])
   return url
+}
+
+/** True once this src failed to load; resets when the src changes. */
+function useImageFailed(src: string | null): [boolean, () => void] {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  return [!!src && failedSrc === src, () => setFailedSrc(src)]
 }
 
 // ── Logo ─────────────────────────────────────────────────────────────────────
@@ -67,6 +70,7 @@ export function LogoUploader({ settings, logoUrl, onChange }: {
   const [dragging, setDragging] = useState(false)
   const [removing, setRemoving] = useState(false)
   const logo = settings.logo ?? null
+  const [thumbFailed, onThumbError] = useImageFailed(logoUrl)
 
   function errorFor(code: string | null, name: string, size: number): string {
     const key = code === 'FILE_TOO_LARGE' ? 'LOGO_TOO_LARGE' : code
@@ -178,8 +182,14 @@ export function LogoUploader({ settings, logoUrl, onChange }: {
     body = (
       <div className="flex items-center gap-4 rounded-xl border border-line bg-panel p-3.5 flex-wrap" data-testid="logo-saved">
         <div className="w-[200px] h-[72px] rounded-lg border border-line bg-white shrink-0 grid place-items-center p-2.5">
-          {logoUrl && <img src={logoUrl} alt={t('settings.portal.branding.logoPreview')} className="max-h-11 max-w-[170px] object-contain"
-            data-testid="uploaded-logo-preview" />}
+          {logoUrl && !thumbFailed && <img src={logoUrl} alt={t('settings.portal.branding.logoPreview')}
+            className="max-h-11 max-w-[170px] object-contain" data-testid="uploaded-logo-preview" onError={onThumbError} />}
+          {logoUrl && thumbFailed && (
+            <span className="w-11 h-11 rounded-lg bg-elevated text-muted grid place-items-center" aria-hidden="true"
+              data-testid="logo-placeholder">
+              <ImageIcon className="w-5 h-5" />
+            </span>
+          )}
         </div>
         <div className="flex-1 min-w-[140px]">
           <p className="text-body font-medium text-primary truncate" dir="auto">{fileName ?? t('settings.portal.branding.yourLogo')}</p>
@@ -340,12 +350,15 @@ function MiniPortal({ lang, style, logoSrc, storeName, label }: {
 }) {
   const copy = lang === 'ar' ? portalAr : portalEn
   const semibold = { fontWeight: 'var(--pp-w600, 600)' } as CSSProperties
+  // A logo that fails to load shows the store-name wordmark, as the portal does.
+  const [failed, onError] = useImageFailed(logoSrc)
   return (
     <div role="img" aria-label={label} className="rounded-xl border border-line overflow-hidden bg-[#F7F7F5] shadow-sm"
       dir={lang === 'ar' ? 'rtl' : 'ltr'} lang={lang} style={style} data-testid={`preview-${lang}`}>
       <div className="h-12 ps-3.5 pe-2 flex items-center gap-1 bg-white border-b border-[#E6E7E3]">
-        {logoSrc
-          ? <img src={logoSrc} alt="" className="h-7 max-w-[140px] object-contain" data-testid={`preview-${lang}-logo`} />
+        {logoSrc && !failed
+          ? <img src={logoSrc} alt="" className="h-7 max-w-[140px] object-contain" data-testid={`preview-${lang}-logo`}
+              onError={onError} />
           : <span className="text-[14px] font-bold tracking-[0.08em] uppercase truncate" style={{ color: 'var(--accent-text)' }}
               dir="auto" data-testid={`preview-${lang}-wordmark`}>{storeName}</span>}
         <span className="flex-1" />
