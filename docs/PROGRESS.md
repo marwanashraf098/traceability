@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Sidebar Option B — Operations | Analytics mode switch (2026-10-11, branch `sidebar-mode-switch` off origin/main
+c52875b, worktree `~/Documents/traceability-modeswitch`; committed + pushed, NOT merged, NOT deployed; frontend only).**
+Replaces A's stacked Analytics section (A = 4137bbc on main, not deployed). Everything else from A unchanged.
+- **Mode = the route, computed in render** (`/analytics/*` → Analytics, else Operations; forced Operations without the
+  switch). Switch only for `role === 'owner' && analyticsEnabled()`. Settings counts as Operations.
+- **Last-visited per mode** (`traced-nav-last-operations` / `-analytics`, recorded where Layout mounts): Operations stores
+  the nav item path by longest prefix (`/transfers/abc` → `/transfers`, never an id or drawer param); Analytics stores
+  `/analytics/<ready page>` + `sharedSearch`. Both validated on read, else Overview / Summary. Clicking the active side = no-op.
+- **Switch = tablist** (roving tabindex, MANUAL activation, Home/End, arrows don't wrap so RTL mirroring is real;
+  Up/Down in the rail), nav list = tabpanel, focus-visible ring. Rail: two stacked icons with tooltips. Tabs size to
+  content (flex-auto) so "Analytics BETA" never truncates.
+- **Analytics list:** Summary / MONEY (Revenue, Order finances, Bosta & payouts) / PRODUCTS (Products & SKUs, Stock
+  health) / CUSTOMERS AND DELIVERY (Delivery, Customers); AR المالية / المنتجات / العملاء والتوصيل. `ANALYTICS_PAGES`
+  reordered to this nav order (only Sidebar renders it in order; AnalyticsRoute / links.ts only check membership) —
+  analyticsSummary r2 passes unedited.
+- **Removed:** Analytics fold + flyout + `alignTop`; `traced-analytics-nav` is deleted on mount. (A's flyout had a class
+  typo `overflow-y-autorounded-lg` on main — gone with it.)
+- **Tests:** sidebarReorg rewritten g1, removed g3/f1/f2/f3, g2 + no switch, new m1–m9 (revert-checked: auto activation,
+  RTL mirror, rail orientation, raw ops path, read validation, legacy cleanup). Frontend 906/906 (123 files).
+- **Screenshot gotcha:** analytics pages crash on a `{}` `/connections` mock (they read `bosta.connected`) — mock the
+  real shape (see `analyticsFixtures.connections`).
+
 **Lookup-adjust repair dropped (2026-10-11, branch `chore/drop-lookup-adjust-repair` on main 4137bbc; NOT merged at
 writing, NOT deployed; no migration).** The 2026-10-10 repair is NOT run, and is gone: `OpsLookupAdjustRepairController`,
 `LookupAdjustRepairService`, `scripts/repair-lookup-adjust-2026-10-10`, `ShopifyInventoryService.claimRepairDeparture` /

@@ -9,12 +9,12 @@ export function analyticsEnabled(): boolean {
 export const ANALYTICS_PAGES = [
   { id: 'summary',   ready: true },
   { id: 'revenue',   ready: true },
+  { id: 'orders',    ready: true },
+  { id: 'money',     ready: true },
   { id: 'products',  ready: true },
   { id: 'stock',     ready: true },
   { id: 'delivery',  ready: true },
-  { id: 'money',     ready: true },
   { id: 'customers', ready: true },
-  { id: 'orders',    ready: true },
 ] as const
 
 export type AnalyticsPageId = typeof ANALYTICS_PAGES[number]['id']
