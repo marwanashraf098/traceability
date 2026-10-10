@@ -30,6 +30,15 @@
       "stock": "المستودع",
       "returns": "المرتجعات"
     },
+    "modes": {
+      "label": "وضع القائمة",
+      "operations": "العمليات"
+    },
+    "analyticsSections": {
+      "money": "المالية",
+      "products": "المنتجات",
+      "customers": "العملاء والتوصيل"
+    },
     "collapse": "طي الشريط الجانبي",
     "expand": "توسيع الشريط الجانبي",
     "openMenu": "فتح القائمة",

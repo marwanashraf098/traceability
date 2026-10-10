@@ -30,6 +30,15 @@
       "stock": "Stock",
       "returns": "Returns"
     },
+    "modes": {
+      "label": "Sidebar mode",
+      "operations": "Operations"
+    },
+    "analyticsSections": {
+      "money": "Money",
+      "products": "Products",
+      "customers": "Customers and delivery"
+    },
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
