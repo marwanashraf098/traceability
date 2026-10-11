@@ -461,6 +461,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
         ObjectNode vars = mapper.createObjectNode();
         vars.put("queryStr", "name:\"#" + bare + "\" OR name:\"" + bare + "\"");
         OrderPiiTier tier = orderPiiTier(shopDomain, token);
+        List<String> denied = new ArrayList<>();
         while (true) {
             JsonNode response = postGraphQL(shopDomain, token, portalOrderQuery(tier), vars);
             if (tier != OrderPiiTier.NONE && hasAccessDenied(response)) {
@@ -468,16 +469,19 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 log.warn("Shopify portal lookup: ACCESS_DENIED for customer data at tier {} on {} — retrying at {}",
                          tier, shopDomain, lower);
                 orderPiiTiers.put(shopDomain, new CachedTier(lower, Instant.now().plus(PII_TIER_TTL)));
+                denied.add(tier.name());
                 tier = lower;
                 continue;
             }
             JsonNode errors = response.get("errors");
             if (errors != null && errors.isArray() && errors.size() > 0) {
-                throw new ShopifyException("Shopify GraphQL error on the portal order lookup");
+                // Codes only (extensions.code) — never the messages or the body.
+                throw new ShopifyGraphQLErrorException("Shopify GraphQL error on the portal order lookup",
+                                                       graphQLErrorCodes(errors));
             }
             JsonNode data = response.get("data");
             if (data == null) throw new ShopifyException("Shopify GraphQL response has no data field");
-            return new PortalOrderSearch(parseOrders(data.path("orders")), tier != OrderPiiTier.NONE);
+            return new PortalOrderSearch(parseOrders(data.path("orders")), tier != OrderPiiTier.NONE, List.copyOf(denied));
         }
     }
 
@@ -528,6 +532,16 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
         orderPiiTiers.put(shopDomain, new CachedTier(tier, Instant.now().plus(ttl)));
         return tier;
+    }
+
+    /** Each error's extensions.code ("NO_CODE" when absent), in order — safe to log. */
+    static List<String> graphQLErrorCodes(JsonNode errors) {
+        List<String> codes = new ArrayList<>();
+        for (JsonNode e : errors) {
+            String code = e.path("extensions").path("code").asText("");
+            codes.add(code.matches("[A-Za-z0-9_]{1,64}") ? code : "NO_CODE");
+        }
+        return codes;
     }
 
     private static boolean hasAccessDenied(JsonNode response) {

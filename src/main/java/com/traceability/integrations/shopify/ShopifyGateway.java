@@ -64,9 +64,15 @@ public interface ShopifyGateway {
      * currentQuantity), fulfillments' tracking numbers, payment fields, and the customer fields this
      * store's token may read (the import's tier: shipping / billing address, customer — NEVER email).
      * {@code customerPhoneReadable} is false when the token can read no customer field at all (tier
-     * NONE): the portal then can't check the phone and must not use the order.
+     * NONE): the portal then can't check the phone and must not use the order. {@code deniedTiers}: the
+     * tiers that answered ACCESS_DENIED on this call (diagnostics only — empty when the tier came from
+     * the cache).
      */
-    record PortalOrderSearch(List<Order> orders, boolean customerPhoneReadable) {}
+    record PortalOrderSearch(List<Order> orders, boolean customerPhoneReadable, List<String> deniedTiers) {
+        public PortalOrderSearch(List<Order> orders, boolean customerPhoneReadable) {
+            this(orders, customerPhoneReadable, List.of());
+        }
+    }
 
     default PortalOrderSearch findOrdersByName(String shopDomain, String token, String typedNumber) {
         throw new UnsupportedOperationException("findOrdersByName");
