@@ -75,6 +75,8 @@ class PortalOnDemandLookupTest {
 
     static final Map<String, ObjectNode> DELIVERIES = new ConcurrentHashMap<>();
     static final AtomicInteger GETS = new AtomicInteger();
+    /** Tracking numbers Bosta answers with a 500. */
+    static final Set<String> FAIL_500 = ConcurrentHashMap.newKeySet();
     static final List<JsonNode> POSTS = new CopyOnWriteArrayList<>();
     static volatile String nextTracking = "7400000001";
     static final ObjectMapper M = new ObjectMapper();
@@ -98,7 +100,9 @@ class PortalOnDemandLookupTest {
                     }
                     if ("GET".equals(ex.getRequestMethod()) && path.startsWith("/api/v0/deliveries/")) {
                         GETS.incrementAndGet();
-                        ObjectNode d = DELIVERIES.get(path.substring("/api/v0/deliveries/".length()));
+                        String tnPath = path.substring("/api/v0/deliveries/".length());
+                        if (FAIL_500.contains(tnPath)) { send(ex, 500, "{\"message\":\"Internal Server Error\"}"); return; }
+                        ObjectNode d = DELIVERIES.get(tnPath);
                         if (d == null) { send(ex, 404, "{}"); return; }
                         send(ex, 200, "{\"data\":" + d + "}");
                         return;
@@ -160,7 +164,9 @@ class PortalOnDemandLookupTest {
         r.add("portal.preconnect.lookup-enabled", () -> "true");
         r.add("portal.preconnect.min-duration-ms", () -> String.valueOf(PAD_MS));
         r.add("portal.preconnect.bosta-interval-ms", () -> "0");
-        r.add("portal.preconnect.bosta-max-wait-ms", () -> "1500");
+        // Prod: pad 4000, read reserve 2000, max wait 3000 — the same ratios, smaller.
+        r.add("portal.preconnect.bosta-max-wait-ms", () -> "900");
+        r.add("portal.preconnect.bosta-read-reserve-ms", () -> "600");
         r.add("portal.preconnect.tenant-per-hour", () -> "8");
         r.add("portal.preconnect.ip-per-hour", () -> "5");
         // The shared Bosta limiter's own per-key / global waits would blur the timing measurement; the
@@ -171,7 +177,7 @@ class PortalOnDemandLookupTest {
         r.add("bosta.rate-limit.global-burst", () -> "100");
     }
 
-    static final long PAD_MS = 600;
+    static final long PAD_MS = 1200;
     static final String CAIRO = "FceDyHXwpSYYF9zGW", NASR = "Iy7-lFD0BE0";
     static final String PHONE = "01055501234";
     static final String CUSTOMER = "Salma Placeholder";
@@ -206,6 +212,7 @@ class PortalOnDemandLookupTest {
     @BeforeEach
     void reset() {
         DELIVERIES.clear();
+        FAIL_500.clear();
         GETS.set(0);
         POSTS.clear();
         nextTracking = String.valueOf(ThreadLocalRandom.current().nextLong(7_400_000_000L, 7_499_999_999L));
@@ -271,10 +278,95 @@ class PortalOnDemandLookupTest {
     }
 
     @Test
-    void a5_storeCantDoIt_noBostaKey_unavailable_withZeroCalls() {
-        assertThat(lookup(b, "1201", PHONE).outcome()).isEqualTo(PortalService.Outcome.UNAVAILABLE);
+    void a5_ineligibleStore_noBostaKey_todaysGenericMiss_unpadded_noAttempt_throttledLikeAnyMiss() {
+        long t0 = System.nanoTime();
+        assertThat(lookup(b, "1201", PHONE).outcome()).isEqualTo(PortalService.Outcome.NOT_FOUND);
+        assertThat(ms(t0)).as("no on-demand attempt → not padded").isLessThan(PAD_MS);
         assertNoExternalCalls();
-        assertThat(attemptOutcomes(b)).containsExactly("unavailable");
+        assertThat(attemptOutcomes(b)).as("a plain miss, no on-demand outcome").isEmpty();
+        for (int i = 0; i < 4; i++) lookup(b, "1201", PHONE);
+        assertThat(lookup(b, "1201", PHONE).outcome()).as("counts in the per-order throttle like any miss")
+            .isEqualTo(PortalService.Outcome.THROTTLED);
+    }
+
+    @Test
+    void a6_ineligibleStore_nullCutoff_or_twoConnectedStores_todaysGenericMiss_zeroCalls() {
+        shopifyAndBosta("#1205", true);
+        jdbc.update("UPDATE stores SET orders_ingest_from = NULL WHERE id = ?", a.store());
+        try {
+            long t0 = System.nanoTime();
+            assertThat(lookup(a, "1205", PHONE).outcome()).isEqualTo(PortalService.Outcome.NOT_FOUND);
+            assertThat(ms(t0)).isLessThan(PAD_MS);
+        } finally {
+            jdbc.update("UPDATE stores SET orders_ingest_from = now() - interval '10 days' WHERE id = ?", a.store());
+        }
+        UUID second = UUID.randomUUID();
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, status, orders_ingest_from) " +
+                    "VALUES (?, ?, 'p4c-a-second.myshopify.com', 'connected', now() - interval '10 days')", second, a.id());
+        try {
+            assertThat(lookup(a, "1205", PHONE).outcome()).isEqualTo(PortalService.Outcome.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM stores WHERE id = ?", second);
+        }
+        assertNoExternalCalls();
+        assertThat(attemptOutcomes(a)).isEmpty();
+    }
+
+    @Test
+    void a7_transientBeforeThePhoneCheck_tokenOrShopifyFailure_unavailable_padded() {
+        shopifyAndBosta("#1206", true);
+        when(tokenProvider.getValidToken(any())).thenThrow(new RuntimeException("token refresh failed"));
+        long t0 = System.nanoTime();
+        assertThat(lookup(a, "1206", PHONE).outcome()).isEqualTo(PortalService.Outcome.UNAVAILABLE);
+        assertThat(ms(t0)).isGreaterThanOrEqualTo(PAD_MS);
+
+        doReturn(TOKEN).when(tokenProvider).getValidToken(any());
+        when(shopify.findOrdersByName(anyString(), anyString(), anyString()))
+            .thenThrow(new com.traceability.integrations.shopify.ShopifyException("HTTP 503"));
+        assertThat(lookup(a, "1206", PHONE).outcome()).isEqualTo(PortalService.Outcome.UNAVAILABLE);
+        assertThat(GETS.get()).isZero();
+        assertThat(attemptOutcomes(a)).containsExactly("unavailable", "unavailable");
+    }
+
+    @Test
+    void a8_bosta5xxAfterThePhoneCheck_paddedGenericNotFound_notCached() {
+        String tn = shopifyAndBosta("#1207", true);
+        FAIL_500.add(tn);
+        long t0 = System.nanoTime();
+        PortalService.LookupResult r = lookup(a, "1207", PHONE);
+        assertThat(r.outcome()).as("never UNAVAILABLE after the phone matched").isEqualTo(PortalService.Outcome.NOT_FOUND);
+        assertThat(ms(t0)).isGreaterThanOrEqualTo(PAD_MS);
+        assertThat(GETS.get()).isGreaterThanOrEqualTo(1);
+        int gets = GETS.get();
+        FAIL_500.clear();
+        assertThat(lookup(a, "1207", PHONE).outcome()).as("an outage isn't cached as a fact about the order")
+            .isEqualTo(PortalService.Outcome.SUCCESS);
+        assertThat(GETS.get()).isGreaterThan(gets);
+    }
+
+    @Test
+    void a9_realV0Body_throughTheRealFetchDeliveryMapping_deliveryTimeThenTimelineCode45() throws Exception {
+        Instant delivered = Instant.now().minus(Duration.ofDays(3)).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        String tn = "5551" + (100000 + ThreadLocalRandom.current().nextInt(899999));
+        DELIVERIES.put(tn, realV0(tn, "#1208", delivered, true));
+        stubShopify(order("#1208", Instant.now().minus(Duration.ofDays(20)), PHONE, List.of(a.originalGid()), tn));
+        assertThat(lookup(a, "1208", PHONE).outcome()).isEqualTo(PortalService.Outcome.SUCCESS);
+        assertThat(jdbc.queryForObject("SELECT portal_delivered_at FROM orders WHERE tenant_id = ? AND number = '#1208'",
+            java.sql.Timestamp.class, a.id()).toInstant()).isEqualTo(delivered);
+
+        // No state.deliveryTime → the timeline's code-45 entry (the same instant on prod raws).
+        String tn2 = "5552" + (100000 + ThreadLocalRandom.current().nextInt(899999));
+        DELIVERIES.put(tn2, realV0(tn2, "#1209", delivered, false));
+        stubShopify(order("#1209", Instant.now().minus(Duration.ofDays(20)), PHONE, List.of(a.originalGid()), tn2));
+        assertThat(lookup(a, "1209", PHONE).outcome()).isEqualTo(PortalService.Outcome.SUCCESS);
+        assertThat(jdbc.queryForObject("SELECT portal_delivered_at FROM orders WHERE tenant_id = ? AND number = '#1209'",
+            java.sql.Timestamp.class, a.id()).toInstant()).isEqualTo(delivered);
+
+        // Delivered outside the 14-day window → generic not-found.
+        String tn3 = "5553" + (100000 + ThreadLocalRandom.current().nextInt(899999));
+        DELIVERIES.put(tn3, realV0(tn3, "#1210", Instant.now().minus(Duration.ofDays(30)), true));
+        stubShopify(order("#1210", Instant.now().minus(Duration.ofDays(40)), PHONE, List.of(a.originalGid()), tn3));
+        assertThat(lookup(a, "1210", PHONE).outcome()).isEqualTo(PortalService.Outcome.NOT_FOUND);
     }
 
     // ── the fetch ─────────────────────────────────────────────────────────────
@@ -509,10 +601,15 @@ class PortalOnDemandLookupTest {
         when(shopify.oldestOrder(anyString(), anyString()))
             .thenReturn(Optional.of(order("#1500", Instant.parse("2026-08-12T09:00:00Z"), PHONE, List.of(), null)));
         took.put("too_old", time(() -> lookup(a, "1100", PHONE)));
-        took.put("unavailable", time(() -> lookup(b, "1100", PHONE)));
+        when(tokenProvider.getValidToken(any())).thenThrow(new RuntimeException("token"));
+        took.put("unavailable", time(() -> lookup(a, "ZZ-2", PHONE)));
+        doReturn(TOKEN).when(tokenProvider).getValidToken(any());
         took.put("skip", time(() -> lookup(a, "2060", PHONE)));
         shopifyAndBosta("#1272", true);
         took.put("phone_mismatch", time(() -> lookup(a, "1272", "01000000000")));
+        String tn5 = shopifyAndBosta("#1273", true);
+        FAIL_500.add(tn5);
+        took.put("bosta_5xx", time(() -> lookup(a, "1273", PHONE)));
         for (Map.Entry<String, Long> e : took.entrySet()) {
             assertThat(e.getValue()).as(e.getKey() + " ≥ pad").isGreaterThanOrEqualTo(PAD_MS);
         }
@@ -549,6 +646,38 @@ class PortalOnDemandLookupTest {
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────
+
+    /**
+     * A body shaped like a real Bosta v0 GET /deliveries/{tn} for a delivered SEND (fields as seen on prod
+     * shipment raws: state {code, value, deliveryTime, …}, timeline [{code, value, date, done}], addresses,
+     * receiver, specs, wallet …). {@code withDeliveryTime} false drops state.deliveryTime (timeline fallback).
+     */
+    private ObjectNode realV0(String tn, String reference, Instant delivered, boolean withDeliveryTime) throws Exception {
+        String at = delivered.toString();
+        ObjectNode d = (ObjectNode) M.readTree("""
+            {"_id":"Kq7XnY2pL0","trackingNumber":"%s","type":{"code":10,"value":"Send"},
+             "state":{"code":45,"value":"Delivered","deliveryTime":"%s","waitingForBusinessAction":false,
+                      "receivedAtWarehouse":{"time":"%s","warehouse":{"_id":"w1","name":"Nasr City Hub"}},
+                      "delivering":{"time":"%s"}},
+             "timeline":[{"code":10,"value":"new","date":"%s","done":true},
+                         {"code":21,"value":"picked_up","date":"%s","done":true},
+                         {"code":41,"value":"out_for_delivery","date":"%s","done":true},
+                         {"code":45,"value":"delivered","date":"%s","done":true},
+                         {"code":46,"value":"returned_to_business","done":false}],
+             "businessReference":"%s","cod":640,"numberOfAttempts":1,"notes":"",
+             "dropOffAddress":{"firstLine":"12 Bosta Street, Block 4","secondLine":"Near the pharmacy","floor":"3","apartment":"7",
+                               "city":{"_id":"%s","name":"Cairo","nameAr":"القاهرة"},
+                               "zone":{"_id":"z1","name":"Nasr City"},
+                               "district":{"_id":"%s","name":"Nasr City - 7th District"}},
+             "pickupAddress":{"firstLine":"Merchant warehouse street","city":{"_id":"%s","name":"Cairo"}},
+             "receiver":{"firstName":"Bosta","lastName":"Receiver","fullName":"Bosta Receiver","phone":"+2%s"},
+             "specs":{"packageType":"Parcel","size":"SMALL","packageDetails":{"itemsCount":1,"description":"Linen Shirt"}},
+             "wallet":{"cashCycle":{"cod":640,"bostaFees":55}},
+             "creationTimestamp":"%s","createdAt":"%s","updatedAt":"%s"}
+            """.formatted(tn, at, at, at, at, at, at, at, reference, CAIRO, NASR, CAIRO, PHONE, at, at, at));
+        if (!withDeliveryTime) ((ObjectNode) d.path("state")).remove("deliveryTime");
+        return d;
+    }
 
     private T tenant(String slug, boolean withBosta) {
         UUID id = UUID.randomUUID(), store = UUID.randomUUID(), owner = UUID.randomUUID(), location = UUID.randomUUID();

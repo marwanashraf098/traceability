@@ -88,7 +88,8 @@ portal:
   # P4d ships the portal copy: PORTAL_PRECONNECT_LOOKUP_ENABLED=true turns it on.
   preconnect:
     lookup-enabled: ${PORTAL_PRECONNECT_LOOKUP_ENABLED:false}
-    min-duration-ms: 2500          # every on-demand outcome (except BUSY) takes at least this long
+    min-duration-ms: 4000          # every on-demand outcome (except BUSY) takes at least this long
+    bosta-read-reserve-ms: 2000    # of the pad, kept for the Bosta read itself; the budget wait gets the rest (≤ 3 s)
     tenant-per-hour: 20            # on-demand attempts per tenant per hour
     ip-per-hour: 5                 # on-demand attempts per client IP per hour
     bosta-interval-ms: 5000        # the portal's own Bosta budget: one fetch per 5 s, all tenants

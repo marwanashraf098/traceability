@@ -73,10 +73,15 @@ public class PortalOnDemandLookup {
     /** prefix · digits · suffix — the "shape" two order numbers must share to be compared. */
     private static final Pattern SHAPE = Pattern.compile("^(\\D*?)(\\d{1,18})(\\D*)$");
     private static final int DELIVERED = 45;
-    /** Time kept back for the Bosta read itself when the budget wait is fitted inside the timing pad. */
-    static final long BOSTA_READ_RESERVE_MS = 800;
 
-    public enum Kind { FETCHED, SKIP, NOT_FOUND, TOO_OLD, UNAVAILABLE, BUSY }
+
+    /**
+     * INELIGIBLE: this store can never look old orders up (NULL connect cutoff, no active Bosta key,
+     * simulated courier, not exactly one connected store) — the caller answers today's generic not-found
+     * exactly as with the flag off: unpadded, recorded as a plain miss. SKIP: an eligible store's miss
+     * that needs no external call — padded like every other on-demand outcome.
+     */
+    public enum Kind { FETCHED, SKIP, INELIGIBLE, NOT_FOUND, TOO_OLD, UNAVAILABLE, BUSY }
 
     /** {@code tooOldBefore}: orders placed before this date can't be looked up online (TOO_OLD only). */
     public record Result(Kind kind, UUID orderId, LocalDate tooOldBefore) {
@@ -96,6 +101,7 @@ public class PortalOnDemandLookup {
     private final int tenantPerHour;
     private final int ipPerHour;
     private final long bostaMaxWaitMs;
+    private final long bostaReadReserveMs;
     private final Duration negativeTtl;
     private final Duration oldestTtl;
 
@@ -117,6 +123,7 @@ public class PortalOnDemandLookup {
                                 @Value("${portal.preconnect.tenant-per-hour:20}") int tenantPerHour,
                                 @Value("${portal.preconnect.ip-per-hour:5}") int ipPerHour,
                                 @Value("${portal.preconnect.bosta-max-wait-ms:3000}") long bostaMaxWaitMs,
+                                @Value("${portal.preconnect.bosta-read-reserve-ms:2000}") long bostaReadReserveMs,
                                 @Value("${portal.preconnect.negative-cache-minutes:30}") long negativeMinutes,
                                 @Value("${portal.preconnect.oldest-order-cache-minutes:60}") long oldestMinutes) {
         this.jdbc = jdbc;
@@ -130,6 +137,7 @@ public class PortalOnDemandLookup {
         this.tenantPerHour = tenantPerHour;
         this.ipPerHour = ipPerHour;
         this.bostaMaxWaitMs = bostaMaxWaitMs;
+        this.bostaReadReserveMs = bostaReadReserveMs;
         this.negativeTtl = Duration.ofMinutes(negativeMinutes);
         this.oldestTtl = Duration.ofMinutes(oldestMinutes);
     }
@@ -149,7 +157,7 @@ public class PortalOnDemandLookup {
 
     /**
      * {@code deadlineNanos}: when the caller's timing pad ends (System.nanoTime). The Bosta budget wait
-     * only uses what is left of it (minus {@link #BOSTA_READ_RESERVE_MS} for the read) and never more than
+     * only uses what is left of it (minus {@code bosta-read-reserve-ms} for the read) and never more than
      * {@code bosta-max-wait-ms} — a found order must not take longer than a miss: past the pad the response
      * time would say the number and phone matched (Bosta is only called after that). Too little time left →
      * BUSY, which is answered at once and says nothing about the order.
@@ -167,12 +175,19 @@ public class PortalOnDemandLookup {
         String phone = ShipmentLinkService.normalizePhone(phoneRaw);
         if (phone == null) return Result.of(Kind.SKIP);
 
+        // UNAVAILABLE is answered ONLY for a transient failure of an eligible store BEFORE the phone
+        // check — (a) the Shopify token can't be had (getValidToken throws: missing / revoked / refresh
+        // failed), (b) the Shopify search fails (401 / 403 / 5xx / GraphQL error / timeout), (c) the token
+        // can read no customer field (ACCESS_DENIED on every tier). After the phone matched, any failure is
+        // the padded generic not-found: an answer there must not say the phone was right.
+
         // 1–3: no external call.
         Object pre = inTenant(tenantId, () -> {
+            // The store first: one that can never do this answers every miss exactly as today (unpadded).
+            Tenant t = tenant(tenantId);
+            if (t == null) return Kind.INELIGIBLE;
             if (portalRowExists(tenantId, raw, stripped)) return Kind.SKIP;
             if (atOrAboveLowestIngested(tenantId, stripped)) return Kind.SKIP;
-            Tenant t = tenant(tenantId);
-            if (t == null) return Kind.UNAVAILABLE;
             if (overCaps(tenantId, ipHash)) return Kind.BUSY;
             return t;
         });
@@ -219,11 +234,11 @@ public class PortalOnDemandLookup {
         // 7: Bosta.
         String tracking = bostaTracking(order.raw());
         if (tracking == null) return miss(cacheKey);
-        long leftMs = (deadlineNanos - System.nanoTime()) / 1_000_000L - BOSTA_READ_RESERVE_MS;
+        long leftMs = (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs;
         long maxWait = Math.max(0, Math.min(bostaMaxWaitMs, leftMs));
         if (!budget.tryAcquire(maxWait)) return Result.of(Kind.BUSY);
         long sharedWait = Math.max(0, Math.min(maxWait,
-            (deadlineNanos - System.nanoTime()) / 1_000_000L - BOSTA_READ_RESERVE_MS));
+            (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs));
         BostaDelivery delivery;
         try {
             delivery = BostaRateLimiter.userFacing(() -> BostaRateLimiter.withMaxWait(sharedWait,
@@ -231,7 +246,9 @@ public class PortalOnDemandLookup {
         } catch (BostaRateLimitException e) {
             return Result.of(Kind.BUSY);
         } catch (RuntimeException e) {
-            return Result.of(Kind.UNAVAILABLE);
+            // After the phone check: never UNAVAILABLE (it would say the phone matched). Not cached —
+            // a Bosta outage is not a fact about the order.
+            return Result.of(Kind.NOT_FOUND);
         }
         if (delivery == null || delivery.stateCode() != DELIVERED || delivery.raw() == null) return miss(cacheKey);
         Instant deliveredAt = deliveredAt(delivery.raw());
@@ -373,8 +390,9 @@ public class PortalOnDemandLookup {
     // ── Bosta ────────────────────────────────────────────────────────────────────
 
     /**
-     * When Bosta delivered it: {@code state.deliveryTime}, else the latest completed "delivered"
-     * timeline entry. Null when neither is there — the order is then not eligible.
+     * When Bosta delivered it: {@code state.deliveryTime}, else the latest completed timeline entry with
+     * code 45 (or value "delivered") — confirmed against prod shipment raws: state.code 45 + deliveryTime
+     * equals the timeline's code-45 date. Null when neither is there — the order is then not eligible.
      */
     static Instant deliveredAt(JsonNode raw) {
         Instant t = parse(raw.path("state").path("deliveryTime").asText(null));
@@ -382,7 +400,9 @@ public class PortalOnDemandLookup {
         Instant best = null;
         for (JsonNode e : raw.path("timeline")) {
             if (!e.path("done").asBoolean(false)) continue;
-            if (!"delivered".equalsIgnoreCase(e.path("value").asText("").trim())) continue;
+            boolean delivered = e.path("code").asInt(-1) == DELIVERED
+                || "delivered".equalsIgnoreCase(e.path("value").asText("").trim());
+            if (!delivered) continue;
             Instant d = parse(e.path("date").asText(null));
             if (d != null && (best == null || d.isAfter(best))) best = d;
         }

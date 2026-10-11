@@ -50,11 +50,11 @@ public class PortalService {
 
     /** P4c — the on-demand lookup (absent on hand-built instances: today's behaviour). */
     private PortalOnDemandLookup onDemand;
-    private long onDemandMinMillis = 2500;
+    private long onDemandMinMillis = 4000;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setOnDemand(PortalOnDemandLookup onDemand,
-                            @org.springframework.beans.factory.annotation.Value("${portal.preconnect.min-duration-ms:2500}")
+                            @org.springframework.beans.factory.annotation.Value("${portal.preconnect.min-duration-ms:4000}")
                             long minMillis) {
         this.onDemand = onDemand;
         this.onDemandMinMillis = minMillis;
@@ -166,13 +166,15 @@ public class PortalService {
             case FETCHED -> TenantContext.runAs(tenantId,
                 () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone, ipHash, false, "fetched"))).result();
             case SKIP -> record(tenantId, first, null, LookupResult.notFound());
+            // A store that can never look old orders up: today's answer, unpadded (see below).
+            case INELIGIBLE -> record(tenantId, first, null, LookupResult.notFound());
             case NOT_FOUND -> record(tenantId, first, "not_found", LookupResult.notFound());
             case TOO_OLD -> record(tenantId, first, "too_old",
                 new LookupResult(Outcome.TOO_OLD, Map.of("date", r.tooOldBefore().toString())));
             case UNAVAILABLE -> record(tenantId, first, "unavailable", new LookupResult(Outcome.UNAVAILABLE, null));
             case BUSY -> record(tenantId, first, "busy", new LookupResult(Outcome.BUSY, null));
         };
-        if (out.outcome() != Outcome.BUSY) padTo(started, onDemandMinMillis);
+        if (out.outcome() != Outcome.BUSY && r.kind() != PortalOnDemandLookup.Kind.INELIGIBLE) padTo(started, onDemandMinMillis);
         return Optional.of(out);
     }
 
