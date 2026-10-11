@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Traced — Portal pre-connect lookup (P4d) — Design Concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Mockup only: the build self-hosts fonts via @fontsource (CSP font-src 'self'). -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* =========================================================================
+   Traced Design System v1.0 — merchant tokens + portal.css (customer portal).
+   Locks LAYOUT, COPY and STATES; the build binds to portal.css / ui.tsx.
+   Store branding (P1): The Snouts — brand #0F766E, font Cairo.
+   ========================================================================= */
+:root{
+  --bg:#F7F8FA; --panel:#FFFFFF; --elevated:#F2F4F7; --line:#E5E7EB; --line-strong:#D1D5DB;
+  --text:#111827; --muted:#5B6675; --faint:#828B99;
+  --blue:#2563EB; --blue-soft:#EFF4FF; --success-text:#15803D;
+  --pp-page:#F7F7F5; --pp-line:#E6E7E3; --pp-ink:#141821; --pp-muted:#5B6270; --pp-input:#CFD3D8;
+  --brand:#0F766E; --on-brand:#FFFFFF; --brand-soft:#E3F1EF;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{font-family:'Geist',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;line-height:1.5}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+.review{position:sticky;top:0;z-index:20;display:flex;gap:20px;align-items:center;flex-wrap:wrap;padding:12px 24px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.review b{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.review a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 10px;border-radius:6px}
+.review a:hover{background:var(--elevated);color:var(--text)}
+.frame-title{max-width:1280px;margin:48px auto 16px;padding:0 24px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.frame-title span{font:600 12px/1 'Geist Mono',monospace;color:var(--blue);background:var(--blue-soft);padding:5px 8px;border-radius:6px}
+.frame-title h2{margin:0;font-size:20px;font-weight:600}
+.frame-title p{margin:0;color:var(--muted);font-size:14px}
+.annot{max-width:1280px;margin:14px auto 0;padding:0 24px 0 44px;font-size:13px;color:var(--muted)}
+.annot li{margin:3px 0}
+.page{max-width:1280px;margin:0 auto;padding:0 24px}
+
+/* portal (portal.css) */
+.phones{display:flex;gap:36px;justify-content:center;flex-wrap:wrap}
+.phone{width:390px;border-radius:36px;background:#0B0D12;padding:12px;box-shadow:0 20px 40px rgba(17,24,39,.15)}
+.screen{border-radius:26px;overflow:hidden;min-height:760px;display:flex;flex-direction:column;background:var(--pp-page)}
+.bar{height:34px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font:600 13px/1 'Geist',sans-serif;color:#111}
+.pp{font-family:'Cairo','Geist',sans-serif;color:var(--pp-ink);flex:1;display:flex;flex-direction:column}
+.pp-header{height:60px;padding-inline:20px 12px;display:flex;align-items:center;gap:4px;background:#fff;border-bottom:1px solid var(--pp-line)}
+.pp-wordmark{font-size:17px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand)}
+.pp-spacer{flex:1}
+.pp-lang{min-height:44px;padding:0 8px;border:0;background:transparent;font-size:15px;font-weight:600;color:var(--brand)}
+.pp-main{padding:24px 20px 16px;display:flex;flex-direction:column;gap:18px;flex:1}
+.pp-h1{margin:0;font-size:28px;font-weight:700;line-height:1.2}
+.pp-lead{margin:6px 0 0;font-size:15px;line-height:1.5;color:var(--pp-muted)}
+.pp-form{display:flex;flex-direction:column;gap:16px}
+.pp-field{display:flex;flex-direction:column;gap:6px}
+.pp-label{font-size:15px;font-weight:600}
+.pp-input{min-height:56px;padding:0 14px;border:1px solid var(--pp-input);border-radius:10px;background:#fff;font-size:18px;width:100%;direction:ltr}
+.pp[dir="rtl"] .pp-input{text-align:right}
+.pp-btn{min-height:52px;border:0;border-radius:12px;background:var(--brand);color:var(--on-brand);font-size:17px;font-weight:600;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:10px}
+.pp-btn[disabled]{opacity:.55}
+.pp-btn--busy{opacity:1}
+.pp-btn .count{font-family:'Geist Mono',monospace;font-size:16px;font-variant-numeric:tabular-nums}
+.pp-spinner{width:18px;height:18px;border-radius:999px;border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.pp-spinner{animation-duration:2.4s}}
+.pp-status{min-height:22px;margin:-6px 0 0;font-size:14px;color:var(--pp-muted);text-align:center}
+.pp-banner{display:flex;gap:12px;padding:14px 16px;border-radius:12px}
+.pp-banner p{margin:0;font-size:15px;line-height:1.5}
+.pp-banner svg{flex-shrink:0;margin-top:2px}
+.pp-banner--error{background:#FCEDEC;border:1px solid #F2C7C3;color:#7E231C}
+.pp-banner--warn{background:#FBF3EA;border:1px solid #F0D5B6;color:#6E3A06}
+.pp-banner__body{display:flex;flex-direction:column;gap:8px}
+.pp-inlinelink{padding:0;border:0;background:transparent;font:inherit;font-size:15px;font-weight:600;color:var(--brand);text-decoration:underline;cursor:pointer;min-height:24px;text-align:start}
+.pp-note{display:flex;gap:12px;padding:16px;border-radius:12px;background:#fff;border:1px solid var(--pp-line)}
+.pp-note p{margin:0;font-size:14px;line-height:1.55}
+.pp-note svg{flex-shrink:0;color:var(--brand);margin-top:1px}
+.pp-foot{padding:14px 20px 22px;text-align:center;font-size:13px;color:#8A8F98}
+.cap{text-align:center;font-size:13px;color:var(--muted);margin-top:10px;max-width:390px}
+.ltr{direction:ltr;unicode-bidi:isolate}
+
+/* merchant drawer (reference) */
+.drawer{width:520px;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(17,24,39,.08);overflow:hidden;margin:0 auto}
+.drawer-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start}
+.drawer-head h3{margin:0;font-size:17px}
+.pill{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--blue-soft);color:var(--blue)}
+.drawer-body{padding:20px}
+.dl{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin:0}
+.dl dt{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dl dd{margin:2px 0 0;font-size:14px}
+.badge{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:999px;background:var(--elevated);color:var(--muted);font-size:12px;font-weight:600;margin-inline-start:6px;vertical-align:middle}
+.muted{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<nav class="review" aria-label="Review sections">
+  <b>P4d · Pre-connect lookup</b>
+  <a href="#a">a · Finding your order</a>
+  <a href="#b">b · Too old</a>
+  <a href="#c">c · Unavailable</a>
+  <a href="#d">d · Busy</a>
+  <a href="#e">e · Not found (unchanged)</a>
+  <a href="#f">f · Merchant drawer</a>
+</nav>
+
+<!-- (a) FINDING -->
+<div class="frame-title" id="a"><span>a</span><h2>Finding your order</h2><p>An order from before the store joined Traced takes ~4 s to look up — the screen must not look stuck.</p></div>
+<div class="page"><div class="phones">
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn pp-btn--busy" aria-busy="true" disabled><span class="pp-spinner" aria-hidden="true"></span>Finding your order…</button>
+            <p class="pp-status" role="status">This can take a few seconds.</p>
+          </form>
+          <div class="pp-note"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><p>Returns are accepted within 14 days of delivery. After approval, a Bosta courier collects the item from the area you choose.</p></div>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN · button spinner + “Finding your order…”; reassurance line under it</div>
+  </div>
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="rtl" lang="ar">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang" style="font-family:'Geist',sans-serif">English</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">ابدأ الإرجاع</h1><p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">رقم الطلب</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">رقم الهاتف</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn pp-btn--busy" aria-busy="true" disabled><span class="pp-spinner" aria-hidden="true"></span>جارٍ البحث عن طلبك…</button>
+            <p class="pp-status" role="status">قد يستغرق ذلك بضع ثوانٍ.</p>
+          </form>
+          <div class="pp-note"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><p>يُقبل الإرجاع خلال 14 يوم من التوصيل. بعد الموافقة، يستلم مندوب بوسطة المنتج من المنطقة التي تختارها.</p></div>
+        </main>
+        <div class="pp-foot">مقدَّم من Traced</div>
+      </div></div></div>
+    <div class="cap">AR / RTL · same state</div>
+  </div>
+</div></div>
+<ul class="annot">
+  <li>The status line has a reserved slot (min-height) under the button, empty when idle — nothing below moves when it appears. It appears after 800 ms, so a fast lookup (an order already in Traced) never flashes it.</li>
+  <li>Button text replaces today's “Searching…”; the spinner is the only motion (slowed under reduced motion). Inputs stay readable, not greyed. <code>aria-busy</code> on the button, <code>role=status</code> on the line.</li>
+  <li>Holds up to ~4 s (the server's timing pad); no client timeout below 15 s.</li>
+</ul>
+
+<!-- (b) TOO OLD -->
+<div class="frame-title" id="b"><span>b</span><h2>Too old to look up online</h2><p>API 404 {code: TOO_OLD, date}. Never says the order exists — only that orders before that date can't be found here.</p></div>
+<div class="page"><div class="phones">
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+            <div class="pp-banner__body"><p>Orders placed before <b>12 August 2026</b> can't be looked up online. Contact The Snouts about returning it.</p>
+              <button class="pp-inlinelink">Read The Snouts's return policy</button></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1042" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">Find my order</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN · date in the store's locale: “12 August 2026”</div>
+  </div>
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="rtl" lang="ar">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang" style="font-family:'Geist',sans-serif">English</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">ابدأ الإرجاع</h1><p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+            <div class="pp-banner__body"><p>لا يمكن البحث عبر الإنترنت عن الطلبات التي تمت قبل <b>12 أغسطس 2026</b>. تواصل مع The Snouts بخصوص إرجاعه.</p>
+              <button class="pp-inlinelink">اقرأ سياسة الإرجاع الخاصة بـ The Snouts</button></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">رقم الطلب</label><input class="pp-input" value="#1042" readonly></div>
+            <div class="pp-field"><label class="pp-label">رقم الهاتف</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">ابحث عن طلبي</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">مقدَّم من Traced</div>
+      </div></div></div>
+    <div class="cap">AR · Arabic month names (Intl, ar-EG, Latin digits as elsewhere in the portal)</div>
+  </div>
+</div></div>
+<ul class="annot">
+  <li>Amber (warn) tone, not red: nothing the customer typed is wrong. Calendar icon.</li>
+  <li>Contact affordance: the store's return policy (the existing policy dialog from step 3) when policy text is set; otherwise the sentence alone. The portal has no store phone/email today — “Contact {store}” stays text.</li>
+  <li>The form stays editable; the button goes back to “Find my order”. Editing either field clears the banner.</li>
+</ul>
+
+<!-- (c) UNAVAILABLE -->
+<div class="frame-title" id="c"><span>c</span><h2>Can't look it up right now</h2><p>API 404 {code: UNAVAILABLE} — a temporary problem on the store's side (Shopify connection).</p></div>
+<div class="page"><div class="phones">
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17h.01"/></svg>
+            <div class="pp-banner__body"><p>We can't look up this order online right now. Contact The Snouts about your return.</p>
+              <button class="pp-inlinelink">Read The Snouts's return policy</button></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">Try again</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN</div>
+  </div>
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="rtl" lang="ar">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang" style="font-family:'Geist',sans-serif">English</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">ابدأ الإرجاع</h1><p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17h.01"/></svg>
+            <div class="pp-banner__body"><p>لا يمكننا البحث عن هذا الطلب عبر الإنترنت الآن. تواصل مع The Snouts بخصوص الإرجاع.</p>
+              <button class="pp-inlinelink">اقرأ سياسة الإرجاع الخاصة بـ The Snouts</button></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">رقم الطلب</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">رقم الهاتف</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">حاول مرة أخرى</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">مقدَّم من Traced</div>
+      </div></div></div>
+    <div class="cap">AR</div>
+  </div>
+</div></div>
+<ul class="annot">
+  <li>Button reads “Try again” (as after today's not-found) — the problem can clear by itself.</li>
+</ul>
+
+<!-- (d) BUSY -->
+<div class="frame-title" id="d"><span>d</span><h2>Busy — try again in a minute</h2><p>API 503 + Retry-After: 60 {code: BUSY}. The button counts down from Retry-After, then enables.</p></div>
+<div class="page"><div class="phones">
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+            <div class="pp-banner__body"><p>We're busy checking orders right now. Please try again in a minute.</p></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn" disabled aria-disabled="true">Try again in <span class="count">0:47</span></button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN · counting down (disabled)</div>
+  </div>
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="rtl" lang="ar">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang" style="font-family:'Geist',sans-serif">English</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">ابدأ الإرجاع</h1><p class="pp-lead">أدخل رقم الطلب ورقم الهاتف الذي استخدمته عند الطلب.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+            <div class="pp-banner__body"><p>نتحقق من طلبات كثيرة الآن. حاول مرة أخرى بعد دقيقة.</p></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">رقم الطلب</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">رقم الهاتف</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn" disabled aria-disabled="true">حاول مرة أخرى بعد <span class="count ltr">0:47</span></button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">مقدَّم من Traced</div>
+      </div></div></div>
+    <div class="cap">AR · counting down (digits kept LTR: 0:47)</div>
+  </div>
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:42</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <div class="pp-banner pp-banner--warn" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+            <div class="pp-banner__body"><p>We're busy checking orders right now. Please try again in a minute.</p></div></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">Try again</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN · countdown done → enabled; tapping it re-submits the same details</div>
+  </div>
+</div></div>
+<ul class="annot">
+  <li>Countdown = the Retry-After header (seconds; 60 when absent or unreadable), shown m:ss in Geist Mono with tabular digits so the button width never jitters.</li>
+  <li>The countdown is announced once (“Try again in 1 minute”) — not every second — via the banner's alert; the button's label updates silently.</li>
+  <li>Editing a field does not skip the wait. Leaving and coming back keeps the remaining time (held in memory for the page).</li>
+</ul>
+
+<!-- (e) NOT FOUND -->
+<div class="frame-title" id="e"><span>e</span><h2>Not found — unchanged</h2><p>Every other miss (wrong number, wrong phone, outside the window, …) stays exactly as today. Shown for comparison.</p></div>
+<div class="page"><div class="phones">
+  <div>
+    <div class="phone"><div class="screen"><div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pp" dir="ltr" lang="en">
+        <header class="pp-header"><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+        <main class="pp-main">
+          <div><h1 class="pp-h1">Start a return</h1><p class="pp-lead">Enter your order number and the phone number you used when ordering.</p></div>
+          <div class="pp-banner pp-banner--error" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+            <p>We couldn't find a returnable order with those details. Check the order number and phone, or contact The Snouts.</p></div>
+          <form class="pp-form">
+            <div class="pp-field"><label class="pp-label">Order number</label><input class="pp-input" value="#1188" readonly></div>
+            <div class="pp-field"><label class="pp-label">Phone number</label><input class="pp-input" value="010 5550 1234" readonly></div>
+            <button type="button" class="pp-btn">Try again</button>
+            <p class="pp-status"></p>
+          </form>
+        </main>
+        <div class="pp-foot">Powered by Traced</div>
+      </div></div></div>
+    <div class="cap">EN · today's red error banner, today's copy</div>
+  </div>
+</div></div>
+
+<!-- (f) DRAWER -->
+<div class="frame-title" id="f"><span>f</span><h2>Merchant drawer — reference (no change)</h2><p>The P4b badge on a request whose order Traced fetched from before the store connected.</p></div>
+<div class="page">
+  <div class="drawer">
+    <div class="drawer-head"><div><h3>RR-7K3F9M</h3><div class="muted" style="font-size:13px">Sent today, 10:14</div></div><span class="pill">Approved</span></div>
+    <div class="drawer-body">
+      <dl class="dl">
+        <div><dt>Customer</dt><dd>Salma P.</dd></div>
+        <div><dt>Phone</dt><dd class="mono" dir="ltr">01055501234</dd></div>
+        <div><dt>Order</dt><dd>#1188<span class="badge">Ordered before Traced</span><span class="muted"> · delivered 8 Oct</span></dd></div>
+        <div><dt>Pickup</dt><dd>Cairo · Nasr City - 7th District</dd></div>
+      </dl>
+    </div>
+  </div>
+  <p class="cap" style="margin:10px auto 0">The order number stays plain text (no link — the order isn't in the Orders list by design). AR: “تم الطلب قبل Traced”.</p>
+</div>
+<div style="height:64px"></div>
+</body>
+</html>
