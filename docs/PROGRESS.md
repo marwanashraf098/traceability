@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Returns portal P4d — portal UX for pre-connect lookups + BUSY leak fix (2026-10-11, branch `feat/portal-preconnect-p4d` off
+origin/main 891bded; NOT deployed; no migration).** Mockup signed off: `design/Traced_portal_preconnect_dc.html` (decisions 1–4
+as proposed: "Contact {store}" stays text + the return-policy link; amber for too old / unavailable / busy, red stays for the
+generic not-found; editing a field doesn't skip the BUSY wait; the "can take a few seconds" line after 800 ms).
+- **Backend (BUSY leak):** `PortalBostaBudget.hasSlotWithin` + `BostaRateLimiter.hasHeadroom` — non-consuming peeks right after
+  the hourly caps, before Shopify and before the phone: no headroom → BUSY (unpadded 503) for any number / phone. After the phone
+  matched the slot is ACQUIRED; losing it (budget or shared limiter) → padded generic 404, not cached. Tests y1–y4 + z1,
+  mutation-checked (peek removed, lost race → BUSY, lost race cached — each red).
+- **Portal:** `api.ts` classifies 404 TOO_OLD {date} / 404 UNAVAILABLE / 503 BUSY (+ Retry-After seconds, 60 default; a 503
+  without code BUSY stays the generic error). `PortalApp`: amber banners (calendar / warning / clock icons), policy link from a
+  banner (`PolicyLink`, the step-3 dialog), date "12 August 2026" / "12 أغسطس 2026" (`longDate`, assembled from formatToParts —
+  WebKit adds an Arabic comma otherwise), button spinner + "Finding your order…", reserved status slot, BUSY countdown "Try again
+  in m:ss" (tabular digits — the portal ships no mono face; digits LTR in AR) then "Try again" re-submits the same details. The
+  only existing string changed: `p1.finding` "Searching…" → "Finding your order…" (signed mockup).
+- **Tests:** `portalPreconnect.test.tsx` (14; revert-checked: 9 red without the api.ts classification),
+  `portalPreconnect.browser.test.tsx` (Chromium + WebKit, EN/LTR + AR/RTL, 8). Checklist: RP.40 ticked, RP.41 (store contact
+  setting) added as a later item.
+
 **Returns portal P4c — on-demand lookup of pre-connect orders (2026-10-11, branch `feat/portal-preconnect-p4c` off
 origin/main 593b4a7; merged to main, no squash; NOT deployed; ships DARK: `PORTAL_PRECONNECT_LOOKUP_ENABLED` default false).
 Migration V165.** Review changes (2026-10-11): pad 4.0 s, Bosta wait = pad − 2.0 s read reserve (≤ 3 s); INELIGIBLE store split
