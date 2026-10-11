@@ -56,6 +56,30 @@ public interface ShopifyGateway {
 
     record LineItem(String gid, int quantity, String variantGid) {}
 
+    // ---- P4c: the returns portal's on-demand lookup of a pre-connect order ----
+
+    /**
+     * Orders whose name is the typed number (at most 2 — the caller needs exactly one). Each Order's
+     * {@code raw} is the GraphQL node: name, createdAt, line items (variant id, quantity,
+     * currentQuantity), fulfillments' tracking numbers, payment fields, and the customer fields this
+     * store's token may read (the import's tier: shipping / billing address, customer — NEVER email).
+     * {@code customerPhoneReadable} is false when the token can read no customer field at all (tier
+     * NONE): the portal then can't check the phone and must not use the order.
+     */
+    record PortalOrderSearch(List<Order> orders, boolean customerPhoneReadable) {}
+
+    default PortalOrderSearch findOrdersByName(String shopDomain, String token, String typedNumber) {
+        throw new UnsupportedOperationException("findOrdersByName");
+    }
+
+    /**
+     * The oldest order Shopify still returns to this token (orders sorted by creation, first 1) — with
+     * read_orders only, roughly the last 60 days. Only {@code name} and {@code createdAt} are used.
+     */
+    default java.util.Optional<Order> oldestOrder(String shopDomain, String token) {
+        throw new UnsupportedOperationException("oldestOrder");
+    }
+
     // ---- token records --------------------------------------------------
 
     /**

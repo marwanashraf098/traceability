@@ -656,7 +656,8 @@ public class ShopifySyncService {
      *     (e.g. a COD gateway that pre-authorises on order placement).
      *   Default: prepaid.
      */
-    private static String inferPaymentMethod(String displayFinancialStatus, java.util.List<String> gateways) {
+    /** Also used by the returns portal's on-demand lookup (P4c) for the order it stores. */
+    public static String inferPaymentMethod(String displayFinancialStatus, java.util.List<String> gateways) {
         if ("pending".equalsIgnoreCase(displayFinancialStatus)) return "cod";
         boolean codGateway = gateways.stream()
                 .anyMatch(g -> g.toLowerCase().contains("cash") || g.toLowerCase().contains("cod"));
