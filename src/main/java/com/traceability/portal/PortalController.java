@@ -28,6 +28,10 @@ public class PortalController {
 
     static final String NOT_FOUND_MESSAGE = "We couldn't find a returnable order with those details.";
     static final String THROTTLED_MESSAGE = "Too many attempts. Please try again later.";
+    // P4c — the portal (P4d) renders its own EN / AR copy from "code"; these are the API's plain fallbacks.
+    static final String TOO_OLD_MESSAGE = "Orders placed before this date can't be looked up online.";
+    static final String UNAVAILABLE_MESSAGE = "We can't look up this order online right now.";
+    static final String BUSY_MESSAGE = "We're busy checking orders right now. Please try again in a minute.";
 
     private final PortalService portal;
     private final ObjectMapper  mapper;
@@ -203,6 +207,16 @@ public class PortalController {
                                       .body(Map.<String, Object>of("message", THROTTLED_MESSAGE));
                 case NOT_FOUND -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                                       .body(Map.<String, Object>of("message", NOT_FOUND_MESSAGE));
+                // P4c (on-demand lookup, flag-gated): stable codes for the portal to render. TOO_OLD and
+                // UNAVAILABLE stay 404 — neither says the typed order exists; BUSY is 503 + Retry-After.
+                case TOO_OLD -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                      .body(Map.<String, Object>of("code", "TOO_OLD", "date", r.body().get("date"),
+                                          "message", TOO_OLD_MESSAGE));
+                case UNAVAILABLE -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                      .body(Map.<String, Object>of("code", "UNAVAILABLE", "message", UNAVAILABLE_MESSAGE));
+                case BUSY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                      .header(org.springframework.http.HttpHeaders.RETRY_AFTER, "60")
+                                      .body(Map.<String, Object>of("code", "BUSY", "message", BUSY_MESSAGE));
             })
             .orElseGet(() -> ResponseEntity.notFound().build());
     }

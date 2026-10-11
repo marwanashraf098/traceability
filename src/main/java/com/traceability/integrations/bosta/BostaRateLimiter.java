@@ -106,6 +106,24 @@ public class BostaRateLimiter {
 
     private static final ThreadLocal<Priority> PRIORITY_OVERRIDE = new ThreadLocal<>();
 
+    /**
+     * P4c — every Bosta call inside {@code call} on this thread waits at most {@code maxWaitMs} for a
+     * token (instead of the priority's usual max wait); over that it gets the usual
+     * {@link BostaRateLimitException}. The returns portal's on-demand lookup answers BUSY rather than
+     * keep a customer waiting. Only shortens; restores the previous value after.
+     */
+    public static <T> T withMaxWait(long maxWaitMs, java.util.function.Supplier<T> call) {
+        Long prev = MAX_WAIT_OVERRIDE.get();
+        MAX_WAIT_OVERRIDE.set(prev == null ? maxWaitMs : Math.min(prev, maxWaitMs));
+        try {
+            return call.get();
+        } finally {
+            if (prev == null) MAX_WAIT_OVERRIDE.remove(); else MAX_WAIT_OVERRIDE.set(prev);
+        }
+    }
+
+    private static final ThreadLocal<Long> MAX_WAIT_OVERRIDE = new ThreadLocal<>();
+
     /** No limit at all — for hand-wired gateways in tests. */
     public static BostaRateLimiter unlimited() {
         return new BostaRateLimiter(0, 1, 0);
@@ -116,6 +134,7 @@ public class BostaRateLimiter {
         if (apiKey == null) return;
         if (PRIORITY_OVERRIDE.get() != null) priority = PRIORITY_OVERRIDE.get();
         long wait = priority == Priority.BACKGROUND ? backgroundMaxWaitMs : maxWaitMs;
+        if (MAX_WAIT_OVERRIDE.get() != null) wait = Math.min(wait, MAX_WAIT_OVERRIDE.get());
         long deadline = System.nanoTime() + wait * 1_000_000L;
         if (perSecond > 0) bucket(apiKey).acquire(priority, deadline);
         if (global != null) global.acquire(priority, deadline);

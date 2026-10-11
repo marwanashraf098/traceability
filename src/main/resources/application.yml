@@ -84,6 +84,18 @@ app:
 # PortalTokenService fails fast at startup when it is missing or shorter than 32 bytes.
 portal:
   token-secret: ${PORTAL_TOKEN_SECRET:}
+  # P4c — on-demand lookup of an order placed before the store connected (Shopify + Bosta). Dark until
+  # P4d ships the portal copy: PORTAL_PRECONNECT_LOOKUP_ENABLED=true turns it on.
+  preconnect:
+    lookup-enabled: ${PORTAL_PRECONNECT_LOOKUP_ENABLED:false}
+    min-duration-ms: 4000          # every on-demand outcome (except BUSY) takes at least this long
+    bosta-read-reserve-ms: 2000    # of the pad, kept for the Bosta read itself; the budget wait gets the rest (≤ 3 s)
+    tenant-per-hour: 20            # on-demand attempts per tenant per hour
+    ip-per-hour: 5                 # on-demand attempts per client IP per hour
+    bosta-interval-ms: 5000        # the portal's own Bosta budget: one fetch per 5 s, all tenants
+    bosta-max-wait-ms: 3000        # wait at most this long for a Bosta token, else BUSY
+    negative-cache-minutes: 30     # an order that isn't eligible isn't looked up again for this long
+    oldest-order-cache-minutes: 60 # the oldest order Shopify still returns, per tenant
 
 # One-time all-statuses catalog re-import for stores connected before 2026-09-29
 # (CatalogBackfillJob). Kill switch: TRACED_CATALOG_BACKFILL_ENABLED=false.

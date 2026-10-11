@@ -4,6 +4,33 @@
 
 ## Current state
 
+**Returns portal P4c — on-demand lookup of pre-connect orders (2026-10-11, branch `feat/portal-preconnect-p4c` off
+origin/main 593b4a7; merged to main, no squash; NOT deployed; ships DARK: `PORTAL_PRECONNECT_LOOKUP_ENABLED` default false).
+Migration V165.** Review changes (2026-10-11): pad 4.0 s, Bosta wait = pad − 2.0 s read reserve (≤ 3 s); INELIGIBLE store split
+from UNAVAILABLE; delivered date confirmed on prod raws (state.code 45 + deliveryTime == timeline code-45 date).
+- **Flow** (`PortalOnDemandLookup`, called by `PortalService.lookup` on a DB miss with the flag on; the DB phase and the insert are
+  separate short transactions, nothing open during Shopify / Bosta): INELIGIBLE store (≠1 connected store, NULL cutoff, no Bosta
+  key, simulated) → today's generic 404, unpadded, a plain throttled miss → SKIP (portal row exists / number ≥ lowest ingested,
+  same shape) → BUSY (hourly caps) → negative cache → Shopify
+  `findOrdersByName` (+ `oldestOrder` for TOO_OLD) → phone → Bosta `fetchDelivery` (portal budget + capped shared wait) →
+  delivered 45 / window / businessReference → insert (orders + mapped order_items, ON CONFLICT gid → winner). FETCHED then runs
+  the normal lookup (token, lines) and records `ondemand_outcome = 'fetched'`.
+- **API:** TOO_OLD → 404 {code, date, message}; UNAVAILABLE → 404 {code, message}; BUSY → 503 Retry-After 60 {code, message};
+  every other miss unchanged ({message} only). Throttles exclude busy / unavailable. **UNAVAILABLE only before the phone check:**
+  (a) Shopify token can't be had, (b) Shopify search fails (401/403/5xx/GraphQL/timeout), (c) token reads no customer field.
+  After the phone check every failure (Bosta 5xx / timeout) is the padded generic 404, not cached. **Open:** a BUSY from the Bosta
+  budget / shared-limiter cap can only happen after the phone matched — an unpadded 503 there says the phone was right (kept as
+  agreed; options: reserve the Bosta slot before the phone check, or answer a padded generic 404 there).
+- **Timing:** every outcome but BUSY / INELIGIBLE padded to 4.0 s from the start of the lookup; the Bosta wait is fitted inside
+  the pad (−2.0 s read reserve, ≤ 3 s). Residual: a Bosta read slower than ~2 s still makes a found order slower than a miss.
+- **Unmapped variants:** lines whose variant isn't in the catalog are left out (can't be returned or exchanged through the portal
+  anyway); no mapped line → nothing stored, generic not-found (negative-cached). Logged as a count only.
+- **Delivered date:** `state.deliveryTime`, else the latest done timeline entry with code 45 — confirmed on prod raws; tested with
+  a real-shaped v0 body through the real `fetchDelivery` mapping (a9).
+- **Tests:** `PortalOnDemandLookupTest` (23, mutation-checked — every guard, incl. both halves of the UNAVAILABLE split, turns its
+  test red when removed),
+  `PortalOnDemandCodesTest` (4), `ShopifyPortalOrderWireTest` (3). Guard 1: 2 MUST_INCLUDE (portalRowExists, insert).
+
 **Returns portal P4b — stored portal pre-connect orders made workable (2026-10-11, branch `feat/portal-preconnect-p4b`
 off origin/main c15636a; NOT merged, NOT deployed). Migration V164.** Still no code path creates a portal row (P4c).
 - **Eligibility:** `PortalService.deliveredWithinWindow` — a portal row's window is `portal_delivered_at` (a forward leg is

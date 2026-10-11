@@ -415,6 +415,79 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 conn.path("pageInfo").path("endCursor").asText(null));
     }
 
+    // ---- P4c: the returns portal's on-demand lookup ------------------------------
+
+    /** One order by name, with what the portal needs: lines, tracking numbers, the tier's customer fields. */
+    static String portalOrderQuery(OrderPiiTier tier) {
+        String pii = switch (tier) {
+            case FULL -> """
+                    shippingAddress { name phone address1 address2 city province zip country }
+                    billingAddress { name phone }
+                    customer { id firstName lastName defaultPhoneNumber { phoneNumber } }
+                    """;
+            case ADDRESSES -> """
+                    shippingAddress { name phone address1 address2 city province zip country }
+                    billingAddress { name phone }
+                    """;
+            case NONE -> "";
+        };
+        return """
+            query PortalOrder($queryStr: String) {
+              orders(first: 2, query: $queryStr) {
+                edges {
+                  node {
+                    id name createdAt updatedAt
+                    lineItems(first: 100) {
+                      edges { node { id quantity currentQuantity variant { id } } }
+                    }
+                    fulfillments(first: 20) { status trackingInfo(first: 5) { number company } }
+                    currentTotalPriceSet { shopMoney { amount currencyCode } }
+                    displayFinancialStatus paymentGatewayNames
+            """ + pii + """
+                  }
+                }
+              }
+            }
+            """;
+    }
+
+    private static final String OLDEST_ORDER_QUERY =
+            "query OldestOrder { orders(first: 1, sortKey: CREATED_AT) { edges { node { id name createdAt } } } }";
+
+    @Override
+    public PortalOrderSearch findOrdersByName(String shopDomain, String token, String typedNumber) {
+        // The caller passes a number already reduced to [A-Za-z0-9-_]; quoted so a '-' is not an operator.
+        String bare = typedNumber.startsWith("#") ? typedNumber.substring(1) : typedNumber;
+        ObjectNode vars = mapper.createObjectNode();
+        vars.put("queryStr", "name:\"#" + bare + "\" OR name:\"" + bare + "\"");
+        OrderPiiTier tier = orderPiiTier(shopDomain, token);
+        while (true) {
+            JsonNode response = postGraphQL(shopDomain, token, portalOrderQuery(tier), vars);
+            if (tier != OrderPiiTier.NONE && hasAccessDenied(response)) {
+                OrderPiiTier lower = tier.lower();
+                log.warn("Shopify portal lookup: ACCESS_DENIED for customer data at tier {} on {} — retrying at {}",
+                         tier, shopDomain, lower);
+                orderPiiTiers.put(shopDomain, new CachedTier(lower, Instant.now().plus(PII_TIER_TTL)));
+                tier = lower;
+                continue;
+            }
+            JsonNode errors = response.get("errors");
+            if (errors != null && errors.isArray() && errors.size() > 0) {
+                throw new ShopifyException("Shopify GraphQL error on the portal order lookup");
+            }
+            JsonNode data = response.get("data");
+            if (data == null) throw new ShopifyException("Shopify GraphQL response has no data field");
+            return new PortalOrderSearch(parseOrders(data.path("orders")), tier != OrderPiiTier.NONE);
+        }
+    }
+
+    @Override
+    public java.util.Optional<Order> oldestOrder(String shopDomain, String token) {
+        JsonNode data = executeGraphQL(shopDomain, token, OLDEST_ORDER_QUERY, mapper.createObjectNode());
+        List<Order> orders = parseOrders(data.path("orders"));
+        return orders.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(orders.get(0));
+    }
+
     /**
      * The tier this store's token can read, from its live scopes (currentAppInstallation.accessScopes —
      * GraphQL, per App Store review 2.2.4), cached per shop domain for {@link #PII_TIER_TTL}. read_customers
