@@ -4,6 +4,26 @@
 
 ## Current state
 
+**Returns portal P4c — on-demand lookup of pre-connect orders (2026-10-11, branch `feat/portal-preconnect-p4c` off
+origin/main 593b4a7; NOT merged, NOT deployed; ships DARK: `PORTAL_PRECONNECT_LOOKUP_ENABLED` default false). Migration V165.**
+- **Flow** (`PortalOnDemandLookup`, called by `PortalService.lookup` on a DB miss with the flag on; the DB phase and the insert are
+  separate short transactions, nothing open during Shopify / Bosta): SKIP (portal row exists / number ≥ lowest ingested, same
+  shape) → UNAVAILABLE (≠1 connected store, NULL cutoff, no Bosta key, simulated) → BUSY (hourly caps) → negative cache → Shopify
+  `findOrdersByName` (+ `oldestOrder` for TOO_OLD) → phone → Bosta `fetchDelivery` (portal budget + capped shared wait) →
+  delivered 45 / window / businessReference → insert (orders + mapped order_items, ON CONFLICT gid → winner). FETCHED then runs
+  the normal lookup (token, lines) and records `ondemand_outcome = 'fetched'`.
+- **API:** TOO_OLD → 404 {code, date, message}; UNAVAILABLE → 404 {code, message}; BUSY → 503 Retry-After 60 {code, message};
+  every other miss unchanged ({message} only). Throttles exclude busy / unavailable.
+- **Timing:** every outcome but BUSY padded to 2.5 s from the start of the lookup; the Bosta wait is fitted inside the pad
+  (−800 ms read reserve) — found by the timing test: the shared limiter's per-key wait had pushed a found order past the pad.
+  Residual risk: a Bosta read slower than ~800 ms still makes a found order slower than a miss.
+- **Unmapped variants:** lines whose variant isn't in the catalog are left out (can't be returned or exchanged through the portal
+  anyway); no mapped line → nothing stored, generic not-found (negative-cached). Logged as a count only.
+- **Delivered date assumption:** `state.deliveryTime`, else the latest done 'delivered' timeline entry — verify against a real
+  Bosta v0 payload before switching the flag on.
+- **Tests:** `PortalOnDemandLookupTest` (19, mutation-checked — 15 guards each turn their test red when removed),
+  `PortalOnDemandCodesTest` (4), `ShopifyPortalOrderWireTest` (3). Guard 1: 2 MUST_INCLUDE (portalRowExists, insert).
+
 **Returns portal P4b — stored portal pre-connect orders made workable (2026-10-11, branch `feat/portal-preconnect-p4b`
 off origin/main c15636a; NOT merged, NOT deployed). Migration V164.** Still no code path creates a portal row (P4c).
 - **Eligibility:** `PortalService.deliveredWithinWindow` — a portal row's window is `portal_delivered_at` (a forward leg is
