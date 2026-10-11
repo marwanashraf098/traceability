@@ -1,7 +1,7 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  getConfig, getDistricts, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
+  BUSY_DEFAULT_SECONDS, getConfig, getDistricts, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
 } from './api'
 import { palette } from './brand'
 import { fontVars, loadPortalFont, portalFontOrDefault } from './fonts'
@@ -49,7 +49,10 @@ export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 type Step = 'start' | 'items' | 'variant' | 'refund' | 'details' | 'sent'
 type Mode = 'refund' | 'exchange'
-type StartBanner = 'notFound' | 'throttled' | 'generic' | 'expired' | 'conflict'
+type StartBanner = 'notFound' | 'throttled' | 'generic' | 'expired' | 'conflict' | 'tooOld' | 'unavailable' | 'busy'
+
+/** P4d — how long a lookup runs before the "can take a few seconds" line shows (fast lookups never flash it). */
+const SLOW_LINE_MS = 800
 type SendBanner = 'invalid' | 'generic' | 'submitThrottled'
 type AddressSource = 'order' | 'custom'
 interface CustomDistricts { key: string; state: 'loading' | 'ok' | 'error'; districts: PickupDistrict[] }
@@ -155,9 +158,34 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [finding, setFinding] = useState(false)
   const [startBanner, setStartBanner] = useState<StartBanner | null>(null)
   const [throttledOrder, setThrottledOrder] = useState<string | null>(null)
+  // P4d — the on-demand lookup's answers: the date before which orders can't be looked up online,
+  // the BUSY countdown (until when, ticking once a second), and the "can take a few seconds" line.
+  const [tooOldDate, setTooOldDate] = useState<string | null>(null)
+  const [busyUntil, setBusyUntil] = useState<number | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const [slowLine, setSlowLine] = useState(false)
   const [missing, setMissing] = useState<{ order: boolean; phone: boolean }>({ order: false, phone: false })
   const orderInputRef = useRef<HTMLInputElement>(null)
   const phoneInputRef = useRef<HTMLInputElement>(null)
+
+  // P4d: the reassurance line appears only once a lookup has run SLOW_LINE_MS.
+  useEffect(() => {
+    if (!finding) { setSlowLine(false); return }
+    const timer = window.setTimeout(() => setSlowLine(true), SLOW_LINE_MS)
+    return () => window.clearTimeout(timer)
+  }, [finding])
+
+  // P4d: the BUSY countdown ticks once a second until it reaches zero.
+  useEffect(() => {
+    if (busyUntil === null) return
+    if (busyUntil <= Date.now()) { setNow(Date.now()); return }
+    const timer = window.setInterval(() => {
+      const at = Date.now()
+      setNow(at)
+      if (at >= busyUntil) window.clearInterval(timer)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [busyUntil])
 
   const [order, setOrder] = useState<LookupResult | null>(null)
   const [selections, setSelections] = useState<Record<string, Selection>>({})
@@ -261,10 +289,13 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       ;(noOrder ? orderInputRef : phoneInputRef).current?.focus()
       return
     }
+    if (busyUntil !== null && busyUntil > Date.now()) return
     setFinding(true)
     const res = await lookup(slug, orderNumber, phone)
     setFinding(false)
     if (res.ok) {
+      setBusyUntil(null)
+      setTooOldDate(null)
       setOrder(res.data)
       setSelections({})
       setMode('refund')
@@ -291,6 +322,14 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     }
     if (res.failure === 'notFound') setStartBanner('notFound')
     else if (res.failure === 'throttled') { setStartBanner('throttled'); setThrottledOrder(orderNumber) }
+    else if (res.failure === 'tooOld' && res.date) { setTooOldDate(res.date); setStartBanner('tooOld') }
+    else if (res.failure === 'unavailable') setStartBanner('unavailable')
+    else if (res.failure === 'busy') {
+      const at = Date.now()
+      setNow(at)
+      setBusyUntil(at + (res.retryAfter ?? BUSY_DEFAULT_SECONDS) * 1000)
+      setStartBanner('busy')
+    }
     else setStartBanner('generic')
   }
 
@@ -1141,7 +1180,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
   // ── P1 / P5 / P6 ──────────────────────────────────────────────────────────
   const throttled = startBanner === 'throttled' && throttledOrder === orderNumber
-  const bannerClass = startBanner === 'throttled' ? 'pp-banner pp-banner--warn' : 'pp-banner pp-banner--error'
+  const warnBanner = startBanner === 'throttled' || startBanner === 'tooOld' || startBanner === 'unavailable' || startBanner === 'busy'
+  const bannerClass = warnBanner ? 'pp-banner pp-banner--warn' : 'pp-banner pp-banner--error'
+  const busySeconds = busyUntil === null ? 0 : Math.max(0, Math.ceil((busyUntil - now) / 1000))
+  const countdown = `${Math.floor(busySeconds / 60)}:${String(busySeconds % 60).padStart(2, '0')}`
+  // Editing a field clears the "too old" answer (it was about the order typed); BUSY keeps its wait.
+  const editedField = () => { if (startBanner === 'tooOld') { setStartBanner(null); setTooOldDate(null) } }
   return (
     <Shell style={rootStyle} header={header()}>
       <div className="pp-intro">
@@ -1150,9 +1194,22 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       </div>
 
       {startBanner && (
-        <div className={bannerClass} role="alert" data-testid="start-banner">
-          <AlertIcon />
-          <p>{t(`errors.${startBanner}`, { store })}</p>
+        <div className={bannerClass} role="alert" data-testid="start-banner" data-kind={startBanner}>
+          {startBanner === 'tooOld' ? <CalendarIcon /> : startBanner === 'unavailable' ? <WarnIcon />
+            : startBanner === 'busy' ? <ClockIcon /> : <AlertIcon />}
+          {startBanner === 'tooOld' || startBanner === 'unavailable' ? (
+            <div className="pp-banner__body">
+              <p>
+                {startBanner === 'tooOld'
+                  ? <Trans t={t} i18nKey="errors.tooOld" values={{ store, date: tooOldDate ? longDate(tooOldDate, lang) : '' }}
+                      components={{ b: <b /> }} />
+                  : t('errors.unavailable', { store })}
+              </p>
+              {config.policyText && <PolicyLink store={store} policyText={config.policyText} />}
+            </div>
+          ) : (
+            <p>{t(`errors.${startBanner}`, { store })}</p>
+          )}
         </div>
       )}
 
@@ -1163,7 +1220,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             id="pp-order" className="pp-input pp-input--lg" type="text" autoComplete="off" dir="ltr"
             placeholder={t('p1.orderPlaceholder')} required ref={orderInputRef}
             aria-invalid={missing.order} aria-describedby={missing.order ? 'pp-order-missing' : undefined}
-            value={orderNumber} onChange={e => { setOrderNumber(e.target.value); setMissing(m => ({ ...m, order: false })) }}
+            value={orderNumber} onChange={e => { setOrderNumber(e.target.value); setMissing(m => ({ ...m, order: false })); editedField() }}
           />
           {missing.order && <p id="pp-order-missing" className="pp-fielderror">{t('p1.orderMissing')}</p>}
         </div>
@@ -1173,17 +1230,26 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             id="pp-phone" className="pp-input pp-input--lg" type="tel" inputMode="tel" autoComplete="tel" dir="ltr"
             placeholder={t('p1.phonePlaceholder')} required ref={phoneInputRef}
             aria-invalid={missing.phone} aria-describedby={missing.phone ? 'pp-phone-missing' : undefined}
-            value={phone} onChange={e => { setPhone(e.target.value); setMissing(m => ({ ...m, phone: false })) }}
+            value={phone} onChange={e => { setPhone(e.target.value); setMissing(m => ({ ...m, phone: false })); editedField() }}
           />
           {missing.phone && <p id="pp-phone-missing" className="pp-fielderror">{t('p1.phoneMissing')}</p>}
         </div>
         <button
           type="submit" className="pp-btn pp-btn--primary"
-          disabled={finding || throttled}
+          disabled={finding || throttled || busySeconds > 0}
           aria-busy={finding}
+          data-testid="find-button"
         >
-          {finding ? t('p1.finding') : startBanner === 'notFound' ? t('p1.tryAgain') : t('p1.find')}
+          {finding
+            ? <><span className="pp-spinner" aria-hidden="true" />{t('p1.finding')}</>
+            : busySeconds > 0
+              ? <Trans t={t} i18nKey="p1.tryAgainIn" values={{ time: countdown }}
+                  components={{ time: <span className="pp-countdown" dir="ltr" /> }} />
+              : startBanner === 'notFound' || startBanner === 'unavailable' || startBanner === 'busy'
+                ? t('p1.tryAgain') : t('p1.find')}
         </button>
+        {/* A reserved slot: nothing below moves when the line appears. */}
+        <p className="pp-status" role="status" data-testid="find-status">{finding && slowLine ? t('p1.slow') : ''}</p>
       </form>
 
       {!startBanner && (
@@ -1377,6 +1443,56 @@ function AlertIcon() {
     <svg className="pp-banner__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
     </svg>
+  )
+}
+
+function CalendarIcon() {
+  return (
+    <svg className="pp-banner__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" />
+    </svg>
+  )
+}
+
+function WarnIcon() {
+  return (
+    <svg className="pp-banner__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3l10 18H2z" /><path d="M12 10v4M12 17h.01" />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg className="pp-banner__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2M9 2h6" />
+    </svg>
+  )
+}
+
+/** P4d — "12 August 2026" / "12 أغسطس 2026" (Arabic month names, Latin digits like the rest of the portal). */
+export function longDate(isoDay: string, lang: PortalLang): string {
+  const [y, m, d] = isoDay.split('-').map(Number)
+  // Assembled from the parts: WebKit puts an Arabic comma before the year ("12 أغسطس، 2026"), Chromium
+  // doesn't — the portal shows "day month year" the same in every browser.
+  const parts = new Intl.DateTimeFormat(lang === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB',
+    { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).formatToParts(new Date(Date.UTC(y, m - 1, d)))
+  const part = (type: string) => parts.find(p => p.type === type)?.value ?? ''
+  return `${part('day')} ${part('month')} ${part('year')}`
+}
+
+/** P4d — the store's return policy, from a banner (the same dialog as step 3's policy line). */
+function PolicyLink({ store, policyText }: { store: string; policyText: string }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  return (
+    <>
+      <button type="button" className="pp-inlinelink pp-banner__link" ref={triggerRef} onClick={() => setOpen(true)}>
+        {t('errors.policyLink', { store })}
+      </button>
+      {open && <PolicyDialog text={policyText} onClose={() => { setOpen(false); triggerRef.current?.focus() }} />}
+    </>
   )
 }
 

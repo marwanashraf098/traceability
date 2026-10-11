@@ -25,13 +25,15 @@
     "phonePlaceholder": "01X XXXX XXXX",
     "find": "Find my order",
     "tryAgain": "Try again",
-    "finding": "Searching…",
+    "finding": "Finding your order…",
     "windowNote": "Returns are accepted within {{count}} day of delivery.",
     "windowNote_other": "Returns are accepted within {{count}} days of delivery.",
     "pickupNote": "The store will arrange a courier to collect the item from your address.",
     "pickupNoteBooking": "After approval, a Bosta courier collects the item from the area you choose.",
     "orderMissing": "Enter your order number.",
-    "phoneMissing": "Enter the phone number you used when ordering."
+    "phoneMissing": "Enter the phone number you used when ordering.",
+    "slow": "This can take a few seconds.",
+    "tryAgainIn": "Try again in <time>{{time}}</time>"
   },
   "errors": {
     "notFound": "We couldn't find a returnable order with those details. Check the order number and phone, or contact {{store}}.",
@@ -40,7 +42,11 @@
     "expired": "Your session has expired. Please look up your order again.",
     "conflict": "Some items are no longer available. Please start again.",
     "invalid": "We couldn't accept this return request. Please start again.",
-    "submitThrottled": "Too many attempts. Please try again later."
+    "submitThrottled": "Too many attempts. Please try again later.",
+    "tooOld": "Orders placed before <b>{{date}}</b> can't be looked up online. Contact {{store}} about returning it.",
+    "unavailable": "We can't look up this order online right now. Contact {{store}} about your return.",
+    "busy": "We're busy checking orders right now. Please try again in a minute.",
+    "policyLink": "Read {{store}}'s return policy"
   },
   "p2": {
     "step": "Step {{step}} of {{total}}",

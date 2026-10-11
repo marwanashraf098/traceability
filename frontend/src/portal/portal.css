@@ -209,6 +209,21 @@ select.pp-input { appearance: auto; }
 .pp-banner__icon { flex-shrink: 0; margin-top: 2px; }
 .pp-banner--error { background: #FCEDEC; border: 1px solid #F2C7C3; color: #7E231C; }
 .pp-banner--warn { background: #FBF3EA; border: 1px solid #F0D5B6; color: #6E3A06; }
+.pp-banner__body { display: flex; flex-direction: column; gap: 8px; }
+.pp-banner__link { font-size: 15px; font-weight: 600; text-align: start; }
+
+/* P4d — lookup in progress / BUSY countdown */
+.pp-btn .pp-spinner {
+  display: inline-block; vertical-align: -3px; box-sizing: border-box;
+  width: 18px; height: 18px; margin-inline-end: 10px;
+  border-radius: 999px; border: 2.5px solid rgba(255, 255, 255, 0.35); border-top-color: currentColor;
+  animation: pp-spin 0.8s linear infinite;
+}
+@keyframes pp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pp-btn .pp-spinner { animation-duration: 2.4s; } }
+/* The portal ships no mono face (font-src 'self', one family per page): tabular digits keep the width steady. */
+.pp-countdown { font-variant-numeric: tabular-nums; unicode-bidi: isolate; }
+.pp-status { min-height: 22px; margin: -6px 0 0; font-size: 14px; line-height: 22px; color: #5B6270; text-align: center; }
 .pp-note {
   display: flex;
   gap: 12px;

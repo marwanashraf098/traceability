@@ -118,20 +118,39 @@ export interface SubmitResult {
   status: 'requested' | 'approved'
 }
 
+/**
+ * P4d — the lookup's on-demand answers (an order from before the store joined Traced): tooOld (404,
+ * with the date before which orders can't be looked up online), unavailable (404), busy (503, with the
+ * Retry-After seconds). Every other miss stays notFound.
+ */
 export type Failure = 'notFound' | 'throttled' | 'unauthorized' | 'invalid' | 'conflict' | 'error'
+  | 'tooOld' | 'unavailable' | 'busy'
 
-export type Outcome<T> = { ok: true; data: T } | { ok: false; failure: Failure; status: number }
+export type Outcome<T> = { ok: true; data: T }
+  | { ok: false; failure: Failure; status: number; date?: string; retryAfter?: number }
+
+/** P4d — seconds to wait after a BUSY answer when Retry-After is missing or unreadable. */
+export const BUSY_DEFAULT_SECONDS = 60
 
 const BASE = '/api/v1/portal'
 
-async function call(path: string, init: RequestInit): Promise<{ status: number; body: unknown }> {
+async function call(path: string, init: RequestInit): Promise<{ status: number; body: unknown; retryAfter: string | null }> {
   const res = await fetch(BASE + path, { ...init, credentials: 'omit', cache: 'no-store' })
   const type = res.headers.get('content-type') ?? ''
   let body: unknown = null
   if (type.includes('application/json')) {
     try { body = await res.json() } catch { body = null }
   }
-  return { status: res.status, body }
+  return { status: res.status, body, retryAfter: res.headers.get('retry-after') }
+}
+
+/** Retry-After in seconds (the delta form); anything else → the default. */
+export function retryAfterSeconds(header: string | null): number {
+  if (header && /^\s*\d{1,4}\s*$/.test(header)) {
+    const n = Number(header.trim())
+    if (n > 0) return n
+  }
+  return BUSY_DEFAULT_SECONDS
 }
 
 function fail<T>(failure: Failure, status: number): Outcome<T> {
@@ -158,7 +177,7 @@ export async function getConfig(slug: string): Promise<Outcome<PortalConfig>> {
 
 export async function lookup(slug: string, orderNumber: string, phone: string): Promise<Outcome<LookupResult>> {
   try {
-    const { status, body } = await call(`/${encodeURIComponent(slug)}/lookup`, {
+    const { status, body, retryAfter } = await call(`/${encodeURIComponent(slug)}/lookup`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ orderNumber, phone }),
@@ -166,9 +185,18 @@ export async function lookup(slug: string, orderNumber: string, phone: string): 
     if (status === 200 && isObject(body) && typeof body.token === 'string' && Array.isArray(body.lines)) {
       return { ok: true, data: body as unknown as LookupResult }
     }
+    const code = isObject(body) ? body.code : undefined
+    if (status === 404 && code === 'TOO_OLD' && isObject(body) && typeof body.date === 'string'
+        && /^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
+      return { ok: false, failure: 'tooOld', status, date: body.date }
+    }
+    if (status === 404 && code === 'UNAVAILABLE') return fail('unavailable', status)
     if (status === 404) return fail('notFound', status)
     // 429 from the app (JSON) or from nginx's rate limit (JSON or HTML) — same screen.
     if (status === 429) return fail('throttled', status)
+    if (status === 503 && code === 'BUSY') {
+      return { ok: false, failure: 'busy', status, retryAfter: retryAfterSeconds(retryAfter) }
+    }
     return fail('error', status)
   } catch {
     return fail('error', 0)
