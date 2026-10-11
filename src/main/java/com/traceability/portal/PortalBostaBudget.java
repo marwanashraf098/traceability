@@ -41,6 +41,15 @@ public class PortalBostaBudget {
         return true;
     }
 
+    /**
+     * P4d — would {@link #tryAcquire} get a slot within {@code maxWaitMs}? Takes nothing (a peek: another
+     * lookup may take the slot first — the caller then answers its padded generic not-found).
+     */
+    public synchronized boolean hasSlotWithin(long maxWaitMs) {
+        long wait = Math.max(0, nextFreeNanos - System.nanoTime());
+        return wait <= Math.max(0, maxWaitMs) * 1_000_000L;
+    }
+
     /** Test seam: the next call gets a slot at once. */
     public synchronized void reset() {
         nextFreeNanos = System.nanoTime();

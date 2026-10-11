@@ -189,6 +189,7 @@ class PortalOnDemandLookupTest {
     @Autowired EncryptionService encryption;
     @Autowired PortalService portal;
     @Autowired PortalOnDemandLookup onDemand;
+    @Autowired PortalBostaBudget realBudget;
     @Autowired BostaRateLimiter rateLimiter;
     @Autowired ReturnPickupBookingService booking;
     @Autowired FulfillService fulfill;
@@ -630,19 +631,87 @@ class PortalOnDemandLookupTest {
         }
     }
 
+    // ── P4d: BUSY never depends on the phone ──────────────────────────────────
+
+    @Test
+    void y1_lostTheLimiterAfterThePhoneMatched_paddedGenericNotFound_notCached() throws Exception {
+        String tn = shopifyAndBosta("#1295", true);
+        ShopifyGateway.PortalOrderSearch search = shopify.findOrdersByName("x", "y", "1295");
+        // The headroom is taken between the peek (before Shopify) and the acquire (after the phone).
+        when(shopify.findOrdersByName(anyString(), anyString(), eq("1295"))).thenAnswer(inv -> {
+            rateLimiter.onRateLimited(KEY, 2);
+            return search;
+        });
+        long t0 = System.nanoTime();
+        PortalService.LookupResult r = lookup(a, "1295", PHONE);
+        assertThat(r.outcome()).as("never BUSY after the phone matched").isEqualTo(PortalService.Outcome.NOT_FOUND);
+        assertThat(ms(t0)).isGreaterThanOrEqualTo(PAD_MS);
+        assertThat(attemptOutcomes(a)).containsExactly("not_found");
+        Thread.sleep(2200);   // the block is over
+        assertThat(lookup(a, "1295", PHONE).outcome()).as("not cached").isEqualTo(PortalService.Outcome.SUCCESS);
+        assertThat(DELIVERIES).containsKey(tn);
+    }
+
+    @Test
+    void y2_lostThePortalBudgetSlotAfterThePhoneMatched_paddedGenericNotFound_notCached() {
+        shopifyAndBosta("#1296", true);
+        ReflectionTestUtils.setField(onDemand, "budget", new PortalBostaBudget(0) {
+            @Override public synchronized boolean hasSlotWithin(long maxWaitMs) { return true; }
+            @Override public boolean tryAcquire(long maxWaitMs) { return false; }
+        });
+        try {
+            long t0 = System.nanoTime();
+            assertThat(lookup(a, "1296", PHONE).outcome()).isEqualTo(PortalService.Outcome.NOT_FOUND);
+            assertThat(ms(t0)).isGreaterThanOrEqualTo(PAD_MS);
+            assertThat(GETS.get()).isZero();
+        } finally {
+            ReflectionTestUtils.setField(onDemand, "budget", realBudget);
+        }
+        assertThat(lookup(a, "1296", PHONE).outcome()).as("not cached").isEqualTo(PortalService.Outcome.SUCCESS);
+    }
+
+    @Test
+    void y3_noBudgetSlot_busy_withAWrongPhoneToo_beforeShopify() {
+        shopifyAndBosta("#1297", true);
+        ReflectionTestUtils.setField(onDemand, "budget", new PortalBostaBudget(0) {
+            @Override public synchronized boolean hasSlotWithin(long maxWaitMs) { return false; }
+        });
+        try {
+            long t0 = System.nanoTime();
+            assertThat(lookup(a, "1297", "01000000000").outcome()).as("wrong phone").isEqualTo(PortalService.Outcome.BUSY);
+            assertThat(lookup(a, "1297", PHONE).outcome()).as("right phone").isEqualTo(PortalService.Outcome.BUSY);
+            assertThat(ms(t0)).as("unpadded").isLessThan(PAD_MS);
+            assertNoExternalCalls();
+        } finally {
+            ReflectionTestUtils.setField(onDemand, "budget", realBudget);
+        }
+    }
+
+    @Test
+    void y4_budgetPeek_takesNothing() {
+        PortalBostaBudget budget = new PortalBostaBudget(5000);
+        assertThat(budget.hasSlotWithin(0)).isTrue();
+        assertThat(budget.hasSlotWithin(0)).as("a peek takes no slot").isTrue();
+        assertThat(budget.tryAcquire(0)).isTrue();
+        assertThat(budget.hasSlotWithin(3000)).as("next slot 5 s away").isFalse();
+        assertThat(budget.hasSlotWithin(6000)).isTrue();
+    }
+
     /**
      * Last (z): the shared Bosta limiter is blocked (a 429) for 5 s — shorter than its own 60 s max wait,
      * so without the portal's cap the lookup would sit there and then answer: the cap answers BUSY at once.
      */
     @Test
-    void z1_theGlobalBostaLimiterBlocked_busyWithinTheMaxWait() {
+    void z1_theGlobalBostaLimiterBlocked_busyAtOnce_forAnyPhone_beforeShopify() {
         shopifyAndBosta("#1291", true);
         rateLimiter.onRateLimited(KEY, 5);
         long t0 = System.nanoTime();
+        assertThat(lookup(a, "1291", "01000000000").outcome()).as("wrong phone").isEqualTo(PortalService.Outcome.BUSY);
         PortalService.LookupResult r = lookup(a, "1291", PHONE);
         assertThat(r.outcome()).isEqualTo(PortalService.Outcome.BUSY);
-        assertThat(ms(t0)).as("≤ the 1.5 s max wait (3 s in prod), never the limiter's 60 s").isLessThan(3000);
-        assertThat(attemptOutcomes(a)).containsExactly("busy");
+        assertThat(ms(t0)).as("unpadded, never the limiter's 60 s").isLessThan(PAD_MS);
+        assertNoExternalCalls();
+        assertThat(attemptOutcomes(a)).containsExactly("busy", "busy");
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────
