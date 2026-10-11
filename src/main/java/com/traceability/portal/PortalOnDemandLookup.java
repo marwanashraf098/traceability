@@ -43,9 +43,11 @@ import java.util.regex.Pattern;
  *   1. SKIP (no call): a portal row for this number already exists (its DB miss was the phone or the
  *      window), or the number is at / above the lowest order number Traced ingested (same shape) — an
  *      order placed after the connect would be in Traced already.
- *   2. UNAVAILABLE (no call): not exactly one connected Shopify store, a NULL connect cutoff, no active
- *      Bosta key, or a simulated-courier tenant.
- *   3. BUSY (no call): the per-tenant / per-IP hourly caps (portal_lookup_attempts.ondemand_outcome).
+ *   2. INELIGIBLE (no call): not exactly one connected Shopify store, a NULL connect cutoff, no active
+ *      Bosta key, or a simulated-courier tenant — today's generic not-found, unpadded.
+ *   3. BUSY (no call): the per-tenant / per-IP hourly caps (portal_lookup_attempts.ondemand_outcome), or
+ *      (P4d) no Bosta headroom — a non-consuming peek at the portal budget and the shared limiter, made
+ *      before anything about the order or the phone is known.
  *   4. NOT_FOUND (no call): the negative cache (30 min) for this order.
  *   5. Shopify (the tenant's token): orders by name, first 2 — exactly one; else the "too old" boundary:
  *      the oldest order Shopify still returns (cached per tenant, 1 h) — same number shape and lower →
@@ -54,7 +56,8 @@ import java.util.regex.Pattern;
  *   6. Phone (shopify_order_pii_phone, the import's precedence) — a mismatch is NOT_FOUND and Bosta is
  *      never called.
  *   7. Bosta: the tracking number from the order's fulfillments, fetchDelivery (v0) through the portal's
- *      own budget (PortalBostaBudget, one per 5 s) and at most 3 s on the global limiter → else BUSY.
+ *      own budget (PortalBostaBudget, one per 5 s) and at most 3 s on the global limiter; losing the slot
+ *      to a concurrent lookup here (after the phone check) is the padded generic not-found, not cached.
  *      Delivered (state 45), delivered within customer_return_window_days, businessReference = the
  *      order name → else NOT_FOUND.
  *   8. Insert, one transaction: the orders row (origin portal_pre_connect, V163) + its order_items
@@ -95,6 +98,7 @@ public class PortalOnDemandLookup {
     private final BostaGateway bosta;
     private final EncryptionService encryption;
     private final PortalBostaBudget budget;
+    private final BostaRateLimiter rateLimiter;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final boolean enabled;
@@ -118,7 +122,7 @@ public class PortalOnDemandLookup {
 
     public PortalOnDemandLookup(JdbcTemplate jdbc, PlatformTransactionManager txm, ShopifyGateway shopify,
                                 ShopifyTokenProvider tokens, BostaGateway bosta, EncryptionService encryption,
-                                PortalBostaBudget budget,
+                                PortalBostaBudget budget, BostaRateLimiter rateLimiter,
                                 @Value("${portal.preconnect.lookup-enabled:false}") boolean enabled,
                                 @Value("${portal.preconnect.tenant-per-hour:20}") int tenantPerHour,
                                 @Value("${portal.preconnect.ip-per-hour:5}") int ipPerHour,
@@ -133,6 +137,7 @@ public class PortalOnDemandLookup {
         this.bosta = bosta;
         this.encryption = encryption;
         this.budget = budget;
+        this.rateLimiter = rateLimiter;
         this.enabled = enabled;
         this.tenantPerHour = tenantPerHour;
         this.ipPerHour = ipPerHour;
@@ -194,6 +199,15 @@ public class PortalOnDemandLookup {
         if (pre instanceof Kind k) return Result.of(k);
         Tenant t = (Tenant) pre;
 
+        // 4 (P4d): BUSY is decided HERE, before anything about the order or the phone is known — a peek
+        // (takes nothing) at the portal's Bosta budget and the shared limiter's headroom for this key.
+        // After the phone matches the slot is acquired; losing it to a concurrent lookup then is the padded
+        // generic not-found, never BUSY — so a 503 never says the phone was right.
+        long peekWait = bostaWaitWithin(deadlineNanos);
+        if (!budget.hasSlotWithin(peekWait) || !rateLimiter.hasHeadroom(t.bostaKey(), peekWait)) {
+            return Result.of(Kind.BUSY);
+        }
+
         String cacheKey = tenantId + "|" + orderKey;
         Expiring<Boolean> miss = negative.get(cacheKey);
         if (miss != null && miss.live()) return Result.of(Kind.NOT_FOUND);
@@ -234,17 +248,15 @@ public class PortalOnDemandLookup {
         // 7: Bosta.
         String tracking = bostaTracking(order.raw());
         if (tracking == null) return miss(cacheKey);
-        long leftMs = (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs;
-        long maxWait = Math.max(0, Math.min(bostaMaxWaitMs, leftMs));
-        if (!budget.tryAcquire(maxWait)) return Result.of(Kind.BUSY);
-        long sharedWait = Math.max(0, Math.min(maxWait,
-            (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs));
+        // The phone matched: from here every failure is the padded generic not-found, not cached.
+        if (!budget.tryAcquire(bostaWaitWithin(deadlineNanos))) return Result.of(Kind.NOT_FOUND);   // lost the race
+        long sharedWait = bostaWaitWithin(deadlineNanos);
         BostaDelivery delivery;
         try {
             delivery = BostaRateLimiter.userFacing(() -> BostaRateLimiter.withMaxWait(sharedWait,
                 () -> bosta.fetchDelivery(t.bostaKey(), tracking)));
         } catch (BostaRateLimitException e) {
-            return Result.of(Kind.BUSY);
+            return Result.of(Kind.NOT_FOUND);   // the limiter's headroom went to someone else
         } catch (RuntimeException e) {
             // After the phone check: never UNAVAILABLE (it would say the phone matched). Not cached —
             // a Bosta outage is not a fact about the order.
@@ -262,6 +274,12 @@ public class PortalOnDemandLookup {
         UUID orderId = inTenant(tenantId, () -> insert(tenantId, t, o, delivery, deliveredAt));
         if (orderId == null) return miss(cacheKey);
         return new Result(Kind.FETCHED, orderId, null);
+    }
+
+    /** What is left of the timing pad for a Bosta wait: pad − elapsed − read reserve, at most bosta-max-wait-ms. */
+    private long bostaWaitWithin(long deadlineNanos) {
+        long left = (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs;
+        return Math.max(0, Math.min(bostaMaxWaitMs, left));
     }
 
     private Result miss(String cacheKey) {

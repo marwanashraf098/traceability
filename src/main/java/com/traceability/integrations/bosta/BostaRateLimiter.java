@@ -140,6 +140,18 @@ public class BostaRateLimiter {
         if (global != null) global.acquire(priority, deadline);
     }
 
+    /**
+     * P4d — would a USER_FACING request with this key get a token within {@code maxWaitMs}? Takes
+     * nothing (a peek: another caller may still take the token first). The returns portal asks this
+     * before it knows whether the customer's phone is right, so "busy" never depends on the phone.
+     */
+    public boolean hasHeadroom(String apiKey, long maxWaitMs) {
+        if (apiKey == null) return true;
+        long limit = Math.max(0, maxWaitMs) * 1_000_000L;
+        if (perSecond > 0 && bucket(apiKey).waitNanos() > limit) return false;
+        return global == null || global.waitNanos() <= limit;
+    }
+
     /** Bosta answered 429 (with any key): nobody sends — with this key or any other — until retry-after has passed. */
     public void onRateLimited(String apiKey, long retryAfterSeconds) {
         onRateLimited(apiKey, retryAfterSeconds, "bosta");
@@ -219,6 +231,15 @@ public class BostaRateLimiter {
                 if (user) userWaiting--;
                 notifyAll();
             }
+        }
+
+        /** How long a USER_FACING caller would wait for a token now (0 = one is there). Takes nothing. */
+        synchronized long waitNanos() {
+            long now = System.nanoTime();
+            refill(now);
+            if (now < blockedUntilNanos) return blockedUntilNanos - now;
+            if (tokens >= 1) return 0;
+            return (long) ((1 - tokens) / rate * 1_000_000_000L);
         }
 
         synchronized void block(long millis) {
