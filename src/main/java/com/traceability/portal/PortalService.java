@@ -36,11 +36,28 @@ public class PortalService {
     /** P1 (V159): failed lookups per client IP (HMAC'd) per tenant in the same window, across order keys. */
     static final int IP_THROTTLE_MAX_FAILURES = 20;
 
-    public enum Outcome { SUCCESS, NOT_FOUND, THROTTLED }
+    /**
+     * P4c adds three answers of the on-demand lookup (only when portal.preconnect.lookup-enabled):
+     * TOO_OLD (body {date}: orders placed before it can't be looked up online), UNAVAILABLE (this store
+     * can't look up old orders online now), BUSY (try again in a minute). Every other miss stays NOT_FOUND.
+     */
+    public enum Outcome { SUCCESS, NOT_FOUND, THROTTLED, TOO_OLD, UNAVAILABLE, BUSY }
 
     public record LookupResult(Outcome outcome, Map<String, Object> body) {
         static LookupResult notFound()  { return new LookupResult(Outcome.NOT_FOUND, null); }
         static LookupResult throttled() { return new LookupResult(Outcome.THROTTLED, null); }
+    }
+
+    /** P4c — the on-demand lookup (absent on hand-built instances: today's behaviour). */
+    private PortalOnDemandLookup onDemand;
+    private long onDemandMinMillis = 2500;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setOnDemand(PortalOnDemandLookup onDemand,
+                            @org.springframework.beans.factory.annotation.Value("${portal.preconnect.min-duration-ms:2500}")
+                            long minMillis) {
+        this.onDemand = onDemand;
+        this.onDemandMinMillis = minMillis;
     }
 
     private final JdbcTemplate        jdbc;
@@ -134,11 +151,58 @@ public class PortalService {
         UUID tenantId = resolveTenant(slug);
         if (tenantId == null) return Optional.empty();
         String ipHash = tokens.clientIpHash(clientIp);
-        return Optional.of(TenantContext.runAs(tenantId,
-            () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone, ipHash))));
+        boolean onDemandOn = onDemand != null && onDemand.enabled();
+        long started = System.nanoTime();
+        Attempt first = TenantContext.runAs(tenantId,
+            () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone, ipHash, onDemandOn, null)));
+        if (!first.dbMiss() || !onDemandOn) return Optional.of(first.result());
+
+        // P4c: the DB found nothing — look the order up in Shopify + Bosta (no transaction open). Every
+        // outcome but BUSY takes at least onDemandMinMillis, so the response time never says whether the
+        // number and the phone matched.
+        PortalOnDemandLookup.Result r = onDemand.fetch(tenantId, first.raw(), first.stripped(), first.orderKey(), phone, ipHash,
+            started + onDemandMinMillis * 1_000_000L);
+        LookupResult out = switch (r.kind()) {
+            case FETCHED -> TenantContext.runAs(tenantId,
+                () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone, ipHash, false, "fetched"))).result();
+            case SKIP -> record(tenantId, first, null, LookupResult.notFound());
+            case NOT_FOUND -> record(tenantId, first, "not_found", LookupResult.notFound());
+            case TOO_OLD -> record(tenantId, first, "too_old",
+                new LookupResult(Outcome.TOO_OLD, Map.of("date", r.tooOldBefore().toString())));
+            case UNAVAILABLE -> record(tenantId, first, "unavailable", new LookupResult(Outcome.UNAVAILABLE, null));
+            case BUSY -> record(tenantId, first, "busy", new LookupResult(Outcome.BUSY, null));
+        };
+        if (out.outcome() != Outcome.BUSY) padTo(started, onDemandMinMillis);
+        return Optional.of(out);
     }
 
-    private LookupResult lookupInTenant(UUID tenantId, String orderNumberRaw, String phoneRaw, String ipHash) {
+    private LookupResult record(UUID tenantId, Attempt a, String ondemandOutcome, LookupResult result) {
+        TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            recordAttempt(tenantId, a.orderKey(), false, a.ipHash(), ondemandOutcome);
+            return null;
+        }));
+        return result;
+    }
+
+    private static void padTo(long startedNanos, long minMillis) {
+        long remaining = minMillis - (System.nanoTime() - startedNanos) / 1_000_000L;
+        if (remaining <= 0) return;
+        try {
+            Thread.sleep(remaining);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** One pass of the DB lookup. {@code dbMiss}: the order wasn't found (not throttled) — on-demand may run. */
+    private record Attempt(LookupResult result, boolean dbMiss, String raw, String stripped, String orderKey, String ipHash) {}
+
+    /**
+     * {@code deferMiss}: on a DB miss, don't record the failed attempt — the on-demand path records it
+     * with its outcome. {@code ondemandOutcome}: stored on this attempt's row (P4c, V165).
+     */
+    private Attempt lookupInTenant(UUID tenantId, String orderNumberRaw, String phoneRaw, String ipHash,
+                                   boolean deferMiss, String ondemandOutcome) {
         String raw      = orderNumberRaw == null ? "" : orderNumberRaw.replaceAll("\\s+", "");
         String stripped = raw.startsWith("#") ? raw.substring(1) : raw;
         String orderKey = stripped.toLowerCase(Locale.ROOT);
@@ -148,35 +212,35 @@ public class PortalService {
         //    60 minutes after the 5th real failure no matter how often the caller retries.
         Integer recentFailures = jdbc.queryForObject(
             "SELECT COUNT(*) FROM portal_lookup_attempts " +
-            "WHERE tenant_id = ? AND order_key = ? AND success = false " +
+            "WHERE tenant_id = ? AND order_key = ? AND success = false " + NOT_THE_CUSTOMERS_FAULT +
             "  AND attempted_at > now() - (interval '1 minute' * ?)",
             Integer.class, tenantId, orderKey, THROTTLE_WINDOW_MINUTES);
         if (recentFailures != null && recentFailures >= THROTTLE_MAX_FAILURES) {
-            return LookupResult.throttled();
+            return new Attempt(LookupResult.throttled(), false, raw, stripped, orderKey, ipHash);
         }
         // P1: per client IP, across order keys — answered like any other miss, not recorded.
         if (ipHash != null) {
             Integer ipFailures = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM portal_lookup_attempts " +
-                "WHERE tenant_id = ? AND ip_hash = ? AND success = false " +
+                "WHERE tenant_id = ? AND ip_hash = ? AND success = false " + NOT_THE_CUSTOMERS_FAULT +
                 "  AND attempted_at > now() - (interval '1 minute' * ?)",
                 Integer.class, tenantId, ipHash, THROTTLE_WINDOW_MINUTES);
             if (ipFailures != null && ipFailures >= IP_THROTTLE_MAX_FAILURES) {
-                return LookupResult.notFound();
+                return new Attempt(LookupResult.notFound(), false, raw, stripped, orderKey, ipHash);
             }
         }
 
         Map<String, Object> order = findEligibleOrder(tenantId, raw, stripped, phoneRaw);
         if (order == null) {
-            recordAttempt(tenantId, orderKey, false, ipHash);
-            return LookupResult.notFound();
+            if (!deferMiss) recordAttempt(tenantId, orderKey, false, ipHash, ondemandOutcome);
+            return new Attempt(LookupResult.notFound(), true, raw, stripped, orderKey, ipHash);
         }
 
         UUID orderId = (UUID) order.get("id");
         List<Map<String, Object>> lines = returnableLines(tenantId, orderId);
         // Step 6a: the order's UNTRACKED lines (no allocation of any status) — keyed by order line.
         lines.addAll(untrackedLines(tenantId, orderId));
-        recordAttempt(tenantId, orderKey, true, ipHash);
+        recordAttempt(tenantId, orderKey, true, ipHash, ondemandOutcome);
         // Step 5b: when the store offers exchanges, each line also carries what it could be
         // exchanged for (siblings of the same product, in stock or not) — absent otherwise.
         if (exchangesEnabled(tenantId)) {
@@ -209,7 +273,7 @@ public class PortalService {
             pickup.put("cities", pickupAreas.pickupCities().stream().map(PickupAreaService.City::toJson).toList());
         }
         body.put("pickup", pickup);
-        return new LookupResult(Outcome.SUCCESS, body);
+        return new Attempt(new LookupResult(Outcome.SUCCESS, body), false, raw, stripped, orderKey, ipHash);
     }
 
     /**
@@ -814,11 +878,19 @@ public class PortalService {
         throw new IllegalStateException("Could not generate a unique return reference");
     }
 
-    private void recordAttempt(UUID tenantId, String orderKey, boolean success, String ipHash) {
+    private void recordAttempt(UUID tenantId, String orderKey, boolean success, String ipHash, String ondemandOutcome) {
         jdbc.update(
-            "INSERT INTO portal_lookup_attempts (tenant_id, order_key, success, ip_hash) VALUES (?, ?, ?, ?)",
-            tenantId, orderKey, success, ipHash);
+            "INSERT INTO portal_lookup_attempts (tenant_id, order_key, success, ip_hash, ondemand_outcome) VALUES (?, ?, ?, ?, ?)",
+            tenantId, orderKey, success, ipHash, ondemandOutcome);
     }
+
+    /**
+     * P4c: an on-demand answer that says nothing about what the customer typed — the portal's Bosta
+     * budget was full (busy) or the store can't look up old orders (unavailable) — never counts toward
+     * the per-order / per-IP failure throttles.
+     */
+    private static final String NOT_THE_CUSTOMERS_FAULT =
+        "  AND (ondemand_outcome IS NULL OR ondemand_outcome NOT IN ('busy', 'unavailable')) ";
 
     // ── P1: the uploaded logo, public ───────────────────────────────────────────
 
