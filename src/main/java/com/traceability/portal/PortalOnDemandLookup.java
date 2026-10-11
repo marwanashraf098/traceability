@@ -9,6 +9,7 @@ import com.traceability.integrations.bosta.BostaRateLimitException;
 import com.traceability.integrations.bosta.BostaRateLimiter;
 import com.traceability.integrations.bosta.CourierSimulation;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyGraphQLErrorException;
 import com.traceability.integrations.shopify.ShopifySyncService;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.inventory.ShipmentLinkService;
@@ -64,7 +65,8 @@ import java.util.regex.Pattern;
  *      mapped to catalog variants. A concurrent insert of the same Shopify order → the winner's row.
  *
  * No DB transaction is open during a Shopify or Bosta call. Nothing about the customer, the order,
- * tokens or the Shopify / Bosta bodies is logged — only the tenant and the outcome.
+ * tokens or the Shopify / Bosta bodies is logged — only the tenant and the outcome, and for UNAVAILABLE
+ * a WARN with its cause (exception class, HTTP status, GraphQL error codes, the denied PII tiers).
  */
 @Service
 public class PortalOnDemandLookup {
@@ -221,12 +223,28 @@ public class PortalOnDemandLookup {
             String token;
             ShopifyGateway.PortalOrderSearch search;
             try {
-                token = tokens.getValidToken(t.storeId());
-                search = shopify.findOrdersByName(t.shopDomain(), token, stripped);
+                // Under the tenant: the provider reads (and may refresh) the stores row as app_user + RLS.
+                // Outside it the row is invisible and every lookup was UNAVAILABLE (prod, 2026-10-11).
+                // No transaction here — the provider opens its own (and only locks to refresh).
+                token = TenantContext.runAs(tenantId, () -> tokens.getValidToken(t.storeId()));
             } catch (RuntimeException e) {
+                log.warn("Portal on-demand lookup: tenant {} → UNAVAILABLE: Shopify token unavailable ({})",
+                         tenantId, e.getClass().getSimpleName());
                 return Result.of(Kind.UNAVAILABLE);
             }
-            if (!search.customerPhoneReadable()) return Result.of(Kind.UNAVAILABLE);
+            try {
+                search = shopify.findOrdersByName(t.shopDomain(), token, stripped);
+            } catch (RuntimeException e) {
+                log.warn("Portal on-demand lookup: tenant {} → UNAVAILABLE: Shopify order search failed ({})",
+                         tenantId, searchFailure(e));
+                return Result.of(Kind.UNAVAILABLE);
+            }
+            if (!search.customerPhoneReadable()) {
+                log.warn("Portal on-demand lookup: tenant {} → UNAVAILABLE: no customer field readable "
+                         + "(ACCESS_DENIED at tiers {})", tenantId,
+                         search.deniedTiers().isEmpty() ? "[none this call — tier NONE cached]" : search.deniedTiers());
+                return Result.of(Kind.UNAVAILABLE);
+            }
             List<ShopifyGateway.Order> exact = search.orders().stream()
                 .filter(o -> sameNumber(o.name(), stripped)).toList();
             if (exact.isEmpty()) {
@@ -280,6 +298,25 @@ public class PortalOnDemandLookup {
     private long bostaWaitWithin(long deadlineNanos) {
         long left = (deadlineNanos - System.nanoTime()) / 1_000_000L - bostaReadReserveMs;
         return Math.max(0, Math.min(bostaMaxWaitMs, left));
+    }
+
+    /**
+     * Why the Shopify search failed, safe to log: the exception class, the HTTP status when there was one,
+     * the GraphQL error codes when there were some. Never the message (a 4xx message carries the body).
+     */
+    static String searchFailure(Throwable e) {
+        StringBuilder b = new StringBuilder(e.getClass().getSimpleName());
+        if (e instanceof ShopifyGraphQLErrorException g) b.append(" codes=").append(g.codes());
+        Throwable root = e;
+        for (Throwable c = e; c != null; c = c.getCause()) {
+            if (c instanceof org.springframework.web.client.RestClientResponseException h) {
+                b.append(" HTTP ").append(h.getStatusCode().value());
+            }
+            root = c;
+            if (c.getCause() == c) break;
+        }
+        if (root != e) b.append(" cause=").append(root.getClass().getSimpleName());
+        return b.toString();
     }
 
     private Result miss(String cacheKey) {
