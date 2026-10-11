@@ -633,6 +633,9 @@ function DrawerContent({
           </ul>
         </section>
 
+        {/* What the customer asked for — in every state, not only next to the refund form (RR-AK9HPN). */}
+        <CustomerRefundChoice detail={detail} />
+
         {detail.note && (
           <section>
             <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">

@@ -7,6 +7,7 @@ import { Button, cn, useToast } from '../../components/ui'
 import { dateTimeLabel } from './requestFormat'
 import { CloseDialog, UntrackedArrivedControls } from './RequestLifecycle'
 import { BookingState } from './ReturnRequestDrawer'
+import CustomerRefundChoice from './CustomerRefundChoice'
 
 /**
  * Step 5c (mockup X5) — an approved exchange request: what goes out, the Bosta exchange trip,
@@ -163,6 +164,8 @@ export default function ExchangeProgressView({
             {detail.closeNote && <p className="text-body text-secondary whitespace-pre-wrap mt-1" dir="auto">{detail.closeNote}</p>}
           </section>
         )}
+
+        <CustomerRefundChoice detail={detail} />
 
         <section>
           <h3 className="text-body font-semibold text-primary mb-3">{t('exchangesRefunds.requests.exchange.progress.title')}</h3>

@@ -1,7 +1,7 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Banknote, Building2, Smartphone, Trash2, Zap } from 'lucide-react'
-import { getRefundDetails, RefundDetailsView, ReturnRequestDetail } from '../../api'
+import { getRefundDetails, getRoleFromToken, RefundDetailsView, ReturnRequestDetail } from '../../api'
 import { Button } from '../../components/ui'
 import { writeToClipboard } from '../settings/connections/CopyRow'
 
@@ -16,7 +16,10 @@ const ICONS: Record<string, ReactNode> = {
  * Returns portal P2 — "Customer asked for" (design/Traced_portal_refund_method_dc.html, c): the
  * method + hint the request detail carries; "Show details" fetches the decrypted details on demand
  * (GET /return-requests/{id}/refund-details — nothing cached, nothing kept after Hide); after the
- * 30-day purge or a privacy request only the method (and hint) remain.
+ * 30-day purge or a privacy request only the method (and hint) remain. Shown in EVERY state of a request
+ * with a refund method (refund requests and exchanges with a refund fallback), not only next to the
+ * refund form. "Show details" only for owner / manager (the endpoint is owner / manager) — a worker
+ * sees the method and the hint.
  */
 export default function CustomerRefundChoice({ detail }: { detail: ReturnRequestDetail }) {
   const { t, i18n } = useTranslation()
@@ -63,7 +66,8 @@ export default function CustomerRefundChoice({ detail }: { detail: ReturnRequest
   }
 
   const purgedAt = detail.refundDetailsPurgedAt
-  const canShow = method !== 'cash' && !!detail.refundDetailsAvailable
+  const role = getRoleFromToken()
+  const canShow = method !== 'cash' && !!detail.refundDetailsAvailable && (role === 'owner' || role === 'manager')
 
   return (
     <section className="rounded-xl border border-line bg-elevated p-3.5 space-y-2.5" data-testid="customer-refund-choice">
