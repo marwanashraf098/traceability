@@ -7,6 +7,7 @@ import { Button, cn, useToast } from '../../components/ui'
 import { reasonLabel, shortCustomerName } from './requestFormat'
 import { PieceCode } from './RequestLifecycle'
 import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
+import CustomerRefundChoice from './CustomerRefundChoice'
 
 /**
  * Step 5b — the request drawer for an exchange (mockups X4 / X6): what comes back → what goes
@@ -151,6 +152,9 @@ export default function ExchangeRequestView({
             {t('exchangesRefunds.requests.exchange.fallback')}
           </p>
         )}
+
+        {/* The refund fallback's method — what the customer asked for if it becomes a refund. */}
+        <CustomerRefundChoice detail={detail} />
       </div>
 
       {requested && !footerExtra && (
