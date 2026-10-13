@@ -919,6 +919,16 @@
     }
   },
   "lookup": {
+    "reprint": {
+      "button": "Reprint label",
+      "disabledTooltip": "Only pieces in the warehouse can be relabelled",
+      "confirmTitle": "Reprint label",
+      "confirmBody": "Remove the old label from this piece before sticking the new one.",
+      "print": "Print",
+      "errorNotAllowed": "Only pieces in the warehouse can be relabelled.",
+      "errorForbidden": "Only owners and managers can reprint labels.",
+      "errorGeneric": "Couldn't print the label. Try again."
+    },
     "title": "Piece Lookup",
     "placeholder": "Scan or type a piece barcode or tracking number…",
     "scanPrompt": "Scan a barcode, or type a piece, order, or tracking number…",

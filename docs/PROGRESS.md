@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Lookup "Reprint label" (2026-10-13, branch `lookup-reprint-label` off main bc2b540; NOT merged, NOT deployed). No migration.**
+- **Endpoint:** `POST /api/v1/pieces/{id}/label/reprint` (`PieceLabelController`, `hasAnyRole('OWNER','MANAGER')`) → inline PDF.
+  `PieceLabelReprintService.reprint` — one transaction (rollbackFor IOException): piece row `FOR UPDATE` (tenant filter) → 404 /
+  422 `REPRINT_NOT_ALLOWED` (`ReprintNotAllowedException`, the usual {code, message_en, message_ar}) → `ledger.recordLabelReprinted`
+  (location, order, newest forward shipment by created_at DESC, id DESC) → `LabelService.generatePieceLabel` (50×25, unchanged).
+  A render failure rolls the event back. No transition(), no pieces write, no Shopify call. Returns/Transfers/Receiving reprint
+  paths and the gated `GET /returns/pieces/{id}/label` untouched.
+- **Allow-list has ONE definition:** `PieceLabelReprintService.REPRINTABLE` (available, on_hold, damaged,
+  return_pending_inspection, reserved). The lookup response carries `canReprint` computed from it; the frontend never lists statuses.
+- **Lookup UI:** header shows `shortCode` (what the sticker carries) with `barcode` as a small secondary line when it differs —
+  NOTE every piece's barcode is `PC-<ULID>` (batchReceive writes it for new pieces too), so the secondary line shows on every
+  piece. `ReprintLabelButton` (btn-outline, Printer 12) above AdjustPanel, hidden for workers, disabled + tooltip when
+  !canReprint; confirm via the shared `Modal` (as TransferDetail); blob → window.open; refresh; 422 / 403 mapped to EN/AR copy.
+- **Tests:** `PieceLabelReprintTest` (11) and `lookupReprintLabel.test.tsx` (10), every one revert-checked. Tenant isolation is
+  triple-layered (service filter, RLS, LabelService's own filter): removing the service filter alone, or it plus RLS, keeps the isolation
+  tests green; removing all three turns them red (M12).
+- **Gotcha:** don't put `produces = "application/pdf"` on a PDF mapping that can also return a JSON error body — the error body is
+  then bound to application/pdf.
+
 **Request drawer — "Customer asked for" in every state (2026-10-12, branch `fix/drawer-refund-asked-all-states`, frontend only).** Prod RR-AK9HPN (The Snouts): instapay + details + hint, but nothing showed while Requested — `CustomerRefundChoice` was only in the lifecycle view (next to RefundForm). Now also in the default view (under Items, above Reject / Approve: requested, approved / pickup_booked before anything arrived, rejected, closed early), the exchange decision view (refund fallback) and the exchange progress view; still exactly one per drawer. Show details only for owner / manager (`getRoleFromToken`; the endpoint is owner/manager already) — a worker sees method + hint. RefundForm prefill unchanged. `refundChoiceAllStates.test.tsx` (14, EN + AR; 11 red on the old code). Not deployed.
 
 **Portal on-demand lookup — UNAVAILABLE on every attempt fixed (2026-10-11, branch `fix/portal-ondemand-unavailable-diag`).** Prod (Jumi, flag on): every on-demand lookup answered UNAVAILABLE, logs said nothing more. Root cause: `PortalOnDemandLookup.fetch` runs outside any tenant context (PortalService's `runAs` closes before it) and called `ShopifyTokenProvider.getValidToken` bare — as app_user + RLS the stores row was invisible → `ShopifyStoreNeedsReauthException` ("not visible under current tenant") → UNAVAILABLE. The P4c tests mocked the provider and connected as postgres, so they could not see it. Fix: the token is read (and refreshed) inside `TenantContext.runAs(tenantId, …)`, no transaction held around the Shopify search. WARN at each UNAVAILABLE cause (exception class / HTTP status / GraphQL codes / denied PII tiers — never PII, tokens or bodies); `PortalOrderSearch.deniedTiers`, `ShopifyGraphQLErrorException.codes`. New `PortalOnDemandTokenTenantTest` (6, app_user, real provider incl. refresh; revert-checked: 5 red without the fix, each logging ShopifyStoreNeedsReauthException) and `ShopifyPortalLookupDiagnosticsWireTest` (3). Not deployed. Checked and NOT the cause: the name query (`name:"#N" OR name:"N"`; a wrong form could only give not-found, never UNAVAILABLE) and the PII query (never email; `customer` only at tier FULL = read_customers granted). If UNAVAILABLE persists after deploy, the new WARN names the cause.

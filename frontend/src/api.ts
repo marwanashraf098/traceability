@@ -493,7 +493,11 @@ export interface PieceLookupResult {
   type: 'piece'
   id: string
   barcode: string
+  /** What the printed sticker carries (P000123) — `barcode` is the internal PC-<ULID>. */
+  shortCode: string
   status: string
+  /** Server-computed from PieceLabelReprintService.REPRINTABLE — never re-derive the status list here. */
+  canReprint: boolean
   condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
@@ -527,6 +531,32 @@ export type LookupResult = PieceLookupResult | TrackingLookupResult | OrderLooku
 
 export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
+}
+
+/** Lookup "Reprint label" failure — status 403 / 422 (code REPRINT_NOT_ALLOWED) / other. */
+export class ReprintLabelError extends Error {
+  constructor(public status: number, public code: string | null) {
+    super(code ?? `HTTP ${status}`)
+  }
+}
+
+/**
+ * Reprints a piece's existing label (owner / manager) — same window.open(URL.createObjectURL(...))
+ * PDF delivery as Receiving / Returns / Transfers.
+ */
+export async function reprintPieceLabel(pieceId: string): Promise<void> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/pieces/${encodeURIComponent(pieceId)}/label/reprint`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { code?: string } | null
+    throw new ReprintLabelError(res.status, body?.code ?? null)
+  }
+  const blob = await res.blob()
+  window.open(URL.createObjectURL(blob), '_blank')
 }
 
 // ── JWT role helper ───────────────────────────────────────────────────────────

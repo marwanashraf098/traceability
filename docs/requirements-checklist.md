@@ -136,6 +136,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 14.4 [M] AWB barcode in lookup → shipment/order page with its pieces
 - [x] 14.5 [M] Bidirectional navigation order↔piece↔shipment
 - [ ] 14.6 [S] Timeline PDF export (dispute evidence)
+- [x] 14.7 [M] Reprint label from Lookup — the piece's existing short code, owner/manager, allow-list available/on_hold/damaged/return_pending_inspection/reserved, audited as piece_events 'label_reprinted' [2026-10-13, branch `lookup-reprint-label`; see PROGRESS.md]
 
 ## FR-15 Dashboards & Exceptions
 - [x] 15.1 [M] Inventory counts by status with drill-down [summary endpoint + Overview tiles + Inventory drill-down page Day 32]
