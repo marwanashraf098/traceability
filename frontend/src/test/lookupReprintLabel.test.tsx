@@ -137,16 +137,13 @@ describe('Lookup — Reprint label', () => {
     expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull()
   })
 
-  test('rl8 — header shows the short code; the internal PC- barcode underneath', async () => {
+  test('rl8 — header shows only the short code; the PC- barcode is the "Internal code" meta field', async () => {
     await search()
-    expect(await screen.findByTestId('piece-short-code')).toHaveTextContent('P000123')
-    expect(screen.getByTestId('piece-barcode-secondary')).toHaveTextContent('PC-' + ULID)
-  })
-
-  test('rl9 — no secondary line when barcode equals the short code', async () => {
-    vi.mocked(api.lookup).mockResolvedValue(piece({ barcode: 'P000123' }))
-    await search()
-    expect(await screen.findByTestId('piece-short-code')).toHaveTextContent('P000123')
-    expect(screen.queryByTestId('piece-barcode-secondary')).toBeNull()
+    const header = await screen.findByTestId('piece-short-code')
+    expect(header).toHaveTextContent('P000123')
+    expect(header.parentElement).not.toHaveTextContent('PC-' + ULID)
+    const internal = screen.getByTestId('piece-internal-code')
+    expect(internal).toHaveTextContent('PC-' + ULID)
+    expect(internal.closest('div')).toHaveTextContent('Internal code')
   })
 })

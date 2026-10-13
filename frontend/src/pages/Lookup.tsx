@@ -82,15 +82,10 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
         <div className="flex items-start justify-between gap-4 mb-5">
           <div className="min-w-0">
             {/* Short code — what the printed sticker carries; mono as spec requires for IDs.
-                The internal PC- barcode shows underneath only when it differs. */}
+                The internal PC- barcode is in the meta grid ("Internal code"). */}
             <p data-testid="piece-short-code" className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
               {result.shortCode}
             </p>
-            {result.barcode !== result.shortCode && (
-              <p data-testid="piece-barcode-secondary" className="text-[11px] text-muted font-mono -mt-1 mb-1">
-                {result.barcode}
-              </p>
-            )}
             <h2 className="text-h2 text-primary leading-tight">
               {result.variant.productTitle}
               {result.variant.title && result.variant.title !== 'Default Title' && (
@@ -135,6 +130,9 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             <span className={result.condition === 'damaged' ? 'text-danger' : 'text-success-text'}>
               {t(`lookup.conditionValue.${result.condition}`)}
             </span>
+          </MetaField>
+          <MetaField label={t('lookup.internalCode')}>
+            <span data-testid="piece-internal-code" className="font-mono break-all">{result.barcode}</span>
           </MetaField>
         </div>
 

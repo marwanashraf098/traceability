@@ -919,6 +919,7 @@
     }
   },
   "lookup": {
+    "internalCode": "Internal code",
     "reprint": {
       "button": "Reprint label",
       "disabledTooltip": "Only pieces in the warehouse can be relabelled",
