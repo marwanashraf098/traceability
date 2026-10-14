@@ -296,6 +296,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/returns/sessions",              skip(R_RETURNS));
         reg("GET /api/v1/returns/sessions/{sessionId}",  skip(R_RETURNS));
         reg("GET /api/v1/returns/pieces/{pieceId}/label",skip("label PDF of one piece"));
+        reg("POST /api/v1/pieces/{id}/label/reprint",   skip("label PDF of one piece"));
         reg("POST /api/v1/returns/sessions",             skip(R_RETURNS));
         reg("DELETE /api/v1/returns/sessions/{sessionId}", skip(R_RETURNS));
         for (String a : List.of("close", "scan", "items/{pieceId}/disposition", "pieces/{pieceId}/reprint-label",

@@ -191,6 +191,7 @@ public class LookupService {
         result.put("barcode",         piece.get("barcode"));
         result.put("shortCode",       piece.get("short_code"));
         result.put("status",          piece.get("status"));
+        result.put("canReprint",      PieceLabelReprintService.canReprint(Objects.toString(piece.get("status"), null)));
         result.put("condition",       piece.get("condition"));
         result.put("receivedAt",      piece.get("received_at"));
         result.put("variant",         variantMap);

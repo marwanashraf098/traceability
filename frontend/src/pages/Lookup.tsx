@@ -2,16 +2,16 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  ScanLine, SearchX, ChevronDown, Lock, RotateCcw, Search,
+  ScanLine, SearchX, ChevronDown, Lock, RotateCcw, Search, Printer,
 } from 'lucide-react'
 import {
   lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, TimelineEvent,
   adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
   voidPiece, holdPiece, unholdPiece, VOID_REASONS, HOLD_REASONS, VoidReason, HoldReason,
   restorePiece, RESTORE_REASONS, RestoreReason,
-  getRoleFromToken,
+  getRoleFromToken, reprintPieceLabel, ReprintLabelError,
 } from '../api'
-import { Badge, Spinner } from '../components/ui'
+import { Badge, Button, Modal, Spinner } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
@@ -61,9 +61,9 @@ function TransitionPill({ from, to }: { from: string | null; to: string | null }
 
 // ── Meta field (bordered cell, per mockup) ──────────────────────────────────────
 
-function MetaField({ label, children }: { label: string; children: React.ReactNode }) {
+function MetaField({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="bg-surface border border-line rounded-lg p-3">
+    <div className={`bg-surface border border-line rounded-lg p-3 ${className}`}>
       <p className="text-caption text-muted mb-1">{label}</p>
       <p className="text-small text-primary font-semibold">{children}</p>
     </div>
@@ -81,9 +81,10 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
       <div className="card p-6">
         <div className="flex items-start justify-between gap-4 mb-5">
           <div className="min-w-0">
-            {/* Barcode — mono as spec requires for IDs */}
-            <p className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
-              {result.barcode}
+            {/* Short code — what the printed sticker carries; mono as spec requires for IDs.
+                The internal PC- barcode is in the meta grid ("Internal code"). */}
+            <p data-testid="piece-short-code" className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
+              {result.shortCode}
             </p>
             <h2 className="text-h2 text-primary leading-tight">
               {result.variant.productTitle}
@@ -130,6 +131,9 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
               {t(`lookup.conditionValue.${result.condition}`)}
             </span>
           </MetaField>
+          <MetaField label={t('lookup.internalCode')} className="col-span-2">
+            <span data-testid="piece-internal-code" className="font-mono break-all">{result.barcode}</span>
+          </MetaField>
         </div>
 
         {result.receivingSession && (
@@ -142,6 +146,8 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             </Link>
           </div>
         )}
+
+        <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
 
         <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
       </div>
@@ -202,6 +208,73 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
 
 function cnPad(isLast: boolean) {
   return isLast ? 'flex-1' : 'flex-1 pb-5'
+}
+
+// ── Reprint label ─────────────────────────────────────────────────────────────
+// A fresh copy of the piece's EXISTING label (same short code). Owner / manager only —
+// hidden for workers like AdjustPanel; the server enforces the role too. Which statuses
+// qualify is decided server-side (canReprint) — this component never lists them.
+
+function ReprintLabelButton({ pieceId, canReprint, onDone }: {
+  pieceId: string
+  canReprint: boolean
+  onDone: () => void
+}) {
+  const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
+  const [printing,   setPrinting]   = useState(false)
+  const [error,      setError]      = useState<string | null>(null)
+
+  const role = getRoleFromToken()
+  if (role !== 'owner' && role !== 'manager') return null
+
+  async function handlePrint() {
+    setPrinting(true)
+    setError(null)
+    try {
+      await reprintPieceLabel(pieceId)
+      setConfirming(false)
+      onDone()
+    } catch (e) {
+      setConfirming(false)
+      if (e instanceof ReprintLabelError && e.code === 'REPRINT_NOT_ALLOWED') setError(t('lookup.reprint.errorNotAllowed'))
+      else if (e instanceof ReprintLabelError && e.status === 403)         setError(t('lookup.reprint.errorForbidden'))
+      else                                                                  setError(t('lookup.reprint.errorGeneric'))
+    } finally {
+      setPrinting(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-line space-y-2">
+      <span title={canReprint ? undefined : t('lookup.reprint.disabledTooltip')} className="inline-flex">
+        <button
+          data-testid="reprint-label-btn"
+          onClick={() => { setError(null); setConfirming(true) }}
+          disabled={!canReprint}
+          className="btn-outline text-small inline-flex items-center gap-1.5"
+        >
+          <Printer size={12} />{t('lookup.reprint.button')}
+        </button>
+      </span>
+
+      {error && <p data-testid="reprint-label-error" className="text-small text-danger">{error}</p>}
+
+      {confirming && (
+        <Modal title={t('lookup.reprint.confirmTitle')} onClose={() => setConfirming(false)}>
+          <div className="space-y-4">
+            <p className="text-body text-primary">{t('lookup.reprint.confirmBody')}</p>
+            <div className="flex gap-3 justify-end">
+              <Button variant="secondary" onClick={() => setConfirming(false)}>{t('common.cancel')}</Button>
+              <Button loading={printing} onClick={handlePrint}>
+                {t('lookup.reprint.print')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
 }
 
 // ── Adjust panel (FR-13 + FR-13.x Void/On Hold) ────────────────────────────────
