@@ -61,9 +61,9 @@ function TransitionPill({ from, to }: { from: string | null; to: string | null }
 
 // ── Meta field (bordered cell, per mockup) ──────────────────────────────────────
 
-function MetaField({ label, children }: { label: string; children: React.ReactNode }) {
+function MetaField({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="bg-surface border border-line rounded-lg p-3">
+    <div className={`bg-surface border border-line rounded-lg p-3 ${className}`}>
       <p className="text-caption text-muted mb-1">{label}</p>
       <p className="text-small text-primary font-semibold">{children}</p>
     </div>
@@ -131,7 +131,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
               {t(`lookup.conditionValue.${result.condition}`)}
             </span>
           </MetaField>
-          <MetaField label={t('lookup.internalCode')}>
+          <MetaField label={t('lookup.internalCode')} className="col-span-2">
             <span data-testid="piece-internal-code" className="font-mono break-all">{result.barcode}</span>
           </MetaField>
         </div>
