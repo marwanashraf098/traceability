@@ -36,7 +36,7 @@ import static org.mockito.Mockito.*;
  *   v1 void of a piece received before the seed (receiving claim superseded by the seed — the
  *      2026-10-10 Snouts case) → one −1                  v2 received after the seed, never counted → skipped
  *   d1 damage → one available→damaged move carrying traced://piece/{id}
- *   n1 linked-but-unseeded hold → skipped not_seeded     n2 unlinked void → skipped main_warehouse_not_linked
+ *   n1 linked, not counting (no seed, no applied receiving) hold → skipped not_counting     n2 unlinked void → skipped main_warehouse_not_linked
  *   n3 piece at another location → skipped not_at_main (a row, never a silent return)
  *   h1 hold_enter failed (definite) → unhold closes it (not "cancelled" — it was sent), no +1, never re-sent
  *   h2 hold_enter skipped → unhold: no +1                h3 hold_enter ambiguous → unhold skipped + alert
@@ -146,13 +146,13 @@ class PieceShopifySyncTest {
     // ── R5 / R4: skips are rows, never silent ─────────────────────────────────────
 
     @Test
-    void n1_linkedButUnseeded_hold_skippedNotSeeded_noCall() throws Exception {
+    void n1_linkedButNotCounting_hold_skippedNotCounting_noCall() throws Exception {
         T t = tenant("n1", true, false);
         String piece = piece(t, "available", null, true);
 
         as(t, () -> adjust.hold(piece, "quality_check", null, t.user()));
 
-        assertThat(claim(t, "hold_enter", piece)).containsEntry("status", "skipped").containsEntry("skip_reason", "not_seeded");
+        assertThat(claim(t, "hold_enter", piece)).containsEntry("status", "skipped").containsEntry("skip_reason", "not_counting");
         Thread.sleep(200);
         verifyNoWrites();
     }

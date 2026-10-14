@@ -255,11 +255,13 @@ public class ShopifyInventoryReconcileService {
      */
     public ApplyResult apply(UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        refuseWhenCountingThroughReceiving(tenantId);
         Context ctx = resolveContext(tenantId);
         Map<UUID, String> preResolved = resolveItemIds(tenantId, ctx, loadVariants(tenantId, true));
 
         return tx.execute(outerStatus -> {
             acquireTenantLock(tenantId);
+            refuseWhenCountingThroughReceiving(tenantId);   // again under the lock — a receiving +1 may have applied since
 
             // Recompute live — never trust a stale client-held report for a write decision.
             List<Map<String, Object>> candidates = loadVariants(tenantId, true);
@@ -516,6 +518,17 @@ public class ShopifyInventoryReconcileService {
 
     /** pg_advisory_xact_lock is transaction-scoped — automatically released when the
      *  surrounding tx.execute(...) transaction commits or rolls back, no explicit unlock. */
+    /**
+     * The seed is for an empty Traced location only (approved 2026-10-14): refused once Shopify's count
+     * there started through receiving (V167 shopify_counting_source = 'receiving'). A tenant whose count
+     * started with the seed (The Snouts) may re-run it — unchanged.
+     */
+    private void refuseWhenCountingThroughReceiving(UUID tenantId) {
+        // tx joins the seed's transaction under the lock; on its own it opens one (RLS needs the GUC).
+        String source = tx.execute(st -> jdbc.queryForObject("SELECT shopify_counting_source(?)", String.class, tenantId));
+        if ("receiving".equals(source)) throw new SeedRefusedException();
+    }
+
     private void acquireTenantLock(UUID tenantId) {
         jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Void>) con -> {
             try (var ps = con.prepareStatement("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)")) {

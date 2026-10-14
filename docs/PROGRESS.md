@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Shopify counting gate — unseeded tenants decrement again (2026-10-14/15, branch `fix/shopify-counting-gate` off main
+1207a5e; NOT merged, NOT deployed, repair NOT run). Migration V167.**
+- **Bug (Step 0, prod read-only):** every tenant but The Snouts was never seeded (connect with 0 → receive), yet receiving
+  +1s applied (BROEK 78 / +1,581). The seed-only gate skipped every Lookup / transfer decrement and the bring-back +1
+  (`not_seeded`): BROEK 10 voids + 6 permanent moves (24 piece departures), JUMI 1 void → Shopify too high.
+- **V167:** `shopify_counting_source(tenant)` (SQL, STABLE, INVOKER) — THE definition: main linked AND (applied seed OR
+  applied receiving claim at main) → 'seed' | 'receiving' (first one), else NULL. `transfer_shopify_syncs.payload` jsonb.
+- **Code:** `PieceShopifyRules.setup` gates on it (new skips `not_counting`; seed-timestamp branches null-guarded);
+  `TransferShopifySync.claimSend` uses `setup` + the shared per-piece `PieceShopifyRules.arrival` — a piece whose arrival
+  never reached Shopify is left out of −N / piece_ids and listed in `payload.excluded` (all excluded → skipped
+  `arrival_not_counted`); `RETURN_COUNTED_SQL` gates on the function. Seed refused 409 `SEED_NOT_NEEDED` (EN + AR,
+  `SeedRefusedException`) when the count started through receiving (checked before + under the lock); the import job
+  logs it at INFO. The Snouts (seed 10-07, first applied receiving 10-11 → 'seed') unchanged. No new decrement method /
+  call site.
+- **Repair:** `scripts/ops/2026-10-14-not-seeded-repair.sql` (dry run default, `-v commit=yes`, optional `-v tenant_id`;
+  refuses without V167). Reopens the `not_seeded` rows through the existing claims (sweeps send them); excludes
+  came-back pieces, uncounted arrivals, return claims, pieces away from main, and variants where Shopify − N < Traced;
+  ABORTS if any variant's level isn't synced after its latest piece event. **Prod dry run (plan query, read-only,
+  2026-10-15):** BROEK −32 over 24 SKUs, JUMI −1 (1018-Cream-L 9 → 8); excluded: AG6 (OFW-M first trip,
+  came_back_to_main), void 248 SMG-XXL (Shopify 28 = Traced 28). Every SKU lands on Traced. **12 BROEK CTK variants are
+  stale** (levels 05:16, transfers 19:0x) → the real run aborts until a level sync ("Sync now").
+- **Tests:** new `ShopifyCountingGateTest` (8), `NotSeededRepairScriptTest` (6, real psql), `SeedSupersedesClaimsTest`
+  r1/r2. Revert-checked: seed-only gate → 5 red; old return gate only → 3 red; no per-piece arrival → g4/g5 red; no
+  refusal → r1 red; refuse on any receiving → r2 red; script without netting / below-Traced / stale abort → red.
+  Edited (approved): TransferShopifySyncTest fixture = applied receiving claim per piece; ts14/ts15 `notCounted`;
+  ts5/ts8 filter `NOT IN ('initial_seed','receiving_session')`; ts14 + PieceShopifySyncTest n1 → `not_counting`;
+  MigrationSmokeTest 166, NotTracedBackfillTest 111. AnalyticsB1Test.payoutLag red on untouched main too (date-dependent).
+- **Open:** excluded `arrival_unconfirmed` pieces on a transfer raise no alert (the Lookup path's NEEDS_CHECK alert has
+  no transfer equivalent); claimSend does one arrival read per piece (fine for BROEK-sized transfers). In-flight
+  bring-back race: if W13T is received between the repair commit and the sweep's push, its +1 is skipped (window ≤ 10 min).
+- **Next:** deploy → level sync → dry run → `-v commit=yes` (Marawan).
+
 **Pickup handover manifest — print the page (2026-10-14, branch `fix/pickup-manifest-print` off main b46d2a4; NOT merged,
 NOT deployed). Frontend only, no endpoint change, no migration.**
 - **Bug:** "Print / Download manifest" (`PickupSessions.tsx`) did `window.open('/api/v1/pickup-sessions/{id}/manifest')` — a plain tab
@@ -695,7 +727,8 @@ locations — Traced still writes only to the Traced Main Warehouse.
   out_on_transfer on a pre-V118 send-and-back, 3 transferred_out) all left BEFORE its 10-07 seed → seed_excluded (Shopify
   never counted them; each gets +1 on return). Sold/lost report: Snouts DBPINK-3 sold ×1 left before the seed → nothing
   to fix; Onboarding Videos sold ×2 / lost ×4 → linked but not seeded → the seed won't count them. Jumi + demo excluded.
-- **Review round (approved 2026-10-09):** linked-but-never-seeded = unlinked (send → skipped `not_seeded`; the +1 rule
+- **Review round (approved 2026-10-09):** ~~linked-but-never-seeded = unlinked~~ (SUPERSEDED 2026-10-14 by V167
+  `shopify_counting_source`: an applied receiving claim counts too — see Current state) (send → skipped `not_seeded`; the +1 rule
   requires an applied seed). `pushTransferOut` classification: definite ONLY HTTP 4xx / userErrors / THROTTLED-only with no data
   (sweep re-sends ≤ 5; THROTTLED approved 2026-10-09); 5xx, any other top-level GraphQL error (THROTTLED mixed or with data), timeouts, connection errors, empty/unreadable bodies and any
   unexpected error → failed_ambiguous, never re-sent. New tests ts12–ts16 + `TransferOutClassificationWireTest` (13),

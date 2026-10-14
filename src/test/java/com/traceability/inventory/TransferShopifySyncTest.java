@@ -47,8 +47,9 @@ import static org.mockito.Mockito.*;
  *        claim — the prod case) gets its +1 when it comes back: the seed never counted it
  *   ts12 the outbound −1 is failed_ambiguous / still pending → NO +1 on return (left for a person)
  *   ts13 bring-back of a permanently moved piece whose −1 applied → exactly ONE +1; a retry adds none
- *   ts14 main warehouse linked but never seeded → skipped 'not_seeded', no call
- *   ts15 no seed → the +1 can never fire, even with a pushed claim on record
+ *   ts14 main warehouse linked but Shopify not counting there (no seed, no applied receiving) → skipped
+ *        'not_counting', no call
+ *   ts15 not counting → the +1 can never fire, even with a pushed claim on record
  *   ts16 a definite rejection is re-sent by the sweep (and stops once pushed); an unexpected error
  *        after the call started is failed_ambiguous
  */
@@ -196,7 +197,7 @@ class TransferShopifySyncTest {
         run(t, () -> transfers.closeTransfer(tr, t.owner()));
         Thread.sleep(500);
 
-        assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type <> 'initial_seed'", t.id())).isZero();
+        assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type NOT IN ('initial_seed', 'receiving_session')", t.id())).isZero();
         assertThat(count("SELECT COUNT(*) FROM transfer_shopify_syncs WHERE tenant_id = ?", t.id())).isZero();
         assertThat(jdbc.queryForObject("SELECT shopify_sync_mode FROM transfers WHERE id = ?", String.class, tr)).isEqualTo("leave");
         verifyNoInteractions(shopify);
@@ -259,7 +260,7 @@ class TransferShopifySyncTest {
         assertThatThrownBy(() -> run(t, () -> transfers.cancel(scanned, t.owner()))).isInstanceOf(TransferException.class);
 
         assertThat(count("SELECT COUNT(*) FROM transfer_shopify_syncs WHERE tenant_id = ?", t.id())).isZero();
-        assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type <> 'initial_seed'", t.id())).isZero();
+        assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type NOT IN ('initial_seed', 'receiving_session')", t.id())).isZero();
         verifyNoInteractions(shopify);
     }
 
@@ -385,12 +386,14 @@ class TransferShopifySyncTest {
     // ── ts14 ──────────────────────────────────────────────────────────────────
 
     @Test
-    void ts14_linkedButNeverSeeded_skippedNotSeeded_noCall() throws Exception {
+    void ts14_linkedButNotCounting_skippedNotCounting_noCall() throws Exception {
         T t = tenant("ts14", true, false);
-        UUID tr = roundTrip(t, piece(t, t.shirt()));
+        String p = piece(t, t.shirt());
+        notCounted(t);   // its receiving +1 never applied: no seed, nothing counted — Shopify isn't counting
+        UUID tr = roundTrip(t, p);
         Thread.sleep(300);
         Map<String, Object> row = jdbc.queryForMap("SELECT status, reason FROM transfer_shopify_syncs WHERE transfer_id = ?", tr);
-        assertThat(row).containsEntry("status", "skipped").containsEntry("reason", "not_seeded");
+        assertThat(row).containsEntry("status", "skipped").containsEntry("reason", "not_counting");
         verify(shopify, never()).pushTransferOut(any(), any(), anyList(), any(), any(), any());
     }
 
@@ -400,8 +403,9 @@ class TransferShopifySyncTest {
     void ts15_noSeed_plusOneNeverFires_evenWithAPushedClaimOnRecord() throws Exception {
         T t = tenant("ts15", true, false);
         String p = piece(t, t.shirt());
+        notCounted(t);   // its receiving +1 never applied: no seed, nothing counted — Shopify isn't counting
         UUID tr = roundTrip(t, p);
-        // Whatever is on record, a tenant with no seed never gets the +1 (the seed would count it again).
+        // Whatever is on record, a tenant Shopify isn't counting for never gets the +1.
         jdbc.update("UPDATE transfer_shopify_syncs SET status = 'pushed', reason = NULL, piece_ids = ?::jsonb WHERE transfer_id = ?",
             "[\"" + p + "\"]", tr);
         run(t, () -> transfers.beginReconcile(tr, t.owner()));
@@ -486,11 +490,26 @@ class TransferShopifySyncTest {
 
     private static String barcode(String piece) { return "TS-" + piece; }
 
+    /** A piece received at the main warehouse the way real pieces are: through a receipt whose receiving
+     *  claim applied (its +1 reached Shopify) — so its departure is counted (PieceShopifyRules.arrival). */
     private String piece(T t, UUID variant) {
         String id = String.format("01TRANSFERSYNC%012d", seq.incrementAndGet());
-        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
-            "VALUES (?, ?, ?, ?, ?, 'available'::piece_status, ?)", id, t.id(), variant, barcode(id), "T" + (1000000 + seq.get()), t.main());
+        UUID receipt = UUID.randomUUID();
+        jdbc.update("INSERT INTO receipts (id, tenant_id, received_by, location_id) VALUES (?, ?, ?, ?)",
+            receipt, t.id(), t.owner(), t.main());
+        jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
+            "trigger_type, trigger_id, payload, status) VALUES (?, ?, ?, ?, 1, 'receiving_session', ?, '{}'::jsonb, 'applied')",
+            t.id(), UUID.randomUUID(), variant, t.main(), receipt.toString());
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id, receipt_id) " +
+            "VALUES (?, ?, ?, ?, ?, 'available'::piece_status, ?, ?)", id, t.id(), variant, barcode(id), "T" + (1000000 + seq.get()),
+            t.main(), receipt);
         return id;
+    }
+
+    /** The tenant's receiving claims never applied (V167: with no seed, Shopify isn't counting). */
+    private void notCounted(T t) {
+        jdbc.update("UPDATE shopify_inventory_adjustments SET status = 'failed' WHERE tenant_id = ? AND trigger_type = 'receiving_session'",
+            t.id());
     }
 
     private T tenant(String name, boolean linked) { return tenant(name, linked, linked); }

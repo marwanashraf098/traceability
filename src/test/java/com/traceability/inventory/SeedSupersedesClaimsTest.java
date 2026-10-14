@@ -65,6 +65,8 @@ import static org.mockito.Mockito.*;
  *   a1 — receiving finalize fires its increment only after commit: the claim's attempt sees the
  *        committed pieces.
  *   a2 — a rolled-back finalize creates no claim.
+ *   r1 — (V167) Shopify already counts through receiving: the seed is refused (409, EN + AR), no write.
+ *   r2 — (V167) seeded first, receiving after (The Snouts' shape): the seed still runs.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -423,6 +425,53 @@ class SeedSupersedesClaimsTest {
         assertThat(committedPieces(t, v)).isZero();
         assertThat(adjusts).isEmpty();
         assertThat(session).isNotNull();
+    }
+
+    // ── r1 / r2: the seed is for an empty location only (V167, approved 2026-10-14) ──
+
+    /** Shopify already counts through receiving → the seed is refused (409, EN + AR), nothing written. */
+    @Test
+    void r1_countingThroughReceiving_seedRefused409_nothingWritten() throws Exception {
+        T t = tenant("r1", true);
+        V a = variant(t, "r1a"), b = variant(t, "r1b");
+        pieces(t, a, 3, "available");
+        UUID s = receive(t, a, 3);
+        assertThat(row(t, s, a)).containsEntry("status", "applied");
+        pieces(t, b, 2, "available");                       // b: Traced 2, Shopify 0 — a seed would write it
+        adjusts.clear();
+
+        assertThatThrownBy(() -> runSeed(t))
+            .isInstanceOfSatisfying(SeedRefusedException.class, e -> {
+                assertThat(e.httpStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                assertThat(e.errorCode()).isEqualTo("SEED_NOT_NEEDED");
+                assertThat(e.messageEn()).isNotBlank();
+                assertThat(e.messageAr()).isNotBlank();
+            });
+        assertThat(adjusts).as("no Shopify write").isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
+            "AND trigger_type = 'initial_seed'", Integer.class, t.tenant())).isZero();
+        assertThat(row(t, s, a)).as("the applied receiving claim is untouched").containsEntry("status", "applied");
+    }
+
+    /** The Snouts' shape — seeded first, receiving after: the seed may still run (unchanged). */
+    @Test
+    void r2_seededFirstThenReceiving_seedStillRuns() throws Exception {
+        T t = tenant("r2", true);
+        V a = variant(t, "r2a"), b = variant(t, "r2b"), c = variant(t, "r2c");
+        pieces(t, a, 4, "available");
+        runSeed(t);
+        shopifyAvailable.put(a.item(), 4);
+        pieces(t, b, 3, "available");
+        UUID s = receive(t, b, 3);
+        assertThat(row(t, s, b)).containsEntry("status", "applied");
+        shopifyAvailable.put(b.item(), 3);
+        pieces(t, c, 2, "available");
+        adjusts.clear();
+
+        ShopifyInventoryReconcileService.ApplyResult r = runSeed(t);
+
+        assertThat(r.seeded()).as("only c is still at 0 in Shopify").isEqualTo(1);
+        assertThat(adjusts).containsExactly(new Adjust(t.shop(), c.item(), 2, seedKey(t, c)));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

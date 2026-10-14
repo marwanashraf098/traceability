@@ -54,7 +54,9 @@ public final class PieceShopifyRules {
     // ── Skip reasons ────────────────────────────────────────────────────────────
     public static final String NO_MAIN_WAREHOUSE     = "no_main_warehouse";
     public static final String MAIN_NOT_LINKED       = "main_warehouse_not_linked";
-    public static final String NOT_SEEDED            = "not_seeded";
+    /** Main warehouse linked, but Shopify isn't counting there yet: no applied seed and no applied
+     *  receiving claim (shopify_counting_source is NULL). Before 2026-10-14 this was 'not_seeded'. */
+    public static final String NOT_COUNTING          = "not_counting";
     public static final String NOT_AT_MAIN           = "not_at_main";
     public static final String ARRIVAL_NOT_COUNTED   = "arrival_not_counted";
     public static final String ARRIVAL_UNCONFIRMED   = "arrival_unconfirmed";
@@ -89,7 +91,10 @@ public final class PieceShopifyRules {
         static Verdict skip(UUID locationId, String reason) { return new Verdict(false, locationId, reason, null); }
     }
 
-    /** The tenant-level preconditions: a main warehouse, linked, and an applied initial seed. */
+    /** The tenant-level preconditions: a main warehouse, linked, and Shopify counting there
+     *  (shopify_counting_source — an applied seed or an applied receiving claim). seededAt is the
+     *  applied seed's time, or null (a tenant counting through receiving) — every seed branch is
+     *  keyed on it and is a no-op without it. */
     record Setup(UUID mainId, String skipReason, Timestamp seededAt) {}
 
     static Setup setup(JdbcTemplate jdbc, UUID tenantId) {
@@ -101,13 +106,14 @@ public final class PieceShopifyRules {
         if (!"linked".equals(main.get(0).get("shopify_sync_status")) || main.get(0).get("shopify_location_id") == null) {
             return new Setup(mainId, MAIN_NOT_LINKED, null);
         }
-        // Linked but never seeded: Shopify's Traced location holds nothing yet, and the seed will count
-        // what Traced holds then — exactly like the transfer push (TransferShopifySync.SEEDED_SQL).
+        // Linked, but neither a seed nor a receiving +1 ever applied: Shopify's Traced location holds
+        // nothing of Traced's yet (V167 shopify_counting_source — also the transfer gate).
+        String source = jdbc.queryForObject("SELECT shopify_counting_source(?)", String.class, tenantId);
+        if (source == null) return new Setup(mainId, NOT_COUNTING, null);
         Timestamp seededAt = jdbc.queryForObject(
             "SELECT MIN(created_at) FROM shopify_inventory_adjustments " +
             "WHERE tenant_id = ? AND trigger_type = 'initial_seed' AND status = 'applied'",
             Timestamp.class, tenantId);
-        if (seededAt == null) return new Setup(mainId, NOT_SEEDED, null);
         return new Setup(mainId, null, seededAt);
     }
 
@@ -125,9 +131,9 @@ public final class PieceShopifyRules {
 
     /**
      * Does Shopify's Traced Main Warehouse count this AVAILABLE piece (called just before it leaves
-     * available)? Main warehouse linked and seeded, or a skip. A piece at the main warehouse is
-     * counted when its arrival was counted: its receiving claim applied or was superseded by the seed
-     * (the seed counted it), or it was received before the seed. A receiving claim still pending or
+     * available)? Main warehouse linked and Shopify counting there, or a skip. A piece at the main
+     * warehouse is counted when its arrival was counted ({@link #arrival}): its receiving claim applied
+     * or was superseded by the seed (the seed counted it), or it was received before the seed. A receiving claim still pending or
      * still retryable (or ambiguous) → arrival_unconfirmed; anything else → arrival_not_counted.
      *
      * A piece at ANOTHER location is counted at main only while its departure from main did not
@@ -162,7 +168,9 @@ public final class PieceShopifyRules {
         if (move.isEmpty()) return Verdict.skip(s.mainId(), NOT_AT_MAIN);
         Map<String, Object> m = move.get(0);
         Timestamp departedAt = (Timestamp) m.get("departed_at");
-        if (departedAt == null || departedAt.before(s.seededAt())) return Verdict.skip(s.mainId(), NOT_COUNTED_AT_MAIN);
+        if (departedAt == null || (s.seededAt() != null && departedAt.before(s.seededAt()))) {
+            return Verdict.skip(s.mainId(), NOT_COUNTED_AT_MAIN);
+        }
         Verdict arrival = arrivalAtMain(jdbc, tenantId, pieceId, p, s);
         if (!arrival.write()) return arrival;
         if ("leave".equals(m.get("mode"))) return Verdict.send(s.mainId(), "leave_mode");
@@ -180,6 +188,19 @@ public final class PieceShopifyRules {
         return Verdict.skip(s.mainId(), DEPARTURE_AMBIGUOUS);
     }
 
+    /**
+     * Did this piece's arrival at the main warehouse reach Shopify? THE per-piece arrival rule — the
+     * departures of {@link #countedAtMain} and the transfer send (TransferShopifySync.claimSend, which
+     * leaves a piece out of its −N when this says no) both decide with it. {@code s} must be a setup
+     * with no skip reason. send(via "arrival" | "seed") or skip(arrival_unconfirmed | arrival_not_counted).
+     */
+    static Verdict arrival(JdbcTemplate jdbc, UUID tenantId, String pieceId, Setup s) {
+        if (s.skipReason() != null) throw new IllegalArgumentException("arrival needs a counting setup");
+        Piece p = piece(jdbc, tenantId, pieceId);
+        if (p == null) throw new IllegalStateException("piece not found: " + pieceId);
+        return arrivalAtMain(jdbc, tenantId, pieceId, p, s);
+    }
+
     private static Verdict arrivalAtMain(JdbcTemplate jdbc, UUID tenantId, String pieceId, Piece p, Setup s) {
         Map<String, Object> recv = p.receiptId() == null ? null : jdbc.query(
             "SELECT status, legacy, attempt_count, failure_class FROM shopify_inventory_adjustments " +
@@ -195,7 +216,7 @@ public final class PieceShopifyRules {
         // The piece row is created when it is received (InventoryLedger.batchReceive).
         Timestamp receivedAt = jdbc.queryForObject(
             "SELECT created_at FROM pieces WHERE id = ? AND tenant_id = ?", Timestamp.class, pieceId, tenantId);
-        if (receivedAt != null && receivedAt.before(s.seededAt())) {
+        if (receivedAt != null && s.seededAt() != null && receivedAt.before(s.seededAt())) {
             return Verdict.send(s.mainId(), "seed");
         }
         boolean unconfirmed = "pending".equals(status)
@@ -239,7 +260,7 @@ public final class PieceShopifyRules {
 
     /**
      * Did this piece's departure from sellable reach Shopify? THE rule (D5) — every return to available
-     * decides with it. Main warehouse linked and seeded, or a skip; then {@link #reach}. A piece away
+     * decides with it. Main warehouse linked and Shopify counting there, or a skip; then {@link #reach}. A piece away
      * from the main warehouse gets a write only when its departure claim wrote at main.
      * Call it inside the transaction that moves the piece back to available — it cancels a departure
      * claim that was never sent.
