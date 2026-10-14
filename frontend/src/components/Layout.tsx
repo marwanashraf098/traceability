@@ -11,7 +11,13 @@ import Sidebar, { avatarInitials } from './Sidebar'
 import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
 import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
+import ShopifyUpgradeBanner from './ShopifyUpgradeBanner'
 import { stationDeviceId } from '../phone/PhoneScanProvider'
+
+// In-shell screens that run a live scan loop (useScanner): the app-wide upgrade notice stays off them.
+export function hidesUpgradeNotice(pathname: string): boolean {
+  return pathname === '/pickups' || /^\/transfers\/[^/]+\/reconcile\/?$/.test(pathname)
+}
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -248,6 +254,14 @@ export default function Layout({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
+
+        {/* App-wide Shopify upgrade notice (/me's shopifyUpgradeStage) — never on in-shell scan loops */}
+        {!hidesUpgradeNotice(pathname) && (
+          <ShopifyUpgradeBanner
+            me={me}
+            onConfirmed={() => getMe().then(setMe).catch(err => console.error('Failed to reload /me', err))}
+          />
+        )}
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6 max-[899px]:p-4">

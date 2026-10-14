@@ -4104,5 +4104,25 @@
       "trips_one": "{{value}} trip",
       "trips_other": "{{value}} trips"
     }
+  },
+  "shopifyUpgradeNotice": {
+    "upgrade": {
+      "title": "Action required: upgrade to the official Traced Shopify app.",
+      "body": "Your early-access connection will be retired.",
+      "cta": "Upgrade now",
+      "askOwner": "Ask your account owner to upgrade."
+    },
+    "delete": {
+      "title": "Upgrade complete. Delete your old custom app now.",
+      "body": "It can still access your store data.",
+      "howTo": "How to delete it",
+      "step1": "Open your Shopify Dev Dashboard.",
+      "step2": "Go to Apps and open your early-access Traced app.",
+      "step3": "Delete the app.",
+      "cta": "I've deleted it",
+      "confirming": "Saving…",
+      "confirmError": "Couldn't save that. Try again.",
+      "askOwner": "Ask your account owner to delete it and confirm here."
+    }
   }
 }

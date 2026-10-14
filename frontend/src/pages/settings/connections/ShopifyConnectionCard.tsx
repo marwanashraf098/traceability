@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
-import { Badge, Button, Spinner } from '../../../components/ui'
+import { Badge, Button, Spinner, cn } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
 import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
@@ -293,6 +293,11 @@ export default function ShopifyConnectionCard({
   // opened from>. Prefill the connect forms with it — only a *.myshopify.com domain; anything else
   // is ignored (the backend validates again on initiate).
   const shopParam = searchParams.get('shop')?.trim().toLowerCase() ?? ''
+  // The app-wide upgrade notice links here with ?focus=upgrade: bring the upgrade banner into view and mark it.
+  const focusUpgrade = searchParams.get('focus') === 'upgrade'
+  const upgradeBannerRef = useCallback((el: HTMLDivElement | null) => {
+    if (el && focusUpgrade) el.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  }, [focusUpgrade])
   const prefillShop = SHOP_RE.test(shopParam) ? shopParam : null
   useEffect(() => {
     if (!prefillShop || linkedShop) return
@@ -589,7 +594,13 @@ export default function ShopifyConnectionCard({
           />
 
           {uiState === 'connected-ea' && oauthAvailable && (
-            <div className="rounded-xl border border-brand/20 bg-brand/5 p-4 space-y-2">
+            <div
+              ref={upgradeBannerRef}
+              data-testid="shopify-card-upgrade-banner"
+              data-highlighted={focusUpgrade ? 'true' : undefined}
+              className={cn('rounded-xl border border-brand/20 bg-brand/5 p-4 space-y-2',
+                focusUpgrade && 'ring-2 ring-warning ring-offset-2 ring-offset-bg')}
+            >
               <h4 className="text-body font-semibold text-primary">{t('connections.shopify.connectedPanel.upgradeBanner.title')}</h4>
               <p className="text-small text-muted">{t('connections.shopify.connectedPanel.upgradeBanner.body')}</p>
               {upgradeError && (
