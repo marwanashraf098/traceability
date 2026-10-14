@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Delete } from 'lucide-react'
 import {
@@ -23,7 +22,6 @@ type Step = 'roster' | 'pin' | 'exit'
  */
 export default function StationGate() {
   const { signInWorker, exitStationMode } = useStation()
-  const navigate = useNavigate()
   const [step, setStep] = useState<Step>('roster')
 
   const [roster, setRoster] = useState<StationRosterEntry[]>([])
@@ -81,8 +79,11 @@ export default function StationGate() {
       setAccessToken(result.accessToken)
       try {
         const me = await getMe()
+        // Stay on the page the gate interrupted (a reload, or a new tab such as the batch pick
+        // list): RequireAuth now renders it, and the route guards decide — an owner-only page
+        // still sends a worker to /worker-home, and "/" already went to /overview → /worker-home.
+        // A hand-over ("Switch / Lock") lands on /worker-home because Layout navigates there.
         signInWorker(me)
-        navigate('/worker-home')
       } catch {
         // /me failed right after a successful PIN switch — extremely unlikely.
         // Fall back to the roster rather than leaving the gate stuck mid-submit.

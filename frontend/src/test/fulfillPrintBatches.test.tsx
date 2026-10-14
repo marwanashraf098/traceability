@@ -1,10 +1,11 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useLocation } from 'react-router-dom'
 import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Fulfill from '../pages/Fulfill'
 import GatherList from '../pages/GatherList'
+import PrintWaybillsDialog from '../pages/fulfill/PrintWaybillsDialog'
 
 /**
  * Pick & Pack S2 — batch waybill printing in queue mode.
@@ -56,6 +57,15 @@ const DETAIL = {
 
 let fetchFn: ReturnType<typeof vi.fn>
 
+function LocationProbe() {
+  const loc = useLocation()
+  return <div data-testid="location">{loc.pathname + loc.search}</div>
+}
+
+/** window.open calls that opened the pick list (the PDF tab is opened with '' and filled later). */
+const pickListOpens = () =>
+  (window.open as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]) => String(u).includes('/fulfill/gather'))
+
 function makeFetch(queue: unknown[] = QUEUE, result: unknown = RESULT) {
   return vi.fn((url: string, opts?: RequestInit) => {
     if (url.endsWith('/fulfill/queue')) return json(queue)
@@ -91,7 +101,13 @@ describe('Pick & Pack — batch waybill printing', () => {
 
   test('dialog sends the chosen options, opens the merged PDF, shows excluded and the order warning', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<Fulfill />)
+    renderWithProviders(
+      <Routes>
+        <Route path="/fulfill" element={<Fulfill />} />
+        <Route path="/fulfill/gather" element={<LocationProbe />} />
+      </Routes>,
+      { initialEntries: ['/fulfill'] },
+    )
     await user.click(await screen.findByRole('button', { name: /Print waybills/ }))
 
     const dialog = await screen.findByTestId('print-batch-dialog')
@@ -115,8 +131,33 @@ describe('Pick & Pack — batch waybill printing', () => {
     expect(within(result).getByText('#1003')).toBeInTheDocument()
     expect(within(result).getByText('Bosta will email this waybill instead')).toBeInTheDocument()
 
+    // Same tab (a new tab on a station tablet shows the PIN gate and loses the batch).
     await user.click(within(result).getByRole('button', { name: 'Open pick list' }))
-    expect(window.open).toHaveBeenLastCalledWith('/fulfill/gather?batch=batch-9', '_blank')
+    expect(await screen.findByTestId('location')).toHaveTextContent('/fulfill/gather?batch=batch-9')
+    expect(pickListOpens()).toHaveLength(0)
+  })
+
+  test('Open pick list closes the dialog as printed, then navigates in the same tab', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    renderWithProviders(
+      <Routes>
+        <Route path="/fulfill" element={<PrintWaybillsDialog newCount={2} allCount={3} onClose={onClose} />} />
+        <Route path="/fulfill/gather" element={<LocationProbe />} />
+      </Routes>,
+      { initialEntries: ['/fulfill'] },
+    )
+    const dialog = await screen.findByTestId('print-batch-dialog')
+    await user.click(within(dialog).getByText('Also print a pick list'))
+    await user.click(within(dialog).getByRole('button', { name: /^Print \d+ waybills?$/ }))
+
+    const result = await screen.findByTestId('print-batch-result')
+    await user.click(within(result).getByRole('button', { name: 'Open pick list' }))
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledWith(true)
+    expect(await screen.findByTestId('location')).toHaveTextContent('/fulfill/gather?batch=batch-9')
+    expect(pickListOpens()).toHaveLength(0)
   })
 
   test('a batch-printed order shows Complete without asking for a reprint, and can still reprint', async () => {

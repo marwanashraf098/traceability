@@ -66,6 +66,8 @@ export default function Layout({ children }: { children: ReactNode }) {
     setMenuOpen(false)
     if (isWorkerAtStation) {
       signOutWorker()
+      // A hand-over: the next worker starts on Worker Home, not on this worker's page.
+      navigate('/worker-home')
     } else {
       logout()
     }

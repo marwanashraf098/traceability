@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { Printer } from 'lucide-react'
 import {
   getPrintBatchOptions, printWaybillBatch, TransferCommandError,
@@ -37,6 +38,7 @@ export default function PrintWaybillsDialog({
   onClose: (printed: boolean) => void
 }) {
   const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const [scope, setScope] = useState<PrintScope>(newCount > 0 ? 'new' : 'all')
   const [paper, setPaper] = useState<PrintPaper>('A4')
   const [sort, setSort] = useState<PrintSort>('oldest')
@@ -128,7 +130,11 @@ export default function PrintWaybillsDialog({
               <Button
                 variant="secondary"
                 className="flex-1"
-                onClick={() => window.open(`/fulfill/gather?batch=${result.batchId}`, '_blank')}
+                onClick={() => {
+                  // Same tab: a new tab on a station tablet has no signed-in worker and shows the PIN gate.
+                  onClose(true)
+                  navigate(`/fulfill/gather?batch=${result.batchId}`)
+                }}
               >
                 {t('fulfill.printBatch.openPickList')}
               </Button>

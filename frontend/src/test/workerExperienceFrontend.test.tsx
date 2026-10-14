@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
-import { screen, fireEvent, render, cleanup, waitFor } from '@testing-library/react'
+import { screen, render, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -107,7 +107,7 @@ describe('(e) Layout sidebar — owner/manager regression guard', () => {
   })
 })
 
-// ── (b) worker sign-in via the station gate navigates to /worker-home ───────
+// ── (b) worker sign-in via the station gate stays on the interrupted page ──
 
 const ROSTER = [{ id: 'worker-1', name: 'Amina', locked: false, lockedUntil: null }]
 
@@ -123,15 +123,15 @@ function mockGateFetch() {
 }
 
 async function signInViaGate() {
-  const tile = await screen.findByText('Amina')
-  fireEvent.click(tile.closest('button')!)
+  const user = userEvent.setup()
+  await user.click((await screen.findByText('Amina')).closest('button')!)
   for (const d of ['1', '2', '3', '4']) {
-    fireEvent.click(await screen.findByRole('button', { name: d }))
+    await user.click(await screen.findByRole('button', { name: d }))
   }
 }
 
-describe('(b) StationGate — worker sign-in lands on /worker-home', () => {
-  test('successful PIN sign-in navigates from the intercepted route to /worker-home', async () => {
+describe('(b) StationGate — worker sign-in returns to the interrupted page', () => {
+  test('station mode, gated on /fulfill (a reload): successful PIN sign-in stays on /fulfill', async () => {
     localStorage.setItem('stationMode', 'true')
     setAccessToken('owner-token')
     mockGateFetch()
@@ -151,8 +151,8 @@ describe('(b) StationGate — worker sign-in lands on /worker-home', () => {
 
     await signInViaGate()
 
-    expect(await screen.findByTestId('worker-home-page')).toBeInTheDocument()
-    expect(screen.queryByTestId('fulfill-page')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('fulfill-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('worker-home-page')).not.toBeInTheDocument()
   })
 })
 

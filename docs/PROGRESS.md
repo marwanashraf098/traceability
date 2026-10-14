@@ -4,6 +4,23 @@
 
 ## Current state
 
+**Station mode — PIN returns the worker to the interrupted page (Nuvira, 2026-10-14, branch `fix/station-new-tab-pin-return`
+off main 8b8a3c8; NOT merged, NOT deployed). Frontend only, no migration.**
+- **Bug:** the print dialog's "Open pick list" opened `/fulfill/gather?batch=…` in a NEW tab; `currentWorker` is in memory per tab,
+  so the tab showed the PIN gate, and `StationGate.submitPin` always `navigate('/worker-home')` — the batch was lost (Nuvira's
+  tablet: ~9 refresh → PIN cycles 14:36–15:52; no refresh ever rejected — not an auth bug).
+- **A:** `PrintWaybillsDialog` "Open pick list" → `onClose(true)` then `navigate('/fulfill/gather?batch=<id>')`, same tab.
+- **B:** `StationGate.submitPin` no longer navigates — the gate renders on the interrupted URL, so after the PIN RequireAuth shows
+  that page and the route guards decide (`OwnerOnlyRoute` → /worker-home; "/" → RootRoute → /overview → /worker-home).
+- **Hand-over:** Layout's station "Switch / Lock" branch adds `navigate('/worker-home')` next to `signOutWorker()` — the next
+  worker starts on Worker Home. Real logout, station exit, refresh cookie, PIN API, scan handlers untouched.
+- **Tests:** new `stationReturnToPage.test.tsx` (4: gather batch, owner-only → worker-home, "/" → worker-home, hand-over) + new
+  dialog test in `fulfillPrintBatches` (onClose(true) + same-tab nav, no window.open); edited (approved) `fulfillPrintBatches`
+  "dialog sends…" (same-tab nav instead of window.open) and `workerExperienceFrontend` (b) (flipped: PIN on /fulfill stays on
+  /fulfill). Revert-checked: StationGate → 3 red; dialog → 2 red; Layout line → 1 red; OwnerOnlyRoute redirect → 3 red.
+  vitest 958/958 (953 + 5), tsc + vite build clean.
+- **Open (separate, not built):** `PickupSessions.tsx:332` opens the API manifest URL in a new tab — see the manifest check.
+
 **App-wide "upgrade to the official Shopify app" notice (2026-10-14, branch `feat/shopify-upgrade-banner` off main 4277335;
 NOT merged, NOT deployed). Migration V166.**
 - **Step 0 diagnosis (read-only, prod + code, 2026-10-14):** the per-store rollout (`SHOPIFY_OAUTH_UPGRADE_SHOPS`) only gates the
