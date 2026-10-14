@@ -397,6 +397,7 @@ class PortalOrderLeakTest {
         }
         reg("POST /api/v1/shopify/custom-connect",       skip(R_IDENTITY));
         reg("POST /api/v1/shopify/oauth/initiate",       skip(R_IDENTITY));
+        reg("POST /api/v1/shopify/custom-app-deletion/confirm", skip(R_CONFIG));
         reg("POST /api/v1/shopify/resolve-store",        skip(R_IDENTITY));
         reg("POST /api/v1/shopify/pending-link/preview", skip(R_IDENTITY));
         reg("POST /api/v1/shopify/pending-link/confirm", skip(R_IDENTITY));

@@ -4,6 +4,52 @@
 
 ## Current state
 
+**App-wide "upgrade to the official Shopify app" notice (2026-10-14, branch `feat/shopify-upgrade-banner` off main 4277335;
+NOT merged, NOT deployed). Migration V166.**
+- **Step 0 diagnosis (read-only, prod + code, 2026-10-14):** the per-store rollout (`SHOPIFY_OAUTH_UPGRADE_SHOPS`) only gates the
+  Connections card's upgrade banner (`oauthAvailable`); `/oauth/initiate` is owner-only and otherwise ungated. A custom_app_cc
+  store not on the list sees no upgrade path in the UI. Prod custom_app_cc (all connected, creds stored): blnco (blncoeg),
+  BROEK (972b0d), High line (t1wswe-dj), Femine (dmditk-kj), Juno Babies (g2ynj1-0n); no `custom_app` rows. Already upgraded
+  (V146 `oauth_upgraded_from = custom_app_cc`, cleanup done): The Snouts (2026-10-07), test Account (2026-10-06). JUMI is oauth
+  with no upgrade record — if it was ever on a custom app pre-V146 it gets no delete notice (open question). Auto-detecting the
+  deletion is impossible: Build C clears `client_id_encrypted` / `api_secret_encrypted` at the swap (and keeping them would undo
+  the guarantee that the old app's app/uninstalled can't disconnect the store). Known edge left untouched (approved):
+  `updateStoreToken`'s fallback catch records `custom_app_cc` even for an oauth re-link if the cleanup throws unexpectedly.
+- **Decisions:** owner + manager see it (workers: /me stage null); "I've deleted it" is owner-only; Stage 1 stays gated on
+  `upgradeOffered`; the allowlist is emptied at deploy (env only, no code).
+- **V166:** `stores.custom_app_deletion_confirmed_at`, `custom_app_deletion_confirmed_by` (→ users). RLS unchanged.
+  MigrationSmokeTest 165, NotTracedBackfillTest 110.
+- **Backend:** `ShopifyUpgradeRollout` (component) is now the ONE upgrade-offered rule — GET /connections and GET /me both use it;
+  `ConnectionsController.upgradeOffered` delegates (its tests unchanged). `ShopifyUpgradeNoticeService` (@Transactional +
+  `TenantContext.require()`): stage from `StoreRepository.findByTenant` (the card's row) — 'upgrade' = custom_app_cc + connected +
+  offered; 'delete_old_app' = oauth + `oauth_upgraded_from` + unconfirmed; else / worker → null. GET /me adds
+  `shopifyUpgradeStage` (computed in `MeController`, so `UserService`'s constructor — and MeRlsTest — are unchanged).
+  `POST /api/v1/shopify/custom-app-deletion/confirm` (OWNER): conditional UPDATE → 204; already confirmed → 204, no rewrite;
+  otherwise 409 NOT_AWAITING_DELETION.
+- **Frontend:** `ShopifyUpgradeBanner` in `Layout` between header and main (not on `/pickups` or `/transfers/:id/reconcile` —
+  `hidesUpgradeNotice`); no inputs, no autofocus, no refocus handler touched. 'upgrade' (warning): owner "Upgrade now" →
+  `/settings?tab=connections&focus=upgrade` (the card's upgrade banner scrolls into view with a ring, `data-highlighted`); manager
+  "Ask your account owner to upgrade." 'delete_old_app' (danger, role=alert): collapsible 3 steps; owner "I've deleted it" → POST →
+  reload /me → gone; manager "Ask your account owner to delete it and confirm here." EN + AR (`shopifyUpgradeNotice.*`).
+- **Tests:** `ShopifyUpgradeNoticeTest` (4, app runs as app_user: stage matrix incl. upgraded-then-back-on-custom, manager 403,
+  wrong-state 409, repeat no-op, tenant isolation + same-tenant positive control, app_user without tenant can't write) —
+  revert-checked R1–R10, each red. `shopifyUpgradeNotice.test.tsx` (7, userEvent, via `stubFetchWithShellDefaults` overrides.me —
+  helper unchanged) — revert-checked F1–F7, each red. vitest 953/953, tsc + vite build clean. Backend full suite (final, isolated run): 2,940 run, 4 skipped, only the known red
+  ExchangeBackfillTest. (A run overlapped with vitest lost TransferReconcileTest's context to a refused test-DB connection —
+  24/24 alone, green in the isolated full run; a stationExitDemo vitest flake under the same load passed 3/3 alone.) Headless renders (both stages ×
+  owner/manager × EN-LTR/AR-RTL × 1280/390) in the session scratchpad `notice-renders/`.
+- **Registry (approved 2026-10-14):** `PortalOrderLeakTest` + `reg("POST /api/v1/shopify/custom-app-deletion/confirm",
+  skip(R_CONFIG))` — a settings write (a flag on the store row), bodiless 204, no order or portal data; R_CONFIG fits better
+  than R_IDENTITY (identity / session / pairing).
+- **/me RLS path check:** `ShopifyUpgradeNoticeTest` reaches every stage through the real GET /me (TestRestTemplate → JWT filter
+  → MeController → `ShopifyUpgradeNoticeService.stage`) with the app's datasource as app_user; each /me response also asserts the
+  caller's `role` (same-response positive control). Revert checks: `@Transactional` removed from `stage()` → RED (n1, n3_n4:
+  'delete_old_app' read as null — the second stores read runs with no SET LOCAL; 'upgrade' survives only because
+  `StoreRepository.findByTenant` opens its own transaction); `TenantContext.clear()` in MeController before the call → RED (500 —
+  `TenantContext.require()` fails loudly rather than reading zero rows); clearing it INSIDE the open transaction stays green (the
+  GUC is set when the transaction starts — not a real scope removal). Restored → GREEN.
+- **Deploy:** empty `SHOPIFY_OAUTH_UPGRADE_SHOPS` (keep `SHOPIFY_OAUTH_AVAILABLE=true`); V166 applies on start.
+
 **Lookup "Reprint label" (2026-10-13, branch `lookup-reprint-label` off main bc2b540; NOT merged, NOT deployed). No migration.**
 - **Endpoint:** `POST /api/v1/pieces/{id}/label/reprint` (`PieceLabelController`, `hasAnyRole('OWNER','MANAGER')`) → inline PDF.
   `PieceLabelReprintService.reprint` — one transaction (rollbackFor IOException): piece row `FOR UPDATE` (tenant filter) → 404 /

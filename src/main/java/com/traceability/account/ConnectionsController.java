@@ -36,30 +36,12 @@ public class ConnectionsController {
     @Value("${app.custom-app-connect-enabled:false}")
     private boolean customAppConnectEnabled;
 
-    @Value("${shopify.oauth-available:false}")
-    private boolean oauthAvailable;
-
-    // Build C — per-store upgrade rollout (SHOPIFY_OAUTH_UPGRADE_SHOPS): shop domains, comma-separated.
-    @Value("${shopify.oauth-upgrade-shops:}")
-    private String oauthUpgradeShops;
-
     /**
-     * Whether this store is offered the custom-app → official OAuth upgrade (the frontend shows the upgrade
-     * banner on a connected custom-app store when this is true): SHOPIFY_OAUTH_AVAILABLE is on AND
-     * (SHOPIFY_OAUTH_UPGRADE_SHOPS is empty — everyone — OR this store's shop domain is listed). Display
-     * only: /oauth/initiate itself is not gated.
+     * Whether this store is offered the custom-app → official OAuth upgrade. The rule lives in
+     * {@link ShopifyUpgradeRollout} (shared with GET /me's app-wide notice); kept here for its existing tests.
      */
     static boolean upgradeOffered(boolean oauthAvailable, String shopsCsv, String shopDomain) {
-        if (!oauthAvailable) return false;
-        java.util.Set<String> shops = new java.util.HashSet<>();
-        if (shopsCsv != null) {
-            for (String s : shopsCsv.split(",")) {
-                String t = s.trim().toLowerCase(java.util.Locale.ROOT);
-                if (!t.isEmpty()) shops.add(t);
-            }
-        }
-        return shops.isEmpty()
-            || (shopDomain != null && shops.contains(shopDomain.trim().toLowerCase(java.util.Locale.ROOT)));
+        return ShopifyUpgradeRollout.offered(oauthAvailable, shopsCsv, shopDomain);
     }
 
     @Value("${shopify.app-url}")
@@ -77,11 +59,14 @@ public class ConnectionsController {
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
     private final StoreRepository    storeRepository;
+    private final ShopifyUpgradeRollout upgradeRollout;
 
-    public ConnectionsController(JdbcTemplate jdbc, PlatformTransactionManager txm, StoreRepository storeRepository) {
+    public ConnectionsController(JdbcTemplate jdbc, PlatformTransactionManager txm, StoreRepository storeRepository,
+                                 ShopifyUpgradeRollout upgradeRollout) {
         this.jdbc = jdbc;
         this.tx   = new TransactionTemplate(txm);
         this.storeRepository = storeRepository;
+        this.upgradeRollout  = upgradeRollout;
     }
 
     /**
@@ -198,8 +183,7 @@ public class ConnectionsController {
             result.put("shopify",            shopify);
             result.put("bosta",              bosta);
             result.put("customAppAvailable", customAppConnectEnabled);
-            result.put("oauthAvailable",     upgradeOffered(oauthAvailable, oauthUpgradeShops,
-                                                               (String) shopify.get("shopDomain")));
+            result.put("oauthAvailable",     upgradeRollout.offered((String) shopify.get("shopDomain")));
             result.put("shopifySetup",       shopifySetup);
             return result;
         }));

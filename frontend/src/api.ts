@@ -992,7 +992,11 @@ export interface Me {
   name: string
   email: string | null
   role: 'owner' | 'manager' | 'worker'
+  /** App-wide Shopify upgrade notice (owner / manager only; always null for a worker). */
+  shopifyUpgradeStage?: ShopifyUpgradeStage
 }
+
+export type ShopifyUpgradeStage = 'upgrade' | 'delete_old_app' | null
 
 /** "Log out" — THIS device only: ends this device's session (and its phone pairing when
  *  {@code deviceId} — the browser's station device id — is given). Other devices, a station
@@ -1009,6 +1013,11 @@ export function logoutAllDevices() {
 
 export function getMe() {
   return request<Me>('/me')
+}
+
+/** The owner's "I've deleted the old custom app" (204; 409 NOT_AWAITING_DELETION when not in that stage). */
+export function confirmCustomAppDeleted() {
+  return request<void>('/shopify/custom-app-deletion/confirm', { method: 'POST' })
 }
 
 // ── Open-exceptions count (shell notification bell) ───────────────────────────

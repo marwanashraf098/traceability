@@ -14,15 +14,18 @@ import java.util.Map;
 /**
  * GET /api/v1/me — the caller's own identity (name/email/role), tenant-scoped.
  * Any authenticated role, including Worker — this is self-lookup, not a list.
+ * Also carries {@code shopifyUpgradeStage} (ShopifyUpgradeNoticeService) — the app-wide upgrade notice.
  */
 @RestController
 @RequestMapping("/api/v1/me")
 public class MeController {
 
-    private final UserService svc;
+    private final UserService                 svc;
+    private final ShopifyUpgradeNoticeService upgradeNotice;
 
-    public MeController(UserService svc) {
-        this.svc = svc;
+    public MeController(UserService svc, ShopifyUpgradeNoticeService upgradeNotice) {
+        this.svc           = svc;
+        this.upgradeNotice = upgradeNotice;
     }
 
     @GetMapping
@@ -32,6 +35,8 @@ public class MeController {
         if (self == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
         }
+        // App-wide Shopify upgrade notice: 'upgrade' | 'delete_old_app' | null (always null for a worker).
+        self.put("shopifyUpgradeStage", upgradeNotice.stage((String) self.get("role")));
         return self;
     }
 }
