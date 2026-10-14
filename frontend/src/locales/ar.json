@@ -2559,6 +2559,8 @@
     "manifestPackages": "إجمالي الطرود",
     "manifestSignature": "توقيع المندوب",
     "printManifest": "طباعة / تحميل القائمة",
+    "printManifestLoading": "جارٍ تجهيز قائمة الاستلام…",
+    "manifestError": "تعذّر تحميل قائمة الاستلام. تحقّق من الاتصال وحاول مرة أخرى.",
     "sessionOpenRequired": "الجلسة مفتوحة — امسح الطرود",
     "orderNumber": "الطلب",
     "cod": "الدفع عند الاستلام",

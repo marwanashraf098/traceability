@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
 import { getAccessToken, clearAccessToken } from '../auth'
+import { getPickupManifest, getRoleFromToken, PickupManifest } from '../api'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
@@ -227,6 +228,23 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const isOpen = session.sessionStatus === 'open'
   const { scanHelpers } = useCapabilities()
 
+  // Handover manifest: fetched through the authenticated request, shown in the manifest card,
+  // then the page is printed (print styles below keep only that card). COD is money — owner /
+  // manager only, never on a worker's screen or printout.
+  const [manifest, setManifest] = useState<PickupManifest | null>(null)
+  const [manifestLoading, setManifestLoading] = useState(false)
+  const [manifestError, setManifestError] = useState(false)
+  const [printPending, setPrintPending] = useState(false)
+  const role = getRoleFromToken()
+  const showMoney = role === 'owner' || role === 'manager'
+
+  // Print only after the fetched rows are on the page.
+  useEffect(() => {
+    if (!printPending || !manifest) return
+    setPrintPending(false)
+    window.print()
+  }, [printPending, manifest])
+
   // R1: scans go through useScanner — queued while one is in flight and sent one at a time, in
   // order; the input is uncontrolled and cleared on Enter, so a fast next scan never appends to
   // the previous code. onScan is the old handleScan: optimistic row, rollback on failure,
@@ -329,7 +347,19 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   }
 
   async function printManifest() {
-    window.open(`${BASE}/pickup-sessions/${session.id}/manifest`, '_blank')
+    if (manifestLoading) return
+    setManifestLoading(true)
+    setManifestError(false)
+    try {
+      const m = await getPickupManifest(session.id)
+      if (!m || !Array.isArray(m.shipments)) throw new Error('empty manifest')
+      setManifest(m)
+      setPrintPending(true)
+    } catch {
+      setManifestError(true)
+    } finally {
+      setManifestLoading(false)
+    }
   }
 
   return (
@@ -352,11 +382,22 @@ function SessionView({ session: initial, onRefresh, onBack }: {
           </p>
         </div>
         {!isOpen && (
-          <button onClick={printManifest} className="btn-outline btn text-small">
-            {t('pickups.printManifest')}
+          <button
+            onClick={printManifest}
+            disabled={manifestLoading}
+            aria-busy={manifestLoading}
+            className="btn-outline btn text-small disabled:opacity-60"
+          >
+            {manifestLoading ? t('pickups.printManifestLoading') : t('pickups.printManifest')}
           </button>
         )}
       </div>
+
+      {manifestError && (
+        <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-small text-danger">
+          {t('pickups.manifestError')}
+        </div>
+      )}
 
       {closeMsg && (
         <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-small text-warning">
@@ -508,9 +549,37 @@ function SessionView({ session: initial, onRefresh, onBack }: {
         </div>
       )}
 
-      {/* Closed session: manifest preview */}
+      {/* Closed session: manifest preview — and, once fetched, the printable shipment list.
+          Print-only rules: A4, light theme (the app is dark-only), everything except this card
+          hidden. :has() keeps the card's ancestors (Layout's main column) and hides their other
+          children, so the sidebar / top bar / scan list never reach the paper. */}
       {!isOpen && (
-        <div className="card p-4 space-y-2">
+        <style>{`
+          @media print {
+            @page { size: A4; margin: 12mm; }
+            body *:not(:has(.pickup-manifest)):not(.pickup-manifest):not(.pickup-manifest *) { display: none !important; }
+            *:has(.pickup-manifest) {
+              display: block !important; position: static !important; overflow: visible !important;
+              height: auto !important; min-height: 0 !important; max-width: none !important; width: auto !important;
+              margin: 0 !important; padding: 0 !important; transform: none !important;
+              background: #ffffff !important; border: 0 !important; box-shadow: none !important;
+            }
+            html, body { background: #ffffff !important; color: #111111 !important; }
+            .pickup-manifest { border: 0 !important; box-shadow: none !important; padding: 0 !important; background: #ffffff !important; }
+            .pickup-manifest .text-primary { color: #111111 !important; }
+            .pickup-manifest .text-muted { color: #444444 !important; }
+            .pickup-manifest .border-line { border-color: #bbbbbb !important; }
+            .pickup-manifest table { width: 100% !important; border-collapse: collapse; font-size: 10pt; }
+            .pickup-manifest thead { display: table-header-group; }
+            .pickup-manifest tr { break-inside: avoid; }
+            .pickup-manifest th, .pickup-manifest td {
+              color: #111111 !important; border-bottom: 1px solid #bbbbbb !important; padding: 1.6mm 2mm !important;
+            }
+          }
+        `}</style>
+      )}
+      {!isOpen && (
+        <div className="card p-4 space-y-2 pickup-manifest" data-testid="pickup-manifest">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('pickups.manifestTitle')}</h2>
           <div className="text-small text-muted space-y-1">
             <p>{t('pickups.col.date')}: <span className="text-primary">{session.scheduledDate}</span></p>
@@ -522,9 +591,40 @@ function SessionView({ session: initial, onRefresh, onBack }: {
               <p>{t('pickups.closedAt', { date: new Date(session.closedAt).toLocaleString() })}</p>
             )}
             <p className="font-semibold text-primary mt-2">
-              {t('pickups.manifestPackages')}: {scans.length}
+              {t('pickups.manifestPackages')}: {manifest ? manifest.shipments.length : scans.length}
             </p>
           </div>
+          {manifest && manifest.shipments.length > 0 && (
+            <table className="min-w-full mt-3 border-t border-line">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="tbl-header w-10">#</th>
+                  <th className="tbl-header">AWB</th>
+                  <th className="tbl-header">{t('pickups.orderNumber')}</th>
+                  {showMoney && <th className="tbl-header">{t('pickups.cod')}</th>}
+                  <th className="tbl-header">{t('pickups.col.scanned')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {manifest.shipments.map((row, i) => (
+                  <tr key={row.shipmentId} className="border-b border-line">
+                    <td className="tbl-cell text-muted tabular-nums">{i + 1}</td>
+                    <td className="tbl-cell font-mono text-primary">{row.trackingNumber}</td>
+                    <td className="tbl-cell text-primary">{row.orderNumber ?? '—'}</td>
+                    {showMoney && (
+                      <td className="tbl-cell text-primary tabular-nums">
+                        {row.codAmount != null ? `${row.codAmount.toLocaleString()} EGP` : '—'}
+                      </td>
+                    )}
+                    <td className="tbl-cell text-muted text-small">
+                      {row.scannedAt ? new Date(row.scannedAt).toLocaleTimeString() : '—'}
+                      {row.scannedByName && <span className="ms-1">· {row.scannedByName}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <p className="text-small text-muted border-t border-line pt-3 mt-3">
             {t('pickups.manifestSignature')}: ___________________________
           </p>

@@ -2616,6 +2616,8 @@
     "manifestPackages": "Total packages",
     "manifestSignature": "Courier signature",
     "printManifest": "Print / Download manifest",
+    "printManifestLoading": "Preparing manifest…",
+    "manifestError": "Couldn't load the manifest. Check your connection and try again.",
     "sessionOpenRequired": "Session is open — scan packages",
     "orderNumber": "Order",
     "cod": "COD",

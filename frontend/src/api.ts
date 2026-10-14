@@ -367,6 +367,31 @@ export function getGatherList(limit?: number, batchId?: string) {
   return request<GatherListResponse>(`/fulfill/gather${qs ? `?${qs}` : ''}`)
 }
 
+/** Pickup handover manifest — the closed session's shipments. codAmount is money: owner /
+ *  manager only on screen and on paper (PickupSessions hides it from a worker). */
+export interface PickupManifestShipment {
+  shipmentId: string
+  trackingNumber: string
+  orderNumber: string | null
+  codAmount: number | null
+  scannedAt: string | null
+  scannedByName: string | null
+}
+
+export interface PickupManifest {
+  pickupId: string
+  scheduledDate: string
+  timeSlot: string | null
+  closedByName: string | null
+  closedAt: string | null
+  packageCount: number
+  shipments: PickupManifestShipment[]
+}
+
+export function getPickupManifest(sessionId: string) {
+  return request<PickupManifest>(`/pickup-sessions/${sessionId}/manifest`)
+}
+
 export interface PieceCounts {
   available: number
   reserved: number

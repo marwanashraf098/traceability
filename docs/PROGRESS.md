@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Pickup handover manifest — print the page (2026-10-14, branch `fix/pickup-manifest-print` off main b46d2a4; NOT merged,
+NOT deployed). Frontend only, no endpoint change, no migration.**
+- **Bug:** "Print / Download manifest" (`PickupSessions.tsx`) did `window.open('/api/v1/pickup-sessions/{id}/manifest')` — a plain tab
+  sends no Bearer header (`JwtAuthenticationFilter` reads only `Authorization`), so every merchant got a 401; the endpoint returns
+  JSON (`ManifestData`), not a PDF.
+- **Fix:** `api.getPickupManifest(id)` (the shared authenticated `request`) → rows rendered inside the existing Handover Manifest
+  card (#, AWB, order, [COD], scanned at · by; Total packages = the printed list's count) → `window.print()` once the rows are on
+  the page. Loading state on the button (disabled, "Preparing manifest…"); a failed fetch shows an inline `role="alert"` error and
+  never prints. Print CSS: A4, light theme, `:has(.pickup-manifest)` keeps only the card (sidebar / top bar / scan list hidden),
+  header row repeats, ~30 rows per page (checked in headless Chromium: 70 rows → 3 pages, chrome hidden). EN + AR keys
+  `pickups.printManifestLoading`, `pickups.manifestError`.
+- **Money:** each manifest row carries `codAmount`. The manifest shows COD to owner / manager only (role from the token); a
+  worker's manifest and printout have no COD column. **Open, not changed:** the page's existing scans table
+  (`PickupSessions.tsx` "Scanned list") still shows COD to every role, and the server sends `codAmount` to workers on both
+  GET /pickup-sessions/{id} and /manifest — hiding it from the API is a backend change, not made.
+- **Tests:** `pickupManifestPrint.test.tsx` (5, userEvent): owner (Bearer fetch, no window.open, rows + COD, print once), manager
+  COD, worker no COD, fetch error → alert, no print / tab, loading state. RED on the old code (5/5); mutations: showMoney
+  always true → worker red; print on error → error red; no print effect → 4 red. vitest 963/963 (958 + 5), tsc + vite build clean.
+
 **Station mode — PIN returns the worker to the interrupted page (Nuvira, 2026-10-14, branch `fix/station-new-tab-pin-return`
 off main 8b8a3c8; NOT merged, NOT deployed). Frontend only, no migration.**
 - **Bug:** the print dialog's "Open pick list" opened `/fulfill/gather?batch=…` in a NEW tab; `currentWorker` is in memory per tab,
