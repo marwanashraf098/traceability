@@ -17,6 +17,9 @@
 --   queue_minus_1     left the main warehouse AFTER the seed (counted, then left, never decremented)
 --   seed_excluded     left BEFORE the seed — nothing to do now; its return gets +1 (RETURN_COUNTED_SQL)
 --   not_seeded        main warehouse linked but never seeded — the seed will exclude it; nothing now
+--                     SUPERSEDED 2026-10-14 (V167): an unseeded tenant whose receiving +1s applied IS counted
+--                     by Shopify; such departures are repaired by 2026-10-14-not-seeded-repair.sql. This
+--                     script is historical (it already ran) — its decision is left as it was.
 --   not_yet_sent      the send-and-back is still 'preparing' — markSent will claim it
 --   mode_leave        the location is set to 'leave' — Shopify unchanged
 -- Report only (no correction): pieces SOLD / LOST at a destination that left AFTER the seed — Shopify

@@ -3,6 +3,7 @@ package com.traceability.integrations.shopify;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.ShopifyCatalogActivationService;
+import com.traceability.inventory.SeedRefusedException;
 import com.traceability.inventory.ShopifyInventoryReconcileService;
 import com.traceability.inventory.ShopifyLocationProvisioningService;
 import com.traceability.tenancy.TenantContext;
@@ -163,6 +164,9 @@ public class ShopifyImportJob {
                     log.info("Automatic on_hand seed for store {}: seeded={} skippedNonZero={} noop={} failed={}",
                         storeId, seedResult.seeded(), seedResult.skippedNonZero(),
                         seedResult.noop(), seedResult.failed());
+                } catch (SeedRefusedException e) {
+                    log.info("Automatic on_hand seed not needed for store {} — Shopify already counts the " +
+                        "main warehouse through receiving", storeId);
                 } catch (Exception e) {
                     log.warn("Automatic on_hand seed failed for store {} — " +
                         "will retry on next import/reconnect", storeId, e);

@@ -28,8 +28,10 @@ import java.util.concurrent.CompletableFuture;
  * the destination's locations.shopify_sync_mode is snapshot onto the transfer; in 'remove' mode the
  * pieces that left the MAIN warehouse (transfer_pieces.from_location_id) are decremented there —
  * ONE transfer_shopify_syncs claim per transfer, ONE pushTransferOut call (−N per variant). 'leave'
- * → nothing at all. Not from the main warehouse / no main warehouse / main not linked → a 'skipped'
- * row with the reason (never a silent skip).
+ * → nothing at all. Not from the main warehouse / no main warehouse / main not linked / Shopify not
+ * counting there yet (PieceShopifyRules.setup — V167 shopify_counting_source) → a 'skipped' row with
+ * the reason (never a silent skip). A piece whose own arrival never reached Shopify
+ * (PieceShopifyRules.arrival) is left out of the −N and listed in the claim's payload.excluded.
  *
  * Claim-before-call: {@link #claimSend} runs in the caller's transaction ('queued'); after commit
  * {@link #push} takes it queued→pending (a conditional UPDATE — the one-sender guard), makes ONE
@@ -73,12 +75,6 @@ public class TransferShopifySync {
 
     /**
      * THE rule (alias {@code tp_out} = the transfer_pieces row of the transfer that took the piece OUT
-     * of the main warehouse, {@code t_out} that transfer): did that departure leave Shopify's Traced
-     * Main Warehouse count? Yes when the transfer's send decrement was pushed and counted this piece,
-     * or when it went out before the tenant's initial seed (the seed counted only pieces at the main
-     * warehouse, so it never counted this one). Then its return gets +1; otherwise (mode 'leave', a
-     * skipped / failed / ambiguous send) Shopify still counts it and the return writes nothing.
-     */
     /**
      * When the pieces of transfer {@code alias} left their location — THE one definition (also inlined,
      * verbatim, in scripts/ops/2026-10-08-transfer-shopify-repair.sql). A permanent move leaves when it
@@ -90,17 +86,18 @@ public class TransferShopifySync {
                "      ELSE COALESCE(" + alias + ".sent_at, " + alias + ".reconcile_started_at, " + alias + ".created_at) END)";
     }
 
-    /** The tenant (of transfer {@code t_out}) has an applied initial seed — Shopify's Traced location holds its count. */
-    static final String SEEDED_SQL =
-        "SELECT 1 FROM shopify_inventory_adjustments sd WHERE sd.tenant_id = t_out.tenant_id " +
-        "AND sd.trigger_type = 'initial_seed' AND sd.status = 'applied'";
-
     /**
-     * Never fires for a tenant with no applied seed (a +1 then would be counted again by the seed):
-     * the seed requirement wraps both branches.
+     * THE rule (alias {@code tp_out} = the transfer_pieces row of the transfer that took the piece OUT
+     * of the main warehouse, {@code t_out} that transfer): did that departure leave Shopify's Traced
+     * Main Warehouse count? Only while Shopify counts there (V167 shopify_counting_source — the same
+     * gate as the send), and then: the transfer's send decrement was pushed and counted this piece, or
+     * it went out before the tenant's initial seed (the seed counted only pieces at the main warehouse,
+     * so it never counted this one; a tenant counting through receiving has no seed — that branch is
+     * then false). Then its return gets +1; otherwise (mode 'leave', a skipped / failed / ambiguous
+     * send, a piece left out because its arrival never reached Shopify) the return writes nothing.
      */
     static final String RETURN_COUNTED_SQL =
-        "(EXISTS (" + SEEDED_SQL + ") AND " +
+        "(shopify_counting_source(t_out.tenant_id) IS NOT NULL AND " +
         "(EXISTS (SELECT 1 FROM transfer_shopify_syncs y WHERE y.tenant_id = t_out.tenant_id " +
         "         AND y.transfer_id = t_out.id AND y.status = 'pushed' " +
         "         AND jsonb_exists(y.piece_ids, tp_out.piece_id)) " +
@@ -130,11 +127,9 @@ public class TransferShopifySync {
             mode, transferId, tenantId);
         if ("leave".equals(mode)) return;   // Shopify unchanged: zero writes
 
-        List<Map<String, Object>> main = jdbc.queryForList(
-            "SELECT id, shopify_location_id, shopify_sync_status FROM locations " +
-            "WHERE tenant_id = ? AND is_fulfillment = true", tenantId);
-        if (main.isEmpty()) { skip(tenantId, transferId, null, "no_main_warehouse"); return; }
-        UUID mainId = (UUID) main.get(0).get("id");
+        PieceShopifyRules.Setup setup = PieceShopifyRules.setup(jdbc, tenantId);
+        if (setup.mainId() == null) { skip(tenantId, transferId, null, PieceShopifyRules.NO_MAIN_WAREHOUSE, null); return; }
+        UUID mainId = setup.mainId();
 
         // Pieces that left the MAIN warehouse on this trip (a bring-back's never did).
         List<Map<String, Object>> leaving = jdbc.queryForList(
@@ -142,39 +137,51 @@ public class TransferShopifySync {
             "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.from_location_id = ? " +
             "  AND (tp.outcome IS NULL OR tp.outcome = 'relocated') " +
             "ORDER BY tp.created_at, tp.id", transferId, tenantId, mainId);
-        if (leaving.isEmpty()) { skip(tenantId, transferId, mainId, "not_from_main_warehouse"); return; }
-        if (!"linked".equals(main.get(0).get("shopify_sync_status")) || main.get(0).get("shopify_location_id") == null) {
-            skip(tenantId, transferId, mainId, "main_warehouse_not_linked"); return;
-        }
-        // Linked but never seeded: Shopify's Traced location holds nothing yet, and the seed will count
-        // only what is in the main warehouse then — treated exactly like an unlinked one (no −N now).
-        if (!Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (" + SEEDED_SQL.replace("t_out.tenant_id", "?") + ")", Boolean.class, tenantId))) {
-            skip(tenantId, transferId, mainId, "not_seeded"); return;
-        }
+        if (leaving.isEmpty()) { skip(tenantId, transferId, mainId, "not_from_main_warehouse", null); return; }
+        // Not linked, or linked but Shopify not counting there yet (no applied seed and no applied
+        // receiving claim — PieceShopifyRules.NOT_COUNTING): nothing of Traced's is in that count.
+        if (setup.skipReason() != null) { skip(tenantId, transferId, mainId, setup.skipReason(), null); return; }
 
         Map<String, Integer> deltas = new LinkedHashMap<>();
         List<String> pieceIds = new ArrayList<>();
+        List<Map<String, String>> excluded = new ArrayList<>();
         for (Map<String, Object> r : leaving) {
+            String pieceId = (String) r.get("piece_id");
+            // The same per-piece arrival rule as every Lookup departure: a piece Shopify never counted
+            // at main (its receiving +1 never applied) is not taken out of that count.
+            PieceShopifyRules.Verdict arrival = PieceShopifyRules.arrival(jdbc, tenantId, pieceId, setup);
+            if (!arrival.write()) {
+                excluded.add(Map.of("piece_id", pieceId, "variant_id", r.get("variant_id").toString(),
+                    "reason", arrival.skipReason()));
+                continue;
+            }
             deltas.merge(r.get("variant_id").toString(), 1, Integer::sum);
-            pieceIds.add((String) r.get("piece_id"));
+            pieceIds.add(pieceId);
+        }
+        String payload = excluded.isEmpty() ? "{}" : json(Map.of("excluded", excluded));
+        if (pieceIds.isEmpty()) {
+            skip(tenantId, transferId, mainId, PieceShopifyRules.ARRIVAL_NOT_COUNTED, payload); return;
         }
         UUID syncId = jdbc.query(
-            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, deltas, piece_ids) " +
-            "VALUES (?, ?, ?, 'queued', ?::jsonb, ?::jsonb) ON CONFLICT (transfer_id) DO NOTHING RETURNING id",
+            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, deltas, piece_ids, payload) " +
+            "VALUES (?, ?, ?, 'queued', ?::jsonb, ?::jsonb, ?::jsonb) ON CONFLICT (transfer_id) DO NOTHING RETURNING id",
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-            tenantId, transferId, mainId, json(deltas), json(pieceIds));
+            tenantId, transferId, mainId, json(deltas), json(pieceIds), payload);
+        if (!excluded.isEmpty()) {
+            log.info("Transfer {} Shopify decrement leaves out {} piece(s) whose arrival never reached Shopify",
+                transferId, excluded.size());
+        }
         if (syncId != null) {
             ShopifyInventoryService.afterCommit(() -> self.push(tenantId, syncId));
         }
     }
 
-    private void skip(UUID tenantId, UUID transferId, UUID locationId, String reason) {
+    private void skip(UUID tenantId, UUID transferId, UUID locationId, String reason, String payload) {
         log.info("Transfer {} Shopify decrement skipped: {}", transferId, reason);
         jdbc.update(
-            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, reason) " +
-            "VALUES (?, ?, ?, 'skipped', ?) ON CONFLICT (transfer_id) DO NOTHING",
-            tenantId, transferId, locationId, reason);
+            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, reason, payload) " +
+            "VALUES (?, ?, ?, 'skipped', ?, ?::jsonb) ON CONFLICT (transfer_id) DO NOTHING",
+            tenantId, transferId, locationId, reason, payload == null ? "{}" : payload);
     }
 
     // ── Phase B: the one attempt ────────────────────────────────────────────────
