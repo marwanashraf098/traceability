@@ -93,7 +93,7 @@ public final class WaybillPdfAssembler {
 
     /** The batch tracking numbers that appear on one page's text as whole digit runs. */
     static Set<String> trackingNumbersIn(String pageText, Set<String> wanted) {
-        String text = foldDigits(pageText);
+        String text = ScanInputNormalizer.foldDigits(pageText);
         Set<String> runs = new HashSet<>();
         collectRuns(text, runs);
         collectRuns(SPACED_DIGITS.matcher(text).replaceAll(""), runs);
@@ -104,17 +104,5 @@ public final class WaybillPdfAssembler {
     private static void collectRuns(String text, Set<String> into) {
         Matcher m = DIGIT_RUN.matcher(text);
         while (m.find()) into.add(m.group());
-    }
-
-    /** Arabic-Indic (U+0660..) and Extended Arabic-Indic (U+06F0..) digits → ASCII. */
-    private static String foldDigits(String s) {
-        StringBuilder b = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= '٠' && c <= '٩') b.append((char) ('0' + (c - '٠')));
-            else if (c >= '۰' && c <= '۹') b.append((char) ('0' + (c - '۰')));
-            else b.append(c);
-        }
-        return b.toString();
     }
 }

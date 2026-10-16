@@ -1190,7 +1190,9 @@ public class ReturnSessionService {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    /** The scan is normalized for the lookup only (Caps Lock / Arabic layout — ScanInputNormalizer). */
     private Map<String, Object> fetchPieceByScan(String scan, UUID tenantId) {
+        String lookup = ScanInputNormalizer.normalizePiece(scan);
         return jdbc.query(
             "SELECT p.id, p.status::text AS status, p.variant_id, " +
             "       p.current_order_id AS order_id, s.id AS shipment_id " +
@@ -1208,7 +1210,7 @@ public class ReturnSessionService {
                 m.put("shipment_id", rs.getObject("shipment_id", UUID.class));
                 return m;
             },
-            tenantId, tenantId, scan, scan, scan, tenantId);
+            tenantId, tenantId, lookup, lookup, lookup, tenantId);
     }
 
     /** Expected-but-unscanned pieces for every AWB scanned into this session — recomputed on read. */

@@ -468,10 +468,13 @@ public class FulfillService {
         // 1. Look up piece by barcode — accept both:
         //    • new label format: scanner returns the raw ULID (matches p.id)
         //    • old label format: scanner returns "PC-<ULID>" (matches p.barcode)
+        //    The lookup value is normalized (Caps Lock / Arabic layout — ScanInputNormalizer);
+        //    the result keeps echoing the raw scan.
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
             "SELECT p.id, p.variant_id, p.status FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-            barcode, barcode, barcode, tenantId);
+            lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
         }

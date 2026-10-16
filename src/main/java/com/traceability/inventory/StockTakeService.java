@@ -200,12 +200,14 @@ public class StockTakeService {
                 "condition must be 'good' or 'damaged'");
         }
 
+        // Normalized for the lookup only (ScanInputNormalizer); an unknown scan stores the raw value.
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
         record PieceRow(String id, String status) {}
         PieceRow piece = jdbc.query(
             "SELECT id, status::text AS status FROM pieces " +
             "WHERE (barcode = ? OR id = ? OR short_code = ?) AND tenant_id = ?",
             rs -> rs.next() ? new PieceRow(rs.getString("id"), rs.getString("status")) : null,
-            barcode, barcode, barcode, tenantId);
+            lookup, lookup, lookup, tenantId);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sessionId", sessionId);

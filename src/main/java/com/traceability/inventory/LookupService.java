@@ -75,6 +75,7 @@ public class LookupService {
     @Transactional(readOnly = true)
     public Map<String, Object> lookupPiece(String barcode, boolean isWorker) {
         UUID tenantId = TenantContext.require();
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);   // idempotent; see ScanInputNormalizer
 
         // 1. Piece header — single JOIN query across all context tables.
         Map<String, Object> piece;
@@ -97,7 +98,7 @@ public class LookupService {
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
                 "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-                barcode, barcode, barcode, tenantId);
+                lookup, lookup, lookup, tenantId);
         } catch (EmptyResultDataAccessException e) {
             throw new LookupNotFoundException("PIECE_NOT_FOUND", barcode);
         }

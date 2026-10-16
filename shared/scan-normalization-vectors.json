@@ -1,0 +1,160 @@
+{
+  "_comment": "Shared scan-normalization vectors (S1 backend, S2 frontend). 'piece' = ScanInputNormalizer.normalizePiece(input). 'tracking' = TrackingNumberNormalizer.normalize(input) (null = rejected); a vector without 'tracking' does not assert it.",
+  "vectors": [
+    {
+      "name": "short code, Caps Lock on",
+      "input": "p000123",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "short code, already canonical",
+      "input": "P000123",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "short code, Arabic-Indic digits (macOS Arabic + Shift reaching P)",
+      "input": "P٠٠٠١٢٣",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "short code, Persian digits",
+      "input": "P۰۰۰۱۲۳",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph U+061B (Shift+P, Windows Arabic 101 / macOS Arabic - PC)",
+      "input": "؛000123",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph U+061B + Arabic-Indic digits (macOS Arabic - PC)",
+      "input": "؛٠٠٠١٢٣",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph U+005B (Shift+P, macOS Arabic)",
+      "input": "[000123",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph U+005B + Arabic-Indic digits (macOS Arabic)",
+      "input": "[٠٠٠١٢٣",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph U+062D (P without Shift, all three layouts)",
+      "input": "ح000123",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "short code past 999999, Caps Lock on",
+      "input": "p1000000",
+      "piece": "P1000000",
+      "tracking": null
+    },
+    {
+      "name": "short code with whitespace and a left-to-right mark",
+      "input": " ‎P000123 \n",
+      "piece": "P000123",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph with only 5 digits is not recovered",
+      "input": "؛00012",
+      "piece": "؛00012",
+      "tracking": null
+    },
+    {
+      "name": "P key glyph followed by a letter is not recovered",
+      "input": "؛00012A",
+      "piece": "؛00012A",
+      "tracking": null
+    },
+    {
+      "name": "legacy PC- label, Caps Lock on",
+      "input": "pc-01hzx4k7m9qw2e3r5t6y8v0bns",
+      "piece": "PC-01HZX4K7M9QW2E3R5T6Y8V0BNS",
+      "tracking": null
+    },
+    {
+      "name": "bare ULID label, Caps Lock on",
+      "input": "01hzx4k7m9qw2e3r5t6y8v0bns",
+      "piece": "01HZX4K7M9QW2E3R5T6Y8V0BNS",
+      "tracking": null
+    },
+    {
+      "name": "PC- label typed on macOS Arabic is NOT resolved (ambiguous as text — S2)",
+      "input": "[ئ-٠١آ'٤٫٧ؤ٩ًَ٢ِ٣ٍ٥ُ٦ٌ٨ء٠أإ«",
+      "piece": "[ئ-01آ'4٫7ؤ9ًَ2ِ3ٍ5ُ6ٌ8ء0أإ«",
+      "tracking": null
+    },
+    {
+      "name": "PC- label typed on Windows Arabic 101 is NOT resolved (ambiguous as text — S2)",
+      "input": "؛}-01أ~ْ4،7’9ًَ2ُ3ٌ5لإ6إ8{0لآآٍ",
+      "piece": "؛}-01أ~ْ4،7’9ًَ2ُ3ٌ5لإ6إ8{0لآآٍ",
+      "tracking": null
+    },
+    {
+      "name": "Bosta AWB, Arabic-Indic digits (macOS Arabic)",
+      "input": "٨٤٨٤٨٠٥٦٩٩",
+      "piece": "8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta AWB, Persian digits",
+      "input": "۸۴۸۴۸۰۵۶۹۹",
+      "piece": "8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta top-of-waybill barcode, Arabic-Indic digits (macOS Arabic)",
+      "input": "G - ٠ ٢ - ٨ ٤ ٨ ٤ ٨ ٠ ٥ ٦ ٩ ٩",
+      "piece": "G-02-8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta top-of-waybill barcode, Windows Arabic 101 (already resolves)",
+      "input": "لأ - 0 2 - 8 4 8 4 8 0 5 6 9 9",
+      "piece": "لأ-02-8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta top-of-waybill barcode, Caps Lock on (already resolves)",
+      "input": "g - 0 2 - 8 4 8 4 8 0 5 6 9 9",
+      "piece": "g-02-8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta waybill QR, Arabic-Indic digits",
+      "input": "BOSTA_٨٤٨٤٨٠٥٦٩٩",
+      "piece": "BOSTA_8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "Bosta waybill QR, Caps Lock on (already resolves)",
+      "input": "bosta_8484805699",
+      "piece": "bosta_8484805699",
+      "tracking": "8484805699"
+    },
+    {
+      "name": "order number is left alone",
+      "input": "#1042",
+      "piece": "#1042",
+      "tracking": null
+    },
+    {
+      "name": "non-Bosta tracking number is never uppercased",
+      "input": "wj-12345",
+      "piece": "wj-12345"
+    }
+  ]
+}

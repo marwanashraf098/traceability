@@ -4,6 +4,65 @@
 
 ## Current state
 
+**HID scanner + Caps Lock / Arabic layout — S1 backend MERGED to main (2026-10-17, branch
+`fix/scan-input-normalization`; NOT deployed). No migration.**
+- `ScanInputNormalizer` (inventory): strip invisible + all whitespace → fold Arabic-Indic / Persian digits → uppercase ONLY
+  a piece-shaped result (P+6+ digits, PC-+ULID, bare ULID; shape case-insensitive) → one recovery: a single leading P-key
+  glyph {؛ U+061B, [ U+005B, ح U+062D} + 6+ digits → "P"+digits. Nothing else is reverse-mapped (PC-/ULID, BOSTA_ → S2).
+- Applied to the LOOKUP VALUE only at FulfillService.scan (pack sessions go through it), StockTakeService.scan,
+  TransferService scanOut / returnScanOut / reconcileScanBack, ReturnSessionService.fetchPieceByScan,
+  LookupService.lookupPiece, LookupController (normalizes before the unchanged `isPieceQuery`). Echoes and raw columns
+  (raw_scan, raw_barcode, current_waybill_scan) keep the raw scan; PhoneScanSource untouched.
+- TrackingNumberNormalizer now folds digits (shared helpers; `WaybillPdfAssembler.foldDigits` removed in favour of
+  `ScanInputNormalizer.foldDigits`). Side effect to know: `FulfillmentTrackingCapture.bareTrackingNumber` now stores a
+  Bosta number typed with Arabic digits in Shopify as ASCII digits (previously stored the Arabic string, which never
+  matched) — new captures only, no stored row changes. **Decision (Marawan 2026-10-17): keep it — ASCII digits are the
+  canonical form.**
+- Shared vectors: `shared/scan-normalization-vectors.json` (26) — S2's TS tests must load the same file.
+- Tests: `ScanInputNormalizerVectorsTest` (29), `ScanInputNormalizationTest` (10, real services / HTTP). Revert of the
+  wiring → 9/10 + 4 vectors red (pickup: 400 "Unreadable waybill scan: ٣٠٠…"); the garbled-ULID guard is green both
+  ways by design. Mutations: no uppercase → 4 red; no P-key recovery → 5 red.
+- Baseline: 2995 run, 2 red — ExchangeBackfillTest + BostaPollJobTest.p6 (flaky, see below).
+- **Known backend reds are now ExchangeBackfillTest ONLY.** ShopifyMagicLinkTest and PasswordResetTest were Docker VM
+  clock drift after a laptop sleep (VM 23 min behind the host → "expired" tokens still valid); a Docker Desktop restart
+  makes both green. If either goes red again, compare `date -u` with `docker run --rm alpine date -u` first.
+- **Follow-up (not fixed): `BostaPollJobTest.p6_pollAndDiscovery_alreadyLinkedDelivery_discoveryCheaplySkipsIt` is a
+  pre-existing intermittent flake** — `verify(never()).fetchDelivery(...)` sometimes sees one call; 1/2 red on the S1
+  branch, 1/3 red with S1 reverted, so not S1.
+- **Follow-up (no fix yet):** the AWB link step input (`Fulfill.tsx` AwbLinkDialog) is `disabled={linking}` and bypasses
+  useScanner, so keystrokes scanned while a link is in flight are dropped.
+- Next: S2 (code-based keydown capture at useScanner) on `fix/scan-key-capture`.
+
+**HID scanner + Caps Lock / Arabic layout — Step 0 diagnosis only (2026-10-16; no code, no migration).**
+- Every scan input reads the layout-produced text (`e.key` / DOM value on Enter); nothing uses `e.code`. Piece lookups
+  (`p.barcode = ? OR p.id = ? OR p.short_code = ?`) are exact + case-sensitive with no normalization → with Caps Lock or
+  any Arabic layout EVERY piece scan misses (`P000123` → `p000123` / `؛000123` / `[٠٠٠١٢٣`). Bosta AWBs survive Caps and
+  Windows Arabic 101 (TrackingNumberNormalizer drops the hub prefix) but fail on macOS Arabic (Arabic-Indic digits are
+  rejected, not folded); `BOSTA_` QR fails on every Arabic layout.
+- Real macOS tables (UCKeyTranslate): macOS "Arabic" Shift+F/G/J/X emit NOTHING; Arabic-PC / Win 101 Shift+T/G/B and
+  plain B are 2-code-point ligatures; 15 glyphs map to two different letters across layouts → text reverse-mapping is
+  lossless only for digits; ULID-based codes / BOSTA_ need code-based capture.
+- Seam: a new keydown listener owned by `useScanner` (covers 7 screens, no marked block edited); AwbLinkDialog + Lookup /
+  topbar search need it separately; never Orders / Exchanges search (Arabic names). Proposed slices S1 backend
+  `ScanInputNormalizer` + TNN digit folding, S2 code-based capture at useScanner, S3 AwbLinkDialog + Lookup. Waiting on
+  Marawan's go-ahead.
+- Baseline: vitest 963/963 (+1 known unhandled teardown error in useScannerQueue). Backend 2956 run, 3 red:
+  ExchangeBackfillTest, ShopifyMagicLinkTest (known) + PasswordResetTest.expiredCode — the expiry reds come from the
+  Docker VM clock running 23 min behind the host after a sleep (restart Docker Desktop), not from code.
+
+**Bosta deliveries deleted in Bosta — Step 0 diagnosis only (2026-10-15; no code, no migration, no prod writes).**
+- Detection today = the status poll's 4 h safety net only: v0 GET → HTTP 400 "Delivery not found" →
+  `DeliveryNotFoundException` → `provider_not_found_at` stamped, `internal_state` untouched. One 400 is enough (no
+  confirmation); a 404 returns null and stamps nothing. Prod: 29 stamped legs, all history 'created' only, none with
+  pieces on a forward leg; Nuvira 6979330981 (last polled 18:39) is due for the safety net ~22:40.
+- mass-awb with a deleted AWB → 400 `"Couldn't find deliveries with ids: [] or trackingNumbers…"` → the whole ≤49 chunk
+  is rejected and EVERY shipment in it gets `awb_print_failed_reason` (→ a missing_awb alert each).
+- A dead 'created' forward leg blocks every new-leg link (V104 index / AWB_MISMATCH / fulfillment-link "active forward
+  leg"). `hasEverShippedPastCreated` + `WaybillResolver.movedState` read ALL forward legs' history, so any non-'created'
+  history row on a dead leg (incl. today's Bosta-cancel 49) blocks pick/pack of a re-booked order forever.
+- Pickup session scan has no shipment-state check; close sets with_courier unconditionally.
+- Report + slice plan given in chat; waiting on Marawan's answers (state model, history row, guard change, pieces).
+
 **Shopify counting gate — unseeded tenants decrement again (2026-10-14/15, branch `fix/shopify-counting-gate` off main
 1207a5e; NOT merged, NOT deployed, repair NOT run). Migration V167.**
 - **Bug (Step 0, prod read-only):** every tenant but The Snouts was never seeded (connect with 0 → receive), yet receiving

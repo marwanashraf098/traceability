@@ -264,11 +264,13 @@ public class TransferService {
         String transferType          = (String) transfer.get("transfer_type");
 
         // 2. Look up piece by barcode — same triple-match as FulfillService.scan()
-        //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code).
+        //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code). The lookup value is
+        //    normalized (Caps Lock / Arabic layout — ScanInputNormalizer); the result echoes the raw scan.
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
             "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-            barcode, barcode, barcode, tenantId);
+            lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
@@ -402,11 +404,12 @@ public class TransferService {
         UUID   sourceLocationId      = (UUID)   transfer.get("source_location_id");
         String transferType          = (String) transfer.get("transfer_type");
 
-        // 2. Piece lookup — same triple-match as scanOut().
+        // 2. Piece lookup — same triple-match (and normalized lookup value) as scanOut().
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
             "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-            barcode, barcode, barcode, tenantId);
+            lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
@@ -659,11 +662,12 @@ public class TransferService {
                 "عملية النقل ليست في حالة المطابقة (الحالة الحالية: " + transferStatusRows.get(0) + ")");
         }
 
-        // 2. Piece lookup — same triple-match as scanOut().
+        // 2. Piece lookup — same triple-match (and normalized lookup value) as scanOut().
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
             "SELECT p.id, p.variant_id FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-            barcode, barcode, barcode, tenantId);
+            lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanBackResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
