@@ -19,6 +19,35 @@ const scannerBurst: BrowserCommand<[codes: string[], keyDelayMs: number]> = asyn
   }
 }
 
+/** One physical key a HID scanner presses: the US position, Shift, and the character the OS
+ *  layout turns it into ('' = the layout types nothing for it). */
+type LayoutKey = { code: string; key: string; shift: boolean; vk: number }
+
+/**
+ * S2 — types each scan through Chromium's DevTools input pipeline (CDP Input.dispatchKeyEvent),
+ * so `code` and `key` can differ the way they do on an Arabic layout and the browser's own
+ * default (insert `text` unless the keydown was prevented) is the one under test.
+ * Chromium only: WebKit has no CDP.
+ */
+const layoutBurst: BrowserCommand<[scans: LayoutKey[][], keyDelayMs: number]> = async (ctx, scans, keyDelayMs) => {
+  const cdp = await ctx.page.context().newCDPSession(ctx.page)
+  const send = (type: 'keyDown' | 'keyUp', k: LayoutKey) => cdp.send('Input.dispatchKeyEvent', {
+    type, code: k.code, key: k.key === '' ? 'Unidentified' : k.key,
+    ...(type === 'keyDown' && k.key !== '' ? { text: k.key, unmodifiedText: k.key } : {}),
+    windowsVirtualKeyCode: k.vk, modifiers: k.shift ? 8 : 0,
+  })
+  for (const keys of scans) {
+    for (const k of keys) {
+      await send('keyDown', k)
+      await send('keyUp', k)
+      await new Promise(r => setTimeout(r, keyDelayMs))
+    }
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', code: 'Enter', key: 'Enter', text: '\r', windowsVirtualKeyCode: 13 })
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', code: 'Enter', key: 'Enter', windowsVirtualKeyCode: 13 })
+  }
+  await cdp.detach()
+}
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -29,7 +58,7 @@ export default defineConfig({
       headless: true,
       provider: playwright(),
       instances: [{ browser: 'chromium' }, { browser: 'webkit' }],
-      commands: { scannerBurst },
+      commands: { scannerBurst, layoutBurst },
     },
   },
 })

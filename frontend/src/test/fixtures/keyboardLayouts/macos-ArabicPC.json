@@ -1,0 +1,290 @@
+{
+ "Backquote": {
+  "plain": "ذ",
+  "shift": "ّ",
+  "caps": "٫",
+  "shiftCaps": "ّ"
+ },
+ "Digit1": {
+  "plain": "١",
+  "shift": "!",
+  "caps": "1",
+  "shiftCaps": "!"
+ },
+ "Digit2": {
+  "plain": "٢",
+  "shift": "@",
+  "caps": "2",
+  "shiftCaps": "@"
+ },
+ "Digit3": {
+  "plain": "٣",
+  "shift": "#",
+  "caps": "3",
+  "shiftCaps": "#"
+ },
+ "Digit4": {
+  "plain": "٤",
+  "shift": "$",
+  "caps": "4",
+  "shiftCaps": "$"
+ },
+ "Digit5": {
+  "plain": "٥",
+  "shift": "٪",
+  "caps": "5",
+  "shiftCaps": "٪"
+ },
+ "Digit6": {
+  "plain": "٦",
+  "shift": "^",
+  "caps": "6",
+  "shiftCaps": "^"
+ },
+ "Digit7": {
+  "plain": "٧",
+  "shift": "&",
+  "caps": "7",
+  "shiftCaps": "&"
+ },
+ "Digit8": {
+  "plain": "٨",
+  "shift": "*",
+  "caps": "8",
+  "shiftCaps": "*"
+ },
+ "Digit9": {
+  "plain": "٩",
+  "shift": ")",
+  "caps": "9",
+  "shiftCaps": ")"
+ },
+ "Digit0": {
+  "plain": "٠",
+  "shift": "(",
+  "caps": "0",
+  "shiftCaps": "("
+ },
+ "Minus": {
+  "plain": "-",
+  "shift": "ـ",
+  "caps": "-",
+  "shiftCaps": "ـ"
+ },
+ "Equal": {
+  "plain": "=",
+  "shift": "+",
+  "caps": "=",
+  "shiftCaps": "+"
+ },
+ "KeyQ": {
+  "plain": "ض",
+  "shift": "َ",
+  "caps": "ض",
+  "shiftCaps": "َ"
+ },
+ "KeyW": {
+  "plain": "ص",
+  "shift": "ً",
+  "caps": "ص",
+  "shiftCaps": "ً"
+ },
+ "KeyE": {
+  "plain": "ث",
+  "shift": "ُ",
+  "caps": "ث",
+  "shiftCaps": "ُ"
+ },
+ "KeyR": {
+  "plain": "ق",
+  "shift": "ٌ",
+  "caps": "ق",
+  "shiftCaps": "ٌ"
+ },
+ "KeyT": {
+  "plain": "ف",
+  "shift": "لإ",
+  "caps": "ف",
+  "shiftCaps": "لإ"
+ },
+ "KeyY": {
+  "plain": "غ",
+  "shift": "إ",
+  "caps": "غ",
+  "shiftCaps": "إ"
+ },
+ "KeyU": {
+  "plain": "ع",
+  "shift": "‘",
+  "caps": "ع",
+  "shiftCaps": "‘"
+ },
+ "KeyI": {
+  "plain": "ه",
+  "shift": "÷",
+  "caps": "ه",
+  "shiftCaps": "÷"
+ },
+ "KeyO": {
+  "plain": "خ",
+  "shift": "×",
+  "caps": "خ",
+  "shiftCaps": "×"
+ },
+ "KeyP": {
+  "plain": "ح",
+  "shift": "؛",
+  "caps": "ح",
+  "shiftCaps": "؛"
+ },
+ "BracketLeft": {
+  "plain": "ج",
+  "shift": "<",
+  "caps": "ج",
+  "shiftCaps": "<"
+ },
+ "BracketRight": {
+  "plain": "د",
+  "shift": ">",
+  "caps": "د",
+  "shiftCaps": ">"
+ },
+ "Backslash": {
+  "plain": "\\",
+  "shift": "|",
+  "caps": "\\",
+  "shiftCaps": "|"
+ },
+ "KeyA": {
+  "plain": "ش",
+  "shift": "ِ",
+  "caps": "ش",
+  "shiftCaps": "ِ"
+ },
+ "KeyS": {
+  "plain": "س",
+  "shift": "ٍ",
+  "caps": "س",
+  "shiftCaps": "ٍ"
+ },
+ "KeyD": {
+  "plain": "ي",
+  "shift": "]",
+  "caps": "ي",
+  "shiftCaps": "]"
+ },
+ "KeyF": {
+  "plain": "ب",
+  "shift": "[",
+  "caps": "ب",
+  "shiftCaps": "["
+ },
+ "KeyG": {
+  "plain": "ل",
+  "shift": "لأ",
+  "caps": "ل",
+  "shiftCaps": "لأ"
+ },
+ "KeyH": {
+  "plain": "ا",
+  "shift": "أ",
+  "caps": "ا",
+  "shiftCaps": "أ"
+ },
+ "KeyJ": {
+  "plain": "ت",
+  "shift": "ـ",
+  "caps": "ت",
+  "shiftCaps": "ـ"
+ },
+ "KeyK": {
+  "plain": "ن",
+  "shift": "،",
+  "caps": "ن",
+  "shiftCaps": "،"
+ },
+ "KeyL": {
+  "plain": "م",
+  "shift": "/",
+  "caps": "م",
+  "shiftCaps": "/"
+ },
+ "Semicolon": {
+  "plain": "ك",
+  "shift": ":",
+  "caps": "ك",
+  "shiftCaps": ":"
+ },
+ "Quote": {
+  "plain": "ط",
+  "shift": "\"",
+  "caps": "ط",
+  "shiftCaps": "\""
+ },
+ "KeyZ": {
+  "plain": "ئ",
+  "shift": "~",
+  "caps": "ئ",
+  "shiftCaps": "~"
+ },
+ "KeyX": {
+  "plain": "ء",
+  "shift": "ْ",
+  "caps": "ء",
+  "shiftCaps": "ْ"
+ },
+ "KeyC": {
+  "plain": "ؤ",
+  "shift": "}",
+  "caps": "ؤ",
+  "shiftCaps": "}"
+ },
+ "KeyV": {
+  "plain": "ر",
+  "shift": "{",
+  "caps": "ر",
+  "shiftCaps": "{"
+ },
+ "KeyB": {
+  "plain": "لا",
+  "shift": "لآ",
+  "caps": "لا",
+  "shiftCaps": "لآ"
+ },
+ "KeyN": {
+  "plain": "ى",
+  "shift": "آ",
+  "caps": "ى",
+  "shiftCaps": "آ"
+ },
+ "KeyM": {
+  "plain": "ة",
+  "shift": "’",
+  "caps": "ة",
+  "shiftCaps": "’"
+ },
+ "Comma": {
+  "plain": "و",
+  "shift": ",",
+  "caps": "و",
+  "shiftCaps": ","
+ },
+ "Period": {
+  "plain": "ز",
+  "shift": ".",
+  "caps": "ز",
+  "shiftCaps": "."
+ },
+ "Slash": {
+  "plain": "ظ",
+  "shift": "؟",
+  "caps": "ظ",
+  "shiftCaps": "؟"
+ },
+ "Space": {
+  "plain": " ",
+  "shift": " ",
+  "caps": " ",
+  "shiftCaps": " "
+ }
+}

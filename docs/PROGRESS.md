@@ -4,6 +4,41 @@
 
 ## Current state
 
+**HID scanner + Caps Lock / Arabic layout — S2 frontend key capture MERGED to main behind a flag (2026-10-17, branch
+`fix/scan-key-capture`; NOT deployed). Frontend only.**
+- **GATED (Marawan 2026-10-17):** the listener acts only when `scanKeyCaptureActive()` (scanKeys.ts, read at event time):
+  the page is `/scan-probe`, OR the build has `VITE_SCAN_KEY_CAPTURE=true` (default false → every scan screen behaves
+  exactly as main before S2). The listener effect in useScanner is now marked SAFETY-CRITICAL. Flag plumbing like
+  VITE_ANALYTICS_ENABLED: Dockerfile ARG, deploy/docker-compose.yml build arg, .env.example, vite-env.d.ts.
+  Rollout: deploy → Marawan probes merchant tablets on /scan-probe → set `VITE_SCAN_KEY_CAPTURE=true` in the server's
+  deploy/.env → rebuild. Gate tests: flag off on a scan screen keeps `؛000123` / `[٠٠٠١٢٣` / `p000123` (as main); flag
+  unset = off; flag off on /scan-probe (and /scan-probe/) captures. Mutations: gate always-on → 2 red, always-off → 46 red.
+  vitest 1024/1024; browser 89 + 1 skipped; tsc + build clean.
+- `frontend/src/hooks/scanKeys.ts`: fixed US table code (+ Shift) → char (KeyA–Z, Digit0–9, Numpad0–9 + operators /
+  decimal, Minus, Equal, brackets, Backslash, Semicolon, Quote, Comma, Period, Slash, Backquote, Space). Falls through
+  (browser default) on Ctrl / Cmd / Alt, isComposing / keyCode 229, empty or unmapped code, named keys ("Unidentified" /
+  "Dead" are NOT named — macOS Arabic Shift+F reports one and the key is still known). Insert at caret / selection,
+  maxLength respected, native value setter + bubbling 'input' event.
+- **Letter case rule (deviation from "Caps Lock ignored entirely", for review):** upper case when Shift is held OR the
+  browser reports that same key's upper-case Latin letter. Why: (1) a Caps-compensating scanner sends unshifted letters
+  with Caps Lock on and expects upper case; (2) 16 existing tests type `P000123` through user-event without Shift — a
+  Shift-only rule turned them into `p000123`. The rule only ever RAISES case; Caps Lock + Shift+T is still `T`; on an
+  Arabic layout Shift alone decides; another key's letter never leaks in (AZERTY KeyQ = 'A' → 'q').
+- `useScanner`: one new (unmarked) effect — capture-phase keydown listener on document, acts only when
+  `e.target === inputRef.current` (read at event time). No marked block, ScanShell, handleScan, worker, refocus or phone
+  path changed. Covers the 7 useScanner screens; Lookup / top-bar search / AwbLinkDialog are S3.
+- `/scan-probe` (`pages/ScanProbe.tsx`): owner / manager (OwnerOnlyRoute), full-screen, not in the sidebar, no backend
+  calls; per keydown code / key (+ code points) / shiftKey / CapsLock / keyCode / isComposing / handled-or-default; per
+  scan captured vs layout text; Clear. EN + AR keys `scanProbe.*`.
+- Tests: `scanKeyCapture.test.tsx` (55; committed macOS tables in `src/test/fixtures/keyboardLayouts/`, Win 101 derived;
+  every Step 0 ❌ shape × 7 layout/Caps scenarios + the shared backend vectors' canonical codes; Alt+numpad not
+  intercepted; named keys / shortcuts / composition fall through; other inputs keep Arabic; controlled-input sync +
+  maxLength), `ordersArabicSearchGuard.test.tsx`, `scanProbe.test.tsx` (2), browser `scanLayoutBurst.browser.test.tsx`
+  (CDP `layoutBurst` command — Chromium; skipped on WebKit, no CDP). Revert of the useScanner listener → 45 jsdom red +
+  the burst red with exactly the Step 0 garbled strings. vitest 1021/1021; browser 89 + 1 skipped; tsc + build clean.
+- Next: Marawan's real-device check on /scan-probe (station tablets + HID scanner, macOS Arabic Shift+F, Windows Arabic
+  101 + Caps Lock), then flip VITE_SCAN_KEY_CAPTURE; then S3 (AwbLinkDialog, Lookup, top-bar search).
+
 **HID scanner + Caps Lock / Arabic layout — S1 backend MERGED to main (2026-10-17, branch
 `fix/scan-input-normalization`; NOT deployed). No migration.**
 - `ScanInputNormalizer` (inventory): strip invisible + all whitespace → fold Arabic-Indic / Persian digits → uppercase ONLY
