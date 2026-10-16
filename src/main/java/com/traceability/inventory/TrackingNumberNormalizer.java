@@ -16,6 +16,10 @@ package com.traceability.inventory;
  * Bosta's waybill QR code holds {@code "BOSTA_<tracking number>"} (camera spike, 2026-10-02):
  * after whitespace removal a case-insensitive {@code BOSTA_} prefix is dropped and the rest must
  * be all digits — {@code "BOSTA_8484805699"} → {@code "8484805699"}, anything else → null.
+ *
+ * Arabic-Indic (٠-٩) and Persian (۰-۹) digits are folded to ASCII after whitespace removal (S1,
+ * 2026-10-16): a scanner on a macOS Arabic layout types {@code ٨٤٨٤٨٠٥٦٩٩}. Same helpers as
+ * {@link ScanInputNormalizer} — one definition of "invisible", "whitespace" and "digit".
  */
 public final class TrackingNumberNormalizer {
 
@@ -31,8 +35,8 @@ public final class TrackingNumberNormalizer {
         if (raw == null) return null;
 
         // Strip zero-width and non-printing characters a scanner may inject, then every
-        // whitespace character anywhere (not just the ends) — see the class comment.
-        String s = removeWhitespace(raw.replaceAll("[\\p{Cf}\\p{Cc}&&[^\t\n\r]]", ""));
+        // whitespace character anywhere (not just the ends), then fold Arabic / Persian digits.
+        String s = ScanInputNormalizer.foldDigits(ScanInputNormalizer.stripInvisible(raw));
         if (s.isEmpty()) return null;
 
         // Bosta waybill QR: "BOSTA_<digits>" (prefix case-insensitive) — see the class comment.
@@ -51,16 +55,5 @@ public final class TrackingNumberNormalizer {
         if (!s.matches("^[0-9]+$")) return null;
 
         return s;
-    }
-
-    /** Character.isWhitespace (ASCII space, tab, newlines, …) plus no-break / other Unicode space separators. */
-    private static String removeWhitespace(String in) {
-        StringBuilder b = new StringBuilder(in.length());
-        for (int i = 0; i < in.length(); ) {
-            int cp = in.codePointAt(i);
-            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp)) b.appendCodePoint(cp);
-            i += Character.charCount(cp);
-        }
-        return b.toString();
     }
 }

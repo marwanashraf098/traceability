@@ -24,8 +24,11 @@ public class LookupController {
             @AuthenticationPrincipal CustomUserDetails principal) {
         boolean isWorker = "worker".equalsIgnoreCase(principal.role());
         String trimmed = q.trim();
-        if (isPieceQuery(trimmed)) {
-            return service.lookupPiece(trimmed, isWorker);
+        // A piece scan typed with Caps Lock or an Arabic layout is routed and looked up in its
+        // normalized form (ScanInputNormalizer). Order and tracking queries keep the trimmed text.
+        String piece = ScanInputNormalizer.normalizePiece(trimmed);
+        if (isPieceQuery(piece)) {
+            return service.lookupPiece(piece, isWorker);
         }
         // '#'-prefixed is unambiguously an order query — no tracking-number format uses '#'.
         if (trimmed.startsWith("#")) {
