@@ -4126,5 +4126,20 @@
       "confirmError": "Couldn't save that. Try again.",
       "askOwner": "Ask your account owner to delete it and confirm here."
     }
+  },
+  "scanProbe": {
+    "title": "Scanner probe",
+    "subtitle": "Scan here to check what the scanner sends on this device. Nothing is saved.",
+    "back": "Back",
+    "clear": "Clear",
+    "placeholder": "Scan a barcode, then Enter",
+    "scansTitle": "Scans",
+    "noScans": "No scans yet.",
+    "captured": "Captured (what Traced uses)",
+    "raw": "Without capture (what the keyboard layout typed)",
+    "keysTitle": "Key presses",
+    "listener": "Scan capture",
+    "handled": "handled",
+    "fellThrough": "browser default"
   }
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { captureScanKey } from './scanKeys'
 
 // ── FR-21 Step 6.2 — transport-agnostic shared scanner ──────────────────────
 //
@@ -177,6 +178,21 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
     document.addEventListener('click', refocus)
     inputRef.current?.focus()
     return () => document.removeEventListener('click', refocus)
+  }, [])
+
+  // S2 (approved 2026-10-17) — layout- and Caps-Lock-independent capture (scanKeys.ts). One
+  // capture-phase keydown listener on the document, acting only when the key is aimed at THIS
+  // scanner's input (read at event time, so a remounted input is covered). A key in the US
+  // table is inserted from its physical position; everything else — Enter included — keeps
+  // the browser default, so the handlers below and the input's own onKeyDown are unchanged.
+  // Phone scans never fire key events (handleScan is called directly) and are unaffected.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const input = inputRef.current
+      if (input && e.target === input) captureScanKey(e, input)
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
   // SAFETY-CRITICAL — flash trigger: do not modify. Copied verbatim from PickScreen.

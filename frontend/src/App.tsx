@@ -32,6 +32,7 @@ import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
+import ScanProbe from './pages/ScanProbe'
 import StockTakeReview from './pages/StockTakeReview'
 import Transfers from './pages/Transfers'
 import TransferScanOut from './pages/TransferScanOut'
@@ -341,6 +342,17 @@ export default function App() {
             <RequireAuth>
               <OwnerOnlyRoute>
                 <Layout><StockTake /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        {/* S2 scanner probe — owner / manager diagnostic, full-screen, not in the sidebar. */}
+        <Route
+          path="/scan-probe"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <ScanProbe />
               </OwnerOnlyRoute>
             </RequireAuth>
           }
