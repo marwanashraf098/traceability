@@ -14,6 +14,19 @@
 // keys (Enter, Tab, Backspace, arrows, Escape, NumLock-off numpad keys, …) — so Enter
 // detection and every existing handler see exactly what they saw before.
 
+/** The diagnostic page where capture is always on (S2 real-device checks). */
+export const SCAN_PROBE_PATH = '/scan-probe'
+
+/**
+ * Capture is gated until it has been probed on merchant devices: on only on /scan-probe, or
+ * everywhere when the build sets VITE_SCAN_KEY_CAPTURE=true (default false — scan screens then
+ * behave exactly as before S2). Read at event time.
+ */
+export function scanKeyCaptureActive(): boolean {
+  if (import.meta.env.VITE_SCAN_KEY_CAPTURE === 'true') return true
+  return window.location.pathname.replace(/\/+$/, '') === SCAN_PROBE_PATH
+}
+
 /** code → [without Shift, with Shift] on a US keyboard. Caps Lock plays no part. */
 const US_KEYS: Readonly<Record<string, readonly [string, string]>> = (() => {
   const t: Record<string, readonly [string, string]> = {}

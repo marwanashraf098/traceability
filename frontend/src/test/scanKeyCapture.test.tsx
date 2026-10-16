@@ -100,8 +100,13 @@ async function scanThrough(layout: Layout, caps: boolean, code: string): Promise
   return got[0]
 }
 
-beforeEach(() => { vi.stubGlobal('AudioContext', undefined) })
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+// The capture suite runs with the build flag ON (VITE_SCAN_KEY_CAPTURE=true); the gate itself is
+// tested at the end of this file.
+beforeEach(() => {
+  vi.stubGlobal('AudioContext', undefined)
+  vi.stubEnv('VITE_SCAN_KEY_CAPTURE', 'true')
+})
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
 describe('scan capture is independent of Caps Lock and the keyboard layout', () => {
   for (const [name, layout, caps] of SCENARIOS) {
@@ -215,5 +220,30 @@ describe('what the listener leaves to the browser', () => {
     insertAtCaret(input, 'C')
     insertAtCaret(input, 'D')                                    // over maxLength — ignored
     await waitFor(() => expect(input.value).toBe('ABC'))
+  })
+})
+
+describe('the gate — capture is off unless the build flag is on or the page is /scan-probe', () => {
+  afterEach(() => { window.history.replaceState({}, '', '/') })
+
+  test('flag off, a scan screen: an Arabic-layout scan stays garbled — exactly as before S2', async () => {
+    vi.stubEnv('VITE_SCAN_KEY_CAPTURE', 'false')
+    window.history.replaceState({}, '', '/stock-take/s-1/scan')
+    expect(await scanThrough(WIN_101, false, 'P000123')).toBe('؛000123')
+    expect(await scanThrough(macArabic as Layout, false, 'P000123')).toBe('[٠٠٠١٢٣')
+    expect(await scanThrough(US, true, 'P000123')).toBe('p000123')
+  })
+
+  test('flag unset (the default build) behaves like flag off', async () => {
+    vi.stubEnv('VITE_SCAN_KEY_CAPTURE', undefined as unknown as string)
+    expect(await scanThrough(WIN_101, false, 'P000123')).toBe('؛000123')
+  })
+
+  test('flag off, /scan-probe: captured', async () => {
+    vi.stubEnv('VITE_SCAN_KEY_CAPTURE', 'false')
+    window.history.replaceState({}, '', '/scan-probe')
+    expect(await scanThrough(WIN_101, false, 'P000123')).toBe('P000123')
+    window.history.replaceState({}, '', '/scan-probe/')
+    expect(await scanThrough(macArabic as Layout, true, 'P000123')).toBe('P000123')
   })
 })

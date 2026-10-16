@@ -12,6 +12,9 @@ services:
         # Analytics screens (build-time flag, default off). Set VITE_ANALYTICS_ENABLED=true in .env
         # (or the shell) and rebuild to turn them on.
         VITE_ANALYTICS_ENABLED: "${VITE_ANALYTICS_ENABLED:-false}"
+        # Scan key capture on every scan screen (build-time flag, default off; /scan-probe always
+        # captures). Set VITE_SCAN_KEY_CAPTURE=true in .env and rebuild once merchant tablets are probed.
+        VITE_SCAN_KEY_CAPTURE: "${VITE_SCAN_KEY_CAPTURE:-false}"
     image: traceability-app:latest
     env_file: ../.env
     restart: unless-stopped

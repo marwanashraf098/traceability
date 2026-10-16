@@ -13,9 +13,11 @@ beforeEach(() => {
   vi.stubGlobal('AudioContext', undefined)
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('the probe must not call the backend') }))
 })
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
 
 test('a Windows Arabic 101 scan of P000123 is captured as P000123, with the layout text alongside', async () => {
+  vi.stubEnv('VITE_SCAN_KEY_CAPTURE', 'false')                // the probe captures whatever the build flag says
+  window.history.replaceState({}, '', '/scan-probe')
   renderWithProviders(<ScanProbe />)
   const input = screen.getByPlaceholderText('Scan a barcode, then Enter') as HTMLInputElement
   input.focus()

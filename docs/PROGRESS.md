@@ -4,8 +4,16 @@
 
 ## Current state
 
-**HID scanner + Caps Lock / Arabic layout — S2 frontend key capture built (2026-10-17, branch `fix/scan-key-capture`
-off main bfb9752; committed on the branch, NOT merged, NOT pushed, NOT deployed). Frontend only.**
+**HID scanner + Caps Lock / Arabic layout — S2 frontend key capture MERGED to main behind a flag (2026-10-17, branch
+`fix/scan-key-capture`; NOT deployed). Frontend only.**
+- **GATED (Marawan 2026-10-17):** the listener acts only when `scanKeyCaptureActive()` (scanKeys.ts, read at event time):
+  the page is `/scan-probe`, OR the build has `VITE_SCAN_KEY_CAPTURE=true` (default false → every scan screen behaves
+  exactly as main before S2). The listener effect in useScanner is now marked SAFETY-CRITICAL. Flag plumbing like
+  VITE_ANALYTICS_ENABLED: Dockerfile ARG, deploy/docker-compose.yml build arg, .env.example, vite-env.d.ts.
+  Rollout: deploy → Marawan probes merchant tablets on /scan-probe → set `VITE_SCAN_KEY_CAPTURE=true` in the server's
+  deploy/.env → rebuild. Gate tests: flag off on a scan screen keeps `؛000123` / `[٠٠٠١٢٣` / `p000123` (as main); flag
+  unset = off; flag off on /scan-probe (and /scan-probe/) captures. Mutations: gate always-on → 2 red, always-off → 46 red.
+  vitest 1024/1024; browser 89 + 1 skipped; tsc + build clean.
 - `frontend/src/hooks/scanKeys.ts`: fixed US table code (+ Shift) → char (KeyA–Z, Digit0–9, Numpad0–9 + operators /
   decimal, Minus, Equal, brackets, Backslash, Semicolon, Quote, Comma, Period, Slash, Backquote, Space). Falls through
   (browser default) on Ctrl / Cmd / Alt, isComposing / keyCode 229, empty or unmapped code, named keys ("Unidentified" /
@@ -29,7 +37,7 @@ off main bfb9752; committed on the branch, NOT merged, NOT pushed, NOT deployed)
   (CDP `layoutBurst` command — Chromium; skipped on WebKit, no CDP). Revert of the useScanner listener → 45 jsdom red +
   the burst red with exactly the Step 0 garbled strings. vitest 1021/1021; browser 89 + 1 skipped; tsc + build clean.
 - Next: Marawan's real-device check on /scan-probe (station tablets + HID scanner, macOS Arabic Shift+F, Windows Arabic
-  101 + Caps Lock), then merge; then S3 (AwbLinkDialog, Lookup, top-bar search).
+  101 + Caps Lock), then flip VITE_SCAN_KEY_CAPTURE; then S3 (AwbLinkDialog, Lookup, top-bar search).
 
 **HID scanner + Caps Lock / Arabic layout — S1 backend MERGED to main (2026-10-17, branch
 `fix/scan-input-normalization`; NOT deployed). No migration.**

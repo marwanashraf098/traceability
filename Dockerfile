@@ -17,6 +17,9 @@ COPY docs/legal/ ./docs/legal/
 # Analytics nav + routes are baked in at build time; off unless the build passes "true"
 # (deploy/docker-compose.yml forwards VITE_ANALYTICS_ENABLED from the environment / .env).
 ARG VITE_ANALYTICS_ENABLED=false
+# Layout-independent scan key capture on every scan screen (S2); off unless "true" — always on at
+# /scan-probe. Forwarded by deploy/docker-compose.yml like VITE_ANALYTICS_ENABLED.
+ARG VITE_SCAN_KEY_CAPTURE=false
 ARG VITE_CALENDLY_SETUP_URL
 ENV VITE_CALENDLY_SETUP_URL=$VITE_CALENDLY_SETUP_URL
 RUN npm run build --prefix frontend

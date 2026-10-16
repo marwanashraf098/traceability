@@ -40,8 +40,11 @@ function Harness({ onScan }: { onScan: (c: string) => Promise<ScanOutcome> }) {
   return <ScanShell scanner={scanner} placeholder="Scan" />
 }
 
-beforeEach(() => { vi.stubGlobal('AudioContext', undefined) })
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+beforeEach(() => {
+  vi.stubGlobal('AudioContext', undefined)
+  vi.stubEnv('VITE_SCAN_KEY_CAPTURE', 'true')                 // the build flag that turns capture on
+})
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('Arabic-layout scanner burst', () => {
   test.skipIf(server.browser !== 'chromium')('3 scans at 2 ms per key arrive complete, in order, one at a time', async () => {
