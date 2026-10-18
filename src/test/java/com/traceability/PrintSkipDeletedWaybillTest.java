@@ -320,9 +320,10 @@ class PrintSkipDeletedWaybillTest {
     // ── Other errors unchanged ────────────────────────────────────────────────
 
     @Test
-    void d4_5xx_noBisect_wholeChunkRejectedAsToday() {
+    void d4_5xx_noBisect_notMarked_reportedTemporary() {
+        // Merged-PDF slice A (approved edit): a 5xx is temporary — never bisected, never marked failed.
         Fixture f = fixture("D4");
-        List<String> tns = f.orders(10);
+        f.orders(10);
         doAnswer(inv -> { calls.add(List.copyOf(inv.getArgument(1)));
                           throw new BostaTransientException("Bosta 5xx on mass-awb"); })
             .when(bostaGateway).printMassAwb(anyString(), anyList(), anyString(), anyString());
@@ -332,8 +333,8 @@ class PrintSkipDeletedWaybillTest {
         assertThat(calls).hasSize(1);
         assertThat(r.batchId()).isNull();
         assertThat(r.excluded()).hasSize(10)
-            .allSatisfy(x -> assertThat(x.reason()).isEqualTo("BOSTA_REJECTED:Bosta 5xx on mass-awb"));
-        assertThat(failedReasons(f.tenant)).containsOnlyKeys(tns.toArray(String[]::new));
+            .allSatisfy(x -> assertThat(x.reason()).isEqualTo(BostaAwbService.BOSTA_TEMPORARY));
+        assertThat(failedReasons(f.tenant)).isEmpty();
     }
 
     @Test

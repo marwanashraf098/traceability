@@ -126,6 +126,9 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
                 ? t('fulfill.waybill.lists.reprinted', { count: result.waybillCount })
                 : (result.message ?? t('fulfill.printBatch.nothingPrinted'))}
             </p>
+            {result.excluded.some(x => x.reason === 'BOSTA_BUSY') && (
+              <Alert tone="warning" title={t('fulfill.printBatch.busyAlert')} />
+            )}
             {result.pdfBase64 && !result.orderGuaranteed && (
               <Alert tone="warning" title={t('fulfill.printBatch.orderNotGuaranteed')} />
             )}

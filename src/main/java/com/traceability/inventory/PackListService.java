@@ -146,10 +146,13 @@ public class PackListService {
             excluded.add(new PackPrintBatchService.Excluded(it != null ? (String) it.get("number") : null,
                 ex.trackingNumber(), ex.reason()));
         }
-        List<byte[]> pdfs = new ArrayList<>();
+        List<WaybillPdfAssembler.ChunkPdf> pdfs = new ArrayList<>();
         Set<String> inPdf = new HashSet<>();
         for (BostaAwbService.AwbChunk chunk : bosta.chunks()) {
-            if (chunk.pdf() != null) { pdfs.add(chunk.pdf()); inPdf.addAll(chunk.trackingNumbers()); }
+            if (chunk.pdf() != null) {
+                pdfs.add(new WaybillPdfAssembler.ChunkPdf(chunk.pdf(), chunk.trackingNumbers()));
+                inPdf.addAll(chunk.trackingNumbers());
+            }
             else {
                 String reason = chunk.emailMessage() != null ? "BOSTA_EMAIL_PATH" : chunk.rejectedReason();
                 for (String tn : chunk.trackingNumbers()) {
@@ -166,7 +169,7 @@ public class PackListService {
         }
         WaybillPdfAssembler.Assembled pdf;
         try {
-            pdf = WaybillPdfAssembler.assemble(pdfs, printedInOrder);
+            pdf = WaybillPdfAssembler.assembleChunks(pdfs, printedInOrder);
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                 "Bosta returned a waybill PDF that couldn't be read — try again");

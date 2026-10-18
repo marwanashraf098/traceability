@@ -702,7 +702,9 @@
       "error": "تعذّرت طباعة البوليصة",
       "notLinked": "البوليصة لم تُربط بعد — لم تتزامن شحنة بوسطة.",
       "noCourierAccount": "تُطبع بوليصة الشحن خارج Traced — لا يوجد حساب شركة شحن مرتبط.",
-      "deletedInBosta": "حُذفت هذه البوليصة في Bosta، لذلك لا يمكن طباعتها. احجز شحنة جديدة في Bosta لهذا الطلب."
+      "deletedInBosta": "حُذفت هذه البوليصة في Bosta، لذلك لا يمكن طباعتها. احجز شحنة جديدة في Bosta لهذا الطلب.",
+      "busy": "Bosta مشغولة الآن — اطبع مرة أخرى بعد بضع دقائق.",
+      "temporary": "لم تُطبع — لم تستجب Bosta. اطبع مرة أخرى."
     },
     "printBatch": {
       "statusLine": "البوالص: {{printed}} مطبوعة · {{notPrinted}} لم تُطبع بعد",
@@ -739,6 +741,9 @@
       "skippedDeleted_other": "{{count}} محذوفة في Bosta",
       "skippedRejected_one": "{{count}} مرفوضة",
       "skippedRejected_other": "{{count}} مرفوضة",
+      "skippedRetry_one": "{{count}} للطباعة مرة أخرى",
+      "skippedRetry_other": "{{count}} للطباعة مرة أخرى",
+      "busyAlert": "Bosta مشغولة الآن — اطبع مرة أخرى بعد بضع دقائق.",
       "reason": {
         "emailed": "سترسل Bosta هذه البوليصة بالبريد الإلكتروني",
         "unlinked": "غير مرتبطة بطلب",
@@ -746,7 +751,9 @@
         "notPrintable": "الشحنة تحركت بالفعل أو أُغلقت",
         "rejected": "رفضت Bosta طباعتها",
         "deletedInBosta": "محذوفة في Bosta — لم تُطبع",
-        "unisolated": "لم تُطبع — رفضت Bosta جزءًا من هذه الطباعة. اطبع مرة أخرى."
+        "unisolated": "لم تُطبع — رفضت Bosta جزءًا من هذه الطباعة. اطبع مرة أخرى.",
+        "busy": "Bosta مشغولة الآن — اطبع مرة أخرى بعد بضع دقائق",
+        "temporary": "لم تُطبع — اطبع مرة أخرى"
       },
       "openPickList": "افتح قائمة التجميع",
       "done": "تم",

@@ -93,11 +93,11 @@ public class PackPrintBatchService {
         for (BostaAwbService.AwbException ex : bosta.exclusions()) {
             excluded.add(excludedFor(byTracking, ex.trackingNumber(), ex.reason()));
         }
-        List<byte[]> pdfs = new ArrayList<>();
+        List<WaybillPdfAssembler.ChunkPdf> pdfs = new ArrayList<>();
         Set<String> inPdf = new HashSet<>();
         for (AwbChunk chunk : bosta.chunks()) {
             if (chunk.pdf() != null) {
-                pdfs.add(chunk.pdf());
+                pdfs.add(new WaybillPdfAssembler.ChunkPdf(chunk.pdf(), chunk.trackingNumbers()));
                 inPdf.addAll(chunk.trackingNumbers());
             } else {
                 String reason = chunk.emailMessage() != null ? "BOSTA_EMAIL_PATH" : chunk.rejectedReason();
@@ -115,10 +115,10 @@ public class PackPrintBatchService {
                 "Bosta didn't return any waybills to print.");
         }
 
-        // d) One PDF, pages in our order when the page text proves it.
+        // d) One PDF, pages in our order when the page text proves it (checked per chunk).
         WaybillPdfAssembler.Assembled pdf;
         try {
-            pdf = WaybillPdfAssembler.assemble(pdfs,
+            pdf = WaybillPdfAssembler.assembleChunks(pdfs,
                 printed.stream().map(PackPrintBatchStore.PrintedItem::trackingNumber).toList());
         } catch (IOException e) {
             log.warn("print batch: tenant={} could not read Bosta's PDF: {}", tenantId, e.getMessage());
