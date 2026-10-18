@@ -701,7 +701,9 @@
       "error": "Could not print waybill",
       "notLinked": "Waybill not linked yet — the Bosta delivery hasn't synced.",
       "noCourierAccount": "Waybill printed outside Traced — no courier account connected.",
-      "deletedInBosta": "This waybill was deleted in Bosta, so it can't be printed. Book a new delivery in Bosta for this order."
+      "deletedInBosta": "This waybill was deleted in Bosta, so it can't be printed. Book a new delivery in Bosta for this order.",
+      "busy": "Bosta is busy — print again in a few minutes.",
+      "temporary": "Not printed — Bosta didn't answer. Print again."
     },
     "printBatch": {
       "statusLine": "Waybills: {{printed}} printed · {{notPrinted}} not printed yet",
@@ -738,6 +740,9 @@
       "skippedDeleted_other": "{{count}} deleted in Bosta",
       "skippedRejected_one": "{{count}} rejected",
       "skippedRejected_other": "{{count}} rejected",
+      "skippedRetry_one": "{{count}} to print again",
+      "skippedRetry_other": "{{count}} to print again",
+      "busyAlert": "Bosta is busy — print again in a few minutes.",
       "reason": {
         "emailed": "Bosta will email this waybill instead",
         "unlinked": "Not linked to an order",
@@ -745,7 +750,9 @@
         "notPrintable": "Shipment already moving or closed",
         "rejected": "Bosta refused to print it",
         "deletedInBosta": "Deleted in Bosta — not printed",
-        "unisolated": "Not printed — Bosta refused part of this print. Print again."
+        "unisolated": "Not printed — Bosta refused part of this print. Print again.",
+        "busy": "Bosta is busy — print again in a few minutes",
+        "temporary": "Not printed — print again"
       },
       "openPickList": "Open pick list",
       "done": "Done",

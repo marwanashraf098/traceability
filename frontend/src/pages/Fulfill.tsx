@@ -154,6 +154,11 @@ class AwbDeletedInBostaError extends Error {
   constructor() { super('DELETED_IN_BOSTA') }
 }
 
+/** Bosta busy (rate limit) or not answering — not printed, nothing wrong with the waybill. */
+class AwbRetryError extends Error {
+  constructor(readonly busy: boolean) { super(busy ? 'BOSTA_BUSY' : 'BOSTA_TEMPORARY') }
+}
+
 async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
   const { data, status } = await api<{
     pdfBase64List: string[]
@@ -189,6 +194,8 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
 
   if (data?.exceptions?.length > 0) {
     if (data.exceptions[0].reason === 'DELETED_IN_BOSTA') throw new AwbDeletedInBostaError()
+    if (data.exceptions[0].reason === 'BOSTA_BUSY') throw new AwbRetryError(true)
+    if (data.exceptions[0].reason === 'BOSTA_TEMPORARY') throw new AwbRetryError(false)
     throw new Error(data.exceptions[0].reason ?? 'AWB not printable')
   }
 
@@ -1093,6 +1100,8 @@ function PickScreen({
     } catch (e: unknown) {
       const text = e instanceof AwbDeletedInBostaError
         ? t('fulfill.printAwb.deletedInBosta')
+        : e instanceof AwbRetryError
+        ? t(e.busy ? 'fulfill.printAwb.busy' : 'fulfill.printAwb.temporary')
         : e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
         : (e as Error).message || t('fulfill.printAwb.error')

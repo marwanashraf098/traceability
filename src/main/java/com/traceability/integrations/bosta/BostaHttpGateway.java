@@ -3,6 +3,7 @@ package com.traceability.integrations.bosta;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.traceability.tenancy.TenantContext;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import org.slf4j.Logger;
@@ -23,6 +24,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Bosta Admin API client.
@@ -452,13 +454,16 @@ class BostaHttpGateway implements BostaGateway {
         if (apiKey == null || apiKey.isBlank()) {
             throw new BostaException("mass-awb: API key is missing — check courier_accounts.api_key_encrypted");
         }
-        log.info("mass-awb: url={} keyPresent=true awbFormat={} lang={} trackingCount={}",
-            url, awbFormat, lang, trackingNumbers.size());
         Map<String, String> body = Map.of(
             "trackingNumbers",  String.join(",", trackingNumbers),
             "requestedAwbType", awbFormat,
             "lang",             lang
         );
+        // One INFO line per request (merged-PDF slice A): tenant, label count, outcome and Bosta's own time —
+        // after the rate limiter (limited() acquires before this runs), incl. the network-error retries.
+        // No tracking numbers, no PII.
+        long started = System.nanoTime();
+        String outcome = "error";
         try {
             JsonNode resp = Retry.decorateSupplier(retry, () ->
                 restClient.post()
@@ -471,6 +476,13 @@ class BostaHttpGateway implements BostaGateway {
             ).get();
 
             if (resp == null) throw new BostaException("Empty mass-awb response");
+            // Bosta's 200-with-body rate limit ({success:false, errorCode:429}) is a rate limit, not an email path.
+            try {
+                detectRateLimit(resp, "mass-awb");
+            } catch (BostaRateLimitException e) {
+                outcome = "rate_limited";
+                throw e;
+            }
 
             JsonNode dataNode = resp.path("data");
             if (!dataNode.isMissingNode() && !dataNode.isNull()) {
@@ -478,12 +490,14 @@ class BostaHttpGateway implements BostaGateway {
                 if (dataNode.isTextual()) {
                     String pdfBase64 = dataNode.asText();
                     if (!pdfBase64.isBlank()) {
+                        outcome = "pdf";
                         return new AwbPrintResult(Base64.getDecoder().decode(pdfBase64), null);
                     }
                 }
                 // Legacy/documented shape: data.pdf
                 String pdfBase64 = dataNode.path("pdf").asText(null);
                 if (pdfBase64 != null && !pdfBase64.isBlank()) {
+                    outcome = "pdf";
                     return new AwbPrintResult(Base64.getDecoder().decode(pdfBase64), null);
                 }
             }
@@ -492,21 +506,34 @@ class BostaHttpGateway implements BostaGateway {
             String msg = resp.path("message").asText(
                 dataNode.isMissingNode() ? "AWB exported to email" : dataNode.path("message").asText("AWB exported to email"));
             log.info("mass-awb email-path response for {} trackings: {}", trackingNumbers.size(), msg);
+            outcome = "email";
             return new AwbPrintResult(null, msg);
 
         } catch (ResourceAccessException e) {
+            outcome = "network";
             throw new BostaTransientException("Network error on mass-awb", e);
         } catch (RestClientResponseException e) {
+            outcome = "http_" + e.getStatusCode().value();
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx on mass-awb", e);
             }
             String responseBody = e.getResponseBodyAsString();
+            if (e.getStatusCode().value() == 429) {
+                // A rate limit, typed like every other Bosta call's 429: limited() then blocks the key and the
+                // global budget for retry-after, and the print stops instead of marking waybills failed.
+                throw new BostaRateLimitException(parseRetryAfter(responseBody, 120L));
+            }
             String message = "Bosta mass-awb error (" + e.getStatusCode() + "): " + responseBody;
             if (e.getStatusCode().value() == 400) {
                 // Typed so BostaAwbService can isolate a deleted / unprintable waybill; same message.
                 throw new BostaAwbRejectedException(message, 400, bostaMessage(responseBody), e);
             }
             throw new BostaException(message, e);
+        } finally {
+            UUID tenant = TenantContext.get();
+            log.info("mass-awb request: tenant={} labels={} awbFormat={} lang={} outcome={} durationMs={}",
+                tenant != null ? tenant : "-", trackingNumbers.size(), awbFormat, lang, outcome,
+                (System.nanoTime() - started) / 1_000_000L);
         }
     }
 

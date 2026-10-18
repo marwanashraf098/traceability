@@ -101,6 +101,9 @@ export default function PrintWaybillsDialog({
               title={t('fulfill.printBatch.remaining', { printed: result.waybillCount, count: result.remainingCount })}
             />
           )}
+          {result.excluded.some(x => x.reason === 'BOSTA_BUSY') && (
+            <Alert tone="warning" title={t('fulfill.printBatch.busyAlert')} />
+          )}
           {result.batchId && !result.orderGuaranteed && (
             <Alert tone="warning" title={t('fulfill.printBatch.orderNotGuaranteed')} />
           )}
@@ -224,6 +227,8 @@ export default function PrintWaybillsDialog({
 export function printSkipReasonText(t: TFunction, reason: string) {
   if (reason === 'DELETED_IN_BOSTA') return t('fulfill.printBatch.reason.deletedInBosta')
   if (reason === 'BOSTA_REJECTED_UNISOLATED') return t('fulfill.printBatch.reason.unisolated')
+  if (reason === 'BOSTA_BUSY') return t('fulfill.printBatch.reason.busy')
+  if (reason === 'BOSTA_TEMPORARY') return t('fulfill.printBatch.reason.temporary')
   if (reason === 'BOSTA_EMAIL_PATH') return t('fulfill.printBatch.reason.emailed')
   if (reason === 'UNLINKED') return t('fulfill.printBatch.reason.unlinked')
   if (reason === 'NON_PRINTABLE_TYPE:CRP') return t('fulfill.printBatch.reason.returnPickup')
@@ -232,13 +237,20 @@ export function printSkipReasonText(t: TFunction, reason: string) {
   return reason
 }
 
-/** "Printed N · Skipped M (X deleted in Bosta, Y rejected)". */
+/** Not printed for a temporary Bosta reason (busy / no answer) — nothing wrong with the waybill. */
+export function isRetryReason(reason: string) {
+  return reason === 'BOSTA_BUSY' || reason === 'BOSTA_TEMPORARY'
+}
+
+/** "Printed N · Skipped M (X deleted in Bosta / Y rejected / Z to print again)". */
 export function printSummaryText(t: TFunction, printed: number, excluded: { reason: string }[]) {
   const deleted = excluded.filter(x => x.reason === 'DELETED_IN_BOSTA').length
-  const rejected = excluded.length - deleted
+  const retry = excluded.filter(x => isRetryReason(x.reason)).length
+  const rejected = excluded.length - deleted - retry
   const parts = [
     deleted > 0 ? t('fulfill.printBatch.skippedDeleted', { count: deleted }) : null,
     rejected > 0 ? t('fulfill.printBatch.skippedRejected', { count: rejected }) : null,
+    retry > 0 ? t('fulfill.printBatch.skippedRetry', { count: retry }) : null,
   ].filter(Boolean)
   return `${t('fulfill.printBatch.summary', { printed, skipped: excluded.length })} (${parts.join(' / ')})`
 }

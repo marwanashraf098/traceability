@@ -4,6 +4,46 @@
 
 ## Current state
 
+**Merged-PDF slice A — temporary Bosta errors never mark waybills failed (2026-10-18, branch
+`fix/print-temporary-errors` off origin/main 3c9be2d; merged to local main, NOT pushed, NOT deployed). No migration.**
+Step 0 (merged-PDF workstream) approved: background print job, ceiling 490; slices A (this) → B (job, V169?) → C (UI).
+- **Temporary errors mark nobody** (`BostaAwbService.temporaryReason`): `BostaRateLimitException` (Bosta's 429, or the
+  shared limiter's time-out) → `BOSTA_BUSY`; `BostaTransientException` (5xx / network after the client's retries) →
+  `BOSTA_TEMPORARY`. Neither ever calls `markFailed` (no awb_print_failed_reason, no missing_awb). A rate limit STOPS the
+  print: no further request, every later chunk reported BOSTA_BUSY, what printed is kept and merged. A 5xx / network
+  error affects only its own request; the print goes on. Other definite rejections (other 4xx, plain BostaException) keep
+  the old whole-chunk BOSTA_REJECTED marking (AwbPickupTest t05 unchanged).
+- **Inside slice 1's isolation:** a temporary error stops the isolation; the remainder is BOSTA_BUSY / BOSTA_TEMPORARY
+  instead of BOSTA_REJECTED_UNISOLATED (still nobody marked); a rate limit there also stops the whole print. Culprits
+  already confirmed before it are still marked. Pre-filter, hints, bisect, convergence, cap 8, DELETED_IN_BOSTA unchanged.
+- **Gap found and fixed — mass-awb 429 was not a rate limit:** `printMassAwb0` turned HTTP 429 into a plain
+  BostaException (→ old marking, and the limiter never learned of it). Now HTTP 429 → `BostaRateLimitException`
+  (retryAfter from the body, default 120 s), and a 200 with `{success:false, errorCode:429}` too (was read as the email
+  path) — so `limited()` blocks the key + global budget like every other Bosta call.
+- **Page order per chunk** (`WaybillPdfAssembler.assembleChunks(List<ChunkPdf>, order)`, used by PackPrintBatchService
+  and PackListService.reprint): each chunk is verified on its own; a verified chunk's pages go to their batch positions,
+  an unverified chunk stays together in Bosta's order where its first waybill belongs. orderGuaranteed = every chunk
+  verified. The old `assemble(List<byte[]>, …)` keeps its exact single-group behaviour.
+- **Timing log:** one INFO line per mass-awb request from the gateway — `mass-awb request: tenant=… labels=… awbFormat=…
+  lang=… outcome=pdf|email|rate_limited|network|http_<status>|error durationMs=…` (Bosta's time after the limiter, incl.
+  network retries; tenant from TenantContext, "-" when none; no tracking numbers). Replaces the pre-call "mass-awb:
+  url=…" line. Use it to measure real Bosta times for slice B's ceiling.
+- **UI:** reason texts `BOSTA_BUSY` "Bosta is busy — print again in a few minutes" / `BOSTA_TEMPORARY` "Not printed —
+  print again" (EN + AR); batch + reprint results show a busy alert; the summary counts them as "N to print again" (not
+  "rejected"); single print shows `fulfill.printAwb.busy` / `.temporary`.
+- **Tests:** `PrintTemporaryErrorTest` (6: 429 at request 2 of 3, 5xx on one request, limiter time-out, single print busy,
+  rate limit / 5xx during isolation), `MassAwbRateLimitWireTest` (4: HTTP 429, 200-errorCode-429, real limiter time-out
+  sends no request, one timing line per request without tracking numbers), `WaybillPdfAssemblerChunkTest` (3),
+  `printTemporaryErrors.test.tsx` (2). Mutations: no temporary classification → 6/6 red; busy doesn't stop → t1, t3 red;
+  gateway 429 unmapped → r1, r2 red; global page-order fallback → c1, c3 red; frontend old UI → 2/2 red.
+  **Approved existing-test edit:** `PrintSkipDeletedWaybillTest.d4` → `d4_5xx_noBisect_notMarked_reportedTemporary`
+  (was "5xx marks all 10 BOSTA_REJECTED"). d4b unchanged (its "429" is a plain BostaException → now just "another 4xx").
+  Full backend: 3024 run, 4 skipped; red only ExchangeBackfillTest (known) and the OLD d4 (that run compiled before the
+  approved edit) — PrintSkipDeletedWaybillTest re-run with the new d4: 12/12. Vitest 1028/1028 (135 files); tsc + vite
+  build clean.
+- **G1 overlap:** none yet (generic-courier-g1 at 3c9be2d, no commits). Slice A touched BostaAwbService (not
+  loadPrintable), BostaHttpGateway, WaybillPdfAssembler, PackPrintBatchService / PackListService (assembler call only).
+
 **HID scanner + Caps Lock / Arabic layout — S2 frontend key capture MERGED to main behind a flag (2026-10-17, branch
 `fix/scan-key-capture`; NOT deployed). Frontend only.**
 - **GATED (Marawan 2026-10-17):** the listener acts only when `scanKeyCaptureActive()` (scanKeys.ts, read at event time):
