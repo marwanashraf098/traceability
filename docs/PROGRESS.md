@@ -4,6 +4,62 @@
 
 ## Current state
 
+**Merged-PDF slices B + C — background print jobs, one merged PDF, up to 490 per print (2026-10-18, branch
+`feat/print-jobs` off origin/main 3f0d538; NOT merged, NOT deployed). Migration V170.**
+- **V170 — why 170:** origin/main, local main and every local branch stop at V167, but G1's worktree
+  (`../traceability-g1`, uncommitted) already holds V168 `courier_provider_generic` + V169 `generic_shipment_legs`.
+  Expect a renumber only if G1 lands with different numbers. On this branch Flyway sees V167 → V170 (gaps are fine).
+  MigrationSmokeTest 166 → 167, NotTracedBackfillTest 111 → 112 (+ V170).
+- **`pack_print_jobs`:** status queued / running / done / partial / failed, kind print (scope/sort/paper) | reprint
+  (reprint_batch_id), total / done / candidate / remaining counts, `result` jsonb `{items:[{o,n,s,t,r}], message}`
+  (r = null | PRINTED | slice 1 / A reason | PRINT_INTERRUPTED | ORDER_CANCELLED), pdf bytea + pdf_bytes, batch_id,
+  expires_at. Partial UNIQUE: one queued-or-running job per tenant. RLS NULLIF + FORCE; app_user SELECT/INSERT/UPDATE
+  (no DELETE — cleanup NULLs pdf / pdf_bytes).
+- **Runner** (`PrintJobRunner`, JobRunr `retries = 0`): server-wide `PrintJobSlots` (Semaphore,
+  `traced.print-jobs.max-running` = 2; no slot → stays queued, `updated_at` bumped, rescheduled in
+  `traced.print-jobs.queue-retry-seconds` = 5) → claim queued → running → plan (print: `PackPrintBatchStore.candidates`,
+  first `MAX_WAYBILLS_PER_JOB` = 490; reprint: `PackListService.reprintItems` — now public, own read tx, the old private
+  query, never copied) → `printAwbDetailed` per ≤ 49 (`BATCH_SIZE`, now public) inside
+  `BostaRateLimiter.userFacing` → after each request ONE short tx saves outcomes + the merged PDF so far
+  (`assembleChunks`, pick-list order). BOSTA_BUSY / BOSTA_AUTH stop the job (the rest reported without a call).
+  End: `PrintJobStore.finish` locks the running row and, in the SAME tx, writes the batch (print, printed > 0, PDF
+  exists) then the row (done | partial = stopped with labels | failed = stopped with none); expires_at = +24 h.
+  Every write is conditional on status 'running', so a swept job is never resurrected.
+- **401 / 403 on mass-awb:** gateway → `BostaAuthException` (same message) → `BOSTA_AUTH`: nobody marked, no
+  missing_awb, print stops, "Bosta connection problem — check Settings → Connections" (EN + AR) — also on single print
+  (`fulfill.printAwb.auth`).
+- **Sweeper** (`PrintJobSweeper`, every minute, owner-pool tenant-id list only, per-tenant `runAs`): a queued /
+  running job with `updated_at` older than 10 min → failed `STUCK` / message PRINT_STOPPED; untried waybills
+  PRINT_INTERRUPTED; saved labels stay downloadable and, for a print, are recorded as its batch; tenant unblocked. PDFs
+  past expires_at → pdf / pdf_bytes NULL.
+- **Endpoints** (`isAuthenticated()`, every tenant user): `POST /api/v1/fulfill/print-jobs` `{kind print, scope, paper,
+  sort}` | `{kind reprint, batchId}` → 202 `{jobId}` / 409 `{code PRINT_JOB_RUNNING, message_en, message_ar, jobId}`;
+  `GET /print-jobs/latest` (last 24 h, or 204); `GET /print-jobs/{id}`; `GET /print-jobs/{id}/pdf[?download=true]`
+  (application/pdf, Content-Disposition inline / attachment, no-store; 410 after the 24 h cleanup).
+- **Old sync endpoints kept, `@Deprecated`** ("remove after merged-PDF jobs are stable in prod") + a WARN log line on
+  every call: `POST /api/v1/fulfill/print-batches` and `POST /api/v1/fulfill/print-batches/{batchId}/reprint` (still
+  49). grep: no frontend code calls either (api.ts keeps only GET `/print-batches/options` and `/today`).
+- **Frontend:** `PrintJobPanel` (shared): polls the job; queued "Waiting for another print to finish", running
+  "Preparing waybills… N of M" + bar, result (summary / reasons as slices 1 / A, "N more ready — print again", busy /
+  order / message alerts, "Open waybills" — the tab is opened inside the click, then filled — and "Download PDF").
+  `PrintWaybillsDialog` (queue mode + WaybillPackPage): cap 490, 409 → the running job's progress ("A print is already
+  running…"), reopening finds a running job (GET latest) or offers the last finished one ("Last print … Open waybills /
+  Show"). `PackLists` reprint → kind reprint job in the same panel. EN + AR.
+- **Tests:** `PrintJobTest` (10), `MassAwbAuthWireTest` (2), `printJobs.test.tsx` (8),
+  `printJobLayout.browser.test.tsx` (12 — Chromium + WebKit, 1280×800 / 768×1024 / 390×844: fits, no sideways scroll,
+  no overlapping buttons). New endpoints registered in RlsCoverageTest (+ `printJobs_returnOwnTenantsJob`) and
+  PortalOrderLeakTest. **Approved frontend test edits** (job flow, every summary / reason assertion kept):
+  fulfillPrintBatches (3; the "> 49" test is now "> 490"), printSkipDeletedWaybills, printTemporaryErrors,
+  packListsSummary (reprint). Mutations (all red, restored): no batch row → j1/j2/j4/j7/j10; busy/auth don't stop →
+  j4, j5; 401 unclassified → j5; sweeper ignores 10 min → j7; cleanup no-op → j8; no slot limit → j6; one call for
+  the whole job → j7; FE old UI → 8/8; 409 as error → 409 test; no resume → resume test.
+  Full backend: 3037 run, 4 skipped, 1 red — ExchangeBackfillTest only (known). Vitest 1036/1036 (136 files; baseline
+  1028 + 8); browser 101 + 1 skipped (89 + 12); tsc + vite build clean.
+- **Known limits:** a single `printAwbDetailed` call (one request + up to 8 isolation calls) longer than 10 min would be
+  swept mid-flight (its later writes are then refused); one JVM assumed for the 2-slot limit (as BostaRateLimiter).
+- **G1 overlap:** `PackListService` (reprintItems made public; G1 may filter generic items there),
+  `PackListController`, `PackPrintBatchController` (deprecation), `BostaAwbService` / `BostaHttpGateway` (BOSTA_AUTH),
+  migrations (V170 vs G1's V168/V169). `PackPrintBatchStore.candidates()` and `loadPrintable` untouched.
 **Non-Bosta couriers G1 — generic shipment legs, backend + badge (2026-10-18, branch `generic-courier-g1`, worktree
 `../traceability-g1`; MERGED to main 2026-10-18, NOT deployed). Migrations V168 + V169.**
 - **Gate:** `tenants.generic_courier_enabled` (default false, no UI, SQL only — not set for any real tenant). With it

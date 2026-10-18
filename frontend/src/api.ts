@@ -1900,36 +1900,103 @@ export type PrintScope = 'new' | 'all'
 export type PrintPaper = 'A6' | 'A4'
 export type PrintSort = 'oldest' | 'newest'
 
-export interface PrintBatchExcluded {
+export function getPrintBatchOptions() {
+  return request<{ defaultPaper: PrintPaper }>('/fulfill/print-batches/options')
+}
+
+// ── Merged-PDF slices B + C: background print jobs ───────────────────────────
+// The old synchronous POST /fulfill/print-batches and /reprint are deprecated server-side; nothing
+// here calls them any more.
+
+/** Waybills per print job — the server's PrintJobRunner.MAX_WAYBILLS_PER_JOB (10 Bosta requests of 49). */
+export const MAX_WAYBILLS_PER_PRINT = 490
+
+export type PrintJobStatus = 'queued' | 'running' | 'done' | 'partial' | 'failed'
+
+export interface PrintJobExcluded {
   orderNumber: string | null
   trackingNumber: string
   reason: string
 }
 
-export interface PrintBatchResult {
+export interface PrintJob {
+  jobId: string
+  kind: 'print' | 'reprint'
+  status: PrintJobStatus
+  total: number
+  done: number
+  candidateCount: number
+  /** Ready waybills left out by the 490 cap — the next print picks them up. */
+  remainingCount: number
+  printedCount: number
+  excluded: PrintJobExcluded[]
   batchId: string | null
   batchNo: number | null
-  waybillCount: number
-  candidateCount: number
-  /** Ready waybills left out by the per-print cap (49) — the next print picks them up. */
-  remainingCount: number
-  orderGuaranteed: boolean
-  /** One merged PDF, base64 — null when nothing was printed. */
-  pdfBase64: string | null
-  excluded: PrintBatchExcluded[]
-  message: string | null
+  reprintBatchId: string | null
+  reprintBatchNo: number | null
+  orderGuaranteed: boolean | null
+  pdfAvailable: boolean
+  pdfBytes: number | null
+  message: { code: string; messageEn: string; messageAr: string } | null
+  createdAt: string
+  finishedAt: string | null
+  expiresAt: string | null
 }
 
-export function getPrintBatchOptions() {
-  return request<{ defaultPaper: PrintPaper }>('/fulfill/print-batches/options')
+export function isPrintJobActive(job: Pick<PrintJob, 'status'>) {
+  return job.status === 'queued' || job.status === 'running'
 }
 
-/** Typed {code, message_en, message_ar} failures (e.g. no Bosta account) throw TransferCommandError. */
-export function printWaybillBatch(body: { scope: PrintScope; paper: PrintPaper; sort: PrintSort }) {
-  return transferCommandRequest<PrintBatchResult>('/fulfill/print-batches', {
+/** A second start while the tenant already has a print running: that job's id. */
+export class PrintJobRunningError extends Error {
+  constructor(readonly jobId: string) { super('PRINT_JOB_RUNNING') }
+}
+
+export type StartPrintJob =
+  | { kind: 'print'; scope: PrintScope; paper: PrintPaper; sort: PrintSort }
+  | { kind: 'reprint'; batchId: string }
+
+/** 202 → the new job's id; 409 → PrintJobRunningError(running job id); typed {code, message_*} → TransferCommandError. */
+export async function startPrintJob(body: StartPrintJob): Promise<string> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/fulfill/print-jobs`, {
     method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
   })
+  const data = await res.json().catch(() => null) as
+    { jobId?: string; code?: string; message_en?: string; message_ar?: string } | null
+  if (res.status === 409 && data?.code === 'PRINT_JOB_RUNNING' && data.jobId) throw new PrintJobRunningError(data.jobId)
+  if (!res.ok) {
+    if (data?.code && data.message_en != null && data.message_ar != null) {
+      throw new TransferCommandError(data as { code: string; message_en: string; message_ar: string })
+    }
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  return data!.jobId!
+}
+
+export function getPrintJob(jobId: string) {
+  return request<PrintJob>(`/fulfill/print-jobs/${jobId}`)
+}
+
+/** The tenant's most recent print job of the last 24 h (running or finished), or null. */
+export function getLatestPrintJob() {
+  return request<PrintJob | null>('/fulfill/print-jobs/latest')
+}
+
+/** The job's merged PDF (binary) and the file name the server suggests. */
+export async function fetchPrintJobPdf(jobId: string, download = false): Promise<{ blob: Blob; filename: string }> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/fulfill/print-jobs/${jobId}/pdf${download ? '?download=true' : ''}`, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error(`${res.status}`)
+  const cd = res.headers.get('content-disposition') ?? ''
+  const m = /filename="?([^";]+)"?/.exec(cd)
+  return { blob: await res.blob(), filename: m?.[1] ?? 'waybills.pdf' }
 }
 
 // ── Pick & Pack S3: waybill pack sessions ─────────────────────────────────────
@@ -2086,9 +2153,6 @@ export function getPrintedNotPacked() {
 }
 
 /** Regenerates a batch's PDF in its stored order — no new batch. Same result shape as printing. */
-export function reprintPrintBatch(batchId: string) {
-  return transferCommandRequest<PrintBatchResult>(`/fulfill/print-batches/${batchId}/reprint`, { method: 'POST' })
-}
 
 export function getPackSessionSummary(sessionId: string) {
   return transferCommandRequest<SessionSummary>(`/pack-sessions/${sessionId}/summary`)

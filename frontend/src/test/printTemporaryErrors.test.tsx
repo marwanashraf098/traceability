@@ -20,9 +20,13 @@ function json(data: unknown, status = 200) {
   })
 }
 
+// Merged-PDF slice C (approved edit): the print is a background job — POST /fulfill/print-jobs, then
+// GET /fulfill/print-jobs/{id} returns this finished job.
 const RESULT = {
-  batchId: 'batch-7', batchNo: 7, waybillCount: 25, candidateCount: 49, remainingCount: 0, orderGuaranteed: true,
-  pdfBase64: btoa('%PDF-1.4 fake'),
+  jobId: 'job-1', kind: 'print', status: 'done', total: 49, done: 49, candidateCount: 49, remainingCount: 0,
+  printedCount: 25, batchId: 'batch-7', batchNo: 7, reprintBatchId: null, reprintBatchNo: null,
+  orderGuaranteed: true, pdfAvailable: true, pdfBytes: 100,
+  createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), expiresAt: null,
   excluded: [
     { orderNumber: '72375', trackingNumber: '5489799252', reason: 'BOSTA_BUSY' },
     { orderNumber: '71618', trackingNumber: '8404104765', reason: 'BOSTA_TEMPORARY' },
@@ -53,7 +57,9 @@ describe('print result — Bosta busy / not answering', () => {
     fetchFn = vi.fn((url: string, opts?: RequestInit) => {
       if (url.endsWith('/fulfill/queue')) return json(QUEUE)
       if (url.endsWith('/fulfill/print-batches/options')) return json({ defaultPaper: 'A6' })
-      if (url.endsWith('/fulfill/print-batches') && opts?.method === 'POST') return json(RESULT)
+      if (url.endsWith('/fulfill/print-jobs') && opts?.method === 'POST') return json({ jobId: 'job-1' }, 202)
+      if (url.endsWith('/fulfill/print-jobs/latest')) return json(null, 204)
+      if (url.endsWith('/fulfill/print-jobs/job-1')) return json(RESULT)
       if (url.endsWith('/fulfill/o1')) return json(DETAIL)
       if (url.endsWith('/bosta/awb/print')) {
         return json({ pdfBase64List: [], emailMessage: null,

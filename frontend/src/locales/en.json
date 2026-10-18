@@ -705,7 +705,8 @@
       "noCourierAccount": "Waybill printed outside Traced — no courier account connected.",
       "deletedInBosta": "This waybill was deleted in Bosta, so it can't be printed. Book a new delivery in Bosta for this order.",
       "busy": "Bosta is busy — print again in a few minutes.",
-      "temporary": "Not printed — Bosta didn't answer. Print again."
+      "temporary": "Not printed — Bosta didn't answer. Print again.",
+      "auth": "Bosta connection problem — check Settings → Connections."
     },
     "printBatch": {
       "statusLine": "Waybills: {{printed}} printed · {{notPrinted}} not printed yet",
@@ -745,6 +746,19 @@
       "skippedRetry_one": "{{count}} to print again",
       "skippedRetry_other": "{{count}} to print again",
       "busyAlert": "Bosta is busy — print again in a few minutes.",
+      "starting": "Starting the print…",
+      "preparing": "Preparing waybills… {{done}} of {{total}}",
+      "queued": "Waiting for another print to finish",
+      "alreadyRunning": "A print is already running — here is its progress.",
+      "keepsGoing": "You can close this — the print keeps going. Open Print waybills again to see it.",
+      "moreReady_one": "{{count}} more ready — print again",
+      "moreReady_other": "{{count}} more ready — print again",
+      "openWaybills": "Open waybills",
+      "download": "Download PDF",
+      "pdfGone": "This PDF was deleted 24 hours after the print. Reprint the batch to get it again.",
+      "lastPrint": "Last print: {{printed}} printed · {{time}}",
+      "showLastPrint": "Show",
+      "newPrint": "New print",
       "reason": {
         "emailed": "Bosta will email this waybill instead",
         "unlinked": "Not linked to an order",
@@ -754,7 +768,9 @@
         "deletedInBosta": "Deleted in Bosta — not printed",
         "unisolated": "Not printed — Bosta refused part of this print. Print again.",
         "busy": "Bosta is busy — print again in a few minutes",
-        "temporary": "Not printed — print again"
+        "temporary": "Not printed — print again",
+        "auth": "Bosta connection problem — check Settings → Connections",
+        "interrupted": "Not printed — print again"
       },
       "openPickList": "Open pick list",
       "done": "Done",
