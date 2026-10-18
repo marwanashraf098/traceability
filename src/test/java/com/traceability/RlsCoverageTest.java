@@ -95,6 +95,9 @@ class RlsCoverageTest {
             "/api/v1/pack-sessions/{id}",
             "/api/v1/pack-sessions/summary",
             "/api/v1/fulfill/print-batches/today",
+            "/api/v1/fulfill/print-jobs/latest",
+            "/api/v1/fulfill/print-jobs/{jobId}",
+            "/api/v1/fulfill/print-jobs/{jobId}/pdf",
             "/api/v1/fulfill/printed-not-packed",
             "/api/v1/pack-sessions/{sessionId}/summary",
             "/api/v1/catalog",
@@ -1233,6 +1236,30 @@ class RlsCoverageTest {
             assertThat(resp.getBody().get("mode")).isEqualTo("waybill_scan");
         } finally {
             jdbc.update("UPDATE tenants SET pick_pack_mode = 'order_queue' WHERE id = ?", tenantId);
+        }
+    }
+
+    @Test
+    void printJobs_returnOwnTenantsJob() {
+        // Merged-PDF slice B: the tenant's latest print job, its progress and its PDF — this tenant's own row.
+        UUID jobId = jdbc.queryForObject(
+            "INSERT INTO pack_print_jobs (tenant_id, requested_by, kind, scope, sort, paper, status, total, done_count, " +
+            "                             result, pdf, pdf_bytes, finished_at, expires_at) " +
+            "VALUES (?, ?, 'print', 'all', 'oldest', 'A6', 'done', 0, 0, '{\"items\":[],\"message\":null}'::jsonb, " +
+            "        '%PDF-cov'::bytea, 8, now(), now() + interval '24 hours') RETURNING id",
+            UUID.class, tenantId, ownerUserId);
+        try {
+            ResponseEntity<Map> latest = get("/api/v1/fulfill/print-jobs/latest", Map.class);
+            assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(latest.getBody().get("jobId")).isEqualTo(jobId.toString());
+            ResponseEntity<Map> one = get("/api/v1/fulfill/print-jobs/" + jobId, Map.class);
+            assertThat(one.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(one.getBody().get("status")).isEqualTo("done");
+            ResponseEntity<byte[]> pdf = get("/api/v1/fulfill/print-jobs/" + jobId + "/pdf", byte[].class);
+            assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(new String(pdf.getBody())).isEqualTo("%PDF-cov");
+        } finally {
+            jdbc.update("DELETE FROM pack_print_jobs WHERE id = ?", jobId);
         }
     }
 

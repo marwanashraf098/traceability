@@ -524,6 +524,10 @@ class BostaHttpGateway implements BostaGateway {
                 throw new BostaRateLimitException(parseRetryAfter(responseBody, 120L));
             }
             String message = "Bosta mass-awb error (" + e.getStatusCode() + "): " + responseBody;
+            if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
+                // The key, not the waybills: typed so the print marks nobody and stops. Same message.
+                throw new BostaAuthException(message, e.getStatusCode().value(), e);
+            }
             if (e.getStatusCode().value() == 400) {
                 // Typed so BostaAwbService can isolate a deleted / unprintable waybill; same message.
                 throw new BostaAwbRejectedException(message, 400, bostaMessage(responseBody), e);
