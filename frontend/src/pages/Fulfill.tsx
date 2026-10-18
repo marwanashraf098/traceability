@@ -149,6 +149,11 @@ function playBeep(success: boolean) {
 
 // ── AWB PDF helper ─────────────────────────────────────────────────────────────
 
+/** Bosta can't find this waybill (deleted in Bosta) — shown as its own EN / AR message. */
+class AwbDeletedInBostaError extends Error {
+  constructor() { super('DELETED_IN_BOSTA') }
+}
+
 async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
   const { data, status } = await api<{
     pdfBase64List: string[]
@@ -183,6 +188,7 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
   if (data?.emailMessage) return 'emailed'
 
   if (data?.exceptions?.length > 0) {
+    if (data.exceptions[0].reason === 'DELETED_IN_BOSTA') throw new AwbDeletedInBostaError()
     throw new Error(data.exceptions[0].reason ?? 'AWB not printable')
   }
 
@@ -1085,7 +1091,9 @@ function PickScreen({
       // emailed — satisfies this; only a thrown error (caught below) does not.
       setAwbPrintedOnce(true)
     } catch (e: unknown) {
-      const text = e instanceof TransferCommandError
+      const text = e instanceof AwbDeletedInBostaError
+        ? t('fulfill.printAwb.deletedInBosta')
+        : e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
         : (e as Error).message || t('fulfill.printAwb.error')
       setAwbMsg({ type: 'error', text })

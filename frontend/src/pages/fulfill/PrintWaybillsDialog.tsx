@@ -7,6 +7,7 @@ import {
   PrintBatchResult, PrintPaper, PrintScope, PrintSort,
 } from '../../api'
 import { Alert, Button, Checkbox, Modal, Radio, SegmentedControl, cn } from '../../components/ui'
+import type { TFunction } from 'i18next'
 
 // Pick & Pack S2 — "Print waybills" (design/pick-pack-waybill-mockup/PrintDialog.html for flow
 // and copy). Counts come from the queue already on screen, so opening the page makes no extra
@@ -79,14 +80,7 @@ export default function PrintWaybillsDialog({
     }
   }
 
-  function reasonText(reason: string) {
-    if (reason === 'BOSTA_EMAIL_PATH') return t('fulfill.printBatch.reason.emailed')
-    if (reason === 'UNLINKED') return t('fulfill.printBatch.reason.unlinked')
-    if (reason === 'NON_PRINTABLE_TYPE:CRP') return t('fulfill.printBatch.reason.returnPickup')
-    if (reason.startsWith('NON_PRINTABLE_STATE:')) return t('fulfill.printBatch.reason.notPrintable')
-    if (reason.startsWith('BOSTA_REJECTED')) return t('fulfill.printBatch.reason.rejected')
-    return reason
-  }
+  const reasonText = (reason: string) => printSkipReasonText(t, reason)
 
   if (result) {
     return (
@@ -112,13 +106,14 @@ export default function PrintWaybillsDialog({
           )}
           {result.excluded.length > 0 && (
             <div>
-              <p className="text-small font-semibold text-primary mb-1.5">
-                {t('fulfill.printBatch.excludedTitle', { count: result.excluded.length })}
+              <p className="text-small font-semibold text-primary mb-1.5" data-testid="print-batch-summary">
+                {printSummaryText(t, result.waybillCount, result.excluded)}
               </p>
               <ul className="max-h-40 overflow-y-auto space-y-1">
                 {result.excluded.map(x => (
                   <li key={x.trackingNumber} className="text-small text-muted flex flex-wrap gap-x-2">
-                    <span className="font-mono text-primary">{x.orderNumber ?? x.trackingNumber}</span>
+                    {x.orderNumber && <span className="font-mono text-primary">{x.orderNumber}</span>}
+                    <span className="font-mono text-primary">{x.trackingNumber}</span>
                     <span>{reasonText(x.reason)}</span>
                   </li>
                 ))}
@@ -223,4 +218,27 @@ export default function PrintWaybillsDialog({
       </div>
     </Modal>
   )
+}
+
+/** Why a waybill wasn't printed — shared by the print dialog and the reprint result. */
+export function printSkipReasonText(t: TFunction, reason: string) {
+  if (reason === 'DELETED_IN_BOSTA') return t('fulfill.printBatch.reason.deletedInBosta')
+  if (reason === 'BOSTA_REJECTED_UNISOLATED') return t('fulfill.printBatch.reason.unisolated')
+  if (reason === 'BOSTA_EMAIL_PATH') return t('fulfill.printBatch.reason.emailed')
+  if (reason === 'UNLINKED') return t('fulfill.printBatch.reason.unlinked')
+  if (reason === 'NON_PRINTABLE_TYPE:CRP') return t('fulfill.printBatch.reason.returnPickup')
+  if (reason.startsWith('NON_PRINTABLE_STATE:')) return t('fulfill.printBatch.reason.notPrintable')
+  if (reason.startsWith('BOSTA_REJECTED')) return t('fulfill.printBatch.reason.rejected')
+  return reason
+}
+
+/** "Printed N · Skipped M (X deleted in Bosta, Y rejected)". */
+export function printSummaryText(t: TFunction, printed: number, excluded: { reason: string }[]) {
+  const deleted = excluded.filter(x => x.reason === 'DELETED_IN_BOSTA').length
+  const rejected = excluded.length - deleted
+  const parts = [
+    deleted > 0 ? t('fulfill.printBatch.skippedDeleted', { count: deleted }) : null,
+    rejected > 0 ? t('fulfill.printBatch.skippedRejected', { count: rejected }) : null,
+  ].filter(Boolean)
+  return `${t('fulfill.printBatch.summary', { printed, skipped: excluded.length })} (${parts.join(' / ')})`
 }

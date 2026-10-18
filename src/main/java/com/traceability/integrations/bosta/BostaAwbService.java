@@ -22,7 +22,11 @@ import java.util.stream.Stream;
  *   NON_PRINTABLE_TYPE  — Bosta delivery type CRP or CASH_COLLECTION
  *
  * Exclusions are written to shipments.awb_print_failed_reason so the exceptions
- * center can surface them as missing_awb exceptions.
+ * center can surface them as missing_awb exceptions — except DELETED_IN_BOSTA (provider_not_found_at
+ * set): never sent to Bosta, reported as skipped, not marked failed.
+ *
+ * A chunk Bosta rejects with a per-waybill 400 ("Couldn't find deliveries…", "…can't be printed…") is
+ * isolated (see isolate()): the bad waybills are reported and marked, the rest printed.
  *
  * Batching: ≤49 tracking numbers per Bosta call — from 50 up, Bosta stops returning the PDF
  * inline and emails the labels instead (see BATCH_SIZE).
@@ -174,26 +178,38 @@ public class BostaAwbService {
         final List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(shipmentIds));
         if (ids.isEmpty()) return new AwbDetailedResult(List.of(), List.of(), format);
         Printable p = loadPrintable(tenantId, ids);
-        List<String>       printable    = p.trackings();
+        // A waybill an earlier print already isolated as not found in Bosta goes in its own request, after
+        // the others: the rest of a reprint then holds at most the culprits not yet found, so "print again"
+        // converges (a second unnamed culprit is bisected within the cap on the next run).
+        List<String>       printable    = new ArrayList<>(p.trackings());
+        printable.sort(Comparator.comparing(p.suspects()::contains));   // stable: order kept within each group
+        int fresh = (int) printable.stream().filter(tn -> !p.suspects().contains(tn)).count();
         List<AwbException> exclusions   = p.exclusions();
         Map<String, UUID>  trackingToId = p.trackingToId();
 
         // 4. Batch into ≤BATCH_SIZE (49) chunks, call Bosta for each
         List<AwbChunk> chunks = new ArrayList<>();
 
-        for (int i = 0; i < printable.size(); i += BATCH_SIZE) {
-            List<String> chunk = List.copyOf(printable.subList(i, Math.min(i + BATCH_SIZE, printable.size())));
+        List<List<String>> requests = new ArrayList<>();
+        for (List<String> group : List.of(printable.subList(0, fresh), printable.subList(fresh, printable.size()))) {
+            for (int i = 0; i < group.size(); i += BATCH_SIZE) {
+                requests.add(List.copyOf(group.subList(i, Math.min(i + BATCH_SIZE, group.size()))));
+            }
+        }
+        for (List<String> chunk : requests) {
+            AwbChunk whole;
             try {
-                AwbPrintResult result = bostaGateway.printMassAwb(apiKey, chunk, format, lang);
-                if (result.isInline()) {
-                    chunks.add(new AwbChunk(chunk, result.pdfBytes(), null, null));
-                } else {
-                    // Bosta went async — surface message, treat chunk as un-printable
-                    chunks.add(new AwbChunk(chunk, null, result.emailMessage(), null));
-                    log.info("mass-awb returned email-path for chunk of {} trackings", chunk.size());
-                }
+                whole = toChunk(chunk, bostaGateway.printMassAwb(apiKey, chunk, format, lang));
             } catch (BostaException e) {
+                Isolation kind = isolationKind(e);
+                if (kind != null) {
+                    // One (or a few) waybills Bosta can't find / won't print: isolate them, print the rest.
+                    chunks.addAll(isolate(tenantId, apiKey, chunk, format, lang, trackingToId,
+                        (BostaAwbRejectedException) e, kind));
+                    continue;
+                }
                 // Bosta rejected the entire chunk — route each to missing-AWB exception.
+                // (429 / 5xx / network / any other error: unchanged, never isolated.)
                 // TODO (gate-c FR-7.8): if rejection reason indicates a blocked consignee,
                 //   raise blocked_customer exception + offer to add phone to blocklist
                 //   (source=bosta_rejected). Deferred — wire when Mode-A / AWB-create
@@ -205,10 +221,176 @@ public class BostaAwbService {
                     UUID sid = trackingToId.get(tn);
                     if (sid != null) markFailed(tenantId, sid, rejectedReason);
                 }
+                continue;
             }
+            chunks.add(whole);
         }
 
         return new AwbDetailedResult(chunks, exclusions, format);
+    }
+
+    // ── Isolating a bad waybill (deleted-in-Bosta workstream, slice 1) ───────
+
+    /** Reported for a waybill Bosta can't find (deleted in Bosta): skipped before the call, or isolated. */
+    public static final String DELETED_IN_BOSTA = "DELETED_IN_BOSTA";
+
+    /**
+     * Not printed because Bosta refused part of the chunk and the bad waybill(s) couldn't be pinned down
+     * within {@link #MAX_ISOLATION_CALLS}, or another error stopped the isolation. Nobody is marked failed —
+     * the set may hold innocent waybills; printing again retries them.
+     */
+    public static final String BOSTA_REJECTED_UNISOLATED = "BOSTA_REJECTED_UNISOLATED";
+
+    /**
+     * Extra mass-awb calls allowed per rejected chunk: 6 bisect one unnamed bad waybill out of 49
+     * (⌈log2 49⌉), 1 prints what's left, 1 spare (or the hint retry when Bosta names a wrong number).
+     * A correct hint costs one call. Two unnamed bad waybills may exceed it in one run; the one found is
+     * marked and goes in its own request on the next print, which then finds the other.
+     */
+    static final int MAX_ISOLATION_CALLS = 8;
+
+    /** Bosta's per-waybill 400s — the only rejections that are isolated. */
+    enum Isolation { NOT_FOUND, NOT_PRINTABLE }
+
+    private static final java.util.regex.Pattern NOT_FOUND_MESSAGE =
+        java.util.regex.Pattern.compile("(couldn\\W?t|could not) find deliver", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern NOT_PRINTABLE_MESSAGE =
+        java.util.regex.Pattern.compile("(can\\W?t|cannot|can not) be printed", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern DIGITS = java.util.regex.Pattern.compile("\\d+");
+
+    static Isolation isolationKind(BostaException e) {
+        if (!(e instanceof BostaAwbRejectedException r) || r.httpStatus() != 400) return null;
+        String m = r.bostaMessage() == null ? "" : r.bostaMessage();
+        if (NOT_FOUND_MESSAGE.matcher(m).find()) return Isolation.NOT_FOUND;
+        if (NOT_PRINTABLE_MESSAGE.matcher(m).find()) return Isolation.NOT_PRINTABLE;
+        return null;
+    }
+
+    /** The tracking numbers of {@code sent} that Bosta's message names (whole digit runs only). */
+    static Set<String> namedIn(BostaAwbRejectedException e, Collection<String> sent) {
+        Set<String> named = new LinkedHashSet<>();
+        if (e == null || e.bostaMessage() == null) return named;
+        Set<String> wanted = new HashSet<>(sent);
+        java.util.regex.Matcher m = DIGITS.matcher(e.bostaMessage());
+        while (m.find()) if (wanted.contains(m.group())) named.add(m.group());
+        return named;
+    }
+
+    private static AwbChunk toChunk(List<String> trackings, AwbPrintResult result) {
+        if (result.isInline()) return new AwbChunk(trackings, result.pdfBytes(), null, null);
+        // Bosta went async — surface message, treat chunk as un-printable
+        log.info("mass-awb returned email-path for chunk of {} trackings", trackings.size());
+        return new AwbChunk(trackings, null, result.emailMessage(), null);
+    }
+
+    /**
+     * {@code chunk} was rejected with a per-waybill 400. Finds the bad waybill(s) and prints the rest:
+     * tracking numbers named in Bosta's message (and in this chunk) are hints only — the chunk is reprinted
+     * once without them; printed → the culprit is among them, refused → hints are dropped for the rest of
+     * the isolation and the hinted waybills wait for the final print. Otherwise bisect (print the first half:
+     * printed → the culprit is in the second half; refused → it is in the first, the second half waits for
+     * one final print). A waybill is marked only when it is the last one of a refused request whose every
+     * other waybill printed — never on Bosta's message alone.
+     * Every printed part comes back as its own pdf chunk (the callers merge them). Only the isolated
+     * culprits are marked failed — DELETED_IN_BOSTA for "couldn't find", BOSTA_REJECTED:… otherwise;
+     * provider_not_found_at / internal_state / pieces are never touched here. At most
+     * {@link #MAX_ISOLATION_CALLS} extra calls; any other error, or the cap, leaves the rest
+     * BOSTA_REJECTED_UNISOLATED. Called with no transaction open (each markFailed is its own).
+     */
+    private List<AwbChunk> isolate(UUID tenantId, String apiKey, List<String> chunk, String format, String lang,
+                                   Map<String, UUID> trackingToId, BostaAwbRejectedException first, Isolation firstKind) {
+        List<AwbChunk> out = new ArrayList<>();
+        Map<String, String> culprits = new LinkedHashMap<>();   // tracking → reason
+        List<String> unresolved = new ArrayList<>();
+        List<String> waiting = new ArrayList<>();               // not printed yet, not known bad
+        List<String> bad = new ArrayList<>(chunk);              // holds ≥ 1 culprit
+        BostaAwbRejectedException err = first;                  // the rejection of exactly `bad` (null when deduced)
+        BostaAwbRejectedException cause = first;                // the rejection that implicated `bad`
+        Isolation kind = firstKind;
+        boolean useHints = true;
+        int calls = 0;
+
+        search:
+        while (true) {
+            // 1. Pin down the culprit(s) in `bad`. Invariant: bad = the last refused request minus what has
+            //    printed since, so a single waybill left in `bad` is confirmed by prints that succeeded without it.
+            //    Numbers in Bosta's message are hints: tried once (reprint without them); never marked on the text.
+            Set<String> hints = useHints ? namedIn(err, bad) : Set.of();
+            if (!hints.isEmpty() && hints.size() < bad.size()) {
+                if (calls >= MAX_ISOLATION_CALLS) { unresolved.addAll(bad); unresolved.addAll(waiting); break; }
+                List<String> rest = bad.stream().filter(tn -> !hints.contains(tn)).toList();
+                calls++;
+                try {
+                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    bad = new ArrayList<>(hints);                    // confirmed: the culprit is among the hints
+                    err = null;
+                } catch (BostaException e) {
+                    Isolation k = isolationKind(e);
+                    if (k == null) { unresolved.addAll(bad); unresolved.addAll(waiting); break; }
+                    useHints = false;                                // the hint was wrong — bisect from here on
+                    waiting.addAll(hints);
+                    bad = new ArrayList<>(rest);
+                    err = cause = (BostaAwbRejectedException) e;
+                    kind = k;
+                }
+                continue;
+            }
+            if (bad.size() == 1) {
+                culprits.put(bad.get(0), reasonFor(kind, cause));
+            } else {
+                if (calls >= MAX_ISOLATION_CALLS) { unresolved.addAll(bad); unresolved.addAll(waiting); break; }
+                List<String> firstHalf = List.copyOf(bad.subList(0, (bad.size() + 1) / 2));
+                List<String> secondHalf = List.copyOf(bad.subList(firstHalf.size(), bad.size()));
+                calls++;
+                try {
+                    out.add(toChunk(firstHalf, bostaGateway.printMassAwb(apiKey, firstHalf, format, lang)));
+                    bad = new ArrayList<>(secondHalf);
+                    err = null;
+                } catch (BostaException e) {
+                    Isolation k = isolationKind(e);
+                    if (k == null) { unresolved.addAll(bad); unresolved.addAll(waiting); break; }
+                    waiting.addAll(secondHalf);
+                    bad = new ArrayList<>(firstHalf);
+                    err = cause = (BostaAwbRejectedException) e;
+                    kind = k;
+                }
+                continue;
+            }
+
+            // 2. `bad` is resolved — print everything still waiting in one call.
+            while (true) {
+                if (waiting.isEmpty()) break search;
+                if (calls >= MAX_ISOLATION_CALLS) { unresolved.addAll(waiting); break search; }
+                List<String> rest = List.copyOf(waiting);
+                waiting.clear();
+                calls++;
+                try {
+                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    break search;
+                } catch (BostaException e) {
+                    Isolation k = isolationKind(e);
+                    if (k == null) { unresolved.addAll(rest); break search; }
+                    bad = new ArrayList<>(rest);
+                    err = cause = (BostaAwbRejectedException) e;
+                    kind = k;
+                    continue search;
+                }
+            }
+        }
+
+        for (Map.Entry<String, String> c : culprits.entrySet()) {
+            out.add(new AwbChunk(List.of(c.getKey()), null, null, c.getValue()));
+            UUID sid = trackingToId.get(c.getKey());
+            if (sid != null) markFailed(tenantId, sid, c.getValue());
+        }
+        if (!unresolved.isEmpty()) out.add(new AwbChunk(List.copyOf(unresolved), null, null, BOSTA_REJECTED_UNISOLATED));
+        log.warn("mass-awb chunk of {} rejected ({}): isolated {} bad waybill(s), {} left unprinted, {} extra call(s)",
+            chunk.size(), firstKind, culprits.size(), unresolved.size(), calls);
+        return out;
+    }
+
+    private static String reasonFor(Isolation kind, BostaAwbRejectedException cause) {
+        return kind == Isolation.NOT_FOUND ? DELETED_IN_BOSTA : "BOSTA_REJECTED:" + truncate(cause.getMessage(), 120);
     }
 
     // ── Review mode ───────────────────────────────────────────────────────────
@@ -266,7 +448,7 @@ public class BostaAwbService {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /** Printable tracking numbers (caller's order), their shipment ids, and the exclusions. */
-    private record Printable(List<String> trackings, Map<String, UUID> trackingToId,
+    private record Printable(List<String> trackings, Set<String> suspects, Map<String, UUID> trackingToId,
                              List<AwbException> exclusions) {}
 
     /**
@@ -283,7 +465,9 @@ public class BostaAwbService {
                 // raw->>'type' would return the JSON object as text — never "CRP".
                 // Extract the numeric code instead: (raw->'type'->>'code')::int
                 "SELECT id, tracking_number, internal_state::text AS internal_state, " +
-                "       order_id, (raw -> 'type' ->> 'code')::int AS delivery_type_code " +
+                "       order_id, (raw -> 'type' ->> 'code')::int AS delivery_type_code, " +
+                "       provider_not_found_at IS NOT NULL AS not_found_in_bosta, " +
+                "       awb_print_failed_reason IS NOT DISTINCT FROM '" + DELETED_IN_BOSTA + "' AS isolated_before " +
                 "FROM shipments WHERE id IN (" + placeholders + ") AND tenant_id = ?",
                 params)));
 
@@ -300,6 +484,7 @@ public class BostaAwbService {
 
         // Build an id→tracking map for Bosta-rejection lookups later
         Map<String, UUID> trackingToId = new HashMap<>();
+        Set<String> suspects = new HashSet<>();   // isolated as DELETED_IN_BOSTA by an earlier print
 
         for (Map<String, Object> row : rows) {
             UUID   id             = (UUID)    row.get("id");
@@ -313,6 +498,12 @@ public class BostaAwbService {
 
             if (orderId == null) {
                 exclusionReason = "UNLINKED";
+            } else if (Boolean.TRUE.equals(row.get("not_found_in_bosta"))) {
+                // Bosta's status poll already got "Delivery not found" for it (provider_not_found_at):
+                // never sent to Bosta, reported as skipped — not marked failed, so no missing_awb alert.
+                exclusions.add(new AwbException(tracking, DELETED_IN_BOSTA));
+                log.debug("AWB skipped: tracking={} reason={}", tracking, DELETED_IN_BOSTA);
+                continue;
             } else if (state != null && NON_PRINTABLE_STATES.contains(state)) {
                 exclusionReason = "NON_PRINTABLE_STATE:" + state;
             } else if (delivTypeCode == CRP_TYPE_CODE) {
@@ -326,10 +517,11 @@ public class BostaAwbService {
             } else if (tracking != null) {
                 printable.add(tracking);
                 if (id != null) trackingToId.put(tracking, id);
+                if (Boolean.TRUE.equals(row.get("isolated_before"))) suspects.add(tracking);
             }
         }
 
-        return new Printable(printable, trackingToId, exclusions);
+        return new Printable(printable, suspects, trackingToId, exclusions);
     }
 
 
