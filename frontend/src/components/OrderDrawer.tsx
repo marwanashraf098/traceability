@@ -296,7 +296,9 @@ export default function OrderDrawer({
                       </span>
                       <div>
                         <p className="text-body font-semibold text-primary">
-                          {t(order.derivedStatus.primaryKey, { defaultValue: order.derivedStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+                          {order.derivedStatus.primaryKey === 'status.with_carrier'
+                            ? t('status.with_carrier', { carrier: order.shippingBadge?.carrier || t('status.another_carrier') })
+                            : t(order.derivedStatus.primaryKey, { defaultValue: order.derivedStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
                         </p>
                         {stateSub && <p className="text-small text-muted">{stateSub}</p>}
                       </div>

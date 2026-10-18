@@ -176,7 +176,7 @@ public class BostaFulfillmentLinkService {
 
         Map<String, Object> existing = tx.execute(s -> jdbc.queryForList(
             "SELECT s.order_id, o.number FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
-            "WHERE s.tenant_id = ? AND s.tracking_number = ?", tenantId, tn)
+            "WHERE s.tenant_id = ? AND s.tracking_number = ? AND s.provider = 'bosta'", tenantId, tn)
             .stream().findFirst().orElse(null));
         if (existing != null) {
             if (orderId.equals(existing.get("order_id"))) {
@@ -198,12 +198,24 @@ public class BostaFulfillmentLinkService {
             return Result.skip(reason);
         }
         String otherLeg = tx.execute(s -> jdbc.query(
-            "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND order_id = ? " +
+            "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'bosta' " +
             "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled') LIMIT 1",
             rs -> rs.next() ? rs.getString(1) : null, tenantId, orderId));
         if (otherLeg != null) {
             String reason = "order already has an active forward leg (" + otherLeg + ")";
             if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
+            return Result.skip(reason);
+        }
+        // V169 Bosta wins over a generic (non-Bosta courier) leg only while it is still cancellable — the
+        // link pipeline cancels it then (GenericShipments.yieldToBosta). Past 'created': never guess.
+        String blockingCarrier = tx.execute(s -> jdbc.query(
+            "SELECT coalesce(s.carrier_name, 'another carrier') FROM shipments s " +
+            "WHERE s.tenant_id = ? AND s.order_id = ? AND " +
+            com.traceability.courier.GenericShipments.BLOCKING_GENERIC_SQL + " LIMIT 1",
+            rs -> rs.next() ? rs.getString(1) : null, tenantId, orderId));
+        if (blockingCarrier != null) {
+            String reason = "order is already shipped with " + blockingCarrier + " — Traced won't replace that shipment";
+            if (!dryRun) markConflict(tenantId, orderId, tn, reason);
             return Result.skip(reason);
         }
 
@@ -264,7 +276,8 @@ public class BostaFulfillmentLinkService {
             }
         }
         boolean linked = Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND order_id = ? AND tracking_number = ?)",
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND order_id = ? AND tracking_number = ? " +
+            "  AND provider = 'bosta')",
             Boolean.class, tenantId, orderId, tn)));
         if (linked) {
             markLinked(tenantId, orderId, tn);

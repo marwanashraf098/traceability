@@ -147,11 +147,21 @@ export default function Orders() {
     const labelOverride = order.derivedStatus.primaryKey === 'status.label_created'
       ? t('orders.delivery.awbCreated')
       : undefined
-    return (
+    // V169: a generic (non-Bosta courier) forward leg also names its carrier ("Mylerz").
+    const generic = order.shippingBadge?.state === 'generic_carrier' ? order.shippingBadge : null
+    const status = (
       <LegStatusBadge
         legStatus={{ primaryKey: order.derivedStatus.primaryKey, tone: order.derivedStatus.tone }}
         labelOverride={labelOverride}
+        carrier={generic?.carrier}
       />
+    )
+    if (!generic) return status
+    return (
+      <div className="flex flex-wrap items-start gap-1.5">
+        {status}
+        <ShippingBadge badge={generic} />
+      </div>
     )
   }
 

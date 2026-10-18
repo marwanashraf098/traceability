@@ -169,7 +169,7 @@ public class ReturnSessionService {
         String trackingNumber = TrackingNumberNormalizer.normalize(cleaned);
         if (trackingNumber != null) {
             List<Map<String, Object>> shipmentRows = jdbc.queryForList(
-                "SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+                "SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta'",
                 trackingNumber, tenantId);
             if (!shipmentRows.isEmpty()) {
                 return scanAwb(sessionId, tenantId, trackingNumber, viaPhone);
@@ -868,7 +868,7 @@ public class ReturnSessionService {
             // leg's request, or for a Traced-booked exchange AWB the exchange's request.
             "       COALESCE(rq.id, xrq.id) AS items_request_id, COALESCE(rq.reference, xrq.reference) AS items_request_reference " +
             "FROM return_session_shipments rss " +
-            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id AND s.provider = 'bosta' " +
             "JOIN orders o    ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
             "LEFT JOIN return_requests rq ON rq.return_shipment_id = s.id AND rq.tenant_id = s.tenant_id " +
@@ -1220,7 +1220,7 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       rss.awb " +
             "FROM return_session_shipments rss " +
-            "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id AND s.provider = 'bosta' " +
             "JOIN orders o       ON o.id = s.order_id AND o.tenant_id = rss.tenant_id " +
             "JOIN order_items oi ON oi.order_id = o.id " +
             "JOIN allocations a  ON a.order_item_id = oi.id " +

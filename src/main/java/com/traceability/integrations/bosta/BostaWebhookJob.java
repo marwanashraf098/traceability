@@ -159,7 +159,7 @@ public class BostaWebhookJob {
         BostaDelivery d = BostaDelivery.fromRaw(trackingNumber, obj);
         if (!com.traceability.inventory.ShipmentLinkService.FORWARD_LINKABLE_TYPE_CODES.contains(d.typeCode())) return null;
         String stored = tx.execute(s -> jdbc.query(
-            "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND raw IS NOT NULL",
+            "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta' AND raw IS NOT NULL",
             rs -> rs.next() ? rs.getString(1) : null, tenantId, trackingNumber));
         com.fasterxml.jackson.databind.node.ObjectNode merged = obj.deepCopy();
         int listAttempts = obj.path("numberOfAttempts").asInt(0);
@@ -331,7 +331,7 @@ public class BostaWebhookJob {
             if (delivery.typeCode() == 30) {
                 ShipmentRow existingForward = tx.execute(s -> jdbc.query(
                     "SELECT id, order_id FROM shipments " +
-                    "WHERE tracking_number = ? AND shipment_leg = 'forward'",
+                    "WHERE tracking_number = ? AND provider = 'bosta' AND shipment_leg = 'forward'",
                     rs -> rs.next() ? new ShipmentRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("order_id", UUID.class)) : null,
@@ -450,7 +450,7 @@ public class BostaWebhookJob {
             //    and match by businessReference / phone+COD. A webhook may arrive before that
             //    ingestion has run, so "no shipment found" is a normal case, not an error.
             ShipmentRow shipment = tx.execute(s -> jdbc.query(
-                "SELECT id, order_id FROM shipments WHERE tracking_number = ?",
+                "SELECT id, order_id FROM shipments WHERE tracking_number = ? AND provider = 'bosta'",
                 rs -> rs.next() ? new ShipmentRow(
                     rs.getObject("id", UUID.class),
                     rs.getObject("order_id", UUID.class)) : null,
@@ -475,7 +475,7 @@ public class BostaWebhookJob {
                 if (linkResult.orderId() != null) {
                     // Successfully matched — re-fetch shipment for steps 9–10.
                     shipment = tx.execute(s -> jdbc.query(
-                        "SELECT id, order_id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+                        "SELECT id, order_id FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta'",
                         rs -> rs.next() ? new ShipmentRow(
                             rs.getObject("id", UUID.class),
                             rs.getObject("order_id", UUID.class)) : null,
@@ -841,7 +841,7 @@ public class BostaWebhookJob {
         record StuckShipment(UUID id, UUID orderId, String internalState, String rawJson) {}
         StuckShipment shipment = tx.execute(s -> jdbc.query(
             "SELECT id, order_id, internal_state::text AS internal_state, raw::text AS raw " +
-            "FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND shipment_leg = 'forward'",
+            "FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta' AND shipment_leg = 'forward'",
             rs -> rs.next() ? new StuckShipment(
                 rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
                 rs.getString("internal_state"), rs.getString("raw")) : null,

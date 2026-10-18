@@ -4,6 +4,64 @@
 
 ## Current state
 
+**Non-Bosta couriers G1 — generic shipment legs, backend + badge (2026-10-18, branch `generic-courier-g1`, worktree
+`../traceability-g1`; MERGED to main 2026-10-18, NOT deployed). Migrations V168 + V169.**
+- **Gate:** `tenants.generic_courier_enabled` (default false, no UI, SQL only — not set for any real tenant). With it
+  off the only new code that runs for a tenant is: one flag read in the capture, one locked SELECT before a Bosta
+  forward INSERT (`GenericShipments.yieldToBosta` → NO_GENERIC), one flag/exists read in `detectAllOpen`.
+- **V168** `courier_provider` + 'generic' (own migration — enum value can't be used in its own transaction).
+  **V169** shipments: carrier_name, tracking_url, source (shopify_fulfillment / merchant_entered / portal_request),
+  shopify_fulfillment_id, tracking_key (app-written, CHECK: generic ⇒ `^[A-Z0-9]+$`, otherwise NULL); V1's global
+  UNIQUE(tracking_number) → `ux_shipments_bosta_tracking_number` (partial, bosta) + `ux_shipments_generic_tracking_key`
+  (tenant, key) + `ux_shipments_generic_fulfillment` (tenant, fulfillment id); V132 777-trigger scoped to bosta rows;
+  order_fulfillment_tracking.shipment_status (stored only, written only for switched-on tenants);
+  `other_known_carriers()` (wijha, mylerz, j&t, j&t express, jt express, aramex, r2s, smsa, smsa express, shipblu,
+  turuq) used by `shipping_carrier_of` — Java mirror `FulfillmentTrackingCapture.OTHER_KNOWN_CARRIERS`, parity test.
+  Prod carriers 2026-10-18: Bosta, Wijha (Femine), Other (Crockera), QP Express (High line, 2 rows), DHL Express
+  (BROEK, Bosta URL → bosta) — none of the newly named ones, so no stored order changes class.
+- `courier/GenericTrackingKey` (vectors `shared/generic-tracking-key-vectors.json`; not wired to any scan — G2).
+  `courier/GenericShipments` — the ONE generic writer: create from the capture (flag on, post-connect merchant order,
+  no active forward leg, class other_known or unknown-without-an-active-Bosta-account, never bosta, earliest
+  fulfillment, idempotent on fulfillment id), cancel on a cancelled fulfillment only while CANCELLABLE_SQL
+  ('created' AND no packed allocation AND order not packed or later), `yieldToBosta` (Bosta wins while
+  cancellable, else BLOCKED).
+- **Bosta wins** wired at ShipmentLinkService's two forward INSERTs (pack-scan link → 409; createOrFindShipment →
+  linkMatchedDelivery returns `GENERIC_CONFLICT` (unlinked row) / manualLink 409) and BostaFulfillmentLinkService
+  (blocked → markConflict before any Bosta call → fulfillment_link_problem HIGH).
+- New derived exceptions (only for a tenant switched on or with generic legs): `generic_bosta_conflict` HIGH (unlinked
+  rows with match_reason GENERIC_CONFLICT — excluded from unmatched_delivery), `generic_multiple_parcels` MEDIUM,
+  `generic_fulfillment_cancelled` MEDIUM. detectStuck excludes provider generic.
+- Badge `generic_carrier` (carrier = carrier_name; any tenant, Bosta account or not); status `status.with_carrier`
+  ("With {{carrier}}") for a generic leg at rank 2 — list + detail only (funnel / embedded / overview keep the
+  9-arg derive; unreachable in G1: nothing writes with_courier on a generic leg). Print batches and BostaAwbService
+  skip generic (`NOT_A_BOSTA_SHIPMENT`, not marked failed); ProviderDeliveryIdJob returns early for generic.
+- `provider = 'bosta'` added to every shipments lookup by tracking number that means Bosta (audit in the G1 report).
+- Snapshot: `scripts/generic_courier_snapshot.sql` (read-only, `-v as_of=…`, runs on V167 and V169 schemas —
+  `GenericCourierSnapshotScriptTest` proves identical output across the migration).
+- Tests: GenericCourierG1Test 14, GenericTrackingKeyVectorsTest 19, GenericCarrierListParityTest 1,
+  GenericCourierSnapshotScriptTest 1, frontend genericCarrierBadge 7. Revert-checks: yieldToBosta → NO_GENERIC turns
+  bw1 + bw2 red; badge generic branch removed turns gen1 + gen2 red.
+- **Known G1 gaps (by design / for G2):** analytics (ORDER_OUTCOMES treats a generic 'created' leg as Bosta
+  in-transit; money pipeline / Overview lateToPack and cancelled_with_live_shipment count it) — only once a tenant is
+  switched on; phone+COD matcher and BostaOrderReconcileJob skip orders with any active forward leg (generic too) —
+  never guess; a fulfillment without a tracking number creates nothing; a generic key already on another order of the
+  tenant creates nothing silently; the pack-scan Bosta-wins refusal is a 409 to the worker, not a stored alert.
+- **Bosta-wins lock (checked before merge):** `GenericShipments.YIELD_SQL` locks only the order's live generic forward
+  rows, reached through `ux_active_forward_shipment_per_order` (plan: LockRows → Index Scan; `shipments_order_idx` also
+  covers it); Bosta rows fail `provider = 'generic'` before LockRows → never locked or waited on. `GenericYieldLockTest`
+  (3): no seq scan on 3000 shipments; no generic leg → NO_GENERIC in < 300 ms while another tx holds the order's Bosta
+  row (lock_timeout 300 ms); a generic leg → only that row locked (same order's Bosta row, other orders, the order row:
+  NOWAIT succeeds).
+- **G2 scope — carried over (Marawan 2026-10-18), REQUIRED before any tenant gets `generic_courier_enabled`:**
+  analytics must not count generic legs as Bosta — `SalesAnalyticsService.java:298` (ORDER_OUTCOMES: a generic 'created'
+  leg is "Bosta decides" → Bosta in-transit, incl. per-city), `MoneyAnalyticsService.java:217` (pipeline "not
+  fulfilled"), `OverviewService.java:235` (cancelled_with_live_shipment) and `:413` (lateToPack, deriver without
+  provider), `OrderFacts.java:109` and `StockAnalyticsService.java:564` (deciding / journey leg).
+- **G2 scope — also:** the pack-time AWB scan on a packed generic order must persist a HIGH alert (today: 409 to the
+  worker only); add "qp express" to `other_known_carriers()` + `OTHER_KNOWN_CARRIERS` (High line, prod 2026-10-18).
+- Next: snapshot before/after on deploy (`scripts/generic_courier_snapshot.sql`); then G2 (the items above, scan /
+  link generic legs, UI switch).
+
 **Merged-PDF slice A — temporary Bosta errors never mark waybills failed (2026-10-18, branch
 `fix/print-temporary-errors` off origin/main 3c9be2d; merged to local main, NOT pushed, NOT deployed). No migration.**
 Step 0 (merged-PDF workstream) approved: background print job, ceiling 490; slices A (this) → B (job, V169?) → C (UI).

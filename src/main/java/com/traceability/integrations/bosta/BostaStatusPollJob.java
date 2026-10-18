@@ -346,7 +346,7 @@ public class BostaStatusPollJob {
                     try {
                         if (ingestionHelper.ingestListItem(tenantId, apiKey, item, "bosta_poll")) ingested++;
                         tx.execute(s -> jdbc.update("UPDATE shipments SET last_polled_at = now() " +
-                            "WHERE tenant_id = ? AND tracking_number = ?", tenantId, tn));
+                            "WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta'", tenantId, tn));
                     } catch (BostaRateLimitException e) {
                         backOff(tenantId, e.getRetryAfterSeconds());
                         rateLimited = true;

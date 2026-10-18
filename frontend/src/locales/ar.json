@@ -509,6 +509,8 @@
     "shippingBadge": {
       "shipped_elsewhere": "شُحن مع {{carrier}}",
       "shipped_elsewhere_unnamed": "شُحن مع شركة شحن أخرى",
+      "generic_carrier": "{{carrier}}",
+      "generic_carrier_unnamed": "شركة شحن أخرى",
       "awaiting_booking": "في انتظار الحجز في بوسطة",
       "not_booked_overdue": "لم يُحجز في بوسطة منذ {{days}} أيام",
       "bosta_tracking_not_linked": "رقم تتبع بوسطة غير مرتبط",
@@ -2996,6 +2998,8 @@
     "packed": "تم التغليف",
     "awaiting_courier": "في انتظار مندوب الشحن",
     "label_created": "بوليصة تم إنشاؤها",
+    "with_carrier": "مع {{carrier}}",
+    "another_carrier": "شركة شحن أخرى",
     "in_transit": "في الطريق",
     "delivery_failed": "فشل التوصيل — إعادة المحاولة",
     "delivered": "تم التوصيل",

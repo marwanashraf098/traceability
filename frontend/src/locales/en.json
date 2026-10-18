@@ -509,6 +509,8 @@
     "shippingBadge": {
       "shipped_elsewhere": "Shipped with {{carrier}}",
       "shipped_elsewhere_unnamed": "Shipped with another carrier",
+      "generic_carrier": "{{carrier}}",
+      "generic_carrier_unnamed": "Another carrier",
       "awaiting_booking": "Awaiting Bosta booking",
       "not_booked_overdue": "Not booked in Bosta for {{days}} days",
       "bosta_tracking_not_linked": "Bosta tracking not linked",
@@ -2988,6 +2990,8 @@
     "packed": "Packed",
     "awaiting_courier": "Awaiting courier",
     "label_created": "Label created",
+    "with_carrier": "With {{carrier}}",
+    "another_carrier": "another carrier",
     "in_transit": "In transit",
     "delivery_failed": "Delivery failed — retrying",
     "delivered": "Delivered",

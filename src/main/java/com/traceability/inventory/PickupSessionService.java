@@ -222,7 +222,7 @@ public class PickupSessionService {
                            o.number AS order_number, s.cod_amount
                     FROM shipments s
                     JOIN merchant_orders o ON o.id = s.order_id
-                    WHERE s.tracking_number = ? AND s.tenant_id = ?
+                    WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'
                     """,
                     rs -> rs.next() ? new ShipmentRow(
                         rs.getObject("id", UUID.class),

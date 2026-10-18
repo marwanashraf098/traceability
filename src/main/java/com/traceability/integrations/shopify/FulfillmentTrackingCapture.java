@@ -1,6 +1,7 @@
 package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.traceability.courier.GenericShipments;
 import com.traceability.integrations.bosta.BostaFulfillmentLinkService;
 import com.traceability.inventory.TrackingNumberNormalizer;
 import com.traceability.tenancy.TenantContext;
@@ -33,8 +34,13 @@ public class FulfillmentTrackingCapture {
 
     private static final Logger log = LoggerFactory.getLogger(FulfillmentTrackingCapture.class);
 
-    /** Non-Bosta carriers named explicitly (case-insensitive). "Other" is NOT here — Jumi's Bosta says "Other". */
-    static final Set<String> OTHER_KNOWN_CARRIERS = Set.of("wijha");
+    /**
+     * Non-Bosta carriers named explicitly (case-insensitive, trimmed). "Other" is NOT here — Jumi's Bosta says
+     * "Other". Must equal the SQL other_known_carriers() (V169) — GenericCarrierListParityTest.
+     */
+    static final Set<String> OTHER_KNOWN_CARRIERS = Set.of(
+        "wijha", "mylerz", "j&t", "j&t express", "jt express", "aramex", "r2s",
+        "smsa", "smsa express", "shipblu", "turuq");
 
     private final JdbcTemplate jdbc;
     private final BostaFulfillmentLinkService linkService;
@@ -57,7 +63,13 @@ public class FulfillmentTrackingCapture {
         UUID tenantId = TenantContext.require();
         UUID orderId = orderId(tenantId, storeId, orderExternalId);
         if (orderId == null) return 0;
-        int rows = upsert(tenantId, orderId, payload);
+        // Non-Bosta couriers G1 (V169): everything generic is behind the per-tenant flag (default off).
+        boolean generic = GenericShipments.enabled(jdbc, tenantId);
+        int rows = upsert(tenantId, orderId, payload, generic);
+        if (generic) {
+            GenericShipments.onFulfillments(jdbc, tenantId, orderId, payload,
+                FulfillmentTrackingCapture::carrierClass, f -> List.copyOf(trackingNumbers(f)));
+        }
         // V139: the order's carrier, from these fulfillments (also a cancelled one flipping it back).
         com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
         if (rows == 0) return 0;
@@ -67,7 +79,7 @@ public class FulfillmentTrackingCapture {
             "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' AND t.link_status IS NULL " +
             "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
             "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
-            "                    AND s.shipment_leg = 'forward')",
+            "                    AND s.provider = 'bosta' AND s.shipment_leg = 'forward')",
             String.class, tenantId, orderId);
         for (String tn : toLink) linkService.enqueueAfterCommit(tenantId, orderId, tn);
         return rows;
@@ -82,7 +94,7 @@ public class FulfillmentTrackingCapture {
         UUID tenantId = TenantContext.require();
         UUID orderId = orderId(tenantId, storeId, orderExternalId);
         if (orderId != null) {
-            upsert(tenantId, orderId, payload);
+            upsert(tenantId, orderId, payload, false);
             com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
         }
         return orderId;
@@ -95,7 +107,11 @@ public class FulfillmentTrackingCapture {
         return ids.isEmpty() ? null : ids.get(0);   // null: not ingested (e.g. before the FR-18 cutoff)
     }
 
-    private int upsert(UUID tenantId, UUID orderId, JsonNode payload) {
+    /**
+     * @param captureShipmentStatus V169: also store the fulfillment's Shopify shipment_status — only for a
+     *     tenant switched on for generic couriers (stored only, nothing reads it in G1); NULL otherwise.
+     */
+    private int upsert(UUID tenantId, UUID orderId, JsonNode payload, boolean captureShipmentStatus) {
         JsonNode fulfillments = payload.path("fulfillments");
         if (!fulfillments.isArray() || fulfillments.isEmpty()) return 0;
 
@@ -114,6 +130,24 @@ public class FulfillmentTrackingCapture {
             JsonNode f = e.getValue();
             String company = text(f, "tracking_company");
             String url     = firstUrl(f);
+            if (captureShipmentStatus) {
+                rows += jdbc.update(
+                    "INSERT INTO order_fulfillment_tracking " +
+                    "    (tenant_id, order_id, tracking_number, carrier_raw, tracking_url, carrier_class, " +
+                    "     shopify_fulfillment_id, fulfillment_status, shipment_status) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                    "ON CONFLICT (tenant_id, order_id, tracking_number) DO UPDATE SET " +
+                    "    carrier_raw            = EXCLUDED.carrier_raw, " +
+                    "    tracking_url           = EXCLUDED.tracking_url, " +
+                    "    carrier_class          = EXCLUDED.carrier_class, " +
+                    "    shopify_fulfillment_id = EXCLUDED.shopify_fulfillment_id, " +
+                    "    fulfillment_status     = EXCLUDED.fulfillment_status, " +
+                    "    shipment_status        = EXCLUDED.shipment_status, " +
+                    "    last_seen_at           = now()",
+                    tenantId, orderId, e.getKey(), company, url, carrierClass(company, url),
+                    text(f, "id"), text(f, "status"), text(f, "shipment_status"));
+                continue;
+            }
             rows += jdbc.update(
                 "INSERT INTO order_fulfillment_tracking " +
                 "    (tenant_id, order_id, tracking_number, carrier_raw, tracking_url, carrier_class, " +

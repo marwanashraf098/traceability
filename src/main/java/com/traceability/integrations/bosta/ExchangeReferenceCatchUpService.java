@@ -137,7 +137,7 @@ public class ExchangeReferenceCatchUpService {
             "JOIN merchant_orders o ON o.id = ft.order_id AND o.tenant_id = ft.tenant_id " +
             "WHERE ft.tenant_id = ? AND ft.link_status IN ('conflict', 'skipped') " +
             "  AND EXISTS (SELECT 1 FROM shipments s JOIN merchant_orders x ON x.id = s.order_id AND x.tenant_id = s.tenant_id " +
-            "              WHERE s.tenant_id = ft.tenant_id AND s.tracking_number = ft.tracking_number " +
+            "              WHERE s.tenant_id = ft.tenant_id AND s.tracking_number = ft.tracking_number AND s.provider = 'bosta' " +
             "                AND s.order_id <> ft.order_id AND x.external_id LIKE 'internal:exchange:%') " +
             "ORDER BY ft.first_seen_at, ft.tracking_number", tenantId)));
         for (Map<String, Object> f : ful) {
@@ -169,7 +169,7 @@ public class ExchangeReferenceCatchUpService {
         }
         Map<String, Object> linked = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForList(
             "SELECT o.number FROM shipments sh JOIN merchant_orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
-            "WHERE sh.tenant_id = ? AND sh.tracking_number = ? AND sh.shipment_leg = 'return'", tenantId, tn)
+            "WHERE sh.tenant_id = ? AND sh.tracking_number = ? AND sh.provider = 'bosta' AND sh.shipment_leg = 'return'", tenantId, tn)
             .stream().findFirst().orElse(null)));
         if (linked != null) return new Row(tenant, "crp", tn, ref, (String) linked.get("number"), "LINKED", null);
         String note = eventId == null ? "an identical catch-up event already exists"

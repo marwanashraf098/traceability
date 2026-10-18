@@ -53,7 +53,7 @@ public class PackPrintBatchStore {
             "SELECT o.id AS order_id, o.number, fs.id AS shipment_id, fs.tracking_number " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, tracking_number, internal_state " +
+            "    SELECT id, tracking_number, internal_state, provider " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
             "      AND shipment_leg = 'forward' " +
@@ -64,6 +64,7 @@ public class PackPrintBatchStore {
             FulfillService.PICKABLE_ORDERS_FILTER +
             "  AND o.is_self_pickup = false " +
             "  AND fs.internal_state = 'created' " +
+            "  AND fs.provider = 'bosta' " +   // V169: a generic (non-Bosta courier) leg has no Bosta waybill
             "  AND fs.tracking_number IS NOT NULL " +
             ("new".equals(scope)
                 ? "  AND NOT EXISTS (SELECT 1 FROM pack_print_batch_items bi " +

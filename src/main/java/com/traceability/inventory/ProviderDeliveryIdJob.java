@@ -55,6 +55,11 @@ public class ProviderDeliveryIdJob {
                 "SELECT provider_delivery_id FROM shipments WHERE id = ? AND tenant_id = ?",
                 rs -> rs.next() ? rs.getString(1) : null, shipmentId, tenantId));
             if (existing != null) return;
+            // V169: a generic (non-Bosta courier) row is never looked up in Bosta.
+            Boolean generic = tx.execute(s -> jdbc.query(
+                "SELECT provider = 'generic' FROM shipments WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getBoolean(1) : null, shipmentId, tenantId));
+            if (Boolean.TRUE.equals(generic)) return;
             String encryptedKey = tx.execute(s -> jdbc.query(
                 "SELECT api_key_encrypted FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",

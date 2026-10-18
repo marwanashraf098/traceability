@@ -224,7 +224,7 @@ public class ReturnRequestLifecycle {
             "UPDATE return_requests rr SET return_shipment_id = s.id, link_source = 'traced_booking' " +
             "FROM shipments s " +
             "WHERE rr.tenant_id = ? AND rr.return_shipment_id IS NULL AND rr.bosta_tracking_number IS NOT NULL " +
-            "  AND s.tenant_id = rr.tenant_id AND s.tracking_number = rr.bosta_tracking_number " +
+            "  AND s.tenant_id = rr.tenant_id AND s.tracking_number = rr.bosta_tracking_number AND s.provider = 'bosta' " +
             "  AND s.shipment_leg = 'return' " +
             "  AND NOT EXISTS (SELECT 1 FROM return_requests o WHERE o.return_shipment_id = s.id) " +
             "RETURNING rr.id, s.id AS shipment_id, s.tracking_number",

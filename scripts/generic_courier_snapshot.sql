@@ -1,0 +1,164 @@
+-- Non-Bosta couriers G1 (V168 / V169) — READ-ONLY before/after snapshot for the deploy.
+--
+-- Prints, for every tenant: per open order its derived status, shipping badge / carrier and
+-- pickable yes/no; per variant its committed quantity; the number of open stuck alerts; plus the
+-- generic switch and generic-leg count (both must stay false / 0 — no tenant is switched on).
+-- Every value is computed by SQL that mirrors the code paths (one comment per block names the Java
+-- it mirrors). It sees what the DATABASE says: the migration's effects (enum value, the swapped
+-- uniqueness indexes, shipping_carrier_of with the named-carrier list, the V132 trigger) and any row
+-- the new code writes. It does not execute the Java, so the in-app check after deploy is still: open
+-- Orders / Pick & Pack / Exceptions for one Bosta tenant and compare with before.
+--
+-- RUN (prod, read-only; a few seconds — open orders only, no jsonb detoast of old orders):
+--   AS_OF="$(date -u +%Y-%m-%dT%H:%M:%SZ)"    # pick ONE timestamp and use it for both runs
+--   psql "$PROD_DATABASE_URL" -X -q -A -t -v as_of="$AS_OF" -f scripts/generic_courier_snapshot.sql > before.txt
+--   … deploy …
+--   psql "$PROD_DATABASE_URL" -X -q -A -t -v as_of="$AS_OF" -f scripts/generic_courier_snapshot.sql > after.txt
+--   diff before.txt after.txt
+-- Expected: empty. as_of pins every "now" (badge overdue days, stuck window) so the clock moving
+-- between runs can't show up. Real activity between the runs (a new order, a Bosta webhook) can — each
+-- order line ends with its last-activity marker, so such a line is recognisable: its marker changed too.
+-- Connection: the owner / postgres role (sees every tenant). Use the session pooler :5432, never :6543.
+
+\set ON_ERROR_STOP on
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '20s';
+SET LOCAL lock_timeout = '2s';
+
+-- 0. Per tenant: the switch and generic legs (must be false / 0 before AND after).
+SELECT 'tenant' AS section, t.name, t.id,
+       -- to_jsonb: the column doesn't exist before V169 (prints false then too, so the diff stays empty)
+       'generic_courier_enabled=' || coalesce(
+           (SELECT (to_jsonb(t2)->>'generic_courier_enabled')::boolean FROM tenants t2 WHERE t2.id = t.id), false)
+       || ' generic_legs=' || (SELECT count(*) FROM shipments s WHERE s.tenant_id = t.id
+                                 AND s.provider::text = 'generic')
+FROM tenants t
+ORDER BY t.name, t.id;
+
+-- 1. Open orders: derived status (OrderStatusDeriver.derive, list path), badge (OrderShippingBadge.derive),
+--    pickable (FulfillService.PICKABLE_SHIPMENT_GATE without the queue's lookback filter).
+WITH cfg AS (SELECT (:'as_of')::timestamptz AS now_ts, 3 AS overdue_days, 60 AS grace_minutes),
+open_orders AS (
+    SELECT o.*
+    FROM orders o
+    WHERE o.external_id NOT LIKE 'internal:portal:%'          -- merchant_orders
+      AND o.status NOT IN ('delivered', 'returned', 'lost', 'cancelled')
+),
+fwd AS (
+    SELECT o.id AS order_id, s.*
+    FROM open_orders o
+    LEFT JOIN LATERAL (
+        SELECT sh.id AS shipment_id, sh.provider::text AS provider,
+               to_jsonb(sh) ->> 'carrier_name' AS carrier_name,   -- column exists only from V169
+               sh.internal_state::text AS internal_state, sh.last_synced_at, sh.created_at AS s_created,
+               sh.is_delayed, sh.sla_breached, sh.exception_code,
+               (SELECT count(*) FROM shipment_status_history h2
+                  LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                 WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                   AND h2.exception_code IS NOT NULL
+                   AND (n.category = 'forward' OR n.category IS NULL)) AS failed_attempts,
+               coalesce((SELECT max(CASE h.internal_state WHEN 'created' THEN 1 WHEN 'with_courier' THEN 2
+                                                          WHEN 'returning' THEN 3 WHEN 'exception' THEN 0 END)
+                           FROM shipment_status_history h WHERE h.shipment_id = sh.id),
+                        CASE sh.internal_state WHEN 'created' THEN 1 WHEN 'with_courier' THEN 2
+                                               WHEN 'returning' THEN 3 WHEN 'exception' THEN 0 END) AS max_rank
+        FROM shipments sh
+        WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id AND sh.shipment_leg = 'forward'
+        ORDER BY sh.created_at DESC, sh.id DESC
+        LIMIT 1
+    ) s ON true
+),
+derived AS (
+    SELECT o.tenant_id, o.id, o.number, o.status::text AS order_status, o.is_self_pickup, o.on_hold,
+           o.shipping_carrier_class, o.shipping_carrier_name, o.placed_at,
+           f.provider, f.carrier_name, f.internal_state, f.max_rank, f.failed_attempts,
+           greatest(f.last_synced_at, f.s_created,
+                    (SELECT max(ft.last_seen_at) FROM order_fulfillment_tracking ft WHERE ft.order_id = o.id)) AS activity,
+           -- OrderStatusDeriver.derive (non-cancelled orders only here)
+           CASE
+             WHEN f.internal_state IS NULL THEN 'pipeline:' || o.status::text
+             WHEN f.internal_state IN ('delivered','returned','lost','terminated','cancelled') THEN 'status.' || f.internal_state
+             WHEN f.failed_attempts >= 1 THEN 'status.delivery_failed'
+             WHEN f.internal_state = 'exception' THEN 'status.needs_attention'
+             WHEN coalesce(f.max_rank, 1) = 1 THEN 'status.label_created'
+             WHEN coalesce(f.max_rank, 1) = 2 THEN CASE WHEN f.provider = 'generic' THEN 'status.with_carrier'
+                                                        ELSE 'status.in_transit' END
+             WHEN coalesce(f.max_rank, 1) = 3 THEN 'status.returning'
+             ELSE 'status.awaiting_courier'
+           END AS derived_status,
+           EXISTS (SELECT 1 FROM courier_accounts c WHERE c.tenant_id = o.tenant_id
+                     AND c.provider = 'bosta' AND c.status = 'active') AS ships_with_bosta,
+           EXISTS (SELECT 1 FROM order_fulfillment_tracking ft, cfg
+                    WHERE ft.order_id = o.id AND ft.tenant_id = o.tenant_id AND ft.carrier_class = 'bosta'
+                      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled'
+                      AND ft.link_status IS DISTINCT FROM 'linked'
+                      AND NOT EXISTS (SELECT 1 FROM shipments s2 WHERE s2.order_id = o.id AND s2.tenant_id = o.tenant_id
+                                        AND s2.tracking_number = ft.tracking_number)
+                      AND (ft.link_status IN ('conflict', 'gave_up')
+                           OR ft.first_seen_at < cfg.now_ts - make_interval(mins => cfg.grace_minutes))) AS link_problem,
+           (o.on_hold = false
+            AND o.status IN ('new', 'ready_to_pick', 'self_pickup_pending')
+            AND (o.is_self_pickup OR f.internal_state = 'created')) AS pickable
+    FROM open_orders o
+    JOIN fwd f ON f.order_id = o.id
+)
+SELECT 'order' AS section, t.name, d.number,
+       d.derived_status
+       || ' | badge=' || CASE
+            -- OrderShippingBadge.derive (order not cancelled: open orders only)
+            WHEN d.internal_state IS NOT NULL AND d.internal_state NOT IN ('cancelled', 'terminated')
+                 THEN CASE WHEN d.provider = 'generic' THEN 'generic_carrier/' || coalesce(d.carrier_name, '')
+                           ELSE 'linked/Bosta' END
+            WHEN d.is_self_pickup OR NOT d.ships_with_bosta THEN 'none'
+            WHEN d.link_problem THEN 'bosta_tracking_not_linked/Bosta'
+            WHEN d.shipping_carrier_class = 'other_known' THEN 'shipped_elsewhere/' || coalesce(d.shipping_carrier_name, '')
+            WHEN d.placed_at IS NOT NULL
+                 AND (SELECT cfg.now_ts FROM cfg) - d.placed_at >= make_interval(days => (SELECT overdue_days FROM cfg))
+                 THEN 'not_booked_overdue/' || floor(extract(epoch FROM (SELECT cfg.now_ts FROM cfg) - d.placed_at) / 86400)::int
+            ELSE 'awaiting_booking'
+          END
+       || ' | carrier=' || coalesce(d.shipping_carrier_class, '-') || '/' || coalesce(d.shipping_carrier_name, '-')
+       || ' | pickable=' || CASE WHEN d.pickable THEN 'yes' ELSE 'no' END
+       || ' | activity=' || coalesce(to_char(d.activity AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS'), '-')
+FROM derived d JOIN tenants t ON t.id = d.tenant_id
+ORDER BY t.name, d.number, d.id;
+
+-- 2. Committed quantity per variant (VariantStockService.COMMITTED_SQL — same gate as Pick & Pack).
+SELECT 'committed' AS section, t.name, coalesce(v.sku, v.id::text),
+       sum(greatest(oi.quantity - coalesce(alloc.active_count, 0), 0))::text
+FROM orders o
+JOIN tenants t ON t.id = o.tenant_id
+JOIN order_items oi ON oi.order_id = o.id
+JOIN variants v ON v.id = oi.variant_id
+LEFT JOIN (SELECT a.order_item_id, count(*) AS active_count FROM allocations a
+            WHERE a.status = 'active' GROUP BY a.order_item_id) alloc ON alloc.order_item_id = oi.id
+LEFT JOIN LATERAL (
+    SELECT internal_state FROM shipments
+    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward'
+    ORDER BY created_at DESC, id DESC LIMIT 1
+) latest_shipment ON true
+WHERE o.external_id NOT LIKE 'internal:portal:%'
+  AND o.status IN ('new', 'ready_to_pick', 'self_pickup_pending')
+  AND o.on_hold = false
+  AND (o.is_self_pickup = true OR latest_shipment.internal_state = 'created')
+GROUP BY t.name, coalesce(v.sku, v.id::text)
+ORDER BY 2, 3;
+
+-- 3. Open stuck alerts per tenant (ExceptionService.detectStuck; simulated tenants are muted there).
+SELECT 'stuck' AS section, t.name, t.id::text, count(s.id)::text
+FROM tenants t
+LEFT JOIN shipments s ON s.tenant_id = t.id
+     AND s.shipment_leg = 'forward'
+     AND s.provider::text <> 'generic'
+     AND s.internal_state NOT IN ('delivered', 'returned', 'lost', 'terminated', 'cancelled')
+     AND coalesce(s.last_synced_at, s.created_at) < (:'as_of')::timestamptz - (interval '1 day' * t.stuck_shipment_days)
+     AND EXISTS (SELECT 1 FROM orders o WHERE o.id = s.order_id AND o.external_id NOT LIKE 'internal:portal:%')
+     AND NOT EXISTS (SELECT 1 FROM exception_resolutions er
+                      WHERE er.tenant_id = s.tenant_id AND er.exception_type = 'stuck_shipment'
+                        AND er.subject_key = 'stuck:shipment:' || s.id
+                        AND er.resolved_at > coalesce(s.last_synced_at, s.created_at))
+WHERE NOT EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = t.id)
+GROUP BY t.name, t.id
+ORDER BY t.name, t.id;
+
+ROLLBACK;

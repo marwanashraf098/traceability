@@ -187,6 +187,14 @@ public class ExceptionService {
         // Pick & Pack S4 — waybill mode (rules in PackListRules, shared with the page lists).
         all.addAll(detectPackSetAside(tenantId));
         all.addAll(detectPackCancelledAfterPrint(tenantId));
+        // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
+                "FROM tenants WHERE id = ?", Boolean.class, tenantId, tenantId))) {
+            all.addAll(detectGenericBostaConflict(tenantId));
+            all.addAll(detectGenericMultipleParcels(tenantId));
+            all.addAll(detectGenericFulfillmentCancelled(tenantId));
+        }
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -741,6 +749,8 @@ public class ExceptionService {
             "       'unmatched:' || u.id AS subject_key " +
             "FROM unlinked_bosta_deliveries u " +
             "WHERE u.tenant_id = ? AND u.resolved = false " +
+            // V169: a delivery Traced refused to link over a generic leg is generic_bosta_conflict (HIGH) instead.
+            "  AND u.match_reason IS DISTINCT FROM '" + ShipmentLinkService.REASON_GENERIC_CONFLICT + "' " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = u.tenant_id " +
@@ -764,7 +774,8 @@ public class ExceptionService {
             "FROM bosta_discovery_failures f " +
             "WHERE f.tenant_id = ? AND f.escalated_at IS NOT NULL " +
             "  AND NOT EXISTS (SELECT 1 FROM shipments s " +
-            "                  WHERE s.tenant_id = f.tenant_id AND s.tracking_number = f.tracking_number) " +
+            "                  WHERE s.tenant_id = f.tenant_id AND s.tracking_number = f.tracking_number " +
+            "                    AND s.provider = 'bosta') " +
             "  AND NOT EXISTS (SELECT 1 FROM unlinked_bosta_deliveries u " +
             "                  WHERE u.tenant_id = f.tenant_id AND u.tracking_number = f.tracking_number) " +
             "  AND NOT EXISTS ( " +
@@ -790,12 +801,105 @@ public class ExceptionService {
             "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
             "WHERE t.tenant_id = ? AND t.link_status IN ('conflict', 'gave_up') " +
             "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
-            "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number) " +
+            "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
+            "                    AND s.provider = 'bosta') " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = t.tenant_id " +
             "        AND er.exception_type = 'fulfillment_link_problem' " +
             "        AND er.subject_key = 'fulfillment_link:' || t.id) ",
+            tid);
+    }
+
+    // ── Non-Bosta couriers G1 (V169) ──────────────────────────────────────────
+
+    /**
+     * HIGH — a Bosta delivery that belongs to an order already shipped with another carrier past 'created'
+     * (GenericShipments.yieldToBosta → BLOCKED): Traced did not link it and never guesses. The delivery
+     * sits in unlinked_bosta_deliveries with match_reason GENERIC_CONFLICT. Clears when that row is
+     * resolved (manual link after the generic leg is dealt with) or when this exception is resolved.
+     */
+    private List<Map<String, Object>> detectGenericBostaConflict(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_bosta_conflict' AS type, 'HIGH' AS severity, 'delivery' AS subject_type, " +
+            "       u.id AS unlinked_id, u.tracking_number, u.business_reference, " +
+            "       u.first_seen_at AS occurred_at, " +
+            "       'generic_bosta_conflict:' || u.id AS subject_key " +
+            "FROM unlinked_bosta_deliveries u " +
+            "WHERE u.tenant_id = ? AND u.resolved = false " +
+            "  AND u.match_reason = '" + ShipmentLinkService.REASON_GENERIC_CONFLICT + "' " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = u.tenant_id " +
+            "        AND er.exception_type = 'generic_bosta_conflict' " +
+            "        AND er.subject_key = 'generic_bosta_conflict:' || u.id) ",
+            tid);
+    }
+
+    /**
+     * MEDIUM — the order already has a generic forward leg and Shopify shows another live, non-Bosta
+     * fulfillment parcel with a different tracking number. G1 records one parcel per order (V104); the
+     * extra parcel isn't tracked. A resolution holds until a newer extra parcel appears.
+     */
+    private List<Map<String, Object>> detectGenericMultipleParcels(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_multiple_parcels' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, s.tracking_number, s.carrier_name, " +
+            "       x.extra_parcels, x.last_seen AS occurred_at, " +
+            "       'generic_multiple_parcels:order:' || o.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN LATERAL ( " +
+            "    SELECT count(*) AS extra_parcels, max(ft.first_seen_at) AS last_seen " +
+            "    FROM order_fulfillment_tracking ft " +
+            "    WHERE ft.order_id = s.order_id AND ft.tenant_id = s.tenant_id " +
+            "      AND ft.carrier_class <> 'bosta' " +
+            "      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled' " +
+            "      AND ft.tracking_number IS DISTINCT FROM s.tracking_number " +
+            ") x ON x.extra_parcels > 0 " +
+            "WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'generic_multiple_parcels' " +
+            "        AND er.subject_key = 'generic_multiple_parcels:order:' || o.id " +
+            "        AND er.resolved_at > x.last_seen) ",
+            tid);
+    }
+
+    /**
+     * MEDIUM — Shopify cancelled the fulfillment a generic leg came from, but the leg was already past
+     * 'created' (something packed), so Traced did not cancel it (GenericShipments). Clears when the leg
+     * ends or the exception is resolved.
+     */
+    private List<Map<String, Object>> detectGenericFulfillmentCancelled(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_fulfillment_cancelled' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number, " +
+            "       s.carrier_name, s.internal_state::text AS shipment_state, " +
+            "       (SELECT max(ft.last_seen_at) FROM order_fulfillment_tracking ft " +
+            "         WHERE ft.order_id = s.order_id AND ft.tenant_id = s.tenant_id " +
+            "           AND ft.shopify_fulfillment_id = s.shopify_fulfillment_id) AS occurred_at, " +
+            "       'generic_fulfillment_cancelled:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "  AND s.shopify_fulfillment_id IS NOT NULL " +
+            "  AND EXISTS (SELECT 1 FROM order_fulfillment_tracking ft " +
+            "              WHERE ft.order_id = s.order_id AND ft.tenant_id = s.tenant_id " +
+            "                AND ft.shopify_fulfillment_id = s.shopify_fulfillment_id " +
+            "                AND lower(coalesce(ft.fulfillment_status, '')) = 'cancelled') " +
+            "  AND NOT EXISTS (SELECT 1 FROM order_fulfillment_tracking ft " +
+            "                  WHERE ft.order_id = s.order_id AND ft.tenant_id = s.tenant_id " +
+            "                    AND ft.shopify_fulfillment_id = s.shopify_fulfillment_id " +
+            "                    AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled') " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'generic_fulfillment_cancelled' " +
+            "        AND er.subject_key = 'generic_fulfillment_cancelled:shipment:' || s.id) ",
             tid);
     }
 
@@ -827,6 +931,8 @@ public class ExceptionService {
             "FROM shipments s " +
             "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
             "WHERE s.shipment_leg = 'forward' " +
+            // V169: a generic (non-Bosta courier) leg gets no courier updates in G1 — never "stuck".
+            "  AND s.provider <> 'generic' " +
             "  AND s.internal_state NOT IN (" +
             "      'delivered'::shipment_internal_state," +
             "      'returned'::shipment_internal_state," +
@@ -1380,6 +1486,36 @@ public class ExceptionService {
                 item.put("descriptionAr", "الطلب " + n + ": شوبيفاي يقول إنه شُحن مع بوسطة " + t
                     + (gaveUp ? "، لكن بوسطة لا تجد هذه الشحنة" : "، لكن Traced لن يربطها: " + r));
                 item.put("suggestedAction", "check_in_bosta");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "generic_bosta_conflict" -> {
+                String t = str(item, "tracking_number");
+                String r = str(item, "business_reference");
+                item.put("descriptionEn", "Bosta delivery " + t + " (" + r + ") belongs to an order already shipped with another"
+                    + " carrier — Traced didn't link it. Check which carrier really has the parcel");
+                item.put("descriptionAr", "شحنة بوسطة " + t + " (" + r + ") تخص طلبًا شُحن بالفعل مع شركة شحن أخرى"
+                    + " — لم يربطها Traced. تأكد أي شركة لديها الطرد فعلًا");
+                item.put("suggestedAction", "check_carrier");
+                item.put("actionUrl", "/shipments/unlinked");
+            }
+            case "generic_multiple_parcels" -> {
+                String n = str(item, "order_number");
+                String c = str(item, "carrier_name");
+                item.put("descriptionEn", "Order " + n + " has more than one parcel in Shopify"
+                    + (c != null ? " (" + c + ")" : "") + " — Traced tracks only the first one");
+                item.put("descriptionAr", "الطلب " + n + " له أكثر من طرد في شوبيفاي"
+                    + (c != null ? " (" + c + ")" : "") + " — Traced يتابع الطرد الأول فقط");
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "generic_fulfillment_cancelled" -> {
+                String n = str(item, "order_number");
+                String c = str(item, "carrier_name");
+                item.put("descriptionEn", "Order " + n + ": the " + (c != null ? c : "carrier")
+                    + " fulfillment was cancelled in Shopify after the order was packed — Traced kept its shipment");
+                item.put("descriptionAr", "الطلب " + n + ": أُلغي تنفيذ " + (c != null ? c : "شركة الشحن")
+                    + " في شوبيفاي بعد تغليف الطلب — أبقى Traced الشحنة");
+                item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
             }
             case "blocked_customer" -> {

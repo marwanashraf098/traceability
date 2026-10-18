@@ -141,7 +141,7 @@ public class BostaFulfillmentCatchUpService {
                     "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' " +
                     "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
                     "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
-                    "                    AND s.shipment_leg = 'forward') " +
+                    "                    AND s.provider = 'bosta' AND s.shipment_leg = 'forward') " +
                     "ORDER BY o.placed_at, t.tracking_number", tenantId)) {
                 UUID orderId = (UUID) r.get("id");
                 tracked.add(orderId);
@@ -174,7 +174,7 @@ public class BostaFulfillmentCatchUpService {
                     for (String tn : tns) {
                         boolean shipped = Boolean.TRUE.equals(jdbc.queryForObject(
                             "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND order_id = ? " +
-                            "  AND tracking_number = ? AND shipment_leg = 'forward')",
+                            "  AND tracking_number = ? AND provider = 'bosta' AND shipment_leg = 'forward')",
                             Boolean.class, tenantId, orderId, tn));
                         if (!shipped && seen.add(orderId + "|" + tn)) {
                             out.add(new Candidate(orderId, (String) r.get("number"), (UUID) r.get("store_id"),

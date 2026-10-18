@@ -217,7 +217,7 @@ public class ReturnPickupBookingService {
                                boolean verified, String fromStatus) {
         // Step 4d-1: a leg already held by another request (one request per leg) is never taken.
         String legSql =
-            "(SELECT s.id FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? " +
+            "(SELECT s.id FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? AND s.provider = 'bosta' " +
             "   AND s.shipment_leg = 'return' " +
             "   AND NOT EXISTS (SELECT 1 FROM return_requests o WHERE o.return_shipment_id = s.id))";
         try {

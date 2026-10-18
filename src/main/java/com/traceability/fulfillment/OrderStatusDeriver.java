@@ -240,6 +240,21 @@ public final class OrderStatusDeriver {
         return new LegStatus(key, tone);
     }
 
+    /**
+     * V169 — a generic (non-Bosta courier) leg: same ladder, but with_courier reads "With {carrier}"
+     * ({@link #WITH_CARRIER_KEY}) — Traced has no tracking for it, so never "In transit". Any other
+     * provider gives exactly {@link #deriveLegStatus(String)}.
+     */
+    public static LegStatus deriveLegStatus(String internalState, String provider) {
+        LegStatus s = deriveLegStatus(internalState);
+        if (GENERIC.equals(provider) && "with_courier".equals(internalState)) return new LegStatus(WITH_CARRIER_KEY, s.tone());
+        return s;
+    }
+
+    /** V169: "With {{carrier}}" — the carrier name comes from the order's shipping badge / the shipment. */
+    public static final String WITH_CARRIER_KEY = "status.with_carrier";
+    private static final String GENERIC = "generic";
+
     // ── the derivation ───────────────────────────────────────────────────────
 
     public static DerivedOrderStatus derive(
@@ -252,6 +267,26 @@ public final class OrderStatusDeriver {
             Boolean isDelayed,
             Boolean slaBreached,
             boolean notTraced) {
+        return derive(orderStatus, shipmentInternalState, maxProgressRank, numberOfAttempts, failedDeliveryAttempts,
+            exceptionCode, isDelayed, slaBreached, notTraced, null);
+    }
+
+    /**
+     * V169: as above, plus the forward shipment's provider. A generic (non-Bosta courier) leg uses the
+     * same furthest-progress rule; only its with_courier rung reads {@link #WITH_CARRIER_KEY} instead of
+     * "In transit". 'bosta' or null gives exactly the 9-argument result.
+     */
+    public static DerivedOrderStatus derive(
+            String orderStatus,
+            String shipmentInternalState,
+            Integer maxProgressRank,
+            int numberOfAttempts,
+            int failedDeliveryAttempts,
+            Integer exceptionCode,
+            Boolean isDelayed,
+            Boolean slaBreached,
+            boolean notTraced,
+            String forwardProvider) {
 
         boolean shipmentLinked = shipmentInternalState != null;
         boolean terminal = shipmentLinked && TERMINAL_STATES.contains(shipmentInternalState);
@@ -279,6 +314,7 @@ public final class OrderStatusDeriver {
                 int rank = maxProgressRank != null ? maxProgressRank : 1;
                 primaryKey = PROGRESS_KEY.getOrDefault(rank, "status.awaiting_courier");
                 tone = PROGRESS_TONE.getOrDefault(rank, Tone.INFO);
+                if (rank == 2 && GENERIC.equals(forwardProvider)) primaryKey = WITH_CARRIER_KEY;
             }
         } else {
             primaryKey = PIPELINE_KEY.getOrDefault(orderStatus, "status.new");

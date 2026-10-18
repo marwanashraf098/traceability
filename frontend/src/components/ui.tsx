@@ -298,6 +298,7 @@ export function LegStatusBadge({
   legStatus,
   className = '',
   labelOverride,
+  carrier,
 }: {
   legStatus: { primaryKey: string; tone: import('../api').DerivedTone }
   className?: string
@@ -307,11 +308,15 @@ export function LegStatusBadge({
   // status.label_created, like the drawer's Current-state pill and the Overview funnel,
   // keeps "Label created" — a state) rather than editing the shared translation.
   labelOverride?: string
+  // V169: the carrier name for status.with_carrier ("With {{carrier}}") — a generic courier leg.
+  carrier?: string | null
 }) {
   const { t } = useTranslation()
   return (
     <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[legStatus.tone]], className)}>
-      {labelOverride ?? t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+      {labelOverride ?? (legStatus.primaryKey === 'status.with_carrier'
+        ? t(legStatus.primaryKey, { carrier: carrier || t('status.another_carrier') })
+        : t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') }))}
     </span>
   )
 }
@@ -1521,10 +1526,12 @@ const SHIPPING_BADGE_TONE: Record<import('../api').ShippingBadgeState, BadgeTone
   not_booked_overdue:        'warning',
   bosta_tracking_not_linked: 'critical',
   cancelled:                 'neutral',
+  generic_carrier:           'neutral',
 }
 
 export function shippingBadgeLabel(badge: import('../api').OrderShippingBadge, t: (k: string, o?: Record<string, unknown>) => string): string {
   if (badge.state === 'shipped_elsewhere' && !badge.carrier) return t('delivery.shippingBadge.shipped_elsewhere_unnamed')
+  if (badge.state === 'generic_carrier' && !badge.carrier) return t('delivery.shippingBadge.generic_carrier_unnamed')
   return t(`delivery.shippingBadge.${badge.state}`, { carrier: badge.carrier ?? '', days: badge.days ?? 0 })
 }
 

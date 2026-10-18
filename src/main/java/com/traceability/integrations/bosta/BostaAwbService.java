@@ -254,6 +254,8 @@ public class BostaAwbService {
 
     /** Reported for a waybill Bosta can't find (deleted in Bosta): skipped before the call, or isolated. */
     public static final String DELETED_IN_BOSTA = "DELETED_IN_BOSTA";
+    /** V169: the shipment is a generic (non-Bosta courier) leg — skipped, never sent to Bosta. */
+    public static final String NOT_A_BOSTA_SHIPMENT = "NOT_A_BOSTA_SHIPMENT";
 
     /**
      * Not printed because Bosta refused part of the chunk and the bad waybill(s) couldn't be pinned down
@@ -512,6 +514,7 @@ public class BostaAwbService {
                 "SELECT id, tracking_number, internal_state::text AS internal_state, " +
                 "       order_id, (raw -> 'type' ->> 'code')::int AS delivery_type_code, " +
                 "       provider_not_found_at IS NOT NULL AS not_found_in_bosta, " +
+                "       provider::text AS provider, " +
                 "       awb_print_failed_reason IS NOT DISTINCT FROM '" + DELETED_IN_BOSTA + "' AS isolated_before " +
                 "FROM shipments WHERE id IN (" + placeholders + ") AND tenant_id = ?",
                 params)));
@@ -543,6 +546,11 @@ public class BostaAwbService {
 
             if (orderId == null) {
                 exclusionReason = "UNLINKED";
+            } else if ("generic".equals(row.get("provider"))) {
+                // V169: a generic (non-Bosta courier) leg has no Bosta waybill — never sent to Bosta,
+                // reported as skipped, not marked failed (no missing_awb alert).
+                exclusions.add(new AwbException(tracking, NOT_A_BOSTA_SHIPMENT));
+                continue;
             } else if (Boolean.TRUE.equals(row.get("not_found_in_bosta"))) {
                 // Bosta's status poll already got "Delivery not found" for it (provider_not_found_at):
                 // never sent to Bosta, reported as skipped — not marked failed, so no missing_awb alert.

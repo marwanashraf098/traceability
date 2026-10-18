@@ -224,7 +224,7 @@ public class LookupService {
                 "       o.id AS order_id, o.number AS order_number, o.status AS order_status " +
                 "FROM shipments s " +
                 "JOIN merchant_orders o ON o.id = s.order_id " +
-                "WHERE s.tracking_number = ? AND s.tenant_id = ?",
+                "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
                 trackingNumber, tenantId);
         } catch (EmptyResultDataAccessException e) {
             throw new LookupNotFoundException("TRACKING_NOT_FOUND", query);

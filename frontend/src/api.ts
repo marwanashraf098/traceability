@@ -168,6 +168,8 @@ export interface OrderSummary {
 export type ShippingBadgeState =
   | 'linked' | 'shipped_elsewhere' | 'awaiting_booking' | 'not_booked_overdue'
   | 'bosta_tracking_not_linked' | 'cancelled'
+  // V169 (non-Bosta couriers): a live generic forward shipment — carrier = its carrier name
+  | 'generic_carrier'
 
 export interface OrderShippingBadge {
   state: ShippingBadgeState

@@ -103,7 +103,7 @@ public class WaybillResolver {
             "       o.raw ->> 'cancelled_at' AS shopify_cancelled_at, o.on_hold, o.is_self_pickup, " +
             "       (o.placed_at > now() - (? * INTERVAL '1 day')) AS in_window " +
             "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
-            "WHERE s.tracking_number = ? AND s.tenant_id = ?",
+            "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
             lookbackDays, tn, tenantId);
 
         if (rows.isEmpty()) return notLinked(tn, tenantId);

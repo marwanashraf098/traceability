@@ -49,6 +49,18 @@ public class ShipmentLinkService {
     public static final String REASON_NO_MATCH        = "NO_MATCH";
     public static final String REASON_AMBIGUOUS_MULTI = "AMBIGUOUS_MULTI";
     public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
+    /** V169 (non-Bosta couriers G1): the order's generic forward leg is past 'created' — Bosta not linked. */
+    public static final String REASON_GENERIC_CONFLICT = "GENERIC_CONFLICT";
+
+    /**
+     * V169: thrown by createOrFindShipment when the order's generic forward leg is past 'created'
+     * (GenericShipments.yieldToBosta → BLOCKED). Nothing was written; the caller must not link.
+     */
+    static class GenericLegBlocksBostaException extends RuntimeException {
+        GenericLegBlocksBostaException(UUID orderId) {
+            super("Order " + orderId + " is already shipped with another carrier");
+        }
+    }
 
     /**
      * Bosta delivery types (raw.type.code) the order-side path — manualLink() and
@@ -223,7 +235,7 @@ public class ShipmentLinkService {
         Object[] existingFwd = jdbc.query(
             "SELECT id::text, tracking_number FROM shipments " +
             "WHERE order_id = ? AND tenant_id = ? " +
-            "  AND shipment_leg = 'forward' " +
+            "  AND shipment_leg = 'forward' AND provider = 'bosta' " +
             "  AND internal_state NOT IN ('terminated', 'cancelled') " +
             "LIMIT 1",
             rs -> rs.next()
@@ -252,6 +264,12 @@ public class ShipmentLinkService {
         // 4. Create shipment if not already present
         boolean isNewShipment = false;
         if (shipmentId == null) {
+            // V169 Bosta wins: a still-cancellable generic leg is cancelled first; past 'created' → refuse.
+            if (com.traceability.courier.GenericShipments.yieldToBosta(jdbc, tenantId, orderId)
+                    == com.traceability.courier.GenericShipments.BostaLink.BLOCKED) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Order is already shipped with another carrier — Traced won't link a Bosta AWB to it");
+            }
             try {
                 shipmentId = UUID.randomUUID();
                 jdbc.update(
@@ -420,6 +438,10 @@ public class ShipmentLinkService {
             try {
                 shipmentId = createOrFindShipment(
                     tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
+            } catch (GenericLegBlocksBostaException e) {
+                // V169 Bosta wins — except over a generic leg past 'created': never guess, route to unlinked
+                // (generic_bosta_conflict, HIGH).
+                return new LinkResult(null, REASON_GENERIC_CONFLICT);
             } catch (DuplicateKeyException e) {
                 // ux_active_forward_shipment_per_order (V104) fired: order already has an active forward
                 // shipment (concurrent double-link race). Route to unlinked.
@@ -514,6 +536,9 @@ public class ShipmentLinkService {
         try {
             shipmentId = createOrFindShipment(
                 tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), null);
+        } catch (GenericLegBlocksBostaException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order is already shipped with another carrier — Traced won't link a Bosta delivery to it");
         } catch (DuplicateKeyException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order already has an active shipment — resolve it before manually linking");
@@ -667,7 +692,7 @@ public class ShipmentLinkService {
         return jdbc.query(
             "SELECT s.id, s.order_id, o.number AS other_number " +
             "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
-            "WHERE s.tracking_number = ? AND s.tenant_id = ?",
+            "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
             rs -> {
                 if (!rs.next()) return null;
                 UUID existingOrderId = rs.getObject("order_id", UUID.class);
@@ -738,7 +763,7 @@ public class ShipmentLinkService {
     private UUID createOrFindShipment(UUID tenantId, UUID orderId, String trackingNumber,
                                        String internalState, BostaDelivery delivery) {
         UUID existing = jdbc.query(
-            "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+            "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta'",
             rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
             trackingNumber, tenantId);
         if (existing != null) {
@@ -754,6 +779,12 @@ public class ShipmentLinkService {
             }
             clearReconcileFlag(orderId, tenantId);
             return existing;
+        }
+
+        // V169 Bosta wins: a still-cancellable generic leg is cancelled first; past 'created' → refuse.
+        if (com.traceability.courier.GenericShipments.yieldToBosta(jdbc, tenantId, orderId)
+                == com.traceability.courier.GenericShipments.BostaLink.BLOCKED) {
+            throw new GenericLegBlocksBostaException(orderId);
         }
 
         UUID id = UUID.randomUUID();
@@ -1226,7 +1257,7 @@ public class ShipmentLinkService {
     private UUID createOrFindReturnShipment(UUID tenantId, UUID orderId, String trackingNumber,
                                              String internalState, BostaDelivery delivery) {
         UUID existing = jdbc.query(
-            "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+            "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta'",
             rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
             trackingNumber, tenantId);
         if (existing != null) {

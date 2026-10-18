@@ -399,7 +399,7 @@ public class BostaDiscoveryPollJob {
         String oldTracking = (String) row.get("discovery_high_water_tracking");
         if (oldTracking != null) {
             String raw = tx.execute(s -> jdbc.query(
-                "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND raw IS NOT NULL " +
+                "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta' AND raw IS NOT NULL " +
                 "UNION ALL SELECT raw::text FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ? " +
                 "  AND raw IS NOT NULL LIMIT 1",
                 rs -> rs.next() ? rs.getString(1) : null, tenantId, oldTracking, tenantId, oldTracking));
@@ -588,7 +588,7 @@ public class BostaDiscoveryPollJob {
 
         List<String> found = tx.execute(s -> jdbc.query(
             "SELECT tracking_number FROM shipments " +
-            "WHERE tenant_id = ? AND tracking_number IN (" + placeholders + ")",
+            "WHERE tenant_id = ? AND provider = 'bosta' AND tracking_number IN (" + placeholders + ")",
             (rs, i) -> rs.getString(1),
             args.toArray()));
         return new HashSet<>(found);

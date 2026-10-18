@@ -62,7 +62,7 @@ public class PackCompleter {
         String tn = TrackingNumberNormalizer.normalize(rawWaybill);
         Boolean onOrder = tn != null && Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM shipments WHERE tracking_number = ? AND order_id = ? " +
-            "               AND tenant_id = ? AND shipment_leg = 'forward')",
+            "               AND tenant_id = ? AND provider = 'bosta' AND shipment_leg = 'forward')",
             Boolean.class, tn, orderId, tenantId));
         if (!Boolean.TRUE.equals(onOrder)) {
             throw new CompleteFailed("WAYBILL_NOT_ON_ORDER",

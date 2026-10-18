@@ -531,6 +531,7 @@ public class OrderController {
             FROM merchant_orders o
             LEFT JOIN LATERAL (
                 SELECT id, tracking_number, internal_state, exception_reason,
+                       provider::text AS provider, carrier_name,
                        is_delayed, sla_breached,
                        number_of_attempts, exception_code,
                        -- Canonical attempt count — see the funnel()/summary() LATERALs'
@@ -595,6 +596,7 @@ public class OrderController {
                    o.not_traced_at,
                    (e.id IS NOT NULL) AS is_exchange,
                    o.is_self_pickup, o.shipping_carrier_class, o.shipping_carrier_name,
+                   s.provider AS forward_provider, s.carrier_name AS forward_carrier_name,
                    """ + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + """
                    AS bosta_link_problem
             """ + baseJoin + """
@@ -613,7 +615,8 @@ public class OrderController {
                     rs.getObject("exception_code", Integer.class),
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
-                    notTracedAt != null);
+                    notTracedAt != null,
+                    rs.getString("forward_provider"));
                 return new OrderSummary(
                     rs.getObject("id", UUID.class).toString(),
                     rs.getString("number"),
@@ -637,7 +640,8 @@ public class OrderController {
                         rs.getString("delivery_state"), rs.getString("shipping_carrier_class"),
                         rs.getString("shipping_carrier_name"), rs.getBoolean("bosta_link_problem"),
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
-                        badgeNow, badgeOverdueDays, shipsWithBosta)
+                        badgeNow, badgeOverdueDays, shipsWithBosta,
+                        rs.getString("forward_provider"), rs.getString("forward_carrier_name"))
                 );
             },
             pageParams.toArray()));
@@ -804,7 +808,7 @@ public class OrderController {
                         rs.getString("last_failure_reason"),
                         attempts,
                         history,
-                        OrderStatusDeriver.deriveLegStatus(internalState));
+                        OrderStatusDeriver.deriveLegStatus(internalState, rs.getString("provider")));
                 }, orderId);
 
             // Latest forward-leg shipment status inputs — deliberately a standalone query,
@@ -818,7 +822,7 @@ public class OrderController {
             Map<String, Object> fwd = jdbc.query(
                 """
                 SELECT internal_state, number_of_attempts,
-                       exception_code, is_delayed, sla_breached,
+                       exception_code, is_delayed, sla_breached, provider::text AS provider,
                        -- Canonical attempt count — see the funnel()/summary()/list()
                        -- LATERALs' identical comment (LEFT JOIN, fail-open on unmapped
                        -- codes, fail-closed on no code). Kept in sync manually across all four.
@@ -861,6 +865,7 @@ public class OrderController {
                     m.put("is_delayed", rs.getObject("is_delayed", Boolean.class));
                     m.put("sla_breached", rs.getObject("sla_breached", Boolean.class));
                     m.put("max_progress_rank", rs.getObject("max_progress_rank", Integer.class));
+                    m.put("provider", rs.getString("provider"));
                     return m;
                 }, orderId);
 
@@ -873,7 +878,8 @@ public class OrderController {
                 fwd != null ? (Integer) fwd.get("exception_code") : null,
                 fwd != null ? (Boolean) fwd.get("is_delayed") : null,
                 fwd != null ? (Boolean) fwd.get("sla_breached") : null,
-                order.notTracedAt() != null);
+                order.notTracedAt() != null,
+                fwd != null ? (String) fwd.get("provider") : null);
 
             // Same predicate FulfillService.cancelOrder()/holdOrder() enforce — one query,
             // no second derivation (see FulfillService.isPhysicallyWithCourier()).
@@ -899,13 +905,18 @@ public class OrderController {
             "SELECT o.status, o.is_self_pickup, o.shipping_carrier_class, o.shipping_carrier_name, o.placed_at, " +
             "       (SELECT sh.internal_state FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
             "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_state, " +
+            "       (SELECT sh.provider::text FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
+            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_provider, " +
+            "       (SELECT sh.carrier_name FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
+            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_carrier_name, " +
             "       " + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + " AS bosta_link_problem " +
             "FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ?",
             rs -> rs.next() ? OrderShippingBadge.derive(rs.getString("status"), rs.getBoolean("is_self_pickup"),
                 rs.getString("forward_state"), rs.getString("shipping_carrier_class"), rs.getString("shipping_carrier_name"),
                 rs.getBoolean("bosta_link_problem"),
                 rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
-                Instant.now(), badgeOverdueDays, shipsWithBosta) : null,
+                Instant.now(), badgeOverdueDays, shipsWithBosta,
+                rs.getString("forward_provider"), rs.getString("forward_carrier_name")) : null,
             orderId, tenantId);
     }
 

@@ -11,6 +11,8 @@ import java.util.Set;
  *
  * In precedence order:
  *   cancelled                   the order is cancelled (neutral)
+ *   generic_carrier             a live generic forward shipment (V169, non-Bosta couriers) — names its carrier
+ *                               ("Mylerz"), never Bosta; shown whether or not the tenant has a Bosta account
  *   linked                      a live Bosta forward shipment — the UI keeps its existing delivery badge
  *   (none)                      self-pickup, a tenant without a Bosta account, or an order already
  *                               delivered / returned / lost without a shipment
@@ -25,6 +27,8 @@ public record OrderShippingBadge(String state, String carrier, Integer days) {
 
     public static final String CANCELLED = "cancelled";
     public static final String LINKED = "linked";
+    /** V169: a live generic (non-Bosta courier) forward leg; {@code carrier} = its carrier_name (may be null). */
+    public static final String GENERIC_CARRIER = "generic_carrier";
     public static final String BOSTA_TRACKING_NOT_LINKED = "bosta_tracking_not_linked";
     public static final String SHIPPED_ELSEWHERE = "shipped_elsewhere";
     public static final String NOT_BOOKED_OVERDUE = "not_booked_overdue";
@@ -40,8 +44,24 @@ public record OrderShippingBadge(String state, String carrier, Integer days) {
     public static OrderShippingBadge derive(String orderStatus, boolean selfPickup, String forwardState,
                                             String carrierClass, String carrierName, boolean bostaLinkProblem,
                                             Instant placedAt, Instant now, int overdueDays, boolean tenantShipsWithBosta) {
+        return derive(orderStatus, selfPickup, forwardState, carrierClass, carrierName, bostaLinkProblem,
+            placedAt, now, overdueDays, tenantShipsWithBosta, null, null);
+    }
+
+    /**
+     * V169: as above, plus the latest forward shipment's provider and carrier_name. Only a live
+     * provider = 'generic' leg changes the result (→ {@link #GENERIC_CARRIER}); 'bosta' or null gives
+     * exactly what the 10-argument form gives.
+     */
+    public static OrderShippingBadge derive(String orderStatus, boolean selfPickup, String forwardState,
+                                            String carrierClass, String carrierName, boolean bostaLinkProblem,
+                                            Instant placedAt, Instant now, int overdueDays, boolean tenantShipsWithBosta,
+                                            String forwardProvider, String forwardCarrierName) {
         if ("cancelled".equals(orderStatus)) return new OrderShippingBadge(CANCELLED, null, null);
-        if (forwardState != null && !DEAD_LEG.contains(forwardState)) return new OrderShippingBadge(LINKED, "Bosta", null);
+        if (forwardState != null && !DEAD_LEG.contains(forwardState)) {
+            if ("generic".equals(forwardProvider)) return new OrderShippingBadge(GENERIC_CARRIER, forwardCarrierName, null);
+            return new OrderShippingBadge(LINKED, "Bosta", null);
+        }
         if (selfPickup || !tenantShipsWithBosta || DONE_WITHOUT_SHIPMENT.contains(orderStatus)) return null;
         if (bostaLinkProblem) return new OrderShippingBadge(BOSTA_TRACKING_NOT_LINKED, "Bosta", null);
         if (isShippedElsewhere(carrierClass, forwardState)) return new OrderShippingBadge(SHIPPED_ELSEWHERE, carrierName, null);
@@ -73,7 +93,7 @@ public record OrderShippingBadge(String state, String carrier, Integer days) {
                // 2026-10-05: a fulfillment linked another way (e.g. "linked via exchange EXC-…") is no problem.
                "    AND ft.link_status IS DISTINCT FROM 'linked' " +
                "    AND NOT EXISTS (SELECT 1 FROM shipments s2 WHERE s2.order_id = o.id AND s2.tenant_id = o.tenant_id " +
-               "                      AND s2.tracking_number = ft.tracking_number) " +
+               "                      AND s2.tracking_number = ft.tracking_number AND s2.provider = 'bosta') " +
                "    AND (ft.link_status IN ('conflict', 'gave_up') " +
                "         OR ft.first_seen_at < now() - INTERVAL '" + Math.max(0, graceMinutes) + " minutes'))";
     }

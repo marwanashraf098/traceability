@@ -1,0 +1,23 @@
+{
+  "_comment": "Non-Bosta couriers (G1): GenericTrackingKey.of(input) → key (null = nothing left). Generic shipments only — Bosta numbers never go through it. G2's scan path must load the same file.",
+  "vectors": [
+    { "name": "J&T letters kept, uppercased", "input": "jt1234567890eg", "key": "JT1234567890EG" },
+    { "name": "J&T mixed case with spaces", "input": " JT 0012 3456 ", "key": "JT00123456" },
+    { "name": "Wijha dash removed, prefix kept", "input": "WJ-12345", "key": "WJ12345" },
+    { "name": "lower-case prefix with dash", "input": "wj-12345", "key": "WJ12345" },
+    { "name": "plain digits (Mylerz)", "input": "123456789", "key": "123456789" },
+    { "name": "Arabic-Indic digits", "input": "٧٧٧١٢٣٤٥٦٧٨٩٠", "key": "7771234567890" },
+    { "name": "Persian digits with letters", "input": "MZ۱۲۳۴۵", "key": "MZ12345" },
+    { "name": "internal spaces, tab and newline", "input": "AB 12\t34\n56", "key": "AB123456" },
+    { "name": "zero-width and no-break space", "input": "​AB 123‎", "key": "AB123" },
+    { "name": "URL with awb query param", "input": "https://track.example.com/track?awb=MY-998877&lang=en", "key": "MY998877" },
+    { "name": "URL with billcode param (J&T)", "input": "https://www.jtexpress.eg/trajectoryQuery?billcode=JT0001234567", "key": "JT0001234567" },
+    { "name": "URL with trackingNumber param", "input": "https://shipblu.com/tracking?trackingNumber=SB12345", "key": "SB12345" },
+    { "name": "URL with encoded param value", "input": "https://x.example/t?waybill=AB%2012%2D34", "key": "AB1234" },
+    { "name": "URL, no tracking param: last path segment", "input": "https://mylerz.net/track/MZ-55443?utm=x", "key": "MZ55443" },
+    { "name": "URL with trailing slash", "input": "https://carrier.example/shipments/4455/", "key": "4455" },
+    { "name": "www URL without scheme", "input": "www.aramex.com/track/results?ShipmentNumber=1234567", "key": "1234567" },
+    { "name": "punctuation only", "input": " - / . ", "key": null },
+    { "name": "empty", "input": "", "key": null }
+  ]
+}

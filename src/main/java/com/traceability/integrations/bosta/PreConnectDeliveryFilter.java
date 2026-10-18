@@ -91,7 +91,7 @@ public class PreConnectDeliveryFilter {
 
     private boolean isTracedOwned(UUID tenantId, String trackingNumber) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND tracking_number = ?) " +
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta') " +
             "    OR EXISTS (SELECT 1 FROM exchanges WHERE tenant_id = ? AND tracking_number = ? " +
             "                 AND return_request_id IS NOT NULL) " +
             "    OR EXISTS (SELECT 1 FROM return_requests WHERE tenant_id = ? AND bosta_tracking_number = ?)",
