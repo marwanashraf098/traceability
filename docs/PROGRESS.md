@@ -12,18 +12,28 @@
   MigrationSmokeTest 166 → 167, NotTracedBackfillTest 111 → 112 (+ V170).
 - **`pack_print_jobs`:** status queued / running / done / partial / failed, kind print (scope/sort/paper) | reprint
   (reprint_batch_id), total / done / candidate / remaining counts, `result` jsonb `{items:[{o,n,s,t,r}], message}`
-  (r = null | PRINTED | slice 1 / A reason | PRINT_INTERRUPTED | ORDER_CANCELLED), pdf bytea + pdf_bytes, batch_id,
-  expires_at. Partial UNIQUE: one queued-or-running job per tenant. RLS NULLIF + FORCE; app_user SELECT/INSERT/UPDATE
-  (no DELETE — cleanup NULLs pdf / pdf_bytes).
+  (r = null | PRINTED | slice 1 / A reason | PRINT_INTERRUPTED | ORDER_CANCELLED), pdf bytea + pdf_bytes (the FINAL
+  merged PDF, written once when the job ends), batch_id, expires_at. Partial UNIQUE: one queued-or-running job per
+  tenant. RLS NULLIF + FORCE; app_user SELECT/INSERT/UPDATE (no DELETE).
+- **`pack_print_job_parts`** (review change 1, folded into V170): each Bosta request's PDF inserted ONCE (job_id,
+  tenant_id, seq, pdf, label_count, tracking_numbers — the latter for the per-part page-order check), composite FK
+  (job_id, tenant_id) → jobs; RLS NULLIF + FORCE; app_user SELECT/INSERT/DELETE (no UPDATE). A part is checked
+  readable (`WaybillPdfAssembler.readable`) before it is stored. Cleanup after 24 h deletes the parts AND NULLs the
+  final pdf.
 - **Runner** (`PrintJobRunner`, JobRunr `retries = 0`): server-wide `PrintJobSlots` (Semaphore,
   `traced.print-jobs.max-running` = 2; no slot → stays queued, `updated_at` bumped, rescheduled in
   `traced.print-jobs.queue-retry-seconds` = 5) → claim queued → running → plan (print: `PackPrintBatchStore.candidates`,
   first `MAX_WAYBILLS_PER_JOB` = 490; reprint: `PackListService.reprintItems` — now public, own read tx, the old private
   query, never copied) → `printAwbDetailed` per ≤ 49 (`BATCH_SIZE`, now public) inside
-  `BostaRateLimiter.userFacing` → after each request ONE short tx saves outcomes + the merged PDF so far
-  (`assembleChunks`, pick-list order). BOSTA_BUSY / BOSTA_AUTH stop the job (the rest reported without a call).
-  End: `PrintJobStore.finish` locks the running row and, in the SAME tx, writes the batch (print, printed > 0, PDF
-  exists) then the row (done | partial = stopped with labels | failed = stopped with none); expires_at = +24 h.
+  `BostaRateLimiter.userFacing` → after each request ONE short tx saves outcomes + inserts that request's part(s).
+  **Heartbeat (review change 2):** `printAwbDetailed(…, Runnable beforeEachCall)` runs the job's heartbeat
+  (`PrintJobStore.heartbeat`, own short tx, updated_at = now() WHERE running) immediately before EVERY mass-awb call —
+  each request and each slice 1 isolation call (all calls go through `BostaAwbService.massAwb`); a swept job → the
+  heartbeat throws `JobNotRunningException` and the runner stops before calling Bosta. BOSTA_BUSY / BOSTA_AUTH stop
+  the job (the rest reported without a call). End: `PrintJobStore.finish` locks the running row and, in the SAME tx,
+  merges the parts in seq order (`assembleChunks`, pick-list order, page order per part) into the final PDF (written
+  once), writes the batch (print, printed > 0, PDF exists), then the row (done | partial = stopped with labels |
+  failed = stopped with none); expires_at = +24 h. The sweeper ends a stuck job the same way (merge once).
   Every write is conditional on status 'running', so a swept job is never resurrected.
 - **401 / 403 on mass-awb:** gateway → `BostaAuthException` (same message) → `BOSTA_AUTH`: nobody marked, no
   missing_awb, print stops, "Bosta connection problem — check Settings → Connections" (EN + AR) — also on single print
@@ -55,8 +65,14 @@
   the whole job → j7; FE old UI → 8/8; 409 as error → 409 test; no resume → resume test.
   Full backend: 3037 run, 4 skipped, 1 red — ExchangeBackfillTest only (known). Vitest 1036/1036 (136 files; baseline
   1028 + 8); browser 101 + 1 skipped (89 + 12); tsc + vite build clean.
-- **Known limits:** a single `printAwbDetailed` call (one request + up to 8 isolation calls) longer than 10 min would be
-  swept mid-flight (its later writes are then refused); one JVM assumed for the 2-slot limit (as BostaRateLimiter).
+- **Review changes (2026-10-19):** (1) parts + final PDF written once (`j11`: 3 requests → 3 part rows seq 1–3 /
+  49-49-22, a trigger logs exactly ONE write of `pack_print_jobs.pdf` and no part UPDATE, pdf NULL during every call;
+  cleanup deletes parts + pdf); (2) heartbeat before every call (`j12`: 8 calls × 90 fake seconds = 12 min, never
+  swept; a call hanging 11 min → swept, and the heartbeat before call 3 stops it). Mutations: no heartbeat → j12 red;
+  heartbeat only before requests (not isolation calls) → j12 red; PDF rewritten during the run → j11 red.
+- **Known limits:** a single Bosta call (incl. its 3 network retries, ≤ ~77 s) can't exceed the 10 min window, so the
+  heartbeat closes the old "long isolation swept mid-flight" gap; one JVM assumed for the 2-slot limit (as
+  BostaRateLimiter).
 - **G1 overlap:** `PackListService` (reprintItems made public; G1 may filter generic items there),
   `PackListController`, `PackPrintBatchController` (deprecation), `BostaAwbService` / `BostaHttpGateway` (BOSTA_AUTH),
   migrations (V170 vs G1's V168/V169). `PackPrintBatchStore.candidates()` and `loadPrintable` untouched.

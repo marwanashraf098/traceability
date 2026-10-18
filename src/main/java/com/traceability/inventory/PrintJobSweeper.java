@@ -17,7 +17,7 @@ import java.util.UUID;
 /**
  * Merged-PDF slice B — every minute: fails print jobs not updated for 10 minutes
  * ({@link PrintJobStore#sweepStuck}) and deletes PDF bytes past their 24 h expiry
- * ({@link PrintJobStore#deleteExpiredPdfs}). The tenant list is a cross-tenant read of tenant ids only,
+ * ({@link PrintJobStore#deleteExpiredPdfs} — the parts and the final PDF). The tenant list is a cross-tenant read of tenant ids only,
  * on the owner pool — the RefundDetailsPurgeJob pattern; every write runs per tenant in
  * TenantContext.runAs under RLS. Logs counts only.
  */
@@ -42,10 +42,11 @@ public class PrintJobSweeper {
     @Job(name = "Print jobs sweep")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(
-            "SELECT DISTINCT tenant_id FROM pack_print_jobs " +
-            "WHERE (status IN ('queued', 'running') " +
-            "       AND updated_at < now() - make_interval(mins => " + PrintJobStore.STUCK_AFTER_MINUTES + ")) " +
-            "   OR (pdf IS NOT NULL AND expires_at < now())", UUID.class);
+            "SELECT DISTINCT j.tenant_id FROM pack_print_jobs j " +
+            "WHERE (j.status IN ('queued', 'running') " +
+            "       AND j.updated_at < now() - make_interval(mins => " + PrintJobStore.STUCK_AFTER_MINUTES + ")) " +
+            "   OR (j.expires_at < now() AND (j.pdf IS NOT NULL OR EXISTS " +
+            "       (SELECT 1 FROM pack_print_job_parts p WHERE p.job_id = j.id)))", UUID.class);
         for (UUID tenantId : tenants) {
             try {
                 sweepTenant(tenantId);

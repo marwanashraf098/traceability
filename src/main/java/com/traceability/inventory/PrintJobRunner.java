@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
 
@@ -31,16 +30,24 @@ import java.util.*;
  *      {@link PackListService#reprintItems} (cancelled orders skipped, as before).
  *   3. Requests of ≤ {@link BostaAwbService#BATCH_SIZE} (49), one after another, each through
  *      {@link BostaAwbService#printAwbDetailed} at user-facing limiter priority — so slice 1's pre-filter and
- *      isolation and slice A's busy / temporary handling apply unchanged. After each request the outcomes
- *      and the merged PDF so far (pick-list order, page order checked per chunk) are saved in one short
- *      transaction. No transaction or connection is held during a Bosta call.
- *   4. A rate limit or a refused API key stops it (the rest is reported without being sent); a print writes
- *      its batch row only after the merged PDF exists, in the same transaction that ends the job.
+ *      isolation and slice A's busy / temporary handling apply unchanged. Immediately before every Bosta call
+ *      (each request and each isolation call) the job's heartbeat is written in its own short transaction, so
+ *      a long isolation is never swept while it is still calling Bosta. After each request the outcomes are
+ *      saved and its PDF(s) inserted once each as parts — never a growing PDF. No transaction or connection is
+ *      held during a Bosta call.
+ *   4. A rate limit or a refused API key stops it (the rest is reported without being sent). The end
+ *      ({@link PrintJobStore#finish}) merges the parts into the final PDF, written once, and a print's batch
+ *      row in the same transaction.
  */
 @Component
 public class PrintJobRunner {
 
     private static final Logger log = LoggerFactory.getLogger(PrintJobRunner.class);
+
+    /** The heartbeat found the job no longer running (swept): stop before calling Bosta again. */
+    static final class JobNotRunningException extends RuntimeException {
+        JobNotRunningException() { super("print job is no longer running", null, false, false); }
+    }
 
     /** Waybills per print job: 10 Bosta requests of 49. Above it, "N more ready — print again". */
     public static final int MAX_WAYBILLS_PER_JOB = 490;
@@ -127,7 +134,6 @@ public class PrintJobRunner {
         // ── Requests of ≤ 49, one after another ──
         Map<String, Integer> indexOf = new HashMap<>();
         for (int i = 0; i < items.size(); i++) indexOf.put(items.get(i).t(), i);
-        List<WaybillPdfAssembler.ChunkPdf> pdfs = new ArrayList<>();
         String stop = null;
         Message message = null;
         int done = items.size() - toTry.size();
@@ -140,10 +146,14 @@ public class PrintJobRunner {
                 continue;
             }
             List<UUID> ids = chunk.stream().map(i -> items.get(i).s()).toList();
+            Runnable heartbeat = () -> { if (!store.heartbeat(jobId)) throw new JobNotRunningException(); };
             AwbDetailedResult bosta;
             try {
                 String p = paper;
-                bosta = BostaRateLimiter.userFacing(() -> awbService.printAwbDetailed(tenantId, ids, p, null));
+                bosta = BostaRateLimiter.userFacing(() -> awbService.printAwbDetailed(tenantId, ids, p, null, heartbeat));
+            } catch (JobNotRunningException e) {
+                log.warn("print job {}: tenant={} is no longer running (swept) — stopping", jobId, tenantId);
+                return;
             } catch (NoBostaAccountException e) {
                 message = msg(e.code(), e.messageEn(), e.messageAr());
                 stop = PrintJobStore.PRINT_INTERRUPTED;
@@ -160,14 +170,22 @@ public class PrintJobRunner {
                 continue;
             }
 
-            boolean newPdf = false;
-            int pdfsBefore = pdfs.size();
+            List<WaybillPdfAssembler.ChunkPdf> newParts = new ArrayList<>();
             for (BostaAwbService.AwbException ex : bosta.exclusions()) set(items, indexOf, ex.trackingNumber(), ex.reason());
             for (AwbChunk c : bosta.chunks()) {
-                if (c.pdf() != null) {
-                    pdfs.add(new WaybillPdfAssembler.ChunkPdf(c.pdf(), c.trackingNumbers()));
+                if (c.pdf() != null && WaybillPdfAssembler.readable(c.pdf())) {
+                    newParts.add(new WaybillPdfAssembler.ChunkPdf(c.pdf(), c.trackingNumbers()));
                     for (String tn : c.trackingNumbers()) set(items, indexOf, tn, PrintJobStore.PRINTED);
-                    newPdf = true;
+                } else if (c.pdf() != null) {
+                    // Bosta's PDF for this part can't be opened: its waybills weren't really printed.
+                    log.warn("print job {}: tenant={} could not read a Bosta PDF of {} waybill(s)",
+                        jobId, tenantId, c.trackingNumbers().size());
+                    for (String tn : c.trackingNumbers()) set(items, indexOf, tn, PrintJobStore.PRINT_INTERRUPTED);
+                    if (stop == null) {
+                        stop = PrintJobStore.PRINT_INTERRUPTED;
+                        message = msg("PDF_UNREADABLE", "Bosta returned a waybill PDF that couldn't be read. Print the rest again.",
+                            "أرسلت Bosta ملف بوالص لا يمكن قراءته. اطبع الباقي مرة أخرى.");
+                    }
                 } else {
                     String reason = c.emailMessage() != null ? "BOSTA_EMAIL_PATH" : c.rejectedReason();
                     for (String tn : c.trackingNumbers()) set(items, indexOf, tn, reason);
@@ -179,29 +197,7 @@ public class PrintJobRunner {
             }
             done += chunk.size();
 
-            byte[] merged = null;
-            Boolean orderGuaranteed = null;
-            if (newPdf) {
-                List<String> printedInOrder = items.stream().filter(it -> PrintJobStore.PRINTED.equals(it.r()))
-                    .map(Item::t).toList();
-                try {
-                    WaybillPdfAssembler.Assembled a = WaybillPdfAssembler.assembleChunks(pdfs, printedInOrder);
-                    merged = a.pdf();
-                    orderGuaranteed = a.orderGuaranteed();
-                } catch (IOException e) {
-                    // This request's PDF is unreadable: its waybills weren't really printed; what was saved stays.
-                    log.warn("print job {}: tenant={} could not read Bosta's PDF: {}", jobId, tenantId, e.getMessage());
-                    List<WaybillPdfAssembler.ChunkPdf> bad = pdfs.subList(pdfsBefore, pdfs.size());
-                    for (WaybillPdfAssembler.ChunkPdf b : bad) {
-                        for (String tn : b.trackingNumbers()) set(items, indexOf, tn, PrintJobStore.PRINT_INTERRUPTED);
-                    }
-                    bad.clear();
-                    message = msg("PDF_UNREADABLE", "Bosta returned a waybill PDF that couldn't be read. Print the rest again.",
-                        "أرسلت Bosta ملف بوالص لا يمكن قراءته. اطبع الباقي مرة أخرى.");
-                    stop = PrintJobStore.PRINT_INTERRUPTED;
-                }
-            }
-            if (!store.saveProgress(jobId, done, new Result(items, message), merged, orderGuaranteed)) {
+            if (!store.saveProgress(jobId, done, new Result(items, message), newParts)) {
                 log.warn("print job {}: tenant={} is no longer running (swept) — stopping", jobId, tenantId);
                 return;
             }

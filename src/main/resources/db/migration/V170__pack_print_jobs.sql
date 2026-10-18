@@ -11,8 +11,10 @@
 -- partial (stopped early — Bosta busy / API key refused — with labels) | failed (nothing
 -- printed, or swept: not updated for 10 minutes; any labels saved stay downloadable).
 -- result: per-waybill outcomes ({items: [...]}) with slice 1 / A reason codes + the message.
--- pdf: the merged PDF; PrintJobSweeper sets pdf / pdf_bytes to NULL after expires_at (24 h
--- after the job ended). No row is ever deleted by the app.
+-- pack_print_job_parts: each Bosta request's PDF, stored ONCE as its own row while the job runs
+-- (never rewritten); the job's pdf is the merge of its parts in seq order, written ONCE when the
+-- job ends (runner or sweeper). PrintJobSweeper deletes the parts and NULLs pdf / pdf_bytes after
+-- expires_at (24 h after the job ended). A job row is never deleted by the app.
 --
 -- One queued-or-running job per tenant (partial UNIQUE) — a second start answers 409 with
 -- that job's id. RLS: tenant_isolation (NULLIF pattern) + FORCE; app_user SELECT / INSERT /
@@ -48,7 +50,8 @@ CREATE TABLE pack_print_jobs (
     expires_at        timestamptz,
     CHECK ((kind = 'print') = (scope IS NOT NULL AND sort IS NOT NULL AND paper IS NOT NULL)),
     CHECK ((kind = 'reprint') = (reprint_batch_id IS NOT NULL)),
-    CHECK ((pdf IS NULL) = (pdf_bytes IS NULL))
+    CHECK ((pdf IS NULL) = (pdf_bytes IS NULL)),
+    UNIQUE (id, tenant_id)
 );
 
 -- One queued-or-running job per tenant.
@@ -71,3 +74,29 @@ CREATE POLICY tenant_isolation ON pack_print_jobs
 
 REVOKE ALL ON pack_print_jobs FROM app_user;
 GRANT SELECT, INSERT, UPDATE ON pack_print_jobs TO app_user;
+
+-- One Bosta request's PDF (a request isolating a bad waybill can return several — one row each).
+-- tracking_numbers = the waybills in it, so the final merge checks page order per part. Written
+-- once (app_user has no UPDATE); deleted with the job's PDF after 24 h. The composite FK keeps a
+-- part in its job's tenant.
+CREATE TABLE pack_print_job_parts (
+    id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id            uuid        NOT NULL,
+    tenant_id         uuid        NOT NULL REFERENCES tenants(id),
+    seq               integer     NOT NULL CHECK (seq > 0),
+    pdf               bytea       NOT NULL,
+    label_count       integer     NOT NULL CHECK (label_count > 0),
+    tracking_numbers  text[]      NOT NULL,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (job_id, seq),
+    FOREIGN KEY (job_id, tenant_id) REFERENCES pack_print_jobs (id, tenant_id)
+);
+
+ALTER TABLE pack_print_job_parts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pack_print_job_parts FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON pack_print_job_parts
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+
+REVOKE ALL ON pack_print_job_parts FROM app_user;
+GRANT SELECT, INSERT, DELETE ON pack_print_job_parts TO app_user;

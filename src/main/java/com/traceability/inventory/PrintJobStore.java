@@ -20,6 +20,10 @@ import java.util.*;
  * Per-waybill outcomes live in {@code result.items}, in pick-list order: {@code r} is null (not tried
  * yet), {@link #PRINTED}, or a slice 1 / A reason code. Every write of a running job is conditional on
  * {@code status = 'running'}, so a job the sweeper has already failed is never written again.
+ *
+ * PDFs: each Bosta request's PDF is inserted once into {@code pack_print_job_parts} (never rewritten); the
+ * job's own {@code pdf} is the merge of its parts in seq order, written once when the job ends
+ * ({@link #finish} or {@link #sweepStuck}).
  */
 @Component
 public class PrintJobStore {
@@ -167,19 +171,50 @@ public class PrintJobStore {
     }
 
     /**
-     * After each Bosta request: progress, outcomes and the merged PDF so far (labels already fetched survive
-     * a restart). False when the job is no longer running (swept) — the runner then stops.
+     * The job's heartbeat, immediately before every Bosta call (and after each request, through
+     * {@link #saveProgress}): a running job with a recent updated_at is never swept. False when the job is no
+     * longer running (swept) — the runner then stops before calling Bosta.
      */
     @Transactional
-    public boolean saveProgress(UUID jobId, int doneCount, Result result, byte[] pdf, Boolean orderGuaranteed) {
+    public boolean heartbeat(UUID jobId) {
         UUID tenantId = TenantContext.require();
-        return jdbc.update(
-            "UPDATE pack_print_jobs SET done_count = ?, result = ?::jsonb, " +
-            "       pdf = COALESCE(?::bytea, pdf), pdf_bytes = COALESCE(?::integer, pdf_bytes), " +
-            "       order_guaranteed = COALESCE(?::boolean, order_guaranteed), updated_at = now() " +
+        return jdbc.update("UPDATE pack_print_jobs SET updated_at = now() " +
+                           "WHERE id = ? AND tenant_id = ? AND status = 'running'", jobId, tenantId) == 1;
+    }
+
+    /**
+     * After each Bosta request: progress and outcomes, plus that request's PDF(s) inserted once each as new
+     * parts (labels already fetched survive a restart). False when the job is no longer running (swept) — the
+     * runner then stops, and nothing is written.
+     */
+    @Transactional
+    public boolean saveProgress(UUID jobId, int doneCount, Result result, List<WaybillPdfAssembler.ChunkPdf> newParts) {
+        UUID tenantId = TenantContext.require();
+        int n = jdbc.update(
+            "UPDATE pack_print_jobs SET done_count = ?, result = ?::jsonb, updated_at = now() " +
             "WHERE id = ? AND tenant_id = ? AND status = 'running'",
-            doneCount, json(result), pdf, pdf == null ? null : pdf.length, orderGuaranteed,
-            jobId, tenantId) == 1;
+            doneCount, json(result), jobId, tenantId);
+        if (n == 0) return false;
+        Integer seq = jdbc.queryForObject(
+            "SELECT COALESCE(MAX(seq), 0) FROM pack_print_job_parts WHERE job_id = ? AND tenant_id = ?",
+            Integer.class, jobId, tenantId);
+        for (WaybillPdfAssembler.ChunkPdf part : newParts) {
+            final int partSeq = ++seq;
+            String[] tns = part.trackingNumbers().toArray(String[]::new);
+            jdbc.update(con -> {
+                var ps = con.prepareStatement(
+                    "INSERT INTO pack_print_job_parts (job_id, tenant_id, seq, pdf, label_count, tracking_numbers) " +
+                    "VALUES (?, ?, ?, ?, ?, ?)");
+                ps.setObject(1, jobId);
+                ps.setObject(2, tenantId);
+                ps.setInt(3, partSeq);
+                ps.setBytes(4, part.pdf());
+                ps.setInt(5, tns.length);
+                ps.setArray(6, con.createArrayOf("text", tns));
+                return ps;
+            });
+        }
+        return true;
     }
 
     /**
@@ -229,32 +264,70 @@ public class PrintJobStore {
     @Transactional
     public int deleteExpiredPdfs() {
         UUID tenantId = TenantContext.require();
-        return jdbc.update("UPDATE pack_print_jobs SET pdf = NULL, pdf_bytes = NULL " +
-                           "WHERE tenant_id = ? AND pdf IS NOT NULL AND expires_at < now()", tenantId);
+        List<UUID> expired = jdbc.queryForList(
+            "SELECT j.id FROM pack_print_jobs j " +
+            "WHERE j.tenant_id = ? AND j.expires_at < now() " +
+            "  AND (j.pdf IS NOT NULL OR EXISTS (SELECT 1 FROM pack_print_job_parts p " +
+            "                                    WHERE p.job_id = j.id AND p.tenant_id = j.tenant_id))",
+            UUID.class, tenantId);
+        for (UUID jobId : expired) {
+            jdbc.update("DELETE FROM pack_print_job_parts WHERE job_id = ? AND tenant_id = ?", jobId, tenantId);
+            jdbc.update("UPDATE pack_print_jobs SET pdf = NULL, pdf_bytes = NULL WHERE id = ? AND tenant_id = ?",
+                jobId, tenantId);
+        }
+        return expired.size();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Writes the end of a locked job (caller's transaction): batch for printed waybills of a print, then the row. */
+    /**
+     * Writes the end of a locked job (caller's transaction): merges its parts in seq order into the final PDF
+     * (pick-list order, page order checked per part) — the job's pdf is written here, once — then the batch for
+     * a print's printed waybills, then the row.
+     */
     private void endJob(Job j, String status, Result result, String errorCode) {
-        List<Item> items = result.items().stream()
-            .map(it -> it.r() == null ? it.withOutcome(PRINT_INTERRUPTED) : it).toList();
-        Result done = new Result(items, result.message());
+        List<Item> items = new ArrayList<>(result.items().stream()
+            .map(it -> it.r() == null ? it.withOutcome(PRINT_INTERRUPTED) : it).toList());
+        PrintJobStore.Message message = result.message();
+
+        List<WaybillPdfAssembler.ChunkPdf> parts = jdbc.query(
+            "SELECT pdf, tracking_numbers FROM pack_print_job_parts WHERE job_id = ? AND tenant_id = ? ORDER BY seq",
+            (rs, i) -> new WaybillPdfAssembler.ChunkPdf(rs.getBytes(1),
+                List.of((String[]) rs.getArray(2).getArray())),
+            j.id(), j.tenantId());
+        byte[] pdf = null;
+        Boolean orderGuaranteed = null;
+        if (!parts.isEmpty()) {
+            List<String> printedOrder = items.stream().filter(it -> PRINTED.equals(it.r())).map(Item::t).toList();
+            try {
+                WaybillPdfAssembler.Assembled a = WaybillPdfAssembler.assembleChunks(parts, printedOrder);
+                pdf = a.pdf();
+                orderGuaranteed = a.orderGuaranteed();
+            } catch (java.io.IOException e) {
+                // Each part was checked readable when stored; if the merge still fails nothing can be handed out.
+                items.replaceAll(it -> PRINTED.equals(it.r()) ? it.withOutcome(PRINT_INTERRUPTED) : it);
+                message = new Message("PDF_UNREADABLE",
+                    "The waybills couldn't be put into one PDF. Print again.",
+                    "تعذّر جمع البوالص في ملف PDF واحد. اطبع مرة أخرى.");
+                status = "failed";
+            }
+        }
 
         UUID batchId = j.batchId();
-        boolean hasPdf = j.pdfBytes() != null;
         List<PackPrintBatchStore.PrintedItem> printed = items.stream().filter(it -> PRINTED.equals(it.r()))
             .map(it -> new PackPrintBatchStore.PrintedItem(it.o(), it.s(), it.t())).toList();
-        if ("print".equals(j.kind()) && hasPdf && !printed.isEmpty() && batchId == null) {
+        if ("print".equals(j.kind()) && pdf != null && !printed.isEmpty() && batchId == null) {
             batchId = batches.record(j.requestedBy(), j.paper(), j.sort(), j.scope(),
-                Boolean.TRUE.equals(j.orderGuaranteed()), printed).batchId();
+                Boolean.TRUE.equals(orderGuaranteed), printed).batchId();
         }
         jdbc.update(
             "UPDATE pack_print_jobs SET status = ?, result = ?::jsonb, error_code = ?, batch_id = ?, " +
+            "       pdf = ?, pdf_bytes = ?, order_guaranteed = ?, " +
             "       done_count = total, updated_at = now(), finished_at = now(), " +
             "       expires_at = now() + make_interval(hours => " + KEEP_PDF_HOURS + ") " +
             "WHERE id = ? AND tenant_id = ?",
-            status, json(done), errorCode, batchId, j.id(), j.tenantId());
+            status, json(new Result(items, message)), errorCode, batchId,
+            pdf, pdf == null ? null : pdf.length, orderGuaranteed, j.id(), j.tenantId());
     }
 
     private Job job(java.sql.ResultSet rs) throws java.sql.SQLException {

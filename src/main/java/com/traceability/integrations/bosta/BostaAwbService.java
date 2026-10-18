@@ -145,6 +145,18 @@ public class BostaAwbService {
      */
     public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
                                               String formatOverride, String langOverride) {
+        return printAwbDetailed(tenantId, shipmentIds, formatOverride, langOverride, () -> {});
+    }
+
+    /**
+     * {@link #printAwbDetailed(UUID, List, String, String)} with {@code beforeEachCall} run immediately before
+     * every mass-awb request — each chunk and each isolation call (merged-PDF slice B: the print job's
+     * heartbeat, a short transaction of its own; never called while a transaction is open here). An exception
+     * it throws stops the print and propagates to the caller.
+     */
+    public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
+                                              String formatOverride, String langOverride,
+                                              Runnable beforeEachCall) {
 
         // Review mode (V130): a simulated-courier tenant has no Bosta account and is never sent
         // to Bosta — its waybills are rendered locally, before the account lookup below (which
@@ -212,7 +224,7 @@ public class BostaAwbService {
             }
             AwbChunk whole;
             try {
-                whole = toChunk(chunk, bostaGateway.printMassAwb(apiKey, chunk, format, lang));
+                whole = toChunk(chunk, massAwb(beforeEachCall, apiKey, chunk, format, lang));
             } catch (BostaException e) {
                 String temporary = temporaryReason(e);
                 if (temporary != null) {
@@ -227,7 +239,7 @@ public class BostaAwbService {
                 if (kind != null) {
                     // One (or a few) waybills Bosta can't find / won't print: isolate them, print the rest.
                     Isolated isolated = isolate(tenantId, apiKey, chunk, format, lang, trackingToId,
-                        (BostaAwbRejectedException) e, kind);
+                        (BostaAwbRejectedException) e, kind, beforeEachCall);
                     chunks.addAll(isolated.chunks());
                     busy = isolated.stopReason() != null;
                     if (busy) stopReason = isolated.stopReason();
@@ -331,6 +343,13 @@ public class BostaAwbService {
         return named;
     }
 
+    /** One mass-awb request, right after {@code beforeEachCall}. */
+    private AwbPrintResult massAwb(Runnable beforeEachCall, String apiKey, List<String> trackings,
+                                   String format, String lang) {
+        beforeEachCall.run();
+        return bostaGateway.printMassAwb(apiKey, trackings, format, lang);
+    }
+
     private static AwbChunk toChunk(List<String> trackings, AwbPrintResult result) {
         if (result.isInline()) return new AwbChunk(trackings, result.pdfBytes(), null, null);
         // Bosta went async — surface message, treat chunk as un-printable
@@ -354,7 +373,8 @@ public class BostaAwbService {
      * also stops the whole print). Called with no transaction open (each markFailed is its own).
      */
     private Isolated isolate(UUID tenantId, String apiKey, List<String> chunk, String format, String lang,
-                                   Map<String, UUID> trackingToId, BostaAwbRejectedException first, Isolation firstKind) {
+                             Map<String, UUID> trackingToId, BostaAwbRejectedException first, Isolation firstKind,
+                             Runnable beforeEachCall) {
         List<AwbChunk> out = new ArrayList<>();
         Map<String, String> culprits = new LinkedHashMap<>();   // tracking → reason
         List<String> unresolved = new ArrayList<>();
@@ -378,7 +398,7 @@ public class BostaAwbService {
                 List<String> rest = bad.stream().filter(tn -> !hints.contains(tn)).toList();
                 calls++;
                 try {
-                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    out.add(toChunk(rest, massAwb(beforeEachCall, apiKey, rest, format, lang)));
                     bad = new ArrayList<>(hints);                    // confirmed: the culprit is among the hints
                     err = null;
                 } catch (BostaException e) {
@@ -400,7 +420,7 @@ public class BostaAwbService {
                 List<String> secondHalf = List.copyOf(bad.subList(firstHalf.size(), bad.size()));
                 calls++;
                 try {
-                    out.add(toChunk(firstHalf, bostaGateway.printMassAwb(apiKey, firstHalf, format, lang)));
+                    out.add(toChunk(firstHalf, massAwb(beforeEachCall, apiKey, firstHalf, format, lang)));
                     bad = new ArrayList<>(secondHalf);
                     err = null;
                 } catch (BostaException e) {
@@ -422,7 +442,7 @@ public class BostaAwbService {
                 waiting.clear();
                 calls++;
                 try {
-                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    out.add(toChunk(rest, massAwb(beforeEachCall, apiKey, rest, format, lang)));
                     break search;
                 } catch (BostaException e) {
                     Isolation k = isolationKind(e);

@@ -103,6 +103,8 @@ class PrintJobTest {
     private final Set<String> deleted = new HashSet<>();
     private final Map<Integer, Function<Integer, Throwable>> failAt = new HashMap<>();
     private boolean calledInsideTransaction;
+    /** Runs at the start of each fake Bosta call (call number), before it answers. */
+    private java.util.function.IntConsumer onCall;
     private long counter = 0;
 
     @BeforeEach
@@ -111,12 +113,14 @@ class PrintJobTest {
         deleted.clear();
         failAt.clear();
         calledInsideTransaction = false;
+        onCall = null;
         reset(bostaGateway, jobScheduler);
         when(bostaGateway.printMassAwb(anyString(), anyList(), anyString(), anyString()))
             .thenAnswer(inv -> {
                 List<String> sent = List.copyOf(inv.getArgument(1));
                 calls.add(sent);
                 if (TransactionSynchronizationManager.isActualTransactionActive()) calledInsideTransaction = true;
+                if (onCall != null) onCall.accept(calls.size());
                 Function<Integer, Throwable> fail = failAt.get(calls.size());
                 if (fail != null) throw fail.apply(calls.size());
                 if (sent.stream().anyMatch(deleted::contains)) {
@@ -354,6 +358,11 @@ class PrintJobTest {
         assertThat(asOther).isZero();
         assertThat(asOwn).isEqualTo(1);
         assertThat(asNone).as("no tenant set → nothing").isZero();
+        String parts = "SELECT COUNT(*) FROM pack_print_job_parts WHERE job_id = ?";
+        Integer partsOther = as(b.tenant, () -> appTx.execute(s -> app.queryForObject(parts, Integer.class, v.jobId())));
+        Integer partsOwn   = as(a.tenant, () -> appTx.execute(s -> app.queryForObject(parts, Integer.class, v.jobId())));
+        assertThat(partsOther).isZero();
+        assertThat(partsOwn).isEqualTo(1);
     }
 
     @Test
@@ -383,6 +392,102 @@ class PrintJobTest {
         assertThat(v.reprintBatchNo()).isEqualTo(first.batchNo());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM pack_print_batches WHERE tenant_id = ?", Integer.class, f.tenant))
             .isEqualTo(1);
+    }
+
+    // ── PDF storage: parts written once, final PDF written once ────────────────
+
+    @Test
+    void j11_threeRequests_threePartRowsWrittenOnce_finalPdfWrittenOnce_noPdfRewriteDuringTheRun() throws Exception {
+        Fixture f = fixture("J11");
+        List<String> tns = f.orders(120);                              // requests of 49, 49, 22
+        jdbc.execute("CREATE TABLE IF NOT EXISTS j11_pdf_writes (job_id uuid, what text)");
+        jdbc.execute("CREATE OR REPLACE FUNCTION j11_log_job_pdf() RETURNS trigger AS $$ BEGIN " +
+                     "INSERT INTO j11_pdf_writes VALUES (NEW.id, 'job_pdf'); RETURN NEW; END $$ LANGUAGE plpgsql");
+        jdbc.execute("CREATE OR REPLACE FUNCTION j11_log_part_update() RETURNS trigger AS $$ BEGIN " +
+                     "INSERT INTO j11_pdf_writes VALUES (NEW.job_id, 'part_update'); RETURN NEW; END $$ LANGUAGE plpgsql");
+        jdbc.execute("CREATE TRIGGER j11_job_pdf BEFORE UPDATE ON pack_print_jobs FOR EACH ROW " +
+                     "WHEN (OLD.pdf IS DISTINCT FROM NEW.pdf) EXECUTE FUNCTION j11_log_job_pdf()");
+        jdbc.execute("CREATE TRIGGER j11_part_update BEFORE UPDATE ON pack_print_job_parts FOR EACH ROW " +
+                     "EXECUTE FUNCTION j11_log_part_update()");
+        List<Boolean> pdfEmptyDuringRun = new ArrayList<>();
+        try {
+            UUID jobId = as(f.tenant, () -> jobs.startPrint("all", "A6", "oldest", f.owner));
+            onCall = n -> pdfEmptyDuringRun.add(jdbc.queryForObject(
+                "SELECT pdf IS NULL FROM pack_print_jobs WHERE id = ?", Boolean.class, jobId));
+            runner.run(jobId, f.tenant);
+            JobView v = as(f.tenant, () -> jobs.view(jobId));
+
+            assertThat(calls).hasSize(3);
+            assertThat(v.status()).isEqualTo("done");
+            assertThat(jdbc.queryForList("SELECT label_count FROM pack_print_job_parts WHERE job_id = ? ORDER BY seq",
+                Integer.class, jobId)).containsExactly(49, 49, 22);
+            assertThat(jdbc.queryForList("SELECT seq FROM pack_print_job_parts WHERE job_id = ? ORDER BY seq",
+                Integer.class, jobId)).containsExactly(1, 2, 3);
+            // The job's pdf is empty while Bosta is being called, and written exactly once — at the end.
+            assertThat(pdfEmptyDuringRun).containsExactly(true, true, true);
+            assertThat(jdbc.queryForList("SELECT what FROM j11_pdf_writes WHERE job_id = ?", String.class, jobId))
+                .containsExactly("job_pdf");
+            assertThat(pagesOf(as(f.tenant, () -> jobs.pdf(jobId)).bytes())).containsExactlyElementsOf(tns);
+
+            // Cleanup after 24 h deletes the parts and the final PDF.
+            jdbc.update("UPDATE pack_print_jobs SET expires_at = now() - interval '1 minute' WHERE id = ?", jobId);
+            assertThat(expire(f.tenant)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM pack_print_job_parts WHERE job_id = ?",
+                Integer.class, jobId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT pdf IS NULL FROM pack_print_jobs WHERE id = ?",
+                Boolean.class, jobId)).isTrue();
+        } finally {
+            jdbc.execute("DROP TRIGGER IF EXISTS j11_job_pdf ON pack_print_jobs");
+            jdbc.execute("DROP TRIGGER IF EXISTS j11_part_update ON pack_print_job_parts");
+        }
+    }
+
+    // ── Heartbeat ─────────────────────────────────────────────────────────────
+
+    @Test
+    void j12_heartbeatBeforeEveryCall_longIsolationNotSwept_noHeartbeatFor10MinutesIs() {
+        // Fake time: each Bosta call "takes" 90 s — updated_at is moved 90 s into the past at the start of
+        // every call, then the sweeper runs. 8 calls (one request + 7 isolation calls) = 12 minutes in all.
+        Fixture f = fixture("J12A");
+        List<String> tns = f.orders(49);
+        deleted.add(tns.get(40));                                        // unnamed → bisected
+        UUID jobId = as(f.tenant, () -> jobs.startPrint("all", "A6", "oldest", f.owner));
+        int[] swept = {0};
+        onCall = n -> {
+            jdbc.update("UPDATE pack_print_jobs SET updated_at = updated_at - interval '90 seconds' WHERE id = ?", jobId);
+            swept[0] += store.sweepStuck();
+        };
+        runner.run(jobId, f.tenant);
+        JobView v = as(f.tenant, () -> jobs.view(jobId));
+
+        assertThat(calls.size()).as("one request + its isolation calls").isGreaterThanOrEqualTo(7);
+        assertThat(calls.size() * 90).as("fake seconds of Bosta calls").isGreaterThanOrEqualTo(9 * 60);
+        assertThat(swept[0]).as("never swept while calls are still being made").isZero();
+        assertThat(v.status()).isEqualTo("done");
+        assertThat(v.printedCount()).isEqualTo(48);
+
+        // No heartbeat for 10 minutes (one call hangs 11): swept, and the job sends nothing more.
+        calls.clear();
+        deleted.clear();
+        Fixture g = fixture("J12B");
+        g.orders(120);
+        UUID stuckJob = as(g.tenant, () -> jobs.startPrint("all", "A6", "oldest", g.owner));
+        int[] sweptB = {0};
+        onCall = n -> {
+            if (n == 2) {
+                jdbc.update("UPDATE pack_print_jobs SET updated_at = now() - interval '11 minutes' WHERE id = ?", stuckJob);
+                sweptB[0] += store.sweepStuck();
+            }
+        };
+        runner.run(stuckJob, g.tenant);
+        JobView s = as(g.tenant, () -> jobs.view(stuckJob));
+
+        assertThat(sweptB[0]).isEqualTo(1);
+        assertThat(calls).as("the heartbeat before call 3 finds the job swept").hasSize(2);
+        assertThat(s.status()).isEqualTo("failed");
+        assertThat(s.message().code()).isEqualTo("PRINT_STOPPED");
+        assertThat(s.printedCount()).as("request 1's part, merged by the sweeper").isEqualTo(49);
+        assertThat(s.pdfAvailable()).isTrue();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
