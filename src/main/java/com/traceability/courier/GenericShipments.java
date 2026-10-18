@@ -170,16 +170,24 @@ public final class GenericShipments {
     }
 
     /**
+     * The one locked read of {@link #yieldToBosta} (binds tenant, order). Scoped to ONE order: it reaches
+     * the order's shipments through an order_id index (shipments_order_idx / the V104 partial
+     * ux_active_forward_shipment_per_order) and locks only rows it returns — that order's live generic
+     * forward legs. Bosta rows fail {@code provider = 'generic'} before the LockRows step, so they are never
+     * locked or waited on; an order with no generic leg locks nothing. GenericYieldLockTest proves both.
+     */
+    public static final String YIELD_SQL =
+        "SELECT s.id, " + CANCELLABLE_SQL + " AS cancellable FROM shipments s " +
+        "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' " +
+        "  AND s.shipment_leg = 'forward' AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+        "FOR UPDATE OF s";
+
+    /**
      * Called by the Bosta link paths right before they would create the order's Bosta forward
      * shipment. One locked read; writes only when a generic leg exists and is still cancellable.
      */
     public static BostaLink yieldToBosta(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT s.id, " + CANCELLABLE_SQL + " AS cancellable FROM shipments s " +
-            "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' " +
-            "  AND s.shipment_leg = 'forward' AND s.internal_state NOT IN ('terminated', 'cancelled') " +
-            "FOR UPDATE OF s",
-            tenantId, orderId);
+        List<Map<String, Object>> rows = jdbc.queryForList(YIELD_SQL, tenantId, orderId);
         if (rows.isEmpty()) return BostaLink.NO_GENERIC;
         for (Map<String, Object> r : rows) {
             if (!Boolean.TRUE.equals(r.get("cancellable"))) {
