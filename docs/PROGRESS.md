@@ -85,6 +85,37 @@
   ExchangeBackfillTest, ShopifyMagicLinkTest (known) + PasswordResetTest.expiredCode — the expiry reds come from the
   Docker VM clock running 23 min behind the host after a sleep (restart Docker Desktop), not from code.
 
+**Deleted-in-Bosta slice 1 — batch / single waybill print skip-and-report (2026-10-18, branch
+`fix/print-skip-deleted-waybills` off main 973bd59; merged to main 2026-10-18, NOT deployed). No migration.**
+- **Review additions (approved 2026-10-18):** (1) Bosta's named numbers are HINTS only — ignored unless in the request;
+  the request is reprinted once without them (printed → culprit among them; refused → hints dropped, bisect). A
+  waybill is marked only when it is the last one left of a refused request whose every other waybill printed — never
+  on the message. (2) Convergence: a waybill an earlier print isolated (`awb_print_failed_reason = 'DELETED_IN_BOSTA'`)
+  goes in its own request after the others, so "print again" with two unnamed culprits finishes in ≤ 2 runs
+  (d6, 10 position pairs; without it pair (0,48) needs 4 runs). d7: message naming an innocent + an outside number.
+- `BostaAwbService.loadPrintable` (shared by batch print, reprint, single print, review mode): a leg with
+  `provider_not_found_at` is never sent to Bosta — reported `DELETED_IN_BOSTA`, NOT marked failed (no missing_awb).
+- `BostaHttpGateway.printMassAwb0`: a 400 → `BostaAwbRejectedException` (Bosta's `message` kept; exception message
+  unchanged). Isolation only for 400s whose message is "Couldn't find deliveries…" (NOT_FOUND → culprit reason
+  `DELETED_IN_BOSTA`) or "…can't be printed…" (culprit `BOSTA_REJECTED:…`). Culprits named in the message are taken
+  as is (1 extra call reprints the rest); else bisect. Cap `MAX_ISOLATION_CALLS` = 8 extra calls per chunk (6 bisect one
+  unnamed culprit out of 49 + 1 final + 1 spare). Leftovers after the cap / any other error → `BOSTA_REJECTED_UNISOLATED`,
+  nobody marked. Only isolated culprits get `awb_print_failed_reason`. 429 / 5xx / network / other 4xx unchanged.
+- **Not stamped:** a culprit never gets `provider_not_found_at` — that column isn't a passive "suspected" flag (one v0
+  400 permanently removes the leg from the status poll and settlement refresh). Slice 4 owns confirmation. Cost: a
+  culprit not yet stamped by the poll is re-isolated on each print until the safety net stamps it (≤ 4 h).
+- **Known limit:** two culprits Bosta doesn't name need ~11 calls in general → beyond the cap the rest is reported
+  unisolated in that run; the next "print again" finishes (see review additions). Bosta's full 400 body is unknown (prod keeps 120 chars); the "names the tracking number"
+  shape is our reconstruction — unnamed falls back to bisect.
+- UI: print dialog "Printed N · Skipped M (X deleted in Bosta / Y rejected)" + each order / waybill number and reason;
+  reprint list uses the same reason texts; single print shows "deleted in Bosta" (EN + AR) instead of the code.
+- Tests: `PrintSkipDeletedWaybillTest` (12), `MassAwbRejectionWireTest` (4), `printSkipDeletedWaybills.test.tsx` (2).
+  Red on old code: 7 of 9 backend (d4/d4b are the "unchanged" guards — red under the bisect-on-any-error mutation),
+  2/2 frontend. Mutation "mark the whole chunk" → 5 red.
+- Item 8 dry run `scripts/ops/2026-10-18-stale-missing-awb-dryrun.sql` (read-only; prod 2026-10-18): 0 innocent
+  missing_awb from a not-found chunk (the only one was a chunk of 1, Snouts 3927856238, already resolved). 8 open
+  BOSTA_REJECTED rows (Snouts 2026-10-14, two chunks of 2 and 6, "can't be printed…") have no not-found culprit.
+
 **Bosta deliveries deleted in Bosta — Step 0 diagnosis only (2026-10-15; no code, no migration, no prod writes).**
 - Detection today = the status poll's 4 h safety net only: v0 GET → HTTP 400 "Delivery not found" →
   `DeliveryNotFoundException` → `provider_not_found_at` stamped, `internal_state` untouched. One 400 is enough (no

@@ -7,7 +7,7 @@ import {
   NotPackedRow, PrintBatchResult, PrintBatchToday,
 } from '../../api'
 import { Alert, Button, Modal, Skeleton, cn } from '../../components/ui'
-import { openPdf } from './PrintWaybillsDialog'
+import { openPdf, printSkipReasonText } from './PrintWaybillsDialog'
 
 // Pick & Pack S4 — the two lists on the waybill-mode page (design/pick-pack-waybill-mockup/
 // Main.html): "Print batches today" (with Reprint) and "Printed but not packed". Each loads its
@@ -136,7 +136,7 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
                     <span className="font-mono text-primary">{x.orderNumber ?? x.trackingNumber}</span>
                     <span>{x.reason === 'ORDER_CANCELLED'
                       ? t('fulfill.waybill.lists.skippedCancelled')
-                      : t('fulfill.waybill.lists.skippedOther', { reason: x.reason })}</span>
+                      : t('fulfill.waybill.lists.skippedOther', { reason: printSkipReasonText(t, x.reason) })}</span>
                   </li>
                 ))}
               </ul>

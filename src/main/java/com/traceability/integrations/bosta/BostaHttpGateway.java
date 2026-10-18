@@ -409,6 +409,17 @@ class BostaHttpGateway implements BostaGateway {
         }
     }
 
+    /** Bosta's {@code message} field of an error body, else the body itself. */
+    private String bostaMessage(String responseBody) {
+        if (responseBody == null || responseBody.isBlank()) return "";
+        try {
+            JsonNode m = mapper.readTree(responseBody).path("message");
+            return m.isTextual() ? m.asText() : responseBody;
+        } catch (Exception ignored) {
+            return responseBody;
+        }
+    }
+
     private long parseRetryAfter(String responseBody, long defaultSeconds) {
         if (responseBody == null || responseBody.isBlank()) return defaultSeconds;
         try {
@@ -489,8 +500,13 @@ class BostaHttpGateway implements BostaGateway {
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx on mass-awb", e);
             }
-            throw new BostaException("Bosta mass-awb error (" + e.getStatusCode() + "): " +
-                e.getResponseBodyAsString(), e);
+            String responseBody = e.getResponseBodyAsString();
+            String message = "Bosta mass-awb error (" + e.getStatusCode() + "): " + responseBody;
+            if (e.getStatusCode().value() == 400) {
+                // Typed so BostaAwbService can isolate a deleted / unprintable waybill; same message.
+                throw new BostaAwbRejectedException(message, 400, bostaMessage(responseBody), e);
+            }
+            throw new BostaException(message, e);
         }
     }
 

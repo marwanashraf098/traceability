@@ -701,7 +701,8 @@
       "emailed": "سيرسل بوسطة البوليصة بالبريد الإلكتروني",
       "error": "تعذّرت طباعة البوليصة",
       "notLinked": "البوليصة لم تُربط بعد — لم تتزامن شحنة بوسطة.",
-      "noCourierAccount": "تُطبع بوليصة الشحن خارج Traced — لا يوجد حساب شركة شحن مرتبط."
+      "noCourierAccount": "تُطبع بوليصة الشحن خارج Traced — لا يوجد حساب شركة شحن مرتبط.",
+      "deletedInBosta": "حُذفت هذه البوليصة في Bosta، لذلك لا يمكن طباعتها. احجز شحنة جديدة في Bosta لهذا الطلب."
     },
     "printBatch": {
       "statusLine": "البوالص: {{printed}} مطبوعة · {{notPrinted}} لم تُطبع بعد",
@@ -733,12 +734,19 @@
       "remaining_other": "طُبعت أول {{printed}}. اطبع مرة أخرى للحصول على المتبقية ({{count}}).",
       "excludedTitle_one": "{{count}} بوليصة لم تُطبع",
       "excludedTitle_other": "{{count}} بوالص لم تُطبع",
+      "summary": "طُبعت {{printed}} · تم تخطي {{skipped}}",
+      "skippedDeleted_one": "{{count}} محذوفة في Bosta",
+      "skippedDeleted_other": "{{count}} محذوفة في Bosta",
+      "skippedRejected_one": "{{count}} مرفوضة",
+      "skippedRejected_other": "{{count}} مرفوضة",
       "reason": {
         "emailed": "سترسل Bosta هذه البوليصة بالبريد الإلكتروني",
         "unlinked": "غير مرتبطة بطلب",
         "returnPickup": "استلام مرتجع، لا توجد بوليصة للطباعة",
         "notPrintable": "الشحنة تحركت بالفعل أو أُغلقت",
-        "rejected": "رفضت Bosta طباعتها"
+        "rejected": "رفضت Bosta طباعتها",
+        "deletedInBosta": "محذوفة في Bosta — لم تُطبع",
+        "unisolated": "لم تُطبع — رفضت Bosta جزءًا من هذه الطباعة. اطبع مرة أخرى."
       },
       "openPickList": "افتح قائمة التجميع",
       "done": "تم",
