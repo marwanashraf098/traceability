@@ -4,6 +4,52 @@
 
 ## Current state
 
+**Returns: parcels coming back to sender are expected, workers grade them (2026-10-19, branch
+`returns-expected-back` off origin/main 05b813b, rebased onto 67ffe18 (G2); NOT merged, NOT deployed). No migration.** Prod trigger: Nuvira session
+bac24a14 (RT-BAC2): #3134 / #3140 cancelled in Shopify after handover, scanned 7 min BEFORE Bosta's state 46 → pieces still
+with_courier (V122: RTO states 20 / 41 move no piece) → flagged UNEXPECTED, and the worker's 9 grade taps all 403'd
+(disposition was owner/manager since 14e4a8f). The owner graded and closed it at 18:27 — nothing to repair. Shopify
+current_qty was NOT the cause.
+- **Expected-back rule:** `ShipmentLinkService.isExpectedBack(forwardShipmentId, orderId, tenant)` — the ONE rule: the
+  forward shipment has a `shipment_status_history` row in 'returning' / 'returned', OR `hasActiveReturnLeg`. Used by both
+  `ReturnSessionService.scanPiece` branches (with_courier, awaiting_pickup) and `ExceptionService.detectUnexpectedReturn`
+  (on the return_received event's `shipment_id` — the same forward shipment the scan used), so the flag and the HIGH
+  alert never disagree. An AWB scanned in the session is NOT evidence alone (a never-collected awaiting_pickup parcel,
+  like mashwar's 3212b930 one, stays unexpected). `hasActiveReturnLeg` itself and its other caller (the delivered
+  exchange-window bypass) are unchanged. Overview's per-day `unexpected_return` trend still counts raw events — it never
+  applied the old rule either (left alone).
+- **Copy:** items carry `on_scanned_awb` (`ReturnSessionService.ON_SCANNED_AWB_SQL`, display only); an UNEXPECTED item on
+  a scanned AWB reads "Courier hasn't reported this parcel as returning", otherwise "not on this shipment's manifest".
+- **Untracked parcel units:** `UntrackedParcelUnits.PARCEL_UNIT_CAP_SQL` = `oi.quantity` (what was shipped) — a Shopify
+  cancel / refund / edit after shipping never hides units. `PortalService.UNTRACKED_CAP_SQL` (LEAST with
+  current_quantity) is unchanged for portal requests; never share the two.
+- **Grading (reverses part of 14e4a8f, approved):** disposition and close are `hasAnyRole('OWNER','MANAGER','WORKER')`
+  (not isAuthenticated — the embedded app's principal stays out). Worker may restock / damaged ANY item, expected or not;
+  MISMATCH is owner/manager — the service's 7-arg `disposition(..., actorRole)` (the controller's only entry) throws
+  `ReturnSessionException` NEEDS_MANAGER 403 {code, message_en, message_ar} before anything is read. Review (same day):
+  the unchecked body is `private dispositionInternal(...)` — the 7-arg method is the only callable entry; the 37 test
+  call sites moved to it with role "owner" (call-site change only); `ReturnsDispositionEntryGuardTest` (reflection +
+  controller source scan, revert-checked) keeps it that way. Shown to a worker as "This needs a manager or owner"
+  instead of Restock / Damage: only pending items whose piece is NOT at return_pending_inspection — the illegal-state
+  scans (delivered outside the window with nothing covering it; available / reserved / packed / damaged / lost / on_hold
+  / transfer / sold / voided) or a piece graded elsewhere since; owners always had only "Not the real piece" there.
+  Prod (Step 0 sweep): no such item ever. Worker close: the existing SESSION_CLOSE_BLOCKED (409 while any item is pending) is
+  the guard. Custody, Shopify +1 / skipped_shopify_restocked untouched; actor = the caller (item disposition_by, ledger
+  event, closed_by). The unexpected flag and alert unchanged — grading writes no exception_resolutions row; the alert
+  clears only by its existing rule (piece leaves return_pending_inspection).
+- **Frontend (Returns.tsx):** workers see Restock / Damage on every item, no "Not the real piece"; an item only a
+  mismatch can settle shows "This needs a manager or owner"; Close enabled for workers once nothing is pending; abandon
+  stays manager-only. 403 / NEEDS_MANAGER → `returns.needsManager` (EN + AR) via the page's `errorText()` — scoped to
+  Returns: the shared `request()` keeps its "403: …" messages (UsersTab, ConnectShopify, … match on them).
+- **Reprint during intake is a deliberate worker action:** `POST /returns/sessions/{sid}/pieces/{pid}/reprint-label` and
+  `GET /returns/pieces/{id}/label` stay `isAuthenticated()`, audited as `label_reprinted` with the caller as actor.
+  Lookup's `POST /pieces/{id}/label/reprint` stays owner/manager.
+- Tests: ReturnsExpectedBackTest 12 (e1–e5, u1–u2, w1–w5; revert-checked: old rule + old cap → 8 fail),
+  WorkerPermissionGuardTest test 1 rewritten (worker mismatch 403 NEEDS_MANAGER, owner mismatch OK, worker restock OK);
+  ReturnsDispositionEntryGuardTest 2; frontend returns.test.tsx rs15 rewritten + rs15b–e. After the rebase: backend 3118 run, 1 red = the documented
+  ExchangeBackfillTest; vitest 1062/1062, tsc + build clean. Headless renders WORKER / OWNER × EN / AR in the session
+  scratchpad `returns-renders/`.
+
 **Non-Bosta couriers G2 — waybill matching, Settings → Couriers, Test a waybill, G1 carry-overs (2026-10-19, branch
 `generic-courier-g2`, worktree `../traceability-g2`, off origin/main cd6441b; NOT merged, NOT deployed). Migration V171.**
 - **Decisions (Marawan 2026-10-19):** item 2's "merchant_entered" creation from a queue scan is SKIPPED in G2 — an
