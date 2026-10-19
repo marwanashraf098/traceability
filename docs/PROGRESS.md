@@ -4,6 +4,55 @@
 
 ## Current state
 
+**Non-Bosta couriers G2 — waybill matching, Settings → Couriers, Test a waybill, G1 carry-overs (2026-10-19, branch
+`generic-courier-g2`, worktree `../traceability-g2`, off origin/main cd6441b; NOT merged, NOT deployed). Migration V171.**
+- **Decisions (Marawan 2026-10-19):** item 2's "merchant_entered" creation from a queue scan is SKIPPED in G2 — an
+  order with no forward shipment never reaches Pick & Pack (PICKABLE_SHIPMENT_GATE, untouched), so the link step only
+  verifies existing generic shipments. Test a waybill is hardware-scanner only: format always "unknown", the phone-camera
+  verdict is a static hint (the camera reads Code 128 + QR only; the relay carries no format).
+- **`WaybillScanKeys`** (inventory) — the ONE generic-key resolver, used by WaybillResolver, PackSessionStore.scanPiece,
+  PackCompleter and ShipmentLinkService's link step. Piece code first (WaybillResolver.looksLikePieceCode) → Bosta key +
+  each caller's own unchanged Bosta query → generic key (GenericTrackingKey) against provider='generic' rows → both
+  matched → AMBIGUOUS (new WaybillResolver.Code), never guess. Applies while the tenant is switched on OR still has a live
+  generic forward shipment (so a switched-off tenant's existing generic orders stay packable); otherwise no lookup.
+  A scan holding Arabic LETTERS (layout garble) is refused with its own text — GenericTrackingKey would silently drop the
+  letters and could match a shorter key. Courier-neutral texts (not found / unrecognised) follow the switch itself.
+- **Link step (queue):** a live generic leg → the scan's generic key must be the leg's (completeLink minus Bosta's
+  unlinked cleanup), else AWB_MISMATCH(key, leg tracking) — except a Bosta AWB (digits, not another order's generic key)
+  on a tenant with an active Bosta account, which takes the unchanged Bosta path; its Bosta-wins BLOCKED → 409 now also
+  records `generic_conflict_scans` (V171) → HIGH `generic_bosta_conflict` (subject `generic_bosta_conflict:scan:<order>:<tn>`,
+  source pack_scan). **The record is written AFTER the link transaction rolls back** (`GenericConflictRecorder.
+  recordAfterRollback`, afterCompletion → REQUIRES_NEW): writing it inside deadlocked on yieldToBosta's FOR UPDATE row
+  (the new row's FK to the shipment waits on the outer lock; no DB detector sees it — the first test run hung).
+- **getOrder:** a generic leg is never `shipment_has_courier`; `shipment_provider` / `shipment_carrier` keys appear ONLY
+  for generic legs (Bosta detail byte-identical). Pick screen: "Shipped with {carrier} — no waybill to print", link step
+  "Scan the {carrier} waybill"; waybill session: neutral hint for switched-on stores (/me `genericCourier`), "Courier
+  {carrier}", "ready for {carrier}".
+- **Settings → Couriers** (`/api/v1/settings/couriers`): GET owner+manager, PUT owner (switch + default carrier, V171
+  `tenants.generic_default_carrier`, 1–60 chars; each change one audit_log row `generic_courier_switch` /
+  `generic_default_carrier` {from,to}); switch-on enqueues `GenericCatchUpJob` after commit; `GET /catch-up/preview`;
+  `POST /test-waybill` (owner+manager, @Transactional(readOnly) — verdicts OPENS_ORDER / AMBIGUOUS / FULFILLMENT_ONLY /
+  NO_FULFILLMENT / WRONG_BARCODE / KEYBOARD_LAYOUT, + waybill mode's own answer). Switch-off: flag only, nothing cancelled.
+- **Catch-up** (`GenericCatchUp`, courier): open (new / ready_to_pick) post-connect merchant orders, no active forward leg,
+  stored fulfillment rows not cancelled with a fulfillment id, class recomputed by the capture's classifier (so QP Express
+  counts), other_known or unknown-without-Bosta, earliest row, key not already used. Insert shared with the live capture
+  (`GenericShipments.insertFromFulfillment`, ON CONFLICT DO NOTHING) → idempotent. `scripts/generic_courier_catchup_dryrun.sql`
+  = the same count, read-only, for prod (URL tracking numbers reported apart — Java-only parsing).
+- **Prod dry run 2026-10-19 (read-only, with QP Express):** Femine 1555 (Wijha), Crockera 72 (Other), High line 1
+  (QP Express), BROEK 0. **Femine: all 1555 are Shopify-"fulfilled" orders still 'new' in Traced (Oct 1–19) — switching
+  Femine on would put ~1555 orders into Pick & Pack and committed stock at once. Decide before switching anyone on.**
+- **Analytics (fork, cherry-picked):** generic legs never count as Bosta — deciding leg is Bosta-only; an order with a live
+  generic leg is the existing 'wijha' ("Shipped outside Bosta") outcome; no Bosta city / fee / stage / rate. Overview
+  :235/:254 (cancelled-with-live-shipment trends) left matching ExceptionService. 97-endpoint golden byte-identical.
+  Snapshot script gained an `outcomes` section.
+- **V171:** generic_default_carrier; generic_conflict_scans (RLS NULLIF + FORCE, app_user SELECT/INSERT); QP Express in
+  other_known_carriers() + Java list. Count tests: MigrationSmokeTest 169 → 170, NotTracedBackfillTest 114 → 115.
+- **Tests:** GenericG2IsolationGoldenTest (2 — golden recorded on cd6441b BEFORE any G2 change: waybill resolve ×17,
+  pack session, queue link, getOrder, pickup / returns / lookup scans, exceptions; flag-off byte-identical, flag-on
+  identical except the two neutral not-found texts), GenericCourierG2Test (11), GenericAnalyticsIsolationTest,
+  GenericSnapshotOutcomesTest; frontend couriersSettings.test.tsx (6), couriersLayout.browser.test.tsx (12).
+- **Follow-ups:** merchant_entered creation (needs a gate decision); generic legs never move past 'created'/awaiting
+  pickup (no carrier status yet — order_fulfillment_tracking.shipment_status is stored, unused); phone format relay.
 **Deleted-in-Bosta slices 2 + 3 — condition-only alerts, pickup scan guard (2026-10-19, branch
 `fix/condition-only-alerts-pickup-guard` off origin/main cd6441b; NOT merged, NOT deployed). No migration.**
 - **Slice 2:** `ExceptionService.CONDITION_ONLY` (type → clearsWhen code) is the ONE list: cancelled_live_shipment
