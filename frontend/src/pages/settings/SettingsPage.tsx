@@ -9,9 +9,10 @@ import LocationsTab from './LocationsTab'
 import ReturnsPortalTab from './ReturnsPortalTab'
 import PickPackTab from './PickPackTab'
 import PrivacyTab from './PrivacyTab'
+import CouriersTab from './CouriersTab'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'portal' | 'privacy'
-const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'portal']
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'couriers' | 'portal' | 'privacy'
+const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'couriers', 'portal']
 
 /**
  * The consolidated Settings screen — one page, four tabs, replacing the four
@@ -34,6 +35,9 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  *
  * Pick & Pack S3 adds "Pick & Pack" (?tab=pickpack) — the packing mode. Owner edits; manager
  * read-only (PUT /tenant/settings is owner-only server-side); never a worker.
+ *
+ * Non-Bosta couriers G2 adds "Couriers" (?tab=couriers) — the "I ship with other couriers" switch and
+ * default carrier (owner edits, manager read-only) and "Test a waybill" (owner + manager).
  *
  * GDPR build A adds "Privacy" (?tab=privacy) — Shopify customer data requests to download.
  * Owner only (every /privacy endpoint is owner-only server-side); managers don't see the tab.
@@ -75,6 +79,7 @@ export default function SettingsPage() {
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'locations' && <LocationsTab />}
         {activeTab === 'pickpack' && <PickPackTab isOwner={isOwner} />}
+        {activeTab === 'couriers' && <CouriersTab isOwner={isOwner} />}
         {activeTab === 'portal' && <ReturnsPortalTab />}
         {activeTab === 'privacy' && <PrivacyTab />}
       </div>

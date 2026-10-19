@@ -2047,6 +2047,9 @@ export interface PackOrderCard {
   tracking_number: string | null
   area: string | null
   courierType: 'delivery' | 'exchange' | 'return_to_origin'
+  /** G2 — present only when the order ships with another courier (a generic shipment). */
+  shipment_provider?: 'generic'
+  shipment_carrier?: string | null
   batchNo: number | null
   batchPrintedAt: string | null
   items: PackOrderLine[]
@@ -3471,4 +3474,51 @@ export async function downloadCustomerDataRequest(id: string): Promise<void> {
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+// ── Non-Bosta couriers G2 — Settings → Couriers ──────────────────────────────────────────────
+
+export interface CourierSettings {
+  enabled: boolean
+  defaultCarrier: string | null
+  suggestions: string[]
+  bostaConnected: boolean
+}
+
+export interface CatchUpPreview { wouldCreate: number; keyInUse: number; byCarrier: Record<string, number> }
+
+export type TestWaybillVerdict =
+  'OPENS_ORDER' | 'AMBIGUOUS' | 'FULFILLMENT_ONLY' | 'NO_FULFILLMENT' | 'WRONG_BARCODE' | 'KEYBOARD_LAYOUT'
+
+export interface TestWaybillResult {
+  raw: string
+  bostaKey: string | null
+  genericKey: string | null
+  format: string
+  fulfillments: { orderNumber: string; carrier: string | null; trackingNumber: string; status: string | null }[]
+  shipments: { orderNumber: string; provider: string; carrier: string | null; trackingNumber: string; state: string }[]
+  verdict: TestWaybillVerdict
+  verdictEn: string
+  verdictAr: string
+  waybillModeCode: string
+  waybillModeEn: string | null
+  waybillModeAr: string | null
+  cameraHintEn: string
+  cameraHintAr: string
+}
+
+export function getCourierSettings() {
+  return request<CourierSettings>('/settings/couriers')
+}
+
+export function updateCourierSettings(body: { enabled: boolean; defaultCarrier: string | null }) {
+  return request<CourierSettings>('/settings/couriers', { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export function getCatchUpPreview() {
+  return request<CatchUpPreview>('/settings/couriers/catch-up/preview')
+}
+
+export function testWaybill(code: string) {
+  return request<TestWaybillResult>('/settings/couriers/test-waybill', { method: 'POST', body: JSON.stringify({ code }) })
 }

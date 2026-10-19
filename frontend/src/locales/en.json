@@ -664,7 +664,8 @@
       "stateSuccess": "Success",
       "stateConflict": "Conflict",
       "stateMismatch": "Mismatch",
-      "mandatoryNote": "Mandatory — this step is required."
+      "mandatoryNote": "Mandatory — this step is required.",
+      "subtitleGeneric": "Scan the {{carrier}} waybill to confirm courier handoff"
     },
     "noPiecesScanned": "No pieces scanned yet",
     "demoAwb": {
@@ -706,7 +707,8 @@
       "deletedInBosta": "This waybill was deleted in Bosta, so it can't be printed. Book a new delivery in Bosta for this order.",
       "busy": "Bosta is busy — print again in a few minutes.",
       "temporary": "Not printed — Bosta didn't answer. Print again.",
-      "auth": "Bosta connection problem — check Settings → Connections."
+      "auth": "Bosta connection problem — check Settings → Connections.",
+      "genericCarrier": "Shipped with {{carrier}} — there's no waybill to print in Traced."
     },
     "printBatch": {
       "statusLine": "Waybills: {{printed}} printed · {{notPrinted}} not printed yet",
@@ -819,7 +821,8 @@
         "courier": {
           "delivery": "Courier Bosta · Delivery",
           "exchange": "Courier Bosta · Exchange",
-          "return_to_origin": "Courier Bosta · Return to origin"
+          "return_to_origin": "Courier Bosta · Return to origin",
+          "generic": "Courier {{carrier}}"
         },
         "cod": "Cash on delivery EGP {{amount}}",
         "prepaid": "Prepaid",
@@ -834,7 +837,10 @@
         "lastScan": "Last scan",
         "undo": "Undo",
         "loading": "Starting your pack session…",
-        "error": "Something went wrong. Try again."
+        "error": "Something went wrong. Try again.",
+        "scanWaybillHintNeutral": "Scan the barcode on the waybill to open its order.",
+        "packedFlashDetailGeneric_one": "{{customer}} · {{count}} piece · ready for {{carrier}}",
+        "packedFlashDetailGeneric_other": "{{customer}} · {{count}} pieces · ready for {{carrier}}"
       },
       "pieceReject": {
         "WAYBILL_WHILE_PACKING": "That's a waybill. Finish or set aside this order first.",
@@ -2129,7 +2135,8 @@
       "locationsSubtitle": "Warehouses & locations",
       "pickpack": "Pick & Pack",
       "portal": "Returns portal",
-      "privacy": "Privacy"
+      "privacy": "Privacy",
+      "couriers": "Couriers"
     },
     "sections": {
       "businessDetails": "Business details",
@@ -2376,6 +2383,38 @@
       "download": "Download",
       "downloadError": "Couldn't download the file. Try again.",
       "expiredError": "This request expired after 30 days and can't be downloaded."
+    },
+    "couriers": {
+      "title": "Other couriers",
+      "ownersOnly": "Owners only",
+      "subtitle": "Use this if some of your orders ship with a courier Traced has no connection to (Wijha, Mylerz, J&T…). Traced picks up their tracking number from the order's Shopify fulfillment.",
+      "switchTitle": "I ship with other couriers",
+      "switchLine": "Orders with another courier's tracking number in Shopify can be packed by scanning that courier's waybill.",
+      "catchUp_one": "After you save, Traced adds {{count}} open order that already has another courier's tracking number.",
+      "catchUp_other": "After you save, Traced adds {{count}} open orders that already have another courier's tracking number.",
+      "offNote": "Turning this off stops new orders being added. Orders already added stay as they are and can still be packed.",
+      "defaultCarrier": "Default courier name",
+      "defaultCarrierPlaceholder": "e.g. Wijha",
+      "defaultCarrierHint": "The courier you use most. Pick one from the list or type its name.",
+      "bostaNote": "Bosta stays your main courier: an order with a Bosta waybill is always a Bosta order.",
+      "error": "Couldn't save. Try again.",
+      "test": {
+        "title": "Test a waybill",
+        "subtitle": "Scan a waybill with your scanner to see what Traced will do with it. Nothing is saved.",
+        "placeholder": "Scan or type a waybill",
+        "run": "Test",
+        "error": "Couldn't test this waybill. Try again.",
+        "raw": "Scanned",
+        "bostaKey": "Bosta number",
+        "genericKey": "Other-courier number",
+        "format": "Barcode type",
+        "formatUnknown": "Unknown (scanners don't report it)",
+        "waybillMode": "Waybill mode",
+        "waybillModeOpen": "Opens the order now",
+        "shipmentRow": "Shipment: order {{number}} · {{carrier}} · {{state}}",
+        "fulfillmentRow": "Shopify: order {{number}} · {{carrier}} · {{tracking}}",
+        "cameraHint": "Scanning with the phone camera? It reads Code 128 and QR barcodes only. If the phone doesn't beep on a waybill, its barcode type can't be read by the camera — use a hardware scanner."
+      }
     }
   },
   "users": {

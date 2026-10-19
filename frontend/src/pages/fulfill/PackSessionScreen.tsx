@@ -34,13 +34,19 @@ import { PhoneScanButton } from '../../phone/PhoneScanButton'
 // `data.phone`; scans dropped from the queue (clearQueue) are answered "not applied"; while the
 // set-aside dialog is open the provider answers "Tablet busy".
 
-type PackedFlash = { number: string | null; customer: string | null; pieces: number }
+type PackedFlash = { number: string | null; customer: string | null; pieces: number; carrier: string | null }
 type Failed = { code: string; message: string | null }
 type LastScan = { pieceId: string; name: string; barcode: string } | null
 
 /** A raw scan for the side list: at most 22 characters, with an ellipsis. */
 function truncateScan(raw: string): string {
   return raw.length > 22 ? `${raw.slice(0, 21)}…` : raw
+}
+
+/** G2: another courier's name when the order card ships with one; null for a Bosta order (wording unchanged). */
+function cardCarrier(order: PackOrderCard | null, unnamed: string): string | null {
+  if (order?.shipment_provider !== 'generic') return null
+  return order.shipment_carrier || unnamed
 }
 
 const SET_ASIDE_REASONS: SetAsideReason[] = ['piece_missing', 'damaged_piece', 'waybill_damaged', 'other']
@@ -92,7 +98,8 @@ export default function PackSessionScreen({ initial, onEnded }: {
       setOrder(null)
       setLastScan(null)
       setFailed(null)
-      setPacked({ number: r.packed?.orderNumber ?? null, customer: r.packed?.customerName ?? null, pieces: r.packed?.pieces ?? 0 })
+      setPacked({ number: r.packed?.orderNumber ?? null, customer: r.packed?.customerName ?? null, pieces: r.packed?.pieces ?? 0,
+                  carrier: cardCarrier(order, t('delivery.shippingBadge.generic_carrier_unnamed')) })
       refresh()
       return { success: true }
     }
@@ -184,7 +191,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
   const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan), focusPaused: setAsideOpen }))
   // Review mode S7: click-to-scan chips (demo / review tenant only) — through scanner.handleScan,
   // the same queue a real scan takes.
-  const { scanHelpers } = useCapabilities()
+  const { scanHelpers, genericCourier } = useCapabilities()
   const helperScan = scanHelpers ? (code: string) => { scanner.handleScan(code) } : null
   // Every drop of waiting scans answers the phone scans among them (the attached clearQueue) —
   // the phone never waits on one.
@@ -309,7 +316,9 @@ export default function PackSessionScreen({ initial, onEnded }: {
                       {t('fulfill.waybill.session.packedFlash', { number: packed.number ?? '' })}
                     </p>
                     <p className="text-small text-muted">
-                      {t('fulfill.waybill.session.packedFlashDetail', { customer: packed.customer ?? '', count: packed.pieces })}
+                      {packed.carrier
+                        ? t('fulfill.waybill.session.packedFlashDetailGeneric', { customer: packed.customer ?? '', count: packed.pieces, carrier: packed.carrier })
+                        : t('fulfill.waybill.session.packedFlashDetail', { customer: packed.customer ?? '', count: packed.pieces })}
                     </p>
                   </div>
                 </div>
@@ -317,7 +326,9 @@ export default function PackSessionScreen({ initial, onEnded }: {
               <PackageCheck size={56} strokeWidth={1.5} className="text-trace-blue" />
               <div>
                 <p className="text-h2 text-primary">{t('fulfill.waybill.session.scanWaybill')}</p>
-                <p className="text-body text-muted mt-1">{t('fulfill.waybill.session.scanWaybillHint')}</p>
+                <p className="text-body text-muted mt-1">
+                  {genericCourier ? t('fulfill.waybill.session.scanWaybillHintNeutral') : t('fulfill.waybill.session.scanWaybillHint')}
+                </p>
               </div>
               {helperScan && (
                 <div className="w-full max-w-xl text-start">
@@ -419,7 +430,9 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
           {order.tracking_number && (
             <p className="font-mono">{t('fulfill.waybill.session.waybill', { tracking: order.tracking_number })}</p>
           )}
-          <p>{t(`fulfill.waybill.session.courier.${order.courierType ?? 'delivery'}`)}</p>
+          <p>{order.shipment_provider === 'generic'
+            ? t('fulfill.waybill.session.courier.generic', { carrier: cardCarrier(order, t('delivery.shippingBadge.generic_carrier_unnamed')) })
+            : t(`fulfill.waybill.session.courier.${order.courierType ?? 'delivery'}`)}</p>
           <p className={cod ? 'text-primary font-semibold' : undefined}>
             {cod ? t('fulfill.waybill.session.cod', { amount: Number(order.cod_amount).toLocaleString() })
                  : t('fulfill.waybill.session.prepaid')}

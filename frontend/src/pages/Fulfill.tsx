@@ -90,6 +90,9 @@ interface OrderDetail {
   shipment_id: string | null
   tracking_number: string | null
   shipment_has_courier: boolean
+  /** G2 — present only when the order ships with another courier (a generic shipment). */
+  shipment_provider?: 'generic'
+  shipment_carrier?: string | null
   /** S2 — this shipment's waybill was printed in a print batch. */
   awbPrinted?: boolean
   items: OrderItem[]
@@ -228,8 +231,11 @@ function AwbLinkDialog({
   variant = 'modal',
   demoTracking = null,
   orderNumber = null,
+  carrier = null,
 }: {
   orderId: string
+  /** G2 — the other courier's name when this order ships with one (else Bosta's wording, unchanged). */
+  carrier?: string | null
   onLinked: (result: { tracking: string; shipmentId: string }) => void
   /** Q1: shown in the paired phone's header while this step is open ("Link AWB · #1047"). */
   orderNumber?: string | null
@@ -403,7 +409,9 @@ function AwbLinkDialog({
       </p>
 
       <h2 className="text-h4 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
-      <p className="text-small text-muted mb-4">{t('fulfill.linkAwb.subtitle')}</p>
+      <p className="text-small text-muted mb-4">
+        {carrier ? t('fulfill.linkAwb.subtitleGeneric', { carrier }) : t('fulfill.linkAwb.subtitle')}
+      </p>
 
       {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched;
           icon is a purely visual sibling <span>, no input props/logic affected */}
@@ -1159,6 +1167,10 @@ function PickScreen({
   )
 
   const allComplete = order.items.every(i => i.allocated >= i.quantity)
+  // G2: another courier's name when the order ships with one (null for a Bosta order — wording unchanged).
+  const genericCarrier = order.shipment_provider === 'generic'
+    ? (order.shipment_carrier || t('delivery.shippingBadge.generic_carrier_unnamed'))
+    : null
   const hasCancelRequest = !!order.cancel_requested_at
 
   // SAFETY-CRITICAL — flash overlay computation: do not modify
@@ -1406,7 +1418,9 @@ function PickScreen({
                there is no real courier-issued label to print. Complete's own gate
                below already allows this case through without awbPrintedOnce. */
             <p className="text-caption text-muted text-center" data-testid="awb-no-courier-note">
-              {t('fulfill.printAwb.noCourierAccount')}
+              {order.shipment_provider === 'generic'
+                ? t('fulfill.printAwb.genericCarrier', { carrier: genericCarrier })
+                : t('fulfill.printAwb.noCourierAccount')}
             </p>
           ) : order.tracking_number ? (
             /* PRINTABLE — kept as raw <button> to preserve data-testid (Button doesn't spread it) */
@@ -1485,6 +1499,7 @@ function PickScreen({
               orderId={orderId}
               orderNumber={order.number}
               variant="inline"
+              carrier={genericCarrier}
               demoTracking={scanHelpers ? order.tracking_number : null}
               onLinked={() => { setShowPreCompleteLink(false); loadOrder() }}
             />
@@ -1500,6 +1515,7 @@ function PickScreen({
         <AwbLinkDialog
           orderId={orderId}
           orderNumber={order.number}
+          carrier={genericCarrier}
           demoTracking={scanHelpers ? order.tracking_number : null}
           onLinked={() => { setShowAwbDialog(false); setCompleted(true) }}
         />

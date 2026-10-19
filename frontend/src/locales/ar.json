@@ -667,7 +667,8 @@
       "stateSuccess": "تم بنجاح",
       "stateConflict": "تعارض",
       "stateMismatch": "عدم تطابق",
-      "mandatoryNote": "إلزامي — هذه الخطوة مطلوبة."
+      "mandatoryNote": "إلزامي — هذه الخطوة مطلوبة.",
+      "subtitleGeneric": "امسح بوليصة {{carrier}} لتأكيد التسليم لشركة الشحن"
     },
     "noPiecesScanned": "لا توجد قطع ممسوحة بعد",
     "demoAwb": {
@@ -707,7 +708,8 @@
       "deletedInBosta": "حُذفت هذه البوليصة في Bosta، لذلك لا يمكن طباعتها. احجز شحنة جديدة في Bosta لهذا الطلب.",
       "busy": "Bosta مشغولة الآن — اطبع مرة أخرى بعد بضع دقائق.",
       "temporary": "لم تُطبع — لم تستجب Bosta. اطبع مرة أخرى.",
-      "auth": "مشكلة في الاتصال بـ Bosta — راجع الإعدادات ← الاتصالات."
+      "auth": "مشكلة في الاتصال بـ Bosta — راجع الإعدادات ← الاتصالات.",
+      "genericCarrier": "يُشحن مع {{carrier}} — لا توجد بوليصة للطباعة في Traced."
     },
     "printBatch": {
       "statusLine": "البوالص: {{printed}} مطبوعة · {{notPrinted}} لم تُطبع بعد",
@@ -820,7 +822,8 @@
         "courier": {
           "delivery": "شركة الشحن Bosta · توصيل",
           "exchange": "شركة الشحن Bosta · استبدال",
-          "return_to_origin": "شركة الشحن Bosta · مرتجع للمرسل"
+          "return_to_origin": "شركة الشحن Bosta · مرتجع للمرسل",
+          "generic": "شركة الشحن {{carrier}}"
         },
         "cod": "الدفع عند الاستلام {{amount}} جنيه",
         "prepaid": "مدفوع مسبقاً",
@@ -835,7 +838,10 @@
         "lastScan": "آخر مسح",
         "undo": "تراجع",
         "loading": "جارٍ بدء جلسة التغليف…",
-        "error": "حدث خطأ. حاول مرة أخرى."
+        "error": "حدث خطأ. حاول مرة أخرى.",
+        "scanWaybillHintNeutral": "امسح الباركود على البوليصة لفتح طلبها.",
+        "packedFlashDetailGeneric_one": "{{customer}} · قطعة واحدة · جاهز لـ {{carrier}}",
+        "packedFlashDetailGeneric_other": "{{customer}} · {{count}} قطع · جاهز لـ {{carrier}}"
       },
       "pieceReject": {
         "WAYBILL_WHILE_PACKING": "هذه بوليصة. أكمل هذا الطلب أو ضعه جانباً أولاً.",
@@ -2133,7 +2139,8 @@
       "locationsSubtitle": "المستودعات والمواقع",
       "pickpack": "التجميع",
       "portal": "بوابة الإرجاع",
-      "privacy": "الخصوصية"
+      "privacy": "الخصوصية",
+      "couriers": "شركات الشحن"
     },
     "sections": {
       "businessDetails": "تفاصيل النشاط التجاري",
@@ -2384,6 +2391,38 @@
       "download": "تنزيل",
       "downloadError": "تعذّر تنزيل الملف. حاول مرة أخرى.",
       "expiredError": "انتهت صلاحية هذا الطلب بعد 30 يومًا ولا يمكن تنزيله."
+    },
+    "couriers": {
+      "title": "شركات شحن أخرى",
+      "ownersOnly": "للمالك فقط",
+      "subtitle": "استخدم هذا إن كانت بعض طلباتك تُشحن مع شركة لا يرتبط بها Traced (وجهة، مايلرز، J&T…). يأخذ Traced رقم التتبع من تنفيذ الطلب في Shopify.",
+      "switchTitle": "أشحن مع شركات أخرى",
+      "switchLine": "الطلبات التي عليها رقم تتبع لشركة أخرى في Shopify يمكن تغليفها بمسح بوليصة تلك الشركة.",
+      "catchUp_one": "بعد الحفظ، سيضيف Traced طلبًا مفتوحًا واحدًا عليه رقم تتبع لشركة أخرى.",
+      "catchUp_other": "بعد الحفظ، سيضيف Traced {{count}} طلبات مفتوحة عليها رقم تتبع لشركة أخرى.",
+      "offNote": "إيقاف هذا يمنع إضافة طلبات جديدة. الطلبات المضافة تبقى كما هي ويمكن تغليفها.",
+      "defaultCarrier": "اسم شركة الشحن الافتراضية",
+      "defaultCarrierPlaceholder": "مثلًا وجهة",
+      "defaultCarrierHint": "الشركة التي تستخدمها أكثر. اختر من القائمة أو اكتب اسمها.",
+      "bostaNote": "تبقى بوسطة شركتك الأساسية: الطلب الذي عليه بوليصة بوسطة هو دائمًا طلب بوسطة.",
+      "error": "تعذّر الحفظ. حاول مرة أخرى.",
+      "test": {
+        "title": "اختبار بوليصة",
+        "subtitle": "امسح بوليصة بالقارئ لترى ما سيفعله Traced بها. لا يُحفظ شيء.",
+        "placeholder": "امسح أو اكتب رقم البوليصة",
+        "run": "اختبار",
+        "error": "تعذّر اختبار هذه البوليصة. حاول مرة أخرى.",
+        "raw": "الممسوح",
+        "bostaKey": "رقم بوسطة",
+        "genericKey": "رقم الشركة الأخرى",
+        "format": "نوع الباركود",
+        "formatUnknown": "غير معروف (القارئ لا يحدده)",
+        "waybillMode": "وضع البوليصة",
+        "waybillModeOpen": "يفتح الطلب الآن",
+        "shipmentRow": "شحنة: الطلب {{number}} · {{carrier}} · {{state}}",
+        "fulfillmentRow": "Shopify: الطلب {{number}} · {{carrier}} · {{tracking}}",
+        "cameraHint": "تستخدم كاميرا الهاتف؟ تقرأ باركود Code 128 و QR فقط. إن لم يُصدر الهاتف صوتًا على البوليصة فنوع الباركود لا تقرؤه الكاميرا — استخدم قارئ باركود."
+      }
     }
   },
   "users": {

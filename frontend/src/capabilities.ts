@@ -10,9 +10,14 @@ import { request } from './api'
  * One /me request per access token, shared by every screen; anything missing or failing reads as
  * a real merchant (both false).
  */
-export interface Capabilities { scanHelpers: boolean; demoMode: boolean }
+export interface Capabilities {
+  scanHelpers: boolean
+  demoMode: boolean
+  /** Non-Bosta couriers G2 — the store ships with other couriers too (courier-neutral scan texts). */
+  genericCourier: boolean
+}
 
-const NONE: Capabilities = { scanHelpers: false, demoMode: false }
+const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false }
 
 let cache: { token: string; promise: Promise<Capabilities> } | null = null
 
@@ -20,8 +25,9 @@ export function loadCapabilities(): Promise<Capabilities> {
   const token = getAccessToken()
   if (!token) return Promise.resolve(NONE)
   if (cache?.token !== token) {
-    const promise = request<{ scanHelpers?: unknown; demoMode?: unknown } | null>('/me')
-      .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true }))
+    const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown } | null>('/me')
+      .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true,
+                     genericCourier: me?.genericCourier === true }))
       .catch(() => NONE)
     cache = { token, promise }
   }
