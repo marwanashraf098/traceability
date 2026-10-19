@@ -2634,6 +2634,7 @@
     "closeConfirmTitle": "Confirm handover",
     "closeConfirmBody": "You are about to confirm handover of {{count}} packages to the courier. This will immediately mark all scanned shipments as WITH COURIER. There is no undo.",
     "closeConfirm": "Confirm handover — {{count}} packages",
+    "closeFailed": "Couldn't close the session. Check your connection and try again — nothing was handed over.",
     "closeCancel": "Cancel",
     "closedAt": "Closed {{date}}",
     "by": "by {{name}}",
@@ -2642,6 +2643,7 @@
       "DUPLICATE": "Already scanned in this session",
       "OTHER_SESSION": "In another active session — remove it first",
       "NOT_FORWARD_LEG": "Return-leg shipment — not eligible for pickup",
+      "LEG_ENDED": "This waybill is cancelled or deleted in Bosta — don't hand it to the courier.",
       "NOT_PACKED": "Shipment not in packed state",
       "UNKNOWN_AWB": "AWB not found"
     },
@@ -2654,6 +2656,10 @@
     "sessionOpenRequired": "Session is open — scan packages",
     "orderNumber": "Order",
     "cod": "COD",
+    "leftOut": {
+      "title": "{{count}} waybill(s) left out of the handover",
+      "body": "Cancelled or deleted in Bosta after it was scanned — not handed over. Keep these parcels; their pieces are still packed."
+    },
     "pieceExceptions": "{{count}} piece(s) had custody gaps — check Alerts",
     "noScans": "No packages scanned yet"
   },
@@ -3040,6 +3046,12 @@
     "not_traced": "Fulfilled outside Traced"
   },
   "exc": {
+    "clearsWhen": {
+      "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when it's deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
+      "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
+      "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
+      "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta."
+    },
     "returnToReceive": {
       "markedBy": "Marked received by {{name}} in session {{session}}",
       "noShopifyRestock": "Don't restock it in Shopify as well."

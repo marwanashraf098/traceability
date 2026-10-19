@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * FR-EXCHANGE Phase 3/4 — per-leg state interpreter for {@code type.code=30} (EXCHANGE)
@@ -69,6 +70,13 @@ public class ExchangeStateInterpreter {
         "exchanged_returned", BostaStateMapper.MappedState.of("delivered", "delivered"),
         "out_for_return",     BostaStateMapper.MappedState.of("delivered", "delivered")
     );
+
+    /**
+     * The exchange forward-leg states Traced handles — the ONE definition. The
+     * {@code exchange_unmapped_state} alert (ExceptionService) raises only for a value outside it,
+     * so a state this interpreter knows never raises it.
+     */
+    public static final Set<String> KNOWN_FORWARD_LEG_STATES = FORWARD_LEG_STATES.keySet();
 
     /**
      * @return the forward-leg internal state to apply, or empty if the delivery's most

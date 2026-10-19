@@ -51,6 +51,30 @@ async function refreshOrLogout(isRetry: boolean): Promise<void> {
   }
 }
 
+/**
+ * A raw fetch with request()'s 401 handling — one shared refresh, the original call retried once with the
+ * new token, /login only when the refresh fails — for a page helper that reads the Response itself
+ * (its own error-body / status contract, a blob). The caller's headers are kept; Authorization is always
+ * the CURRENT token (so the retry carries the refreshed one). Worker screens sit open for hours: a helper
+ * that cleared the token on the first 401 logged the worker out at every 15-minute expiry (Nuvira's
+ * pickup close, 2026-10).
+ */
+export async function authFetch(path: string, opts: RetryOpts = {}): Promise<Response> {
+  const token = getAccessToken()
+  const res = await fetch(BASE + path, {
+    ...opts,
+    headers: {
+      ...(opts.headers as Record<string, string> | undefined),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+  if (res.status === 401) {
+    await refreshOrLogout(!!opts[RETRY_FLAG])
+    return authFetch(path, { ...opts, [RETRY_FLAG]: true })
+  }
+  return res
+}
+
 export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T> {
   const token = getAccessToken()
   const res = await fetch(BASE + path, {

@@ -1,8 +1,11 @@
 package com.traceability.inventory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -41,20 +44,51 @@ public class PickupSessionService {
     private final TransactionTemplate tx;
     private final InventoryLedger  ledger;
     private final ShopifyInventoryService shopifyInventory;
+    private final AuditService     audit;
 
+    @Autowired
     public PickupSessionService(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
                                  InventoryLedger ledger,
-                                 ShopifyInventoryService shopifyInventory) {
+                                 ShopifyInventoryService shopifyInventory,
+                                 AuditService audit) {
         this.jdbc   = jdbc;
         this.tx     = new TransactionTemplate(txm);
         this.ledger = ledger;
         this.shopifyInventory = shopifyInventory;
+        this.audit  = audit;
+    }
+
+    /** Built by hand (ReviewTenantRlsTest, on an app_user connection): audit entries go through the same JdbcTemplate. */
+    public PickupSessionService(JdbcTemplate jdbc,
+                                 PlatformTransactionManager txm,
+                                 InventoryLedger ledger,
+                                 ShopifyInventoryService shopifyInventory) {
+        this(jdbc, txm, ledger, shopifyInventory, new AuditService(jdbc, new ObjectMapper()));
     }
 
     // ── Public types ──────────────────────────────────────────────────────────
 
-    public enum ScanOutcome { ACCEPTED, DUPLICATE, OTHER_SESSION, NOT_FORWARD_LEG, NOT_PACKED, UNKNOWN_AWB }
+    public enum ScanOutcome { ACCEPTED, DUPLICATE, OTHER_SESSION, NOT_FORWARD_LEG, LEG_ENDED, NOT_PACKED, UNKNOWN_AWB }
+
+    /**
+     * A forward leg that must never be handed to a courier: cancelled or terminated in Bosta, or
+     * deleted there (the status poll stamped {@code provider_not_found_at}). The ONE definition,
+     * checked at scan (LEG_ENDED, nothing recorded) and again for every scanned shipment at close
+     * (left out of the handover). Expects the shipments row aliased {@code s}.
+     */
+    static final String LEG_ENDED_SQL =
+        "(s.internal_state IN ('cancelled'::shipment_internal_state, 'terminated'::shipment_internal_state) " +
+        " OR s.provider_not_found_at IS NOT NULL)";
+
+    /** Why {@link #LEG_ENDED_SQL} matched: cancelled | terminated | deleted_in_bosta (else NULL). */
+    static final String LEG_ENDED_REASON_SQL =
+        "CASE WHEN s.internal_state = 'cancelled'::shipment_internal_state THEN 'cancelled' " +
+        "     WHEN s.internal_state = 'terminated'::shipment_internal_state THEN 'terminated' " +
+        "     WHEN s.provider_not_found_at IS NOT NULL THEN 'deleted_in_bosta' END";
+
+    /** audit_log action for a scanned shipment left out of a pickup handover at close. */
+    public static final String AUDIT_LEG_LEFT_OUT = "pickup_leg_left_out";
 
     public record SessionSummary(
             UUID id, String sessionStatus, LocalDate scheduledDate,
@@ -74,7 +108,10 @@ public class PickupSessionService {
 
     public record ScanResult(ScanOutcome outcome, ScanEntry entry) {}
 
-    public record CloseResult(int shipmentsClosed, List<String> pieceExceptions) {}
+    /** A scanned shipment whose leg ended between scan and close: not handed over, its pieces untouched. */
+    public record LeftOut(UUID shipmentId, String trackingNumber, String orderNumber, String reason) {}
+
+    public record CloseResult(int shipmentsClosed, List<String> pieceExceptions, List<LeftOut> leftOut) {}
 
     // ── Open ─────────────────────────────────────────────────────────────────
 
@@ -189,7 +226,7 @@ public class PickupSessionService {
 
     public ScanResult scan(UUID tenantId, UUID pickupId, UUID actorUserId, String trackingNumber) {
         record ShipmentRow(UUID id, UUID orderId, String leg, String internalState,
-                           String orderNumber, BigDecimal cod) {}
+                           String orderNumber, BigDecimal cod, boolean ended) {}
 
         // Normalize before matching — the physical Bosta label's top barcode carries a hub
         // routing prefix (e.g. D-07-2944282510) that shipments.tracking_number never stores.
@@ -219,7 +256,9 @@ public class PickupSessionService {
                     """
                     SELECT s.id, s.order_id, s.shipment_leg::text AS leg,
                            s.internal_state::text AS internal_state,
-                           o.number AS order_number, s.cod_amount
+                           o.number AS order_number, s.cod_amount,
+                           """ + LEG_ENDED_SQL + """
+                           AS ended
                     FROM shipments s
                     JOIN merchant_orders o ON o.id = s.order_id
                     WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'
@@ -230,7 +269,8 @@ public class PickupSessionService {
                         rs.getString("leg"),
                         rs.getString("internal_state"),
                         rs.getString("order_number"),
-                        rs.getBigDecimal("cod_amount")) : null,
+                        rs.getBigDecimal("cod_amount"),
+                        rs.getBoolean("ended")) : null,
                     normalizedTracking, tenantId);
 
                 if (shipment == null) return new ScanResult(ScanOutcome.UNKNOWN_AWB, null);
@@ -238,6 +278,9 @@ public class PickupSessionService {
                 // 3. Must be forward leg.
                 if (!"forward".equals(shipment.leg()))
                     return new ScanResult(ScanOutcome.NOT_FORWARD_LEG, null);
+
+                // 3b. Cancelled, terminated or deleted in Bosta — never hand it to the courier.
+                if (shipment.ended()) return new ScanResult(ScanOutcome.LEG_ENDED, null);
 
                 // 4. Check for duplicate in THIS session.
                 boolean inThisSession = Boolean.TRUE.equals(jdbc.queryForObject(
@@ -323,7 +366,10 @@ public class PickupSessionService {
     // ── Close ─────────────────────────────────────────────────────────────────
 
     public CloseResult closeSession(UUID tenantId, UUID pickupId, UUID actorUserId) {
-        record ScannedShipment(UUID shipmentId, UUID orderId, String trackingNumber) {}
+        record ScannedShipment(UUID shipmentId, UUID orderId, String trackingNumber,
+                               String orderNumber, String endedReason) {
+            boolean ended() { return endedReason != null; }
+        }
 
         return TenantContext.runAs(tenantId, () ->
             tx.execute(s -> {
@@ -341,15 +387,20 @@ public class PickupSessionService {
                 // 2. Load scanned shipments.
                 List<ScannedShipment> scanned = jdbc.query(
                     """
-                    SELECT ps.shipment_id, s.order_id, s.tracking_number
+                    SELECT ps.shipment_id, s.order_id, s.tracking_number, o.number AS order_number,
+                           """ + LEG_ENDED_REASON_SQL + """
+                           AS ended_reason
                     FROM pickup_shipments ps
                     JOIN shipments s ON s.id = ps.shipment_id
+                    LEFT JOIN merchant_orders o ON o.id = s.order_id
                     WHERE ps.pickup_id = ? AND ps.tenant_id = ?
                     """,
                     (rs, i) -> new ScannedShipment(
                         rs.getObject("shipment_id", UUID.class),
                         rs.getObject("order_id", UUID.class),
-                        rs.getString("tracking_number")),
+                        rs.getString("tracking_number"),
+                        rs.getString("order_number"),
+                        rs.getString("ended_reason")),
                     pickupId, tenantId);
 
                 if (scanned.isEmpty())
@@ -358,8 +409,29 @@ public class PickupSessionService {
 
                 List<String> pieceExceptions = new ArrayList<>();
 
-                // 3. For each scanned shipment: set with_courier + custody lock; transition pieces.
+                // 2b. A leg that ended since its scan (cancelled / terminated / deleted in Bosta) is
+                // left out of the handover: no with_courier, no history row, its pieces stay packed.
+                // Its scan row is removed so the session and its manifest list only what the courier
+                // took — after an audit_log entry (same transaction) records that it was scanned and
+                // left out, by whom; the close summary names it.
+                List<LeftOut> leftOut = new ArrayList<>();
                 for (ScannedShipment sh : scanned) {
+                    if (!sh.ended()) continue;
+                    Map<String, Object> meta = new LinkedHashMap<>();
+                    meta.put("pickup_id", pickupId.toString());
+                    meta.put("shipment_id", sh.shipmentId().toString());
+                    meta.put("tracking_number", sh.trackingNumber());
+                    meta.put("order_number", sh.orderNumber());
+                    meta.put("reason", sh.endedReason());
+                    audit.record(actorUserId, AUDIT_LEG_LEFT_OUT, "pickup", pickupId.toString(), meta);
+                    jdbc.update("DELETE FROM pickup_shipments WHERE pickup_id = ? AND shipment_id = ?",
+                        pickupId, sh.shipmentId());
+                    leftOut.add(new LeftOut(sh.shipmentId(), sh.trackingNumber(), sh.orderNumber(), sh.endedReason()));
+                }
+                List<ScannedShipment> handed = scanned.stream().filter(sh -> !sh.ended()).toList();
+
+                // 3. For each scanned shipment: set with_courier + custody lock; transition pieces.
+                for (ScannedShipment sh : handed) {
                     // Set shipment-level custody state unconditionally (C1).
                     jdbc.update("""
                         UPDATE shipments
@@ -450,12 +522,13 @@ public class PickupSessionService {
                         closed_by_user_id = ?,
                         closed_at = now()
                     WHERE id = ? AND tenant_id = ?
-                    """, scanned.size(), actorUserId, pickupId, tenantId);
+                    """, handed.size(), actorUserId, pickupId, tenantId);
 
-                log.info("Pickup session {} closed: {} shipments, {} piece exceptions",
-                    pickupId, scanned.size(), pieceExceptions.size());
+                log.info("Pickup session {} closed: {} shipments, {} piece exceptions, {} left out (leg ended: {})",
+                    pickupId, handed.size(), pieceExceptions.size(), leftOut.size(),
+                    leftOut.stream().map(LeftOut::trackingNumber).toList());
 
-                return new CloseResult(scanned.size(), pieceExceptions);
+                return new CloseResult(handed.size(), pieceExceptions, leftOut);
             }));
     }
 

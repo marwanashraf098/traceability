@@ -239,9 +239,23 @@ public class ExceptionService {
         return countOpenExceptionsBySeverity().total();
     }
 
+    /**
+     * Alerts that only clear themselves: their detectors read live state and never look at
+     * exception_resolutions, so Resolve would write a row that hides nothing. Each carries a
+     * {@code clearsWhen} code (the screen shows what clears it instead of a Resolve button) and
+     * {@link #resolve} refuses them with 409 CONDITION_ONLY. Rows written for these types before
+     * this rule are left in place — harmless, nothing reads them.
+     */
+    public static final Map<String, String> CONDITION_ONLY = Map.of(
+        "cancelled_live_shipment", "BOSTA_LEG_ENDED",
+        "guided_unpack",           "ORDER_UNPACKED",
+        "exchange_needs_mapping",  "EXCHANGE_MAPPED",
+        "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED");
+
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
         UUID tenantId = TenantContext.require();
+        if (CONDITION_ONLY.containsKey(exceptionType)) throw new ConditionOnlyAlertException();
         jdbc.update(
             "INSERT INTO exception_resolutions " +
             "(tenant_id, exception_type, subject_key, resolved_by, note) " +
@@ -1072,7 +1086,8 @@ public class ExceptionService {
      * (and/or Shopify) — Shopify cancel ≠ Bosta cancel.
      *
      * Self-resolving like detectGuidedUnpack — no exception_resolutions row: the exception
-     * disappears the moment the shipment syncs into a terminal state.
+     * disappears the moment the shipment syncs into a terminal state, or the status poll finds
+     * it deleted in Bosta ({@code provider_not_found_at}). Condition-only: Resolve answers 409.
      *
      * status='cancelled' alone doesn't say which cancel path fired — cancel_requested_at
      * (Traced-side cancelOrder()) vs shopify_cancel_requested_at (Shopify-side webhook).
@@ -1093,7 +1108,7 @@ public class ExceptionService {
             "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, tracking_number, internal_state, last_synced_at " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_not_found_at " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             // UUIDv4 is not time-ordered — order by created_at, never id.
@@ -1107,7 +1122,9 @@ public class ExceptionService {
             "      'returned'::shipment_internal_state, " +
             "      'lost'::shipment_internal_state, " +
             "      'terminated'::shipment_internal_state, " +
-            "      'cancelled'::shipment_internal_state) ",
+            "      'cancelled'::shipment_internal_state) " +
+            // Deleted in Bosta (the status poll's safety net stamped it): nothing left to cancel.
+            "  AND s.provider_not_found_at IS NULL ",
             tid);
     }
 
@@ -1116,7 +1133,8 @@ public class ExceptionService {
      * 'delivered' — the courier delivered it despite the cancellation. Distinct code from
      * {@link #detectCancelledWithLiveShipment} because the remediation is different
      * (reconcile COD / arrange a return, not "cancel the AWB before it's collected").
-     * Self-resolving the same way — no exception_resolutions row.
+     * Delivered is terminal, so it never clears by itself: hidden once resolved
+     * (exception_resolutions on its subject key), like the other resolution-based types.
      */
     private List<Map<String, Object>> detectCancelledButDelivered(UUID tid) {
         return jdbc.queryForList(
@@ -1137,7 +1155,14 @@ public class ExceptionService {
             ") s ON true " +
             "WHERE o.tenant_id = ? " +
             "  AND o.status = 'cancelled'::order_status " +
-            "  AND s.internal_state = 'delivered'::shipment_internal_state ",
+            "  AND s.internal_state = 'delivered'::shipment_internal_state " +
+            // Resolved by a manager (COD settled / return arranged) → hidden, like the other
+            // resolution-based types. Never clears by itself: delivered is terminal.
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'cancelled_but_delivered' " +
+            "        AND er.subject_key = 'cancelled_but_delivered:order:' || o.id) ",
             tid);
     }
 
@@ -1302,6 +1327,12 @@ public class ExceptionService {
      * it (or the same value is re-fetched), the next webhook applies a real transition and
      * this query stops matching — no exception_resolutions bookkeeping needed.
      */
+    /** ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES as a SQL list — never a copy of the values. */
+    private static final String KNOWN_EXCHANGE_STATES_SQL =
+        com.traceability.integrations.bosta.ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES.stream()
+            .sorted().map(v -> "'" + v.replace("'", "''") + "'")
+            .collect(java.util.stream.Collectors.joining(", "));
+
     private List<Map<String, Object>> detectExchangeUnmappedState(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'exchange_unmapped_state' AS type, 'MEDIUM' AS severity, 'exchange' AS subject_type, " +
@@ -1313,7 +1344,7 @@ public class ExceptionService {
             "JOIN shipments s ON s.order_id = e.outbound_order_id AND s.shipment_leg = 'forward' " +
             "WHERE e.tenant_id = ? AND s.tenant_id = ? " +
             "  AND s.raw #>> '{state,value}' IS NOT NULL " +
-            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN ('new', 'picked_up', 'in_transit')",
+            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN (" + KNOWN_EXCHANGE_STATES_SQL + ")",
             tid, tid);
     }
 
@@ -1347,6 +1378,8 @@ public class ExceptionService {
 
     private void enrich(Map<String, Object> item) {
         String type = (String) item.get("type");
+        String clearsWhen = CONDITION_ONLY.get(type);
+        if (clearsWhen != null) item.put("clearsWhen", clearsWhen);
         switch (type) {
             case "lost" -> {
                 String b = str(item, "barcode");

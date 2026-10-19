@@ -97,7 +97,8 @@ public class PickupSessionController {
 
         return ResponseEntity.ok(Map.of(
             "shipmentsClosed",  result.shipmentsClosed(),
-            "pieceExceptions",  result.pieceExceptions()
+            "pieceExceptions",  result.pieceExceptions(),
+            "leftOut",          result.leftOut()
         ));
     }
 

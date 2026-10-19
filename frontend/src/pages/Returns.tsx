@@ -8,8 +8,8 @@ import {
   Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner, cn,
 } from '../components/ui'
 import Layout from '../components/Layout'
-import { getAccessToken, clearAccessToken } from '../auth'
-import { getRoleFromToken } from '../api'
+import { getAccessToken } from '../auth'
+import { authFetch, getRoleFromToken } from '../api'
 import { formatSessionStart } from './returns/sessionStart'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
@@ -18,7 +18,6 @@ import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ViaPhoneTag } from '../phone/ViaPhoneTag'
 
-const BASE = '/api/v1'
 
 function authHeaders(): Record<string, string> {
   const t = getAccessToken()
@@ -42,8 +41,10 @@ class ApiError extends Error {
   }
 }
 
+// authFetch: an expired access token is refreshed and the call retried once (a return session sits
+// open for hours); the old helper logged the worker out on the first 401.
 async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, {
+  const res = await authFetch(path, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
@@ -51,7 +52,6 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
       ...(opts.headers as Record<string, string> ?? {}),
     },
   })
-  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('401') }
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as ApiErrorBody
     throw new ApiError(res.status, body, body?.message_en ?? `HTTP ${res.status}`)
@@ -67,10 +67,9 @@ async function printSessionPieceLabel(sessionId: string, pieceId: string): Promi
   const token = getAccessToken()
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(BASE + `/returns/sessions/${sessionId}/pieces/${pieceId}/reprint-label`, {
+  const res = await authFetch(`/returns/sessions/${sessionId}/pieces/${pieceId}/reprint-label`, {
     method: 'POST', headers,
   })
-  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; return }
   if (!res.ok) {
     const b = await res.json().catch(() => ({}))
     throw Object.assign(new Error(b?.message_en ?? `HTTP ${res.status}`), { status: res.status })

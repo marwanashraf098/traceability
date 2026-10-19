@@ -3,10 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
 
-import { getAccessToken, clearAccessToken } from '../auth'
-import { getRoleFromToken } from '../api'
+import { getAccessToken } from '../auth'
+import { authFetch, getRoleFromToken } from '../api'
 
-const BASE = '/api/v1'
 function authHeaders() {
   const t = getAccessToken()
   return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) }
@@ -14,9 +13,10 @@ function authHeaders() {
 // Exported — ProductSelectionGrid reuses this exact fetch wrapper for its line
 // mutations, so every Receiving call (session/lines/finalize) shares identical
 // 401/error-handling behavior regardless of which component fires the request.
+// authFetch: an expired access token is refreshed and the call retried once (a receiving session sits
+// open for hours); the old helper logged the worker out on the first 401.
 export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
-  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
+  const res = await authFetch(path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
   if (!res.ok) {
     // Never surface the raw response body — Spring Security's default 403 body
     // (ACCESS_DENIED + granted authorities) is not meant for display. Business
@@ -258,7 +258,7 @@ function SessionView({ session, onRefresh, onBack }: {
   async function printLabels() {
     setPrintError(null)
     try {
-      const res = await fetch(`${BASE}/receiving/sessions/${session.id}/labels`, {
+      const res = await authFetch(`/receiving/sessions/${session.id}/labels`, {
         headers: authHeaders(),
       })
       if (!res.ok) throw new Error(res.statusText)
@@ -269,7 +269,7 @@ function SessionView({ session, onRefresh, onBack }: {
   async function reprintLabels() {
     setPrintError(null)
     try {
-      const res = await fetch(`${BASE}/receiving/sessions/${session.id}/reprint`, {
+      const res = await authFetch(`/receiving/sessions/${session.id}/reprint`, {
         method: 'POST', headers: authHeaders(), body: JSON.stringify({ note: 'manual reprint' }),
       })
       if (!res.ok) throw new Error(res.statusText)
@@ -281,8 +281,8 @@ function SessionView({ session, onRefresh, onBack }: {
     setPrintError(null)
     setPrintingVariant(variantId)
     try {
-      const res = await fetch(
-        `${BASE}/receiving/sessions/${session.id}/variants/${variantId}/labels`,
+      const res = await authFetch(
+        `/receiving/sessions/${session.id}/variants/${variantId}/labels`,
         { headers: authHeaders() }
       )
       if (!res.ok) throw new Error(res.statusText)
