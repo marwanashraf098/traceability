@@ -8,8 +8,9 @@
 `fix/condition-only-alerts-pickup-guard` off origin/main cd6441b; NOT merged, NOT deployed). No migration.**
 - **Slice 2:** `ExceptionService.CONDITION_ONLY` (type → clearsWhen code) is the ONE list: cancelled_live_shipment
   BOSTA_LEG_ENDED, guided_unpack ORDER_UNPACKED, exchange_needs_mapping EXCHANGE_MAPPED, exchange_unmapped_state
-  BOSTA_STATE_RECOGNISED. (Review 2026-10-19: cancelled_but_delivered taken out — keeps Resolve exactly as before;
-  its detector still doesn't read exception_resolutions, so the row doesn't hide it.) Their detectors never
+  BOSTA_STATE_RECOGNISED. (Review 2026-10-19: cancelled_but_delivered taken out — keeps Resolve, and its detector now
+  respects exception_resolutions on `cancelled_but_delivered:order:<id>`, so a resolved one is hidden; delivered is
+  terminal, it never clears by itself. Overview's per-day trend still counts it, like every other type.) Their detectors never
   read exception_resolutions, so Resolve used to write a row that hid nothing. Now: each item carries `clearsWhen`;
   `resolve()` throws `ConditionOnlyAlertException` → 409 CONDITION_ONLY (EN + AR), no row. Old rows are left alone.
   Exceptions.tsx hides Resolve for an item with clearsWhen and shows `exc.clearsWhen.<code>` (EN + AR).
@@ -18,8 +19,12 @@
 - **exchange_unmapped_state (review):** its NOT IN list is built from
   `ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES` (the interpreter map's keys — ONE definition), so the six
   handled states (new, picked_up, in_transit, out_for_exchange, exchanged_returned, out_for_return) never raise it.
-  Still condition-only. Known gap: the detector reads `raw.state.value`; the interpreter reads the latest done
-  timeline value (its javadoc says state.value is the wrong signal).
+  Still condition-only.
+- **Follow-ups:** (a) `exchange_unmapped_state` reads `raw.state.value` while `ExchangeStateInterpreter` reads the
+  latest done timeline entry (its javadoc says state.value is the wrong signal) — align them so the alert and the
+  state handling can't disagree. (b) `PortalOnDemandLookupTest.e1_twoConcurrentLookups_oneRow` is a known
+  full-suite timing flake (one of two concurrent lookups loses the single Bosta budget slot → padded generic 404
+  by design); green alone (27/27 ×3, 2026-10-19).
 - **Slice 3:** `PickupSessionService.LEG_ENDED_SQL` (cancelled / terminated / provider_not_found_at) is the ONE
   definition. Scan → new outcome LEG_ENDED (after the forward-leg check), nothing recorded; "This waybill is
   cancelled or deleted in Bosta — don't hand it to the courier." (EN + AR). Close re-reads it for every scanned

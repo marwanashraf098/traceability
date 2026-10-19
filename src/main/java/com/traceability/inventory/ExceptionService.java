@@ -1133,7 +1133,8 @@ public class ExceptionService {
      * 'delivered' — the courier delivered it despite the cancellation. Distinct code from
      * {@link #detectCancelledWithLiveShipment} because the remediation is different
      * (reconcile COD / arrange a return, not "cancel the AWB before it's collected").
-     * Self-resolving the same way — no exception_resolutions row.
+     * Delivered is terminal, so it never clears by itself: hidden once resolved
+     * (exception_resolutions on its subject key), like the other resolution-based types.
      */
     private List<Map<String, Object>> detectCancelledButDelivered(UUID tid) {
         return jdbc.queryForList(
@@ -1154,7 +1155,14 @@ public class ExceptionService {
             ") s ON true " +
             "WHERE o.tenant_id = ? " +
             "  AND o.status = 'cancelled'::order_status " +
-            "  AND s.internal_state = 'delivered'::shipment_internal_state ",
+            "  AND s.internal_state = 'delivered'::shipment_internal_state " +
+            // Resolved by a manager (COD settled / return arranged) → hidden, like the other
+            // resolution-based types. Never clears by itself: delivered is terminal.
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'cancelled_but_delivered' " +
+            "        AND er.subject_key = 'cancelled_but_delivered:order:' || o.id) ",
             tid);
     }
 

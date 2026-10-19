@@ -28,7 +28,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   co2 — POST /exceptions/resolve on each of the four → 409 CONDITION_ONLY, no exception_resolutions row,
  *         the alert is still listed
  *   co3 — POST /exceptions/resolve on stuck_shipment still works (204, row written, alert gone)
- *   co3b — cancelled_but_delivered keeps Resolve as before (review 2026-10-19): 204, row written
+ *   co3b — cancelled_but_delivered keeps Resolve (review 2026-10-19): 204, row written, and the alert is
+ *          gone (its detector respects resolutions)
  *   co4 — cancelled_live_shipment clears once the status poll finds the delivery deleted in Bosta
  *         (provider_not_found_at), as its clearsWhen text says
  *   co5 — exchange_unmapped_state: each of the six states ExchangeStateInterpreter handles raises nothing;
@@ -145,14 +146,13 @@ class ConditionOnlyAlertsTest {
     }
 
     @Test @Order(3)
-    void co3b_resolveOnCancelledButDelivered_worksAsBefore() {
+    void co3b_resolveOnCancelledButDelivered_hidesIt() {
         String key = (String) only(items(), "cancelled_but_delivered").get("subject_key");
         assertThat(resolve("cancelled_but_delivered", key).getStatusCode().value()).isEqualTo(204);
         assertThat(jdbc.queryForObject(
             "SELECT count(*) FROM exception_resolutions WHERE tenant_id = ? AND exception_type = 'cancelled_but_delivered'",
             Integer.class, tenantId)).isEqualTo(1);
-        // As before: its detector doesn't read exception_resolutions, so the row doesn't hide it.
-        assertThat(only(items(), "cancelled_but_delivered")).isNotNull();
+        assertThat(items().stream().filter(i -> "cancelled_but_delivered".equals(i.get("type")))).isEmpty();
     }
 
     @Test @Order(5)
