@@ -2642,6 +2642,7 @@
       "DUPLICATE": "Already scanned in this session",
       "OTHER_SESSION": "In another active session — remove it first",
       "NOT_FORWARD_LEG": "Return-leg shipment — not eligible for pickup",
+      "LEG_ENDED": "This waybill is cancelled or deleted in Bosta — don't hand it to the courier.",
       "NOT_PACKED": "Shipment not in packed state",
       "UNKNOWN_AWB": "AWB not found"
     },
@@ -2654,6 +2655,10 @@
     "sessionOpenRequired": "Session is open — scan packages",
     "orderNumber": "Order",
     "cod": "COD",
+    "leftOut": {
+      "title": "{{count}} waybill(s) left out of the handover",
+      "body": "Cancelled or deleted in Bosta after it was scanned — not handed over. Keep these parcels; their pieces are still packed."
+    },
     "pieceExceptions": "{{count}} piece(s) had custody gaps — check Alerts",
     "noScans": "No packages scanned yet"
   },

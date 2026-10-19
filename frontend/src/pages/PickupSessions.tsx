@@ -208,7 +208,10 @@ function CreateSessionForm({ onCreated, onCancel }: {
 
 // ── Session view (scan screen + closed manifest) ──────────────────────────────
 
-type FeedbackOutcome = 'ACCEPTED' | 'DUPLICATE' | 'OTHER_SESSION' | 'NOT_FORWARD_LEG' | 'NOT_PACKED' | 'UNKNOWN_AWB' | null
+type FeedbackOutcome = 'ACCEPTED' | 'DUPLICATE' | 'OTHER_SESSION' | 'NOT_FORWARD_LEG' | 'LEG_ENDED' | 'NOT_PACKED' | 'UNKNOWN_AWB' | null
+
+/** A scanned waybill whose leg was cancelled / deleted in Bosta before close — not handed over. */
+interface LeftOut { shipmentId: string; trackingNumber: string; orderNumber: string | null }
 
 function SessionView({ session: initial, onRefresh, onBack }: {
   session: SessionDetail
@@ -223,6 +226,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const [closing, setClosing]       = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
   const [closeMsg, setCloseMsg]     = useState<string | null>(null)
+  const [leftOut, setLeftOut]       = useState<LeftOut[]>([])
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = session.sessionStatus === 'open'
@@ -329,9 +333,10 @@ function SessionView({ session: initial, onRefresh, onBack }: {
     scanner.clearQueue()                       // nothing waiting may land on a closing session
     setClosing(true)
     try {
-      const res = await api<{ shipmentsClosed: number; pieceExceptions: string[] }>(
+      const res = await api<{ shipmentsClosed: number; pieceExceptions: string[]; leftOut?: LeftOut[] }>(
         `/pickup-sessions/${session.id}/close`, { method: 'POST' })
       setShowConfirm(false)
+      setLeftOut(res.leftOut ?? [])
       if (res.pieceExceptions.length > 0) {
         setCloseMsg(t('pickups.pieceExceptions', { count: res.pieceExceptions.length }))
       }
@@ -396,6 +401,22 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       {manifestError && (
         <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-small text-danger">
           {t('pickups.manifestError')}
+        </div>
+      )}
+
+      {leftOut.length > 0 && (
+        <div role="alert" data-testid="pickup-left-out"
+             className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-small text-danger space-y-1">
+          <p className="font-semibold">{t('pickups.leftOut.title', { count: leftOut.length })}</p>
+          <ul className="space-y-0.5">
+            {leftOut.map(l => (
+              <li key={l.shipmentId}>
+                <span className="font-mono">{l.trackingNumber}</span>
+                {l.orderNumber && <span> · {t('pickups.orderNumber')} {l.orderNumber}</span>}
+              </li>
+            ))}
+          </ul>
+          <p>{t('pickups.leftOut.body')}</p>
         </div>
       )}
 
