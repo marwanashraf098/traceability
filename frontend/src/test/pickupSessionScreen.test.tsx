@@ -2,74 +2,17 @@ import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
-import { setAccessToken, clearAccessToken } from '../auth'
-import * as api from '../api'
-import Exceptions from '../pages/Exceptions'
+import { setAccessToken, clearAccessToken, getAccessToken } from '../auth'
 import PickupSessions from '../pages/PickupSessions'
-import ar from '../locales/ar.json'
 
 /**
- * Deleted-in-Bosta slices 2 + 3 (screens).
- *  - Exceptions: the five condition-only alerts show what clears them instead of a Resolve button;
- *    every other alert keeps Resolve.
- *  - Pickup session: a LEG_ENDED scan says "cancelled or deleted in Bosta — don't hand it to the courier";
- *    a close that left waybills out lists them.
+ * Pickup session screen.
+ *  - Deleted-in-Bosta slice 3: a LEG_ENDED scan says "cancelled or deleted in Bosta — don't hand it to the
+ *    courier"; a close that left waybills out lists them.
+ *  - Nuvira (2026-10): a worker's session sits open for hours; a Close after the 15-minute access token
+ *    expired must refresh the token and close — the old page helper logged the worker out instead. A close
+ *    that fails says so inside the confirm dialog.
  */
-
-vi.mock('../api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, request: vi.fn() }
-})
-
-const CLEARS: Record<string, [string, string]> = {
-  cancelled_live_shipment: ['BOSTA_LEG_ENDED', 'Cancel it in Bosta to stop a courier coming.'],
-  cancelled_but_delivered: ['DELIVERED_WHILE_CANCELLED', 'Collect the payment from the customer or arrange a return.'],
-  guided_unpack:           ['ORDER_UNPACKED', 'Open the order (Go →) and unpack them.'],
-  exchange_needs_mapping:  ['EXCHANGE_MAPPED', 'Open it (Go →) to choose them.'],
-  exchange_unmapped_state: ['BOSTA_STATE_RECOGNISED', 'If it looks stuck, check the exchange in Bosta.'],
-}
-
-function alert(type: string, i: number, clearsWhen?: string) {
-  return {
-    type, severity: 'HIGH', subject_key: `${type}:order:${i}`, subject_type: 'order',
-    order_id: `o-${i}`, order_number: `#${4100 + i}`, tracking_number: String(6979330980 + i), ageSeconds: 600,
-    descriptionEn: `Alert ${type}`, descriptionAr: `تنبيه ${type}`, suggestedAction: 'x', actionUrl: '/orders',
-    ...(clearsWhen ? { clearsWhen } : {}),
-  }
-}
-
-describe('Exceptions — condition-only alerts', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    const items = [
-      ...Object.entries(CLEARS).map(([type, [code]], i) => alert(type, i, code)),
-      alert('stuck_shipment', 9),
-    ]
-    vi.mocked(api.request).mockImplementation(async () => ({
-      total: items.length, page: 0, size: 50, items, counts: { critical: 0, high: items.length, medium: 0, low: 0 },
-    }))
-  })
-
-  test('the five show their clearsWhen text and no Resolve; stuck_shipment keeps Resolve', async () => {
-    renderWithProviders(<Exceptions />)
-    await screen.findByText('Alert stuck_shipment')
-
-    for (const [type, [, text]] of Object.entries(CLEARS)) {
-      const row = screen.getByText(`Alert ${type}`).closest<HTMLElement>('.card')!
-      expect(within(row).getByTestId('exception-clears-when').textContent).toContain(text)
-      expect(within(row).queryByRole('button', { name: 'Resolve' })).toBeNull()
-    }
-    const stuck = screen.getByText('Alert stuck_shipment').closest<HTMLElement>('.card')!
-    expect(within(stuck).getByRole('button', { name: 'Resolve' })).toBeTruthy()
-    expect(within(stuck).queryByTestId('exception-clears-when')).toBeNull()
-    expect(screen.getAllByRole('button', { name: 'Resolve' })).toHaveLength(1)
-  })
-
-  test('every clearsWhen code has an Arabic text', () => {
-    const texts = (ar as { exc: { clearsWhen: Record<string, string> } }).exc.clearsWhen
-    for (const [code] of Object.values(CLEARS)) expect(texts[code]?.length).toBeGreaterThan(20)
-  })
-})
 
 // ── Pickup session ───────────────────────────────────────────────────────────
 
@@ -87,13 +30,24 @@ const base = { id: 'pk-1', scheduledDate: '2026-10-19', scheduledTimeSlot: '10:0
   createdAt: '2026-10-19T08:00:00Z', notes: null }
 let session: Record<string, unknown>
 let fetchFn: ReturnType<typeof vi.fn>
+/** The token the server accepts; any other Bearer gets a 401 (an expired access token). */
+let validToken: string
+let closeStatus: number
+
+const bearer = (opts: RequestInit) => (opts.headers as Record<string, string> | undefined)?.Authorization
 
 function backend(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
+  if (url.endsWith('/auth/refresh') && method === 'POST') {
+    validToken = 'h.' + btoa(JSON.stringify({ role: 'worker', v: 2 })) + '.s'
+    return json({ accessToken: validToken })
+  }
+  if (bearer(opts) !== `Bearer ${validToken}`) return json({ code: 'UNAUTHORIZED' }, 401)
   if (url.endsWith('/pickup-sessions') && method === 'GET') return json([{ ...base, sessionStatus: session.sessionStatus, scannedCount: 2 }])
   if (url.endsWith('/pickup-sessions/pk-1') && method === 'GET') return json(session)
   if (url.endsWith('/pickup-sessions/pk-1/scans') && method === 'POST') return json({ outcome: 'LEG_ENDED', entry: {} })
   if (url.endsWith('/pickup-sessions/pk-1/close') && method === 'POST') {
+    if (closeStatus !== 200) return json({ code: 'INTERNAL_ERROR' }, closeStatus)
     session = { ...session, sessionStatus: 'closed', closedByName: 'Mona', closedAt: '2026-10-19T09:00:00Z', scans: [LIVE] }
     return json({ shipmentsClosed: 1, pieceExceptions: [], leftOut: [
       { shipmentId: 'sh-2', trackingNumber: '6979330902', orderNumber: '#4202' }] })
@@ -112,7 +66,9 @@ async function openSession() {
 describe('Pickup session — legs that ended in Bosta', () => {
   beforeEach(() => {
     clearAccessToken()
-    setAccessToken(`h.${btoa(JSON.stringify({ role: 'worker' }))}.s`)
+    validToken = `h.${btoa(JSON.stringify({ role: 'worker' }))}.s`
+    closeStatus = 200
+    setAccessToken(validToken)
     session = { ...base, sessionStatus: 'open', scannedCount: 2, closedByName: null, closedAt: null, scans: [LIVE, ENDED] }
     fetchFn = vi.fn(backend)
     stubFetchWithShellDefaults(fetchFn)
@@ -140,5 +96,32 @@ describe('Pickup session — legs that ended in Bosta', () => {
     expect(box.textContent).toContain('6979330902')
     expect(box.textContent).toContain('#4202')
     expect(box.textContent).not.toContain('6979330901')
+  })
+
+  test('a Close after the access token expired refreshes the token and closes (no logout)', async () => {
+    const user = await openSession()
+    await user.click(await screen.findByRole('button', { name: /close session/i }))
+    // The worker waited for the courier: the 15-minute access token has expired.
+    validToken = 'h.' + btoa(JSON.stringify({ role: 'worker', expiredBefore: true })) + '.s-server-side'
+    await user.click(await screen.findByRole('button', { name: /confirm handover/i }))
+
+    expect(await screen.findByTestId('pickup-left-out')).toBeTruthy()
+    expect(getAccessToken()).toBe(validToken)
+    const calls = fetchFn.mock.calls.map(([u, o]) => `${(o?.method ?? 'GET').toUpperCase()} ${String(u)}`)
+    expect(calls.filter(c => c.endsWith('/auth/refresh'))).toHaveLength(1)
+    expect(calls.filter(c => c.endsWith('/pickup-sessions/pk-1/close'))).toHaveLength(2)   // 401, then the retry
+    expect(screen.queryByTestId('pickup-close-error')).toBeNull()
+  })
+
+  test('a Close that fails says so inside the confirm dialog', async () => {
+    closeStatus = 500
+    const user = await openSession()
+    await user.click(await screen.findByRole('button', { name: /close session/i }))
+    await user.click(await screen.findByRole('button', { name: /confirm handover/i }))
+    const err = await screen.findByTestId('pickup-close-error')
+    expect(err.textContent).toContain("Couldn't close the session")
+    // Inside the dialog (next to its buttons), not on the page behind it.
+    const dialog = screen.getByRole('button', { name: /confirm handover/i }).closest<HTMLElement>('.shadow-elevated')!
+    expect(within(dialog).getByTestId('pickup-close-error')).toBe(err)
   })
 })

@@ -2634,6 +2634,7 @@
     "closeConfirmTitle": "Confirm handover",
     "closeConfirmBody": "You are about to confirm handover of {{count}} packages to the courier. This will immediately mark all scanned shipments as WITH COURIER. There is no undo.",
     "closeConfirm": "Confirm handover — {{count}} packages",
+    "closeFailed": "Couldn't close the session. Check your connection and try again — nothing was handed over.",
     "closeCancel": "Cancel",
     "closedAt": "Closed {{date}}",
     "by": "by {{name}}",
@@ -3047,7 +3048,6 @@
   "exc": {
     "clearsWhen": {
       "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when it's deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
-      "DELIVERED_WHILE_CANCELLED": "The courier delivered an order that's cancelled. Collect the payment from the customer or arrange a return. This alert stays while the order is cancelled and its delivery shows delivered.",
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
       "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta."

@@ -248,7 +248,6 @@ public class ExceptionService {
      */
     public static final Map<String, String> CONDITION_ONLY = Map.of(
         "cancelled_live_shipment", "BOSTA_LEG_ENDED",
-        "cancelled_but_delivered", "DELIVERED_WHILE_CANCELLED",
         "guided_unpack",           "ORDER_UNPACKED",
         "exchange_needs_mapping",  "EXCHANGE_MAPPED",
         "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED");
@@ -1320,6 +1319,12 @@ public class ExceptionService {
      * it (or the same value is re-fetched), the next webhook applies a real transition and
      * this query stops matching — no exception_resolutions bookkeeping needed.
      */
+    /** ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES as a SQL list — never a copy of the values. */
+    private static final String KNOWN_EXCHANGE_STATES_SQL =
+        com.traceability.integrations.bosta.ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES.stream()
+            .sorted().map(v -> "'" + v.replace("'", "''") + "'")
+            .collect(java.util.stream.Collectors.joining(", "));
+
     private List<Map<String, Object>> detectExchangeUnmappedState(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'exchange_unmapped_state' AS type, 'MEDIUM' AS severity, 'exchange' AS subject_type, " +
@@ -1331,7 +1336,7 @@ public class ExceptionService {
             "JOIN shipments s ON s.order_id = e.outbound_order_id AND s.shipment_leg = 'forward' " +
             "WHERE e.tenant_id = ? AND s.tenant_id = ? " +
             "  AND s.raw #>> '{state,value}' IS NOT NULL " +
-            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN ('new', 'picked_up', 'in_transit')",
+            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN (" + KNOWN_EXCHANGE_STATES_SQL + ")",
             tid, tid);
     }
 

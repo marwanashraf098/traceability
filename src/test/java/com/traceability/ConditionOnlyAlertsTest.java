@@ -23,12 +23,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Deleted-in-Bosta slice 2 — alerts that only clear themselves.
  *
- *   co1 — each of the five condition-only types carries its clearsWhen code; stuck_shipment carries none
- *   co2 — POST /exceptions/resolve on each of the five → 409 CONDITION_ONLY, no exception_resolutions row,
+ *   co1 — each of the four condition-only types carries its clearsWhen code; stuck_shipment and
+ *         cancelled_but_delivered carry none
+ *   co2 — POST /exceptions/resolve on each of the four → 409 CONDITION_ONLY, no exception_resolutions row,
  *         the alert is still listed
  *   co3 — POST /exceptions/resolve on stuck_shipment still works (204, row written, alert gone)
+ *   co3b — cancelled_but_delivered keeps Resolve as before (review 2026-10-19): 204, row written
  *   co4 — cancelled_live_shipment clears once the status poll finds the delivery deleted in Bosta
  *         (provider_not_found_at), as its clearsWhen text says
+ *   co5 — exchange_unmapped_state: each of the six states ExchangeStateInterpreter handles raises nothing;
+ *         an unknown state still does (one shared set, KNOWN_FORWARD_LEG_STATES)
  *
  * Production-shaped fixtures: bare numeric tracking numbers, real enum values.
  */
@@ -65,7 +69,6 @@ class ConditionOnlyAlertsTest {
 
     static final Map<String, String> EXPECTED = Map.of(
         "cancelled_live_shipment", "BOSTA_LEG_ENDED",
-        "cancelled_but_delivered", "DELIVERED_WHILE_CANCELLED",
         "guided_unpack",           "ORDER_UNPACKED",
         "exchange_needs_mapping",  "EXCHANGE_MAPPED",
         "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED");
@@ -113,6 +116,7 @@ class ConditionOnlyAlertsTest {
             assertThat(item.get("clearsWhen")).as(e.getKey()).isEqualTo(e.getValue());
         }
         assertThat(only(items, "stuck_shipment")).doesNotContainKey("clearsWhen");
+        assertThat(only(items, "cancelled_but_delivered")).doesNotContainKey("clearsWhen");
     }
 
     @Test @Order(2)
@@ -140,7 +144,36 @@ class ConditionOnlyAlertsTest {
         assertThat(items().stream().filter(i -> "stuck_shipment".equals(i.get("type")))).isEmpty();
     }
 
-    @Test @Order(4)
+    @Test @Order(3)
+    void co3b_resolveOnCancelledButDelivered_worksAsBefore() {
+        String key = (String) only(items(), "cancelled_but_delivered").get("subject_key");
+        assertThat(resolve("cancelled_but_delivered", key).getStatusCode().value()).isEqualTo(204);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM exception_resolutions WHERE tenant_id = ? AND exception_type = 'cancelled_but_delivered'",
+            Integer.class, tenantId)).isEqualTo(1);
+        // As before: its detector doesn't read exception_resolutions, so the row doesn't hide it.
+        assertThat(only(items(), "cancelled_but_delivered")).isNotNull();
+    }
+
+    @Test @Order(5)
+    void co5_exchangeUnmappedState_handledStatesRaiseNothing_unknownStillDoes() {
+        assertThat(com.traceability.integrations.bosta.ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES)
+            .containsExactlyInAnyOrder("new", "picked_up", "in_transit", "out_for_exchange", "exchanged_returned",
+                "out_for_return");
+        // The fixture's exchange (state "Rescheduled") raises it; move its leg through every handled state.
+        UUID leg = jdbc.queryForObject("SELECT id FROM shipments WHERE tracking_number = '6979330984'", UUID.class);
+        for (String state : com.traceability.integrations.bosta.ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES) {
+            String shown = state.equals("out_for_exchange") ? "Out_For_Exchange " : state;   // Bosta casing / spacing
+            jdbc.update("UPDATE shipments SET raw = jsonb_build_object('state', jsonb_build_object('value', ?::text)) " +
+                        "WHERE id = ?", shown, leg);
+            assertThat(items().stream().filter(i -> "exchange_unmapped_state".equals(i.get("type"))))
+                .as(state).isEmpty();
+        }
+        jdbc.update("UPDATE shipments SET raw = '{\"state\":{\"value\":\"Rescheduled\"}}'::jsonb WHERE id = ?", leg);
+        assertThat(only(items(), "exchange_unmapped_state").get("clearsWhen")).isEqualTo("BOSTA_STATE_RECOGNISED");
+    }
+
+    @Test @Order(6)
     void co4_cancelledLiveShipment_clearsWhenDeletedInBosta() {
         assertThat(only(items(), "cancelled_live_shipment")).isNotNull();
         jdbc.update("UPDATE shipments SET provider_not_found_at = now() WHERE id = ?", liveShipmentId);

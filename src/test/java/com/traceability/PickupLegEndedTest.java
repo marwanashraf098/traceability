@@ -28,7 +28,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   pl3 — scan of a live-looking leg the status poll found deleted in Bosta (provider_not_found_at) → LEG_ENDED
  *   pl4 — legs that ended between scan and close (one cancelled, one deleted in Bosta) are left out at close:
  *         no with_courier, no custody lock, no history row, pieces stay packed, scan row gone, listed in the
- *         close summary; the live leg closes exactly as before (with_courier + lock + history + pieces)
+ *         close summary; the live leg closes exactly as before (with_courier + lock + history + pieces);
+ *         each left-out leg gets an audit_log entry (pickup, shipment, tracking, order, reason, who closed)
  *
  * Production-shaped fixtures: bare numeric 10-digit tracking numbers, packed pieces on packed allocations.
  */
@@ -109,6 +110,26 @@ class PickupLegEndedTest {
         assertThat(close.leftOut()).extracting(PickupSessionService.LeftOut::trackingNumber)
             .containsExactlyInAnyOrder(tn(cancelled), tn(deleted));
         assertThat(close.leftOut()).allSatisfy(l -> assertThat(l.orderNumber()).startsWith("#"));
+        assertThat(close.leftOut()).extracting(PickupSessionService.LeftOut::reason)
+            .containsExactlyInAnyOrder("cancelled", "deleted_in_bosta");
+
+        // An audit_log entry per left-out leg, written before its scan row was removed.
+        var audit = jdbc.queryForList(
+            "SELECT actor_user_id, target_type, target_id, metadata->>'pickup_id' AS pickup_id, " +
+            "       metadata->>'shipment_id' AS shipment_id, metadata->>'tracking_number' AS tracking_number, " +
+            "       metadata->>'order_number' AS order_number, metadata->>'reason' AS reason " +
+            "FROM audit_log WHERE tenant_id = ? AND action = 'pickup_leg_left_out' AND target_id = ?",
+            tenantId, session.toString());
+        assertThat(audit).hasSize(2);
+        for (var a : audit) {
+            assertThat(a.get("actor_user_id")).isEqualTo(actorId);
+            assertThat(a.get("target_type")).isEqualTo("pickup");
+            assertThat(a.get("pickup_id")).isEqualTo(session.toString());
+            UUID sid = UUID.fromString((String) a.get("shipment_id"));
+            assertThat(a.get("tracking_number")).isEqualTo(tn(sid));
+            assertThat((String) a.get("order_number")).startsWith("#");
+            assertThat(a.get("reason")).isEqualTo(sid.equals(cancelled) ? "cancelled" : "deleted_in_bosta");
+        }
 
         // Live leg: closed exactly as before.
         assertThat(state(live)).isEqualTo("with_courier");

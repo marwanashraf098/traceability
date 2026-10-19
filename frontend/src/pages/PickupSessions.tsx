@@ -1,23 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
-import { getAccessToken, clearAccessToken } from '../auth'
-import { getPickupManifest, getRoleFromToken, PickupManifest } from '../api'
+import { getPickupManifest, getRoleFromToken, PickupManifest, request } from '../api'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 
-const BASE = '/api/v1'
-function authHeaders() {
-  const t = getAccessToken()
-  return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) }
-}
-async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string, string> } })
-  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
-  if (!res.ok) { const txt = await res.text(); throw new Error(txt || res.statusText) }
-  return res.json()
-}
+// Every call goes through the shared request(): an expired access token is refreshed and the call
+// retried once. The page's old helper cleared the token on the first 401 and sent a worker to /login —
+// a pickup session sits open for hours, so no worker's Close ever reached the server (Nuvira, 2026-10).
+const api = request
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
@@ -227,6 +219,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const [showConfirm, setShowConfirm] = useState(false)
   const [closeMsg, setCloseMsg]     = useState<string | null>(null)
   const [leftOut, setLeftOut]       = useState<LeftOut[]>([])
+  const [closeError, setCloseError] = useState(false)
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = session.sessionStatus === 'open'
@@ -332,6 +325,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   async function confirmClose() {
     scanner.clearQueue()                       // nothing waiting may land on a closing session
     setClosing(true)
+    setCloseError(false)
     try {
       const res = await api<{ shipmentsClosed: number; pieceExceptions: string[]; leftOut?: LeftOut[] }>(
         `/pickup-sessions/${session.id}/close`, { method: 'POST' })
@@ -344,8 +338,10 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       const updated = await api<SessionDetail>(`/pickup-sessions/${session.id}`)
       setSession(updated)
       setScans(updated.scans)
-    } catch (e: unknown) {
-      setCloseMsg((e as Error).message)
+    } catch {
+      // Shown inside the confirm dialog — the dialog stays open over the page, so a message on the
+      // page itself was hidden behind it.
+      setCloseError(true)
     } finally {
       setClosing(false)
     }
@@ -546,6 +542,12 @@ function SessionView({ session: initial, onRefresh, onBack }: {
                 count: scans.filter(s => !s.shipmentId.startsWith('optimistic-')).length
               })}
             </p>
+            {closeError && (
+              <p role="alert" data-testid="pickup-close-error"
+                 className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-small text-danger">
+                {t('pickups.closeFailed')}
+              </p>
+            )}
             <div className="flex gap-3 pt-2">
               <button
                 onClick={confirmClose}
@@ -559,7 +561,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
                     })}
               </button>
               <button
-                onClick={() => { setShowConfirm(false); refocus() }}
+                onClick={() => { setShowConfirm(false); setCloseError(false); refocus() }}
                 className="btn-outline btn text-small"
                 disabled={closing}
               >

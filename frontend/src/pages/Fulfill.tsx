@@ -8,15 +8,14 @@ import {
 import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
 import Layout from '../components/Layout'
 import PrintWaybillsDialog from './fulfill/PrintWaybillsDialog'
-import { getAccessToken, clearAccessToken } from '../auth'
-import { TransferCommandError } from '../api'
+import { getAccessToken } from '../auth'
+import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 
-const BASE = '/api/v1'
 
 function authHeaders(): Record<string, string> {
   const token = getAccessToken()
@@ -29,12 +28,9 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<{ da
     ...authHeaders(),
     ...(opts.headers as Record<string, string> ?? {}),
   }
-  const res = await fetch(BASE + path, { ...opts, headers })
-  if (res.status === 401) {
-    clearAccessToken()
-    window.location.href = '/login'
-    throw new Error('Unauthenticated')
-  }
+  // authFetch: an expired access token is refreshed and the call retried once (a picker sits on this
+  // screen for hours); the old helper logged the worker out on the first 401.
+  const res = await authFetch(path, { ...opts, headers })
   if (res.status === 204) return { data: undefined as T, status: 204 }
   const data = res.status !== 204 ? await res.json().catch(() => null) : null
   return { data, status: res.status }

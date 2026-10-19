@@ -7,29 +7,41 @@
 **Deleted-in-Bosta slices 2 + 3 — condition-only alerts, pickup scan guard (2026-10-19, branch
 `fix/condition-only-alerts-pickup-guard` off origin/main cd6441b; NOT merged, NOT deployed). No migration.**
 - **Slice 2:** `ExceptionService.CONDITION_ONLY` (type → clearsWhen code) is the ONE list: cancelled_live_shipment
-  BOSTA_LEG_ENDED, cancelled_but_delivered DELIVERED_WHILE_CANCELLED, guided_unpack ORDER_UNPACKED,
-  exchange_needs_mapping EXCHANGE_MAPPED, exchange_unmapped_state BOSTA_STATE_RECOGNISED. Their detectors never
+  BOSTA_LEG_ENDED, guided_unpack ORDER_UNPACKED, exchange_needs_mapping EXCHANGE_MAPPED, exchange_unmapped_state
+  BOSTA_STATE_RECOGNISED. (Review 2026-10-19: cancelled_but_delivered taken out — keeps Resolve exactly as before;
+  its detector still doesn't read exception_resolutions, so the row doesn't hide it.) Their detectors never
   read exception_resolutions, so Resolve used to write a row that hid nothing. Now: each item carries `clearsWhen`;
   `resolve()` throws `ConditionOnlyAlertException` → 409 CONDITION_ONLY (EN + AR), no row. Old rows are left alone.
   Exceptions.tsx hides Resolve for an item with clearsWhen and shows `exc.clearsWhen.<code>` (EN + AR).
   `detectCancelledWithLiveShipment` (and Overview's mirror) now also skip a leg with `provider_not_found_at`, so the
   text "clears when … deleted in Bosta" is true. The order chip (OrderStatusDeriver) still reads internal_state only.
-- **Known (reported, not changed):** cancelled_but_delivered has no clearing path (delivered is terminal, a
-  cancelled order stays cancelled) — it now stays until a decision; exchange_unmapped_state's detector reads
-  raw state.value against ('new','picked_up','in_transit') while the interpreter knows six timeline values.
+- **exchange_unmapped_state (review):** its NOT IN list is built from
+  `ExchangeStateInterpreter.KNOWN_FORWARD_LEG_STATES` (the interpreter map's keys — ONE definition), so the six
+  handled states (new, picked_up, in_transit, out_for_exchange, exchanged_returned, out_for_return) never raise it.
+  Still condition-only. Known gap: the detector reads `raw.state.value`; the interpreter reads the latest done
+  timeline value (its javadoc says state.value is the wrong signal).
 - **Slice 3:** `PickupSessionService.LEG_ENDED_SQL` (cancelled / terminated / provider_not_found_at) is the ONE
   definition. Scan → new outcome LEG_ENDED (after the forward-leg check), nothing recorded; "This waybill is
   cancelled or deleted in Bosta — don't hand it to the courier." (EN + AR). Close re-reads it for every scanned
-  shipment: an ended leg's pickup_shipments row is deleted (session + manifest = what the courier took), no
+  shipment: an ended leg gets an `audit_log` entry (AuditService, action `pickup_leg_left_out`, target pickup,
+  metadata pickup_id / shipment_id / tracking_number / order_number / reason cancelled|terminated|deleted_in_bosta,
+  actor = who closed), then its pickup_shipments row is deleted (session + manifest = what the courier took), no
   with_courier / lock / history / piece move; CloseResult + response carry `leftOut` (shipment, tracking, order
   number), no_of_packages = handed count; the screen lists them. Valid shipments close exactly as before.
-- **Nuvira (diagnosis only):** all 4 Nuvira sessions are closed in prod now (10-17 16:11, 16:12; 10-18 16:44, 19:08),
-  all opened by a worker. Likely cause: PickupSessions.tsx's page-local `api()` never refreshes the 15-min access
-  token — a 401 clears the token and hard-redirects to /login, nothing reaches the server; and a failed close's
-  message renders under the still-open confirm dialog. Not fixed (outside the close path).
-- Tests: ConditionOnlyAlertsTest 4, PickupLegEndedTest 4, deletedInBostaAlertsPickup.test.tsx 4. Mutations: no
-  resolve guard → co2; no clearsWhen → co1; no not-found filter → co4; no scan guard → pl1–3; no close re-check →
-  pl4; old Exceptions / PickupSessions screens → 2 frontend red.
+- **Nuvira login refresh (review, confirmed in prod: 4 of 4 sessions opened by a worker, open 3 h–3 days, closed
+  later by the owner):** PickupSessions.tsx's page-local `api()` cleared the token on the first 401 (15-min access
+  token) and hard-redirected to /login. Now `const api = request` (shared refresh + one retry). A failed close
+  shows `pickups.closeFailed` INSIDE the confirm dialog. New `authFetch()` in api.ts (same refreshOrLogout /
+  single in-flight refresh as request(), returns the Response, Authorization = current token) replaces the raw
+  fetch + logout-on-401 in the other worker screens' helpers, error contracts unchanged: Returns.tsx `api` +
+  piece-label reprint, Receiving.tsx `api` + 3 label fetches (had no 401 handling at all), Fulfill.tsx `api`.
+  No SAFETY-CRITICAL code touched. Not worker screens (left): settings/LocationsTab, analytics/OrdersPage export,
+  embedded/EmbeddedApp (Shopify session token), portal/api (public), phone/relayStream (already refreshes).
+- Tests: ConditionOnlyAlertsTest 6, PickupLegEndedTest 4, conditionOnlyAlerts.test.tsx 2,
+  pickupSessionScreen.test.tsx 4, authFetch.test.ts 2. Mutations: no resolve guard → co2; no clearsWhen → co1;
+  no not-found filter → co4; old 3-state list → co5; cancelled_but_delivered back in the set → co1 + co3b; no
+  audit entry → pl4; no scan guard → pl1–3; no close re-check → pl4; old Exceptions screen → 1 red; old pickup
+  page → token-expiry close + in-dialog error red.
 
 **Merged-PDF slices B + C — background print jobs, one merged PDF, up to 490 per print (2026-10-18, branch
 `feat/print-jobs` off origin/main 3f0d538; NOT merged, NOT deployed). Migration V170.**
