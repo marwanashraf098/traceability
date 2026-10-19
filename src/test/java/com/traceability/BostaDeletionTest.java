@@ -56,6 +56,9 @@ import static org.mockito.Mockito.*;
  *        on the next piece scan, its pieces back on the shelf
  *   dl14 the dead waybill can't be linked again by scan (409)
  *   dl15 RLS: app_user with another tenant's context can't observe / clear / confirm this tenant's legs
+ *   dl16 a leg stamped before V172 (provider_not_found_at set, count 0, last NULL) enters the re-check queue;
+ *        its old stamp never counts: one fresh 400 → not confirmed, a second within 30 min → not counted, a
+ *        second ≥ 30 min after the first → confirmed
  *
  * Production-shaped: bare numeric 10-digit tracking numbers (PackFixtures), packed pieces, real states.
  */
@@ -468,6 +471,38 @@ class BostaDeletionTest {
         jdbc.update("UPDATE shipments SET not_found_count = 2, last_not_found_at = now() WHERE id = ?", o.shipment());
         assertThat(TenantContext.runAs(a.f.tenant, () -> asAppUser.tryConfirm(a.f.tenant, o.shipment())))
             .isEqualTo(Confirmation.CLOSED);
+    }
+
+    @Test
+    void dl16_legacyStampedLeg_needsTwoFreshNotFounds30MinApart() {
+        Shop s = new Shop("DL16");
+        Order o = s.order("#4116");
+        // As the poll left it before V172: stamped two days ago, polled then; V172's defaults (count 0, last NULL).
+        jdbc.update("UPDATE shipments SET provider_not_found_at = LOCALTIMESTAMP - INTERVAL '2 days', " +
+                    "last_polled_at = now() - INTERVAL '2 days' WHERE id = ?", o.shipment());
+        assertThat(leg(o.shipment())).containsEntry("not_found_count", 0).containsEntry("last_not_found_at", null);
+        when(gateway.fetchDelivery(eq(KEY), eq(o.tracking()))).thenThrow(new DeliveryNotFoundException(o.tracking()));
+
+        // 1st fresh 400 — the queue picks the legacy leg up; the old stamp doesn't count, so count 1: not confirmed.
+        s.keyOk(1);
+        assertThat(as(s, () -> deletion.recheckSuspects(s.f.tenant, KEY))).isEqualTo(1);
+        assertThat(leg(o.shipment())).containsEntry("not_found_count", 1).containsEntry("internal_state", "created");
+        assertThat(leg(o.shipment()).get("provider_deleted_at")).isNull();
+
+        // Another 400 within 30 minutes (e.g. the print path's re-check) isn't counted.
+        as(s, () -> { deletion.observeNotFound(s.f.tenant, o.shipment()); return null; });
+        assertThat(as(s, () -> deletion.tryConfirm(s.f.tenant, o.shipment()))).isEqualTo(Confirmation.NOT_READY);
+        assertThat(leg(o.shipment())).containsEntry("not_found_count", 1);
+
+        // 31 minutes later the queue looks again: the 2nd fresh 400, ≥ 30 min after the 1st → confirmed and closed.
+        jdbc.update("UPDATE shipments SET last_not_found_at = last_not_found_at - INTERVAL '31 minutes', " +
+                    "last_polled_at = last_polled_at - INTERVAL '31 minutes' WHERE id = ?", o.shipment());
+        s.keyOk(1);
+        assertThat(as(s, () -> deletion.recheckSuspects(s.f.tenant, KEY))).isEqualTo(1);
+        Map<String, Object> row = leg(o.shipment());
+        assertThat(row).containsEntry("not_found_count", 2).containsEntry("internal_state", "cancelled")
+            .containsEntry("provider_deleted_reason", "deleted_in_bosta");
+        assertThat(count("SELECT COUNT(*) FROM shipment_status_history WHERE shipment_id = ?", o.shipment())).isZero();
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

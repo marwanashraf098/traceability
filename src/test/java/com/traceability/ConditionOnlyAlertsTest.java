@@ -30,8 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   co3 — POST /exceptions/resolve on stuck_shipment still works (204, row written, alert gone)
  *   co3b — cancelled_but_delivered keeps Resolve (review 2026-10-19): 204, row written, and the alert is
  *          gone (its detector respects resolutions)
- *   co4 — cancelled_live_shipment clears once the status poll finds the delivery deleted in Bosta
- *         (provider_not_found_at), as its clearsWhen text says
+ *   co4 — cancelled_live_shipment clears once Traced confirms the delivery was deleted in Bosta
+ *         (provider_deleted_at, slice 4), as its clearsWhen text says
  *   co5 — exchange_unmapped_state: each of the six states ExchangeStateInterpreter handles raises nothing;
  *         an unknown state still does (one shared set, KNOWN_FORWARD_LEG_STATES)
  *
@@ -174,9 +174,10 @@ class ConditionOnlyAlertsTest {
     }
 
     @Test @Order(6)
-    void co4_cancelledLiveShipment_clearsWhenDeletedInBosta() {
+    void co4_cancelledLiveShipment_clearsWhenConfirmedDeletedInBosta() {
         assertThat(only(items(), "cancelled_live_shipment")).isNotNull();
-        jdbc.update("UPDATE shipments SET provider_not_found_at = now() WHERE id = ?", liveShipmentId);
+        jdbc.update("UPDATE shipments SET provider_deleted_at = now(), provider_deleted_reason = 'deleted_in_bosta' " +
+                    "WHERE id = ?", liveShipmentId);
         assertThat(items().stream().filter(i -> "cancelled_live_shipment".equals(i.get("type")))).isEmpty();
     }
 

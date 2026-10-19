@@ -19,14 +19,17 @@ import java.util.UUID;
  * there. Bosta rows only — a generic (non-Bosta courier) leg is never suspected, confirmed or closed.
  *
  * <b>Suspected</b> ({@link #observeNotFound}): a v0 lookup answered 400 "Delivery not found" →
- * provider_not_found_at (first, kept), last_not_found_at, not_found_count + 1. A suspect stays in the
+ * provider_not_found_at (first, kept). It COUNTS (not_found_count + 1, last_not_found_at) only when it is the
+ * first fresh one (count 0) or at least {@link #CONFIRM_SPACING_MINUTES} after the last counted one — so
+ * count ≥ 2 means two fresh 400s at least 30 minutes apart. A leg stamped before V172 starts at count 0: its
+ * old stamp never counts as one of the two. A suspect stays in the
  * re-check queue ({@link #recheckSuspects}, run by the status poll after its walk): one by-tracking lookup
  * per suspect per {@link #RECHECK_EVERY_MINUTES}, BACKGROUND priority. A lookup that returns the delivery
  * clears the suspicion ({@link #clearSuspicion}) and the result is ingested normally.
  *
  * <b>Confirmed</b> ({@link #tryConfirm}) only when ALL hold, re-read under the shipment's row lock:
  * <ol>
- *   <li>two not-founds at least {@link #CONFIRM_SPACING_MINUTES} apart (count ≥ 2, last − first ≥ 30 min);</li>
+ *   <li>two counted not-founds (count ≥ 2 — at least {@link #CONFIRM_SPACING_MINUTES} apart by construction);</li>
  *   <li>the positive control: the SAME tenant's key had a successful v0 lookup or v2 search page in the last
  *       {@link #POSITIVE_CONTROL_MINUTES} ({@code courier_accounts.lookup_ok_at}) and no 401 / 403 in that
  *       window ({@code lookup_auth_failed_at}) — a wrong or rotated key never confirms anything;</li>
@@ -132,16 +135,25 @@ public class BostaDeletionService {
 
     // ── Observations ──────────────────────────────────────────────────────────
 
-    /** One 400 "Delivery not found" for this shipment. Caller inside runAs; no Bosta call here. */
+    /**
+     * One 400 "Delivery not found" for this shipment. Counted only when it is the first fresh one or ≥ 30 min
+     * after the last counted one (both timestamps are V44-style `timestamp`: LOCALTIMESTAMP, the session's
+     * Cairo wall clock). Caller inside runAs; no Bosta call here.
+     */
     public void observeNotFound(UUID tenantId, UUID shipmentId) {
         tx.execute(s -> jdbc.update(
             "UPDATE shipments SET " +
-            "  not_found_count = CASE WHEN provider_not_found_at IS NULL THEN 1 ELSE not_found_count + 1 END, " +
-            "  provider_not_found_at = COALESCE(provider_not_found_at, now()), " +
-            "  last_not_found_at = now() " +
+            "  provider_not_found_at = COALESCE(provider_not_found_at, LOCALTIMESTAMP), " +
+            "  not_found_count = CASE WHEN " + COUNTS_SQL + " THEN not_found_count + 1 ELSE not_found_count END, " +
+            "  last_not_found_at = CASE WHEN " + COUNTS_SQL + " THEN LOCALTIMESTAMP ELSE last_not_found_at END " +
             "WHERE id = ? AND tenant_id = ? AND provider = 'bosta' AND provider_deleted_at IS NULL",
             shipmentId, tenantId));
     }
+
+    /** This 400 counts: the first fresh one, or ≥ 30 min after the last counted one (old row values). */
+    private static final String COUNTS_SQL =
+        "(not_found_count = 0 OR last_not_found_at IS NULL " +
+        " OR last_not_found_at <= LOCALTIMESTAMP - (" + CONFIRM_SPACING_MINUTES + " * INTERVAL '1 minute'))";
 
     /** Bosta returned the delivery after all: no longer suspected. Caller inside runAs. */
     public int clearSuspicion(UUID tenantId, UUID shipmentId) {
@@ -179,14 +191,13 @@ public class BostaDeletionService {
     private Confirmation confirmLocked(UUID tenantId, UUID shipmentId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT s.order_id, s.tracking_number, s.shipment_leg::text AS leg, s.internal_state::text AS state, " +
-            "       s.provider::text AS provider, s.provider_deleted_at, s.not_found_count, " +
-            "       (s.last_not_found_at - s.provider_not_found_at) >= (? * INTERVAL '1 minute') AS spaced " +
+            "       s.provider::text AS provider, s.provider_deleted_at, s.not_found_count " +
             "FROM shipments s WHERE s.id = ? AND s.tenant_id = ? FOR UPDATE",
-            CONFIRM_SPACING_MINUTES, shipmentId, tenantId);
+            shipmentId, tenantId);
         if (rows.isEmpty() || !"bosta".equals(rows.get(0).get("provider"))) return Confirmation.NOT_BOSTA;
         Map<String, Object> r = rows.get(0);
         if (r.get("provider_deleted_at") != null) return Confirmation.ALREADY_DELETED;
-        if (((Number) r.get("not_found_count")).intValue() < 2 || !Boolean.TRUE.equals(r.get("spaced"))) {
+        if (((Number) r.get("not_found_count")).intValue() < 2) {   // two counted 400s, ≥ 30 min apart
             return Confirmation.NOT_READY;
         }
 

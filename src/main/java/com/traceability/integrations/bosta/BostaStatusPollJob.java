@@ -238,10 +238,9 @@ public class BostaStatusPollJob {
                         deletion.observeNotFound(tenantId, fShipId);
                         deletion.tryConfirm(tenantId, fShipId);
                     } else {
-                        tx.execute(s -> jdbc.update(
-                            "UPDATE shipments SET provider_not_found_at = COALESCE(provider_not_found_at, now()), " +
-                            "last_not_found_at = now(), not_found_count = not_found_count + 1 WHERE id = ? AND tenant_id = ?",
-                            fShipId, tenantId));
+                        tx.execute(s -> jdbc.update(   // hand-built instance (no deletion service): suspect only
+                            "UPDATE shipments SET provider_not_found_at = COALESCE(provider_not_found_at, LOCALTIMESTAMP) " +
+                            "WHERE id = ? AND tenant_id = ?", fShipId, tenantId));
                     }
                 } catch (BostaAuthException e) {
                     // The key, not this delivery: inconclusive, and confirmation pauses for the tenant.

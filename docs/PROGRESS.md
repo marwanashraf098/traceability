@@ -6,12 +6,21 @@
 
 **Deleted-in-Bosta slices 4 + 5 — confirm a deletion safely, close the dead shipment, backfill script (2026-10-19,
 branch `feat/deleted-in-bosta-confirm` off origin/main 05b813b; NOT merged, NOT deployed). Migration V172.**
-- **V172 — why 172:** G2 (`../traceability-g2`, branch `generic-courier-g2`) has V171 committed. On this branch Flyway
-  sees V170 → V172. MigrationSmokeTest 169 → 170, NotTracedBackfillTest 114 → 115 (+ V172). shipments:
+- **V172 — why 172:** G2 merged to main first with V171 (2026-10-19), so this takes the next free number (review asked
+  for V171 on the assumption G2 would merge later — it already had; G2 needs no renumber). Rebased onto main a9a9f4c:
+  V170 → V171 → V172; MigrationSmokeTest 171, NotTracedBackfillTest 116 (+ V171 + V172). **Lock-safe:** only ADD
+  COLUMN (nullable / constant DEFAULT 0 — metadata-only), CHECKs NOT VALID, no index, no data UPDATE (no other
+  migration sets lock_timeout, so this doesn't either). shipments:
   provider_deleted_at / provider_deleted_reason ('deleted_in_bosta' | 'deleted_in_bosta_backfill', CHECK pair, Bosta
   rows only), not_found_count, last_not_found_at — **`timestamp` without time zone like V44's provider_not_found_at**
   (both hold the app's Cairo wall-clock time, JVM -Duser.timezone=Africa/Cairo; converting V44's column would rewrite
-  shipments). courier_accounts: lookup_ok_at, lookup_auth_failed_at. Existing stamps seeded as one observation.
+  shipments). courier_accounts: lookup_ok_at, lookup_auth_failed_at.
+- **Counting (review):** a 400 COUNTS only when it is the first fresh one (count 0) or ≥ 30 min after the last counted
+  one (`observeNotFound`, LOCALTIMESTAMP); confirmation needs count ≥ 2. Legs stamped before V172 keep count 0 /
+  last NULL — their old stamp never counts. They enter the queue first (last_not_found_at NULLS FIRST; their
+  last_polled_at is days old). Prod's 39: every tenant has ≤ 20 (Femine 17, BROEK 12) so pass 1 is the first poll
+  cycle after deploy (≤ 3 min, ~1 lookup/s per key), pass 2 the first cycle ≥ 30 min later → all 39 confirmed about
+  33–36 min after deploy if each walk succeeds and no 429.
 - **Rule** (`integrations/bosta/BostaDeletionService` — the ONE place): provider_not_found_at = SUSPECTED (first 400).
   Suspects leave the safety net for a re-check queue (`recheckSuspects`, after each poll walk, BACKGROUND, one lookup
   per suspect per 30 min, ≤ 20/cycle); a found delivery clears it and is ingested; the walk seeing it clears it too.
@@ -40,8 +49,8 @@ branch `feat/deleted-in-bosta-confirm` off origin/main 05b813b; NOT merged, NOT 
 - **Known gaps:** a leg already handed over (pickup close sets with_courier) is never 'created', so it can't be
   confirmed — the CRITICAL path needs a 'created' leg with with_courier pieces; slice 6 should decide. Stranded
   unlinked rows matched only by phone + COD aren't retried (no reference to tie them to the order).
-- Tests: BostaDeletionTest 15, DeletedInBostaBackfillScriptTest 2 (psql in the container), frontend
-  packSessionDeletedInBosta 1.
+- Tests: BostaDeletionTest 16 (dl16 legacy leg), DeletedInBostaBackfillScriptTest 2 (psql in the container), frontend
+  packSessionDeletedInBosta 1; ConditionOnlyAlertsTest.co4 → …clearsWhenConfirmedDeletedInBosta (approved).
 
 **Returns: parcels coming back to sender are expected, workers grade them (2026-10-19, branch
 `returns-expected-back` off origin/main 05b813b, rebased onto 67ffe18 (G2); NOT merged, NOT deployed). No migration.** Prod trigger: Nuvira session
