@@ -36,6 +36,8 @@ interface ExceptionItem {
   releaseUrl?: string
   cancelUrl?: string
   diffJson?: string
+  /** Condition-only alerts: what clears it (exc.clearsWhen.<code>) — no Resolve for these. */
+  clearsWhen?: string
 }
 
 interface SeverityCounts { critical: number; high: number; medium: number; low: number }
@@ -211,6 +213,11 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
             </span>
           )}
         </div>
+        {item.clearsWhen && (
+          <p className="text-caption text-muted mt-1" data-testid="exception-clears-when">
+            {t(`exc.clearsWhen.${item.clearsWhen}`)}
+          </p>
+        )}
         {item.type === 'return_to_receive' && (
           <p className="text-caption text-muted mt-1" data-testid="return-to-receive-note">
             {item.marked_by_name && item.intake_session_id
@@ -257,9 +264,12 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
             {isAr ? 'الإجراء' : 'Go →'}
           </Button>
         )}
-        <Button variant="secondary" size="sm" onClick={() => onAck(item)}>
-          {isAr ? 'معالجة' : 'Resolve'}
-        </Button>
+        {/* Condition-only alerts clear themselves — the server refuses Resolve (409 CONDITION_ONLY). */}
+        {!item.clearsWhen && (
+          <Button variant="secondary" size="sm" onClick={() => onAck(item)}>
+            {isAr ? 'معالجة' : 'Resolve'}
+          </Button>
+        )}
       </div>
     </div>
   )

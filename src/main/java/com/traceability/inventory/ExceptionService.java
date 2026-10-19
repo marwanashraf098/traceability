@@ -239,9 +239,24 @@ public class ExceptionService {
         return countOpenExceptionsBySeverity().total();
     }
 
+    /**
+     * Alerts that only clear themselves: their detectors read live state and never look at
+     * exception_resolutions, so Resolve would write a row that hides nothing. Each carries a
+     * {@code clearsWhen} code (the screen shows what clears it instead of a Resolve button) and
+     * {@link #resolve} refuses them with 409 CONDITION_ONLY. Rows written for these types before
+     * this rule are left in place — harmless, nothing reads them.
+     */
+    public static final Map<String, String> CONDITION_ONLY = Map.of(
+        "cancelled_live_shipment", "BOSTA_LEG_ENDED",
+        "cancelled_but_delivered", "DELIVERED_WHILE_CANCELLED",
+        "guided_unpack",           "ORDER_UNPACKED",
+        "exchange_needs_mapping",  "EXCHANGE_MAPPED",
+        "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED");
+
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
         UUID tenantId = TenantContext.require();
+        if (CONDITION_ONLY.containsKey(exceptionType)) throw new ConditionOnlyAlertException();
         jdbc.update(
             "INSERT INTO exception_resolutions " +
             "(tenant_id, exception_type, subject_key, resolved_by, note) " +
@@ -1072,7 +1087,8 @@ public class ExceptionService {
      * (and/or Shopify) — Shopify cancel ≠ Bosta cancel.
      *
      * Self-resolving like detectGuidedUnpack — no exception_resolutions row: the exception
-     * disappears the moment the shipment syncs into a terminal state.
+     * disappears the moment the shipment syncs into a terminal state, or the status poll finds
+     * it deleted in Bosta ({@code provider_not_found_at}). Condition-only: Resolve answers 409.
      *
      * status='cancelled' alone doesn't say which cancel path fired — cancel_requested_at
      * (Traced-side cancelOrder()) vs shopify_cancel_requested_at (Shopify-side webhook).
@@ -1093,7 +1109,7 @@ public class ExceptionService {
             "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, tracking_number, internal_state, last_synced_at " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_not_found_at " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             // UUIDv4 is not time-ordered — order by created_at, never id.
@@ -1107,7 +1123,9 @@ public class ExceptionService {
             "      'returned'::shipment_internal_state, " +
             "      'lost'::shipment_internal_state, " +
             "      'terminated'::shipment_internal_state, " +
-            "      'cancelled'::shipment_internal_state) ",
+            "      'cancelled'::shipment_internal_state) " +
+            // Deleted in Bosta (the status poll's safety net stamped it): nothing left to cancel.
+            "  AND s.provider_not_found_at IS NULL ",
             tid);
     }
 
@@ -1347,6 +1365,8 @@ public class ExceptionService {
 
     private void enrich(Map<String, Object> item) {
         String type = (String) item.get("type");
+        String clearsWhen = CONDITION_ONLY.get(type);
+        if (clearsWhen != null) item.put("clearsWhen", clearsWhen);
         switch (type) {
             case "lost" -> {
                 String b = str(item, "barcode");
