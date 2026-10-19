@@ -6,7 +6,12 @@ import java.util.*;
 import java.util.function.BiFunction;
 
 /**
- * Non-Bosta couriers G2 — the one-time catch-up when a tenant switches "I ship with other couriers" ON.
+ * Non-Bosta couriers G2 — the OPTIONAL one-time catch-up when a tenant switches "I ship with other couriers" ON.
+ *
+ * Default is "start from now": no catch-up at all (approved 2026-10-19 — prod showed a switch-on could put
+ * ~1500 already-shipped orders into Pick &amp; Pack at once). The owner may opt in to "also include orders from the
+ * last N days", N = 1–7 ({@link #MIN_DAYS}–{@link #MAX_DAYS}, default {@link #DEFAULT_DAYS}): only orders whose
+ * fulfillment tracking was CAPTURED inside that window (order_fulfillment_tracking.first_seen_at).
  *
  * Orders that already carry another courier's tracking number in Shopify were captured into
  * order_fulfillment_tracking while the switch was off, but got no generic shipment. For each OPEN
@@ -32,6 +37,16 @@ public final class GenericCatchUp {
 
     private GenericCatchUp() {}
 
+    public static final int MIN_DAYS = 1, MAX_DAYS = 7, DEFAULT_DAYS = 3;
+
+    /** The window must be 1–7 days. */
+    public static int requireDays(int days) {
+        if (days < MIN_DAYS || days > MAX_DAYS) {
+            throw new IllegalArgumentException("catch-up window must be " + MIN_DAYS + "–" + MAX_DAYS + " days");
+        }
+        return days;
+    }
+
     public record Candidate(UUID orderId, String orderNumber, String trackingNumber, String key,
                             String fulfillmentId, String carrierName, String trackingUrl) {}
 
@@ -40,7 +55,7 @@ public final class GenericCatchUp {
     public record DryRun(int wouldCreate, int keyInUse, Map<String, Integer> byCarrier, List<Candidate> candidates) {}
 
     /**
-     * SQL (binds tenant): the stored fulfillment rows of this tenant's open post-connect orders with no active
+     * SQL (binds tenant, window days): the stored fulfillment rows of this tenant's open post-connect orders with no active
      * forward shipment, earliest first per order. The carrier class and key are decided in Java (the capture's
      * classifier, GenericTrackingKey); scripts/generic_courier_catchup_dryrun.sql mirrors both for prod.
      */
@@ -57,9 +72,11 @@ public final class GenericCatchUp {
         "                    AND s.shipment_leg = 'forward' AND s.internal_state NOT IN ('terminated', 'cancelled')) " +
         "  AND lower(coalesce(t.fulfillment_status, '')) <> 'cancelled' " +
         "  AND t.shopify_fulfillment_id IS NOT NULL " +
+        "  AND t.first_seen_at >= now() - (? * interval '1 day') " +
         "ORDER BY o.id, t.first_seen_at, t.id";
 
-    public static DryRun dryRun(JdbcTemplate jdbc, UUID tenantId, BiFunction<String, String, String> classOf) {
+    public static DryRun dryRun(JdbcTemplate jdbc, UUID tenantId, int days, BiFunction<String, String, String> classOf) {
+        requireDays(days);
         boolean tenantHasBosta = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
             Boolean.class, tenantId));
@@ -68,7 +85,7 @@ public final class GenericCatchUp {
 
         Map<UUID, Candidate> firstPerOrder = new LinkedHashMap<>();
         Set<UUID> keyInUseOrders = new HashSet<>();
-        for (Map<String, Object> r : jdbc.queryForList(ROWS_SQL, tenantId)) {
+        for (Map<String, Object> r : jdbc.queryForList(ROWS_SQL, tenantId, days)) {
             UUID orderId = (UUID) r.get("order_id");
             if (firstPerOrder.containsKey(orderId)) continue;
             String company = trimToNull((String) r.get("carrier_raw"));
@@ -92,9 +109,9 @@ public final class GenericCatchUp {
     }
 
     /** Creates the shipments {@link #dryRun} lists; returns how many were created now. */
-    public static int run(JdbcTemplate jdbc, UUID tenantId, BiFunction<String, String, String> classOf) {
+    public static int run(JdbcTemplate jdbc, UUID tenantId, int days, BiFunction<String, String, String> classOf) {
         int created = 0;
-        for (Candidate c : dryRun(jdbc, tenantId, classOf).candidates()) {
+        for (Candidate c : dryRun(jdbc, tenantId, days, classOf).candidates()) {
             if (GenericShipments.insertFromFulfillment(jdbc, tenantId, c.orderId(), c.trackingNumber(), c.key(),
                     c.fulfillmentId(), c.carrierName(), c.trackingUrl()) != null) {
                 created++;

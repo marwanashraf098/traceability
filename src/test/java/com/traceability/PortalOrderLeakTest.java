@@ -195,6 +195,11 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/fulfill/print-batches",        skip("creates a batch from PackPrintBatchStore.candidates (merchant_orders) — the "
                                                               + "pickable filter is checked directly in jobs_pickableFilterAndCommittedStock"));
         reg("POST /api/v1/fulfill/print-batches/{batchId}/reprint", skip("reprints an existing batch's items"));
+        // Non-Bosta couriers G2 — Settings → Couriers.
+        reg("GET /api/v1/settings/couriers",             skip("tenant settings (switch, default carrier, carrier names) — no order data"));
+        reg("PUT /api/v1/settings/couriers",             skip("tenant settings write — no order data returned"));
+        reg("GET /api/v1/settings/couriers/catch-up/preview", skip("counts only; candidates are read from merchant_orders (GenericCatchUp.ROWS_SQL)"));
+        reg("POST /api/v1/settings/couriers/test-waybill", skip("one scanned value; order numbers come only from joins on merchant_orders (TestWaybillService)"));
         reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
                                                               + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
         reg("GET /api/v1/fulfill/print-jobs/latest",     list());

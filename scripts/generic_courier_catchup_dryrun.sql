@@ -1,21 +1,27 @@
--- Non-Bosta couriers G2 — READ-ONLY dry run of the switch-on catch-up, per tenant.
+-- Non-Bosta couriers G2 — READ-ONLY dry run of the OPTIONAL switch-on catch-up, per tenant.
 --
 -- How many generic shipments GenericCatchUp.run would create for each tenant if "I ship with other couriers"
--- were switched on now. Mirrors GenericCatchUp.dryRun (GenericCatchUpDryRunScriptTest keeps them equal):
+-- were switched on now WITH "also include orders from the last N days" (-v days=N, 1–7, default 3). The default
+-- switch-on ("start from now") creates nothing. Mirrors GenericCatchUp.dryRun (GenericCatchUpDryRunScriptTest keeps them equal):
 --   open post-connect merchant orders (new / ready_to_pick, placed at/after the store's orders_ingest_from — NULL
 --   never filters), no active forward shipment; stored fulfillment rows not cancelled, with a Shopify
 --   fulfillment id; carrier class recomputed like FulfillmentTrackingCapture.carrierClass ('bosta' if company or
 --   URL mentions bosta, 'other_known' if lower(trim(company)) is in other_known_carriers(), else 'unknown');
+--   fulfillment tracking captured inside the window (first_seen_at >= now() - N days);
 --   eligible = other_known, or unknown while the tenant has no active Bosta account; the earliest row per order
 --   (first_seen_at, id) with a non-empty key whose key isn't already another generic shipment's.
 -- Key: GenericTrackingKey for a plain number (digits folded, A–Z0–9, upper case). A stored tracking number that is
 -- a URL is counted in url_rows and NOT in would_create — GenericTrackingKey parses URLs in Java only.
 --
 -- RUN (prod, read-only, a few seconds):
---   psql "$PROD_DATABASE_URL" -X -q -A -F '|' -f scripts/generic_courier_catchup_dryrun.sql
+--   psql "$PROD_DATABASE_URL" -X -q -A -F '|' -v days=3 -f scripts/generic_courier_catchup_dryrun.sql
 -- Connection: the owner / postgres role (sees every tenant). Session pooler :5432, never :6543.
 
 \set ON_ERROR_STOP on
+\if :{?days}
+\else
+  \set days 3
+\endif
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '20s';
 SET LOCAL lock_timeout = '2s';
@@ -42,6 +48,7 @@ WITH rows AS (
                         AND s.shipment_leg = 'forward' AND s.internal_state NOT IN ('terminated', 'cancelled'))
       AND lower(coalesce(t.fulfillment_status, '')) <> 'cancelled'
       AND t.shopify_fulfillment_id IS NOT NULL
+      AND t.first_seen_at >= now() - ((:'days')::int * interval '1 day')
 ),
 eligible AS (
     SELECT r.* FROM rows r

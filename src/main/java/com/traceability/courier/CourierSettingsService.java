@@ -19,8 +19,9 @@ import java.util.*;
  * ({@code tenants.generic_courier_enabled}) and the default carrier name ({@code generic_default_carrier}, V171).
  *
  * Owner writes (the controller gates it), owner + manager read. Every change of either value is one
- * audit_log row (who, when, from → to). Switching ON enqueues the one-time {@link GenericCatchUpJob} after the
- * transaction commits. Switching OFF writes the flag only: no new generic shipment is created from then on and
+ * audit_log row (who, when, from → to). Switching ON starts from now by default — no catch-up. Only when the owner
+ * opts in to "also include orders from the last N days" (1–7) is the one-time {@link GenericCatchUpJob} enqueued,
+ * after the transaction commits; the choice (N, or null = from now) is in the switch's audit row. Switching OFF writes the flag only: no new generic shipment is created from then on and
  * the existing ones are left exactly as they are — not cancelled (a 'created' one may already be on a parcel the
  * merchant handed to that courier); their orders stay packable (WaybillScanKeys keeps applying while a live
  * generic shipment exists) and their alerts keep showing (ExceptionService's flag-or-legs gate).
@@ -73,8 +74,15 @@ public class CourierSettingsService {
     }
 
     @Transactional
-    public Settings update(UUID actorUserId, boolean enabled, String defaultCarrier) {
+    public Settings update(UUID actorUserId, boolean enabled, String defaultCarrier, Integer catchUpDays) {
         UUID tenantId = TenantContext.require();
+        if (catchUpDays != null) {
+            try {
+                GenericCatchUp.requireDays(catchUpDays);
+            } catch (IllegalArgumentException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+            }
+        }
         String carrier = defaultCarrier == null ? null : defaultCarrier.strip();
         if (carrier != null && carrier.isEmpty()) carrier = null;
         if (carrier != null && carrier.length() > 60) {
@@ -84,6 +92,10 @@ public class CourierSettingsService {
             "SELECT generic_courier_enabled, generic_default_carrier FROM tenants WHERE id = ? FOR UPDATE", tenantId);
         boolean wasEnabled = Boolean.TRUE.equals(before.get("generic_courier_enabled"));
         String wasCarrier = (String) before.get("generic_default_carrier");
+        boolean switchingOn = !wasEnabled && enabled;
+        if (catchUpDays != null && !switchingOn) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "catchUpDays applies only when switching on");
+        }
 
         jdbc.update("UPDATE tenants SET generic_courier_enabled = ?, generic_default_carrier = ? WHERE id = ?",
             enabled, carrier, tenantId);
@@ -92,6 +104,7 @@ public class CourierSettingsService {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("from", wasEnabled);
             m.put("to", enabled);
+            if (switchingOn) m.put("catchUpDays", catchUpDays);   // null = start from now (no catch-up)
             audit.record(actorUserId, "generic_courier_switch", "tenant", tenantId.toString(), m);
         }
         if (!Objects.equals(wasCarrier, carrier)) {
@@ -100,18 +113,23 @@ public class CourierSettingsService {
             m.put("to", carrier);
             audit.record(actorUserId, "generic_default_carrier", "tenant", tenantId.toString(), m);
         }
-        if (!wasEnabled && enabled) enqueueCatchUpAfterCommit(tenantId);
+        if (switchingOn && catchUpDays != null) enqueueCatchUpAfterCommit(tenantId, catchUpDays);
         return get();
     }
 
-    /** The catch-up's dry run for this tenant: what switching on (or the job) would create now. */
+    /** The catch-up's dry run for the last {@code days} days: what opting in now would create. */
     @Transactional(readOnly = true)
-    public GenericCatchUp.DryRun catchUpPreview() {
-        return GenericCatchUp.dryRun(jdbc, TenantContext.require(), FulfillmentTrackingCapture::carrierClass);
+    public GenericCatchUp.DryRun catchUpPreview(int days) {
+        try {
+            GenericCatchUp.requireDays(days);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        return GenericCatchUp.dryRun(jdbc, TenantContext.require(), days, FulfillmentTrackingCapture::carrierClass);
     }
 
-    private void enqueueCatchUpAfterCommit(UUID tenantId) {
-        Runnable enqueue = () -> jobScheduler.<GenericCatchUpJob>enqueue(job -> job.run(tenantId));
+    private void enqueueCatchUpAfterCommit(UUID tenantId, int days) {
+        Runnable enqueue = () -> jobScheduler.<GenericCatchUpJob>enqueue(job -> job.run(tenantId, days));
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCommit() { enqueue.run(); }

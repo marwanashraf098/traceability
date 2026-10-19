@@ -95,6 +95,9 @@ class RlsCoverageTest {
             "/api/v1/pack-sessions/{id}",
             "/api/v1/pack-sessions/summary",
             "/api/v1/fulfill/print-batches/today",
+            // Non-Bosta couriers G2 — couriersSettings_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/settings/couriers",
+            "/api/v1/settings/couriers/catch-up/preview",
             "/api/v1/fulfill/print-jobs/latest",
             "/api/v1/fulfill/print-jobs/{jobId}",
             "/api/v1/fulfill/print-jobs/{jobId}/pdf",
@@ -641,6 +644,50 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants   WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void couriersSettings_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Non-Bosta couriers G2: Settings → Couriers and the catch-up preview read only the caller's tenant.
+        jdbc.update("UPDATE tenants SET generic_default_carrier = 'Cov-A Express' WHERE id = ?", tenantId);
+        UUID mine = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-GEN-A', '#CVG-GEN-A', 'new'::order_status, now(), false)",
+                    mine, tenantId, storeId);
+        jdbc.update("INSERT INTO order_fulfillment_tracking (tenant_id, order_id, tracking_number, carrier_raw, " +
+                    "carrier_class, shopify_fulfillment_id, fulfillment_status) " +
+                    "VALUES (?, ?, 'MYCOVA01', 'Mylerz', 'other_known', 'F-CVG-A', 'success')", tenantId, mine);
+
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID(), otherOrder = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, generic_courier_enabled, generic_default_carrier) " +
+                    "VALUES (?, 'Cov Other', true, 'Cov-B Express')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-gen-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-GEN-B', '#CVG-GEN-B', 'new'::order_status, now(), false)",
+                    otherOrder, otherTenant, otherStore);
+        jdbc.update("INSERT INTO order_fulfillment_tracking (tenant_id, order_id, tracking_number, carrier_raw, " +
+                    "carrier_class, shopify_fulfillment_id, fulfillment_status) " +
+                    "VALUES (?, ?, 'WJCOVB01', 'Wijha', 'other_known', 'F-CVG-B', 'success')", otherTenant, otherOrder);
+        try {
+            ResponseEntity<Map> settings = get("/api/v1/settings/couriers", Map.class);
+            assertThat(settings.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(settings.getBody().get("defaultCarrier")).as("same-tenant positive control").isEqualTo("Cov-A Express");
+            assertThat(settings.getBody().get("enabled")).as("own switch, not the other tenant's").isEqualTo(false);
+            assertThat(settings.getBody().toString()).as("other tenant's settings never visible").doesNotContain("Cov-B Express");
+
+            ResponseEntity<Map> preview = get("/api/v1/settings/couriers/catch-up/preview?days=3", Map.class);
+            assertThat(preview.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(preview.getBody().get("wouldCreate")).as("own order only").isEqualTo(1);
+            assertThat((Map<Object, Object>) preview.getBody().get("byCarrier")).as("same-tenant positive control")
+                .containsEntry("Mylerz", (Object) 1).doesNotContainKey("Wijha");
+        } finally {
+            jdbc.update("UPDATE tenants SET generic_default_carrier = NULL WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM order_fulfillment_tracking WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
+            jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }
 

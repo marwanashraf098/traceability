@@ -12,6 +12,9 @@ import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.lambdas.IocJobLambda;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -54,6 +57,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@ExtendWith(OutputCaptureExtension.class)
 class GenericCourierG2Test {
 
     @Container
@@ -86,6 +90,7 @@ class GenericCourierG2Test {
     @Autowired ShipmentLinkService link;
     @Autowired ExceptionService    exceptions;
     @Autowired GenericCatchUpJob   catchUpJob;
+    @Autowired GenericConflictRecorder recorder;
     @MockBean  BostaGateway        bostaGateway;
     @MockBean  JobScheduler        jobScheduler;
 
@@ -298,66 +303,113 @@ class GenericCourierG2Test {
         assertThat(count("SELECT count(*) FROM generic_conflict_scans WHERE tenant_id = ?", n.f.tenant)).isZero();
     }
 
+    @Test
+    void q3_conflictNotStored_isLoggedAtError_withTenantOrderTracking(CapturedOutput out) {
+        Shop s = new Shop("q3", true, true);
+        UUID o = s.order("#Q4");
+        s.generic(o, "WJ-51515", "Wijha");
+        TenantContext.set(s.f.tenant);
+        // The write fails (actor is no user → FK violation): ERROR with tenant / order / AWB, nothing stored, no throw.
+        recorder.recordAfterRollback(o, "9300000009", "D-07-9300000009", UUID.randomUUID());
+        assertThat(out.getOut() + out.getErr()).contains("ERROR")
+            .contains("conflict NOT stored — HIGH alert lost: tenant=" + s.f.tenant + " order=" + o + " bostaTracking=9300000009");
+        assertThat(count("SELECT count(*) FROM generic_conflict_scans WHERE order_id = ?", o)).isZero();
+        // Nothing to attach it to (no live generic shipment): ERROR too.
+        UUID o2 = s.order("#Q5");
+        recorder.recordAfterRollback(o2, "9300000010", "9300000010", null);
+        assertThat(out.getOut() + out.getErr())
+            .contains("no live generic shipment left: tenant=" + s.f.tenant + " order=" + o2 + " bostaTracking=9300000010");
+    }
+
     // ── c: catch-up ──────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void c1_catchUp_eligibility_dryRunEqualsRunEqualsScript_idempotent() throws Exception {
+    void c0_switchOn_defaultStartsFromNow_createsNothing_auditSaysSo() {
+        Shop s = new Shop("c0", false, false);
+        UUID o = s.order("#D1"); tracking(s, o, "MY121212", "Mylerz", "success", 0.1);
+        UUID owner = s.user("Owner", "owner");
+        assertThat(http(s.token(owner, "owner"), HttpMethod.PUT, "", Map.of("enabled", true)).getStatusCode())
+            .isEqualTo(HttpStatus.OK);
+        verify(jobScheduler, never()).enqueue(any(IocJobLambda.class));
+        assertThat(count("SELECT count(*) FROM shipments WHERE tenant_id = ? AND provider = 'generic'", s.f.tenant)).isZero();
+        assertThat(jdbc.queryForObject("SELECT metadata::text FROM audit_log WHERE tenant_id = ? AND action = 'generic_courier_switch'",
+            String.class, s.f.tenant)).isEqualTo("{\"to\": true, \"from\": false, \"catchUpDays\": null}");
+    }
+
+    @Test
+    void c1_catchUpWindow_eligibility_respectsN_dryRunEqualsRunEqualsScript_idempotent() throws Exception {
         Shop s = new Shop("c1", false, false);
-        jdbc.update("UPDATE stores SET orders_ingest_from = now() - interval '10 days' WHERE tenant_id = ?", s.f.tenant);
-        UUID c1 = s.order("#C1"); tracking(s, c1, "MY111111", "Mylerz", "success", 0);
-        UUID c2 = s.order("#C2"); tracking(s, c2, "OT222222", "Other", "success", 0);
-        UUID c3 = s.order("#C3"); tracking(s, c3, "9400000003", "Bosta", "success", 0);
-        UUID c4 = s.order("#C4"); tracking(s, c4, "MY444444", "Mylerz", "cancelled", 0);
-        UUID c5 = s.order("#C5"); tracking(s, c5, "MY555555", "Mylerz", "success", 0);
+        jdbc.update("UPDATE stores SET orders_ingest_from = now() - interval '30 days' WHERE tenant_id = ?", s.f.tenant);
+        UUID c1 = s.order("#C1"); tracking(s, c1, "MY111111", "Mylerz", "success", 0.5);
+        UUID c2 = s.order("#C2"); tracking(s, c2, "OT222222", "Other", "success", 1.5);
+        UUID c3 = s.order("#C3"); tracking(s, c3, "9400000003", "Bosta", "success", 0.5);
+        UUID c4 = s.order("#C4"); tracking(s, c4, "MY444444", "Mylerz", "cancelled", 0.5);
+        UUID c5 = s.order("#C5"); tracking(s, c5, "MY555555", "Mylerz", "success", 0.5);
         jdbc.update("UPDATE orders SET status = 'packed' WHERE id = ?", c5);
-        UUID c6 = s.order("#C6"); tracking(s, c6, "MY666666", "Mylerz", "success", 0); s.bosta(c6, "9400000006");
-        UUID c7 = s.f.order("#C7", 20); s.f.item(c7, s.variant, 1); tracking(s, c7, "MY777777", "Mylerz", "success", 0);
-        UUID c8 = s.order("#C8"); tracking(s, c8, "WJ-888", "Wijha", "success", 0); tracking(s, c8, "MY888888", "Mylerz", "success", 5);
-        UUID c9 = s.order("#C9"); tracking(s, c9, "QP999999", "QP Express", "success", 0);  // stored 'unknown', now named
+        UUID c6 = s.order("#C6"); tracking(s, c6, "MY666666", "Mylerz", "success", 0.5); s.bosta(c6, "9400000006");
+        UUID c7 = s.f.order("#C7", 40); s.f.item(c7, s.variant, 1); tracking(s, c7, "MY777777", "Mylerz", "success", 0.5);
+        UUID c8 = s.order("#C8"); tracking(s, c8, "WJ-888", "Wijha", "success", 2.0); tracking(s, c8, "MY888888", "Mylerz", "success", 1.0);
+        UUID c9 = s.order("#C9"); tracking(s, c9, "QP999999", "QP Express", "success", 2.5);  // stored 'unknown', now named
         UUID used = s.order("#USED"); s.generic(used, "MY101010", "Mylerz");
         jdbc.update("UPDATE orders SET status = 'awaiting_pickup' WHERE id = ?", used);
-        UUID c10 = s.order("#C10"); tracking(s, c10, "my-101010", "Mylerz", "success", 0);       // same key as #USED
+        UUID c10 = s.order("#C10"); tracking(s, c10, "my-101010", "Mylerz", "success", 0.5);    // same key as #USED
+        UUID c11 = s.order("#C11"); tracking(s, c11, "MY131313", "Mylerz", "success", 5.0);     // only in a 6–7 day window
+        UUID c12 = s.order("#C12"); tracking(s, c12, "MY141414", "Mylerz", "success", 9.0);     // outside every window
 
-        GenericCatchUp.DryRun dry = TenantContext.runAs(s.f.tenant,
-            () -> GenericCatchUp.dryRun(jdbc, s.f.tenant, FulfillmentTrackingCapture::carrierClass));
-        assertThat(dry.candidates()).extracting(GenericCatchUp.Candidate::orderNumber)
+        assertThat(dry(s, 1).candidates()).extracting(GenericCatchUp.Candidate::orderNumber).containsExactlyInAnyOrder("#C1");
+        assertThat(dry(s, 3).candidates()).extracting(GenericCatchUp.Candidate::orderNumber)
             .containsExactlyInAnyOrder("#C1", "#C2", "#C8", "#C9");
-        assertThat(dry.candidates()).filteredOn(c -> c.orderNumber().equals("#C8"))
+        assertThat(dry(s, 3).candidates()).filteredOn(c -> c.orderNumber().equals("#C8"))
             .extracting(GenericCatchUp.Candidate::trackingNumber).containsExactly("WJ-888");   // earliest wins
-        assertThat(dry.keyInUse()).isEqualTo(1);
-        assertThat(dry.byCarrier()).containsEntry("Mylerz", 1).containsEntry("Other", 1)
-            .containsEntry("Wijha", 1).containsEntry("QP Express", 1);
+        assertThat(dry(s, 3).keyInUse()).isEqualTo(1);
+        assertThat(dry(s, 7).candidates()).extracting(GenericCatchUp.Candidate::orderNumber)
+            .containsExactlyInAnyOrder("#C1", "#C2", "#C8", "#C9", "#C11");
 
-        // The prod dry-run script says the same, through real psql.
-        Map<String, String> script = scriptRow(s.f.tenant);
-        assertThat(script.get("would_create")).isEqualTo("4");
-        assertThat(script.get("key_in_use_orders")).isEqualTo("1");
-        assertThat(script.get("by_carrier")).isEqualTo("Mylerz=1, Other=1, QP Express=1, Wijha=1");
+        // The prod dry-run script says the same, through real psql, for the same N.
+        for (int n : new int[]{1, 3, 7}) {
+            assertThat(scriptRow(s.f.tenant, n).get("would_create")).as("N=" + n)
+                .isEqualTo(String.valueOf(dry(s, n).wouldCreate()));
+        }
+        assertThat(scriptRow(s.f.tenant, 3).get("by_carrier")).isEqualTo("Mylerz=1, Other=1, QP Express=1, Wijha=1");
 
-        // Switch on (owner, HTTP) → catch-up enqueued after commit, audit row; the job creates exactly the dry run.
+        // Preview endpoint = the dry run; out-of-range N is refused.
         UUID owner = s.user("Owner", "owner");
-        ResponseEntity<Map> put = http(s.token(owner, "owner"), HttpMethod.PUT, "", Map.of("enabled", true, "defaultCarrier", "Mylerz"));
-        assertThat(put.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String ot = s.token(owner, "owner");
+        assertThat(http(ot, HttpMethod.GET, "/catch-up/preview?days=3", null).getBody().get("wouldCreate")).isEqualTo(4);
+        assertThat(http(ot, HttpMethod.GET, "/catch-up/preview", null).getBody().get("days")).isEqualTo(3);
+        assertThat(http(ot, HttpMethod.GET, "/catch-up/preview?days=8", null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http(ot, HttpMethod.PUT, "", Map.of("enabled", true, "catchUpDays", 0)).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(flag(s)).isFalse();
+
+        // Switch on WITH "last 3 days" → enqueued after commit, choice audited; the job creates exactly the dry run.
+        assertThat(http(ot, HttpMethod.PUT, "", Map.of("enabled", true, "defaultCarrier", "Mylerz", "catchUpDays", 3))
+            .getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(jobScheduler, times(1)).enqueue(any(IocJobLambda.class));
-        assertThat(catchUpJob.run(s.f.tenant)).isEqualTo(4);
+        assertThat(jdbc.queryForObject("SELECT metadata::text FROM audit_log WHERE tenant_id = ? AND action = 'generic_courier_switch'",
+            String.class, s.f.tenant)).isEqualTo("{\"to\": true, \"from\": false, \"catchUpDays\": 3}");
+        assertThat(catchUpJob.run(s.f.tenant, 3)).isEqualTo(4);
         assertThat(jdbc.queryForList("SELECT o.number FROM shipments sh JOIN orders o ON o.id = sh.order_id " +
-            "WHERE sh.tenant_id = ? AND sh.provider = 'generic' AND sh.source = 'shopify_fulfillment' AND o.number <> '#USED'",
-            String.class, s.f.tenant)).containsExactlyInAnyOrder("#C1", "#C2", "#C8", "#C9");
-        assertThat(catchUpJob.run(s.f.tenant)).as("idempotent").isZero();
-        assertThat(TenantContext.runAs(s.f.tenant,
-            () -> GenericCatchUp.dryRun(jdbc, s.f.tenant, FulfillmentTrackingCapture::carrierClass)).wouldCreate()).isZero();
-        assertThat(count("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'generic_courier_catch_up'", s.f.tenant))
-            .isEqualTo(2);
+            "WHERE sh.tenant_id = ? AND sh.provider = 'generic' AND o.number <> '#USED'", String.class, s.f.tenant))
+            .containsExactlyInAnyOrder("#C1", "#C2", "#C8", "#C9");
+        assertThat(catchUpJob.run(s.f.tenant, 3)).as("idempotent").isZero();
+        assertThat(dry(s, 3).wouldCreate()).isZero();
+        // catchUpDays only with a switch-on.
+        assertThat(http(ot, HttpMethod.PUT, "", Map.of("enabled", true, "catchUpDays", 3)).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    private GenericCatchUp.DryRun dry(Shop s, int days) {
+        return TenantContext.runAs(s.f.tenant,
+            () -> GenericCatchUp.dryRun(jdbc, s.f.tenant, days, FulfillmentTrackingCapture::carrierClass));
     }
 
     @Test
     void c2_bostaTenant_unknownCarrier_neverCaughtUp() {
         Shop s = new Shop("c2", true, false);
-        UUID o = s.order("#B1"); tracking(s, o, "OT123456", "Other", "success", 0);
-        UUID w = s.order("#B2"); tracking(s, w, "WJ-123456", "Wijha", "success", 0);
-        GenericCatchUp.DryRun dry = TenantContext.runAs(s.f.tenant,
-            () -> GenericCatchUp.dryRun(jdbc, s.f.tenant, FulfillmentTrackingCapture::carrierClass));
-        assertThat(dry.candidates()).extracting(GenericCatchUp.Candidate::orderNumber).containsExactly("#B2");
+        UUID o = s.order("#B1"); tracking(s, o, "OT123456", "Other", "success", 0.5);
+        UUID w = s.order("#B2"); tracking(s, w, "WJ-123456", "Wijha", "success", 0.5);
+        assertThat(dry(s, 3).candidates()).extracting(GenericCatchUp.Candidate::orderNumber).containsExactly("#B2");
     }
 
     // ── s: settings ──────────────────────────────────────────────────────────────────────────────
@@ -391,11 +443,11 @@ class GenericCourierG2Test {
         List<Map<String, Object>> audit = jdbc.queryForList("SELECT action, actor_user_id, metadata::text AS m FROM audit_log " +
             "WHERE tenant_id = ? AND action LIKE 'generic_%' ORDER BY created_at, id", s.f.tenant);
         assertThat(audit).extracting(a -> a.get("action") + " " + a.get("m")).containsExactly(
-            "generic_courier_switch {\"to\": true, \"from\": false}",
+            "generic_courier_switch {\"to\": true, \"from\": false, \"catchUpDays\": null}",
             "generic_default_carrier {\"to\": \"Wijha\", \"from\": null}",
             "generic_courier_switch {\"to\": false, \"from\": true}");
         assertThat(audit).allSatisfy(a -> assertThat(a.get("actor_user_id")).isEqualTo(owner));
-        verify(jobScheduler, times(1)).enqueue(any(IocJobLambda.class));   // only the switch-on
+        verify(jobScheduler, never()).enqueue(any(IocJobLambda.class));   // switched on "from now": no catch-up
     }
 
     // ── t: Test a waybill ────────────────────────────────────────────────────────────────────────
@@ -404,9 +456,9 @@ class GenericCourierG2Test {
     void t1_testAWaybill_verdicts_readOnly_roles() {
         Shop s = new Shop("t1", true, true);
         UUID wj = s.order("#T1"); s.generic(wj, "WJ-70707", "Wijha");
-        tracking(s, wj, "WJ-70707", "Wijha", "success", 0);
+        tracking(s, wj, "WJ-70707", "Wijha", "success", 0.1);
         UUID b = s.order("#T2"); s.bosta(b, "9500000005");
-        UUID f = s.order("#T3"); tracking(s, f, "MY8080808", "Mylerz", "success", 0);   // fulfillment, no shipment
+        UUID f = s.order("#T3"); tracking(s, f, "MY8080808", "Mylerz", "success", 0.1);   // fulfillment, no shipment
         UUID a1 = s.order("#T4"); s.bosta(a1, "9500000009");
         UUID a2 = s.order("#T5"); s.generic(a2, "9500000009", "Mylerz");
         UUID manager = s.user("M", "manager"), worker = s.user("W", "worker");
@@ -456,18 +508,20 @@ class GenericCourierG2Test {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
-    private void tracking(Shop s, UUID order, String tn, String carrier, String status, int minutesLater) {
+    /** A stored fulfillment row, captured {@code daysAgo} days ago (stored class as the capture computed it before
+     *  V171 — QP Express was 'unknown' then). */
+    private void tracking(Shop s, UUID order, String tn, String carrier, String status, double daysAgo) {
+        String cls = carrier.equals("QP Express") ? "unknown" : FulfillmentTrackingCapture.carrierClass(carrier, null);
         jdbc.update("INSERT INTO order_fulfillment_tracking (tenant_id, order_id, tracking_number, carrier_raw, carrier_class, " +
-            "shopify_fulfillment_id, fulfillment_status, first_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, now() + (? * interval '1 minute'))",
-            s.f.tenant, order, tn, carrier, FulfillmentTrackingCapture.carrierClass(carrier, null).equals("other_known")
-                && carrier.equals("QP Express") ? "unknown" : FulfillmentTrackingCapture.carrierClass(carrier, null),
-            "F-" + UUID.randomUUID(), status, minutesLater);
+            "shopify_fulfillment_id, fulfillment_status, first_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, " +
+            "now() - (? * interval '1 day'))",
+            s.f.tenant, order, tn, carrier, cls, "F-" + UUID.randomUUID(), status, daysAgo);
     }
 
-    private Map<String, String> scriptRow(UUID tenant) throws Exception {
+    private Map<String, String> scriptRow(UUID tenant, int days) throws Exception {
         POSTGRES.copyFileToContainer(MountableFile.forHostPath("scripts/generic_courier_catchup_dryrun.sql"), "/tmp/dry.sql");
         ExecResult r = POSTGRES.execInContainer("psql", "-U", "postgres", "-d", "traceability_test",
-            "-X", "-q", "-A", "-F", "|", "-f", "/tmp/dry.sql");
+            "-X", "-q", "-A", "-F", "|", "-v", "days=" + days, "-f", "/tmp/dry.sql");
         assertThat(r.getExitCode()).as(r.getStderr()).isZero();
         String[] lines = r.getStdout().strip().split("\n");
         String[] header = lines[0].split("\\|", -1);
@@ -479,7 +533,9 @@ class GenericCourierG2Test {
                 return m;
             }
         }
-        throw new AssertionError("tenant not in script output:\n" + r.getStdout());
+        Map<String, String> none = new HashMap<>();
+        none.put("would_create", "0");
+        return none;   // no candidate row for the tenant in this window
     }
 
     private List<Map<String, Object>> conflictAlerts(Shop s) {

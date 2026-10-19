@@ -49,7 +49,10 @@ function backend(url: string, opts: RequestInit = {}) {
     return json(settings)
   }
   if (url.endsWith('/settings/couriers')) return json(settings)
-  if (url.endsWith('/settings/couriers/catch-up/preview')) return json({ wouldCreate: 4, keyInUse: 0, byCarrier: { Wijha: 4 } })
+  if (url.includes('/settings/couriers/catch-up/preview')) {
+    const days = Number(new URL(url, 'http://x').searchParams.get('days'))
+    return json({ days, wouldCreate: days * 2, keyInUse: 0, byCarrier: { Wijha: days * 2 } })
+  }
   if (url.endsWith('/settings/couriers/test-waybill')) return json(OPENS)
   return json({})
 }
@@ -69,7 +72,7 @@ function renderSettings() {
 }
 
 describe('Settings › Couriers', () => {
-  test('owner switches on with a default carrier: catch-up count shown, PUT sends both', async () => {
+  test('owner switches on with a default carrier: starts from now by default — no catch-up, no preview call', async () => {
     const user = userEvent.setup()
     renderSettings()
     await screen.findByTestId('couriers-settings')
@@ -78,16 +81,37 @@ describe('Settings › Couriers', () => {
     expect(save).toBeDisabled()
 
     await user.click(screen.getByRole('switch', { name: 'I ship with other couriers' }))
-    expect(screen.getByTestId('couriers-catchup')).toHaveTextContent('Traced adds 4 open orders')
+    expect(screen.getByTestId('couriers-catchup')).toHaveTextContent('Traced starts from now')
+    expect(screen.getByTestId('couriers-include-recent')).not.toBeChecked()
+    expect(screen.getByTestId('couriers-days')).toBeDisabled()
+    expect(screen.queryByTestId('couriers-catchup-count')).toBeNull()
     await user.type(screen.getByLabelText('Default courier name'), 'Wijha')
     await user.click(save)
 
     await waitFor(() => {
       const put = calls.find(c => c.method === 'PUT' && c.url.endsWith('/settings/couriers'))
-      expect(put?.body).toEqual({ enabled: true, defaultCarrier: 'Wijha' })
+      expect(put?.body).toEqual({ enabled: true, defaultCarrier: 'Wijha', catchUpDays: null })
     })
+    expect(calls.some(c => c.url.includes('/catch-up/preview'))).toBe(false)
     expect(await screen.findByText('Settings saved.')).toBeInTheDocument()
     expect(screen.getByText(/Bosta stays your main courier/)).toBeInTheDocument()
+  })
+
+  test('opt in to the last N days: the dry-run count for that N is shown before saving, and N is sent', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await user.click(await screen.findByRole('switch', { name: 'I ship with other couriers' }))
+    await user.click(screen.getByTestId('couriers-include-recent'))
+    expect(await screen.findByTestId('couriers-catchup-count')).toHaveTextContent('This adds 6 open orders from the last 3 days')
+    await user.selectOptions(screen.getByTestId('couriers-days'), '5')
+    await waitFor(() => expect(screen.getByTestId('couriers-catchup-count'))
+      .toHaveTextContent('This adds 10 open orders from the last 5 days'))
+    expect(calls.filter(c => c.url.includes('/catch-up/preview')).map(c => c.url.split('?')[1])).toEqual(['days=3', 'days=5'])
+    await user.click(screen.getByTestId('couriers-save'))
+    await waitFor(() => {
+      const put = calls.find(c => c.method === 'PUT' && c.url.endsWith('/settings/couriers'))
+      expect(put?.body).toEqual({ enabled: true, defaultCarrier: null, catchUpDays: 5 })
+    })
   })
 
   test('switching off explains that existing orders stay', async () => {

@@ -15,7 +15,8 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1/settings/couriers")
 public class CourierSettingsController {
 
-    public record UpdateRequest(Boolean enabled, String defaultCarrier) {}
+    /** catchUpDays: only with a switch-on — null = start from now (default), 1–7 = also the last N days. */
+    public record UpdateRequest(Boolean enabled, String defaultCarrier, Integer catchUpDays) {}
 
     public record TestRequest(String code) {}
 
@@ -40,15 +41,17 @@ public class CourierSettingsController {
         if (req == null || req.enabled() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "enabled is required");
         }
-        return settings.update(principal.userId(), req.enabled(), req.defaultCarrier());
+        return settings.update(principal.userId(), req.enabled(), req.defaultCarrier(), req.catchUpDays());
     }
 
-    /** What switching on would create now (the catch-up's dry run) — counts per carrier. */
+    /** What "also include orders from the last N days" would create now (the dry run) — counts per carrier. */
     @GetMapping("/catch-up/preview")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public java.util.Map<String, Object> catchUpPreview() {
-        GenericCatchUp.DryRun d = settings.catchUpPreview();
+    public java.util.Map<String, Object> catchUpPreview(
+            @RequestParam(defaultValue = "" + GenericCatchUp.DEFAULT_DAYS) int days) {
+        GenericCatchUp.DryRun d = settings.catchUpPreview(days);
         java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("days", days);
         out.put("wouldCreate", d.wouldCreate());
         out.put("keyInUse", d.keyInUse());
         out.put("byCarrier", d.byCarrier());

@@ -3485,7 +3485,7 @@ export interface CourierSettings {
   bostaConnected: boolean
 }
 
-export interface CatchUpPreview { wouldCreate: number; keyInUse: number; byCarrier: Record<string, number> }
+export interface CatchUpPreview { days: number; wouldCreate: number; keyInUse: number; byCarrier: Record<string, number> }
 
 export type TestWaybillVerdict =
   'OPENS_ORDER' | 'AMBIGUOUS' | 'FULFILLMENT_ONLY' | 'NO_FULFILLMENT' | 'WRONG_BARCODE' | 'KEYBOARD_LAYOUT'
@@ -3511,12 +3511,13 @@ export function getCourierSettings() {
   return request<CourierSettings>('/settings/couriers')
 }
 
-export function updateCourierSettings(body: { enabled: boolean; defaultCarrier: string | null }) {
+/** catchUpDays: only with a switch-on — omitted / null = start from now; 1–7 = also the last N days. */
+export function updateCourierSettings(body: { enabled: boolean; defaultCarrier: string | null; catchUpDays?: number | null }) {
   return request<CourierSettings>('/settings/couriers', { method: 'PUT', body: JSON.stringify(body) })
 }
 
-export function getCatchUpPreview() {
-  return request<CatchUpPreview>('/settings/couriers/catch-up/preview')
+export function getCatchUpPreview(days: number) {
+  return request<CatchUpPreview>(`/settings/couriers/catch-up/preview?days=${days}`)
 }
 
 export function testWaybill(code: string) {

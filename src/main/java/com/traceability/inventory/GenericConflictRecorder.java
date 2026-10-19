@@ -20,7 +20,8 @@ import java.util.UUID;
  * written here, AFTER that rollback, in a transaction of its OWN (REQUIRES_NEW — same thread, tenant
  * context set explicitly, so RLS applies), and survives. ExceptionService derives a HIGH generic_bosta_conflict alert
  * from each row until it's resolved — the same type G1 raises for a delivery Traced refused to link.
- * Never throws: a failed write is logged and the packer still gets the 409.
+ * A failed write never reaches the packer (they still get the 409) and is never swallowed: it is logged at ERROR with
+ * tenant, order and Bosta AWB ({@link #recordAfterRollback}).
  */
 @Component
 public class GenericConflictRecorder {
@@ -47,11 +48,20 @@ public class GenericConflictRecorder {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCompletion(int status) {
                     if (status == STATUS_COMMITTED) return;   // the link went through after all: no conflict
-                    TenantContext.runAs(tenantId, () -> self.record(orderId, bostaTrackingNumber, rawScan, actorUserId));
+                    try {
+                        TenantContext.runAs(tenantId, () -> self.record(orderId, bostaTrackingNumber, rawScan, actorUserId));
+                    } catch (RuntimeException e) {
+                        // e.g. the REQUIRES_NEW commit itself failed — never swallowed: the alert is lost, say so loudly.
+                        logLost(tenantId, orderId, bostaTrackingNumber, e);
+                    }
                 }
             });
         } else {
-            self.record(orderId, bostaTrackingNumber, rawScan, actorUserId);
+            try {
+                self.record(orderId, bostaTrackingNumber, rawScan, actorUserId);
+            } catch (RuntimeException e) {
+                logLost(tenantId, orderId, bostaTrackingNumber, e);
+            }
         }
     }
 
@@ -66,18 +76,27 @@ public class GenericConflictRecorder {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(UUID orderId, String bostaTrackingNumber, String rawScan, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-        try {
-            int n = jdbc.update(
-                "INSERT INTO generic_conflict_scans (tenant_id, order_id, shipment_id, tracking_number, raw_scan, actor_user_id) " +
-                "SELECT ?, ?, s.id, ?, ?, ? FROM shipments s " +
-                "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
-                "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
-                "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
-                tenantId, orderId, bostaTrackingNumber, rawScan, actorUserId, tenantId, orderId);
-            if (n == 1) log.warn("Bosta AWB {} scanned on order {} whose generic shipment is packed — HIGH alert recorded",
+        // A failure throws — this REQUIRES_NEW transaction rolls back and recordAfterRollback logs it at ERROR.
+        int n = jdbc.update(
+            "INSERT INTO generic_conflict_scans (tenant_id, order_id, shipment_id, tracking_number, raw_scan, actor_user_id) " +
+            "SELECT ?, ?, s.id, ?, ?, ? FROM shipments s " +
+            "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
+            tenantId, orderId, bostaTrackingNumber, rawScan, actorUserId, tenantId, orderId);
+        if (n == 1) {
+            log.warn("Bosta AWB {} scanned on order {} whose generic shipment is packed — HIGH alert recorded",
                 bostaTrackingNumber, orderId);
-        } catch (RuntimeException e) {
-            log.error("Could not record the generic/Bosta conflict for order {}: {}", orderId, e.toString());
+        } else {
+            log.error("Generic/Bosta pack-scan conflict NOT stored — no live generic shipment left: tenant={} order={} " +
+                "bostaTracking={}", tenantId, orderId, bostaTrackingNumber);
         }
+    }
+
+
+    /** ERROR with tenant / order / Bosta AWB and the cause — the HIGH alert was NOT stored. */
+    private static void logLost(UUID tenantId, UUID orderId, String bostaTrackingNumber, RuntimeException e) {
+        log.error("Generic/Bosta pack-scan conflict NOT stored — HIGH alert lost: tenant={} order={} bostaTracking={}",
+            tenantId, orderId, bostaTrackingNumber, e);
     }
 }

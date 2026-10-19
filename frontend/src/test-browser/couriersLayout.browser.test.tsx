@@ -32,7 +32,7 @@ function backend() {
     if (url.endsWith('/settings/couriers')) {
       return json({ enabled: false, defaultCarrier: 'J&T Express', suggestions: ['Wijha', 'Mylerz', 'J&T Express'], bostaConnected: true })
     }
-    if (url.endsWith('/catch-up/preview')) return json({ wouldCreate: 12, keyInUse: 0, byCarrier: {} })
+    if (url.includes('/catch-up/preview')) return json({ days: 3, wouldCreate: 12, keyInUse: 0, byCarrier: {} })
     if (url.endsWith('/test-waybill')) return json(RESULT)
     return json({})
   })
@@ -81,6 +81,8 @@ describe('Settings › Couriers layout', () => {
         await expect.poll(() => container.querySelector('[role="switch"]')).toBeTruthy()
         container.querySelector<HTMLElement>('[role="switch"]')!.click()
         await expect.poll(() => container.querySelector('[data-testid="couriers-catchup"]')).toBeTruthy()
+        container.querySelector<HTMLElement>('[data-testid="couriers-include-recent"]')!.click()
+        await expect.poll(() => container.querySelector('[data-testid="couriers-catchup-count"]')).toBeTruthy()
 
         const input = container.querySelector<HTMLInputElement>('[data-testid="test-waybill-input"]')!
         const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -92,7 +94,7 @@ describe('Settings › Couriers layout', () => {
           .toBe(lng === 'ar' ? RESULT.verdictAr : RESULT.verdictEn)
 
         expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth)
-        for (const el of container.querySelectorAll<HTMLElement>('button, input, [data-testid="test-waybill-result"]')) {
+        for (const el of container.querySelectorAll<HTMLElement>('button, input, select, [data-testid="test-waybill-result"], [data-testid="couriers-catchup"]')) {
           const r = el.getBoundingClientRect()
           if (r.width === 0) continue
           expect(r.left, el.outerHTML.slice(0, 60)).toBeGreaterThanOrEqual(0)

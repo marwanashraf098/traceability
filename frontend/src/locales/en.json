@@ -2390,8 +2390,8 @@
       "subtitle": "Use this if some of your orders ship with a courier Traced has no connection to (Wijha, Mylerz, J&T…). Traced picks up their tracking number from the order's Shopify fulfillment.",
       "switchTitle": "I ship with other couriers",
       "switchLine": "Orders with another courier's tracking number in Shopify can be packed by scanning that courier's waybill.",
-      "catchUp_one": "After you save, Traced adds {{count}} open order that already has another courier's tracking number.",
-      "catchUp_other": "After you save, Traced adds {{count}} open orders that already have another courier's tracking number.",
+      "catchUp_one": "This adds {{count}} open order from the last {{days}} days to Pick & Pack.",
+      "catchUp_other": "This adds {{count}} open orders from the last {{days}} days to Pick & Pack.",
       "offNote": "Turning this off stops new orders being added. Orders already added stay as they are and can still be packed.",
       "defaultCarrier": "Default courier name",
       "defaultCarrierPlaceholder": "e.g. Wijha",
@@ -2414,7 +2414,11 @@
         "shipmentRow": "Shipment: order {{number}} · {{carrier}} · {{state}}",
         "fulfillmentRow": "Shopify: order {{number}} · {{carrier}} · {{tracking}}",
         "cameraHint": "Scanning with the phone camera? It reads Code 128 and QR barcodes only. If the phone doesn't beep on a waybill, its barcode type can't be read by the camera — use a hardware scanner."
-      }
+      },
+      "fromNow": "Traced starts from now: orders whose tracking is added to Shopify after you save.",
+      "includeRecentBefore": "Also include open orders whose tracking was added in the last",
+      "includeRecentAfter": "days",
+      "daysLabel": "Days"
     }
   },
   "users": {

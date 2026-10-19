@@ -17,36 +17,49 @@ export default function CouriersTab({ isOwner }: { isOwner: boolean }) {
   const [enabled, setEnabled] = useState(false)
   const [carrier, setCarrier] = useState('')
   const [preview, setPreview] = useState<CatchUpPreview | null>(null)
+  // Switch-on catch-up: off by default ("start from now"); opt in to the last N days (1–7, default 3).
+  const [includeRecent, setIncludeRecent] = useState(false)
+  const [days, setDays] = useState(3)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<'saved' | 'error' | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([getCourierSettings(), getCatchUpPreview().catch(() => null)])
-      .then(([s, p]) => {
+    getCourierSettings()
+      .then(s => {
         if (cancelled || !s) return
         setSaved(s)
         setEnabled(s.enabled)
         setCarrier(s.defaultCarrier ?? '')
-        setPreview(p)
       })
       .catch(() => { if (!cancelled) setResult('error') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [])
 
+  const switchingOn = !!saved && !saved.enabled && enabled
   const dirty = !!saved && (enabled !== saved.enabled || carrier.trim() !== (saved.defaultCarrier ?? ''))
+
+  // The dry-run count for the chosen window, shown before the owner saves.
+  useEffect(() => {
+    if (!switchingOn || !includeRecent) { setPreview(null); return }
+    let cancelled = false
+    getCatchUpPreview(days).then(p => { if (!cancelled) setPreview(p) }).catch(() => { if (!cancelled) setPreview(null) })
+    return () => { cancelled = true }
+  }, [switchingOn, includeRecent, days])
 
   async function save() {
     if (saving || !dirty) return
     setSaving(true)
     setResult(null)
     try {
-      const s = await updateCourierSettings({ enabled, defaultCarrier: carrier.trim() || null })
+      const s = await updateCourierSettings({ enabled, defaultCarrier: carrier.trim() || null,
+        catchUpDays: switchingOn && includeRecent ? days : null })
       setSaved(s)
       setEnabled(s.enabled)
       setCarrier(s.defaultCarrier ?? '')
+      setIncludeRecent(false)
       setResult('saved')
     } catch {
       setResult('error')
@@ -88,11 +101,27 @@ export default function CouriersTab({ isOwner }: { isOwner: boolean }) {
           </span>
         </div>
 
-        {!saved?.enabled && enabled && preview && (
-          <p className="flex items-start gap-2 text-small text-muted" data-testid="couriers-catchup">
-            <Info size={14} strokeWidth={1.75} className="flex-shrink-0 mt-0.5" />
-            {t('settings.couriers.catchUp', { count: preview.wouldCreate })}
-          </p>
+        {switchingOn && isOwner && (
+          <div className="rounded-xl border border-line p-4 space-y-2" data-testid="couriers-catchup">
+            <p className="text-small text-primary">{t('settings.couriers.fromNow')}</p>
+            <label className="flex flex-wrap items-center gap-2 text-small text-primary">
+              <input type="checkbox" checked={includeRecent} onChange={e => setIncludeRecent(e.target.checked)}
+                     data-testid="couriers-include-recent" />
+              <span>{t('settings.couriers.includeRecentBefore')}</span>
+              <select className="input w-auto py-1" value={days} disabled={!includeRecent}
+                      onChange={e => setDays(Number(e.target.value))} aria-label={t('settings.couriers.daysLabel')}
+                      data-testid="couriers-days">
+                {[1, 2, 3, 4, 5, 6, 7].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span>{t('settings.couriers.includeRecentAfter')}</span>
+            </label>
+            {includeRecent && preview && preview.days === days && (
+              <p className="flex items-start gap-2 text-small text-muted" data-testid="couriers-catchup-count">
+                <Info size={14} strokeWidth={1.75} className="flex-shrink-0 mt-0.5" />
+                {t('settings.couriers.catchUp', { count: preview.wouldCreate, days })}
+              </p>
+            )}
+          </div>
         )}
         {saved?.enabled && !enabled && (
           <p className="flex items-start gap-2 text-small text-muted" data-testid="couriers-off-note">
