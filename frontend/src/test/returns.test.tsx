@@ -69,7 +69,7 @@ function makeAnalytics(overrides: Partial<{
 function makeItem(overrides: Partial<{
   id: string; piece_id: string; barcode: string; status: string
   disposition: 'pending' | 'restocked' | 'damaged' | 'mismatch'
-  unexpected: boolean; damage_reason: string | null
+  unexpected: boolean; damage_reason: string | null; on_scanned_awb: boolean
 }> = {}) {
   return {
     id: 'item-1', piece_id: 'piece-1', barcode: 'PC-piece-1',
@@ -344,23 +344,68 @@ describe('Returns — session-based rebuild', () => {
     expect(screen.queryByTestId('scan-input')).not.toBeInTheDocument()
   })
 
-  test('rs15 close disabled for a worker even with nothing pending', async () => {
-    // A worker's landing never fetches the sessions list/analytics (FIX 6a —
-    // owner-only endpoints), so its "Open return session" button always POSTs
-    // directly; resuming an already-open session goes through the
-    // SESSION_ALREADY_OPEN 409 → details.sessionId path, not enterSession()'s
-    // owner-path list-then-resume sequence.
+  // returns-expected-back (2026-10-19, reverses part of 14e4a8f): a worker grades restock / damaged
+  // and closes once nothing is pending; mismatch stays owner / manager.
+  async function enterAsWorker(user: ReturnType<typeof userEvent.setup>, detail: ReturnType<typeof makeSessionDetail>) {
+    // A worker's landing never fetches the sessions list/analytics (FIX 6a — owner-only
+    // endpoints), so its "Open return session" button always POSTs directly; resuming an
+    // already-open session goes through the SESSION_ALREADY_OPEN 409 → details.sessionId path.
     vi.mocked(api.getRoleFromToken).mockReturnValue('worker')
-    const user = userEvent.setup()
-    const detail = makeSessionDetail({ items: [makeItem({ disposition: 'restocked' })] })
     mockFetch
       .mockReturnValueOnce(jsonErr({ code: 'SESSION_ALREADY_OPEN', message_en: 'Already open', details: { sessionId: detail.id } }, 409))
       .mockReturnValueOnce(jsonOk(detail))
     renderWithProviders(<Returns />)
     await user.click(await screen.findByTestId('open-session-button'))
     await waitFor(() => screen.getByTestId('open-session-screen'))
-    expect(screen.getByTestId('close-session-button')).toBeDisabled()
+  }
+
+  test('rs15 a worker can close once nothing is pending; abandon stays manager-only', async () => {
+    const user = userEvent.setup()
+    await enterAsWorker(user, makeSessionDetail({ items: [makeItem({ disposition: 'restocked' })] }))
+    expect(screen.getByTestId('close-session-button')).toBeEnabled()
     expect(screen.queryByTestId('abandon-link')).not.toBeInTheDocument()
+  })
+
+  test('rs15b a worker sees Restock / Damage on an unexpected item, the badge, and no Not-the-real-piece', async () => {
+    const user = userEvent.setup()
+    await enterAsWorker(user, makeSessionDetail({ items: [makeItem({ unexpected: true })] }))
+    const card = screen.getByTestId('item-piece-1')
+    expect(card).toHaveTextContent('UNEXPECTED')
+    expect(card).toHaveTextContent('Restock')
+    expect(card).toHaveTextContent('Damage')
+    expect(card).not.toHaveTextContent('Not the real piece')
+    expect(screen.getByTestId('close-session-button')).toBeDisabled()
+  })
+
+  test('rs15c a worker on an item only a mismatch can settle is told it needs a manager', async () => {
+    const user = userEvent.setup()
+    await enterAsWorker(user, makeSessionDetail({ items: [makeItem({ unexpected: true, status: 'available' })] }))
+    const card = screen.getByTestId('item-piece-1')
+    expect(card).not.toHaveTextContent('Restock')
+    expect(card).not.toHaveTextContent('Not the real piece')
+    expect(screen.getByTestId('needs-manager-piece-1')).toHaveTextContent('This needs a manager or owner')
+  })
+
+  test('rs15d a 403 on a decision reads "This needs a manager or owner", never HTTP 403', async () => {
+    const user = userEvent.setup()
+    await enterAsWorker(user, makeSessionDetail({ items: [makeItem()] }))
+    mockFetch.mockReturnValueOnce(jsonErr({ error: 'ACCESS_DENIED', path: '/x', authorities: 'ROLE_WORKER' }, 403))
+    await user.click(within(screen.getByTestId('item-piece-1')).getByText('Restock'))
+    expect(await screen.findByText('This needs a manager or owner')).toBeInTheDocument()
+    expect(screen.queryByText(/HTTP 403/)).not.toBeInTheDocument()
+  })
+
+  test('rs15e the UNEXPECTED reason: on a scanned AWB → courier has not reported it; otherwise not on the manifest', async () => {
+    const user = userEvent.setup()
+    await enterSession(user, makeSessionDetail({ items: [
+      makeItem({ unexpected: true, on_scanned_awb: true }),
+      makeItem({ id: 'item-2', piece_id: 'piece-2', barcode: 'PC-piece-2', unexpected: true, on_scanned_awb: false }),
+    ] }))
+    expect(screen.getByTestId('item-piece-1')).toHaveTextContent("Courier hasn't reported this parcel as returning")
+    expect(screen.getByTestId('item-piece-1')).not.toHaveTextContent("not on this shipment's manifest")
+    expect(screen.getByTestId('item-piece-2')).toHaveTextContent("not on this shipment's manifest")
+    // owner still sees all three decisions
+    expect(screen.getByTestId('item-piece-1')).toHaveTextContent('Not the real piece')
   })
 
   // ── Abandon (change B: soft-delete, no revert) ────────────────────────────

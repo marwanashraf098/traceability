@@ -28,7 +28,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * isAuthenticated() to hasAnyRole('OWNER','MANAGER').
  *
  * Phase A (three endpoints):
- *   1. ReturnSessionController.disposition()
+ *   1. ReturnSessionController.disposition() — narrowed 2026-10-19 (returns-expected-back, approved):
+ *      a worker may restock / mark damaged; only MISMATCH stays owner / manager (403 NEEDS_MANAGER)
  *   2. ShopifyInventoryController.exportCsv()
  *   3. FulfillController.cancelOrder()
  *
@@ -141,12 +142,14 @@ class WorkerPermissionGuardTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 1. Returns disposition — worker 403, then owner succeeds on the same item
+    // 1. Returns disposition — worker mismatch 403 NEEDS_MANAGER (zero effect), owner mismatch
+    //    succeeds on the same item; a worker restock succeeds (returns-expected-back, 2026-10-19)
     // ─────────────────────────────────────────────────────────────────────────
     @Test
-    void disposition_workerForbidden_ownerSucceeds() {
+    void disposition_workerMismatchForbidden_ownerSucceeds_workerRestockAllowed() {
         UUID orderId = createOrder("returning");
         String pieceId = createPiece("return_in_transit", orderId);
+        String restockId = createPiece("return_in_transit", orderId);
 
         TenantContext.set(tenantId);
         UUID sessionId;
@@ -154,28 +157,40 @@ class WorkerPermissionGuardTest {
             sessionId = sessionSvc.createSession(null, ownerId);
             Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + pieceId, locationId, ownerId);
             assertThat(scanResult.get("disposition")).isEqualTo("pending");
+            sessionSvc.scan(sessionId, "PC-" + restockId, locationId, ownerId);
         } finally {
             TenantContext.clear();
         }
         assertThat(pieceStatus(pieceId)).isEqualTo("return_pending_inspection");
 
-        Map<String, Object> body = Map.of("disposition", "restock", "locationId", locationId.toString());
+        Map<String, Object> body = Map.of("disposition", "mismatch");
         String url = base() + "/api/v1/returns/sessions/" + sessionId + "/items/" + pieceId + "/disposition";
 
-        ResponseEntity<String> workerResp = rest.exchange(
-            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(workerToken)), String.class);
+        ResponseEntity<Map> workerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(workerToken)), Map.class);
         assertThat(workerResp.getStatusCode().value())
-            .as("worker must be rejected (403) — disposition is Manager-tier per blueprint.md")
+            .as("worker mismatch must be rejected (403) — mismatch is Manager-tier")
             .isEqualTo(403);
-        assertThat(pieceStatus(pieceId))
+        assertThat(workerResp.getBody().get("code")).isEqualTo("NEEDS_MANAGER");
+        assertThat(jdbc.queryForObject(
+            "SELECT disposition FROM return_session_items WHERE session_id = ? AND piece_id = ?",
+            String.class, sessionId, pieceId))
             .as("worker's rejected call must have zero effect")
-            .isEqualTo("return_pending_inspection");
+            .isEqualTo("pending");
 
         ResponseEntity<Map> ownerResp = rest.exchange(
             url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(ownerToken)), Map.class);
         assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(ownerResp.getBody().get("disposition")).isEqualTo("restocked");
-        assertThat(pieceStatus(pieceId)).isEqualTo("available");
+        assertThat(ownerResp.getBody().get("disposition")).isEqualTo("mismatch");
+
+        ResponseEntity<Map> workerRestock = rest.exchange(
+            base() + "/api/v1/returns/sessions/" + sessionId + "/items/" + restockId + "/disposition",
+            HttpMethod.POST,
+            new HttpEntity<>(Map.of("disposition", "restock", "locationId", locationId.toString()), bearerHeaders(workerToken)),
+            Map.class);
+        assertThat(workerRestock.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(workerRestock.getBody().get("disposition")).isEqualTo("restocked");
+        assertThat(pieceStatus(restockId)).isEqualTo("available");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

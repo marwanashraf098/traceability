@@ -253,7 +253,7 @@ class ReturnParcelCardsTest {
         Crp manual = trackedCrpWithDeliveredPiece(a);
         UUID s = open(a);
         scan(a, s, "PC-" + manual.pieceId());
-        as(a, () -> sessionSvc.disposition(s, manual.pieceId(), "restock", null, a.location(), a.actor()));
+        as(a, () -> sessionSvc.disposition(s, manual.pieceId(), "restock", null, a.location(), a.actor(), "owner"));
         as(a, () -> sessionSvc.close(s, a.actor()));
         Map<String, Object> m = jdbc.queryForMap(
             "SELECT return_intake_outcome, return_intake_by, return_intake_session_id FROM shipments WHERE id = ?",
@@ -265,7 +265,7 @@ class ReturnParcelCardsTest {
         Crp auto = trackedCrpWithDeliveredPiece(a);
         UUID s2 = open(a);
         scan(a, s2, "PC-" + auto.pieceId());
-        as(a, () -> sessionSvc.disposition(s2, auto.pieceId(), "restock", null, a.location(), a.actor()));
+        as(a, () -> sessionSvc.disposition(s2, auto.pieceId(), "restock", null, a.location(), a.actor(), "owner"));
         jdbc.update("UPDATE return_sessions SET opened_at = now() - interval '13 hours' WHERE id = ?", s2);
         jdbc.update("UPDATE return_session_items SET scanned_at = now() - interval '13 hours', " +
                     "disposition_at = now() - interval '13 hours' WHERE session_id = ?", s2);
@@ -319,8 +319,8 @@ class ReturnParcelCardsTest {
         // the item must still sit under its parcel).
         String second = two.otherPieceId();
         scan(a, s, "PC-" + second);
-        as(a, () -> sessionSvc.disposition(s, two.pieceId(), "restock", null, a.location(), a.actor()));
-        as(a, () -> sessionSvc.disposition(s, second, "restock", null, a.location(), a.actor()));
+        as(a, () -> sessionSvc.disposition(s, two.pieceId(), "restock", null, a.location(), a.actor(), "owner"));
+        as(a, () -> sessionSvc.disposition(s, second, "restock", null, a.location(), a.actor(), "owner"));
         Map<String, Object> twoDone = parcels(detail(a, s)).stream()
             .filter(p -> two.awb().equals(p.get("awb"))).findFirst().orElseThrow();
         assertThat((List<?>) twoDone.get("scannedItems")).hasSize(2);

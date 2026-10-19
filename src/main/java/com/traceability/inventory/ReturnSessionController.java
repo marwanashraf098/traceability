@@ -87,8 +87,13 @@ public class ReturnSessionController {
         return sessionService.getSession(sessionId);
     }
 
+    /**
+     * returns-expected-back (2026-10-19): a worker may close too — the service already refuses a close
+     * while any item still needs a decision (409 SESSION_CLOSE_BLOCKED), so a worker closes only
+     * once every item is graded. Owner / manager unchanged.
+     */
     @PostMapping("/sessions/{sessionId}/close")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','WORKER')")
     public Map<String, Object> close(@PathVariable UUID sessionId,
                                      @AuthenticationPrincipal CustomUserDetails principal) {
         return sessionService.close(sessionId, principal.userId());
@@ -193,18 +198,27 @@ public class ReturnSessionController {
         return sessionService.scan(sessionId, req.scan(), req.locationId(), principal.userId(), viaPhone);
     }
 
+    /**
+     * returns-expected-back (approved 2026-10-19; reverses part of 14e4a8f): a worker may restock or
+     * mark damaged (Traced roles only — never the embedded app's principal); mismatch stays owner / manager — enforced in the service (403 NEEDS_MANAGER).
+     */
     @PostMapping("/sessions/{sessionId}/items/{pieceId}/disposition")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','WORKER')")
     public Map<String, Object> disposition(
             @PathVariable UUID sessionId,
             @PathVariable String pieceId,
             @RequestBody DispositionRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
         return sessionService.disposition(
-            sessionId, pieceId, req.disposition(), req.reason(), req.locationId(), principal.userId());
+            sessionId, pieceId, req.disposition(), req.reason(), req.locationId(), principal.userId(),
+            principal.role());
     }
 
     // ── Reprint (any status — separate surface from the piece-level /pieces/{id}/label below) ──
+    // Intake reprint is a DELIBERATE worker action (confirmed 2026-10-19, returns-expected-back): a
+    // torn / missing sticker is found while unpacking, by whoever is unpacking. Still audited as
+    // piece_events 'label_reprinted' with the caller as actor. Both returns reprint endpoints stay
+    // isAuthenticated(); Lookup's POST /pieces/{id}/label/reprint stays owner / manager.
 
     @PostMapping("/sessions/{sessionId}/pieces/{pieceId}/reprint-label")
     @PreAuthorize("isAuthenticated()")

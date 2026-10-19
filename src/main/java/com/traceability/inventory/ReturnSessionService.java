@@ -60,6 +60,20 @@ public class ReturnSessionService {
         "        AND pe.event_type = 'return_received' AND pe.metadata->>'session_id' = i.session_id::text " +
         "        AND pe.metadata->>'via' = 'phone')";
 
+    /**
+     * returns-expected-back: the item's piece is on an AWB scanned in this session — a shipment
+     * the piece's own events carry, or any leg of its order. Display only (which reason the
+     * UNEXPECTED badge shows); never an acceptance or "expected back" rule.
+     */
+    static final String ON_SCANNED_AWB_SQL =
+        "EXISTS (SELECT 1 FROM return_session_shipments rss " +
+        "        JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+        "        WHERE rss.session_id = i.session_id AND rss.tenant_id = i.tenant_id " +
+        "          AND (s.order_id = p.current_order_id " +
+        "               OR s.id IN (SELECT pe.shipment_id FROM piece_events pe " +
+        "                           WHERE pe.piece_id = i.piece_id AND pe.tenant_id = i.tenant_id " +
+        "                             AND pe.shipment_id IS NOT NULL)))";
+
     private static final Logger log = LoggerFactory.getLogger(ReturnSessionService.class);
 
     /** Statuses from which a scan legally moves a piece into return_pending_inspection. */
@@ -213,17 +227,18 @@ public class ReturnSessionService {
             }
             case WITH_COURIER -> {
                 legal = true;
-                // Not unexpected if this order has a matched CRP return leg already in
-                // flight — Bosta just hasn't caught the piece's own status up yet. See
-                // ShipmentLinkService.hasActiveReturnLeg() javadoc.
-                unexpected = !shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
+                // Not unexpected if the courier is bringing it back — its forward leg is on its
+                // way back to sender (RTO states move no piece before 46), or the order has a
+                // CRP return leg / matched exchange in flight. ShipmentLinkService.isExpectedBack
+                // is the one rule; detectUnexpectedReturn uses it too.
+                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.WITH_COURIER, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case AWAITING_PICKUP -> {
                 legal = true;
-                unexpected = !shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
+                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.AWAITING_PICKUP, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
@@ -361,9 +376,34 @@ public class ReturnSessionService {
 
     // ── Disposition ───────────────────────────────────────────────────────────
 
+    /**
+     * returns-expected-back (approved 2026-10-19; reverses part of 14e4a8f): the endpoint's entry.
+     * Owner, manager and worker may RESTOCK or mark DAMAGED any item, expected or unexpected — the actor recorded on
+     * the item and the ledger events is the caller. MISMATCH stays owner / manager: anyone else gets
+     * 403 NEEDS_MANAGER before anything is read or written. The unexpected flag and the
+     * unexpected_return alert are untouched by who grades.
+     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> disposition(UUID sessionId, String pieceId, String disposition,
-                                           String reason, UUID locationId, UUID actorUserId) {
+                                           String reason, UUID locationId, UUID actorUserId, String actorRole) {
+        if ("mismatch".equals(disposition)
+                && !"owner".equalsIgnoreCase(actorRole) && !"manager".equalsIgnoreCase(actorRole)) {
+            throw new ReturnSessionException(ReturnSessionException.Code.NEEDS_MANAGER,
+                "This needs a manager or owner",
+                "هذا الإجراء يحتاج إلى مدير أو مالك",
+                HttpStatus.FORBIDDEN, Map.of());
+        }
+        return dispositionInternal(sessionId, pieceId, disposition, reason, locationId, actorUserId);
+    }
+
+    /**
+     * The disposition itself, WITHOUT the role check — it skips the mismatch-needs-a-manager rule.
+     * Private on purpose: only {@link #disposition(UUID, String, String, String, UUID, UUID, String)}
+     * calls it, and it must never be called from a controller (ReturnsDispositionEntryGuardTest).
+     * Runs inside the public method's transaction.
+     */
+    private Map<String, Object> dispositionInternal(UUID sessionId, String pieceId, String disposition,
+                                                    String reason, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);
 
@@ -810,6 +850,7 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            "       " + ON_SCANNED_AWB_SQL + " AS on_scanned_awb, " +
             // Q2: the order the piece came back from — the phone's "Received · #1047" line.
             "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at, p.short_code " +
@@ -1249,6 +1290,7 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            "       " + ON_SCANNED_AWB_SQL + " AS on_scanned_awb, " +
             // Q2: the order the piece came back from — the phone's "Received · #1047" line.
             "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at " +
@@ -1268,6 +1310,7 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            "       " + ON_SCANNED_AWB_SQL + " AS on_scanned_awb, " +
             // Q2: the order the piece came back from — the phone's "Received · #1047" line.
             "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at " +

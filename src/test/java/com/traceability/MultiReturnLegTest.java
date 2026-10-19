@@ -151,7 +151,7 @@ class MultiReturnLegTest {
         UUID s1 = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s1, legA, locationId, actorId);                          // A's AWB
         sessionSvc.scan(s1, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s1, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s1, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         assertThat(state(legB))
             .as("resolveReturnLegIfComplete must not flip B — it has no scan evidence of its own")
             .isEqualTo("returning");
@@ -165,7 +165,7 @@ class MultiReturnLegTest {
         // order, so only its own AWB could speak for it.
         UUID s2 = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s2, "PC-" + o.pieces().get(1), locationId, actorId);
-        sessionSvc.disposition(s2, o.pieces().get(1), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s2, o.pieces().get(1), "restock", null, locationId, actorId, "owner");
         assertThat(state(legB)).as("still not flipped").isEqualTo("returning");
         sessionSvc.close(s2, actorId);
         assertThat(intakeCompletedAt(legB)).as("still not stamped").isNull();
@@ -184,7 +184,7 @@ class MultiReturnLegTest {
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, legB, locationId, actorId);                           // B's AWB
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s, actorId);
 
         assertThat(intakeCompletedAt(legB)).as("B: own AWB scanned → stamped").isNotNull();
@@ -207,7 +207,7 @@ class MultiReturnLegTest {
 
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s, actorId);
 
         assertThat(intakeCompletedAt(legA)).as("A: which parcel was it? unknown → not stamped").isNull();
@@ -224,7 +224,7 @@ class MultiReturnLegTest {
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, legA, locationId, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s, actorId);
         assertThat(intakeCompletedAt(legA)).isNotNull();
 
@@ -255,7 +255,7 @@ class MultiReturnLegTest {
 
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         assertThat(state(leg))
             .as("single leg, piece dispositioned → resolveReturnLegIfComplete flips it, as today")
             .isEqualTo("returned");
@@ -280,7 +280,7 @@ class MultiReturnLegTest {
 
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s, actorId);
 
         assertThat(intakeCompletedAt(legA)).isNull();
@@ -299,7 +299,7 @@ class MultiReturnLegTest {
 
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s, actorId);
 
         assertThat(intakeCompletedAt(legB))

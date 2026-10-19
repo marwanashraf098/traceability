@@ -320,7 +320,7 @@ class ExchangeDispatchDecrementTest {
         TenantContext.set(tenantId);
         UUID s = returnSessions.createSession(null, actorId);
         returnSessions.scan(s, "PC-" + f.piece(), fulfillmentLoc, actorId);
-        returnSessions.disposition(s, f.piece(), "restock", null, fulfillmentLoc, actorId);
+        returnSessions.disposition(s, f.piece(), "restock", null, fulfillmentLoc, actorId, "owner");
         TenantContext.clear();
         awaitTrigger("return_inspection", f.piece());
 
@@ -338,7 +338,7 @@ class ExchangeDispatchDecrementTest {
         TenantContext.set(tenantId);
         UUID s = returnSessions.createSession(null, actorId);
         returnSessions.scan(s, "PC-" + f.piece(), fulfillmentLoc, actorId);
-        returnSessions.disposition(s, f.piece(), "damaged", "Torn seam", fulfillmentLoc, actorId);
+        returnSessions.disposition(s, f.piece(), "damaged", "Torn seam", fulfillmentLoc, actorId, "owner");
         TenantContext.clear();
         settle();
 

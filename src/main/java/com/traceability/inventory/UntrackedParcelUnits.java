@@ -18,7 +18,7 @@ import java.util.UUID;
  * Which parcels: a courier-return leg, or a returned-to-sender forward leg
  * ({@link ShipmentLinkService#returnedToSenderSql}), that no return request holds. Which lines: the
  * order lines with no allocation of any status ({@link PortalService#LINE_UNTRACKED_SQL}); units
- * 1..{@link PortalService#UNTRACKED_CAP_SQL}. A parcel with a linked request keeps its request items.
+ * 1..{@link #PARCEL_UNIT_CAP_SQL}. A parcel with a linked request keeps its request items.
  *
  * Partial returns are normal (signed off): the leg is HANDLED once at least one unit is marked —
  * stamped return_intake_outcome 'untracked_units_arrived' through the canonical evidence rule
@@ -34,6 +34,15 @@ import java.util.UUID;
 public class UntrackedParcelUnits {
 
     private final JdbcTemplate jdbc;
+
+    /**
+     * returns-expected-back (2026-10-19): how many unit rows a parcel shows for an untracked line —
+     * the ORDERED quantity. A parcel holds what was shipped, so a Shopify cancellation / refund /
+     * edit after shipping (current_quantity lowered) never hides units that physically came back.
+     * Deliberately NOT {@link PortalService#UNTRACKED_CAP_SQL}: that cap is for portal requests (a
+     * cancelled or refunded unit isn't requestable again) — never share the two.
+     */
+    static final String PARCEL_UNIT_CAP_SQL = "oi.quantity";
 
     public UntrackedParcelUnits(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -53,7 +62,7 @@ public class UntrackedParcelUnits {
     public List<Map<String, Object>> units(UUID tenantId, UUID shipmentId) {
         List<Map<String, Object>> lines = jdbc.queryForList(
             "SELECT oi.id AS order_item_id, COALESCE(pr.title, oi.raw->>'title') AS product_title, v.title AS variant_title, " +
-            "       v.sku, " + PortalService.UNTRACKED_CAP_SQL + " AS cap " +
+            "       v.sku, " + PARCEL_UNIT_CAP_SQL + " AS cap " +
             "FROM shipments s " +
             "JOIN order_items oi ON oi.order_id = s.order_id AND oi.tenant_id = s.tenant_id " +
             "LEFT JOIN variants v ON v.id = oi.variant_id " +

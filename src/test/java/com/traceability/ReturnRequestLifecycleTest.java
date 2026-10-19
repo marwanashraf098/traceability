@@ -405,7 +405,7 @@ class ReturnRequestLifecycleTest {
         // B's item arrives with no AWB scan, both legs still with the courier.
         UUID s = sessions.createSession(null, ownerId);
         sessions.scan(s, "PC-" + o.pieces().get(1), locationId, ownerId);
-        sessions.disposition(s, o.pieces().get(1), "restock", null, locationId, ownerId);
+        sessions.disposition(s, o.pieces().get(1), "restock", null, locationId, ownerId, "owner");
         sessions.close(s, ownerId);
 
         assertThat(intakeCompletedAt(tb)).as("B: its request's item arrived → exact evidence").isNotNull();
@@ -426,7 +426,7 @@ class ReturnRequestLifecycleTest {
 
         sessions.scan(s, "PC-" + p0, locationId, ownerId);
         assertThat(col(r, "status")).as("one item still awaited").isEqualTo("approved");
-        sessions.disposition(s, p0, "restock", null, locationId, ownerId);
+        sessions.disposition(s, p0, "restock", null, locationId, ownerId, "owner");
         assertThat(itemStatus(i0)).isEqualTo("done");
         assertThat(itemActive(i0)).as("released at once, while the other item is still awaited").isFalse();
         assertThat(itemStatus(i1)).isEqualTo("awaiting");
@@ -437,7 +437,7 @@ class ReturnRequestLifecycleTest {
         assertThat(col(r, "received_at")).isNotNull();
         assertThat(col(r, "refund_pending_at")).isNull();
 
-        sessions.disposition(s, p1, "damaged", "Torn seam", locationId, ownerId);
+        sessions.disposition(s, p1, "damaged", "Torn seam", locationId, ownerId, "owner");
         assertThat(itemStatus(i1)).isEqualTo("done");
         assertThat(itemActive(i1)).isFalse();
         assertThat(col(r, "status")).isEqualTo("refund_pending");
@@ -455,7 +455,7 @@ class ReturnRequestLifecycleTest {
         sessions.scan(s, "PC-" + o.pieces().get(0), locationId, ownerId);
         assertThat(col(r, "status")).isEqualTo("received");
 
-        sessions.disposition(s, o.pieces().get(0), "mismatch", null, locationId, ownerId);
+        sessions.disposition(s, o.pieces().get(0), "mismatch", null, locationId, ownerId, "owner");
 
         assertThat(col(r, "status")).isEqualTo("received");
         assertThat(itemStatus(item)).isEqualTo("arrived");
@@ -469,7 +469,7 @@ class ReturnRequestLifecycleTest {
         UUID r = request(o, "pickup_booked", Instant.now().minus(1, ChronoUnit.HOURS), p0, p1);
         UUID s = sessions.createSession(null, ownerId);
         sessions.scan(s, "PC-" + p0, locationId, ownerId);
-        sessions.disposition(s, p0, "restock", null, locationId, ownerId);
+        sessions.disposition(s, p0, "restock", null, locationId, ownerId, "owner");
 
         requests.restNotComing(r, ownerId);
 

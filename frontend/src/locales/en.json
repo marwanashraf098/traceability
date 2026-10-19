@@ -1057,6 +1057,7 @@
     }
   },
   "returns": {
+    "needsManager": "This needs a manager or owner",
     "title": "Scan returns",
     "landing": {
       "openSession": "Open return session",
@@ -1118,6 +1119,7 @@
       "unexpected": "UNEXPECTED",
       "awaitingScan": "awaiting scan",
       "notOnManifest": "not on this shipment's manifest",
+      "notReportedReturning": "Courier hasn't reported this parcel as returning",
       "restock": "Restock",
       "damage": "Damage",
       "mismatch": "Not the real piece",

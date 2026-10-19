@@ -19,7 +19,9 @@ public class ReturnSessionException extends RuntimeException {
 
     public enum Code {
         SESSION_ALREADY_OPEN,
-        SESSION_CLOSE_BLOCKED
+        SESSION_CLOSE_BLOCKED,
+        /** returns-expected-back: a mismatch decision by a role below manager (403). */
+        NEEDS_MANAGER
     }
 
     private final Code                code;

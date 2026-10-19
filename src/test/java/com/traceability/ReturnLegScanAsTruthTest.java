@@ -214,7 +214,7 @@ class ReturnLegScanAsTruthTest {
         UUID s1 = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s1, "PC-" + o.pieces().get(0), locationId, actorId);
         assertThat(intakeCompletedAt(crp)).as("not stamped while the session is open").isNull();
-        sessionSvc.disposition(s1, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s1, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         sessionSvc.close(s1, actorId);
 
         assertThat(intakeCompletedAt(crp)).as("close() stamps return_intake_completed_at").isNotNull();
@@ -254,7 +254,7 @@ class ReturnLegScanAsTruthTest {
         UUID s = sessionSvc.createSession(null, actorId);
         sessionSvc.scan(s, "PC-" + o.pieces().get(0), locationId, actorId);
         assertThat(inspectionState(crp)).isEqualTo("needs_inspection");
-        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId);
+        sessionSvc.disposition(s, o.pieces().get(0), "restock", null, locationId, actorId, "owner");
         assertThat(inspectionState(crp)).as("dispositioned but session still open").isEqualTo("needs_inspection");
         sessionSvc.close(s, actorId);
 
