@@ -1000,7 +1000,8 @@ public class ExceptionService {
             "       p.id AS piece_id, p.barcode, " +
             "       o.id AS order_id, o.number AS order_number, " +
             "       pe.occurred_at, " +
-            "       'unexpected_return:' || p.id AS subject_key " +
+            "       'unexpected_return:' || p.id AS subject_key, " +
+            "       pe.shipment_id AS expected_back_shipment_id " +
             "FROM pieces p " +
             "JOIN piece_events pe ON pe.piece_id = p.id " +
             "    AND pe.event_type = 'return_received' " +
@@ -1014,11 +1015,13 @@ public class ExceptionService {
             "        AND er.exception_type = 'unexpected_return' " +
             "        AND er.subject_key = 'unexpected_return:' || p.id) ",
             tid);
-        // Suppress candidates whose order has a matched CRP return leg already in flight —
-        // same predicate ReturnSessionService.scanPiece() uses (ShipmentLinkService.
-        // hasActiveReturnLeg), so "expected" can never drift between the two call sites.
+        // Suppress candidates the courier is bringing back — same predicate
+        // ReturnSessionService.scanPiece() uses (ShipmentLinkService.isExpectedBack, on the
+        // forward shipment the scan's return_received event carries), so "expected" can never
+        // drift between the two call sites.
         return candidates.stream()
-            .filter(row -> !shipmentLinkService.hasActiveReturnLeg((UUID) row.get("order_id"), tid))
+            .filter(row -> !shipmentLinkService.isExpectedBack(
+                (UUID) row.remove("expected_back_shipment_id"), (UUID) row.get("order_id"), tid))
             .collect(java.util.stream.Collectors.toList());
     }
 

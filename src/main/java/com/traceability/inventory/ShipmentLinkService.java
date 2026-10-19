@@ -1004,6 +1004,30 @@ public class ShipmentLinkService {
     }
 
     /**
+     * THE "expected back" rule (returns-expected-back, approved 2026-10-19) for a piece a return
+     * scan finds still with_courier / awaiting_pickup: (a) its forward shipment
+     * {@code forwardShipmentId} has return-to-sender evidence — a shipment_status_history row in
+     * 'returning' or 'returned' (V122: RTO states 20 / 41 move no piece, so the piece is still
+     * with_courier until state 46) — or (b) {@link #hasActiveReturnLeg}. Used by
+     * ReturnSessionService.scanPiece (the unexpected flag) and
+     * ExceptionService.detectUnexpectedReturn (the alert) so the two never disagree. Shopify
+     * quantities play no part. An AWB scanned in the session is NOT evidence on its own: a
+     * never-collected parcel with no return history stays unexpected.
+     */
+    public boolean isExpectedBack(UUID forwardShipmentId, UUID orderId, UUID tenantId) {
+        if (forwardShipmentId != null) {
+            Boolean rto = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM shipment_status_history h " +
+                "  JOIN shipments s ON s.id = h.shipment_id " +
+                "  WHERE h.shipment_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+                "    AND h.internal_state IN ('returning', 'returned'))",
+                Boolean.class, forwardShipmentId, tenantId);
+            if (Boolean.TRUE.equals(rto)) return true;
+        }
+        return hasActiveReturnLeg(orderId, tenantId);
+    }
+
+    /**
      * Scan-as-truth intake gate (V98): true when {@code orderId} has a CRP return leg
      * (shipment_leg='return') that is still awaiting its intake scan — either
      * non-terminal, or already 'returned' per Bosta (state 46) with
