@@ -1,0 +1,664 @@
+{
+  "exceptions" : [ "blocked_customer|LOW|order", "cancelled_live_shipment|HIGH|order", "unmatched_delivery|MEDIUM|delivery" ],
+  "getOrderAfter" : {
+    "address" : null,
+    "awbPrinted" : false,
+    "cancel_requested_at" : null,
+    "cod_amount" : 1250.00,
+    "customer_name" : "Youssef Adel",
+    "customer_phone" : null,
+    "id" : "<v0>",
+    "is_exchange" : false,
+    "is_self_pickup" : false,
+    "items" : [ {
+      "allocated" : 1,
+      "allocatedPieces" : [ {
+        "allocation_status" : "packed",
+        "barcode" : "<v22>",
+        "piece_id" : "<v24>",
+        "piece_status" : "awaiting_pickup"
+      } ],
+      "id" : "<v1>",
+      "imageUrl" : null,
+      "product_title" : "Shirt",
+      "quantity" : 1,
+      "sku" : "SH-<tenant>",
+      "variant_id" : "<v2>",
+      "variant_title" : "M"
+    } ],
+    "locked_at" : null,
+    "locked_by" : null,
+    "number" : "#2010",
+    "payment_method" : "cod",
+    "placed_at" : "<v30>",
+    "shipment_has_courier" : true,
+    "shipment_id" : "<v3>",
+    "status" : "awaiting_pickup",
+    "tracking_number" : "TN+10"
+  },
+  "getOrderBefore" : {
+    "address" : null,
+    "awbPrinted" : false,
+    "cancel_requested_at" : null,
+    "cod_amount" : 1250.00,
+    "customer_name" : "Youssef Adel",
+    "customer_phone" : null,
+    "id" : "<v0>",
+    "is_exchange" : false,
+    "is_self_pickup" : false,
+    "items" : [ {
+      "allocated" : 0,
+      "allocatedPieces" : [ ],
+      "id" : "<v1>",
+      "imageUrl" : null,
+      "product_title" : "Shirt",
+      "quantity" : 1,
+      "sku" : "SH-<tenant>",
+      "variant_id" : "<v2>",
+      "variant_title" : "M"
+    } ],
+    "locked_at" : null,
+    "locked_by" : null,
+    "number" : "#2010",
+    "payment_method" : "cod",
+    "placed_at" : "<v30>",
+    "shipment_has_courier" : true,
+    "shipment_id" : "<v3>",
+    "status" : "new",
+    "tracking_number" : "TN+10"
+  },
+  "linkMismatch" : {
+    "reason" : "Scanned AWB TN+98 does not match this order's AWB TN+10",
+    "refused" : "AwbMismatchException"
+  },
+  "linkNewAwb" : {
+    "linkedPieces" : 0,
+    "orderStatus" : "awaiting_pickup",
+    "shipmentId" : "<v4>",
+    "trackingNumber" : "TN+11"
+  },
+  "linkUnreadable" : {
+    "reason" : "Unreadable AWB scan: JT1234567890EG",
+    "refused" : 400
+  },
+  "linkVerify" : {
+    "linkedPieces" : 1,
+    "orderStatus" : "awaiting_pickup",
+    "shipmentId" : "<v3>",
+    "trackingNumber" : "TN+10"
+  },
+  "linkWijha" : {
+    "reason" : "Scanned AWB 12345 does not match this order's AWB TN+10",
+    "refused" : "AwbMismatchException"
+  },
+  "lookupOrder" : {
+    "orderId" : "<v0>",
+    "orderNumber" : "#2010",
+    "type" : "order"
+  },
+  "lookupTracking" : {
+    "internalState" : "created",
+    "orderId" : "<v0>",
+    "orderNumber" : "#2010",
+    "pieces" : [ {
+      "barcode" : "<v22>",
+      "pieceId" : "<v24>",
+      "status" : "awaiting_pickup"
+    } ],
+    "shipmentId" : "<v3>",
+    "trackingNumber" : "TN+10",
+    "type" : "tracking"
+  },
+  "lookupWijha" : {
+    "reason" : "null",
+    "refused" : 404
+  },
+  "open1Status" : "awaiting_pickup",
+  "packOpen" : {
+    "result" : "opened",
+    "order" : {
+      "address" : null,
+      "area" : null,
+      "awbPrinted" : false,
+      "batchNo" : null,
+      "batchPrintedAt" : null,
+      "cancel_requested_at" : null,
+      "cod_amount" : 1250.00,
+      "courierType" : "delivery",
+      "customer_name" : "Youssef Adel",
+      "customer_phone" : null,
+      "id" : "<v5>",
+      "is_exchange" : false,
+      "is_self_pickup" : false,
+      "items" : [ {
+        "allocated" : 0,
+        "allocatedPieces" : [ ],
+        "id" : "<v6>",
+        "imageUrl" : null,
+        "product_title" : "Shirt",
+        "quantity" : 2,
+        "sku" : "SH-<tenant>",
+        "variant_id" : "<v2>",
+        "variant_title" : "M"
+      } ],
+      "locked_at" : "<v31>",
+      "locked_by" : "<v7>",
+      "number" : "#2001",
+      "payment_method" : "cod",
+      "placed_at" : "<v32>",
+      "shipment_has_courier" : true,
+      "shipment_id" : "<v8>",
+      "status" : "new",
+      "tracking_number" : "TN+1"
+    },
+    "code" : null,
+    "subReason" : null,
+    "orderNumber" : "#2001",
+    "who" : null,
+    "at" : null,
+    "state" : null,
+    "messageEn" : null,
+    "messageAr" : null
+  },
+  "packScan1" : {
+    "status" : "scanned",
+    "scan" : {
+      "success" : true,
+      "code" : "SCANNED",
+      "message" : null,
+      "pieceId" : "<v25>",
+      "barcode" : "<v27>",
+      "variantId" : "<v2>",
+      "orderItemId" : "<v6>",
+      "allocatedCount" : 1,
+      "requiredQuantity" : 2,
+      "allComplete" : false
+    },
+    "order" : {
+      "address" : null,
+      "area" : null,
+      "awbPrinted" : false,
+      "batchNo" : null,
+      "batchPrintedAt" : null,
+      "cancel_requested_at" : null,
+      "cod_amount" : 1250.00,
+      "courierType" : "delivery",
+      "customer_name" : "Youssef Adel",
+      "customer_phone" : null,
+      "id" : "<v5>",
+      "is_exchange" : false,
+      "is_self_pickup" : false,
+      "items" : [ {
+        "allocated" : 1,
+        "allocatedPieces" : [ {
+          "allocation_status" : "active",
+          "barcode" : "<v23>",
+          "piece_id" : "<v25>",
+          "piece_status" : "reserved"
+        } ],
+        "id" : "<v6>",
+        "imageUrl" : null,
+        "product_title" : "Shirt",
+        "quantity" : 2,
+        "sku" : "SH-<tenant>",
+        "variant_id" : "<v2>",
+        "variant_title" : "M"
+      } ],
+      "locked_at" : "<v33>",
+      "locked_by" : "<v7>",
+      "number" : "#2001",
+      "payment_method" : "cod",
+      "placed_at" : "<v32>",
+      "shipment_has_courier" : true,
+      "shipment_id" : "<v8>",
+      "status" : "new",
+      "tracking_number" : "TN+1"
+    },
+    "packed" : null,
+    "failCode" : null,
+    "failMessage" : null
+  },
+  "packScan2" : {
+    "status" : "completed",
+    "scan" : {
+      "success" : true,
+      "code" : "SCANNED",
+      "message" : null,
+      "pieceId" : "<v26>",
+      "barcode" : "<v28>",
+      "variantId" : "<v2>",
+      "orderItemId" : "<v6>",
+      "allocatedCount" : 2,
+      "requiredQuantity" : 2,
+      "allComplete" : true
+    },
+    "order" : null,
+    "packed" : {
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "customerName" : "Youssef Adel",
+      "pieces" : 2
+    },
+    "failCode" : null,
+    "failMessage" : null
+  },
+  "packView" : {
+    "id" : "<v9>",
+    "mode" : "waybill_scan",
+    "status" : "open",
+    "startedAt" : "<v34>",
+    "workerName" : "Mona",
+    "counters" : {
+      "packed" : 1,
+      "setAside" : 0,
+      "rejected" : 0,
+      "left" : 0
+    },
+    "recent" : [ {
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "customerName" : "Youssef Adel",
+      "outcome" : "packed",
+      "reason" : null,
+      "rawScan" : "D-07-TN+1",
+      "at" : "<v35>"
+    } ],
+    "openOrder" : null
+  },
+  "packWaybillWhilePacking" : {
+    "status" : "rejected",
+    "scan" : {
+      "success" : false,
+      "code" : "WAYBILL_WHILE_PACKING",
+      "message" : "That's a waybill. Finish or set aside this order before scanning the next waybill.",
+      "pieceId" : null,
+      "barcode" : null,
+      "variantId" : null,
+      "orderItemId" : null,
+      "allocatedCount" : 0,
+      "requiredQuantity" : 0,
+      "allComplete" : false
+    },
+    "order" : {
+      "address" : null,
+      "area" : null,
+      "awbPrinted" : false,
+      "batchNo" : null,
+      "batchPrintedAt" : null,
+      "cancel_requested_at" : null,
+      "cod_amount" : 1250.00,
+      "courierType" : "delivery",
+      "customer_name" : "Youssef Adel",
+      "customer_phone" : null,
+      "id" : "<v5>",
+      "is_exchange" : false,
+      "is_self_pickup" : false,
+      "items" : [ {
+        "allocated" : 1,
+        "allocatedPieces" : [ {
+          "allocation_status" : "active",
+          "barcode" : "<v23>",
+          "piece_id" : "<v25>",
+          "piece_status" : "reserved"
+        } ],
+        "id" : "<v6>",
+        "imageUrl" : null,
+        "product_title" : "Shirt",
+        "quantity" : 2,
+        "sku" : "SH-<tenant>",
+        "variant_id" : "<v2>",
+        "variant_title" : "M"
+      } ],
+      "locked_at" : "<v33>",
+      "locked_by" : "<v7>",
+      "number" : "#2001",
+      "payment_method" : "cod",
+      "placed_at" : "<v32>",
+      "shipment_has_courier" : true,
+      "shipment_id" : "<v8>",
+      "status" : "new",
+      "tracking_number" : "TN+1"
+    },
+    "packed" : null,
+    "failCode" : null,
+    "failMessage" : null
+  },
+  "packWijhaWhilePacking" : {
+    "status" : "rejected",
+    "scan" : {
+      "success" : false,
+      "code" : "WAYBILL_WHILE_PACKING",
+      "message" : "That's a waybill. Finish or set aside this order before scanning the next waybill.",
+      "pieceId" : null,
+      "barcode" : null,
+      "variantId" : null,
+      "orderItemId" : null,
+      "allocatedCount" : 0,
+      "requiredQuantity" : 0,
+      "allComplete" : false
+    },
+    "order" : {
+      "address" : null,
+      "area" : null,
+      "awbPrinted" : false,
+      "batchNo" : null,
+      "batchPrintedAt" : null,
+      "cancel_requested_at" : null,
+      "cod_amount" : 1250.00,
+      "courierType" : "delivery",
+      "customer_name" : "Youssef Adel",
+      "customer_phone" : null,
+      "id" : "<v5>",
+      "is_exchange" : false,
+      "is_self_pickup" : false,
+      "items" : [ {
+        "allocated" : 1,
+        "allocatedPieces" : [ {
+          "allocation_status" : "active",
+          "barcode" : "<v23>",
+          "piece_id" : "<v25>",
+          "piece_status" : "reserved"
+        } ],
+        "id" : "<v6>",
+        "imageUrl" : null,
+        "product_title" : "Shirt",
+        "quantity" : 2,
+        "sku" : "SH-<tenant>",
+        "variant_id" : "<v2>",
+        "variant_title" : "M"
+      } ],
+      "locked_at" : "<v33>",
+      "locked_by" : "<v7>",
+      "number" : "#2001",
+      "payment_method" : "cod",
+      "placed_at" : "<v32>",
+      "shipment_has_courier" : true,
+      "shipment_id" : "<v8>",
+      "status" : "new",
+      "tracking_number" : "TN+1"
+    },
+    "packed" : null,
+    "failCode" : null,
+    "failMessage" : null
+  },
+  "pickupScan" : {
+    "outcome" : "ACCEPTED",
+    "entry" : {
+      "shipmentId" : "<v3>",
+      "trackingNumber" : "TN+10",
+      "orderNumber" : "#2010",
+      "codAmount" : null,
+      "scannedAt" : "<v36>",
+      "scannedByName" : "Mona"
+    }
+  },
+  "pickupUnknown" : {
+    "outcome" : "UNKNOWN_AWB",
+    "entry" : null
+  },
+  "pickupWijha" : {
+    "outcome" : "UNKNOWN_AWB",
+    "entry" : null
+  },
+  "q2Shipments" : [ {
+    "carrier_name" : null,
+    "internal_state" : "created",
+    "provider" : "bosta",
+    "shipment_leg" : "forward",
+    "source" : null,
+    "tracking_key" : null,
+    "tracking_number" : "TN+11"
+  } ],
+  "queueComplete" : 1,
+  "queueScan" : {
+    "success" : true,
+    "code" : "SCANNED",
+    "message" : null,
+    "pieceId" : "<v24>",
+    "barcode" : "<v29>",
+    "variantId" : "<v2>",
+    "orderItemId" : "<v1>",
+    "allocatedCount" : 1,
+    "requiredQuantity" : 1,
+    "allComplete" : true
+  },
+  "resolve" : {
+    "arabicDigits" : {
+      "code" : "OPEN",
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "shipmentId" : "<v8>",
+      "trackingNumber" : "TN+1",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : null,
+      "messageAr" : null
+    },
+    "cancelled" : {
+      "code" : "CANCELLED",
+      "orderId" : "<v10>",
+      "orderNumber" : "#2003",
+      "shipmentId" : "<v11>",
+      "trackingNumber" : "TN+4",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "Order #2003 was cancelled. Put the waybill to one side and give it to a manager.",
+      "messageAr" : "تم إلغاء الطلب #2003. ضع البوليصة جانباً وسلّمها للمدير."
+    },
+    "hubPrefix" : {
+      "code" : "OPEN",
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "shipmentId" : "<v8>",
+      "trackingNumber" : "TN+1",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : null,
+      "messageAr" : null
+    },
+    "jtLetters" : {
+      "code" : "UNRECOGNISED_BARCODE",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : null,
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "This barcode isn't a waybill we recognise. Try the barcode at the bottom of the waybill (Tracking Number).",
+      "messageAr" : "هذا الباركود ليس بوليصة نعرفها. جرّب الباركود الموجود أسفل البوليصة (رقم التتبع)."
+    },
+    "legEnded" : {
+      "code" : "NOT_PACKABLE",
+      "orderId" : "<v12>",
+      "orderNumber" : "#2004",
+      "shipmentId" : "<v13>",
+      "trackingNumber" : "TN+5",
+      "who" : null,
+      "at" : null,
+      "detail" : "LEG_ENDED",
+      "state" : "terminated",
+      "messageEn" : "This waybill for #2004 was terminated at Bosta. Don't use it — give it to a manager.",
+      "messageAr" : "هذه البوليصة للطلب #2004 أُنهيت في Bosta. لا تستخدمها — سلّمها للمدير."
+    },
+    "moved" : {
+      "code" : "NOT_PACKABLE",
+      "orderId" : "<v14>",
+      "orderNumber" : "#2005",
+      "shipmentId" : "<v15>",
+      "trackingNumber" : "TN+6",
+      "who" : null,
+      "at" : null,
+      "detail" : "ALREADY_MOVING",
+      "state" : "with_courier",
+      "messageEn" : "The shipment for #2005 has already moved (Bosta: with_courier). It can't be packed again.",
+      "messageAr" : "شحنة الطلب #2005 تحركت بالفعل (Bosta: with_courier). لا يمكن تغليفها مرة أخرى."
+    },
+    "onHold" : {
+      "code" : "ON_HOLD",
+      "orderId" : "<v16>",
+      "orderNumber" : "#2006",
+      "shipmentId" : "<v17>",
+      "trackingNumber" : "TN+7",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "Order #2006 is on hold. Give the waybill to a manager.",
+      "messageAr" : "الطلب #2006 موقوف. سلّم البوليصة للمدير."
+    },
+    "pieceCode" : {
+      "code" : "NOT_A_WAYBILL",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : null,
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "That's not a waybill. Scan the waybill first to open an order.",
+      "messageAr" : "هذا ليس باركود بوليصة. امسح البوليصة أولاً لفتح الطلب."
+    },
+    "plain" : {
+      "code" : "OPEN",
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "shipmentId" : "<v8>",
+      "trackingNumber" : "TN+1",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : null,
+      "messageAr" : null
+    },
+    "qr" : {
+      "code" : "OPEN",
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "shipmentId" : "<v8>",
+      "trackingNumber" : "TN+1",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : null,
+      "messageAr" : null
+    },
+    "returnLeg" : {
+      "code" : "RETURN_WAYBILL",
+      "orderId" : "<v18>",
+      "orderNumber" : "#2002",
+      "shipmentId" : "<v19>",
+      "trackingNumber" : "TN+3",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "This is a return waybill for #2002. Use Returns instead.",
+      "messageAr" : "هذه بوليصة مرتجع للطلب #2002. استخدم شاشة المرتجعات."
+    },
+    "spacedTop" : {
+      "code" : "OPEN",
+      "orderId" : "<v5>",
+      "orderNumber" : "#2001",
+      "shipmentId" : "<v8>",
+      "trackingNumber" : "TN+1",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : null,
+      "messageAr" : null
+    },
+    "tooOld" : {
+      "code" : "TOO_OLD",
+      "orderId" : "<v20>",
+      "orderNumber" : "#2007",
+      "shipmentId" : "<v21>",
+      "trackingNumber" : "TN+8",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "Order #2007 is older than 30 days. Open it from Orders.",
+      "messageAr" : "الطلب #2007 أقدم من 30 يوماً. افتحه من شاشة الطلبات."
+    },
+    "unknownDigits" : {
+      "code" : "NOT_FOUND",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : "TN+99",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "No order in this store uses this waybill. Check it's a Bosta waybill.",
+      "messageAr" : "لا يوجد طلب في هذا المتجر يستخدم هذه البوليصة. تأكد أنها بوليصة Bosta."
+    },
+    "unlinked" : {
+      "code" : "NOT_FOUND",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : "TN+9",
+      "who" : null,
+      "at" : null,
+      "detail" : "unlinked",
+      "state" : null,
+      "messageEn" : "Bosta knows this waybill, but it isn't linked to an order yet. Give it to a manager.",
+      "messageAr" : "Bosta تعرف هذه البوليصة، لكنها غير مرتبطة بطلب بعد. سلّمها للمدير."
+    },
+    "url" : {
+      "code" : "UNRECOGNISED_BARCODE",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : null,
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "This barcode isn't a waybill we recognise. Try the barcode at the bottom of the waybill (Tracking Number).",
+      "messageAr" : "هذا الباركود ليس بوليصة نعرفها. جرّب الباركود الموجود أسفل البوليصة (رقم التتبع)."
+    },
+    "wijha" : {
+      "code" : "NOT_FOUND",
+      "orderId" : null,
+      "orderNumber" : null,
+      "shipmentId" : null,
+      "trackingNumber" : "12345",
+      "who" : null,
+      "at" : null,
+      "detail" : null,
+      "state" : null,
+      "messageEn" : "No order in this store uses this waybill. Check it's a Bosta waybill.",
+      "messageAr" : "لا يوجد طلب في هذا المتجر يستخدم هذه البوليصة. تأكد أنها بوليصة Bosta."
+    }
+  },
+  "returnScanLeg" : {
+    "awb" : "TN+3",
+    "description" : null,
+    "descriptionAr" : null,
+    "expectedPieces" : [ ],
+    "itemsCount" : null,
+    "scanType" : "awb"
+  },
+  "returnScanUnknown" : {
+    "reason" : "Scan does not match any piece or shipment: TN+96",
+    "refused" : 422
+  },
+  "returnScanWijha" : {
+    "reason" : "Scan does not match any piece or shipment: WJ-12345",
+    "refused" : 422
+  }
+}
