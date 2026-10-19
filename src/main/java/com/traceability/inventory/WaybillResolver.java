@@ -32,6 +32,8 @@ public class WaybillResolver {
     public enum Code {
         OPEN, CANCELLED, ALREADY_PACKED, CLAIMED_BY_OTHER, RETURN_WAYBILL, EXCHANGE_NOT_MAPPED,
         TOO_OLD, NOT_FOUND,
+        /** G2: the scan is both a Bosta waybill (one shipment) and another courier's (another) — never guess. */
+        AMBIGUOUS,
         /** Doesn't normalize to a tracking number and looks like a piece code (a piece label
          *  scanned while waiting for a waybill). */
         NOT_A_WAYBILL,
@@ -85,12 +87,27 @@ public class WaybillResolver {
     public Resolution resolve(String rawScan, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
+        // G2: the generic (non-Bosta) key — WaybillScanKeys, only while it applies to the tenant. The
+        // courier-neutral texts follow the switch itself (a switched-on tenant ships with other couriers).
+        WaybillScanKeys.Generic generic = WaybillScanKeys.enabled(jdbc, tenantId)
+            ? WaybillScanKeys.lookupEnabled(jdbc, tenantId, rawScan) : null;
+        boolean genericOn = com.traceability.courier.GenericShipments.enabled(jdbc, tenantId);
+
         String tn = TrackingNumberNormalizer.normalize(rawScan);
         if (tn == null) {
             if (looksLikePieceCode(rawScan)) {
                 return of(Code.NOT_A_WAYBILL, null, null, null, null, null, null, null,
                     "That's not a waybill. Scan the waybill first to open an order.",
                     "هذا ليس باركود بوليصة. امسح البوليصة أولاً لفتح الطلب.");
+            }
+            if (generic != null && generic.matched()) return resolveGeneric(generic.match(), actorUserId, tenantId);
+            if (generic != null && generic.kind() == WaybillScanKeys.Kind.LAYOUT) {
+                return of(Code.UNRECOGNISED_BARCODE, null, null, null, null, null, null, null,
+                    WaybillScanKeys.LAYOUT_EN, WaybillScanKeys.LAYOUT_AR);
+            }
+            if (genericOn) {
+                return of(Code.UNRECOGNISED_BARCODE, null, null, null, null, null, null, null,
+                    WaybillScanKeys.UNRECOGNISED_EN, WaybillScanKeys.UNRECOGNISED_AR);
             }
             return of(Code.UNRECOGNISED_BARCODE, null, null, null, null, null, null, null,
                 "This barcode isn't a waybill we recognise. Try the barcode at the bottom of the waybill (Tracking Number).",
@@ -106,9 +123,44 @@ public class WaybillResolver {
             "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
             lookbackDays, tn, tenantId);
 
-        if (rows.isEmpty()) return notLinked(tn, tenantId);
+        if (generic != null && generic.matched()) {
+            if (!rows.isEmpty()) {
+                // Bosta key AND generic key each matched a shipment — two different ones. Never guess.
+                return of(Code.AMBIGUOUS, null, null, null, tn, null, null, null,
+                    WaybillScanKeys.AMBIGUOUS_EN, WaybillScanKeys.AMBIGUOUS_AR);
+            }
+            return resolveGeneric(generic.match(), actorUserId, tenantId);
+        }
 
-        Map<String, Object> r = rows.get(0);
+        if (rows.isEmpty()) return notLinked(tn, tenantId, genericOn);
+
+        return resolveRow(rows.get(0), tn, false, null, actorUserId, tenantId);
+    }
+
+    /**
+     * G2: the order of a generic (non-Bosta courier) shipment, through the same checks as a Bosta waybill
+     * (cancelled → already packed → on hold → not packable → too old → claimed → OPEN), with
+     * courier-neutral texts where Bosta's name used to be.
+     */
+    private Resolution resolveGeneric(WaybillScanKeys.Match m, UUID actorUserId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT s.id AS shipment_id, s.shipment_leg, s.internal_state::text AS state, s.created_at AS s_created, " +
+            "       o.id AS order_id, o.number, o.status::text AS status, o.cancel_requested_at, " +
+            "       o.raw ->> 'cancelled_at' AS shopify_cancelled_at, o.on_hold, o.is_self_pickup, " +
+            "       (o.placed_at > now() - (? * INTERVAL '1 day')) AS in_window " +
+            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "WHERE s.id = ? AND s.tenant_id = ? AND s.provider = 'generic'",
+            lookbackDays, m.shipmentId(), tenantId);
+        if (rows.isEmpty()) {
+            return of(Code.NOT_FOUND, null, null, null, m.trackingNumber(), null, null, null,
+                WaybillScanKeys.NOT_FOUND_EN, WaybillScanKeys.NOT_FOUND_AR);
+        }
+        return resolveRow(rows.get(0), m.trackingNumber(), true, m.carrierName(), actorUserId, tenantId);
+    }
+
+    /** The checks after a waybill matched a shipment row — shared by the Bosta and generic keys. */
+    private Resolution resolveRow(Map<String, Object> r, String tn, boolean generic, String carrierName,
+                                  UUID actorUserId, UUID tenantId) {
         UUID   orderId    = (UUID) r.get("order_id");
         UUID   shipmentId = (UUID) r.get("shipment_id");
         String number     = (String) r.get("number");
@@ -143,7 +195,7 @@ public class WaybillResolver {
                 "الطلب " + label + " موقوف. سلّم البوليصة للمدير.");
         }
 
-        Resolution notPackable = notPackable(r, orderId, number, label, shipmentId, tn, tenantId);
+        Resolution notPackable = notPackable(r, orderId, number, label, shipmentId, tn, tenantId, generic, carrierName);
         if (notPackable != null) return notPackable;
 
         if (!Boolean.TRUE.equals(r.get("in_window"))) {
@@ -169,7 +221,7 @@ public class WaybillResolver {
     private static final java.util.regex.Pattern PIECE_CODE = java.util.regex.Pattern.compile(
         "^(P[0-9]{6,}|PC-[0-9A-Za-z]+|[0-9A-HJKMNP-TV-Z]{26})$");
 
-    static boolean looksLikePieceCode(String rawScan) {
+    public static boolean looksLikePieceCode(String rawScan) {
         return rawScan != null && PIECE_CODE.matcher(rawScan.strip()).matches();
     }
 
@@ -181,13 +233,18 @@ public class WaybillResolver {
      * (reused verbatim; its LATERAL looks at the order's newest forward leg) refuses → OTHER.
      */
     private Resolution notPackable(Map<String, Object> r, UUID orderId, String number, String label,
-                                   UUID shipmentId, String tn, UUID tenantId) {
+                                   UUID shipmentId, String tn, UUID tenantId, boolean generic, String carrierName) {
         String state = (String) r.get("state");
 
         if (Boolean.TRUE.equals(r.get("is_self_pickup"))) {
             return np(NotPackable.SELF_PICKUP, null, orderId, number, shipmentId, tn,
                 "Order " + label + " is a self-pickup order. The customer collects it — pack it from the order queue.",
                 "الطلب " + label + " استلام من المتجر. العميل سيستلمه بنفسه — جهّزه من قائمة الطلبات.");
+        }
+        if (generic && ("terminated".equals(state) || "cancelled".equals(state))) {
+            return np(NotPackable.LEG_ENDED, state, orderId, number, shipmentId, tn,
+                "This waybill for " + label + " was cancelled. Don't use it — give it to a manager.",
+                "هذه البوليصة للطلب " + label + " أُلغيت. لا تستخدمها — سلّمها للمدير.");
         }
         if ("terminated".equals(state) || "cancelled".equals(state)) {
             return np(NotPackable.LEG_ENDED, state, orderId, number, shipmentId, tn,
@@ -196,6 +253,13 @@ public class WaybillResolver {
                 " في Bosta. لا تستخدمها — سلّمها للمدير.");
         }
         String moved = movedState(orderId, tenantId, state);
+        if (moved != null && generic) {
+            String courier = carrierName != null ? carrierName : "the courier";
+            String courierAr = carrierName != null ? carrierName : "شركة الشحن";
+            return np(NotPackable.ALREADY_MOVING, moved, orderId, number, shipmentId, tn,
+                "The shipment for " + label + " has already moved (" + courier + ": " + moved + "). It can't be packed again.",
+                "شحنة الطلب " + label + " تحركت بالفعل (" + courierAr + ": " + moved + "). لا يمكن تغليفها مرة أخرى.");
+        }
         if (moved != null) {
             return np(NotPackable.ALREADY_MOVING, moved, orderId, number, shipmentId, tn,
                 "The shipment for " + label + " has already moved (Bosta: " + moved + "). It can't be packed again.",
@@ -231,7 +295,7 @@ public class WaybillResolver {
         return new Resolution(Code.NOT_PACKABLE, orderId, number, shipmentId, tn, null, null, why.name(), state, en, ar);
     }
 
-    private Resolution notLinked(String tn, UUID tenantId) {
+    private Resolution notLinked(String tn, UUID tenantId, boolean genericOn) {
         Integer exchange = jdbc.queryForObject(
             "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
             Integer.class, tenantId, tn);
@@ -247,6 +311,11 @@ public class WaybillResolver {
             return of(Code.NOT_FOUND, null, null, null, tn, null, null, "unlinked",
                 "Bosta knows this waybill, but it isn't linked to an order yet. Give it to a manager.",
                 "Bosta تعرف هذه البوليصة، لكنها غير مرتبطة بطلب بعد. سلّمها للمدير.");
+        }
+        if (genericOn) {
+            // G2: a switched-on tenant ships with other couriers too — no "Check it's a Bosta waybill".
+            return of(Code.NOT_FOUND, null, null, null, tn, null, null, null,
+                WaybillScanKeys.NOT_FOUND_EN, WaybillScanKeys.NOT_FOUND_AR);
         }
         return of(Code.NOT_FOUND, null, null, null, tn, null, null, null,
             "No order in this store uses this waybill. Check it's a Bosta waybill.",

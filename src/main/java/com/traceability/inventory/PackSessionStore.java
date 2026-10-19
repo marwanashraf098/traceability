@@ -188,6 +188,11 @@ public class PackSessionStore {
             return FulfillService.ScanResult.rejected("WAYBILL_WHILE_PACKING",
                 "That's a waybill. Finish or set aside this order before scanning the next waybill.");
         }
+        // G2: another courier's waybill (WaybillScanKeys — switched-on tenants only; piece codes never match).
+        if (WaybillScanKeys.lookup(jdbc, tenantId, code).matched()) {
+            return FulfillService.ScanResult.rejected("WAYBILL_WHILE_PACKING",
+                "That's a waybill. Finish or set aside this order before scanning the next waybill.");
+        }
         PackClaim.take(jdbc, orderId, tenantId, userId);
         return fulfill.scan(orderId, code, userId);
     }

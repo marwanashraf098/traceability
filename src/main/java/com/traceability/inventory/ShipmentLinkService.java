@@ -119,6 +119,15 @@ public class ShipmentLinkService {
     /** Step 4d-1: return-request linking, on this service's own JdbcTemplate. */
     private final ReturnRequestLifecycle requests;
 
+    /** G2 (V171): keeps the pack-time Bosta-over-generic conflict past the 409's rollback. Setter-injected so
+     *  hand-built instances (tests) keep their constructor; null there → nothing recorded. */
+    private GenericConflictRecorder conflictRecorder;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setConflictRecorder(GenericConflictRecorder conflictRecorder) {
+        this.conflictRecorder = conflictRecorder;
+    }
+
     /**
      * Result returned by tryMatchDelivery().
      * orderId != null → successfully linked.
@@ -174,7 +183,7 @@ public class ShipmentLinkService {
                 "Order must be in 'packed' state to link an AWB (current: " + orderStatus + ")");
         }
 
-        return linkTrackingNumberToOrder(orderId, orderNumber, rawScan, tenantId, actorUserId, eventMetadataJson);
+        return linkTrackingNumberToOrder(orderId, orderNumber, rawScan, tenantId, actorUserId, eventMetadataJson, true);
     }
 
     /**
@@ -210,7 +219,7 @@ public class ShipmentLinkService {
                 "Order must be unpicked ('new'/'ready_to_pick') to auto-link at map-time (current: " + orderStatus + ")");
         }
 
-        return linkTrackingNumberToOrder(orderId, orderNumber, trackingNumber, tenantId, actorUserId, null);
+        return linkTrackingNumberToOrder(orderId, orderNumber, trackingNumber, tenantId, actorUserId, null, false);
     }
 
     /**
@@ -221,7 +230,16 @@ public class ShipmentLinkService {
      */
     private Map<String, Object> linkTrackingNumberToOrder(UUID orderId, String orderNumber, String rawScan,
                                                             UUID tenantId, UUID actorUserId,
-                                                            String eventMetadataJson) {
+                                                            String eventMetadataJson, boolean packerScan) {
+        // G2: the order ships with another courier (a live generic forward leg; switched-on tenants only) —
+        // verify the scan against it by the generic key. Anything this doesn't answer falls through to the
+        // Bosta path below, unchanged.
+        if (packerScan) {
+            Map<String, Object> generic = verifyGenericScan(orderId, orderNumber, rawScan, tenantId, actorUserId,
+                eventMetadataJson);
+            if (generic != null) return generic;
+        }
+
         // Normalize the raw scan — single source of truth, used everywhere below.
         String trackingNumber = TrackingNumberNormalizer.normalize(rawScan);
         if (trackingNumber == null) {
@@ -267,6 +285,10 @@ public class ShipmentLinkService {
             // V169 Bosta wins: a still-cancellable generic leg is cancelled first; past 'created' → refuse.
             if (com.traceability.courier.GenericShipments.yieldToBosta(jdbc, tenantId, orderId)
                     == com.traceability.courier.GenericShipments.BostaLink.BLOCKED) {
+                // G2: keep the conflict (HIGH generic_bosta_conflict) — this 409 rolls the transaction back.
+                if (packerScan && conflictRecorder != null) {
+                    conflictRecorder.recordAfterRollback(orderId, trackingNumber, rawScan, actorUserId);
+                }
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Order is already shipped with another carrier — Traced won't link a Bosta AWB to it");
             }
@@ -295,6 +317,78 @@ public class ShipmentLinkService {
 
         return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan,
             eventMetadataJson);
+    }
+
+    /**
+     * G2 — the AWB link step for an order whose live forward leg is GENERIC (another courier), switched-on
+     * tenants only. Returns null when it has nothing to say (tenant off, no generic leg, or the scan is a
+     * Bosta AWB on a tenant with a Bosta account) — the caller then runs its Bosta path unchanged, whose
+     * Bosta-wins refusal records the pack-time conflict.
+     * <ul>
+     *   <li>the scan's generic key (WaybillScanKeys) is the leg's own → linked (same tail as Bosta, minus
+     *       Bosta's unlinked-delivery cleanup), unless the scan is ALSO one of this tenant's Bosta waybills
+     *       → 409 AMBIGUOUS, never guess;</li>
+     *   <li>anything else → AWB_MISMATCH against the leg's tracking number — except a Bosta AWB (digits that
+     *       aren't another order's generic waybill) on a tenant with an active Bosta account, which goes to the
+     *       Bosta path.</li>
+     * </ul>
+     */
+    private Map<String, Object> verifyGenericScan(UUID orderId, String orderNumber, String rawScan, UUID tenantId,
+                                                  UUID actorUserId, String eventMetadataJson) {
+        if (!WaybillScanKeys.enabled(jdbc, tenantId)) return null;
+        List<Map<String, Object>> legs = jdbc.queryForList(
+            "SELECT id, tracking_number FROM shipments " +
+            "WHERE order_id = ? AND tenant_id = ? AND provider = 'generic' AND shipment_leg = 'forward' " +
+            "  AND internal_state NOT IN ('terminated', 'cancelled') " +
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            orderId, tenantId);
+        if (legs.isEmpty()) return null;
+        UUID   legId  = (UUID) legs.get(0).get("id");
+        String legTn  = (String) legs.get(0).get("tracking_number");
+
+        WaybillScanKeys.Generic scan = WaybillScanKeys.lookupEnabled(jdbc, tenantId, rawScan);
+        String bostaTn = TrackingNumberNormalizer.normalize(rawScan);
+        boolean bostaWaybill = bostaTn != null && Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta')",
+            Boolean.class, bostaTn, tenantId));
+
+        if (scan.matched() && scan.match().shipmentId().equals(legId)) {
+            if (bostaWaybill) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, WaybillScanKeys.AMBIGUOUS_EN);
+            }
+            return completeGenericLink(orderId, orderNumber, legId, legTn, tenantId, actorUserId, rawScan,
+                eventMetadataJson);
+        }
+        if (scan.kind() == WaybillScanKeys.Kind.LAYOUT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, WaybillScanKeys.LAYOUT_EN);
+        }
+        boolean otherOrdersGeneric = scan.matched();
+        boolean tenantHasBosta = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
+            Boolean.class, tenantId));
+        if (bostaTn != null && !otherOrdersGeneric && tenantHasBosta) return null;   // a Bosta AWB: Bosta path
+
+        throw new AwbMismatchException(scan.key() != null ? scan.key() : rawScan, legTn);
+    }
+
+    /** G2: the link tail for a verified generic waybill — completeLink's steps, without Bosta's unlinked cleanup. */
+    private Map<String, Object> completeGenericLink(UUID orderId, String orderNumber, UUID shipmentId,
+                                                    String trackingNumber, UUID tenantId, UUID actorUserId,
+                                                    String rawScan, String eventMetadataJson) {
+        int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, rawScan, eventMetadataJson);
+        jdbc.update(
+            "UPDATE merchant_orders SET status = 'awaiting_pickup' " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
+            orderId, tenantId);
+        clearReconcileFlag(orderId, tenantId);
+        log.info("Order {} linked to its generic waybill ({} pieces)", orderNumber, linked);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("shipmentId",     shipmentId.toString());
+        result.put("trackingNumber", trackingNumber);
+        result.put("linkedPieces",   linked);
+        result.put("orderStatus",    "awaiting_pickup");
+        return result;
     }
 
     /** Shared tail of the link path: piece transitions, order advance, cleanup, response. */

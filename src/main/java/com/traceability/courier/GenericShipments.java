@@ -46,7 +46,7 @@ public final class GenericShipments {
         "                 AND o2.status IN ('packed', 'awaiting_pickup', 'with_courier', 'delivered', " +
         "                                   'returning', 'returned', 'lost')))";
 
-    /** Is the tenant switched on? (Default false; set only by SQL in G1.) */
+    /** Is the tenant switched on? (Default false; Settings → Couriers, owner only, since G2.) */
     public static boolean enabled(JdbcTemplate jdbc, UUID tenantId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT generic_courier_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId));
@@ -112,21 +112,32 @@ public final class GenericShipments {
             for (String tn : trackingNumbersOf.apply(f)) {
                 String key = GenericTrackingKey.of(tn);
                 if (key == null) continue;
-                UUID id = UUID.randomUUID();
-                int n = jdbc.update(
-                    "INSERT INTO shipments (id, tenant_id, order_id, provider, tracking_number, tracking_key, " +
-                    "    internal_state, source, shopify_fulfillment_id, carrier_name, tracking_url) " +
-                    "VALUES (?, ?, ?, 'generic', ?, ?, 'created', 'shopify_fulfillment', ?, ?, ?) " +
-                    "ON CONFLICT DO NOTHING",
-                    id, tenantId, orderId, tn, key, text(f, "id"),
+                // a conflict (replay, or the key is another order's) → null: never guess further
+                return insertFromFulfillment(jdbc, tenantId, orderId, tn, key, text(f, "id"),
                     trimToNull(text(f, "tracking_company")), firstUrl(f));
-                if (n == 1) {
-                    log.info("Generic shipment: order {} — carrier '{}' (fulfillment {})",
-                        orderId, text(f, "tracking_company"), text(f, "id"));
-                    return id;
-                }
-                return null;   // a conflict (replay, or the key is another order's): never guess further
             }
+        }
+        return null;
+    }
+
+    /**
+     * The INSERT of a generic shipment from a Shopify fulfillment — shared by the live capture
+     * ({@link #onFulfillments}) and the G2 switch-on catch-up ({@link GenericCatchUp}). Idempotent:
+     * ON CONFLICT DO NOTHING (tenant + fulfillment id, tenant + key, V104's one active forward leg).
+     * @return the new shipment's id, or null when nothing was inserted
+     */
+    static UUID insertFromFulfillment(JdbcTemplate jdbc, UUID tenantId, UUID orderId, String trackingNumber,
+                                      String key, String fulfillmentId, String carrierName, String trackingUrl) {
+        UUID id = UUID.randomUUID();
+        int n = jdbc.update(
+            "INSERT INTO shipments (id, tenant_id, order_id, provider, tracking_number, tracking_key, " +
+            "    internal_state, source, shopify_fulfillment_id, carrier_name, tracking_url) " +
+            "VALUES (?, ?, ?, 'generic', ?, ?, 'created', 'shopify_fulfillment', ?, ?, ?) " +
+            "ON CONFLICT DO NOTHING",
+            id, tenantId, orderId, trackingNumber, key, fulfillmentId, carrierName, trackingUrl);
+        if (n == 1) {
+            log.info("Generic shipment: order {} — carrier '{}' (fulfillment {})", orderId, carrierName, fulfillmentId);
+            return id;
         }
         return null;
     }

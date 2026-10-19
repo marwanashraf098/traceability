@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -64,6 +65,16 @@ public class PackCompleter {
             "SELECT EXISTS (SELECT 1 FROM shipments WHERE tracking_number = ? AND order_id = ? " +
             "               AND tenant_id = ? AND provider = 'bosta' AND shipment_leg = 'forward')",
             Boolean.class, tn, orderId, tenantId));
+        if (!Boolean.TRUE.equals(onOrder)) {
+            // G2: or another courier's waybill — this order's generic forward shipment (WaybillScanKeys;
+            // switched-on tenants only), and not also a Bosta waybill (the resolver refused that as AMBIGUOUS).
+            WaybillScanKeys.Generic g = WaybillScanKeys.lookup(jdbc, tenantId, rawWaybill);
+            onOrder = g.matched() && g.match().orderId().equals(orderId)
+                && !List.of("terminated", "cancelled").contains(g.match().state())
+                && (tn == null || !Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta')",
+                    Boolean.class, tn, tenantId)));
+        }
         if (!Boolean.TRUE.equals(onOrder)) {
             throw new CompleteFailed("WAYBILL_NOT_ON_ORDER",
                 "The waybill that opened this order is no longer this order's waybill.");

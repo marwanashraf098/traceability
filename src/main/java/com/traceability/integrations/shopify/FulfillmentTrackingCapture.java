@@ -40,7 +40,7 @@ public class FulfillmentTrackingCapture {
      */
     static final Set<String> OTHER_KNOWN_CARRIERS = Set.of(
         "wijha", "mylerz", "j&t", "j&t express", "jt express", "aramex", "r2s",
-        "smsa", "smsa express", "shipblu", "turuq");
+        "smsa", "smsa express", "shipblu", "turuq", "qp express");
 
     private final JdbcTemplate jdbc;
     private final BostaFulfillmentLinkService linkService;
@@ -167,7 +167,7 @@ public class FulfillmentTrackingCapture {
         return rows;
     }
 
-    static String carrierClass(String company, String url) {
+    public static String carrierClass(String company, String url) {
         String c = company == null ? "" : company.trim().toLowerCase(Locale.ROOT);
         String u = url == null ? "" : url.toLowerCase(Locale.ROOT);
         if (c.contains("bosta") || u.contains("bosta")) return "bosta";

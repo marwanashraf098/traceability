@@ -350,7 +350,8 @@ public class FulfillService {
             // shipments.courier_account_id — no ingest path ever populates that column.
             // Review mode (V130): a simulated-courier tenant has no courier row but its print
             // succeeds (BostaAwbService renders the waybill locally), so it "has courier" too.
-            "       (s.id IS NOT NULL AND (EXISTS (" +
+            // G2: a generic (other-courier) leg has no Traced-printable waybill — never "has courier".
+            "       (s.id IS NOT NULL AND s.provider = 'bosta' AND (EXISTS (" +
             "           SELECT 1 FROM courier_accounts ca " +
             "           WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' " +
             "             AND ca.status = 'active') " +
@@ -360,14 +361,15 @@ public class FulfillService {
             // then doesn't ask for a reprint before Complete.
             "       (s.id IS NOT NULL AND EXISTS (" +
             "           SELECT 1 FROM pack_print_batch_items bi " +
-            "           WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id)) AS \"awbPrinted\" " +
+            "           WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id)) AS \"awbPrinted\", " +
+            "       s.provider AS g2_provider, s.carrier_name AS g2_carrier " +
             "FROM merchant_orders o " +
             // One forward leg, deterministically: an active one (not terminated / cancelled) before
             // an ended one, newest first. A plain join returned one row per forward leg and
             // rows.get(0) picked an arbitrary one once an order had an old terminated leg.
             // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
             "LEFT JOIN LATERAL ( " +
-            "    SELECT fs.id, fs.tracking_number FROM shipments fs " +
+            "    SELECT fs.id, fs.tracking_number, fs.provider::text AS provider, fs.carrier_name FROM shipments fs " +
             "    WHERE fs.order_id = o.id AND fs.tenant_id = o.tenant_id AND fs.shipment_leg = 'forward' " +
             "    ORDER BY (fs.internal_state IN ('terminated', 'cancelled')) ASC, " +
             "             fs.created_at DESC, fs.id DESC " +
@@ -380,6 +382,14 @@ public class FulfillService {
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
 
         Map<String, Object> order = new LinkedHashMap<>(rows.get(0));
+        // G2: an order on another courier's waybill says so (shipment_provider 'generic' + the carrier as
+        // Shopify named it) — keys present ONLY then, so a Bosta order's detail is exactly as before.
+        Object provider = order.remove("g2_provider");
+        Object carrier  = order.remove("g2_carrier");
+        if ("generic".equals(provider)) {
+            order.put("shipment_provider", "generic");
+            order.put("shipment_carrier", carrier);
+        }
         order.put("items", getItemsWithAllocations(orderId, tenantId));
         return order;
     }

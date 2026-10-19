@@ -68,6 +68,8 @@ public class UserService {
         // Review mode S7 — the screens' capabilities (ReviewCapabilities is the one rule).
         self.put("scanHelpers", ReviewCapabilities.scanHelpers(jdbc, tenantId));
         self.put("demoMode",    ReviewCapabilities.demoMode(jdbc, tenantId));
+        // Non-Bosta couriers G2 — the store ships with other couriers too (courier-neutral scan texts).
+        self.put("genericCourier", com.traceability.courier.GenericShipments.enabled(jdbc, tenantId));
         return self;
     }
 

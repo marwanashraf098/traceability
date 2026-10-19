@@ -192,6 +192,7 @@ public class ExceptionService {
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
                 "FROM tenants WHERE id = ?", Boolean.class, tenantId, tenantId))) {
             all.addAll(detectGenericBostaConflict(tenantId));
+            all.addAll(detectGenericBostaConflictAtPack(tenantId));
             all.addAll(detectGenericMultipleParcels(tenantId));
             all.addAll(detectGenericFulfillmentCancelled(tenantId));
         }
@@ -847,6 +848,32 @@ public class ExceptionService {
             "      WHERE er.tenant_id = u.tenant_id " +
             "        AND er.exception_type = 'generic_bosta_conflict' " +
             "        AND er.subject_key = 'generic_bosta_conflict:' || u.id) ",
+            tid);
+    }
+
+    /**
+     * HIGH — G2 (V171): at pack, a packer scanned a Bosta AWB on an order whose generic shipment is past 'created'.
+     * The link was refused (409); GenericConflictRecorder kept the scan in generic_conflict_scans. One alert per
+     * (order, Bosta AWB), dated by the latest such scan; shown while the generic shipment is still live, until
+     * resolved (a later scan of the same AWB after the resolution raises it again).
+     */
+    private List<Map<String, Object>> detectGenericBostaConflictAtPack(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_bosta_conflict' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       'pack_scan' AS source, c.order_id, o.number AS order_number, c.tracking_number, " +
+            "       s.carrier_name, max(c.created_at) AS occurred_at, " +
+            "       'generic_bosta_conflict:scan:' || c.order_id || ':' || c.tracking_number AS subject_key " +
+            "FROM generic_conflict_scans c " +
+            "JOIN merchant_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id " +
+            "JOIN shipments s ON s.id = c.shipment_id AND s.tenant_id = c.tenant_id " +
+            "WHERE c.tenant_id = ? AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "GROUP BY c.order_id, o.number, c.tracking_number, s.carrier_name, c.tenant_id " +
+            "HAVING NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = c.tenant_id " +
+            "        AND er.exception_type = 'generic_bosta_conflict' " +
+            "        AND er.subject_key = 'generic_bosta_conflict:scan:' || c.order_id || ':' || c.tracking_number " +
+            "        AND er.resolved_at >= max(c.created_at)) ",
             tid);
     }
 
@@ -1523,6 +1550,18 @@ public class ExceptionService {
             }
             case "generic_bosta_conflict" -> {
                 String t = str(item, "tracking_number");
+                if ("pack_scan".equals(item.get("source"))) {
+                    String n = str(item, "order_number");
+                    String c = str(item, "carrier_name");
+                    item.put("descriptionEn", "Order " + n + " is packed for " + (c != null ? c : "another carrier")
+                        + ", but Bosta waybill " + t + " was scanned on it — Traced didn't link it. Check which carrier"
+                        + " really has the parcel");
+                    item.put("descriptionAr", "الطلب " + n + " مغلّف لـ " + (c != null ? c : "شركة شحن أخرى")
+                        + "، لكن مُسحت عليه بوليصة بوسطة " + t + " — لم يربطها Traced. تأكد أي شركة لديها الطرد فعلًا");
+                    item.put("suggestedAction", "check_carrier");
+                    item.put("actionUrl", ordersUrl(item));
+                    break;
+                }
                 String r = str(item, "business_reference");
                 item.put("descriptionEn", "Bosta delivery " + t + " (" + r + ") belongs to an order already shipped with another"
                     + " carrier — Traced didn't link it. Check which carrier really has the parcel");
