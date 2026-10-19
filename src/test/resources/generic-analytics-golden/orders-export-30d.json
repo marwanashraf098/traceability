@@ -1,0 +1,24 @@
+﻿order,placed_at,customer,governorate,governorate_ar,items,total,payment,delivery_status,financial_status,bosta_fees,fees_estimated,net_to_you,refund_amount_unknown
+#G143,2026-09-26 12:00,,Giza,الجيزة,1,1200.00,Other,With courier,overdue,57.00,true,,false
+#G137,2026-09-22 10:00,,Giza,الجيزة,1,1200.00,Other,Cancelled,lost,,false,,false
+#G91,2026-09-22 09:15,,Giza,الجيزة,2,1469.00,Card,Lost,lost,57.00,true,-57.00,false
+#G134,2026-09-21 10:00,,Cairo,القاهرة,1,800.00,Other,Terminated,lost,,false,,false
+#G88,2026-09-21 04:15,,Cairo,القاهرة,3,2380.00,COD,Not shipped,expected,,false,,false
+#G85,2026-09-20 23:15,,Unknown,غير معروف,3,1771.00,Other,Other carrier,other_carrier,,false,,false
+#G131,2026-09-20 10:00,,Unknown,غير معروف,1,300.00,Other,Other carrier,other_carrier,,false,,false
+#G82,2026-09-19 18:15,,Alexandria,الإسكندرية,1,772.00,Mixed,Delivered,paid,91.20,false,808.80,false
+#G128,2026-09-19 10:00,,Unknown,غير معروف,1,1200.00,Other,Not shipped,expected,,false,,false
+#G78,2026-09-18 13:15,,Giza,الجيزة,4,2073.00,Manual,Booked,expected,57.00,true,,false
+#G125,2026-09-18 10:00,,Unknown,غير معروف,1,800.00,Other,Not shipped,expected,,false,,false
+#G74,2026-09-17 08:15,,Cairo,القاهرة,2,1574.00,Card,Delivered,refunded,163.02,true,,true
+#G69,2026-09-16 03:15,,null,null,3,2650.00,COD,Lost,lost,57.00,true,-57.00,false
+#G66,2026-09-15 22:15,,Alexandria,الإسكندرية,3,2376.00,Other,With courier,overdue,57.00,true,,false
+#G63,2026-09-14 17:15,,Giza,الجيزة,3,1777.00,Mixed,Not shipped,expected,,false,,false
+#G61,2026-09-13 12:15,,Cairo,القاهرة,1,778.00,Manual,Other carrier,other_carrier,,false,,false
+#G146,2026-09-13 12:00,,Cairo,القاهرة,1,1200.00,Other,Delivered,overdue,57.00,true,,false
+#G103,2026-09-12 13:00,,Cairo,القاهرة,2,600.00,Other,Delivered,refunded,57.00,true,,true
+#G57,2026-09-12 07:15,,null,null,4,2079.00,Card,Booked,expected,57.00,true,,false
+#G52,2026-09-11 02:15,,Alexandria,الإسكندرية,3,2380.00,COD,Delivered,awaiting_payout,163.02,true,,false
+#G48,2026-09-10 21:15,,Giza,الجيزة,2,1481.00,Other,Lost,lost,57.00,true,-57.00,false
+#G45,2026-09-09 16:15,,Cairo,القاهرة,3,2382.00,Mixed,With courier,overdue,57.00,true,,false
+
