@@ -18,7 +18,7 @@ const time = (iso: string, lang: string) =>
   new Date(iso).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })
 
 function setAsideReasonKey(r: string | null) {
-  return r && ['piece_missing', 'damaged_piece', 'waybill_damaged', 'other'].includes(r) ? r : 'other'
+  return r && ['piece_missing', 'damaged_piece', 'waybill_damaged', 'other', 'deleted_in_bosta'].includes(r) ? r : 'other'
 }
 
 // ── Print batches today ─────────────────────────────────────────────────────

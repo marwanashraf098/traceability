@@ -109,6 +109,18 @@ export default function PackSessionScreen({ initial, onEnded }: {
       setFailed({ code: r.failCode ?? 'COMPLETE_ERROR', message: r.failMessage })
       return { success: false }
     }
+    if (r.status === 'rejected' && r.scan?.code === 'WAYBILL_DELETED_IN_BOSTA') {
+      // Deleted-in-Bosta slice 4: the server already set the order aside — back to "scan a waybill", with why.
+      clearQueueRef.current()
+      const number = order?.number ?? null
+      setOrder(null)
+      setLastScan(null)
+      setRejection({ result: 'rejected', order: null, code: 'WAYBILL_DELETED_IN_BOSTA', subReason: null,
+        orderNumber: number, who: null, at: null, state: null,
+        messageEn: null, messageAr: null })
+      refresh()
+      return { success: false }
+    }
     if (r.status === 'rejected') {
       const code = r.scan?.code ?? 'ERROR'
       setPieceError(t(`fulfill.waybill.pieceReject.${code}`, {
@@ -544,6 +556,11 @@ function RejectionCard({ r, fmtTime, onOk }: {
           {t(`fulfill.waybill.rejected.${r.code}`, { defaultValue: r.code ?? '' })}
         </p>
         {message && <p className="text-body text-primary">{message}</p>}
+        {r.code === 'WAYBILL_DELETED_IN_BOSTA' && (
+          <p className="text-body text-primary" data-testid="rejected-deleted-in-bosta">
+            {t('fulfill.waybill.rejected.deletedInBostaBody', { number: r.orderNumber ?? '' })}
+          </p>
+        )}
         {r.code === 'CANCELLED' && r.at && (
           <p className="text-small text-muted">{t('fulfill.waybill.rejected.cancelledAt', { time: fmtTime(r.at) })}</p>
         )}

@@ -843,6 +843,7 @@
         "packedFlashDetailGeneric_other": "{{customer}} · {{count}} pieces · ready for {{carrier}}"
       },
       "pieceReject": {
+        "WAYBILL_DELETED_IN_BOSTA": "This waybill was deleted in Bosta — the order was set aside.",
         "WAYBILL_WHILE_PACKING": "That's a waybill. Finish or set aside this order first.",
         "ALREADY_SHIPPED": "This order's shipment has already moved — it can't be packed",
         "CLAIMED_BY_OTHER": "Another packer is packing this order right now"
@@ -860,6 +861,8 @@
         "UNRECOGNISED_BARCODE": "Not a waybill we recognise",
         "ON_HOLD": "Order on hold",
         "NOT_PACKABLE": "Can't pack this waybill",
+        "WAYBILL_DELETED_IN_BOSTA": "Waybill deleted in Bosta",
+        "deletedInBostaBody": "Order {{number}} was set aside: its waybill was deleted in Bosta. Put the waybill to one side and give it to a manager — the order needs a new waybill.",
         "cancelledAt": "Cancelled at {{time}}",
         "packedAt": "Packed at {{time}}",
         "ok": "OK, scan the next waybill",
@@ -872,6 +875,7 @@
         "bodyNone": "Put the waybill to one side — a manager will see this order in “Printed but not packed”.",
         "reason": "Reason",
         "reasons": {
+          "deleted_in_bosta": "Waybill deleted in Bosta",
           "piece_missing": "Piece missing on the shelf",
           "damaged_piece": "Damaged piece",
           "waybill_damaged": "Waybill damaged or unreadable",
@@ -3092,7 +3096,7 @@
   },
   "exc": {
     "clearsWhen": {
-      "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when it's deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
+      "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when Traced confirms it was deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
       "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta."

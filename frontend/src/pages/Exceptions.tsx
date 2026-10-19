@@ -66,6 +66,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // still-in-flight" signals) even though that type isn't itself in this map yet.
   cancelled_live_shipment: { en: 'Cancelled · Live Shipment', ar: 'ملغي · شحنة نشطة' },
   cancelled_but_delivered: { en: 'Cancelled · Delivered',     ar: 'ملغي · تم التوصيل' },
+  waybill_deleted_in_bosta: { en: 'Waybill Deleted in Bosta',  ar: 'بوليصة محذوفة في بوسطة' },
   return_leg_unscanned:    { en: 'Return Not Scanned',        ar: 'مرتجع لم يُمسح' },
   return_to_receive:       { en: 'Return To Receive',         ar: 'مرتجع بانتظار الاستلام' },
   request_item_to_receive: { en: 'Returned Item To Receive',  ar: 'منتج مرتجع بانتظار الاستلام' },

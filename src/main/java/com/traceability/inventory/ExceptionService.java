@@ -167,6 +167,7 @@ public class ExceptionService {
         all.addAll(detectShopifyCancelVsInflight(tenantId));
         if (!simulated) all.addAll(detectCancelledWithLiveShipment(tenantId));   // muted: nothing ever terminates a simulated leg
         all.addAll(detectCancelledButDelivered(tenantId));
+        all.addAll(detectWaybillDeletedInBosta(tenantId));
         all.addAll(detectMissingProviderId(tenantId));
         all.addAll(detectHighAttempts(tenantId));
         all.addAll(detectShopifyEditConflict(tenantId));
@@ -974,6 +975,8 @@ public class ExceptionService {
             "WHERE s.shipment_leg = 'forward' " +
             // V169: a generic (non-Bosta courier) leg gets no courier updates in G1 — never "stuck".
             "  AND s.provider <> 'generic' " +
+            // Slice 4: a leg confirmed deleted in Bosta gets no courier updates — never "stuck".
+            "  AND s.provider_deleted_at IS NULL " +
             "  AND s.internal_state NOT IN (" +
             "      'delivered'::shipment_internal_state," +
             "      'returned'::shipment_internal_state," +
@@ -1116,8 +1119,8 @@ public class ExceptionService {
      * (and/or Shopify) — Shopify cancel ≠ Bosta cancel.
      *
      * Self-resolving like detectGuidedUnpack — no exception_resolutions row: the exception
-     * disappears the moment the shipment syncs into a terminal state, or the status poll finds
-     * it deleted in Bosta ({@code provider_not_found_at}). Condition-only: Resolve answers 409.
+     * disappears the moment the shipment syncs into a terminal state, or Traced confirms it was
+     * deleted in Bosta ({@code provider_deleted_at}, slice 4). Condition-only: Resolve answers 409.
      *
      * status='cancelled' alone doesn't say which cancel path fired — cancel_requested_at
      * (Traced-side cancelOrder()) vs shopify_cancel_requested_at (Shopify-side webhook).
@@ -1138,7 +1141,7 @@ public class ExceptionService {
             "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_not_found_at " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_deleted_at " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             // UUIDv4 is not time-ordered — order by created_at, never id.
@@ -1153,8 +1156,8 @@ public class ExceptionService {
             "      'lost'::shipment_internal_state, " +
             "      'terminated'::shipment_internal_state, " +
             "      'cancelled'::shipment_internal_state) " +
-            // Deleted in Bosta (the status poll's safety net stamped it): nothing left to cancel.
-            "  AND s.provider_not_found_at IS NULL ",
+            // Confirmed deleted in Bosta (BostaDeletionService — not merely suspected): nothing left to cancel.
+            "  AND s.provider_deleted_at IS NULL ",
             tid);
     }
 
@@ -1376,6 +1379,34 @@ public class ExceptionService {
             "  AND s.raw #>> '{state,value}' IS NOT NULL " +
             "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN (" + KNOWN_EXCHANGE_STATES_SQL + ")",
             tid, tid);
+    }
+
+    /**
+     * Deleted-in-Bosta slice 4 — a forward leg confirmed deleted in Bosta while pieces of its order are
+     * awaiting_pickup or with_courier: BostaDeletionService kept its state (recovery is slice 6). HIGH,
+     * CRITICAL once a piece is with_courier; lists the pieces. Clears when no such piece is left; a manager
+     * can resolve it (keyed on the shipment).
+     */
+    private List<Map<String, Object>> detectWaybillDeletedInBosta(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'waybill_deleted_in_bosta' AS type, " +
+            "       CASE WHEN bool_or(p.status = 'with_courier') THEN 'CRITICAL' ELSE 'HIGH' END AS severity, " +
+            "       'shipment' AS subject_type, s.id AS shipment_id, s.tracking_number, " +
+            "       o.id AS order_id, o.number AS order_number, s.provider_deleted_at AS occurred_at, " +
+            "       string_agg(p.short_code || ' (' || p.status::text || ')', ', ' ORDER BY p.short_code) AS pieces, " +
+            "       'waybill_deleted_in_bosta:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN order_items oi ON oi.order_id = o.id " +
+            "JOIN allocations a ON a.order_item_id = oi.id AND a.status <> 'released' " +
+            "JOIN pieces p ON p.id = a.piece_id AND p.status IN ('awaiting_pickup', 'with_courier') " +
+            "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward' " +
+            "  AND s.provider_deleted_at IS NOT NULL " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'waybill_deleted_in_bosta' " +
+            "        AND er.subject_key = 'waybill_deleted_in_bosta:shipment:' || s.id) " +
+            "GROUP BY s.id, s.tracking_number, o.id, o.number, s.provider_deleted_at",
+            tid);
     }
 
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
@@ -1700,6 +1731,16 @@ public class ExceptionService {
                 item.put("actionUrl", ordersUrl(item));
                 // item-28 / §6.1: wire terminateDelivery() one-click resolve here when the
                 // Bosta cancel endpoint ships.
+            }
+            case "waybill_deleted_in_bosta" -> {
+                String t = str(item, "tracking_number");
+                String pcs = str(item, "pieces");
+                item.put("descriptionEn", "Waybill " + t + " was deleted in Bosta, but its pieces already left the shelf: "
+                    + pcs + ". Find the parcel and book a new waybill.");
+                item.put("descriptionAr", "البوليصة " + t + " حُذفت في Bosta، لكن قطعها خرجت من الرف بالفعل: "
+                    + pcs + ". ابحث عن الطرد واحجز بوليصة جديدة.");
+                item.put("suggestedAction", "recover_parcel_rebook");
+                item.put("actionUrl", ordersUrl(item));
             }
             case "cancelled_but_delivered" -> {
                 String t = str(item, "tracking_number");

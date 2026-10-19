@@ -232,7 +232,7 @@ public class OverviewService {
             "                s.last_synced_at, o.created_at) " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, internal_state, last_synced_at, provider_not_found_at FROM shipments " +
+            "    SELECT id, internal_state, last_synced_at, provider_deleted_at FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             "    ORDER BY created_at DESC, id DESC LIMIT 1 " +
             ") s ON true " +
@@ -241,7 +241,7 @@ public class OverviewService {
             "      'delivered'::shipment_internal_state, 'returned'::shipment_internal_state, " +
             "      'lost'::shipment_internal_state, 'terminated'::shipment_internal_state, " +
             "      'cancelled'::shipment_internal_state) " +
-            "  AND s.provider_not_found_at IS NULL " +
+            "  AND s.provider_deleted_at IS NULL " +
             "  AND COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
             "               s.last_synced_at, o.created_at) >= ?",
             TS_MAPPER, tid, lower));
@@ -414,6 +414,7 @@ public class OverviewService {
                 FROM shipments sh
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
+                  AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) s ON true

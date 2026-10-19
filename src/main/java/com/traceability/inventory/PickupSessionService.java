@@ -79,13 +79,15 @@ public class PickupSessionService {
      */
     static final String LEG_ENDED_SQL =
         "(s.internal_state IN ('cancelled'::shipment_internal_state, 'terminated'::shipment_internal_state) " +
-        " OR s.provider_not_found_at IS NOT NULL)";
+        // Slice 4: suspected (one 400) AND confirmed deleted in Bosta are both refused.
+        " OR " + com.traceability.integrations.bosta.BostaDeletionService.suspectedOrDeletedSql("s") + ")";
 
     /** Why {@link #LEG_ENDED_SQL} matched: cancelled | terminated | deleted_in_bosta (else NULL). */
     static final String LEG_ENDED_REASON_SQL =
         "CASE WHEN s.internal_state = 'cancelled'::shipment_internal_state THEN 'cancelled' " +
         "     WHEN s.internal_state = 'terminated'::shipment_internal_state THEN 'terminated' " +
-        "     WHEN s.provider_not_found_at IS NOT NULL THEN 'deleted_in_bosta' END";
+        "     WHEN " + com.traceability.integrations.bosta.BostaDeletionService.suspectedOrDeletedSql("s") +
+        "     THEN 'deleted_in_bosta' END";
 
     /** audit_log action for a scanned shipment left out of a pickup handover at close. */
     public static final String AUDIT_LEG_LEFT_OUT = "pickup_leg_left_out";

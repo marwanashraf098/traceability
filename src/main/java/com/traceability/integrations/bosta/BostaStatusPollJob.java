@@ -100,6 +100,14 @@ public class BostaStatusPollJob {
         this.safetyNetHours = safetyNetHours;
     }
 
+    /** Deleted-in-Bosta slice 4: not-found observations, the key's positive control, the suspect queue. */
+    private BostaDeletionService deletion;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDeletion(BostaDeletionService deletion) {
+        this.deletion = deletion;
+    }
+
     // Per-tenant rate-limit backoff: epoch-ms after which the tenant's poll resumes.
     // Rate limits are per API key, so each tenant has its own backoff timer.
     // Reset to empty on app restart (acceptable — the 429 window is short).
@@ -181,7 +189,8 @@ public class BostaStatusPollJob {
                 "  AND provider = 'bosta' " +
                 "  AND tracking_number IS NOT NULL " +
                 "  AND internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") " +
-                "  AND provider_not_found_at IS NULL " +   // FR-14: exclude permanently-unknown deliveries
+                // Suspected (one 400) legs are re-checked by the suspect queue below, confirmed ones never.
+                "  AND provider_not_found_at IS NULL AND provider_deleted_at IS NULL " +
                 "  AND (last_polled_at IS NULL OR last_polled_at < LEAST(now() - (? * INTERVAL '1 hour'), ?)) " +
                 "ORDER BY last_polled_at ASC NULLS FIRST " +
                 "LIMIT ?",
@@ -219,18 +228,25 @@ public class BostaStatusPollJob {
                         }
                     }
                 } catch (DeliveryNotFoundException e) {
-                    // FR-14: Bosta says this tracking number does not exist (HTTP 400 "Delivery not found").
-                    // Stamp provider_not_found_at so the shipment drops out of the poll set permanently.
-                    // The shipment row is preserved for audit; internal_state is unchanged.
-                    log.warn("Status poll tenant {}: tracking {} not found in Bosta — stamping provider_not_found_at (drops from poll set)",
+                    // FR-14 / deleted-in-Bosta slice 4: Bosta answered 400 "Delivery not found". That makes the
+                    // shipment SUSPECTED (provider_not_found_at): it leaves the safety net for the suspect
+                    // re-check queue, and is confirmed deleted only by BostaDeletionService's rule.
+                    log.warn("Status poll tenant {}: tracking {} not found in Bosta — suspected deleted",
                         tenantId, trackingNumber);
                     final UUID fShipId = shipmentId;
-                    tx.execute(s -> {
-                        jdbc.update(
-                            "UPDATE shipments SET provider_not_found_at = now() WHERE id = ? AND tenant_id = ?",
-                            fShipId, tenantId);
-                        return null;
-                    });
+                    if (deletion != null) {
+                        deletion.observeNotFound(tenantId, fShipId);
+                        deletion.tryConfirm(tenantId, fShipId);
+                    } else {
+                        tx.execute(s -> jdbc.update(
+                            "UPDATE shipments SET provider_not_found_at = COALESCE(provider_not_found_at, now()), " +
+                            "last_not_found_at = now(), not_found_count = not_found_count + 1 WHERE id = ? AND tenant_id = ?",
+                            fShipId, tenantId));
+                    }
+                } catch (BostaAuthException e) {
+                    // The key, not this delivery: inconclusive, and confirmation pauses for the tenant.
+                    if (deletion != null) deletion.recordKeyAuthFailure(tenantId);
+                    log.warn("Status poll tenant {}: Bosta refused the key on {} — {}", tenantId, trackingNumber, e.getMessage());
                 } catch (BostaRateLimitException e) {
                     // Rate-limited: stop fetching ALL remaining shipments for this tenant
                     // (more calls would extend the blackout window). Record the backoff
@@ -265,6 +281,18 @@ public class BostaStatusPollJob {
                 if (Thread.currentThread().isInterrupted()) break;   // no sleep: the shared limiter paces the calls
             }
 
+        });
+        // Deleted-in-Bosta slice 4: the suspect re-check queue — after the walk, which is this cycle's positive
+        // control for the tenant's key (a confirmation needs one in the last 30 minutes).
+        if (walk.ok() && deletion != null) TenantContext.runAs(tenantId, (Runnable) () -> {
+            try {
+                int n = deletion.recheckSuspects(tenantId, apiKey);
+                if (n > 0) log.info("Status poll tenant {}: {} suspected-deleted shipment(s) re-checked", tenantId, n);
+            } catch (BostaRateLimitException e) {
+                backOff(tenantId, e.getRetryAfterSeconds());
+            } catch (RuntimeException e) {
+                log.warn("Status poll tenant {}: suspect re-check failed: {}", tenantId, e.toString());
+            }
         });
         log.info("Status poll tenant {}: walk {} page(s), {} change(s) ingested{}; safety net {} fetch(es), " +
             "{} change(s) found ({} missed by the walk)", tenantId, walk.pages(), walk.ingested(),
@@ -302,10 +330,12 @@ public class BostaStatusPollJob {
                     rateLimited = true;
                     break;
                 } catch (BostaException e) {
+                    if (e instanceof BostaAuthException && deletion != null) deletion.recordKeyAuthFailure(tenantId);
                     log.warn("Status poll tenant {}: search page {} failed — walk stops, mark kept: {}", tenantId, page, e.getMessage());
                     stopped = true;
                     break;
                 }
+                if (pagesRead == 0 && deletion != null) deletion.recordKeyOk(tenantId);   // positive control
                 pagesRead++;
                 if (items.isEmpty()) { endOfList = true; break; }
 
@@ -331,6 +361,7 @@ public class BostaStatusPollJob {
                 prevLast = last;
 
                 java.util.Set<String> inFlight = inFlight(tenantId, pageTracking);
+                java.util.Set<String> suspects = suspectsAmong(tenantId, pageTracking);
                 boolean leftHead = false;
                 for (com.fasterxml.jackson.databind.JsonNode item : items) {
                     String tn = item.path("trackingNumber").asText("");
@@ -344,6 +375,8 @@ public class BostaStatusPollJob {
                     }
                     if (!seen.add(tn) || !inFlight.contains(tn)) continue;
                     try {
+                        // On Bosta's own list: it exists — a suspected leg is no longer suspected (slice 4).
+                        if (deletion != null && suspects.contains(tn)) deletion.clearSuspicionByTracking(tenantId, tn);
                         if (ingestionHelper.ingestListItem(tenantId, apiKey, item, "bosta_poll")) ingested++;
                         tx.execute(s -> jdbc.update("UPDATE shipments SET last_polled_at = now() " +
                             "WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta'", tenantId, tn));
@@ -403,7 +436,21 @@ public class BostaStatusPollJob {
         args.addAll(trackingNumbers);
         List<String> found = tx.execute(s -> jdbc.queryForList(
             "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND provider = 'bosta' " +
-            "  AND internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") AND provider_not_found_at IS NULL " +
+            "  AND internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") AND provider_deleted_at IS NULL " +
+            "  AND tracking_number IN (" + in + ")", String.class, args.toArray()));
+        return new java.util.HashSet<>(found);
+    }
+
+    /** Of these tracking numbers, the tenant's suspected (not confirmed) deleted Bosta legs. */
+    private java.util.Set<String> suspectsAmong(UUID tenantId, List<String> trackingNumbers) {
+        if (trackingNumbers.isEmpty() || deletion == null) return java.util.Set.of();
+        String in = String.join(",", java.util.Collections.nCopies(trackingNumbers.size(), "?"));
+        List<Object> args = new java.util.ArrayList<>();
+        args.add(tenantId);
+        args.addAll(trackingNumbers);
+        List<String> found = tx.execute(s -> jdbc.queryForList(
+            "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND provider = 'bosta' " +
+            "  AND provider_not_found_at IS NOT NULL AND provider_deleted_at IS NULL " +
             "  AND tracking_number IN (" + in + ")", String.class, args.toArray()));
         return new java.util.HashSet<>(found);
     }
