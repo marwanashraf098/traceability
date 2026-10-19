@@ -97,7 +97,7 @@ class ReturnSessionAutoCloseTest {
         UUID s = openSession(t);
         TenantContext.runAs(t.id(), () -> {
             sessionSvc.scan(s, "PC-" + piece, t.location(), t.actor());
-            sessionSvc.disposition(s, piece, "restock", null, t.location(), t.actor());
+            sessionSvc.disposition(s, piece, "restock", null, t.location(), t.actor(), "owner");
         });
         backdate(s, 13);
         assertThat(intake(crp)).isNull();
@@ -147,7 +147,7 @@ class ReturnSessionAutoCloseTest {
         UUID s = openSession(t);
         TenantContext.runAs(t.id(), () -> {
             sessionSvc.scan(s, "PC-" + piece, t.location(), t.actor());
-            sessionSvc.disposition(s, piece, "restock", null, t.location(), t.actor());
+            sessionSvc.disposition(s, piece, "restock", null, t.location(), t.actor(), "owner");
         });
         // opened + scanned 13h ago, but dispositioned 2h ago → idle only 2h.
         jdbc.update("UPDATE return_sessions SET opened_at = now() - interval '13 hours' WHERE id = ?", s);

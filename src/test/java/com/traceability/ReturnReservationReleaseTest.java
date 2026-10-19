@@ -126,7 +126,7 @@ class ReturnReservationReleaseTest {
         // It comes back and is restocked.
         UUID session = sessions.createSession(null, ownerId);
         sessions.scan(session, "PC-" + piece, locationId, ownerId);
-        sessions.disposition(session, piece, "restock", null, locationId, ownerId);
+        sessions.disposition(session, piece, "restock", null, locationId, ownerId, "owner");
         sessions.close(session, ownerId);
         TenantContext.clear();
         assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, piece))

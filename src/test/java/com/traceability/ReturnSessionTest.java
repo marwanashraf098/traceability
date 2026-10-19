@@ -151,7 +151,7 @@ class ReturnSessionTest {
         assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
         Map<String, Object> result = sessionSvc.disposition(
-                sessionId, piece, "restock", null, locationId, actorId);
+                sessionId, piece, "restock", null, locationId, actorId, "owner");
 
         assertThat(result.get("disposition")).isEqualTo("restocked");
         assertThat(pieceStatus(piece)).isEqualTo("available");
@@ -185,7 +185,7 @@ class ReturnSessionTest {
         assertThat(scanResult.get("unexpected")).isEqualTo(false);
         assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
-        sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId, "owner");
         assertThat(pieceStatus(piece)).isEqualTo("available");
 
         String meta = jdbc.queryForObject(
@@ -220,14 +220,14 @@ class ReturnSessionTest {
         // restock()'s own return_pending_inspection guard rejects it — free enforcement,
         // no bespoke illegal-state check needed in disposition().
         ResponseStatusException ex = catchThrowableOfType(
-            () -> sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId),
+            () -> sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId, "owner"),
             ResponseStatusException.class);
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(pieceStatus(piece)).isEqualTo("delivered");
 
         // mismatch is always available as the release valve.
         Map<String, Object> mismatchResult = sessionSvc.disposition(
-                sessionId, piece, "mismatch", null, locationId, actorId);
+                sessionId, piece, "mismatch", null, locationId, actorId, "owner");
         assertThat(mismatchResult.get("disposition")).isEqualTo("mismatch");
         assertThat(pieceStatus(piece)).isEqualTo("delivered");
     }
@@ -243,7 +243,7 @@ class ReturnSessionTest {
 
         UUID sessionId = openSession();
         sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
-        sessionSvc.disposition(sessionId, piece, "damaged", "scratched lens", locationId, actorId);
+        sessionSvc.disposition(sessionId, piece, "damaged", "scratched lens", locationId, actorId, "owner");
         assertThat(pieceStatus(piece)).isEqualTo("damaged");
 
         // Old gated reprint (untouched, FR-12 change 3): damaged qualifies.
@@ -486,7 +486,7 @@ class ReturnSessionTest {
         assertThat(scan1.get("unexpected")).isEqualTo(false);
 
         // Disposition the only piece from this return leg.
-        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId, "owner");
 
         String returnLegState = jdbc.queryForObject(
             "SELECT internal_state::text FROM shipments WHERE id = ?", String.class, returnLegId);
@@ -584,7 +584,7 @@ class ReturnSessionTest {
         Map<String, Object> scan1 = sessionSvc.scan(sessionId, "PC-" + piece1, locationId, actorId);
         assertThat(scan1.get("unexpected")).isEqualTo(false);
 
-        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId, "owner");
 
         String exchangeStatus = jdbc.queryForObject(
             "SELECT status FROM exchanges WHERE id = ?", String.class, exchangeId);
@@ -642,7 +642,7 @@ class ReturnSessionTest {
             .contains("exchange_match");
 
         // Resolve it — Step 3 Part C's resolution flip must fire.
-        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId, "owner");
         String exchangeStatus = jdbc.queryForObject(
             "SELECT status FROM exchanges WHERE id = ?", String.class, exchangeId);
         assertThat(exchangeStatus).isEqualTo("return_received");
@@ -712,7 +712,7 @@ class ReturnSessionTest {
         assertThat(scanWrong.get("unexpected"))
             .as("order-scoped bypass still accepts any delivered piece — unchanged")
             .isEqualTo(false);
-        sessionSvc.disposition(sessionId, wrongPiece, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, wrongPiece, "restock", null, locationId, actorId, "owner");
         assertThat(pieceStatus(wrongPiece))
             .as("the wrong-variant piece itself still restocks correctly — no inventory corruption")
             .isEqualTo("available");
@@ -726,7 +726,7 @@ class ReturnSessionTest {
         assertThat(scanReal.get("unexpected"))
             .as("cover is still open — exchange hasn't resolved yet")
             .isEqualTo(false);
-        sessionSvc.disposition(sessionId, realPiece, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, realPiece, "restock", null, locationId, actorId, "owner");
 
         assertThat(exchangeStatusById(exchangeId))
             .as("resolving the ACTUAL matched piece must flip the exchange")

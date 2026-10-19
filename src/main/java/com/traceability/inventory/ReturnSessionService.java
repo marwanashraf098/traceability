@@ -376,9 +376,34 @@ public class ReturnSessionService {
 
     // ── Disposition ───────────────────────────────────────────────────────────
 
+    /**
+     * returns-expected-back (approved 2026-10-19; reverses part of 14e4a8f): the endpoint's entry.
+     * Owner, manager and worker may RESTOCK or mark DAMAGED any item, expected or unexpected — the actor recorded on
+     * the item and the ledger events is the caller. MISMATCH stays owner / manager: anyone else gets
+     * 403 NEEDS_MANAGER before anything is read or written. The unexpected flag and the
+     * unexpected_return alert are untouched by who grades.
+     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> disposition(UUID sessionId, String pieceId, String disposition,
-                                           String reason, UUID locationId, UUID actorUserId) {
+                                           String reason, UUID locationId, UUID actorUserId, String actorRole) {
+        if ("mismatch".equals(disposition)
+                && !"owner".equalsIgnoreCase(actorRole) && !"manager".equalsIgnoreCase(actorRole)) {
+            throw new ReturnSessionException(ReturnSessionException.Code.NEEDS_MANAGER,
+                "This needs a manager or owner",
+                "هذا الإجراء يحتاج إلى مدير أو مالك",
+                HttpStatus.FORBIDDEN, Map.of());
+        }
+        return dispositionInternal(sessionId, pieceId, disposition, reason, locationId, actorUserId);
+    }
+
+    /**
+     * The disposition itself, WITHOUT the role check — it skips the mismatch-needs-a-manager rule.
+     * Private on purpose: only {@link #disposition(UUID, String, String, String, UUID, UUID, String)}
+     * calls it, and it must never be called from a controller (ReturnsDispositionEntryGuardTest).
+     * Runs inside the public method's transaction.
+     */
+    private Map<String, Object> dispositionInternal(UUID sessionId, String pieceId, String disposition,
+                                                    String reason, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);
 

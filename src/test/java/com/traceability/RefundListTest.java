@@ -276,7 +276,7 @@ class RefundListTest {
         assertThat(before.get("inspection_state"))
             .as("undispositioned piece still at return_pending_inspection").isEqualTo("needs_inspection");
 
-        sessionSvc.disposition(sessionId, pieceId, "restock", null, locationId, actorId);
+        sessionSvc.disposition(sessionId, pieceId, "restock", null, locationId, actorId, "owner");
         sessionSvc.close(sessionId, actorId);
 
         Map<String, Object> after = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-008");

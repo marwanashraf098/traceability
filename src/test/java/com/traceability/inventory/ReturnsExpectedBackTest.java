@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * returns-expected-back (approved 2026-10-19; prod: Nuvira #3134 / #3140, session bac24a14) —
  * a parcel coming back to sender after the merchant cancelled the order in Shopify is a normal
- * return.
+ * return, and the worker who unpacks it can grade it.
  *
  * Expected-back rule (ShipmentLinkService.isExpectedBack — scan and alert always agree):
  *   e1 cancelled in Shopify after ship, RTO 20 / 41 recorded, scanned BEFORE state 46 (piece still
@@ -43,6 +43,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Untracked parcel units (UntrackedParcelUnits.PARCEL_UNIT_CAP_SQL — the ordered quantity):
  *   u1 cancelled after ship (current_quantity 0) → full unit rows; the portal cap still says 0
  *   u2 partial refund after ship (current_quantity 1 of 2) → 2 rows; the portal cap still says 1
+ * Grading permissions (HTTP, real JWTs):
+ *   w1 worker restocks an expected item → 200, actor = the worker on the item and the ledger event
+ *   w2 worker restocks an UNEXPECTED item → 200, the flag stays, the alert was raised and clears only
+ *      by its existing rule (piece left return_pending_inspection) — no resolution row is written
+ *   w3 worker marks damaged → 200
+ *   w4 worker mismatch → 403 NEEDS_MANAGER, item untouched; owner mismatch on the same item → 200
+ *   w5 worker close with a pending item → 409 SESSION_CLOSE_BLOCKED; after grading → 200
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -192,6 +199,89 @@ class ReturnsExpectedBackTest {
 
         assertThat(units(t, s, leg.awb())).hasSize(2);
         assertThat(portalCap(leg.orderItem())).isEqualTo(1);
+    }
+
+    // ── Grading permissions ───────────────────────────────────────────────────
+
+    @Test
+    void w1_workerRestocksExpectedItem_ok_actorIsTheWorker() {
+        T t = tenant("w1");
+        Fixture f = rtoItem(t);
+
+        ResponseEntity<Map> r = disposition(t, f, token(t, "worker"), "restock", null);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(r.getBody().get("disposition")).isEqualTo("restocked");
+        assertThat(pieceStatus(f.piece())).isEqualTo("available");
+        assertThat(jdbc.queryForObject("SELECT disposition_by FROM return_session_items WHERE session_id = ? AND piece_id = ?",
+            UUID.class, f.session(), f.piece())).isEqualTo(t.worker());
+        assertThat(jdbc.queryForObject(
+            "SELECT actor_user_id FROM piece_events WHERE piece_id = ? AND to_status = 'available'::piece_status " +
+            "ORDER BY created_at DESC LIMIT 1", UUID.class, f.piece())).isEqualTo(t.worker());
+    }
+
+    @Test
+    void w2_workerRestocksUnexpectedItem_ok_flagStays_alertClearsOnlyByItsRule() {
+        T t = tenant("w2");
+        Leg leg = orderLeg(t, "awaiting_pickup", 1, null, "created");
+        history(leg, "created", 10);
+        String piece = piece(t, leg, "awaiting_pickup");
+        UUID s = session(t);
+        scan(t, s, leg.awb());
+        assertThat(scan(t, s, "PC-" + piece).get("unexpected")).isEqualTo(true);
+        assertThat(unexpectedAlerts(t)).containsExactly(piece);
+
+        ResponseEntity<Map> r = disposition(t, new Fixture(s, piece), token(t, "worker"), "restock", null);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(jdbc.queryForObject("SELECT unexpected FROM return_session_items WHERE session_id = ? AND piece_id = ?",
+            Boolean.class, s, piece)).as("grading never clears the flag").isTrue();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM exception_resolutions WHERE tenant_id = ? AND exception_type = 'unexpected_return'",
+            Integer.class, t.id())).as("grading writes no resolution").isZero();
+        assertThat(unexpectedAlerts(t)).as("existing rule: the piece left return_pending_inspection").isEmpty();
+    }
+
+    @Test
+    void w3_workerMarksDamaged_ok() {
+        T t = tenant("w3");
+        Fixture f = rtoItem(t);
+
+        ResponseEntity<Map> r = disposition(t, f, token(t, "worker"), "damaged", "torn seam");
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(r.getBody().get("disposition")).isEqualTo("damaged");
+        assertThat(pieceStatus(f.piece())).isEqualTo("damaged");
+    }
+
+    @Test
+    void w4_workerMismatch_needsManager_itemUntouched_ownerMismatchOk() {
+        T t = tenant("w4");
+        Fixture f = rtoItem(t);
+
+        ResponseEntity<Map> worker = disposition(t, f, token(t, "worker"), "mismatch", null);
+        assertThat(worker.getStatusCode().value()).isEqualTo(403);
+        assertThat(worker.getBody().get("code")).isEqualTo("NEEDS_MANAGER");
+        assertThat(worker.getBody().get("message_en")).isEqualTo("This needs a manager or owner");
+        assertThat(itemDisposition(f)).isEqualTo("pending");
+
+        ResponseEntity<Map> owner = disposition(t, f, token(t, "owner"), "mismatch", null);
+        assertThat(owner.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(itemDisposition(f)).isEqualTo("mismatch");
+    }
+
+    @Test
+    void w5_workerClose_refusedWhilePending_okOnceGraded() {
+        T t = tenant("w5");
+        Fixture f = rtoItem(t);
+        String url = base() + "/api/v1/returns/sessions/" + f.session() + "/close";
+
+        ResponseEntity<Map> blocked = rest.exchange(url, HttpMethod.POST, new HttpEntity<>(headers(token(t, "worker"))), Map.class);
+        assertThat(blocked.getStatusCode().value()).isEqualTo(409);
+        assertThat(blocked.getBody().get("code")).isEqualTo("SESSION_CLOSE_BLOCKED");
+
+        assertThat(disposition(t, f, token(t, "worker"), "restock", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<Map> closed = rest.exchange(url, HttpMethod.POST, new HttpEntity<>(headers(token(t, "worker"))), Map.class);
+        assertThat(closed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(jdbc.queryForObject("SELECT closed_by FROM return_sessions WHERE id = ?", UUID.class, f.session()))
+            .isEqualTo(t.worker());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

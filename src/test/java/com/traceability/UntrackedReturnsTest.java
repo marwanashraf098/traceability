@@ -376,7 +376,7 @@ class UntrackedReturnsTest {
         TenantContext.set(a.id());
         sessions.scan(s, "PC-" + piece, a.location(), a.owner());
         assertThat(status(r)).isEqualTo("received");
-        sessions.disposition(s, piece, "restock", null, a.location(), a.owner());
+        sessions.disposition(s, piece, "restock", null, a.location(), a.owner(), "owner");
         TenantContext.clear();
         assertThat(status(r)).isEqualTo("refund_pending");
     }

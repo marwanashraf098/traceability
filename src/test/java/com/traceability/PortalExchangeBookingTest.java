@@ -894,7 +894,7 @@ class PortalExchangeBookingTest {
         try {
             UUID s = returnSessions.createSession(null, t.owner());
             returnSessions.scan(s, "PC-" + piece, t.location(), t.owner());
-            returnSessions.disposition(s, piece, disposition, "damaged".equals(disposition) ? "Torn seam" : null, t.location(), t.owner());
+            returnSessions.disposition(s, piece, disposition, "damaged".equals(disposition) ? "Torn seam" : null, t.location(), t.owner(), "owner");
         } finally {
             TenantContext.clear();
         }
