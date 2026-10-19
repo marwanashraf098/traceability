@@ -425,10 +425,20 @@ class BostaDeletionTest {
         Shop s = new Shop("DL14");
         Order o = s.order("#4114");
         closeConfirmed(s, o);
-        org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+        // Packed and waiting for its AWB: without the guard, the swapped-label check hands back the dead leg
+        // as "already this order's" and the link completes on it.
+        String pieceId = s.f.pieceId(o.piece());
+        jdbc.update("UPDATE pieces SET status = 'packed' WHERE id = ?", pieceId);
+        jdbc.update("INSERT INTO allocations (piece_id, order_item_id, tenant_id, status) " +
+                    "SELECT ?, oi.id, oi.tenant_id, 'packed' FROM order_items oi WHERE oi.order_id = ?", pieceId, o.id());
+        jdbc.update("UPDATE orders SET status = 'packed' WHERE id = ?", o.id());
+        var e = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
             () -> TenantContext.runAs(s.f.tenant, () -> shipmentLink.linkByAwbScan(o.id(), o.tracking(), s.packer)));
+        assertThat(e.getStatusCode().value()).isEqualTo(409);
+        assertThat(e.getReason()).contains("deleted in Bosta");
         assertThat(count("SELECT COUNT(*) FROM shipments WHERE order_id = ?", o.id())).isEqualTo(1);
         assertThat(leg(o.shipment()).get("internal_state")).isEqualTo("cancelled");
+        assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, pieceId)).isEqualTo("packed");
     }
 
     @Test
