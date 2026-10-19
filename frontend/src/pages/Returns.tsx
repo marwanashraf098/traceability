@@ -60,6 +60,16 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json()
 }
 
+/**
+ * The text shown for a failed Returns call. A 403 (ACCESS_DENIED, or NEEDS_MANAGER — a worker asking
+ * for a manager-only decision) reads "This needs a manager or owner", never "HTTP 403". Scoped to
+ * this page: the shared request() keeps its "403: …" messages, which other screens match on.
+ */
+function errorText(e: unknown, t: (k: string) => string): string {
+  if (e instanceof ApiError && (e.status === 403 || e.body?.code === 'NEEDS_MANAGER')) return t('returns.needsManager')
+  return (e as Error)?.message || t('common.error')
+}
+
 // ── Piece label reprint (blob PDF, not base64) — reused for both open-session
 // items and AWB-expected (not-yet-scanned) rows. ─────────────────────────────
 
@@ -137,6 +147,8 @@ interface SessionItem {
   sku: string | null
   disposition: 'pending' | 'restocked' | 'damaged' | 'mismatch'
   unexpected: boolean
+  /** The piece is on an AWB scanned in this session (picks the UNEXPECTED reason text only). */
+  on_scanned_awb?: boolean
   damage_reason: string | null
 }
 
@@ -387,7 +399,7 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
       setTotal(sessResp.total)
       setAnalytics(analyticsResp)
     } catch (e: unknown) {
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setLoading(false)
     }
@@ -407,7 +419,7 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
       if (e instanceof ApiError && e.body.code === 'SESSION_ALREADY_OPEN' && e.body.details?.sessionId) {
         onOpenSession(e.body.details.sessionId as string)
       } else {
-        setError((e as Error).message || t('common.error'))
+        setError(errorText(e, t))
       }
     } finally {
       setOpening(false)
@@ -660,7 +672,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       const data = await api<SessionDetail>(`/returns/sessions/${sessionId}`)
       setDetail(data)
     } catch (e: unknown) {
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setLoading(false)
     }
@@ -705,7 +717,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         setRejectedScan(cleaned)
         setTimeout(() => setRejectedScan(null), 4000)
       } else {
-        setError((e as Error).message || t('common.error'))
+        setError(errorText(e, t))
       }
       return { success: false }
     }
@@ -767,7 +779,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       await load()
     } catch (e: unknown) {
       playBeep(false)
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setDispositioning(null)
     }
@@ -778,7 +790,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     setReprinting(pieceId)
     setReprintErrors(prev => { const n = { ...prev }; delete n[pieceId]; return n })
     try { await printSessionPieceLabel(sessionId, pieceId) }
-    catch (e: unknown) { setReprintErrors(prev => ({ ...prev, [pieceId]: (e as Error).message || t('common.error') })) }
+    catch (e: unknown) { setReprintErrors(prev => ({ ...prev, [pieceId]: errorText(e, t) })) }
     finally { setReprinting(null) }
   }
 
@@ -798,7 +810,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       await load()
     } catch (e: unknown) {
       playBeep(false)
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setParcelBusy(null)
     }
@@ -820,7 +832,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       await load()
     } catch (e: unknown) {
       playBeep(false)
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setItemBusy(null)
     }
@@ -836,7 +848,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         { method: 'POST', ...(action === 'undo' ? {} : { body: JSON.stringify({ condition: action }) }) })
       await load()
     } catch (e: unknown) {
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setItemBusy(null)
     }
@@ -849,7 +861,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       await api(`/returns/sessions/${sessionId}`, { method: 'DELETE' })
       onExit()
     } catch (e: unknown) {
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
     } finally {
       setAbandoning(false); setShowAbandonModal(false)
     }
@@ -865,7 +877,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       if (e instanceof ApiError && e.body.code === 'SESSION_CLOSE_BLOCKED') {
         await load() // refresh so the blocked callout reflects authoritative state
       } else {
-        setError((e as Error).message || t('common.error'))
+        setError(errorText(e, t))
       }
     } finally {
       setClosing(false)
@@ -884,7 +896,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       // component for the new session — no manual state reset needed here.
       onStartNew(result.sessionId)
     } catch (e: unknown) {
-      setError((e as Error).message || t('common.error'))
+      setError(errorText(e, t))
       setStartingNew(false)
     }
   }
@@ -947,7 +959,9 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                 </div>
                 <p className="text-caption font-mono text-muted">
                   {item.barcode}
-                  {item.unexpected && !isIllegal && ` — ${t('returns.openSession.notOnManifest')}`}
+                  {item.unexpected && !isIllegal && ` — ${t(item.on_scanned_awb
+                    ? 'returns.openSession.notReportedReturning'
+                    : 'returns.openSession.notOnManifest')}`}
                 </p>
                 {item.via_phone && <div className="mt-1"><ViaPhoneTag /></div>}
               </div>
@@ -970,13 +984,21 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                     </Button>
                   </>
                 )}
-                <Button
-                  variant="tertiary" size="sm"
-                  loading={dispositioning === item.piece_id}
-                  onClick={() => disposition(item.piece_id, 'mismatch')}
-                >
-                  {t('returns.openSession.mismatch')}
-                </Button>
+                {/* Mismatch stays owner / manager (backend: 403 NEEDS_MANAGER); a worker grades
+                    restock / damaged only — an item only a mismatch can settle waits for a manager. */}
+                {canManage ? (
+                  <Button
+                    variant="tertiary" size="sm"
+                    loading={dispositioning === item.piece_id}
+                    onClick={() => disposition(item.piece_id, 'mismatch')}
+                  >
+                    {t('returns.openSession.mismatch')}
+                  </Button>
+                ) : isIllegal && (
+                  <span className="text-caption text-muted self-center" data-testid={`needs-manager-${item.piece_id}`}>
+                    {t('returns.needsManager')}
+                  </span>
+                )}
                 <button
                   title={t('returns.openSession.reprint')}
                   onClick={() => reprint(item.piece_id)}
@@ -1217,7 +1239,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         {/* raw <button> — Button doesn't spread data-testid */}
         <button
           className="btn-brand w-full justify-center"
-          disabled={!canClose || !canManage || closing}
+          disabled={!canClose || closing}
           onClick={close}
           data-testid="close-session-button"
         >
@@ -1773,7 +1795,7 @@ function SessionSummaryScreen({ sessionId, onBack }: { sessionId: string; onBack
     let cancelled = false
     api<SessionDetail>(`/returns/sessions/${sessionId}`)
       .then(data => { if (!cancelled) setDetail(data) })
-      .catch((e: unknown) => { if (!cancelled) setError((e as Error).message || t('common.error')) })
+      .catch((e: unknown) => { if (!cancelled) setError(errorText(e, t)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [sessionId, t])
