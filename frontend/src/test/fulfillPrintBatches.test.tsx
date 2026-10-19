@@ -10,8 +10,9 @@ import PrintWaybillsDialog from '../pages/fulfill/PrintWaybillsDialog'
 /**
  * Pick & Pack S2 — batch waybill printing in queue mode.
  *  - queue header: "Waybills: N printed · M not printed yet" from the queue rows' awb_printed
- *  - Print waybills dialog: counts, options sent to POST /fulfill/print-batches, merged PDF
- *    opened, excluded + "may not be in the order you chose" shown
+ *  - Print waybills dialog: counts, options sent to POST /fulfill/print-jobs (merged-PDF slice C: a
+ *    background job), merged PDF opened from "Open waybills", excluded + "may not be in the order you
+ *    chose" shown
  *  - a batch-printed order doesn't force a reprint before Complete (awbPrinted)
  *  - GatherList ?batch=<id> asks for that batch only
  */
@@ -38,11 +39,22 @@ const QUEUE = [
   row('o4', '#1004', { is_self_pickup: true }),   // never counted — no waybill
 ]
 
+/** The finished print job (GET /fulfill/print-jobs/job-1). */
 const RESULT = {
-  batchId: 'batch-9', batchNo: 4, waybillCount: 1, candidateCount: 2, remainingCount: 0, orderGuaranteed: false,
-  pdfBase64: btoa('%PDF-1.4 fake'),
+  jobId: 'job-1', kind: 'print', status: 'done', total: 2, done: 2, candidateCount: 2, remainingCount: 0,
+  printedCount: 1, batchId: 'batch-9', batchNo: 4, reprintBatchId: null, reprintBatchNo: null,
+  orderGuaranteed: false, pdfAvailable: true, pdfBytes: 100, message: null,
   excluded: [{ orderNumber: '#1003', trackingNumber: '777', reason: 'BOSTA_EMAIL_PATH' }],
-  message: null,
+  createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), expiresAt: null,
+}
+
+function pdfResponse() {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    headers: { get: (k: string) => (k.toLowerCase() === 'content-disposition' ? 'inline; filename="waybills-batch-4.pdf"' : null) },
+    blob: async () => new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }),
+  })
 }
 
 const DETAIL = {
@@ -70,7 +82,10 @@ function makeFetch(queue: unknown[] = QUEUE, result: unknown = RESULT) {
   return vi.fn((url: string, opts?: RequestInit) => {
     if (url.endsWith('/fulfill/queue')) return json(queue)
     if (url.endsWith('/fulfill/print-batches/options')) return json({ defaultPaper: 'A6' })
-    if (url.endsWith('/fulfill/print-batches') && opts?.method === 'POST') return json(result)
+    if (url.endsWith('/fulfill/print-jobs') && opts?.method === 'POST') return json({ jobId: 'job-1' }, 202)
+    if (url.endsWith('/fulfill/print-jobs/latest')) return json(null, 204)
+    if (url.endsWith('/fulfill/print-jobs/job-1/pdf')) return pdfResponse()
+    if (url.endsWith('/fulfill/print-jobs/job-1')) return json(result)
     if (url.endsWith('/fulfill/o1')) return json(DETAIL)
     if (url.includes('/fulfill/gather')) return json({ generatedAt: new Date().toISOString(), orderCount: 1, rows: [] })
     return json({})
@@ -122,10 +137,13 @@ describe('Pick & Pack — batch waybill printing', () => {
 
     const result = await screen.findByTestId('print-batch-result')
     const post = fetchFn.mock.calls.find(([u, o]) =>
-      String(u).endsWith('/fulfill/print-batches') && (o as RequestInit | undefined)?.method === 'POST')
-    expect(JSON.parse((post![1] as RequestInit).body as string)).toEqual({ scope: 'new', paper: 'A6', sort: 'newest' })
+      String(u).endsWith('/fulfill/print-jobs') && (o as RequestInit | undefined)?.method === 'POST')
+    expect(JSON.parse((post![1] as RequestInit).body as string))
+      .toEqual({ kind: 'print', scope: 'new', paper: 'A6', sort: 'newest' })
 
-    expect(popup.location.href).toBe('blob:merged-pdf')
+    // The PDF opens from the user's own click (a tab opened later would be popup-blocked).
+    await user.click(within(result).getByRole('button', { name: 'Open waybills' }))
+    await waitFor(() => expect(popup.location.href).toBe('blob:merged-pdf'))
     expect(within(result).getByText('Batch #4: 1 waybill printed.')).toBeInTheDocument()
     expect(within(result).getByText('Waybills may not be in the order you chose.')).toBeInTheDocument()
     expect(within(result).getByText('#1003')).toBeInTheDocument()
@@ -171,20 +189,20 @@ describe('Pick & Pack — batch waybill printing', () => {
     expect(reprint).toHaveTextContent('Print Waybill')
   })
 
-  test('more than 49 ready: totals shown, button capped at 49, result says how many remain', async () => {
-    const big = Array.from({ length: 60 }, (_, i) => row(`b${i}`, `#2${String(i).padStart(3, '0')}`))
-    fetchFn = makeFetch(big, { ...RESULT, waybillCount: 49, candidateCount: 60, remainingCount: 11, orderGuaranteed: true })
+  test('more than 490 ready: totals shown, button capped at 490, result says how many more are ready', async () => {
+    // Merged-PDF slice C (approved edit): the per-print cap is 490 (was 49).
+    fetchFn = makeFetch(QUEUE, { ...RESULT, total: 490, done: 490, printedCount: 490, excluded: [],
+                                 candidateCount: 600, remainingCount: 110, orderGuaranteed: true })
     stubFetchWithShellDefaults(fetchFn)
     const user = userEvent.setup()
-    renderWithProviders(<Fulfill />)
-    await user.click(await screen.findByRole('button', { name: /Print waybills/ }))
+    renderWithProviders(<PrintWaybillsDialog newCount={600} allCount={600} onClose={vi.fn()} />)
 
     const dialog = await screen.findByTestId('print-batch-dialog')
-    expect(within(dialog).getByText('New only').closest('label')).toHaveTextContent('60')
-    await user.click(within(dialog).getByRole('button', { name: 'Print 49 waybills' }))
+    expect(within(dialog).getByText('New only').closest('label')).toHaveTextContent('600')
+    await user.click(within(dialog).getByRole('button', { name: 'Print 490 waybills' }))
 
     const result = await screen.findByTestId('print-batch-result')
-    expect(within(result).getByText('Printed the first 49. Print again to get the remaining 11.')).toBeInTheDocument()
+    expect(within(result).getByText('110 more ready — print again')).toBeInTheDocument()
     expect(within(result).queryByText('Waybills may not be in the order you chose.')).not.toBeInTheDocument()
   })
 

@@ -117,7 +117,7 @@ public class PackListService {
     public PackPrintBatchService.PrintBatchResult reprint(UUID batchId) {
         UUID tenantId = TenantContext.require();
         // Own short read transaction (RLS needs one); the Bosta call below stays outside it.
-        List<Map<String, Object>> items = readTx.execute(st -> reprintItems(batchId, tenantId));
+        List<Map<String, Object>> items = reprintItems(batchId);
         if (items == null || items.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Print batch not found");
         int batchNo = ((Number) items.get(0).get("batch_no")).intValue();
         String paper = (String) items.get(0).get("paper");
@@ -181,7 +181,17 @@ public class PackListService {
             Base64.getEncoder().encodeToString(pdf.pdf()), excluded, null);
     }
 
-    private List<Map<String, Object>> reprintItems(UUID batchId, UUID tenantId) {
+    /**
+     * One batch's items in stored position order, with batch_no / paper and whether the order is now
+     * cancelled — the reprint's input, shared by {@link #reprint} and the reprint print job (PrintJobRunner),
+     * never copied. Own short read transaction (RLS needs one); empty for another tenant's batch.
+     */
+    public List<Map<String, Object>> reprintItems(UUID batchId) {
+        UUID tenantId = TenantContext.require();
+        return readTx.execute(st -> reprintItemsSql(batchId, tenantId));
+    }
+
+    private List<Map<String, Object>> reprintItemsSql(UUID batchId, UUID tenantId) {
         return jdbc.queryForList(
             "SELECT b.batch_no, b.paper, bi.shipment_id, bi.tracking_number, bi.position, " +
             "       o.number, " + PackListRules.CANCELLED_SQL + " AS cancelled " +

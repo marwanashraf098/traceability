@@ -63,9 +63,18 @@ function backend(url: string, opts: RequestInit = {}) {
   if (url.endsWith('/pack-sessions/summary')) return json({ packedToday: 31, openSessionId: null })
   if (url.endsWith('/fulfill/print-batches/today')) return json(batches)
   if (url.endsWith('/fulfill/printed-not-packed')) return json(notPacked)
-  if (url.endsWith('/print-batches/b3/reprint')) {
-    return json({ batchId: 'b3', batchNo: 3, waybillCount: 11, candidateCount: 12, remainingCount: 0, orderGuaranteed: true,
-      pdfBase64: btoa('%PDF'), excluded: [{ orderNumber: '#1039', trackingNumber: '74821655', reason: 'ORDER_CANCELLED' }], message: null })
+  // Merged-PDF slice C (approved edit): a reprint is a background job (kind 'reprint').
+  if (url.endsWith('/fulfill/print-jobs') && method === 'POST') return json({ jobId: 'job-r3' }, 202)
+  if (url.endsWith('/fulfill/print-jobs/job-r3/pdf')) {
+    return Promise.resolve({ ok: true, status: 200, headers: { get: () => null },
+      blob: async () => new Blob(['%PDF'], { type: 'application/pdf' }) })
+  }
+  if (url.endsWith('/fulfill/print-jobs/job-r3')) {
+    return json({ jobId: 'job-r3', kind: 'reprint', status: 'done', total: 12, done: 12, candidateCount: 12,
+      remainingCount: 0, printedCount: 11, batchId: null, batchNo: null, reprintBatchId: 'b3', reprintBatchNo: 3,
+      orderGuaranteed: true, pdfAvailable: true, pdfBytes: 4, message: null,
+      excluded: [{ orderNumber: '#1039', trackingNumber: '74821655', reason: 'ORDER_CANCELLED' }],
+      createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), expiresAt: null })
   }
   if (url.endsWith('/pack-sessions') && method === 'POST') return json(VIEW)
   if (url.endsWith('/pack-sessions/sess-1/end')) return Promise.resolve({ ok: true, status: 204, headers: { get: () => '0' }, json: async () => null })
@@ -118,9 +127,11 @@ describe('waybill-mode page lists', () => {
 
     await user.click(within(rows[0]).getByRole('button', { name: /Reprint/ }))
     const result = await screen.findByTestId('reprint-result')
-    expect(popup.location.href).toBe('blob:reprint')
-    expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/print-batches/b3/reprint'))).toBe(true)
-    expect(result).toHaveTextContent('11 waybills reprinted.')
+    expect(await within(result).findByText('11 waybills reprinted.')).toBeInTheDocument()
+    expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/fulfill/print-jobs'))).toBe(true)
+    expect(calls.some(c => c.url.includes('/print-batches/b3/reprint'))).toBe(false)
+    await user.click(within(result).getByRole('button', { name: 'Open waybills' }))
+    await waitFor(() => expect(popup.location.href).toBe('blob:reprint'))
     expect(result).toHaveTextContent('Order cancelled — not reprinted')
   })
 

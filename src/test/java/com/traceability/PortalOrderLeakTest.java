@@ -195,6 +195,11 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/fulfill/print-batches",        skip("creates a batch from PackPrintBatchStore.candidates (merchant_orders) — the "
                                                               + "pickable filter is checked directly in jobs_pickableFilterAndCommittedStock"));
         reg("POST /api/v1/fulfill/print-batches/{batchId}/reprint", skip("reprints an existing batch's items"));
+        reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
+                                                              + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
+        reg("GET /api/v1/fulfill/print-jobs/latest",     list());
+        reg("GET /api/v1/fulfill/print-jobs/{jobId}",    skip("one print job by id — its stored items were taken from PackPrintBatchStore.candidates / reprint items"));
+        reg("GET /api/v1/fulfill/print-jobs/{jobId}/pdf", skip("one print job's PDF by id (binary)"));
         reg("POST /api/v1/pack-sessions",                skip("opens the caller's pack session — no order"));
         reg("GET /api/v1/pack-sessions/summary",         list());
         reg("GET /api/v1/pack-sessions/{id}",            list());

@@ -159,6 +159,11 @@ class AwbRetryError extends Error {
   constructor(readonly busy: boolean) { super(busy ? 'BOSTA_BUSY' : 'BOSTA_TEMPORARY') }
 }
 
+/** Bosta refused the store's API key (401 / 403) — "check Settings → Connections". */
+class AwbAuthError extends Error {
+  constructor() { super('BOSTA_AUTH') }
+}
+
 async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
   const { data, status } = await api<{
     pdfBase64List: string[]
@@ -196,6 +201,7 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
     if (data.exceptions[0].reason === 'DELETED_IN_BOSTA') throw new AwbDeletedInBostaError()
     if (data.exceptions[0].reason === 'BOSTA_BUSY') throw new AwbRetryError(true)
     if (data.exceptions[0].reason === 'BOSTA_TEMPORARY') throw new AwbRetryError(false)
+    if (data.exceptions[0].reason === 'BOSTA_AUTH') throw new AwbAuthError()
     throw new Error(data.exceptions[0].reason ?? 'AWB not printable')
   }
 
@@ -1102,6 +1108,8 @@ function PickScreen({
         ? t('fulfill.printAwb.deletedInBosta')
         : e instanceof AwbRetryError
         ? t(e.busy ? 'fulfill.printAwb.busy' : 'fulfill.printAwb.temporary')
+        : e instanceof AwbAuthError
+        ? t('fulfill.printAwb.auth')
         : e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
         : (e as Error).message || t('fulfill.printAwb.error')

@@ -32,6 +32,7 @@ import java.util.stream.Stream;
  * time-out — stops the print (no further requests; what already printed is kept, the rest is reported
  * BOSTA_BUSY); a 5xx / network error after the client's retries reports that request's waybills
  * BOSTA_TEMPORARY and the print goes on. Only another definite rejection still marks a whole chunk.
+ * Bosta's 401 / 403 (the API key, slice B) is BOSTA_AUTH: nobody marked, and the print stops like a rate limit.
  *
  * Batching: ≤49 tracking numbers per Bosta call — from 50 up, Bosta stops returning the PDF
  * inline and emails the labels instead (see BATCH_SIZE).
@@ -44,7 +45,7 @@ public class BostaAwbService {
     private static final Logger log = LoggerFactory.getLogger(BostaAwbService.class);
     /** Bosta mass-awb answers with an inline PDF only below 50 tracking numbers; from 50 up it
      *  emails the labels instead. 49 keeps every request on the inline path, for every caller. */
-    static final int BATCH_SIZE = 49;
+    public static final int BATCH_SIZE = 49;
 
     // Shipment internal states that are terminal / already-done — no AWB reprinting needed.
     // Note: "awaiting_pickup" is an order_status, NOT a shipment_internal_state; shipments
@@ -144,6 +145,18 @@ public class BostaAwbService {
      */
     public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
                                               String formatOverride, String langOverride) {
+        return printAwbDetailed(tenantId, shipmentIds, formatOverride, langOverride, () -> {});
+    }
+
+    /**
+     * {@link #printAwbDetailed(UUID, List, String, String)} with {@code beforeEachCall} run immediately before
+     * every mass-awb request — each chunk and each isolation call (merged-PDF slice B: the print job's
+     * heartbeat, a short transaction of its own; never called while a transaction is open here). An exception
+     * it throws stops the print and propagates to the caller.
+     */
+    public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
+                                              String formatOverride, String langOverride,
+                                              Runnable beforeEachCall) {
 
         // Review mode (V130): a simulated-courier tenant has no Bosta account and is never sent
         // to Bosta — its waybills are rendered locally, before the account lookup below (which
@@ -195,6 +208,7 @@ public class BostaAwbService {
         // 4. Batch into ≤BATCH_SIZE (49) chunks, call Bosta for each — until Bosta says it's busy.
         List<AwbChunk> chunks = new ArrayList<>();
         boolean busy = false;
+        String stopReason = BOSTA_BUSY;
 
         List<List<String>> requests = new ArrayList<>();
         for (List<String> group : List.of(printable.subList(0, fresh), printable.subList(fresh, printable.size()))) {
@@ -204,29 +218,31 @@ public class BostaAwbService {
         }
         for (List<String> chunk : requests) {
             if (busy) {
-                // A rate limit stopped the print: nothing more is sent, nobody is marked.
-                chunks.add(new AwbChunk(chunk, null, null, BOSTA_BUSY));
+                // A rate limit / the API key stopped the print: nothing more is sent, nobody is marked.
+                chunks.add(new AwbChunk(chunk, null, null, stopReason));
                 continue;
             }
             AwbChunk whole;
             try {
-                whole = toChunk(chunk, bostaGateway.printMassAwb(apiKey, chunk, format, lang));
+                whole = toChunk(chunk, massAwb(beforeEachCall, apiKey, chunk, format, lang));
             } catch (BostaException e) {
                 String temporary = temporaryReason(e);
                 if (temporary != null) {
                     // Bosta busy / down for a moment — says nothing about these waybills: never marked.
                     log.warn("mass-awb chunk of {} not printed ({}): {}", chunk.size(), temporary, e.getMessage());
                     chunks.add(new AwbChunk(chunk, null, null, temporary));
-                    busy = BOSTA_BUSY.equals(temporary);
+                    busy = stopsPrint(temporary);
+                    stopReason = temporary;
                     continue;
                 }
                 Isolation kind = isolationKind(e);
                 if (kind != null) {
                     // One (or a few) waybills Bosta can't find / won't print: isolate them, print the rest.
                     Isolated isolated = isolate(tenantId, apiKey, chunk, format, lang, trackingToId,
-                        (BostaAwbRejectedException) e, kind);
+                        (BostaAwbRejectedException) e, kind, beforeEachCall);
                     chunks.addAll(isolated.chunks());
-                    busy = isolated.busy();
+                    busy = isolated.stopReason() != null;
+                    if (busy) stopReason = isolated.stopReason();
                     continue;
                 }
                 // Bosta rejected the entire chunk (a definite rejection, not 429 / 5xx / network) — route
@@ -278,15 +294,27 @@ public class BostaAwbService {
     /** Not printed because of a Bosta 5xx / network error (after the client's own retries). Never marked. */
     public static final String BOSTA_TEMPORARY = "BOSTA_TEMPORARY";
 
-    /** BOSTA_BUSY / BOSTA_TEMPORARY for an error that says nothing about the waybills sent, else null. */
+    /**
+     * Not printed because Bosta refused the tenant's API key (401 / 403). Never marked; the print stops.
+     * Shown as "Bosta connection problem — check Settings → Connections".
+     */
+    public static final String BOSTA_AUTH = "BOSTA_AUTH";
+
+    /** BOSTA_BUSY / BOSTA_TEMPORARY / BOSTA_AUTH for an error that says nothing about the waybills sent, else null. */
     static String temporaryReason(BostaException e) {
         if (e instanceof BostaRateLimitException) return BOSTA_BUSY;
         if (e instanceof BostaTransientException) return BOSTA_TEMPORARY;
+        if (e instanceof BostaAuthException) return BOSTA_AUTH;
         return null;
     }
 
-    /** What isolate() printed / reported, and whether a rate limit stopped it (the print stops too). */
-    private record Isolated(List<AwbChunk> chunks, boolean busy) {}
+    /** A rate limit or a refused API key stops the whole print — no further request is sent. */
+    public static boolean stopsPrint(String reason) {
+        return BOSTA_BUSY.equals(reason) || BOSTA_AUTH.equals(reason);
+    }
+
+    /** What isolate() printed / reported, and the reason that stopped the whole print (null = go on). */
+    private record Isolated(List<AwbChunk> chunks, String stopReason) {}
 
     /** Bosta's per-waybill 400s — the only rejections that are isolated. */
     enum Isolation { NOT_FOUND, NOT_PRINTABLE }
@@ -315,6 +343,13 @@ public class BostaAwbService {
         return named;
     }
 
+    /** One mass-awb request, right after {@code beforeEachCall}. */
+    private AwbPrintResult massAwb(Runnable beforeEachCall, String apiKey, List<String> trackings,
+                                   String format, String lang) {
+        beforeEachCall.run();
+        return bostaGateway.printMassAwb(apiKey, trackings, format, lang);
+    }
+
     private static AwbChunk toChunk(List<String> trackings, AwbPrintResult result) {
         if (result.isInline()) return new AwbChunk(trackings, result.pdfBytes(), null, null);
         // Bosta went async — surface message, treat chunk as un-printable
@@ -338,7 +373,8 @@ public class BostaAwbService {
      * also stops the whole print). Called with no transaction open (each markFailed is its own).
      */
     private Isolated isolate(UUID tenantId, String apiKey, List<String> chunk, String format, String lang,
-                                   Map<String, UUID> trackingToId, BostaAwbRejectedException first, Isolation firstKind) {
+                             Map<String, UUID> trackingToId, BostaAwbRejectedException first, Isolation firstKind,
+                             Runnable beforeEachCall) {
         List<AwbChunk> out = new ArrayList<>();
         Map<String, String> culprits = new LinkedHashMap<>();   // tracking → reason
         List<String> unresolved = new ArrayList<>();
@@ -362,7 +398,7 @@ public class BostaAwbService {
                 List<String> rest = bad.stream().filter(tn -> !hints.contains(tn)).toList();
                 calls++;
                 try {
-                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    out.add(toChunk(rest, massAwb(beforeEachCall, apiKey, rest, format, lang)));
                     bad = new ArrayList<>(hints);                    // confirmed: the culprit is among the hints
                     err = null;
                 } catch (BostaException e) {
@@ -384,7 +420,7 @@ public class BostaAwbService {
                 List<String> secondHalf = List.copyOf(bad.subList(firstHalf.size(), bad.size()));
                 calls++;
                 try {
-                    out.add(toChunk(firstHalf, bostaGateway.printMassAwb(apiKey, firstHalf, format, lang)));
+                    out.add(toChunk(firstHalf, massAwb(beforeEachCall, apiKey, firstHalf, format, lang)));
                     bad = new ArrayList<>(secondHalf);
                     err = null;
                 } catch (BostaException e) {
@@ -406,7 +442,7 @@ public class BostaAwbService {
                 waiting.clear();
                 calls++;
                 try {
-                    out.add(toChunk(rest, bostaGateway.printMassAwb(apiKey, rest, format, lang)));
+                    out.add(toChunk(rest, massAwb(beforeEachCall, apiKey, rest, format, lang)));
                     break search;
                 } catch (BostaException e) {
                     Isolation k = isolationKind(e);
@@ -427,7 +463,7 @@ public class BostaAwbService {
         if (!unresolved.isEmpty()) out.add(new AwbChunk(List.copyOf(unresolved), null, null, unresolvedReason));
         log.warn("mass-awb chunk of {} rejected ({}): isolated {} bad waybill(s), {} left unprinted ({}), {} extra call(s)",
             chunk.size(), firstKind, culprits.size(), unresolved.size(), unresolvedReason, calls);
-        return new Isolated(out, BOSTA_BUSY.equals(unresolvedReason) && !unresolved.isEmpty());
+        return new Isolated(out, stopsPrint(unresolvedReason) && !unresolved.isEmpty() ? unresolvedReason : null);
     }
 
     /** Why isolation stopped on a non-isolatable error: temporary (busy / 5xx / network), else unisolated. */

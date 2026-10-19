@@ -152,6 +152,15 @@ public final class WaybillPdfAssembler {
         }
     }
 
+    /** True when {@code pdf} is a PDF that can be opened (a part is checked before it is stored). */
+    public static boolean readable(byte[] pdf) {
+        try (PDDocument d = Loader.loadPDF(pdf)) {
+            return d.getNumberOfPages() > 0;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     /** The batch tracking numbers that appear on one page's text as whole digit runs. */
     static Set<String> trackingNumbersIn(String pageText, Set<String> wanted) {
         String text = ScanInputNormalizer.foldDigits(pageText);

@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Printer } from 'lucide-react'
 import {
-  getPrintBatchesToday, getPrintedNotPacked, getRoleFromToken, reprintPrintBatch, TransferCommandError,
-  NotPackedRow, PrintBatchResult, PrintBatchToday,
+  getPrintBatchesToday, getPrintedNotPacked, getRoleFromToken, PrintJobRunningError, startPrintJob,
+  TransferCommandError, NotPackedRow, PrintBatchToday,
 } from '../../api'
 import { Alert, Button, Modal, Skeleton, cn } from '../../components/ui'
-import { openPdf, printSkipReasonText } from './PrintWaybillsDialog'
+import { PrintJobPanel } from './PrintJobPanel'
 
 // Pick & Pack S4 — the two lists on the waybill-mode page (design/pick-pack-waybill-mockup/
 // Main.html): "Print batches today" (with Reprint) and "Printed but not packed". Each loads its
@@ -27,7 +27,8 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
   const { t, i18n } = useTranslation()
   const [rows, setRows] = useState<PrintBatchToday[] | null>(null)
   const [reprinting, setReprinting] = useState<string | null>(null)
-  const [result, setResult] = useState<PrintBatchResult | null>(null)
+  /** The reprint job being followed (merged-PDF slice C: a reprint is a background print job). */
+  const [reprintJob, setReprintJob] = useState<{ jobId: string; batchNo: number; alreadyRunning: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -42,14 +43,14 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
     if (reprinting) return
     setReprinting(b.batchId)
     setError(null)
-    const win = window.open('', '_blank')                  // inside the click — popup blockers
     try {
-      const r = await reprintPrintBatch(b.batchId)
-      if (r.pdfBase64) openPdf(win, r.pdfBase64)
-      else win?.close()
-      if (!r.pdfBase64 || r.excluded.length > 0 || !r.orderGuaranteed) setResult(r)
+      const jobId = await startPrintJob({ kind: 'reprint', batchId: b.batchId })
+      setReprintJob({ jobId, batchNo: b.batchNo, alreadyRunning: false })
     } catch (e) {
-      win?.close()
+      if (e instanceof PrintJobRunningError) {
+        setReprintJob({ jobId: e.jobId, batchNo: b.batchNo, alreadyRunning: true })
+        return
+      }
       setError(e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
         : t('fulfill.printBatch.error'))
@@ -118,33 +119,23 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
         </ul>
       )}
 
-      {result && (
-        <Modal title={t('fulfill.waybill.lists.reprintTitle', { no: result.batchNo })} onClose={() => setResult(null)}>
-          <div className="space-y-3" data-testid="reprint-result">
-            <p className="text-body text-primary">
-              {result.pdfBase64
-                ? t('fulfill.waybill.lists.reprinted', { count: result.waybillCount })
-                : (result.message ?? t('fulfill.printBatch.nothingPrinted'))}
-            </p>
-            {result.excluded.some(x => x.reason === 'BOSTA_BUSY') && (
-              <Alert tone="warning" title={t('fulfill.printBatch.busyAlert')} />
-            )}
-            {result.pdfBase64 && !result.orderGuaranteed && (
-              <Alert tone="warning" title={t('fulfill.printBatch.orderNotGuaranteed')} />
-            )}
-            {result.excluded.length > 0 && (
-              <ul className="space-y-1">
-                {result.excluded.map(x => (
-                  <li key={x.trackingNumber} className="text-small text-muted flex flex-wrap gap-x-2">
-                    <span className="font-mono text-primary">{x.orderNumber ?? x.trackingNumber}</span>
-                    <span>{x.reason === 'ORDER_CANCELLED'
-                      ? t('fulfill.waybill.lists.skippedCancelled')
-                      : t('fulfill.waybill.lists.skippedOther', { reason: printSkipReasonText(t, x.reason) })}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <Button className="w-full" onClick={() => setResult(null)}>{t('fulfill.printBatch.done')}</Button>
+      {reprintJob && (
+        <Modal
+          title={reprintJob.alreadyRunning ? t('fulfill.printBatch.title')
+            : t('fulfill.waybill.lists.reprintTitle', { no: reprintJob.batchNo })}
+          onClose={() => setReprintJob(null)}
+        >
+          <div data-testid="reprint-result">
+            <PrintJobPanel
+              key={reprintJob.jobId}
+              jobId={reprintJob.jobId}
+              alreadyRunning={reprintJob.alreadyRunning}
+              actions={() => (
+                <Button variant="secondary" className="w-full" onClick={() => setReprintJob(null)}>
+                  {t('fulfill.printBatch.done')}
+                </Button>
+              )}
+            />
           </div>
         </Modal>
       )}

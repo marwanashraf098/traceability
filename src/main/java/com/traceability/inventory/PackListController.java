@@ -1,6 +1,9 @@
 package com.traceability.inventory;
 
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +22,8 @@ import java.util.UUID;
 @RequestMapping("/api/v1")
 public class PackListController {
 
+    private static final Logger log = LoggerFactory.getLogger(PackListController.class);
+
     private final PackListService svc;
 
     public PackListController(PackListService svc) {
@@ -33,9 +38,18 @@ public class PackListController {
     }
 
     /** Regenerate one batch's PDF in its stored order; writes no batch row. */
+    /**
+     * The synchronous reprint. The UI reprints through POST /api/v1/fulfill/print-jobs (kind 'reprint')
+     * since merged-PDF slice B; kept unchanged so nothing that still calls it breaks.
+     * @deprecated remove after merged-PDF jobs are stable in prod — the WARN below shows whether anything
+     *             still calls it.
+     */
+    @Deprecated
     @PostMapping("/fulfill/print-batches/{batchId}/reprint")
     @PreAuthorize("isAuthenticated()")
     public PackPrintBatchService.PrintBatchResult reprint(@PathVariable UUID batchId) {
+        log.warn("Deprecated POST /api/v1/fulfill/print-batches/{}/reprint called: tenant={} — the UI uses print-jobs",
+            batchId, TenantContext.get());
         return svc.reprint(batchId);
     }
 

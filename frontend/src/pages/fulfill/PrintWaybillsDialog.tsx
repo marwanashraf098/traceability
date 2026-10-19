@@ -3,29 +3,19 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { Printer } from 'lucide-react'
 import {
-  getPrintBatchOptions, printWaybillBatch, TransferCommandError,
-  PrintBatchResult, PrintPaper, PrintScope, PrintSort,
+  getLatestPrintJob, getPrintBatchOptions, isPrintJobActive, MAX_WAYBILLS_PER_PRINT, PrintJob,
+  PrintJobRunningError, PrintPaper, PrintScope, PrintSort, startPrintJob, TransferCommandError,
 } from '../../api'
 import { Alert, Button, Checkbox, Modal, Radio, SegmentedControl, cn } from '../../components/ui'
-import type { TFunction } from 'i18next'
+import { openJobPdf, PrintJobPanel } from './PrintJobPanel'
+
+export { isRetryReason, printSkipReasonText, printSummaryText } from './PrintJobPanel'
 
 // Pick & Pack S2 — "Print waybills" (design/pick-pack-waybill-mockup/PrintDialog.html for flow
 // and copy). Counts come from the queue already on screen, so opening the page makes no extra
-// request; the paper default is fetched only when this dialog opens.
-
-/** Same cap as the server (PackPrintBatchService.MAX_WAYBILLS_PER_PRINT): from 50 waybills up
- *  Bosta emails the labels instead of returning the PDF, so one print = at most 49. */
-const MAX_WAYBILLS_PER_PRINT = 49
-
-/** Shows a base64 PDF in the tab opened during the click (popup blockers), or a new one. */
-export function openPdf(win: Window | null, base64: string) {
-  const bytes = atob(base64)
-  const arr = new Uint8Array(bytes.length)
-  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
-  const url = URL.createObjectURL(new Blob([arr], { type: 'application/pdf' }))
-  if (win) win.location.href = url
-  else window.open(url, '_blank')
-}
+// request; the paper default and the latest print job are fetched only when this dialog opens.
+// Merged-PDF slice C: a print is a background job of up to 490 waybills (requests of 49 to Bosta, one
+// merged PDF); this dialog starts it, follows it, and finds it again after being closed.
 
 export default function PrintWaybillsDialog({
   newCount,
@@ -44,15 +34,26 @@ export default function PrintWaybillsDialog({
   const [paper, setPaper] = useState<PrintPaper>('A4')
   const [sort, setSort] = useState<PrintSort>('oldest')
   const [pickList, setPickList] = useState(false)
-  const [printing, setPrinting] = useState(false)
+  const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<PrintBatchResult | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [alreadyRunning, setAlreadyRunning] = useState(false)
+  const [lastJob, setLastJob] = useState<PrintJob | null>(null)
+  const [finished, setFinished] = useState<PrintJob | null>(null)
 
   useEffect(() => {
     let cancelled = false
     getPrintBatchOptions()
       .then(o => { if (!cancelled && o?.defaultPaper) setPaper(o.defaultPaper) })
       .catch(() => { /* keep A4 */ })
+    // A print left running (or finished) while the dialog was closed is found again here.
+    getLatestPrintJob()
+      .then(j => {
+        if (cancelled || !j) return
+        if (isPrintJobActive(j)) setJobId(j.jobId)
+        else setLastJob(j)
+      })
+      .catch(() => { /* nothing to resume */ })
     return () => { cancelled = true }
   }, [])
 
@@ -60,86 +61,60 @@ export default function PrintWaybillsDialog({
   const count = Math.min(scope === 'new' ? newCount : allCount, MAX_WAYBILLS_PER_PRINT)
 
   async function print() {
-    if (printing || count === 0) return
-    setPrinting(true)
+    if (starting || count === 0) return
+    setStarting(true)
     setError(null)
-    // Open the tab inside the click so popup blockers allow it; filled once the PDF arrives.
-    const win = window.open('', '_blank')
     try {
-      const r = await printWaybillBatch({ scope, paper, sort })
-      if (r.pdfBase64) openPdf(win, r.pdfBase64)
-      else win?.close()
-      setResult(r)
+      setJobId(await startPrintJob({ kind: 'print', scope, paper, sort }))
     } catch (e) {
-      win?.close()
-      setError(e instanceof TransferCommandError
-        ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
-        : t('fulfill.printBatch.error'))
+      if (e instanceof PrintJobRunningError) {
+        setAlreadyRunning(true)
+        setJobId(e.jobId)
+      } else {
+        setError(e instanceof TransferCommandError
+          ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
+          : t('fulfill.printBatch.error'))
+      }
     } finally {
-      setPrinting(false)
+      setStarting(false)
     }
   }
 
-  const reasonText = (reason: string) => printSkipReasonText(t, reason)
+  const close = (job: PrintJob | null) => onClose(!!(job?.batchId ?? finished?.batchId))
 
-  if (result) {
+  if (jobId) {
     return (
-      <Modal title={t('fulfill.printBatch.title')} onClose={() => onClose(!!result.batchId)}>
-        <div className="space-y-4" data-testid="print-batch-result">
-          {result.batchId ? (
-            <p className="text-body text-primary">
-              {t('fulfill.printBatch.printed', { no: result.batchNo, count: result.waybillCount })}
-            </p>
-          ) : (
-            <p className="text-body text-primary">
-              {result.candidateCount === 0 ? t('fulfill.printBatch.nothingReady') : t('fulfill.printBatch.nothingPrinted')}
-            </p>
-          )}
-          {result.batchId && result.remainingCount > 0 && (
-            <Alert
-              tone="info"
-              title={t('fulfill.printBatch.remaining', { printed: result.waybillCount, count: result.remainingCount })}
-            />
-          )}
-          {result.excluded.some(x => x.reason === 'BOSTA_BUSY') && (
-            <Alert tone="warning" title={t('fulfill.printBatch.busyAlert')} />
-          )}
-          {result.batchId && !result.orderGuaranteed && (
-            <Alert tone="warning" title={t('fulfill.printBatch.orderNotGuaranteed')} />
-          )}
-          {result.excluded.length > 0 && (
-            <div>
-              <p className="text-small font-semibold text-primary mb-1.5" data-testid="print-batch-summary">
-                {printSummaryText(t, result.waybillCount, result.excluded)}
-              </p>
-              <ul className="max-h-40 overflow-y-auto space-y-1">
-                {result.excluded.map(x => (
-                  <li key={x.trackingNumber} className="text-small text-muted flex flex-wrap gap-x-2">
-                    {x.orderNumber && <span className="font-mono text-primary">{x.orderNumber}</span>}
-                    <span className="font-mono text-primary">{x.trackingNumber}</span>
-                    <span>{reasonText(x.reason)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="flex gap-2 pt-1">
-            {pickList && result.batchId && (
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => {
-                  // Same tab: a new tab on a station tablet has no signed-in worker and shows the PIN gate.
-                  onClose(true)
-                  navigate(`/fulfill/gather?batch=${result.batchId}`)
-                }}
-              >
-                {t('fulfill.printBatch.openPickList')}
-              </Button>
-            )}
-            <Button className="flex-1" onClick={() => onClose(!!result.batchId)}>{t('fulfill.printBatch.done')}</Button>
-          </div>
-        </div>
+      <Modal title={t('fulfill.printBatch.title')} onClose={() => close(finished)}>
+        <PrintJobPanel
+          key={jobId}
+          jobId={jobId}
+          alreadyRunning={alreadyRunning}
+          onJob={j => { if (!isPrintJobActive(j)) setFinished(j) }}
+          actions={job => {
+            const ended = job && !isPrintJobActive(job)
+            return (
+              <>
+                {ended && pickList && job.batchId && (
+                  <Button
+                    variant="secondary"
+                    className="flex-1 min-w-[10rem]"
+                    onClick={() => {
+                      // Same tab: a new tab on a station tablet has no signed-in worker and shows the PIN gate.
+                      onClose(true)
+                      navigate(`/fulfill/gather?batch=${job.batchId}`)
+                    }}
+                  >
+                    {t('fulfill.printBatch.openPickList')}
+                  </Button>
+                )}
+                <Button className="flex-1 min-w-[10rem]" variant={ended && job.pdfAvailable ? 'secondary' : 'primary'}
+                        onClick={() => close(job)}>
+                  {t('fulfill.printBatch.done')}
+                </Button>
+              </>
+            )
+          }}
+        />
       </Modal>
     )
   }
@@ -208,49 +183,37 @@ export default function PrintWaybillsDialog({
           }
         />
 
+        {lastJob && lastJob.printedCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line p-3" data-testid="last-print">
+            <span className="flex-1 min-w-0 text-small text-muted">
+              {t('fulfill.printBatch.lastPrint', {
+                printed: lastJob.printedCount,
+                time: new Date(lastJob.finishedAt ?? lastJob.createdAt)
+                  .toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' }),
+              })}
+            </span>
+            {lastJob.pdfAvailable && (
+              <Button size="sm" variant="secondary" onClick={() => { openJobPdf(lastJob.jobId).catch(() => {}) }}>
+                {t('fulfill.printBatch.openWaybills')}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setJobId(lastJob.jobId)}>
+              {t('fulfill.printBatch.showLastPrint')}
+            </Button>
+          </div>
+        )}
+
         {error && <Alert tone="critical" title={error} />}
 
         <div className="flex gap-2 pt-1">
-          <Button variant="secondary" className="flex-1" onClick={() => onClose(false)} disabled={printing}>
+          <Button variant="secondary" className="flex-1" onClick={() => onClose(false)} disabled={starting}>
             {t('common.cancel')}
           </Button>
-          <Button className="flex-1" iconStart={Printer} loading={printing} disabled={count === 0} onClick={print}>
+          <Button className="flex-1" iconStart={Printer} loading={starting} disabled={count === 0} onClick={print}>
             {t('fulfill.printBatch.printN', { count })}
           </Button>
         </div>
       </div>
     </Modal>
   )
-}
-
-/** Why a waybill wasn't printed — shared by the print dialog and the reprint result. */
-export function printSkipReasonText(t: TFunction, reason: string) {
-  if (reason === 'DELETED_IN_BOSTA') return t('fulfill.printBatch.reason.deletedInBosta')
-  if (reason === 'BOSTA_REJECTED_UNISOLATED') return t('fulfill.printBatch.reason.unisolated')
-  if (reason === 'BOSTA_BUSY') return t('fulfill.printBatch.reason.busy')
-  if (reason === 'BOSTA_TEMPORARY') return t('fulfill.printBatch.reason.temporary')
-  if (reason === 'BOSTA_EMAIL_PATH') return t('fulfill.printBatch.reason.emailed')
-  if (reason === 'UNLINKED') return t('fulfill.printBatch.reason.unlinked')
-  if (reason === 'NON_PRINTABLE_TYPE:CRP') return t('fulfill.printBatch.reason.returnPickup')
-  if (reason.startsWith('NON_PRINTABLE_STATE:')) return t('fulfill.printBatch.reason.notPrintable')
-  if (reason.startsWith('BOSTA_REJECTED')) return t('fulfill.printBatch.reason.rejected')
-  return reason
-}
-
-/** Not printed for a temporary Bosta reason (busy / no answer) — nothing wrong with the waybill. */
-export function isRetryReason(reason: string) {
-  return reason === 'BOSTA_BUSY' || reason === 'BOSTA_TEMPORARY'
-}
-
-/** "Printed N · Skipped M (X deleted in Bosta / Y rejected / Z to print again)". */
-export function printSummaryText(t: TFunction, printed: number, excluded: { reason: string }[]) {
-  const deleted = excluded.filter(x => x.reason === 'DELETED_IN_BOSTA').length
-  const retry = excluded.filter(x => isRetryReason(x.reason)).length
-  const rejected = excluded.length - deleted - retry
-  const parts = [
-    deleted > 0 ? t('fulfill.printBatch.skippedDeleted', { count: deleted }) : null,
-    rejected > 0 ? t('fulfill.printBatch.skippedRejected', { count: rejected }) : null,
-    retry > 0 ? t('fulfill.printBatch.skippedRetry', { count: retry }) : null,
-  ].filter(Boolean)
-  return `${t('fulfill.printBatch.summary', { printed, skipped: excluded.length })} (${parts.join(' / ')})`
 }
