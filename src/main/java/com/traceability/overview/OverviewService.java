@@ -384,10 +384,10 @@ public class OverviewService {
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                    COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                    s.exception_code, s.is_delayed, s.sla_breached,
-                   s.max_progress_rank
+                   s.max_progress_rank, s.provider AS delivery_provider
             FROM merchant_orders o
             LEFT JOIN LATERAL (
-                SELECT internal_state, number_of_attempts,
+                SELECT internal_state, provider, number_of_attempts,
                        exception_code, is_delayed, sla_breached,
                        (SELECT COUNT(*) FROM shipment_status_history h2
                         LEFT JOIN ndr_codes n ON n.code = h2.exception_code
@@ -431,7 +431,8 @@ public class OverviewService {
                     rs.getObject("exception_code", Integer.class),
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
-                    notTracedAt != null);
+                    notTracedAt != null,
+                    rs.getString("delivery_provider"));
                 return new Candidate(orderStatus, rs.getTimestamp("placed_at"), derived,
                     com.traceability.fulfillment.OrderShippingBadge.isShippedElsewhere(
                         rs.getString("shipping_carrier_class"), rs.getString("delivery_state")));

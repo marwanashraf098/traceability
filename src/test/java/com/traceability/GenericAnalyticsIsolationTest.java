@@ -340,7 +340,60 @@ class GenericAnalyticsIsolationTest {
     /** The (b) assertions — in their own class so the pre-G2 dump run (-Dgeneric.dumpOnly=true) can skip them. */
     static final class GenericAssertions {
         static void check(Map<String, JsonNode> out) {
-            // filled in after the pre-G2 dump showed the response shapes
+            // Revenue: the 3 generic orders are "Shipped outside Bosta" (otherCarrier), not in transit / refused.
+            JsonNode w = out.get("revenue-summary").path("current").path("waterfall");
+            assertThat(dec(w.get("otherCarrier"))).isEqualByComparingTo("3000");
+            assertThat(dec(w.get("inTransit"))).isEqualByComparingTo("0");
+            assertThat(dec(w.get("refused"))).isEqualByComparingTo("0");
+            assertThat(dec(w.get("netRealized"))).isEqualByComparingTo("1000");
+            assertThat(out.get("revenue-summary").path("current").path("funnel").path("delivered").asInt()).isEqualTo(1);
+
+            // Cities: only the Bosta order's city — no generic order in any (or the Unknown) city.
+            JsonNode cities = out.get("sales-cities").path("cities");
+            assertThat(cities).hasSize(1);
+            assertThat(cities.get(0).path("cityId").asText()).isEqualTo("g-cairo");
+            assertThat(cities.get(0).path("orders").asInt()).isEqualTo(1);
+
+            // Delivery: Bosta's own success rate — the generic delivered / returned orders don't count.
+            JsonNode d = out.get("delivery-summary").path("current");
+            assertThat(d.path("delivered").asInt()).isEqualTo(1);
+            assertThat(d.path("failed").asInt()).isEqualTo(0);
+            assertThat(d.path("handedOrders").asInt()).isEqualTo(1);
+
+            // Orders (finance): every generic order is "Other carrier", never awaiting a Bosta payout / lost.
+            JsonNode orders = out.get("orders");
+            assertThat(orders.path("counts").path("other_carrier").asInt()).isEqualTo(3);
+            assertThat(orders.path("counts").path("lost").asInt()).isEqualTo(0);
+            assertThat(orders.path("counts").path("overdue").asInt()).isEqualTo(0);
+            int generic = 0;
+            for (JsonNode o : orders.path("orders")) {
+                if (List.of("#F2", "#F3", "#F4").contains(o.path("name").asText())) {
+                    generic++;
+                    assertThat(o.path("deliveryStatus").path("key").asText()).as(o.path("name").asText()).isEqualTo("wijha");
+                    assertThat(o.path("financialStatus").asText()).isEqualTo("other_carrier");
+                    assertThat(o.path("bostaFees").isNull()).isTrue();
+                }
+            }
+            assertThat(generic).isEqualTo(3);
+
+            // Money: the generic 'created' order isn't "not fulfilled with Bosta"; nothing generic in transit / fees.
+            JsonNode pipe = out.get("money-pipeline");
+            assertThat(pipe.path("notFulfilled").path("count").asInt()).isEqualTo(1);
+            assertThat(dec(pipe.path("notFulfilled").get("value"))).isEqualByComparingTo("1000");
+            assertThat(pipe.path("inTransit").path("count").asInt()).isEqualTo(0);
+            assertThat(out.get("money-fees").path("total").path("legs").asInt()).isEqualTo(1);
+            assertThat(dec(out.get("money-fees").path("total").get("amount"))).isEqualByComparingTo("68.40");
+
+            // Profit: realized only from the Bosta-delivered order.
+            assertThat(dec(out.get("profit-summary").path("coverage").get("realizedTotal"))).isEqualByComparingTo("1000");
+            assertThat(dec(out.get("profit-summary").get("feesTotal"))).isEqualByComparingTo("68.40");
+
+            // A piece trip on the generic leg: its tracking number, 'wijha', no Bosta city, no fee.
+            JsonNode trip = out.get("piece-history").path("trips").get(0);
+            assertThat(trip.path("trackingNumber").asText()).isEqualTo("WJ-1001");
+            assertThat(trip.path("outcome").asText()).isEqualTo("wijha");
+            assertThat(trip.path("cityId").isNull()).isTrue();
+            assertThat(trip.path("fee").isNull()).isTrue();
         }
     }
 

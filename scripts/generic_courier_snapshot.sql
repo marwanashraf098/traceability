@@ -1,8 +1,9 @@
 -- Non-Bosta couriers G1 (V168 / V169) — READ-ONLY before/after snapshot for the deploy.
 --
 -- Prints, for every tenant: per open order its derived status, shipping badge / carrier and
--- pickable yes/no; per variant its committed quantity; the number of open stuck alerts; plus the
--- generic switch and generic-leg count (both must stay false / 0 — no tenant is switched on).
+-- pickable yes/no; per variant its committed quantity; the number of open stuck alerts; the
+-- generic switch and generic-leg count (both must stay false / 0 — no tenant is switched on); and
+-- (G2) the analytics outcome counts of the last 30 days (section 4).
 -- Every value is computed by SQL that mirrors the code paths (one comment per block names the Java
 -- it mirrors). It sees what the DATABASE says: the migration's effects (enum value, the swapped
 -- uniqueness indexes, shipping_carrier_of with the named-carrier list, the V132 trigger) and any row
@@ -160,5 +161,75 @@ LEFT JOIN shipments s ON s.tenant_id = t.id
 WHERE NOT EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = t.id)
 GROUP BY t.name, t.id
 ORDER BY t.name, t.id;
+
+-- 4. Analytics outcomes per tenant (G2): orders placed in the 30 days before as_of, per outcome — the
+--    SalesAnalyticsService.ORDER_OUTCOMES rule as of G2: the deciding leg is the order's BOSTA forward leg
+--    (never a type 25 / 30 leg; a live one first, else the newest ended one); an order with no deciding
+--    Bosta leg, or one ended before pickup, is 'wijha' when Shopify names another known carrier OR it has a
+--    live generic (non-Bosta courier) forward leg, else 'not_shipped'. Cohort ≈ soldLines: merchant
+--    orders, not cancelled, not exchange replacements, at/after the store's ingest floor, with a line
+--    still sold (floor overrides and refund add-backs are left out — same script before and after, so the
+--    diff is what matters). Bosta-only tenants: identical before and after the deploy.
+WITH cfg AS (SELECT (:'as_of')::timestamptz AS now_ts),
+period_orders AS (
+    SELECT o.tenant_id, o.id AS order_id, o.shipping_carrier_class AS carrier_class
+    FROM orders o
+    JOIN stores st ON st.id = o.store_id
+    CROSS JOIN cfg
+    WHERE o.external_id NOT LIKE 'internal:portal:%'          -- merchant_orders
+      AND o.external_id NOT LIKE 'internal:exchange:%'
+      AND o.status <> 'cancelled' AND NOT coalesce(o.raw_cancelled, false)
+      AND o.placed_at >= cfg.now_ts - interval '30 days' AND o.placed_at < cfg.now_ts
+      AND (st.orders_ingest_from IS NULL OR o.placed_at >= st.orders_ingest_from)
+      AND EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id AND coalesce(oi.current_qty, oi.quantity) > 0)
+),
+outcomes AS (
+    SELECT po.tenant_id,
+           CASE
+             WHEN NOT d.bosta_decides THEN
+                  CASE WHEN po.carrier_class = 'other_known'
+                         OR EXISTS (SELECT 1 FROM shipments g WHERE g.order_id = po.order_id
+                                      AND g.provider::text = 'generic' AND g.shipment_leg = 'forward'
+                                      AND g.internal_state NOT IN ('terminated', 'cancelled'))
+                       THEN 'wijha' ELSE 'not_shipped' END
+             WHEN leg.internal_state IN ('terminated', 'cancelled')
+                  AND leg.collected_from_business_at IS NULL AND NOT coalesce(h.picked_up, false) THEN 'not_shipped'
+             WHEN leg.internal_state = 'delivered' THEN 'delivered'
+             WHEN leg.type_code = '20' OR leg.internal_state IN ('returning', 'returned')
+                  OR (h.first_return IS NOT NULL AND (h.first_delivered IS NULL OR h.first_return < h.first_delivered))
+                  THEN 'refused'
+             WHEN h.first_delivered IS NOT NULL THEN 'delivered'
+             WHEN leg.internal_state IN ('lost', 'terminated', 'cancelled') THEN 'other_terminal'
+             ELSE 'in_transit'
+           END AS outcome
+    FROM period_orders po
+    LEFT JOIN LATERAL (
+        SELECT s.id AS shipment_id, s.internal_state::text AS internal_state, s.collected_from_business_at, s.type_code
+        FROM shipments s
+        WHERE s.order_id = po.order_id AND s.tenant_id = po.tenant_id AND s.provider::text = 'bosta'
+          AND s.shipment_leg = 'forward' AND coalesce(s.type_code, '10') NOT IN ('25', '30')
+        ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
+        LIMIT 1
+    ) leg ON true
+    LEFT JOIN LATERAL (
+        SELECT min(hh.occurred_at) FILTER (WHERE hh.internal_state = 'delivered')                AS first_delivered,
+               min(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return,
+               coalesce(bool_or(hh.internal_state IN ('with_courier', 'returning', 'returned', 'delivered', 'lost')), false)
+                                                                                                  AS picked_up
+        FROM shipment_status_history hh
+        WHERE hh.shipment_id = leg.shipment_id AND hh.tenant_id = po.tenant_id
+    ) h ON true
+    CROSS JOIN LATERAL (
+        SELECT leg.shipment_id IS NOT NULL
+               AND NOT (leg.internal_state IN ('terminated', 'cancelled')
+                        AND (po.carrier_class = 'other_known'
+                             OR (leg.collected_from_business_at IS NULL AND NOT coalesce(h.picked_up, false))))
+               AS bosta_decides
+    ) d
+)
+SELECT 'outcomes' AS section, t.name, t.id::text, oc.outcome, count(*)::text
+FROM outcomes oc JOIN tenants t ON t.id = oc.tenant_id
+GROUP BY t.name, t.id, oc.outcome
+ORDER BY t.name, t.id, oc.outcome;
 
 ROLLBACK;

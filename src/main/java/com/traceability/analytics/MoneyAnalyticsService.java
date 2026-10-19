@@ -145,7 +145,7 @@ public class MoneyAnalyticsService {
                     SELECT s.id AS shipment_id, s.internal_state, s.collected_from_business_at, s.type_code AS type_code,
                            s.city_name AS city
                     FROM shipments s
-                    WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward'
+                    WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
                       AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                     ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
                     LIMIT 1
@@ -206,6 +206,7 @@ public class MoneyAnalyticsService {
                 SELECT l.order_id, SUM(l.revenue) AS value FROM lines l
                 JOIN merchant_orders o ON o.id = l.order_id
                 WHERE COALESCE(o.shipping_carrier_class, '') <> 'other_known'
+                  AND NOT """ + SalesAnalyticsService.liveGenericLeg("l.order_id") + """
                   AND EXISTS (SELECT 1 FROM courier_accounts ca
                               WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' AND ca.status = 'active')
                 GROUP BY l.order_id
@@ -216,7 +217,7 @@ public class MoneyAnalyticsService {
                        s.city_name AS city
                 FROM shipments s
                 JOIN open_orders oo ON oo.order_id = s.order_id
-                WHERE s.tenant_id = ? AND s.shipment_leg = 'forward'
+                WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
                   AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                 ORDER BY s.order_id, (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
             ),
@@ -584,7 +585,7 @@ public class MoneyAnalyticsService {
                 money(rs.getBigDecimal("deposited_amt")), rs.getLong("days")));
 
         Long unresolved = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND s.settlement_status = 'unresolved' " +
+            "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.settlement_status = 'unresolved' " +
             "AND NOT " + SettlementSql.zeroCycle("s"), Long.class, tid);
         return new Stuck(now, never, withBosta, notPaid, weekday, unresolved == null ? 0 : unresolved);
     }

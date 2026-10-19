@@ -544,21 +544,25 @@ public class StockAnalyticsService {
     /*
      * A piece's trips. The trip's leg: the event's shipment, else the order's forward leg booked
      * before the event (the newest). Its outcome: the s2 rule; with no leg, a delivered move is
-     * 'delivered' (a self-pickup handover), anything else 'unknown'. Parameters: piece id, tenant id.
+     * 'delivered' (a self-pickup handover), anything else 'unknown'. A trip on a generic (non-Bosta courier)
+     * leg keeps its tracking number but reads 'wijha' ("Shipped outside Bosta"), with no Bosta city and no
+     * Bosta fee (G2). Parameters: piece id, tenant id.
      */
     private static final String TRIPS_SQL = """
         SELECT e.occurred_at, e.order_id, o.number, leg.tracking_number, leg.city_id, leg.city,
                CASE WHEN leg.shipment_id IS NULL THEN CASE WHEN e.to_status = 'delivered' THEN 'delivered' ELSE 'unknown' END
+                    WHEN leg.provider = 'generic' THEN 'wijha'
         """ + SalesAnalyticsService.LEG_OUTCOME_WHENS + """
                END AS outcome,
                leg.fee, leg.estimated
         FROM piece_events e
         LEFT JOIN merchant_orders o ON o.id = e.order_id
         LEFT JOIN LATERAL (
-            SELECT s.id AS shipment_id, s.tracking_number, s.internal_state, s.collected_from_business_at, s.type_code,
-                   s.city_id, s.city_name AS city,
-                   """ + SettlementSql.fee("s") + """
-                    AS fee,
+            SELECT s.id AS shipment_id, s.provider, s.tracking_number, s.internal_state, s.collected_from_business_at, s.type_code,
+                   CASE WHEN s.provider = 'bosta' THEN s.city_id END AS city_id,
+                   CASE WHEN s.provider = 'bosta' THEN s.city_name END AS city,
+                   CASE WHEN s.provider = 'bosta' THEN """ + SettlementSql.fee("s") + """
+                   END AS fee,
                    NOT """ + SettlementSql.settled("s") + """
                     AS estimated
             FROM shipments s

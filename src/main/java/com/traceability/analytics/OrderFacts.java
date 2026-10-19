@@ -107,7 +107,7 @@ final class OrderFacts {
                    sh.settlement_status,
                    sh.last_failure_category                                                   AS failure_category
             FROM shipments sh
-            WHERE sh.id = om.shipment_id AND sh.tenant_id = ?
+            WHERE sh.id = om.shipment_id AND sh.tenant_id = ? AND sh.provider = 'bosta'
         ) lg ON true
         """;
 

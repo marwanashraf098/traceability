@@ -252,6 +252,9 @@ public class SalesAnalyticsService {
      *     other_terminal  — lost, or terminated / cancelled after pickup
      *     in_transit      — created / with_courier / exception
      *   bosta_decides = a Bosta leg decided the outcome (the cities endpoint counts only those).
+     *   Non-Bosta couriers (G2): the deciding leg is a BOSTA leg only (provider = 'bosta'); an order whose
+     *   forward leg is generic ({@link #liveGenericLeg}) is never Bosta-decided and reads 'wijha' (shipped
+     *   outside Bosta) whatever its Shopify carrier class — never delivered / refused / in transit, no city.
      */
     /**
      * THE outcome of a deciding Bosta forward leg (alias leg: internal_state, type_code) given its
@@ -264,6 +267,19 @@ public class SalesAnalyticsService {
      * not_shipped, not a failure (approved 2026-10-08). Cancelled / terminated after pickup stays
      * other_terminal (failed).
      */
+    /**
+     * Non-Bosta couriers G2 (V169 generic legs): SQL true when the order {@code orderIdExpr} has a live generic
+     * (non-Bosta courier) forward leg — not terminated / cancelled. Such an order is never Bosta-decided: the
+     * deciding-leg pickers read Bosta legs only ({@code provider = 'bosta'}) and the order lands in the
+     * 'wijha' ("Shipped outside Bosta") outcome. Order ids are unique across tenants and the read runs under
+     * the caller's RLS, so no tenant parameter is bound. Padded with spaces: text blocks strip the trailing
+     * space before a {@code """ +} splice.
+     */
+    static String liveGenericLeg(String orderIdExpr) {
+        return " EXISTS (SELECT 1 FROM shipments g WHERE g.order_id = " + orderIdExpr + " AND g.provider = 'generic' " +
+               "AND g.shipment_leg = 'forward' AND g.internal_state NOT IN ('terminated', 'cancelled')) ";
+    }
+
     static final String LEG_OUTCOME_WHENS = """
                        WHEN leg.internal_state IN ('terminated', 'cancelled')
                             AND leg.collected_from_business_at IS NULL
@@ -288,7 +304,8 @@ public class SalesAnalyticsService {
                    CASE WHEN d.bosta_decides THEN leg.city END AS city,
                    CASE
                        WHEN NOT d.bosta_decides THEN
-                           CASE WHEN po.carrier_class = 'other_known' THEN 'wijha' ELSE 'not_shipped' END
+                           CASE WHEN po.carrier_class = 'other_known' OR """ + liveGenericLeg("po.order_id") + """
+                                THEN 'wijha' ELSE 'not_shipped' END
             """ + LEG_OUTCOME_WHENS + """
                    END AS outcome
             FROM period_orders po
@@ -298,6 +315,7 @@ public class SalesAnalyticsService {
                 FROM shipments s
                 WHERE s.order_id = po.order_id
                   AND s.tenant_id = ?
+                  AND s.provider = 'bosta'
                   AND s.shipment_leg = 'forward'
                   AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                 ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
