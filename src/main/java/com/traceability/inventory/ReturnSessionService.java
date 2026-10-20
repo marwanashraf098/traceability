@@ -91,6 +91,8 @@ public class ReturnSessionService {
     private final ReturnRequestLifecycle requests;
     /** Issue 1 (V154): untracked order lines on a parcel, one row per unit — same JdbcTemplate. */
     private final UntrackedParcelUnits untrackedUnits;
+    /** Non-Bosta couriers G3: a generic leg scanned back becomes 'returned' — on this service's own connection. */
+    private final com.traceability.courier.GenericLegTransitions genericLegs;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
                                 ReturnService returnService, ShipmentLinkService shipmentLinkService,
@@ -102,6 +104,7 @@ public class ReturnSessionService {
         this.clock               = clock;
         this.requests            = new ReturnRequestLifecycle(jdbc);
         this.untrackedUnits      = new UntrackedParcelUnits(jdbc);
+        this.genericLegs         = new com.traceability.courier.GenericLegTransitions(jdbc, ledger);
     }
 
     // ── Create / open ─────────────────────────────────────────────────────────
@@ -181,19 +184,50 @@ public class ReturnSessionService {
         }
 
         String trackingNumber = TrackingNumberNormalizer.normalize(cleaned);
+        // G3: the shared generic resolver (G2) — OFF, with no key lookup, for a tenant with the switch off and no
+        // live generic shipment; then everything here is exactly the Bosta path.
+        WaybillScanKeys.Generic generic = WaybillScanKeys.lookup(jdbc, tenantId, cleaned);
         if (trackingNumber != null) {
             List<Map<String, Object>> shipmentRows = jdbc.queryForList(
                 "SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND provider = 'bosta'",
                 trackingNumber, tenantId);
             if (!shipmentRows.isEmpty()) {
+                if (generic.matched()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, WaybillScanKeys.AMBIGUOUS_EN);
+                }
                 return scanAwb(sessionId, tenantId, trackingNumber, viaPhone);
             }
+        }
+        if (generic.matched()) {
+            return scanGenericAwb(sessionId, tenantId, generic.match(), viaPhone);
         }
 
         // Foreign scan: nothing of ours matched. No row written, ledger untouched.
         log.warn("Foreign return scan: raw={} session={} tenant={}", rawScan, sessionId, tenantId);
         throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
             "Scan does not match any piece or shipment: " + rawScan);
+    }
+
+    /**
+     * G3 — a generic (non-Bosta courier) waybill scanned back. No courier status exists for it, so the scan IS the
+     * evidence: a leg with the courier or delivered becomes 'returned' (GenericLegTransitions, source return_scan)
+     * and its pieces are then expected back (ShipmentLinkService.isExpectedBack reads that history row). The
+     * session remembers the AWB as its tracking number plus the shipment id (V173), so the parcel card and every
+     * existing awb reader work as for a Bosta parcel. Pieces move one by one as they are scanned, like Bosta's.
+     */
+    private Map<String, Object> scanGenericAwb(UUID sessionId, UUID tenantId, WaybillScanKeys.Match match, boolean viaPhone) {
+        genericLegs.markReturnedByScan(tenantId, match.shipmentId());
+        jdbc.update(
+            "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb, via_phone, shipment_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?) " +
+            "ON CONFLICT (session_id, awb) DO UPDATE SET via_phone = return_session_shipments.via_phone OR EXCLUDED.via_phone",
+            UUID.randomUUID(), tenantId, sessionId, match.trackingNumber(), viaPhone, match.shipmentId());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanType", "awb");
+        result.put("awb", match.trackingNumber());
+        result.put("carrier", match.carrierName());
+        result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        return result;
     }
 
     private Map<String, Object> scanPiece(UUID sessionId, UUID tenantId, Map<String, Object> piece,
@@ -212,6 +246,18 @@ public class ReturnSessionService {
         PieceStatus current   = PieceStatus.fromDb((String) piece.get("status"));
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
+        // G3: a piece of an order whose GENERIC forward leg is with the courier or delivered — the scan is the
+        // return evidence (same rule as its waybill): the leg becomes 'returned', the piece is expected back.
+        // Never a Bosta leg (returnableGenericLeg reads provider = 'generic' only).
+        boolean genericReturn = false;
+        if (current == PieceStatus.WITH_COURIER || current == PieceStatus.AWAITING_PICKUP || current == PieceStatus.DELIVERED) {
+            UUID genericLeg = genericLegs.returnableGenericLeg(tenantId, orderId);
+            if (genericLeg != null) {
+                genericLegs.markReturnedByScan(tenantId, genericLeg);
+                shipmentId = genericLeg;
+                genericReturn = true;
+            }
+        }
         String metaSuffix     = "\"session_id\":\"" + sessionId + "\"" + (viaPhone ? ",\"via\":\"phone\"" : "");
         boolean legal;
         boolean unexpected = false;
@@ -264,7 +310,7 @@ public class ReturnSessionService {
                 // pieces. Return-leg courier states no longer move pieces, so this scan is
                 // the ONLY way such a piece reaches return_pending_inspection.
                 boolean crpAwaitingIntake = shipmentLinkService.hasReturnLegAwaitingIntake(orderId, tenantId);
-                if (attribution != null || inWindow || matchedExchangeCover || crpAwaitingIntake) {
+                if (attribution != null || inWindow || matchedExchangeCover || crpAwaitingIntake || genericReturn) {
                     legal = true;
                     // Label = what actually covers the piece, independent of the window
                     // (acceptance above is unchanged). Precedence:
@@ -277,6 +323,7 @@ public class ReturnSessionService {
                     String returnKind = shipmentLinkService.hasMatchedExchange(orderId, tenantId) ? "exchange_match"
                         : attribution != null ? "request_return"
                         : crpAwaitingIntake ? "crp_return"
+                        : genericReturn ? "rto"
                         : "customer_after_delivery";
                     String requestMeta = attribution == null ? ""
                         : ",\"request_id\":\"" + attribution.requestId() + "\",\"request_item_id\":\"" + attribution.itemId() + "\"";
@@ -905,11 +952,13 @@ public class ReturnSessionService {
             "       s.raw #>> '{specs,packageDetails,description}' AS fwd_description, " +
             "       s.return_intake_outcome, s.return_intake_completed_at, s.return_intake_session_id, " +
             "       u.name AS marked_by, rq.id AS request_id, rq.reference AS request_reference, " +
+            "       CASE WHEN s.provider = 'generic' THEN COALESCE(s.carrier_name, '') END AS generic_carrier, " +
             // Step 6a: the return request whose items this parcel carries — the linked courier-return
             // leg's request, or for a Traced-booked exchange AWB the exchange's request.
             "       COALESCE(rq.id, xrq.id) AS items_request_id, COALESCE(rq.reference, xrq.reference) AS items_request_reference " +
             "FROM return_session_shipments rss " +
-            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id AND s.provider = 'bosta' " +
+            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "                AND (s.provider = 'bosta' OR s.id = rss.shipment_id) " +
             "JOIN orders o    ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
             "LEFT JOIN return_requests rq ON rq.return_shipment_id = s.id AND rq.tenant_id = s.tenant_id " +
@@ -1035,6 +1084,10 @@ public class ReturnSessionService {
                 bosta.put("description", leg.get("description"));
                 bosta.put("descriptionAr", leg.get("description_ar"));
                 parcel.put("bosta", bosta);
+            } else if (leg.get("generic_carrier") != null) {
+                // G3: another courier's parcel — no Bosta block; the card names its carrier instead.
+                parcel.put("bosta", null);
+                parcel.put("carrier", leg.get("generic_carrier"));
             } else if (returnedToSender) {
                 // Issue 1: never a blank card — Bosta's status and its forward package note.
                 Map<String, Object> bosta = new LinkedHashMap<>();
@@ -1261,7 +1314,8 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       rss.awb " +
             "FROM return_session_shipments rss " +
-            "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id AND s.provider = 'bosta' " +
+            "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "                    AND (s.provider = 'bosta' OR s.id = rss.shipment_id) " +
             "JOIN orders o       ON o.id = s.order_id AND o.tenant_id = rss.tenant_id " +
             "JOIN order_items oi ON oi.order_id = o.id " +
             "JOIN allocations a  ON a.order_item_id = oi.id " +

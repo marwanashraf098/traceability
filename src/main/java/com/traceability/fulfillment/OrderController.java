@@ -102,7 +102,14 @@ public class OrderController {
         // A3.1 — leg-scoped badge from this shipment's OWN internal_state only (no
         // order-level precedence). The frontend renders it for the return leg ONLY; the
         // forward leg's status lives solely in the order header (deriveOrderStatus).
-        OrderStatusDeriver.LegStatus legStatus) {}
+        OrderStatusDeriver.LegStatus legStatus,
+        // G3 — generic (non-Bosta courier) legs only, absent from the JSON for Bosta: the carrier, and the
+        // latest Shopify fulfillment shipment_status (in_transit, out_for_delivery, attempted_delivery, failure,
+        // delivered…) — shown on the order; only 'delivered' ever moves anything (GenericLegTransitions).
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String carrierName,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String shopifyShipmentStatus) {}
 
     public record OrderDetail(
         String id, String number, String customerName, String customerPhone,
@@ -474,6 +481,12 @@ public class OrderController {
 
     // ── list ─────────────────────────────────────────────────────────────────
 
+    /** The list without the G3 carrier filter (every caller before G3). */
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public OrderPage list(String status, String deliveryState, String q, String tracking, int page, int size) {
+        return list(status, deliveryState, q, tracking, page, size, null);
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public OrderPage list(
@@ -482,7 +495,8 @@ public class OrderController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String tracking,
             @RequestParam(defaultValue = "0")  int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String carrier) {
 
         size = Math.min(size, 100);
         int offset = page * size;
@@ -518,6 +532,12 @@ public class OrderController {
         if (tracking != null && !tracking.isBlank()) {
             where.append(" AND s.tracking_number ILIKE ?");
             params.add("%" + tracking.trim() + "%");
+        }
+        // Non-Bosta couriers G3: "With <carrier>" — generic orders of one carrier (case / space-insensitive;
+        // "" = a generic leg naming no carrier). Combined with deliveryState=with_courier for Mark delivered.
+        if (carrier != null) {
+            where.append(" AND s.provider = 'generic' AND lower(btrim(coalesce(s.carrier_name, ''))) = lower(btrim(?))");
+            params.add(carrier);
         }
 
         // LATERAL picks the latest forward shipment per order (by created_at, id DESC as
@@ -715,6 +735,12 @@ public class OrderController {
                 """
                 SELECT sh.id, sh.tracking_number, sh.provider,
                        sh.internal_state, sh.shipment_leg::text AS shipment_leg,
+                       CASE WHEN sh.provider = 'generic' THEN COALESCE(sh.carrier_name, '') END AS generic_carrier,
+                       CASE WHEN sh.provider = 'generic' THEN
+                           (SELECT t.shipment_status FROM order_fulfillment_tracking t
+                             WHERE t.tenant_id = sh.tenant_id AND t.order_id = sh.order_id
+                               AND t.shopify_fulfillment_id = sh.shopify_fulfillment_id
+                             ORDER BY t.last_seen_at DESC NULLS LAST LIMIT 1) END AS shopify_shipment_status,
                        sh.number_of_attempts,
                        -- Canonical attempt count, leg-aware: ndr_codes.category matches
                        -- shipment_leg's own value ('forward'/'return' are identical
@@ -812,7 +838,9 @@ public class OrderController {
                         rs.getString("last_failure_reason"),
                         attempts,
                         history,
-                        OrderStatusDeriver.deriveLegStatus(internalState, rs.getString("provider")));
+                        OrderStatusDeriver.deriveLegStatus(internalState, rs.getString("provider")),
+                        rs.getString("generic_carrier"),
+                        rs.getString("shopify_shipment_status"));
                 }, orderId);
 
             // Latest forward-leg shipment status inputs — deliberately a standalone query,
@@ -945,9 +973,20 @@ public class OrderController {
     // This never competes with OrderStatusDeriver — both read the same underlying rows, so
     // the drawer's Current-state card (derivedStatus) and this endpoint's 'now' row agree
     // by construction, not by cross-checking each other.
+    /**
+     * {@code source}: G3 — where a generic (non-Bosta courier) leg's state came from (pickup_scan,
+     * inferred_handover, shopify, manual, return_scan — V173). Absent from the JSON for every Bosta row.
+     */
     public record TimelineItem(
         Instant occurredAt, String eventKey, String actorName,
-        String locationName, String detail, String kind) {}
+        String locationName, String detail, String kind,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String source) {
+        public TimelineItem(Instant occurredAt, String eventKey, String actorName,
+                            String locationName, String detail, String kind) {
+            this(occurredAt, eventKey, actorName, locationName, detail, kind, null);
+        }
+    }
 
     @GetMapping("/{orderId}/timeline")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
@@ -1052,7 +1091,8 @@ public class OrderController {
             // frontend precedent (OrderDetail.tsx) exactly, including that same-code
             // exceptions fold like any other repeated state; different codes never merge.
             List<Map<String, Object>> shipmentRows = jdbc.queryForList(
-                "SELECT id, created_at, tracking_number, shipment_leg::text AS shipment_leg " +
+                "SELECT id, created_at, tracking_number, shipment_leg::text AS shipment_leg, " +
+                "       (provider = 'generic') AS generic " +
                 "FROM shipments WHERE order_id = ? ORDER BY created_at ASC, id ASC",
                 orderId);
             for (Map<String, Object> s : shipmentRows) {
@@ -1063,14 +1103,18 @@ public class OrderController {
                 List<Map<String, Object>> historyRows = jdbc.queryForList(
                     """
                     SELECT h.internal_state, h.occurred_at, h.exception_code, h.exception_reason,
-                           n.category AS ndr_category
+                           n.category AS ndr_category, h.source
                     FROM shipment_status_history h
                     LEFT JOIN ndr_codes n ON n.code = h.exception_code
                     WHERE h.shipment_id = ?
                     ORDER BY h.occurred_at ASC, h.id ASC
                     """, shipmentId);
 
-                Instant awbAt = historyRows.isEmpty()
+                // G3: a generic leg has no courier label-creation row — its first history row is a real handover
+                // (pickup_scan / inferred_handover), never folded into the AWB-linked marker, which keeps the
+                // moment Traced learned the waybill (the shipment row's created_at).
+                boolean generic = Boolean.TRUE.equals(s.get("generic"));
+                Instant awbAt = historyRows.isEmpty() || generic
                     ? ((Timestamp) s.get("created_at")).toInstant()
                     : ((Timestamp) historyRows.get(0).get("occurred_at")).toInstant();
                 items.add(new TimelineItem(
@@ -1084,7 +1128,7 @@ public class OrderController {
                 // failure are two different truths, not a duplicate).
                 boolean firstIsException = !historyRows.isEmpty()
                     && "exception".equals(historyRows.get(0).get("internal_state"));
-                int startIdx = (!historyRows.isEmpty() && !firstIsException) ? 1 : 0;
+                int startIdx = (!historyRows.isEmpty() && !firstIsException && !generic) ? 1 : 0;
 
                 // Run-key seeded from the subsumed row (when there is one) so an immediate
                 // repeat of that same state right after linking still folds away; null when
@@ -1142,7 +1186,7 @@ public class OrderController {
                     items.add(new TimelineItem(
                         ((Timestamp) row.get("occurred_at")).toInstant(), eventKey, null, null,
                         isException ? (String) row.get("exception_reason") : null,
-                        isException ? "fail" : "done"));
+                        isException ? "fail" : "done", (String) row.get("source")));
                 }
             }
 
@@ -1177,7 +1221,7 @@ public class OrderController {
                 if (!"fail".equals(last.kind())) {
                     items.set(lastIdx, new TimelineItem(
                         last.occurredAt(), last.eventKey(), last.actorName(),
-                        last.locationName(), last.detail(), "now"));
+                        last.locationName(), last.detail(), "now", last.source()));
                 }
             }
 

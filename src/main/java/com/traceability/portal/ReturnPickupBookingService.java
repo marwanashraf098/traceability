@@ -146,6 +146,12 @@ public class ReturnPickupBookingService {
         // Review mode (V130) backstop: a simulated-courier tenant never books a real Bosta trip.
         // The manual entry points refuse first (REVIEW_MODE_UNAVAILABLE); nothing is claimed here.
         if (Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId)))) return;
+        // Non-Bosta couriers G3 backstop: an order shipped with another courier is never booked with Bosta (type 25
+        // or 30) — the portal never lets such a request in; nothing is claimed or posted here either.
+        if (Boolean.TRUE.equals(tx.execute(s -> requestOrderIsGeneric(requestId, tenantId)))) {
+            log.info("Return pickup booking request={} outcome=SKIPPED_GENERIC_COURIER", requestId);
+            return;
+        }
         Context c = tx.execute(s -> loadContext(requestId, tenantId));
         if (c == null) return;                                       // not this tenant's / gone
         if (c.bookingStatus != null && !"failed".equals(c.bookingStatus)) return;
@@ -497,7 +503,19 @@ public class ReturnPickupBookingService {
         if (!"exchange".equals(r.get("type")) || !"approved".equals(r.get("status")) || r.get("booking_status") != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an approved exchange that was never booked can be booked now.");
         }
+        if (Boolean.TRUE.equals(tx.execute(s -> requestOrderIsGeneric(requestId, tenantId)))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This order was shipped with another courier — Traced can't book its pickup with Bosta.");
+        }
         scheduler.enqueue(requestId, tenantId);
+    }
+
+    /** G3: the request's order ships with another courier (GenericShipments.newestForwardIsGenericSql). */
+    private Boolean requestOrderIsGeneric(UUID requestId, UUID tenantId) {
+        return jdbc.queryForList(
+            "SELECT " + com.traceability.courier.GenericShipments.newestForwardIsGenericSql("rr.order_id") +
+            " FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ?",
+            Boolean.class, requestId, tenantId).stream().findFirst().orElse(false);
     }
 
     private static Instant parseInstant(String s) {

@@ -75,8 +75,12 @@ class GenericG3IsolationGoldenTest {
     static final Path GOLDEN_OFF = Path.of("src/test/resources/golden/g3-bosta-isolation-off.json");
     static final Path GOLDEN_ON  = Path.of("src/test/resources/golden/g3-bosta-isolation-on.json");
 
-    /** Keys of the flag-ON output that G3 may change (switched-on tenants only). Empty when recorded. */
-    static final Set<String> FLAG_ON_CHANGES = Set.of();
+    /**
+     * Paths (section.key) of the flag-ON output that G3 deliberately changes, switched-on tenants only: a pickup
+     * scan of a waybill with letters (another courier's) was "Unreadable waybill scan" (400) — it now goes to
+     * the shared generic resolver (G2) and, matching no shipment, answers UNKNOWN_AWB like an unknown Bosta AWB.
+     */
+    static final Set<String> FLAG_ON_CHANGES = Set.of("pickup.07_lettersDash", "pickup.09_wijha");
 
     @LocalServerPort int port;
     @Autowired TestRestTemplate      rest;
@@ -107,10 +111,15 @@ class GenericG3IsolationGoldenTest {
         check(out, GOLDEN_ON, "on");
         @SuppressWarnings("unchecked") Map<String, Object> on = mapper.readValue(out, Map.class);
         @SuppressWarnings("unchecked") Map<String, Object> golden = mapper.readValue(Files.readString(GOLDEN_ON), Map.class);
-        for (String k : FLAG_ON_CHANGES) {
-            assertThat(on.get(k)).as(k + " is a listed G3 change — it must actually differ").isNotEqualTo(golden.get(k));
-            on.remove(k);
-            golden.remove(k);
+        for (String path : FLAG_ON_CHANGES) {
+            String[] p = path.split("\\.");
+            @SuppressWarnings("unchecked") Map<String, Object> a = (Map<String, Object>) on.get(p[0]);
+            @SuppressWarnings("unchecked") Map<String, Object> g = (Map<String, Object>) golden.get(p[0]);
+            assertThat(a.get(p[1])).as(path + " is a listed G3 change — it must actually differ").isNotEqualTo(g.get(p[1]));
+            assertThat(g.get(p[1])).as(path + " was the 400").asString().contains("Unreadable waybill scan");
+            assertThat(a.get(p[1])).as(path + " is now an unknown waybill").asString().contains("UNKNOWN_AWB");
+            a.remove(p[1]);
+            g.remove(p[1]);
         }
         assertThat(on).isEqualTo(golden);
     }

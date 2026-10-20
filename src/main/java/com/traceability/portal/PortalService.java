@@ -368,6 +368,12 @@ public class PortalService {
             if (p.get("delivered_at") == null || !Boolean.TRUE.equals(p.get("in_window"))) return null;
             return (Timestamp) p.get("delivered_at");
         }
+        // Non-Bosta couriers G3: an order whose newest forward leg is another courier's stays out of the portal
+        // until G4 — even once that leg is delivered (Shopify / Mark delivered). Lookup and submission both land here.
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT " + com.traceability.courier.GenericShipments.newestForwardIsGenericSql("?"), Boolean.class, orderId))) {
+            return null;
+        }
         List<Map<String, Object>> delivered = jdbc.queryForList(
             "SELECT s.delivered_at, " +
             "       (now() - s.delivered_at <= interval '1 day' * t.customer_return_window_days) AS in_window " +

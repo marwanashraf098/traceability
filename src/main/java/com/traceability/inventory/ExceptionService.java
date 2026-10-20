@@ -196,6 +196,8 @@ public class ExceptionService {
             all.addAll(detectGenericBostaConflictAtPack(tenantId));
             all.addAll(detectGenericMultipleParcels(tenantId));
             all.addAll(detectGenericFulfillmentCancelled(tenantId));
+            all.addAll(detectGenericCancelledLiveShipment(tenantId));     // G3
+            all.addAll(detectGenericDeliveredWithoutPickup(tenantId));    // G3
         }
 
         // Enrich with descriptions and action hints
@@ -1141,7 +1143,7 @@ public class ExceptionService {
             "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
             "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
-            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_deleted_at " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at, provider_deleted_at, provider " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             // UUIDv4 is not time-ordered — order by created_at, never id.
@@ -1157,7 +1159,65 @@ public class ExceptionService {
             "      'terminated'::shipment_internal_state, " +
             "      'cancelled'::shipment_internal_state) " +
             // Confirmed deleted in Bosta (BostaDeletionService — not merely suspected): nothing left to cancel.
-            "  AND s.provider_deleted_at IS NULL ",
+            "  AND s.provider_deleted_at IS NULL " +
+            // Non-Bosta couriers G3: "cancel the AWB in Bosta" is only for a Bosta leg — a generic one has its
+            // own alert (detectGenericCancelledLiveShipment). Every Bosta row is selected exactly as before.
+            "  AND s.provider = 'bosta' ",
+            tid);
+    }
+
+    /**
+     * HIGH — Non-Bosta couriers G3: a cancelled order whose newest forward leg is another courier's and still out
+     * (created with a waybill, or with the courier). Traced can't cancel it anywhere — the merchant tells the
+     * carrier. Hidden once resolved, or once the leg ends (delivered / returned / cancelled).
+     */
+    private List<Map<String, Object>> detectGenericCancelledLiveShipment(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_cancelled_live_shipment' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number, " +
+            "       s.carrier_name, s.internal_state::text AS shipment_state, " +
+            "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, s.last_synced_at, o.created_at) AS occurred_at, " +
+            "       'generic_cancelled_live_shipment:order:' || o.id AS subject_key " +
+            "FROM merchant_orders o " +
+            "JOIN LATERAL (SELECT id, tracking_number, internal_state, last_synced_at, provider, carrier_name " +
+            "              FROM shipments WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
+            "              ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
+            "WHERE o.tenant_id = ? AND o.status = 'cancelled'::order_status AND s.provider = 'generic' " +
+            "  AND s.internal_state IN ('created', 'with_courier') " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'generic_cancelled_live_shipment' " +
+            "        AND er.subject_key = 'generic_cancelled_live_shipment:order:' || o.id) ",
+            tid);
+    }
+
+    /**
+     * LOW — Non-Bosta couriers G3: Shopify reported a generic parcel delivered that Traced never scanned out at
+     * Pickups. Two cases, one alert type (subject = the shipment):
+     *   inferred   — the order was packed: Traced recorded the handover as INFERRED (history source
+     *                inferred_handover) and delivered it. Hidden once resolved.
+     *   not_packed — the order isn't packed in Traced: nothing moved (held). Clears by itself once it is packed
+     *                and the next Shopify update delivers it, or once resolved.
+     */
+    private List<Map<String, Object>> detectGenericDeliveredWithoutPickup(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'generic_delivered_without_pickup' AS type, 'LOW' AS severity, 'shipment' AS subject_type, " +
+            "       x.reason, s.order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number, " +
+            "       s.carrier_name, x.occurred_at, 'generic_delivered_without_pickup:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN LATERAL ( " +
+            "    SELECT 'inferred' AS reason, h.occurred_at FROM shipment_status_history h " +
+            "    WHERE h.shipment_id = s.id AND h.source = 'inferred_handover' " +
+            "    UNION ALL " +
+            "    SELECT 'not_packed', max(t.last_seen_at) FROM order_fulfillment_tracking t " +
+            "    WHERE s.internal_state = 'created' AND t.tenant_id = s.tenant_id AND t.order_id = s.order_id " +
+            "      AND t.shopify_fulfillment_id = s.shopify_fulfillment_id AND t.shipment_status = 'delivered' " +
+            "    HAVING count(*) > 0 " +
+            "    ORDER BY 2 DESC LIMIT 1) x ON true " +
+            "WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'generic_delivered_without_pickup' " +
+            "        AND er.subject_key = 'generic_delivered_without_pickup:' || s.id) ",
             tid);
     }
 
@@ -1740,6 +1800,36 @@ public class ExceptionService {
                 item.put("descriptionAr", "البوليصة " + t + " حُذفت في Bosta، لكن قطعها خرجت من الرف بالفعل: "
                     + pcs + ". ابحث عن الطرد واحجز بوليصة جديدة.");
                 item.put("suggestedAction", "recover_parcel_rebook");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "generic_cancelled_live_shipment" -> {
+                String n = str(item, "order_number");
+                String t = str(item, "tracking_number");
+                String c = str(item, "carrier_name");
+                boolean out = "with_courier".equals(item.get("shipment_state"));
+                item.put("descriptionEn", "Order " + n + " is cancelled, but its " + (c != null ? c : "courier") + " parcel (" + t
+                    + ") " + (out ? "is still with the courier. Ask them to bring it back." : "still has a live waybill. Make sure the courier doesn't collect it."));
+                item.put("descriptionAr", "الطلب " + n + " ملغي، لكن طرده مع " + (c != null ? c : "شركة الشحن") + " (" + t + ") "
+                    + (out ? "ما زال مع المندوب. اطلب منهم إرجاعه." : "ما زالت بوليصته نشطة. تأكد ألا يستلمه المندوب."));
+                item.put("suggestedAction", "contact_carrier");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "generic_delivered_without_pickup" -> {
+                String n = str(item, "order_number");
+                String c = str(item, "carrier_name");
+                String carrier = c != null ? c : "the courier";
+                if ("not_packed".equals(item.get("reason"))) {
+                    item.put("descriptionEn", "Shopify says order " + n + " was delivered by " + carrier
+                        + ", but it isn't packed in Traced — nothing was moved. Pack it, or check the fulfillment in Shopify");
+                    item.put("descriptionAr", "شوبيفاي يقول إن الطلب " + n + " وُصّل مع " + (c != null ? c : "شركة الشحن")
+                        + "، لكنه غير مغلّف في Traced — لم يتغير شيء. غلّفه أو راجع الشحنة في شوبيفاي");
+                } else {
+                    item.put("descriptionEn", "Order " + n + " was delivered by " + carrier
+                        + " without a pickup scan — Traced recorded the handover as inferred. Scan parcels out at Pickups next time");
+                    item.put("descriptionAr", "الطلب " + n + " وُصّل مع " + (c != null ? c : "شركة الشحن")
+                        + " دون مسح عند التسليم — سجّل Traced التسليم كاستنتاج. امسح الطرود في صفحة الاستلام المرة القادمة");
+                }
+                item.put("suggestedAction", "scan_at_pickups");
                 item.put("actionUrl", ordersUrl(item));
             }
             case "cancelled_but_delivered" -> {

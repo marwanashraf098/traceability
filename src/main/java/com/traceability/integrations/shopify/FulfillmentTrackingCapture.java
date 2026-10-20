@@ -50,6 +50,14 @@ public class FulfillmentTrackingCapture {
         this.linkService = linkService;
     }
 
+    /** Non-Bosta couriers G3: applies Shopify's 'delivered' to generic legs. Absent when built by hand. */
+    private com.traceability.courier.GenericLegTransitions genericLegs;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setGenericLegs(com.traceability.courier.GenericLegTransitions genericLegs) {
+        this.genericLegs = genericLegs;
+    }
+
     /**
      * Upserts the payload's tracking rows, then (2026-10-03) enqueues a Bosta link job — after
      * commit, deterministic id — for every 'bosta' row of the order that isn't cancelled, has never
@@ -69,6 +77,7 @@ public class FulfillmentTrackingCapture {
         if (generic) {
             GenericShipments.onFulfillments(jdbc, tenantId, orderId, payload,
                 FulfillmentTrackingCapture::carrierClass, f -> List.copyOf(trackingNumbers(f)));
+            applyShopifyDelivered(tenantId, orderId);
         }
         // V139: the order's carrier, from these fulfillments (also a cancelled one flipping it back).
         com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
@@ -98,6 +107,27 @@ public class FulfillmentTrackingCapture {
             com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
         }
         return orderId;
+    }
+
+    /**
+     * G3 — Shopify's fulfillment shipment_status (stored above, switched-on tenants only) → the order's generic
+     * leg. Only 'delivered' moves anything (GenericLegTransitions.deliver, source 'shopify'); in_transit /
+     * out_for_delivery / attempted_delivery / failure stay stored on order_fulfillment_tracking and are shown on
+     * the order. A leg already delivered / returned is never touched (monotonic). Bosta legs never match.
+     */
+    private void applyShopifyDelivered(UUID tenantId, UUID orderId) {
+        if (genericLegs == null) return;
+        List<UUID> legs = jdbc.queryForList(
+            "SELECT s.id FROM shipments s " +
+            "JOIN order_fulfillment_tracking t ON t.tenant_id = s.tenant_id AND t.order_id = s.order_id " +
+            "                                  AND t.shopify_fulfillment_id = s.shopify_fulfillment_id " +
+            "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state IN ('created', 'with_courier') " +
+            "  AND t.shipment_status = 'delivered' AND coalesce(t.fulfillment_status, '') <> 'cancelled'",
+            UUID.class, tenantId, orderId);
+        for (UUID leg : legs) {
+            genericLegs.deliver(tenantId, leg, com.traceability.courier.GenericLegTransitions.SOURCE_SHOPIFY, null);
+        }
     }
 
     private UUID orderId(UUID tenantId, UUID storeId, String orderExternalId) {

@@ -256,11 +256,14 @@ public final class OrderStatusDeriver {
     public static LegStatus deriveLegStatus(String internalState, String provider) {
         LegStatus s = deriveLegStatus(internalState);
         if (GENERIC.equals(provider) && "with_courier".equals(internalState)) return new LegStatus(WITH_CARRIER_KEY, s.tone());
+        if (GENERIC.equals(provider) && "delivered".equals(internalState)) return new LegStatus(DELIVERED_WITH_CARRIER_KEY, s.tone());
         return s;
     }
 
     /** V169: "With {{carrier}}" — the carrier name comes from the order's shipping badge / the shipment. */
     public static final String WITH_CARRIER_KEY = "status.with_carrier";
+    /** G3: "Delivered · {{carrier}}" — a generic leg delivered (Shopify's status, or Mark delivered). */
+    public static final String DELIVERED_WITH_CARRIER_KEY = "status.delivered_with_carrier";
     private static final String GENERIC = "generic";
 
     // ── the derivation ───────────────────────────────────────────────────────
@@ -312,6 +315,8 @@ public final class OrderStatusDeriver {
             if (terminal) {
                 primaryKey = TERMINAL_KEY.get(shipmentInternalState);
                 tone = TERMINAL_TONE.get(shipmentInternalState);
+                // G3: a generic leg's delivered reads "Delivered · {carrier}" (same tone).
+                if (GENERIC.equals(forwardProvider) && "delivered".equals(shipmentInternalState)) primaryKey = DELIVERED_WITH_CARRIER_KEY;
             } else if (failedDeliveryAttempts >= 1) {
                 primaryKey = "status.delivery_failed";
                 tone = Tone.WARN;

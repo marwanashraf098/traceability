@@ -1,6 +1,8 @@
 package com.traceability.inventory;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.courier.GenericLegTransitions;
 import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
@@ -45,6 +47,8 @@ public class PickupSessionService {
     private final InventoryLedger  ledger;
     private final ShopifyInventoryService shopifyInventory;
     private final AuditService     audit;
+    /** Non-Bosta couriers G3: the generic leg's handover (source pickup_scan) — on this service's own connection. */
+    private final GenericLegTransitions genericLegs;
 
     @Autowired
     public PickupSessionService(JdbcTemplate jdbc,
@@ -57,6 +61,7 @@ public class PickupSessionService {
         this.ledger = ledger;
         this.shopifyInventory = shopifyInventory;
         this.audit  = audit;
+        this.genericLegs = new GenericLegTransitions(jdbc, ledger);
     }
 
     /** Built by hand (ReviewTenantRlsTest, on an app_user connection): audit entries go through the same JdbcTemplate. */
@@ -67,9 +72,16 @@ public class PickupSessionService {
         this(jdbc, txm, ledger, shopifyInventory, new AuditService(jdbc, new ObjectMapper()));
     }
 
+
     // ── Public types ──────────────────────────────────────────────────────────
 
-    public enum ScanOutcome { ACCEPTED, DUPLICATE, OTHER_SESSION, NOT_FORWARD_LEG, LEG_ENDED, NOT_PACKED, UNKNOWN_AWB }
+    /**
+     * G3 adds WRONG_CARRIER (the session already holds another courier's parcels — {@link ScanResult#carrier}
+     * names it) and AMBIGUOUS (the scan matches a Bosta and a generic shipment). Neither can happen for a tenant
+     * with no generic shipments and the switch off.
+     */
+    public enum ScanOutcome { ACCEPTED, DUPLICATE, OTHER_SESSION, NOT_FORWARD_LEG, LEG_ENDED, NOT_PACKED, UNKNOWN_AWB,
+                              WRONG_CARRIER, AMBIGUOUS }
 
     /**
      * A forward leg that must never be handed to a courier: cancelled or terminated in Bosta, or
@@ -97,18 +109,31 @@ public class PickupSessionService {
             String scheduledTimeSlot, int scannedCount,
             String openedByName, String createdAt) {}
 
+    /** {@code carrierName}: G3, a generic shipment's carrier only — absent from the JSON for Bosta parcels. */
     public record ScanEntry(
             UUID shipmentId, String trackingNumber, String orderNumber,
-            BigDecimal codAmount, String scannedAt, String scannedByName) {}
+            BigDecimal codAmount, String scannedAt, String scannedByName,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String carrierName) {
+        public ScanEntry(UUID shipmentId, String trackingNumber, String orderNumber,
+                         BigDecimal codAmount, String scannedAt, String scannedByName) {
+            this(shipmentId, trackingNumber, orderNumber, codAmount, scannedAt, scannedByName, null);
+        }
+    }
 
+    /** {@code carrier}: G3, the generic carrier of a session holding other couriers' parcels — absent for Bosta sessions. */
     public record SessionDetail(
             UUID id, String sessionStatus, LocalDate scheduledDate,
             String scheduledTimeSlot, String notes, int scannedCount,
             String openedByName, String closedByName,
             String createdAt, String closedAt,
-            List<ScanEntry> scans) {}
+            List<ScanEntry> scans,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String carrier) {}
 
-    public record ScanResult(ScanOutcome outcome, ScanEntry entry) {}
+    /** {@code carrier}: G3, on WRONG_CARRIER — the courier this session is for ("Bosta" or the generic carrier name). */
+    public record ScanResult(ScanOutcome outcome, ScanEntry entry,
+                             @JsonInclude(JsonInclude.Include.NON_NULL) String carrier) {
+        public ScanResult(ScanOutcome outcome, ScanEntry entry) { this(outcome, entry, null); }
+    }
 
     /** A scanned shipment whose leg ended between scan and close: not handed over, its pieces untouched. */
     public record LeftOut(UUID shipmentId, String trackingNumber, String orderNumber, String reason) {}
@@ -201,7 +226,8 @@ public class PickupSessionService {
                 """
                 SELECT s.id AS shipment_id, s.tracking_number,
                        o.number AS order_number, s.cod_amount,
-                       ps.scanned_at::text, u.name AS scanned_by_name
+                       ps.scanned_at::text, u.name AS scanned_by_name,
+                       CASE WHEN s.provider = 'generic' THEN COALESCE(btrim(s.carrier_name), '') END AS generic_carrier
                 FROM pickup_shipments ps
                 JOIN shipments s ON s.id = ps.shipment_id
                 JOIN merchant_orders    o ON o.id = s.order_id
@@ -215,13 +241,18 @@ public class PickupSessionService {
                     rs.getString("order_number"),
                     rs.getBigDecimal("cod_amount"),
                     rs.getString("scanned_at"),
-                    rs.getString("scanned_by_name")),
+                    rs.getString("scanned_by_name"),
+                    rs.getString("generic_carrier")),
                 pickupId, tenantId)));
 
+        // G3: one courier per session — a session of generic parcels names their carrier (manifest, header).
+        // The session's courier is its FIRST scan's (scans are listed newest first).
+        String carrier = null;
+        for (ScanEntry e : scans) if (e.carrierName() != null) carrier = e.carrierName();
         return new SessionDetail(
             hdr.id(), hdr.status(), hdr.date(), hdr.slot(), hdr.notes(),
             scans.size(), hdr.openedBy(), hdr.closedBy(),
-            hdr.createdAt(), hdr.closedAt(), scans);
+            hdr.createdAt(), hdr.closedAt(), scans, carrier);
     }
 
     // ── Scan ──────────────────────────────────────────────────────────────────
@@ -235,7 +266,13 @@ public class PickupSessionService {
         // Canonical everywhere from here on: the normalized value is what gets matched and
         // echoed back — never the raw scan (mirrors ReturnSessionService.createSession).
         String normalizedTracking = TrackingNumberNormalizer.normalize(trackingNumber);
-        if (normalizedTracking == null) {
+        // G3: the shared generic resolver (G2). OFF — no key lookup at all — for a tenant with the switch off and
+        // no live generic shipment, so everything below is exactly the Bosta path for it.
+        WaybillScanKeys.Generic generic = TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> WaybillScanKeys.lookup(jdbc, tenantId, trackingNumber)));
+        boolean genericKeys = generic.kind() != WaybillScanKeys.Kind.OFF;
+        if (normalizedTracking == null && !generic.matched()
+                && (!genericKeys || generic.kind() == WaybillScanKeys.Kind.PIECE || generic.kind() == WaybillScanKeys.Kind.LAYOUT)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Unreadable waybill scan: " + trackingNumber);
         }
@@ -253,8 +290,13 @@ public class PickupSessionService {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                         "Session is not open (status: " + sessionStatus + ")");
 
+                // G3: one courier per session — serialise scans of a switched-on tenant on the session row.
+                if (genericKeys) {
+                    jdbc.queryForList("SELECT id FROM pickups WHERE id = ? AND tenant_id = ? FOR UPDATE", pickupId, tenantId);
+                }
+
                 // 2. Look up shipment by tracking number.
-                ShipmentRow shipment = jdbc.query(
+                ShipmentRow shipment = normalizedTracking == null ? null : jdbc.query(
                     """
                     SELECT s.id, s.order_id, s.shipment_leg::text AS leg,
                            s.internal_state::text AS internal_state,
@@ -274,6 +316,27 @@ public class PickupSessionService {
                         rs.getBigDecimal("cod_amount"),
                         rs.getBoolean("ended")) : null,
                     normalizedTracking, tenantId);
+
+                // G3: Bosta first; the generic key only when the Bosta key found nothing — both → never guess.
+                String echoTracking = normalizedTracking;
+                if (generic.matched()) {
+                    if (shipment != null) return new ScanResult(ScanOutcome.AMBIGUOUS, null);
+                    shipment = jdbc.query(
+                        "SELECT s.id, s.order_id, s.shipment_leg::text AS leg, s.internal_state::text AS internal_state, " +
+                        "       o.number AS order_number, s.cod_amount, " + LEG_ENDED_SQL + " AS ended " +
+                        "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
+                        "WHERE s.id = ? AND s.tenant_id = ? AND s.provider = 'generic'",
+                        rs -> rs.next() ? new ShipmentRow(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("order_id", UUID.class),
+                            rs.getString("leg"),
+                            rs.getString("internal_state"),
+                            rs.getString("order_number"),
+                            rs.getBigDecimal("cod_amount"),
+                            rs.getBoolean("ended")) : null,
+                        generic.match().shipmentId(), tenantId);
+                    echoTracking = generic.match().trackingNumber();
+                }
 
                 if (shipment == null) return new ScanResult(ScanOutcome.UNKNOWN_AWB, null);
 
@@ -300,6 +363,13 @@ public class PickupSessionService {
                     "    AND p.session_status = 'open' AND p.id != ?)",
                     Boolean.class, shipment.id(), tenantId, pickupId));
                 if (inOtherSession) return new ScanResult(ScanOutcome.OTHER_SESSION, null);
+
+                // 5b. G3 — one courier per session: the first scan sets it (Bosta, or the generic carrier name);
+                //     a parcel for another courier is refused, naming the session's. Switched-on tenants only.
+                if (genericKeys) {
+                    String sessionCarrier = otherCarrier(pickupId, shipment.id());
+                    if (sessionCarrier != null) return new ScanResult(ScanOutcome.WRONG_CARRIER, null, sessionCarrier);
+                }
 
                 // 6. Verify pieces are in a shippable state (packed or awaiting_pickup).
                 Integer packableCount = jdbc.queryForObject(
@@ -336,9 +406,11 @@ public class PickupSessionService {
                     "SELECT name FROM users WHERE id = ?",
                     rs -> rs.next() ? rs.getString("name") : null, actorUserId);
 
+                String genericCarrier = generic.matched()
+                    ? (generic.match().carrierName() == null ? "" : generic.match().carrierName().trim()) : null;
                 return new ScanResult(ScanOutcome.ACCEPTED,
-                    new ScanEntry(shipment.id(), normalizedTracking, shipment.orderNumber(),
-                                  shipment.cod(), scannedAt, actorName));
+                    new ScanEntry(shipment.id(), echoTracking, shipment.orderNumber(),
+                                  shipment.cod(), scannedAt, actorName, genericCarrier));
             }));
     }
 
@@ -369,7 +441,7 @@ public class PickupSessionService {
 
     public CloseResult closeSession(UUID tenantId, UUID pickupId, UUID actorUserId) {
         record ScannedShipment(UUID shipmentId, UUID orderId, String trackingNumber,
-                               String orderNumber, String endedReason) {
+                               String orderNumber, String endedReason, boolean generic) {
             boolean ended() { return endedReason != null; }
         }
 
@@ -390,6 +462,7 @@ public class PickupSessionService {
                 List<ScannedShipment> scanned = jdbc.query(
                     """
                     SELECT ps.shipment_id, s.order_id, s.tracking_number, o.number AS order_number,
+                           (s.provider = 'generic') AS generic,
                            """ + LEG_ENDED_REASON_SQL + """
                            AS ended_reason
                     FROM pickup_shipments ps
@@ -402,7 +475,8 @@ public class PickupSessionService {
                         rs.getObject("order_id", UUID.class),
                         rs.getString("tracking_number"),
                         rs.getString("order_number"),
-                        rs.getString("ended_reason")),
+                        rs.getString("ended_reason"),
+                        rs.getBoolean("generic")),
                     pickupId, tenantId);
 
                 if (scanned.isEmpty())
@@ -452,12 +526,18 @@ public class PickupSessionService {
                     // so a shipment re-scanned into a later pickup session after a failed
                     // handover can insert another row here without conflict. Do not
                     // fabricate a provider_state or webhook_event_id.
-                    jdbc.update("""
-                        INSERT INTO shipment_status_history
-                            (tenant_id, shipment_id, internal_state, provider_state,
-                             exception_code, exception_reason, occurred_at, webhook_event_id)
-                        VALUES (?, ?, 'with_courier', NULL, NULL, NULL, now(), NULL)
-                        """, tenantId, sh.shipmentId());
+                    if (sh.generic()) {
+                        // G3: a generic leg's handover — the same history row plus its source (pickup_scan)
+                        // and handed_over_at, through the one writer of generic leg states.
+                        genericLegs.recordHandover(tenantId, sh.shipmentId());
+                    } else {
+                        jdbc.update("""
+                            INSERT INTO shipment_status_history
+                                (tenant_id, shipment_id, internal_state, provider_state,
+                                 exception_code, exception_reason, occurred_at, webhook_event_id)
+                            VALUES (?, ?, 'with_courier', NULL, NULL, NULL, now(), NULL)
+                            """, tenantId, sh.shipmentId());
+                    }
 
                     // Transition pieces: packed/awaiting_pickup → with_courier.
                     record PieceRow(String id, String status) {}
@@ -536,10 +616,12 @@ public class PickupSessionService {
 
     // ── Manifest data (for PDF endpoint) ─────────────────────────────────────
 
+    /** {@code carrier}: G3, the generic carrier of a session of other couriers' parcels — absent for Bosta. */
     public record ManifestData(
             UUID pickupId, String scheduledDate, String timeSlot,
             String closedByName, String closedAt, int packageCount,
-            List<ScanEntry> shipments) {}
+            List<ScanEntry> shipments,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String carrier) {}
 
     public ManifestData getManifestData(UUID tenantId, UUID pickupId) {
         record HeaderRow(String date, String slot, String closedBy, String closedAt, int count) {}
@@ -568,10 +650,30 @@ public class PickupSessionService {
 
         SessionDetail detail = getSession(tenantId, pickupId);
         return new ManifestData(pickupId, hdr.date(), hdr.slot(),
-            hdr.closedBy(), hdr.closedAt(), hdr.count(), detail.scans());
+            hdr.closedBy(), hdr.closedAt(), hdr.count(), detail.scans(), detail.carrier());
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * G3 — the session's courier, when {@code shipmentId} isn't for it: the first other scan of the session
+     * decides it (all scans share one courier). Returns "Bosta", the generic carrier name ("" when the
+     * shipment names none), or null when the parcel fits (or the session is still empty).
+     */
+    private String otherCarrier(UUID pickupId, UUID shipmentId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT s.provider::text AS provider, s.carrier_name, " +
+            "       (s.provider <> n.provider OR (s.provider = 'generic' " +
+            "         AND lower(btrim(coalesce(s.carrier_name, ''))) <> lower(btrim(coalesce(n.carrier_name, ''))))) AS differs " +
+            "FROM pickup_shipments ps JOIN shipments s ON s.id = ps.shipment_id " +
+            "CROSS JOIN (SELECT provider, carrier_name FROM shipments WHERE id = ?) n " +
+            "WHERE ps.pickup_id = ? ORDER BY ps.scanned_at, ps.shipment_id LIMIT 1",
+            shipmentId, pickupId);
+        if (rows.isEmpty() || !Boolean.TRUE.equals(rows.get(0).get("differs"))) return null;
+        if ("bosta".equals(rows.get(0).get("provider"))) return "Bosta";
+        Object name = rows.get(0).get("carrier_name");
+        return name == null ? "" : name.toString().trim();
+    }
 
     private void raisePieceException(UUID tenantId, String pieceId, UUID resolvedBy,
                                       UUID pickupId, String note) {

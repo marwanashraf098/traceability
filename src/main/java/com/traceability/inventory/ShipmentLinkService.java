@@ -1199,11 +1199,18 @@ public class ShipmentLinkService {
      * Return to Origin (the verify-by-fetch type.value uppercased, the V122 key; present in both the
      * v0 and the v2-list raw shapes). Only these forward legs get "Mark parcel received" and unit
      * rows in Scan returns; every other forward leg is unchanged. {@code alias} = shipments row.
+     *
+     * Non-Bosta couriers G3: OR a GENERIC forward leg in 'returned' — it gets there only through a Scan
+     * returns scan of its waybill or a piece (GenericLegTransitions.markReturnedByScan; no courier status
+     * exists), so it is a parcel returned to sender by definition. The Bosta branch is untouched and a
+     * Bosta row can never satisfy the generic one (provider = 'generic').
      */
     public static String returnedToSenderSql(String alias) {
-        return "(" + alias + ".shipment_leg = 'forward' " +
+        return "((" + alias + ".shipment_leg = 'forward' " +
                "AND " + alias + ".internal_state = 'returned'::shipment_internal_state " +
-               "AND upper(" + alias + ".raw #>> '{type,value}') = 'RETURN TO ORIGIN') ";
+               "AND upper(" + alias + ".raw #>> '{type,value}') = 'RETURN TO ORIGIN') " +
+               "OR (" + alias + ".provider = 'generic' AND " + alias + ".shipment_leg = 'forward' " +
+               "AND " + alias + ".internal_state = 'returned'::shipment_internal_state)) ";
     }
 
     /**

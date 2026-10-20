@@ -46,6 +46,18 @@ public final class GenericShipments {
         "                 AND o2.status IN ('packed', 'awaiting_pickup', 'with_courier', 'delivered', " +
         "                                   'returning', 'returned', 'lost')))";
 
+    /**
+     * Non-Bosta couriers G3 — the ONE definition of "this order ships with another courier" for the returns
+     * portal: its NEWEST forward leg (any state, delivered included) is generic. Such an order stays out of the
+     * portal until G4 — never eligible for lookup / submission, never booked as a Bosta type 25 / 30.
+     * {@code orderIdExpr}: SQL for the order id (a column or a bind '?'). Bosta-only orders: always false.
+     */
+    public static String newestForwardIsGenericSql(String orderIdExpr) {
+        return "COALESCE((SELECT s_g.provider = 'generic' FROM shipments s_g " +
+               "          WHERE s_g.order_id = " + orderIdExpr + " AND s_g.shipment_leg = 'forward' " +
+               "          ORDER BY s_g.created_at DESC, s_g.id DESC LIMIT 1), false)";
+    }
+
     /** Is the tenant switched on? (Default false; Settings → Couriers, owner only, since G2.) */
     public static boolean enabled(JdbcTemplate jdbc, UUID tenantId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(

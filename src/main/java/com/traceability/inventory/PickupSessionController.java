@@ -67,10 +67,12 @@ public class PickupSessionController {
         PickupSessionService.ScanResult result =
             service.scan(user.tenantId(), id, user.userId(), req.trackingNumber());
 
-        return ResponseEntity.ok(Map.of(
-            "outcome", result.outcome().name(),
-            "entry",   result.entry() != null ? result.entry() : Map.of()
-        ));
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("outcome", result.outcome().name());
+        body.put("entry",   result.entry() != null ? result.entry() : Map.of());
+        // G3: WRONG_CARRIER names the session's courier ("This parcel goes with …"); absent otherwise.
+        if (result.carrier() != null) body.put("carrier", result.carrier());
+        return ResponseEntity.ok(body);
     }
 
     // ── Remove scan ───────────────────────────────────────────────────────────
