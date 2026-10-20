@@ -133,9 +133,9 @@ class GenericG3SnapshotScriptTest {
             "VALUES (?, ?, ?, ?, ?::order_status, '2026-10-10T09:00:00Z') RETURNING id",
             UUID.class, t, store, "gid://shopify/Order/" + number, number, status);
         jdbc.update("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1)", t, order, variant);
-        return jdbc.queryForObject("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, " +
-            "delivered_at, created_at) VALUES (?, ?, ?::courier_provider, ?, ?::shipment_internal_state, ?, '2026-10-12T09:00:00Z') RETURNING id",
-            UUID.class, t, order, provider, tn, state, deliveredAt);
+        return jdbc.queryForObject("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, tracking_key, internal_state, " +
+            "delivered_at, created_at) VALUES (?, ?, ?::courier_provider, ?, ?, ?::shipment_internal_state, ?, '2026-10-12T09:00:00Z') RETURNING id",
+            UUID.class, t, order, provider, tn, "generic".equals(provider) ? tn.replace("-", "") : null, state, deliveredAt);
     }
 
     private static void history(JdbcTemplate jdbc, UUID t, UUID shipment, String state, String source) {
