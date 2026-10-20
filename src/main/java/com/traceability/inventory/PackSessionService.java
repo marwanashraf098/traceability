@@ -67,6 +67,8 @@ public class PackSessionService {
             return failed(sessionId, userId, tenantId, scan, e.code(), e.getMessage());
         } catch (AwbMismatchException e) {
             return failed(sessionId, userId, tenantId, scan, "AWB_MISMATCH", e.getMessage());
+        } catch (AllItemsRemovedException e) {
+            return failed(sessionId, userId, tenantId, scan, e.errorCode(), e.messageEn());
         } catch (ResponseStatusException e) {
             return failed(sessionId, userId, tenantId, scan, "COMPLETE_REFUSED", e.getReason());
         } catch (RuntimeException e) {

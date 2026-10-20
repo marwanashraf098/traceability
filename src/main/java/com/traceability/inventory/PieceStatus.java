@@ -20,6 +20,15 @@ public enum PieceStatus {
     ON_HOLD("on_hold"),
     TRANSFERRED_OUT("transferred_out");
 
+    /**
+     * A piece in one of these has left Traced custody for its order: with the courier (or collected),
+     * delivered, or on its way back / back but not yet inspected. Derived from the declaration order —
+     * the courier / return lifecycle WITH_COURIER..RETURN_PENDING_INSPECTION stays contiguous
+     * (OrderLineFreezeTest pins the set). Used by {@link OrderLineFreeze}.
+     */
+    public static final java.util.Set<PieceStatus> LEFT_CUSTODY =
+        java.util.Collections.unmodifiableSet(java.util.EnumSet.range(WITH_COURIER, RETURN_PENDING_INSPECTION));
+
     /** Lowercase value matching the PostgreSQL enum literal. */
     public final String db;
 

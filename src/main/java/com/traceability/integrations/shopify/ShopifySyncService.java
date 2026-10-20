@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.BlocklistService;
+import com.traceability.inventory.OrderLineFreeze;
 import com.traceability.security.EncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -191,6 +192,30 @@ public class ShopifySyncService {
                 quantity = EXCLUDED.quantity,
                 raw      = EXCLUDED.raw
             """;
+
+    // The order has left Traced custody (OrderLineFreeze): an existing line keeps its quantity — it is
+    // what was shipped — and only its raw follows Shopify. A brand-new line is inserted with its quantity.
+    private static final String UPSERT_ORDER_ITEM_FROZEN = """
+            INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, external_id, raw)
+            VALUES (?, ?, ?, ?, ?, ?::jsonb)
+            ON CONFLICT (order_id, external_id) WHERE external_id IS NOT NULL
+            DO UPDATE SET
+                raw      = EXCLUDED.raw
+            """;
+
+    /**
+     * A REST line's quantity as Traced stores it: Shopify's CURRENT quantity ({@code current_quantity} —
+     * removed / refunded units excluded; an edit keeps a removed line with current_quantity 0), falling
+     * back to {@code quantity} when the key is absent. Used by the ingest and by the FR-3.6 edit diff
+     * (ShopifyWebhookProcessorJob) so both read the same number.
+     */
+    static int restLineQuantity(JsonNode line) {
+        JsonNode current = line.path("current_quantity");
+        if (current.isIntegralNumber() || (current.isTextual() && current.asText().matches("\\d+"))) {
+            return Math.max(current.asInt(), 0);
+        }
+        return line.path("quantity").asInt(1);
+    }
 
     private static final String LOOKUP_VARIANT =
             "SELECT v.id FROM variants v JOIN products p ON v.product_id = p.id " +
@@ -413,6 +438,8 @@ public class ShopifySyncService {
             UUID orderId = up.id();
 
             boolean needsHold = false;
+            String upsertItem = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)
+                ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
             for (JsonNode line : payload.path("line_items")) {
                 long variantRestId = line.path("variant_id").asLong(0);
                 if (variantRestId == 0) {
@@ -430,11 +457,11 @@ public class ShopifySyncService {
                     needsHold = true;
                     continue;
                 }
-                int qty = line.path("quantity").asInt(1);
+                int qty = restLineQuantity(line);
                 String lineGid = line.has("admin_graphql_api_id")
                     ? line.path("admin_graphql_api_id").asText()
                     : "gid://shopify/LineItem/" + line.path("id").asLong();
-                jdbc.update(UPSERT_ORDER_ITEM, tenantId, orderId, variantId, qty, lineGid, toJson(line));
+                jdbc.update(upsertItem, tenantId, orderId, variantId, qty, lineGid, toJson(line));
             }
             if (needsHold) jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
 
@@ -593,6 +620,8 @@ public class ShopifySyncService {
             UUID orderId = up.id();
 
             boolean needsHold = false;
+            String upsertItem = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)
+                ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
             for (ShopifyGateway.LineItem line : o.lineItems()) {
                 if (line.variantGid() == null) {
                     log.warn("Order {} line {} has no variant GID — skipping", o.name(), line.gid());
@@ -608,8 +637,8 @@ public class ShopifySyncService {
                     needsHold = true;
                     continue;
                 }
-                jdbc.update(UPSERT_ORDER_ITEM,
-                        tenantId, orderId, variantId, line.quantity(), line.gid(), toJson(line));
+                jdbc.update(upsertItem,
+                        tenantId, orderId, variantId, line.storedQuantity(), line.gid(), toJson(line));
             }
 
             if (needsHold) {

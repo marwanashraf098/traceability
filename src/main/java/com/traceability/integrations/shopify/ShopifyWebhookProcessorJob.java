@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.FulfillService;
+import com.traceability.inventory.OrderLineFreeze;
 import com.traceability.inventory.ShopifyCatalogActivationService;
 import com.traceability.privacy.CustomerDataRequestService;
 import com.traceability.privacy.CustomerRedaction;
@@ -266,11 +267,14 @@ public class ShopifyWebhookProcessorJob {
      * FR-3.6: orders/updated — detect line-item edits and route by order status.
      *
      * Diff is computed against the pre-edit local order_items (before ingestOrderWebhook
-     * upserts them). Routing:
-     *   new/confirmed/ready_to_pick → line items updated, no release, no exception.
-     *   picking → release allocations for removed/reduced lines; raise exception.
-     *   packed/self_pickup_pending/awaiting_pickup/with_courier/returning → no touch; exception.
-     *   terminal → line items updated, no exception.
+     * upserts them), on Shopify's CURRENT line quantities (ShopifySyncService.restLineQuantity).
+     * An order that has left Traced custody (OrderLineFreeze) is never diffed — its quantities
+     * are kept, nothing is released, nothing is raised. Otherwise routing is
+     * FulfillService.handleShopifyLineItemEdit:
+     *   packed / self_pickup_pending / awaiting_pickup (PAST_PACKING_STATUSES) → no touch; exception.
+     *   any other status with an active allocation (being picked) → release allocations for
+     *     removed / reduced lines; exception.
+     *   any other status with no active allocation → line items updated, no exception.
      */
     private void handleOrderUpdated(UUID tenantId, String shopDomain, JsonNode payload) {
         UUID storeId = syncService.resolveStore(tenantId, shopDomain);
@@ -307,6 +311,16 @@ public class ShopifyWebhookProcessorJob {
         UUID   orderId     = (UUID)   preEdit.get("id");
         String orderStatus = (String) preEdit.get("status");
 
+        // The order has left Traced custody (OrderLineFreeze): its lines are what was shipped. A lower
+        // Shopify quantity now is a refund or a post-ship cancel, never a pick change — no diff, no
+        // release, no edit-conflict alert; the upsert keeps the stored quantities.
+        boolean frozen = Boolean.TRUE.equals(tx.execute(s -> OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)));
+        if (frozen) {
+            syncService.ingestOrderWebhook(storeId, tenantId, payload);
+            captureFulfillmentTracking(storeId, externalId, payload);
+            return;
+        }
+
         // Load pre-edit local order_items: externalId → qty
         Map<String, Integer> localQty = tx.execute(s ->
             jdbc.query(
@@ -325,7 +339,9 @@ public class ShopifyWebhookProcessorJob {
             String lineGid = line.has("admin_graphql_api_id")
                 ? line.path("admin_graphql_api_id").asText()
                 : "gid://shopify/LineItem/" + line.path("id").asLong();
-            incomingQty.put(lineGid, line.path("quantity").asInt(1));
+            // Shopify's CURRENT quantity — an edit keeps a removed line with current_quantity 0 and its
+            // original quantity unchanged, so reading quantity never saw a removal (2026-10-21).
+            incomingQty.put(lineGid, ShopifySyncService.restLineQuantity(line));
         }
 
         LineDiff diff = computeLineDiff(localQty != null ? localQty : Map.of(), incomingQty);

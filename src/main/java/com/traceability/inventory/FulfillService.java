@@ -451,6 +451,8 @@ public class FulfillService {
      *   3. ALREADY_RESERVED  — piece has a live allocation to another order
      *   4a. WRONG_VARIANT    — piece variant matches NO line on this order
      *   4b. LINE_FILLED      — variant matches a line, but it is already fully allocated
+     *   4c. REMOVED_IN_SHOPIFY — every line of this variant is at quantity 0 (removed by a Shopify
+     *                          order edit — the line is kept, OrderLineFreeze)
      *   5. WRONG_STATUS      — piece is not 'available'
      *   6. transition()      — available→reserved; StateConflictException → ALREADY_RESERVED
      */
@@ -543,6 +545,10 @@ public class FulfillService {
             }
         }
         if (targetItem == null) {
+            // Every line of this variant is at quantity 0: removed from the order in Shopify.
+            if (items.stream().allMatch(i -> ((Number) i.get("quantity")).longValue() == 0)) {
+                return ScanResult.rejected("REMOVED_IN_SHOPIFY", "This item was removed from the order in Shopify");
+            }
             // Variant is on the order but every line for it is already fully allocated.
             // Distinct from WRONG_VARIANT (which means no matching line exists at all).
             return ScanResult.rejected("LINE_FILLED", "This line is already complete");
@@ -574,6 +580,10 @@ public class FulfillService {
             Long.class, orderItemId);
         long lockedAllocated = countResult != null ? countResult : 0L;
 
+        if (lockedQuantity == 0) {
+            // Post-lock re-read: a Shopify edit removed the line meanwhile.
+            return ScanResult.rejected("REMOVED_IN_SHOPIFY", "This item was removed from the order in Shopify");
+        }
         if (lockedAllocated >= lockedQuantity) {
             // Post-lock re-read: the winning concurrent thread just filled this line.
             // The piece is correct-variant, just nothing left to scan for this line.
@@ -667,6 +677,10 @@ public class FulfillService {
         if (lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Order has no items");
+        }
+        // Every line removed in Shopify (kept at quantity 0): never pack an empty parcel.
+        if (lines.stream().allMatch(l -> ((Number) l.get("quantity")).longValue() == 0)) {
+            throw new AllItemsRemovedException();
         }
         for (Map<String, Object> line : lines) {
             long qty    = ((Number) line.get("quantity")).longValue();
@@ -1128,13 +1142,7 @@ public class FulfillService {
      */
     private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {
         Boolean exists = jdbc.queryForObject(
-            "SELECT EXISTS (" +
-            "    SELECT 1 FROM shipment_status_history h " +
-            "    JOIN shipments s ON s.id = h.shipment_id " +
-            "    WHERE s.order_id = ? AND s.tenant_id = ? " +
-            "      AND s.shipment_leg = 'forward' " +
-            "      AND h.internal_state <> 'created'" +
-            ")",
+            "SELECT " + OrderLineFreeze.shippedPastCreatedSql("?", "?"),
             Boolean.class, orderId, tenantId);
         return Boolean.TRUE.equals(exists);
     }

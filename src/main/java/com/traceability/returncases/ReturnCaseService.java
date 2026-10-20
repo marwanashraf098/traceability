@@ -183,7 +183,8 @@ public class ReturnCaseService {
         "           SELECT pr.title || COALESCE(' ' || NULLIF(v.title, ''), '') " +
         "                  || CASE WHEN SUM(oi.quantity) > 1 THEN ' × ' || SUM(oi.quantity) ELSE '' END AS label " +
         "           FROM order_items oi JOIN variants v ON v.id = oi.variant_id JOIN products pr ON pr.id = v.product_id " +
-        "           WHERE oi.order_id = s.order_id AND oi.tenant_id = s.tenant_id GROUP BY pr.title, v.title) x), '{}'), " +
+        "           WHERE oi.order_id = s.order_id AND oi.tenant_id = s.tenant_id AND oi.quantity > 0 " +
+        "           GROUP BY pr.title, v.title) x), '{}'), " +
         "       NULL::text[], (s.return_intake_completed_at IS NULL AND s.internal_state::text NOT IN ('lost', 'terminated', 'cancelled')), " +
         "       ARRAY[s.tracking_number], " +
         "       GREATEST(s.created_at, s.last_synced_at, s.returned_at, s.return_intake_completed_at), " +
