@@ -264,6 +264,10 @@ export interface ShipmentDetail {
   // precedence). Render for the return leg ONLY; the forward leg's status lives solely in
   // the order header (OrderStatus / derivedStatus).
   legStatus: { primaryKey: string; tone: DerivedTone }
+  // G3 — generic (non-Bosta courier) legs only, absent for Bosta: the carrier and Shopify's latest
+  // fulfillment shipment_status (in_transit, out_for_delivery, attempted_delivery, failure, delivered…).
+  carrierName?: string
+  shopifyShipmentStatus?: string | null
 }
 
 export interface OrderDetail {
@@ -305,6 +309,8 @@ export interface OrderListParams {
   tracking?: string
   page?: number
   size?: number
+  /** G3: "With <carrier>" — generic orders of one carrier ('' = a generic leg naming none). */
+  carrier?: string
 }
 
 export function listOrders(params: OrderListParams = {}) {
@@ -315,6 +321,7 @@ export function listOrders(params: OrderListParams = {}) {
   if (params.tracking) q.set('tracking', params.tracking)
   if (params.page != null) q.set('page', String(params.page))
   if (params.size != null) q.set('size', String(params.size))
+  if (params.carrier != null) q.set('carrier', params.carrier)
   return request<OrderPage>(`/orders?${q}`)
 }
 
@@ -328,6 +335,9 @@ export function getOrder(id: string) {
 // rest of the drawer. eventKey/kind are the wire contract with GET
 // /orders/{id}/timeline; kind is backend-computed and rendered as-is, never
 // recomputed client-side.
+/** G3: where a generic leg's state came from (V173). Absent for every Bosta row. */
+export type GenericLegSource = 'pickup_scan' | 'inferred_handover' | 'shopify' | 'manual' | 'return_scan'
+
 export interface TimelineItem {
   occurredAt: string
   eventKey: string
@@ -335,6 +345,7 @@ export interface TimelineItem {
   locationName: string | null
   detail: string | null
   kind: 'done' | 'now' | 'fail'
+  source?: GenericLegSource
 }
 
 export function getOrderTimeline(id: string) {
@@ -402,6 +413,8 @@ export interface PickupManifestShipment {
   codAmount: number | null
   scannedAt: string | null
   scannedByName: string | null
+  /** G3: a generic shipment's carrier ('' when it names none) — absent for Bosta parcels. */
+  carrierName?: string
 }
 
 export interface PickupManifest {
@@ -412,6 +425,8 @@ export interface PickupManifest {
   closedAt: string | null
   packageCount: number
   shipments: PickupManifestShipment[]
+  /** G3: the courier of a session of other couriers' parcels — absent for Bosta sessions. */
+  carrier?: string
 }
 
 export function getPickupManifest(sessionId: string) {
@@ -3522,4 +3537,21 @@ export function getCatchUpPreview(days: number) {
 
 export function testWaybill(code: string) {
   return request<TestWaybillResult>('/settings/couriers/test-waybill', { method: 'POST', body: JSON.stringify({ code }) })
+}
+
+// ── Non-Bosta couriers G3 — "With <carrier>" filter + Mark delivered (owner / manager) ────────────
+
+export interface GenericCarrierCount { carrier: string; withCourier: number }
+
+export function listGenericCarriers() {
+  return request<GenericCarrierCount[]>('/generic-shipments/carriers')
+}
+
+export type MarkDeliveredOutcome = 'DELIVERED' | 'ALREADY_DELIVERED' | 'NOT_WITH_COURIER' | 'NO_GENERIC_SHIPMENT'
+export interface MarkDeliveredResult { orderId: string; orderNumber: string | null; outcome: MarkDeliveredOutcome }
+
+export function markGenericDelivered(orderIds: string[]) {
+  return request<MarkDeliveredResult[]>('/generic-shipments/mark-delivered', {
+    method: 'POST', body: JSON.stringify({ orderIds }),
+  })
 }

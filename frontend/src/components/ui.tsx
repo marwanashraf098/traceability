@@ -308,13 +308,14 @@ export function LegStatusBadge({
   // status.label_created, like the drawer's Current-state pill and the Overview funnel,
   // keeps "Label created" — a state) rather than editing the shared translation.
   labelOverride?: string
-  // V169: the carrier name for status.with_carrier ("With {{carrier}}") — a generic courier leg.
+  // V169: the carrier name for status.with_carrier ("With {{carrier}}") — a generic courier leg; G3 also
+  // status.delivered_with_carrier ("Delivered · {{carrier}}").
   carrier?: string | null
 }) {
   const { t } = useTranslation()
   return (
     <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[legStatus.tone]], className)}>
-      {labelOverride ?? (legStatus.primaryKey === 'status.with_carrier'
+      {labelOverride ?? ((legStatus.primaryKey === 'status.with_carrier' || legStatus.primaryKey === 'status.delivered_with_carrier')
         ? t(legStatus.primaryKey, { carrier: carrier || t('status.another_carrier') })
         : t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') }))}
     </span>

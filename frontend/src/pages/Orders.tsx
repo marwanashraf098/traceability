@@ -5,11 +5,13 @@ import { ChevronRight } from 'lucide-react'
 import {
   listOrders, OrderPage, listShopifyStores, syncShopifyStore,
   getOrdersSummary, OrderSummaryCounts, getExceptionsCount,
+  listGenericCarriers, markGenericDelivered, type GenericCarrierCount,
 } from '../api'
 import {
-  Alert, Avatar, Badge, Button, DataTable, type DataTableColumn,
-  EmptyState, LegStatusBadge, ShippingBadge, Tabs, TableSkeleton,
+  Alert, Avatar, Badge, Button, Checkbox, DataTable, type DataTableColumn,
+  EmptyState, LegStatusBadge, Modal, ShippingBadge, Tabs, TableSkeleton,
 } from '../components/ui'
+import { useCapabilities } from '../capabilities'
 import OrderDrawer from '../components/OrderDrawer'
 
 const PAGE_SIZE = 20
@@ -47,6 +49,21 @@ export default function Orders() {
   const [syncMsg,  setSyncMsg]  = useState('')
   const [summary,  setSummary]  = useState<OrderSummaryCounts | null>(null)
   const [needsAttention, setNeedsAttention] = useState<number | null>(null)
+  // Non-Bosta couriers G3 — "With <carrier>": generic orders of one carrier now with the courier, which an
+  // owner / manager can select and mark delivered (the carrier has no API; Shopify may also say so).
+  const { genericCourier } = useCapabilities()
+  const [carriers, setCarriers]         = useState<GenericCarrierCount[]>([])
+  const [carrierFilter, setCarrierFilter] = useState<string | null>(null)
+  const [selected, setSelected]         = useState<Set<string>>(new Set())
+  const [confirmMark, setConfirmMark]   = useState(false)
+  const [marking, setMarking]           = useState(false)
+  const [markError, setMarkError]       = useState(false)
+  const [markMsg, setMarkMsg]           = useState('')
+  const loadCarriers = useCallback(() => {
+    if (!genericCourier) return
+    listGenericCarriers().then(setCarriers).catch(() => {})
+  }, [genericCourier])
+  useEffect(() => { loadCarriers() }, [loadCarriers])
   // ?order=<id> opens that order's drawer (links from Analytics); closing removes it from the URL.
   const [searchParams, setSearchParams] = useSearchParams()
   const [drawerOrderId, setDrawerOrderId]   = useState<string | null>(() => searchParams.get('order'))
@@ -71,7 +88,8 @@ export default function Orders() {
     setError('')
     try {
       const res = await listOrders({
-        deliveryState: deliveryStateFilter || undefined,
+        deliveryState: carrierFilter != null ? 'with_courier' : deliveryStateFilter || undefined,
+        carrier:  carrierFilter ?? undefined,
         q:        q || undefined,
         tracking: tracking || undefined,
         page,
@@ -83,7 +101,7 @@ export default function Orders() {
     } finally {
       setLoading(false)
     }
-  }, [deliveryStateFilter, q, tracking, page, t])
+  }, [deliveryStateFilter, carrierFilter, q, tracking, page, t])
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
@@ -103,7 +121,28 @@ export default function Orders() {
     }
   }, [fetchOrders, t])
 
-  function applyFilter(fn: () => void) { fn(); setPage(0) }
+  function applyFilter(fn: () => void) { fn(); setPage(0); setSelected(new Set()) }
+
+  async function markDelivered() {
+    setMarking(true)
+    setMarkError(false)
+    try {
+      const results = await markGenericDelivered([...selected])
+      const delivered = results.filter(r => r.outcome === 'DELIVERED').length
+      const skipped = results.length - delivered
+      setMarkMsg(t('orders.markDelivered.done', { count: delivered })
+        + (skipped > 0 ? ' ' + t('orders.markDelivered.skipped', { count: skipped }) : ''))
+      setConfirmMark(false)
+      setSelected(new Set())
+      fetchOrders()
+      loadCarriers()
+      getOrdersSummary().then(setSummary).catch(() => {})
+    } catch {
+      setMarkError(true)
+    } finally {
+      setMarking(false)
+    }
+  }
 
   const total = data?.total ?? 0
   const from  = total === 0 ? 0 : page * PAGE_SIZE + 1
@@ -166,7 +205,25 @@ export default function Orders() {
   }
 
   // ── Column definitions ─────────────────────────────────────────────────────
+  const selectable = carrierFilter != null
+  const pageIds = rows.map(r => r.id)
+  const allSelected = pageIds.length > 0 && pageIds.every(id => selected.has(id))
   const columns: DataTableColumn<OrderItem>[] = [
+    ...(selectable ? [{
+      key: 'select',
+      header: '',
+      render: (row: OrderItem) => (
+        <span onClick={e => e.stopPropagation()} data-testid={`orders-select-${row.number}`}>
+          <Checkbox checked={selected.has(row.id)}
+            label={<span className="sr-only">{t('orders.markDelivered.select', { number: row.number })}</span>}
+            onChange={c => setSelected(prev => {
+              const n = new Set(prev)
+              if (c) n.add(row.id); else n.delete(row.id)
+              return n
+            })} />
+        </span>
+      ),
+    } as DataTableColumn<OrderItem>] : []),
     {
       key: 'number',
       header: t('orders.columns.number', { defaultValue: 'Order' }),
@@ -252,11 +309,12 @@ export default function Orders() {
     },
   ]
 
-  const activeTabKey = TAB_DEFS.find(d => d.filterDeliveryState === (deliveryStateFilter || null))?.key ?? 'all'
+  const activeTabKey = carrierFilter != null ? 'inTransit'
+    : TAB_DEFS.find(d => d.filterDeliveryState === (deliveryStateFilter || null))?.key ?? 'all'
   function handleTabClick(key: string) {
     const def = TAB_DEFS.find(d => d.key === key)
     if (!def || !def.clickable) return
-    applyFilter(() => setDeliveryStateFilter(def.filterDeliveryState ?? ''))
+    applyFilter(() => { setCarrierFilter(null); setDeliveryStateFilter(def.filterDeliveryState ?? '') })
   }
   const tabCount = (key: typeof TAB_DEFS[number]['key']): number | undefined => {
     switch (key) {
@@ -328,7 +386,57 @@ export default function Orders() {
           onChange={e => applyFilter(() => setTracking(e.target.value))}
           className="input w-40"
         />
+        {/* G3: "With <carrier>" — only for a store that ships with other couriers and has parcels out. */}
+        {genericCourier && carriers.length > 0 && (
+          <select
+            data-testid="orders-carrier-filter"
+            aria-label={t('orders.carrierFilter.label')}
+            value={carrierFilter ?? '__all__'}
+            onChange={e => applyFilter(() => setCarrierFilter(e.target.value === '__all__' ? null : e.target.value))}
+            className="input w-56"
+          >
+            <option value="__all__">{t('orders.carrierFilter.all')}</option>
+            {carriers.map(c => (
+              <option key={c.carrier} value={c.carrier}>
+                {t('orders.carrierFilter.option', { carrier: c.carrier || t('status.another_carrier'), count: c.withCourier })}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
+
+      {markMsg && <Alert tone="success" title={markMsg} />}
+      {selectable && (
+        <div className="flex flex-wrap items-center gap-3" data-testid="orders-mark-bar">
+          <Checkbox checked={allSelected} indeterminate={selected.size > 0 && !allSelected}
+            label={t('orders.markDelivered.selectAll')}
+            onChange={c => setSelected(c ? new Set(pageIds) : new Set())} />
+          <span className="text-small text-muted">{t('orders.markDelivered.selected', { count: selected.size })}</span>
+          <Button size="sm" disabled={selected.size === 0} onClick={() => { setMarkError(false); setConfirmMark(true) }}>
+            {t('orders.markDelivered.button')}
+          </Button>
+        </div>
+      )}
+      {confirmMark && (
+        <Modal title={t('orders.markDelivered.confirmTitle')} onClose={() => !marking && setConfirmMark(false)}>
+          <div className="space-y-4" data-testid="orders-mark-confirm">
+            <p className="text-body text-muted">
+              {t('orders.markDelivered.confirmBody', {
+                count: selected.size, carrier: carrierFilter || t('status.another_carrier'),
+              })}
+            </p>
+            {markError && <Alert tone="critical" title={t('orders.markDelivered.error')} />}
+            <div className="flex flex-wrap gap-3">
+              <Button loading={marking} onClick={markDelivered}>
+                {t('orders.markDelivered.confirm', { count: selected.size })}
+              </Button>
+              <Button variant="secondary" disabled={marking} onClick={() => setConfirmMark(false)}>
+                {t('orders.markDelivered.cancel')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Table — loading/empty/error/data handled here so EmptyState can carry an action */}
       <div className="card overflow-hidden">

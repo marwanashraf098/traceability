@@ -391,7 +391,14 @@
       "return_shipment_state_lost": "Return lost",
       "return_shipment_state_exception": "Return issue",
       "return_shipment_state_terminated": "Return terminated",
-      "return_shipment_state_cancelled": "Return cancelled"
+      "return_shipment_state_cancelled": "Return cancelled",
+      "source": {
+        "pickup_scan": "Scanned out at Pickups",
+        "inferred_handover": "No pickup scan — handover inferred from Shopify",
+        "shopify": "From Shopify's delivery status",
+        "manual": "Marked delivered by hand",
+        "return_scan": "Scanned back in Scan returns"
+      }
     },
     "pipeline": {
       "new": "New",
@@ -413,7 +420,25 @@
     "empty": "No orders found",
     "prev": "Previous",
     "next": "Next",
-    "showing": "Showing {{from}}–{{to}} of {{total}}"
+    "showing": "Showing {{from}}–{{to}} of {{total}}",
+    "carrierFilter": {
+      "label": "Courier",
+      "all": "All couriers",
+      "option": "With {{carrier}} ({{count}})"
+    },
+    "markDelivered": {
+      "button": "Mark delivered",
+      "selected": "{{count}} selected",
+      "selectAll": "Select all on this page",
+      "select": "Select order {{number}}",
+      "confirmTitle": "Mark as delivered?",
+      "confirmBody": "{{count}} order(s) with {{carrier}} will be marked delivered. Their items count as delivered and this is recorded under your name. Only parcels still with the courier change.",
+      "confirm": "Mark {{count}} delivered",
+      "cancel": "Cancel",
+      "done": "{{count}} order(s) marked delivered.",
+      "skipped": "{{count}} skipped (already delivered or not with the courier).",
+      "error": "Couldn't mark them delivered. Check your connection and try again — nothing changed."
+    }
   },
   "orderDetail": {
     "title": "Order",
@@ -479,7 +504,19 @@
     "codCancel": "Cancel",
     "codFrozen": "COD is frozen after packing",
     "codValidation": "COD must be between 1 and 30,000 EGP",
-    "codSuccess": "COD updated"
+    "codSuccess": "COD updated",
+    "shopifyStatus": "Shopify status",
+    "shopifyShipmentStatus": {
+      "confirmed": "Confirmed",
+      "label_printed": "Label printed",
+      "label_purchased": "Label purchased",
+      "ready_for_pickup": "Ready for pickup",
+      "in_transit": "In transit",
+      "out_for_delivery": "Out for delivery",
+      "attempted_delivery": "Delivery attempted",
+      "delivered": "Delivered",
+      "failure": "Delivery failed"
+    }
   },
   "delivery": {
     "state": {
@@ -1209,7 +1246,8 @@
           "mismatchHint": "Records the whole parcel as received instead — managers add what came back in Receiving.",
           "bostaStatus": "Bosta status",
           "rtoSince": "returned to origin since {{date}}"
-        }
+        },
+        "carrier": "Courier"
       },
       "footer": {
         "parcels": "{{count}} parcel",
@@ -2694,7 +2732,10 @@
       "NOT_FORWARD_LEG": "Return-leg shipment — not eligible for pickup",
       "LEG_ENDED": "This waybill is cancelled or deleted in Bosta — don't hand it to the courier.",
       "NOT_PACKED": "Shipment not in packed state",
-      "UNKNOWN_AWB": "AWB not found"
+      "UNKNOWN_AWB": "AWB not found",
+      "WRONG_CARRIER": "This parcel goes with {{carrier}} — keep it for that courier's pickup.",
+      "AMBIGUOUS": "This waybill matches two shipments — give it to a manager.",
+      "LEG_ENDED_NEUTRAL": "This waybill is cancelled (or deleted in Bosta) — don't hand it to the courier."
     },
     "manifestTitle": "Handover Manifest",
     "manifestPackages": "Total packages",
@@ -2710,7 +2751,9 @@
       "body": "Cancelled or deleted in Bosta after it was scanned — not handed over. Keep these parcels; their pieces are still packed."
     },
     "pieceExceptions": "{{count}} piece(s) had custody gaps — check Alerts",
-    "noScans": "No packages scanned yet"
+    "noScans": "No packages scanned yet",
+    "courier": "Courier: {{carrier}}",
+    "anotherCourier": "another courier"
   },
   "stocktake": {
     "title": "Stock Take",
@@ -3077,7 +3120,8 @@
     "conflict": {
       "cancelled_but_delivered": "Cancelled · but delivered",
       "live_shipment": "Shipment still live — cancel the AWB"
-    }
+    },
+    "delivered_with_carrier": "Delivered · {{carrier}}"
   },
   "chip": {
     "delayed": "Delayed",

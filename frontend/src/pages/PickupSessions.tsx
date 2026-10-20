@@ -30,6 +30,8 @@ interface ScanEntry {
   codAmount: number | null
   scannedAt: string | null
   scannedByName: string | null
+  /** G3: a generic (non-Bosta courier) parcel's carrier ('' when it names none); absent for Bosta. */
+  carrierName?: string
 }
 
 interface SessionDetail extends SessionSummary {
@@ -37,11 +39,15 @@ interface SessionDetail extends SessionSummary {
   closedByName: string | null
   closedAt: string | null
   scans: ScanEntry[]
+  /** G3: the courier of a session of other couriers' parcels; absent for Bosta sessions. */
+  carrier?: string
 }
 
 interface ScanResponse {
   outcome: string
   entry: ScanEntry | null
+  /** G3: on WRONG_CARRIER — the courier this session is for ("Bosta" or a carrier name). */
+  carrier?: string
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -200,7 +206,8 @@ function CreateSessionForm({ onCreated, onCancel }: {
 
 // ── Session view (scan screen + closed manifest) ──────────────────────────────
 
-type FeedbackOutcome = 'ACCEPTED' | 'DUPLICATE' | 'OTHER_SESSION' | 'NOT_FORWARD_LEG' | 'LEG_ENDED' | 'NOT_PACKED' | 'UNKNOWN_AWB' | null
+type FeedbackOutcome = 'ACCEPTED' | 'DUPLICATE' | 'OTHER_SESSION' | 'NOT_FORWARD_LEG' | 'LEG_ENDED' | 'NOT_PACKED' | 'UNKNOWN_AWB'
+  | 'WRONG_CARRIER' | 'AMBIGUOUS' | null
 
 /** A scanned waybill whose leg was cancelled / deleted in Bosta before close — not handed over. */
 interface LeftOut { shipmentId: string; trackingNumber: string; orderNumber: string | null }
@@ -214,6 +221,8 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const [session, setSession] = useState<SessionDetail>(initial)
   const [feedback, setFeedback]   = useState<FeedbackOutcome>(null)
   const [feedbackTn, setFeedbackTn] = useState('')
+  // G3: WRONG_CARRIER names the session's courier ("This parcel goes with Aramex").
+  const [feedbackCarrier, setFeedbackCarrier] = useState<string | undefined>(undefined)
   const [scans, setScans]           = useState<ScanEntry[]>(initial.scans)
   const [closing, setClosing]       = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -223,7 +232,11 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = session.sessionStatus === 'open'
-  const { scanHelpers } = useCapabilities()
+  const { scanHelpers, genericCourier } = useCapabilities()
+  // G3: one courier per session — the first accepted parcel's courier names the session (a generic carrier;
+  // undefined for a Bosta session, which shows nothing new).
+  const firstReal = [...scans].reverse().find(s => !s.shipmentId.startsWith('optimistic-'))
+  const sessionCarrier = session.carrier ?? firstReal?.carrierName
 
   // Handover manifest: fetched through the authenticated request, shown in the manifest card,
   // then the page is printed (print styles below keep only that card). COD is money — owner /
@@ -272,7 +285,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       }
       // Rollback optimistic entry.
       setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
-      showFeedback(res.outcome as FeedbackOutcome, tn)
+      showFeedback(res.outcome as FeedbackOutcome, tn, res.carrier)
       return { success: false }
     } catch {
       setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
@@ -295,9 +308,10 @@ function SessionView({ session: initial, onRefresh, onBack }: {
     if (isOpen) refocus()
   }, [isOpen, refocus])
 
-  function showFeedback(outcome: FeedbackOutcome, tn: string) {
+  function showFeedback(outcome: FeedbackOutcome, tn: string, carrier?: string) {
     setFeedback(outcome)
     setFeedbackTn(tn)
+    setFeedbackCarrier(carrier)
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
     if (outcome === 'ACCEPTED') {
       feedbackTimer.current = setTimeout(() => setFeedback(null), 1500)
@@ -377,9 +391,14 @@ function SessionView({ session: initial, onRefresh, onBack }: {
               <span className="text-muted font-normal ms-2 text-body">· {session.scheduledTimeSlot}</span>
             )}
           </h1>
-          <p className="text-small text-muted mt-0.5 flex items-center gap-2">
+          <p className="text-small text-muted mt-0.5 flex flex-wrap items-center gap-2">
             <SessionStatusBadge status={session.sessionStatus} />
             {session.openedByName && <span>{t('pickups.by', { name: session.openedByName })}</span>}
+            {sessionCarrier != null && (
+              <span className="badge border bg-info/10 text-info border-info/20" data-testid="pickup-carrier">
+                {t('pickups.courier', { carrier: sessionCarrier || t('pickups.anotherCourier') })}
+              </span>
+            )}
           </p>
         </div>
         {!isOpen && (
@@ -451,14 +470,18 @@ function SessionView({ session: initial, onRefresh, onBack }: {
 
           {/* Feedback banner */}
           {feedback && (
-            <div className={`rounded-lg px-4 py-4 text-xl font-bold text-center transition-all ${
+            <div data-testid="pickup-scan-feedback" className={`rounded-lg px-4 py-4 text-xl font-bold text-center transition-all ${
               feedback === 'ACCEPTED'
                 ? 'bg-success/15 text-success border border-success/30'
                 : feedback === 'DUPLICATE'
                 ? 'bg-warning/15 text-warning border border-warning/30'
                 : 'bg-danger/15 text-danger border border-danger/30'
             }`}>
-              {t(`pickups.scanOutcome.${feedback}`)}
+              {feedback === 'WRONG_CARRIER'
+                ? t('pickups.scanOutcome.WRONG_CARRIER', { carrier: feedbackCarrier || t('pickups.anotherCourier') })
+                : feedback === 'LEG_ENDED' && genericCourier
+                ? t('pickups.scanOutcome.LEG_ENDED_NEUTRAL')
+                : t(`pickups.scanOutcome.${feedback}`)}
               {feedbackTn && <div className="text-sm font-mono mt-1 opacity-70">{feedbackTn}</div>}
             </div>
           )}
@@ -491,7 +514,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
             <tbody>
               {scans.map(scan => (
                 <tr key={scan.shipmentId} className={`tbl-row ${scan.shipmentId.startsWith('optimistic-') ? 'opacity-50' : ''}`}>
-                  <td className="tbl-cell font-mono text-caption text-muted">{scan.trackingNumber}</td>
+                  <td className="tbl-cell font-mono text-caption text-muted" dir="ltr">{scan.trackingNumber}</td>
                   <td className="tbl-cell text-primary">{scan.orderNumber ?? '—'}</td>
                   <td className="tbl-cell text-warning">
                     {scan.codAmount != null ? `${scan.codAmount.toLocaleString()} EGP` : <span className="text-muted">—</span>}
@@ -607,6 +630,11 @@ function SessionView({ session: initial, onRefresh, onBack }: {
           <div className="text-small text-muted space-y-1">
             <p>{t('pickups.col.date')}: <span className="text-primary">{session.scheduledDate}</span></p>
             <p>{t('pickups.timeSlot')}: <span className="text-primary">{session.scheduledTimeSlot ?? '—'}</span></p>
+            {(manifest?.carrier ?? sessionCarrier) != null && (
+              <p data-testid="pickup-manifest-carrier">
+                {t('pickups.courier', { carrier: (manifest?.carrier ?? sessionCarrier) || t('pickups.anotherCourier') })}
+              </p>
+            )}
             {session.closedByName && (
               <p>{t('pickups.by', { name: session.closedByName })}</p>
             )}

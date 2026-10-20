@@ -196,8 +196,11 @@ interface Parcel {
   itemsRequestId?: string | null
   itemsRequestReference?: string | null
   requestItems?: ParcelRequestItem[]
-  /** Issue 1 (V154): a forward leg Bosta returned to the merchant (Return to Origin). */
+  /** Issue 1 (V154): a forward leg Bosta returned to the merchant (Return to Origin) — or, G3, another
+   *  courier's parcel scanned back here. */
   returnedToSender?: boolean
+  /** G3: another courier's parcel — its carrier ('' when it names none); absent for Bosta parcels. */
+  carrier?: string
   /** Issue 1: the order's untracked lines, one row per unit (parcels no request holds). */
   untrackedUnits?: ParcelUnit[]
   unitsIn?: number
@@ -1386,6 +1389,10 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </div>
         <div className="flex gap-8 flex-1 min-w-0">
           <ParcelFact label={t('returns.openSession.parcel.order')} value={<bdi>{order}</bdi>} />
+          {parcel.carrier != null && (
+            <ParcelFact label={t('returns.openSession.parcel.carrier')}
+              value={<bdi data-testid="parcel-carrier">{parcel.carrier || t('pickups.anotherCourier')}</bdi>} />
+          )}
           {requestReference && (
             <ParcelFact label={t('returns.openSession.parcel.request')}
               value={<bdi className="font-mono" data-testid="parcel-request">{requestReference}</bdi>} />

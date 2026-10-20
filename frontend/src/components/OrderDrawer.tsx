@@ -296,8 +296,8 @@ export default function OrderDrawer({
                       </span>
                       <div>
                         <p className="text-body font-semibold text-primary">
-                          {order.derivedStatus.primaryKey === 'status.with_carrier'
-                            ? t('status.with_carrier', { carrier: order.shippingBadge?.carrier || t('status.another_carrier') })
+                          {order.derivedStatus.primaryKey === 'status.with_carrier' || order.derivedStatus.primaryKey === 'status.delivered_with_carrier'
+                            ? t(order.derivedStatus.primaryKey, { carrier: order.shippingBadge?.carrier || t('status.another_carrier') })
                             : t(order.derivedStatus.primaryKey, { defaultValue: order.derivedStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
                         </p>
                         {stateSub && <p className="text-small text-muted">{stateSub}</p>}
@@ -631,6 +631,10 @@ function DrawerTimeline({ items }: { items: TimelineItem[] }) {
               {label}
             </p>
             {item.detail && <p className="text-caption text-muted">{item.detail}</p>}
+            {/* G3: where a generic (non-Bosta courier) leg's step came from — Bosta rows carry no source. */}
+            {item.source && (
+              <p className="text-caption text-muted" data-testid="timeline-source">{t(`orders.timeline.source.${item.source}`)}</p>
+            )}
           </li>
         )
       })}

@@ -391,7 +391,14 @@
       "return_shipment_state_lost": "مرتجع مفقود",
       "return_shipment_state_exception": "مشكلة في الإرجاع",
       "return_shipment_state_terminated": "تم إنهاء الإرجاع",
-      "return_shipment_state_cancelled": "تم إلغاء الإرجاع"
+      "return_shipment_state_cancelled": "تم إلغاء الإرجاع",
+      "source": {
+        "pickup_scan": "مُسح عند التسليم في صفحة الاستلام",
+        "inferred_handover": "بدون مسح عند التسليم — التسليم مُستنتج من شوبيفاي",
+        "shopify": "من حالة التوصيل في شوبيفاي",
+        "manual": "عُلّم كمُوصَّل يدويًا",
+        "return_scan": "مُسح عند الإرجاع"
+      }
     },
     "pipeline": {
       "new": "جديد",
@@ -413,7 +420,25 @@
     "empty": "لا توجد طلبات",
     "prev": "السابق",
     "next": "التالي",
-    "showing": "عرض {{from}}–{{to}} من {{total}}"
+    "showing": "عرض {{from}}–{{to}} من {{total}}",
+    "carrierFilter": {
+      "label": "شركة الشحن",
+      "all": "كل شركات الشحن",
+      "option": "مع {{carrier}} ({{count}})"
+    },
+    "markDelivered": {
+      "button": "تعليم كمُوصَّل",
+      "selected": "تم اختيار {{count}}",
+      "selectAll": "اختيار الكل في هذه الصفحة",
+      "select": "اختيار الطلب {{number}}",
+      "confirmTitle": "تعليمها كمُوصَّلة؟",
+      "confirmBody": "سيتم تعليم {{count}} طلب مع {{carrier}} كمُوصَّل. تُحسب قطعها كمُوصَّلة ويُسجَّل ذلك باسمك. تتغير فقط الطرود التي ما زالت مع المندوب.",
+      "confirm": "تعليم {{count}} كمُوصَّل",
+      "cancel": "إلغاء",
+      "done": "تم تعليم {{count}} طلب كمُوصَّل.",
+      "skipped": "تم تخطي {{count}} (مُوصَّل بالفعل أو ليس مع المندوب).",
+      "error": "تعذّر تعليمها كمُوصَّلة. تحقق من الاتصال وحاول مجددًا — لم يتغير شيء."
+    }
   },
   "orderDetail": {
     "title": "الطلب",
@@ -479,7 +504,19 @@
     "codCancel": "إلغاء",
     "codFrozen": "مبلغ الاستلام مجمَّد بعد التعبئة",
     "codValidation": "يجب أن يكون المبلغ بين 1 و30,000 جنيه",
-    "codSuccess": "تم تحديث مبلغ الاستلام"
+    "codSuccess": "تم تحديث مبلغ الاستلام",
+    "shopifyStatus": "حالة شوبيفاي",
+    "shopifyShipmentStatus": {
+      "confirmed": "مؤكد",
+      "label_printed": "طُبعت البوليصة",
+      "label_purchased": "اشتُريت البوليصة",
+      "ready_for_pickup": "جاهز للاستلام",
+      "in_transit": "في الطريق",
+      "out_for_delivery": "خرج للتوصيل",
+      "attempted_delivery": "محاولة توصيل",
+      "delivered": "تم التوصيل",
+      "failure": "فشل التوصيل"
+    }
   },
   "delivery": {
     "state": {
@@ -1212,7 +1249,8 @@
           "mismatchHint": "يسجّل الشحنة كلها كمستلمة بدلًا من ذلك — ويضيف المديرون ما عاد في جلسة الاستلام.",
           "bostaStatus": "حالة بوستا",
           "rtoSince": "مرتجع للمرسل منذ {{date}}"
-        }
+        },
+        "carrier": "شركة الشحن"
       },
       "footer": {
         "parcels": "{{count}} شحنة",
@@ -2637,7 +2675,10 @@
       "NOT_FORWARD_LEG": "شحنة إرجاع — غير مؤهلة للاستلام",
       "LEG_ENDED": "هذه البوليصة ملغاة أو محذوفة في Bosta — لا تسلّمها للمندوب.",
       "NOT_PACKED": "الشحنة ليست في حالة التعبئة",
-      "UNKNOWN_AWB": "رقم التتبع غير موجود"
+      "UNKNOWN_AWB": "رقم التتبع غير موجود",
+      "WRONG_CARRIER": "هذا الطرد يذهب مع {{carrier}} — احتفظ به لاستلام تلك الشركة.",
+      "AMBIGUOUS": "هذه البوليصة تطابق شحنتين — سلّمها للمدير.",
+      "LEG_ENDED_NEUTRAL": "هذه البوليصة ملغاة (أو حُذفت في Bosta) — لا تسلّمها للمندوب."
     },
     "manifestTitle": "قائمة الاستلام",
     "manifestPackages": "إجمالي الطرود",
@@ -2653,7 +2694,9 @@
       "body": "أُلغيت أو حُذفت في Bosta بعد مسحها — لم تُسلَّم. احتفظ بهذه الطرود؛ قطعها ما زالت معبّأة."
     },
     "pieceExceptions": "{{count}} قطعة بها فجوات في سلسلة الحيازة — تحقق من التنبيهات",
-    "noScans": "لم يتم مسح أي طرود بعد"
+    "noScans": "لم يتم مسح أي طرود بعد",
+    "courier": "شركة الشحن: {{carrier}}",
+    "anotherCourier": "شركة شحن أخرى"
   },
   "locations": {
     "title": "المواقع",
@@ -3085,7 +3128,8 @@
     "conflict": {
       "cancelled_but_delivered": "ملغي · لكن تم التوصيل",
       "live_shipment": "الشحنة ما زالت نشطة — ألغِ البوليصة"
-    }
+    },
+    "delivered_with_carrier": "تم التوصيل · {{carrier}}"
   },
   "chip": {
     "delayed": "متأخر",

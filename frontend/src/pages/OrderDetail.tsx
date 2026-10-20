@@ -498,7 +498,17 @@ export function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       <dl className="space-y-2">
         {/* Tracking number — font-mono */}
         <InfoRow label={t('orderDetail.tracking')} value={shipment.trackingNumber} mono />
-        <InfoRow label={t('orderDetail.provider')} value={shipment.provider} />
+        {/* G3: a generic (non-Bosta courier) leg names its carrier instead of "generic", and shows Shopify's
+            latest delivery status — information only; only "delivered" ever moves the order. */}
+        <InfoRow label={t('orderDetail.provider')}
+                 value={shipment.carrierName != null ? (shipment.carrierName || t('status.another_carrier')) : shipment.provider} />
+        {shipment.shopifyShipmentStatus && (
+          <div data-testid="shopify-shipment-status">
+            <InfoRow label={t('orderDetail.shopifyStatus')}
+                     value={t(`orderDetail.shopifyShipmentStatus.${shipment.shopifyShipmentStatus}`,
+                       { defaultValue: shipment.shopifyShipmentStatus.replace(/_/g, ' ') })} />
+          </div>
+        )}
         {shipment.courierName && (
           <InfoRow
             label={t('orderDetail.courier')}
