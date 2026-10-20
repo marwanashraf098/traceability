@@ -3,6 +3,7 @@ package com.traceability;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -22,6 +23,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * table and INSERT-only enforcement on piece_events.
  */
 @Testcontainers
+// A migration that hangs (e.g. CREATE INDEX CONCURRENTLY under Flyway's transactional lock) fails here instead of
+// hanging the suite. SEPARATE_THREAD: a JDBC call blocked on a lock ignores the interrupt SAME_THREAD sends.
+@Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class MigrationSmokeTest {
 
     @Container
@@ -70,7 +74,7 @@ class MigrationSmokeTest {
     @Test
     void migrationsSucceedAndStructuralGuaranteesHold() throws Exception {
         // 1. Run migrations
-        Flyway flyway = Flyway.configure()
+        Flyway flyway = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(),
                         POSTGRES.getUsername(),
                         POSTGRES.getPassword())
@@ -82,8 +86,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V174 must execute (V38 was never used — 173 files, not 174)")
-                .isEqualTo(173);
+                .as("all migrations V1–V175 must execute (V38 was never used — 174 files, not 175)")
+                .isEqualTo(174);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),
@@ -254,7 +258,7 @@ class MigrationSmokeTest {
                 .withPassword("postgres")) {
             pg.start();
 
-            Flyway.configure()
+            FlywayTestSupport.configure()
                     .dataSource(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())
                     .locations("classpath:db/migration")
                     .target(org.flywaydb.core.api.MigrationVersion.fromVersion("58"))
@@ -288,7 +292,7 @@ class MigrationSmokeTest {
                 }
             }
 
-            MigrateResult result = Flyway.configure()
+            MigrateResult result = FlywayTestSupport.configure()
                     .dataSource(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())
                     .locations("classpath:db/migration")
                     .load()

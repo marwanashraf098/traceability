@@ -42,7 +42,7 @@ class CrpAddressBackfillTest {
 
     @Test
     void v99_correctsOnlyPollutedBostaOrders_idempotent() throws Exception {
-        MigrateResult r1 = Flyway.configure()
+        MigrateResult r1 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("98").load().migrate();
         assertThat(r1.success).isTrue();
@@ -86,7 +86,7 @@ class CrpAddressBackfillTest {
             leg(c, tenant, shopifySourced, "return", "6136500006", crpRaw("3 Shop Rd", "Giza"));
         }
 
-        MigrateResult r2 = Flyway.configure()
+        MigrateResult r2 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 // Pinned: later migrations must not change this V99-only count.
                 .locations("classpath:db/migration").target("99").load().migrate();

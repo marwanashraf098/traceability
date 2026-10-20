@@ -28,7 +28,7 @@ class ReturnIntakeOutcomeBackfillTest {
 
     @Test
     void v101Backfill_stampedRowsBecomeScanned_unstampedUntouched() throws Exception {
-        assertThat(Flyway.configure()
+        assertThat(FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("100").load().migrate().success).isTrue();
 
@@ -41,7 +41,7 @@ class ReturnIntakeOutcomeBackfillTest {
             unstamped = leg(c, tenant, store, "9730639058", false);
         }
 
-        MigrateResult r = Flyway.configure()
+        MigrateResult r = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("101").load().migrate();
         assertThat(r.success).isTrue();

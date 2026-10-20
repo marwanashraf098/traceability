@@ -38,7 +38,7 @@ class SettlementBackfillTest {
 
     @Test
     void backfill_matchesTheJavaExtractor_andSetsStatus() throws Exception {
-        assertThat(Flyway.configure()
+        assertThat(FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("147").load().migrate().success).isTrue();
 
@@ -78,7 +78,7 @@ class SettlementBackfillTest {
             ids.put("noRaw", ship);
         }
 
-        assertThat(Flyway.configure()
+        assertThat(FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").load().migrate().success).isTrue();
 

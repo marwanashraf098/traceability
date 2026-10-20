@@ -40,7 +40,7 @@ class GenericSnapshotOutcomesTest {
 
     @Test
     void outcomesSection_genericOrdersAreWijha_bostaOrdersUnchanged() throws Exception {
-        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
+        FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
             .locations("classpath:db/migration").load().migrate();
         jdbc = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
 

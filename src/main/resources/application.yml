@@ -35,6 +35,12 @@ spring:
     # after its successors already exist in schema_history.  out-of-order=true lets Flyway
     # apply the gap without failing the version-sequence check.
     out-of-order: true
+    # Session-level advisory lock instead of Flyway 10's default transactional one. The transactional lock
+    # is held in an open transaction on a second connection for the whole run, and CREATE INDEX CONCURRENTLY
+    # (V175) waits for every open transaction — it would hang startup forever. The session lock still keeps
+    # two instances from migrating at once. Tests: FlywayTestSupport (FlywayLockGuardTest keeps both false).
+    postgresql:
+      transactional-lock: false
     url: ${FLYWAY_DB_URL:${DATABASE_URL:jdbc:postgresql://localhost:5432/traceability}}
     user: ${FLYWAY_DB_USER:postgres}
     password: ${FLYWAY_DB_PASSWORD:postgres}
