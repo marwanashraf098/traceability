@@ -29,6 +29,10 @@ public class PackSessionStore {
     static final Set<String> SET_ASIDE_REASONS =
         Set.of("piece_missing", "damaged_piece", "waybill_damaged", "other");
 
+    /** Set-aside reason written by the server itself (never chosen by the packer): the open waybill was
+     *  deleted in Bosta after it was opened (deleted-in-Bosta slice 4). */
+    public static final String SET_ASIDE_DELETED_IN_BOSTA = "deleted_in_bosta";
+
     public record Counters(int packed, int setAside, int rejected, int left) {}
 
     /** rawScan: what was scanned — shown for rejected rows, which usually have no order. */
@@ -193,6 +197,13 @@ public class PackSessionStore {
             return FulfillService.ScanResult.rejected("WAYBILL_WHILE_PACKING",
                 "That's a waybill. Finish or set aside this order before scanning the next waybill.");
         }
+        // Slice 4: the open waybill may have been found deleted in Bosta since it was opened — re-checked on
+        // every piece scan; then the order is set aside with that reason and the packer waits for a new waybill.
+        if (openWaybillDeletedInBosta(s, tenantId)) {
+            setAsideOpenOrder(s, tenantId, orderId, SET_ASIDE_DELETED_IN_BOSTA, userId);
+            return FulfillService.ScanResult.rejected("WAYBILL_DELETED_IN_BOSTA",
+                "This waybill was deleted in Bosta. The order was set aside — put the waybill to one side and give it to a manager.");
+        }
         PackClaim.take(jdbc, orderId, tenantId, userId);
         return fulfill.scan(orderId, code, userId);
     }
@@ -218,7 +229,22 @@ public class PackSessionStore {
         UUID tenantId = TenantContext.require();
         Session s = load(sessionId, userId, tenantId, true, true);
         requireOpenOrder(s, orderId);
+        return setAsideOpenOrder(s, tenantId, orderId, reason, userId);
+    }
 
+    /** The open waybill's shipment was confirmed deleted in Bosta (the session's own scan). */
+    private boolean openWaybillDeletedInBosta(Session s, UUID tenantId) {
+        String tn = s.currentWaybillScan() == null ? null : TrackingNumberNormalizer.normalize(s.currentWaybillScan());
+        if (tn == null) return false;
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? " +
+            "  AND s.provider = 'bosta' AND " + com.traceability.integrations.bosta.BostaDeletionService.deletedSql("s") + ")",
+            Boolean.class, tenantId, tn));
+    }
+
+    /** setAside's body: unscan active allocations, release the claim, record the outcome, clear the order. */
+    private int setAsideOpenOrder(Session s, UUID tenantId, UUID orderId, String reason, UUID userId) {
+        UUID sessionId = s.id();
         List<String> pieces = jdbc.queryForList(
             "SELECT a.piece_id FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
             "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'active' " +

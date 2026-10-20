@@ -30,6 +30,14 @@ public final class OrderStatusDeriver {
 
     private OrderStatusDeriver() {}
 
+    /**
+     * Deleted-in-Bosta slice 4: the forward legs that feed {@link #derive} and the shipping badge — a leg
+     * confirmed deleted in Bosta ({@code provider_deleted_at}) is "no shipment" there, so the order shows its
+     * own status and the badge "Awaiting booking" until a new delivery links. Appended (unqualified columns)
+     * to every input query's latest-forward-leg subquery; the derivation itself is unchanged.
+     */
+    public static final String LIVE_FORWARD_LEG_SQL = " AND provider_deleted_at IS NULL ";
+
     public enum Tone { NEUTRAL, INFO, SUCCESS, WARN, DANGER }
 
     public record Chip(String key, Tone tone, Integer count) {

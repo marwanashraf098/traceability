@@ -4,6 +4,54 @@
 
 ## Current state
 
+**Deleted-in-Bosta slices 4 + 5 — confirm a deletion safely, close the dead shipment, backfill script (2026-10-19,
+branch `feat/deleted-in-bosta-confirm` off origin/main 05b813b; NOT merged, NOT deployed). Migration V172.**
+- **V172 — why 172:** G2 merged to main first with V171 (2026-10-19), so this takes the next free number (review asked
+  for V171 on the assumption G2 would merge later — it already had; G2 needs no renumber). Rebased onto main a9a9f4c:
+  V170 → V171 → V172; MigrationSmokeTest 171, NotTracedBackfillTest 116 (+ V171 + V172). **Lock-safe:** only ADD
+  COLUMN (nullable / constant DEFAULT 0 — metadata-only), CHECKs NOT VALID, no index, no data UPDATE (no other
+  migration sets lock_timeout, so this doesn't either). shipments:
+  provider_deleted_at / provider_deleted_reason ('deleted_in_bosta' | 'deleted_in_bosta_backfill', CHECK pair, Bosta
+  rows only), not_found_count, last_not_found_at — **`timestamp` without time zone like V44's provider_not_found_at**
+  (both hold the app's Cairo wall-clock time, JVM -Duser.timezone=Africa/Cairo; converting V44's column would rewrite
+  shipments). courier_accounts: lookup_ok_at, lookup_auth_failed_at.
+- **Counting (review):** a 400 COUNTS only when it is the first fresh one (count 0) or ≥ 30 min after the last counted
+  one (`observeNotFound`, LOCALTIMESTAMP); confirmation needs count ≥ 2. Legs stamped before V172 keep count 0 /
+  last NULL — their old stamp never counts. They enter the queue first (last_not_found_at NULLS FIRST; their
+  last_polled_at is days old). Prod's 39: every tenant has ≤ 20 (Femine 17, BROEK 12) so pass 1 is the first poll
+  cycle after deploy (≤ 3 min, ~1 lookup/s per key), pass 2 the first cycle ≥ 30 min later → all 39 confirmed about
+  33–36 min after deploy if each walk succeeds and no 429.
+- **Rule** (`integrations/bosta/BostaDeletionService` — the ONE place): provider_not_found_at = SUSPECTED (first 400).
+  Suspects leave the safety net for a re-check queue (`recheckSuspects`, after each poll walk, BACKGROUND, one lookup
+  per suspect per 30 min, ≤ 20/cycle); a found delivery clears it and is ingested; the walk seeing it clears it too.
+  CONFIRM (`tryConfirm`, one tx, row lock) only with: count ≥ 2 and last − first ≥ 30 min; the tenant key's
+  lookup_ok_at < 30 min old (set by any walk page / found lookup) and no 401/403 in 30 min; still 'created'.
+  404/401/403/429/5xx/timeouts never observe or confirm (401/403 → lookup_auth_failed_at). Gateway: v0 fetch and v2
+  search 401/403 → BostaAuthException (subclass, same message). Print: isolated DELETED_IN_BOSTA culprits are re-looked
+  up user-facing (≤ 8) — an observation, never a confirmation. Never a Bosta call in a transaction.
+- **Confirmation does:** forward / exchange leg, no order piece awaiting_pickup / with_courier / delivered →
+  'cancelled' + provider_deleted_at, NO history row, no piece writes, then matcher_version NULL on the order's unlinked
+  rows (via OrderReference). Pieces awaiting_pickup / with_courier → state kept + alert `waybill_deleted_in_bosta`
+  (HIGH; CRITICAL with a with_courier piece; resolvable). Delivered pieces only → state kept, no alert. Return leg held
+  by an open request (requested…refund_pending) → kept; else closed.
+- **Downstream:** `OrderStatusDeriver.LIVE_FORWARD_LEG_SQL` (provider_deleted_at IS NULL) appended to every
+  deriver/badge input lateral (OrderController ×5 + badge, EmbeddedController ×2, OverviewService ×1) → "Awaiting
+  booking". Scan link refuses a deleted tracking number (409); Shopify fulfillment link → 'skipped' "waybill deleted in
+  Bosta", no fetch, no alert. WaybillResolver NOT_PACKABLE/DELETED_IN_BOSTA; PackSessionStore.scanPiece re-checks the
+  open waybill → set aside reason `deleted_in_bosta`, WAYBILL_DELETED_IN_BOSTA. cancelled_live_shipment (+ Overview)
+  filters provider_deleted_at (suspected no longer clears it); stuck_shipment ignores deleted legs; clearsWhen text
+  "…or when Traced confirms it was deleted in Bosta". Pickup guard + print pre-filter: suspected OR confirmed.
+- **Slice 5:** `scripts/ops/2026-10-19-deleted-in-bosta-backfill.sql` (psql as owner; dry run = no UPDATE + ROLLBACK;
+  `-v commit=yes`). Guards: history 'created' only, not terminal, no order piece awaiting_pickup/with_courier, return
+  leg not held by an open request. Prod dry run 2026-10-19 (read-only SELECT via the connector): **39 stamped legs,
+  all 39 pass** — Femine 17, BROEK 12, The Snouts 5 (1 send, 2 exchange, 2 customer-return pickups), blnco 1,
+  Juno #1110, Nuvira #3123 6979330981. Not applied.
+- **Known gaps:** a leg already handed over (pickup close sets with_courier) is never 'created', so it can't be
+  confirmed — the CRITICAL path needs a 'created' leg with with_courier pieces; slice 6 should decide. Stranded
+  unlinked rows matched only by phone + COD aren't retried (no reference to tie them to the order).
+- Tests: BostaDeletionTest 16 (dl16 legacy leg), DeletedInBostaBackfillScriptTest 2 (psql in the container), frontend
+  packSessionDeletedInBosta 1; ConditionOnlyAlertsTest.co4 → …clearsWhenConfirmedDeletedInBosta (approved).
+
 **Returns: parcels coming back to sender are expected, workers grade them (2026-10-19, branch
 `returns-expected-back` off origin/main 05b813b, rebased onto 67ffe18 (G2); NOT merged, NOT deployed). No migration.** Prod trigger: Nuvira session
 bac24a14 (RT-BAC2): #3134 / #3140 cancelled in Shopify after handover, scanned 7 min BEFORE Bosta's state 46 → pieces still

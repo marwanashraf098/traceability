@@ -74,6 +74,14 @@ public class BostaAwbService {
         this.encryptionService = encryptionService;
     }
 
+    /** Deleted-in-Bosta slice 4: the print path's not-found re-check (null in hand-built instances). */
+    private BostaDeletionService deletion;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDeletion(BostaDeletionService deletion) {
+        this.deletion = deletion;
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     public record AwbException(String trackingNumber, String reason) {}
@@ -261,6 +269,22 @@ public class BostaAwbService {
                 continue;
             }
             chunks.add(whole);
+        }
+
+        // Deleted-in-Bosta slice 4: mass-awb said "couldn't find" and isolation named these — look each up right
+        // away (user-facing, no transaction open here). A 400 is one not-found observation; it never confirms
+        // a deletion by itself (the status poll's suspect queue does). The print's result is unchanged.
+        if (deletion != null) {
+            List<String> notFound = chunks.stream()
+                .filter(c -> c.pdf() == null && DELETED_IN_BOSTA.equals(c.rejectedReason()) && c.trackingNumbers().size() == 1)
+                .map(c -> c.trackingNumbers().get(0)).toList();
+            if (!notFound.isEmpty()) {
+                try {
+                    deletion.recheckFromPrint(tenantId, apiKey, notFound);
+                } catch (RuntimeException e) {
+                    log.warn("mass-awb not-found re-check failed: {}", e.toString());
+                }
+            }
         }
 
         return new AwbDetailedResult(chunks, exclusions, format);
@@ -549,7 +573,8 @@ public class BostaAwbService {
                 // Extract the numeric code instead: (raw->'type'->>'code')::int
                 "SELECT id, tracking_number, internal_state::text AS internal_state, " +
                 "       order_id, (raw -> 'type' ->> 'code')::int AS delivery_type_code, " +
-                "       provider_not_found_at IS NOT NULL AS not_found_in_bosta, " +
+                // Suspected or confirmed deleted in Bosta (slice 4) — never sent to Bosta again.
+                "       " + BostaDeletionService.suspectedOrDeletedSql("shipments") + " AS not_found_in_bosta, " +
                 "       provider::text AS provider, " +
                 "       awb_print_failed_reason IS NOT DISTINCT FROM '" + DELETED_IN_BOSTA + "' AS isolated_before " +
                 "FROM shipments WHERE id IN (" + placeholders + ") AND tenant_id = ?",

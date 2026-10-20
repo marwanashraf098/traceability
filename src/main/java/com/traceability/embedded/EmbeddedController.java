@@ -229,6 +229,7 @@ public class EmbeddedController {
                     FROM shipments sh
                     WHERE order_id = o.id AND tenant_id = o.tenant_id
                       AND shipment_leg = 'forward'
+                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                     ORDER BY created_at DESC, id DESC
                     LIMIT 1
                 ) s ON true
@@ -368,6 +369,7 @@ public class EmbeddedController {
                     FROM shipments sh
                     WHERE order_id = o.id AND tenant_id = o.tenant_id
                       AND shipment_leg = 'forward'
+                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                     ORDER BY created_at DESC, id DESC
                     LIMIT 1
                 ) s ON true

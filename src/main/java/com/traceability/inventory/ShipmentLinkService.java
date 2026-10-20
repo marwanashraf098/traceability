@@ -247,6 +247,16 @@ public class ShipmentLinkService {
                 "Unreadable AWB scan: " + rawScan);
         }
 
+        // 1b. Deleted-in-Bosta slice 4: a waybill confirmed deleted in Bosta is never linked again — not to its
+        //     own order (the closed leg stays closed), not to another one. The order needs a NEW waybill.
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? " +
+                "  AND s.provider = 'bosta' AND " + com.traceability.integrations.bosta.BostaDeletionService.deletedSql("s") + ")",
+                Boolean.class, tenantId, trackingNumber))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Waybill " + trackingNumber + " was deleted in Bosta — it can't be linked. Book a new waybill for this order.");
+        }
+
         // 2. Mode B verify path — must run BEFORE the swapped check and INSERT.
         //    V43 made shipments two-active (forward + return); filter shipment_leg='forward'
         //    explicitly so a return-pickup leg cannot produce a false AWB_MISMATCH.

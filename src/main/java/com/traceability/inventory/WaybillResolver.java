@@ -49,6 +49,8 @@ public class WaybillResolver {
 
     /** Why a NOT_PACKABLE waybill can't be packed — each has its own message. */
     public enum NotPackable {
+        /** The scanned forward leg was confirmed deleted in Bosta (deleted-in-Bosta slice 4). */
+        DELETED_IN_BOSTA,
         /** The scanned forward leg is terminated / cancelled. */
         LEG_ENDED,
         /** The shipment has moved past 'created' (now, or at any point in its history). */
@@ -116,6 +118,7 @@ public class WaybillResolver {
 
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT s.id AS shipment_id, s.shipment_leg, s.internal_state::text AS state, s.created_at AS s_created, " +
+            "       " + com.traceability.integrations.bosta.BostaDeletionService.deletedSql("s") + " AS deleted_in_bosta, " +
             "       o.id AS order_id, o.number, o.status::text AS status, o.cancel_requested_at, " +
             "       o.raw ->> 'cancelled_at' AS shopify_cancelled_at, o.on_hold, o.is_self_pickup, " +
             "       (o.placed_at > now() - (? * INTERVAL '1 day')) AS in_window " +
@@ -245,6 +248,11 @@ public class WaybillResolver {
             return np(NotPackable.LEG_ENDED, state, orderId, number, shipmentId, tn,
                 "This waybill for " + label + " was cancelled. Don't use it — give it to a manager.",
                 "هذه البوليصة للطلب " + label + " أُلغيت. لا تستخدمها — سلّمها للمدير.");
+        }
+        if (Boolean.TRUE.equals(r.get("deleted_in_bosta"))) {
+            return np(NotPackable.DELETED_IN_BOSTA, state, orderId, number, shipmentId, tn,
+                "This waybill for " + label + " was deleted in Bosta. Don't use it — put it to one side and give it to a manager.",
+                "هذه البوليصة للطلب " + label + " حُذفت في Bosta. لا تستخدمها — ضعها جانباً وسلّمها للمدير.");
         }
         if ("terminated".equals(state) || "cancelled".equals(state)) {
             return np(NotPackable.LEG_ENDED, state, orderId, number, shipmentId, tn,

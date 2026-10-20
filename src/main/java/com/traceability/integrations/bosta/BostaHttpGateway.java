@@ -383,6 +383,12 @@ class BostaHttpGateway implements BostaGateway {
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx fetching delivery " + trackingNumber, e);
             }
+            if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
+                // The key, not the delivery (deleted-in-Bosta slice 4): never a not-found observation,
+                // and it pauses deletion confirmation for the tenant. Same message as before.
+                throw new BostaAuthException("Bosta API error (" + e.getStatusCode() + "): " + e.getMessage(),
+                    e.getStatusCode().value(), e);
+            }
             throw new BostaException("Bosta API error (" + e.getStatusCode() + "): " + e.getMessage(), e);
         }
     }

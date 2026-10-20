@@ -488,6 +488,10 @@ public class BostaV2Client {
                 throw new BostaRateLimitException(retryAfter);
             }
             if (status >= 500) throw new BostaTransientException("Bosta delivery search page " + page + " answered " + status);
+            if (status == 401 || status == 403) {
+                // The tenant's key was refused (deleted-in-Bosta slice 4 pauses confirmation on it).
+                throw new BostaAuthException("Bosta delivery search page " + page + " answered " + status, status, e);
+            }
             throw new BostaException("Bosta delivery search page " + page + " answered " + status);
         } catch (Exception e) {
             throw new BostaTransientException("Bosta delivery search page " + page + " failed: " + e.getClass().getSimpleName(), e);

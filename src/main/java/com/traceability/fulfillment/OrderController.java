@@ -221,6 +221,7 @@ public class OrderController {
                 FROM shipments sh
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
+                  AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) s ON true
@@ -364,6 +365,7 @@ public class OrderController {
                     FROM shipments sh
                     WHERE order_id = o.id AND tenant_id = o.tenant_id
                       AND shipment_leg = 'forward'
+                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                     ORDER BY created_at DESC, id DESC
                     LIMIT 1
                 ) s ON true
@@ -428,6 +430,7 @@ public class OrderController {
                     FROM shipments sh
                     WHERE order_id = o.id AND tenant_id = o.tenant_id
                       AND shipment_leg = 'forward'
+                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                     ORDER BY created_at DESC, id DESC
                     LIMIT 1
                 ) s ON true
@@ -562,6 +565,7 @@ public class OrderController {
                 FROM shipments sh
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
+                  AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) s ON true
@@ -852,6 +856,7 @@ public class OrderController {
                 WHERE order_id = ?
                   AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                   AND shipment_leg = 'forward'
+                  AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 """,
@@ -904,11 +909,11 @@ public class OrderController {
         return jdbc.query(
             "SELECT o.status, o.is_self_pickup, o.shipping_carrier_class, o.shipping_carrier_name, o.placed_at, " +
             "       (SELECT sh.internal_state FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
-            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_state, " +
+            "          AND sh.shipment_leg = 'forward' AND sh.provider_deleted_at IS NULL ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_state, " +
             "       (SELECT sh.provider::text FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
-            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_provider, " +
+            "          AND sh.shipment_leg = 'forward' AND sh.provider_deleted_at IS NULL ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_provider, " +
             "       (SELECT sh.carrier_name FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
-            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_carrier_name, " +
+            "          AND sh.shipment_leg = 'forward' AND sh.provider_deleted_at IS NULL ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_carrier_name, " +
             "       " + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + " AS bosta_link_problem " +
             "FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ?",
             rs -> rs.next() ? OrderShippingBadge.derive(rs.getString("status"), rs.getBoolean("is_self_pickup"),
