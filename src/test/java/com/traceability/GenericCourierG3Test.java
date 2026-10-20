@@ -590,6 +590,39 @@ class GenericCourierG3Test {
         verify(bostaV2, never()).createExchange(any(), any());
     }
 
+    // ── an: analytics ────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void an1_genericDeliveredAndReturned_neverInBostaDeliveryFigures() throws Exception {
+        Shop s = new Shop("an1", true);
+        Ord bo = s.order("packed"), gd = s.order("packed"), gr = s.order("packed");
+        UUID bl = s.bosta(bo, "8123450061", "delivered");
+        jdbc.update("UPDATE shipments SET delivered_at = now() - interval '1 day' WHERE id = ?", bl);
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, occurred_at) " +
+            "VALUES (?, ?, 'with_courier', now() - interval '2 days'), (?, ?, 'delivered', now() - interval '1 day')",
+            s.tenant, bl, s.tenant, bl);
+        s.generic(gd, "34100000061", "Aramex", "with_courier");
+        s.piece(gd, "with_courier", "packed");
+        s.as(() -> delivery.markDelivered(List.of(gd.id()), s.owner));
+        UUID grl = s.generic(gr, "34100000062", "Aramex", "with_courier");
+        String pr = s.piece(gr, "with_courier", "packed");
+        UUID rs = s.as(() -> returns.createSession(null, s.worker));
+        s.as(() -> returns.scan(rs, "PC-" + pr, s.location, s.worker));
+        assertThat(state(grl)).isEqualTo("returned");
+
+        JsonNode summary = mapper.readTree(http(s, "owner", HttpMethod.GET, "/api/v1/analytics/delivery/summary?period=30d", null).getBody());
+        assertThat(summary.path("current").path("delivered").asInt()).as("Bosta delivered only").isEqualTo(1);
+        assertThat(summary.path("current").path("failed").asInt()).as("a generic return is not a Bosta failure").isZero();
+        assertThat(summary.path("current").path("handedOrders").asInt()).as("Bosta handovers only").isEqualTo(1);
+
+        JsonNode orders = mapper.readTree(http(s, "owner", HttpMethod.GET, "/api/v1/analytics/orders?size=200&period=30d", null).getBody());
+        Map<String, String> status = new HashMap<>();
+        for (JsonNode o : orders.path("orders")) status.put(o.path("name").asText(), o.path("deliveryStatus").path("key").asText());
+        assertThat(status.get(bo.number())).isEqualTo("delivered");
+        assertThat(status.get(gd.number())).as("a generic delivered order is never a Bosta delivery").isNotEqualTo("delivered");
+        assertThat(status.get(gr.number())).as("a generic returned order is never a Bosta refusal").isNotEqualTo("refused");
+    }
+
     // ── a: alerts ────────────────────────────────────────────────────────────────────────────────
 
     @Test

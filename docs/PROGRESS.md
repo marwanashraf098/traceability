@@ -4,6 +4,59 @@
 
 ## Current state
 
+**Non-Bosta couriers G3 — out at Pickups, delivered, returned parcels (2026-10-20, branch `generic-courier-g3` off
+origin/main a9a9f4c; V173; NOT merged, NOT deployed, no tenant switched on).** Approved invariant amendment
+(Marawan 2026-10-20, in CLAUDE.md): a generic leg becomes 'delivered' only from Shopify's fulfillment
+shipment_status or an owner / manager "Mark delivered" — through the ledger, idempotent, source on the history row;
+Bosta 'delivered' still comes only from Bosta.
+- **V173:** `shipment_status_history.source` (pickup_scan | inferred_handover | shopify | manual | return_scan; NULL
+  for every Bosta row), `shipments.handed_over_at` (generic only), `return_session_shipments.shipment_id` (generic
+  rows only). No new table.
+- **`courier.GenericLegTransitions`** — the ONE writer of a generic leg past 'created' (caller's JdbcTemplate):
+  `recordHandover` (pickup close), `deliver` (Shopify / manual), `markReturnedByScan`, `returnableGenericLeg`.
+- **Pickups:** scans fall back to `WaybillScanKeys` (G2) after the unchanged Bosta query; both match → AMBIGUOUS.
+  One courier per session (first scan; switched-on tenants only, session row locked): another courier's parcel →
+  `WRONG_CARRIER` + `carrier` ("This parcel goes with Aramex"). Close: generic legs get the same with_courier +
+  custody lock + piece moves, their history row via `recordHandover` (source pickup_scan, handed_over_at). Session
+  detail / manifest / scan entries carry `carrier` / `carrierName` — NON_NULL, absent for Bosta. Flag-on change:
+  a letters-only waybill (another courier's) that matches nothing is UNKNOWN_AWB, not 400 "Unreadable".
+- **Delivered:** `FulfillmentTrackingCapture.applyShopifyDelivered` (switched-on tenants, after the G1 capture) —
+  'delivered' on a with_courier leg → delivered; on a 'created' leg whose order is packed (or has no allocation) →
+  **allow with an inferred handover** (history inferred_handover, pieces → with_courier → delivered) + LOW
+  `generic_delivered_without_pickup` (reason inferred); a piece still being picked → **held**, same alert (reason
+  not_packed). Why allow: Shopify's 'delivered' is the carrier's own word; holding would leave Traced saying
+  "packed" for a parcel the customer has (committed stock, queues, a later return scan "unexpected") — the same
+  custody-lie reasoning as FR-16's packed:with_courier. Other statuses stored + shown on the order (Shipment card
+  "Shopify status"). Monotonic.
+- **Mark delivered:** `GET /api/v1/generic-shipments/carriers`, `POST /api/v1/generic-shipments/mark-delivered`
+  (owner / manager; ≤ 200; outcomes DELIVERED / ALREADY_DELIVERED / NOT_WITH_COURIER / NO_GENERIC_SHIPMENT; audit
+  `generic_mark_delivered` per delivered order). Orders list `carrier` param (generic only). Status
+  `status.delivered_with_carrier` ("Delivered · Aramex"); the timeline shows every generic history row with its
+  `source` (the first one is never folded into the AWB-linked marker).
+- **Returns:** a generic waybill (after the unchanged Bosta check; both → 409 AMBIGUOUS) → `scanGenericAwb`: leg
+  with_courier / delivered → returned (source return_scan), rss row awb = its tracking number + shipment_id. A piece
+  of an order whose generic leg is with_courier / delivered → the same mark, then expected (`isExpectedBack` reads
+  the returned history row; a delivered piece is accepted, return_kind rto). `returnedToSenderSql` gains a
+  generic-only branch (unit rows, Mark parcel received, Return To Receive); `returnLegScanEvidenceSql` UNCHANGED
+  (its untracked-unit clause already covers any shipment). The two `provider = 'bosta'` parcel joins also take
+  `s.id = rss.shipment_id`.
+- **Portal:** `GenericShipments.newestForwardIsGenericSql` — newest forward leg generic → `deliveredWithinWindow`
+  null (lookup + submit), booking job skips before any claim, `bookNow` 409.
+- **Alerts:** `cancelled_live_shipment` gets `AND s.provider = 'bosta'` (Bosta rows identical); a generic one is
+  `generic_cancelled_live_shipment` (HIGH, neutral text, resolvable). Proposed, NOT built: a LOW "with <carrier>
+  for more than N days, no delivered signal" alert, off by default (per-tenant days, null = off).
+- **Tests:** GenericG3IsolationGoldenTest (recorded on a9a9f4c before any G3 code: pickup, scan returns incl.
+  untracked RTO units, lookup, Orders list/detail/timeline, alerts, portal, analytics — flag off byte-identical;
+  flag on identical except the two letters-only pickup scans), GenericCourierG3Test (17), GenericG3SnapshotScriptTest,
+  genericCourierG3.test.tsx (6), genericG3Layout.browser.test.tsx (24: EN/AR × 3 sizes × chromium/webkit).
+  Revert-checked: carrier mixing, portal exclusion, booking backstop, monotonic delivered. Registry: RlsCoverageTest
+  (+ genericCarriers cross-tenant test with a same-tenant positive control), PortalOrderLeakTest (2 SKIP entries);
+  counts 171 files / 116 pending.
+- **Pre-existing at phone width (not G3, unchanged):** the Orders tab strip with counts (485px at 390) and the
+  pickup scan table's ✕ column (424px at 390).
+- **Live test plan:** docs/runbooks/generic-courier-g3-live-test.md. Snapshot: section 5 (g3 lines) in
+  scripts/generic_courier_snapshot.sql.
+
 **Deleted-in-Bosta slices 4 + 5 — confirm a deletion safely, close the dead shipment, backfill script (2026-10-19,
 branch `feat/deleted-in-bosta-confirm` off origin/main 05b813b; NOT merged, NOT deployed). Migration V172.**
 - **V172 — why 172:** G2 merged to main first with V171 (2026-10-19), so this takes the next free number (review asked

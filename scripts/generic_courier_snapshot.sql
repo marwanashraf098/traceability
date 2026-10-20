@@ -3,7 +3,9 @@
 -- Prints, for every tenant: per open order its derived status, shipping badge / carrier and
 -- pickable yes/no; per variant its committed quantity; the number of open stuck alerts; the
 -- generic switch and generic-leg count (both must stay false / 0 — no tenant is switched on); and
--- (G2) the analytics outcome counts of the last 30 days (section 4).
+-- (G2) the analytics outcome counts of the last 30 days (section 4); and (G3, section 5) per tenant: pickups
+-- (open-session scans by courier, handovers), delivered and returned forward legs of the 30 days before as_of
+-- by courier and source, generic parcels scanned back, and the returns-portal eligible order count.
 -- Every value is computed by SQL that mirrors the code paths (one comment per block names the Java
 -- it mirrors). It sees what the DATABASE says: the migration's effects (enum value, the swapped
 -- uniqueness indexes, shipping_carrier_of with the named-carrier list, the V132 trigger) and any row
@@ -78,6 +80,8 @@ derived AS (
            -- OrderStatusDeriver.derive (non-cancelled orders only here)
            CASE
              WHEN f.internal_state IS NULL THEN 'pipeline:' || o.status::text
+             -- G3: a generic leg's delivered reads "Delivered · {carrier}"
+             WHEN f.internal_state = 'delivered' AND f.provider = 'generic' THEN 'status.delivered_with_carrier'
              WHEN f.internal_state IN ('delivered','returned','lost','terminated','cancelled') THEN 'status.' || f.internal_state
              WHEN f.failed_attempts >= 1 THEN 'status.delivery_failed'
              WHEN f.internal_state = 'exception' THEN 'status.needs_attention'
@@ -231,5 +235,74 @@ SELECT 'outcomes' AS section, t.name, t.id::text, oc.outcome, count(*)::text
 FROM outcomes oc JOIN tenants t ON t.id = oc.tenant_id
 GROUP BY t.name, t.id, oc.outcome
 ORDER BY t.name, t.id, oc.outcome;
+
+-- 5. G3 (V173) per tenant — every line is "metric/courier[/source]" → count. Bosta rows have no source (V173
+--    leaves it NULL for them) and print '-'; a tenant with no generic shipment prints only bosta / '-' metrics,
+--    identical before and after. Read through to_jsonb where a column is new in V173, so the script also runs
+--    on the schema before it. Windows end at as_of (the 30 days before it; the portal: the tenant's own
+--    return window), so the clock moving between runs can't show up — real activity between runs can.
+--    Mirrors: PickupSessionService (open scans; handover = a with_courier history row with no webhook event),
+--    GenericLegTransitions (delivered / returned + source), ReturnSessionService.scanGenericAwb (parcels
+--    scanned back), PortalService.deliveredWithinWindow + GenericShipments.newestForwardIsGenericSql (eligible).
+WITH cfg AS (SELECT (:'as_of')::timestamptz AS now_ts),
+metrics AS (
+    SELECT p.tenant_id, 'pickup_open_scans/' || s.provider::text AS metric, count(*) AS n
+    FROM pickups p
+    JOIN pickup_shipments ps ON ps.pickup_id = p.id
+    JOIN shipments s ON s.id = ps.shipment_id
+    WHERE p.session_status = 'open'
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT h.tenant_id, 'handed_over/' || s.provider::text || '/' || coalesce(to_jsonb(h) ->> 'source', '-'), count(*)
+    FROM shipment_status_history h
+    JOIN shipments s ON s.id = h.shipment_id
+    CROSS JOIN cfg
+    WHERE h.internal_state = 'with_courier' AND h.webhook_event_id IS NULL AND s.shipment_leg = 'forward'
+      AND h.occurred_at >= cfg.now_ts - interval '30 days' AND h.occurred_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT s.tenant_id, 'delivered/' || s.provider::text || '/' || coalesce(
+               (SELECT to_jsonb(h) ->> 'source' FROM shipment_status_history h
+                 WHERE h.shipment_id = s.id AND h.internal_state = 'delivered'
+                 ORDER BY h.occurred_at DESC, h.id DESC LIMIT 1), '-'), count(*)
+    FROM shipments s CROSS JOIN cfg
+    WHERE s.shipment_leg = 'forward' AND s.delivered_at >= cfg.now_ts - interval '30 days' AND s.delivered_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT s.tenant_id, 'returned/' || s.provider::text, count(*)
+    FROM shipments s CROSS JOIN cfg
+    WHERE s.shipment_leg = 'forward' AND s.internal_state = 'returned'
+      AND s.returned_at >= cfg.now_ts - interval '30 days' AND s.returned_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT rss.tenant_id, 'return_scans/' || CASE WHEN to_jsonb(rss) ->> 'shipment_id' IS NULL THEN 'bosta' ELSE 'generic' END,
+           count(*)
+    FROM return_session_shipments rss CROSS JOIN cfg
+    WHERE rss.linked_at >= cfg.now_ts - interval '30 days' AND rss.linked_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    -- starts from forward legs delivered in a bounded range (shipments_tenant_delivered_at_idx), never all orders
+    SELECT s.tenant_id, 'portal_eligible', count(DISTINCT s.order_id)
+    FROM shipments s
+    JOIN tenants tt ON tt.id = s.tenant_id
+    JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id
+    CROSS JOIN cfg
+    WHERE s.shipment_leg = 'forward'
+      AND s.delivered_at >= cfg.now_ts - interval '120 days' AND s.delivered_at <= cfg.now_ts
+      AND cfg.now_ts - s.delivered_at <= interval '1 day' * tt.customer_return_window_days
+      AND o.external_id NOT LIKE 'internal:portal:%' AND o.pii_redacted_at IS NULL
+      -- the order's newest forward leg that has a delivered_at is this one
+      AND NOT EXISTS (SELECT 1 FROM shipments s2 WHERE s2.order_id = s.order_id AND s2.tenant_id = s.tenant_id
+                        AND s2.shipment_leg = 'forward' AND s2.delivered_at IS NOT NULL
+                        AND (s2.created_at, s2.id) > (s.created_at, s.id))
+      -- G3: the order's newest forward leg (any state) isn't another courier's
+      AND NOT coalesce((SELECT s_g.provider::text = 'generic' FROM shipments s_g
+                         WHERE s_g.order_id = s.order_id AND s_g.shipment_leg = 'forward'
+                         ORDER BY s_g.created_at DESC, s_g.id DESC LIMIT 1), false)
+    GROUP BY 1, 2
+)
+SELECT 'g3' AS section, t.name, t.id::text, m.metric, m.n::text
+FROM metrics m JOIN tenants t ON t.id = m.tenant_id
+ORDER BY t.name, t.id, m.metric;
 
 ROLLBACK;
