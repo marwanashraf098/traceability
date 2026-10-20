@@ -98,6 +98,8 @@ class RlsCoverageTest {
             // Non-Bosta couriers G2 — couriersSettings_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/settings/couriers",
             "/api/v1/settings/couriers/catch-up/preview",
+            // Non-Bosta couriers G3 — genericCarriers_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/generic-shipments/carriers",
             "/api/v1/fulfill/print-jobs/latest",
             "/api/v1/fulfill/print-jobs/{jobId}",
             "/api/v1/fulfill/print-jobs/{jobId}/pdf",
@@ -685,6 +687,39 @@ class RlsCoverageTest {
         } finally {
             jdbc.update("UPDATE tenants SET generic_default_carrier = NULL WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM order_fulfillment_tracking WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
+            jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void genericCarriers_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Non-Bosta couriers G3: the Orders filter's carriers (generic legs with the courier) are the caller's only.
+        UUID mine = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-G3-A', '#CVG-G3-A', 'packed'::order_status, now(), false)",
+                    mine, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, tracking_key, internal_state, " +
+                    "carrier_name) VALUES (?, ?, 'generic', 'CVG-G3-A1', 'CVGG3A1', 'with_courier', 'Cov-A Couriers')", tenantId, mine);
+
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID(), otherOrder = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, generic_courier_enabled) VALUES (?, 'Cov G3 Other', true)", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-g3-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-G3-B', '#CVG-G3-B', 'packed'::order_status, now(), false)",
+                    otherOrder, otherTenant, otherStore);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, tracking_key, internal_state, " +
+                    "carrier_name) VALUES (?, ?, 'generic', 'CVG-G3-B1', 'CVGG3B1', 'with_courier', 'Cov-B Couriers')", otherTenant, otherOrder);
+        try {
+            ResponseEntity<String> carriers = get("/api/v1/generic-shipments/carriers", String.class);
+            assertThat(carriers.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(carriers.getBody()).as("same-tenant positive control")
+                .contains("{\"carrier\":\"Cov-A Couriers\",\"withCourier\":1}");
+            assertThat(carriers.getBody()).as("other tenant's carriers never visible").doesNotContain("Cov-B Couriers");
+        } finally {
+            jdbc.update("DELETE FROM shipments WHERE order_id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
