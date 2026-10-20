@@ -4,8 +4,9 @@
 
 ## Current state
 
-**Non-Bosta couriers G3 — out at Pickups, delivered, returned parcels (2026-10-20, branch `generic-courier-g3` off
-origin/main a9a9f4c; V173; NOT merged, NOT deployed, no tenant switched on).** Approved invariant amendment
+**Non-Bosta couriers G3 — out at Pickups, delivered, returned parcels (2026-10-20, branch `generic-courier-g3`, built
+on a9a9f4c, rebased onto fe0c3e2 (deleted-in-Bosta slices 4 + 5, V172) and merged to main; V173; NOT deployed, no
+tenant switched on).** Approved invariant amendment
 (Marawan 2026-10-20, in CLAUDE.md): a generic leg becomes 'delivered' only from Shopify's fulfillment
 shipment_status or an owner / manager "Mark delivered" — through the ledger, idempotent, source on the history row;
 Bosta 'delivered' still comes only from Bosta.
@@ -49,11 +50,16 @@ Bosta 'delivered' still comes only from Bosta.
   untracked RTO units, lookup, Orders list/detail/timeline, alerts, portal, analytics — flag off byte-identical;
   flag on identical except the two letters-only pickup scans), GenericCourierG3Test (17), GenericG3SnapshotScriptTest,
   genericCourierG3.test.tsx (6), genericG3Layout.browser.test.tsx (24: EN/AR × 3 sizes × chromium/webkit).
-  Revert-checked: carrier mixing, portal exclusion, booking backstop, monotonic delivered. Registry: RlsCoverageTest
-  (+ genericCarriers cross-tenant test with a same-tenant positive control), PortalOrderLeakTest (2 SKIP entries);
-  counts 171 files / 116 pending.
-- **Pre-existing at phone width (not G3, unchanged):** the Orders tab strip with counts (485px at 390) and the
-  pickup scan table's ✕ column (424px at 390).
+  Revert-checked: carrier mixing, portal exclusion, booking backstop, monotonic delivered. Registry (approved):
+  RlsCoverageTest (+ genericCarriers cross-tenant test with a same-tenant positive control), PortalOrderLeakTest
+  (2 SKIP entries); counts 172 files / 117 pending (V172 + V173). The G3 golden re-recorded on fe0c3e2 before the
+  rebase was byte-identical to the a9a9f4c recording.
+- **Follow-ups (not built):**
+  - Orders tab strip overflows at 390px once its counts load (485px wide) — pre-existing, not G3.
+  - Pickup scan table's ✕ column overflows at 390px (reaches 424px) — pre-existing, not G3.
+  - Proposed LOW alert "with <carrier> for more than N days, no delivered signal" — per-tenant days, off by default.
+  - Watch the volume of `generic_delivered_without_pickup` alerts for merchants who don't use Pickups (every Shopify
+    'delivered' then raises one); if noisy, consider a per-tenant "I don't scan out at Pickups" setting.
 - **Live test plan:** docs/runbooks/generic-courier-g3-live-test.md. Snapshot: section 5 (g3 lines) in
   scripts/generic_courier_snapshot.sql.
 
