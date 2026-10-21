@@ -4,8 +4,37 @@
 
 ## Current state
 
-**DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; NOT merged, NOT
-deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
+**DB write churn, slice B — shopify_webhook_events retention (2026-10-21, branch `perf/webhook-retention` off
+origin/main 2b258b7; NOT merged, NOT deployed). No migration.**
+- `integrations.shopify.ShopifyWebhookRetention` (+ `ShopifyWebhookRetentionJob`, `@Recurring`
+  `shopify-webhook-retention`, 04:40 Africa/Cairo, retries 0). Deletes only PROCESSED rows (`processed_at` set,
+  superseded included) received before the tenant's cutoff = `LEAST(now() - days, oldest received_at of the
+  tenant's rows that can still run)`; "can still run" = `processed_at IS NULL`, except an exhausted failure
+  (`process_error` set, `next_retry_at` NULL) received > 30 days ago. Pending / retry-due / failed rows are never
+  deleted. Why the guard: `supersededReason()` looks for a LATER processed event for the same object with no lower
+  bound, and the manual reprocess can run an event at any age.
+- Config `traced.webhook-retention.*`: `days` (env `TRACED_WEBHOOK_RETENTION_DAYS`, default 7; under 3 → refused,
+  logged ERROR, nothing deleted — Shopify redelivers for up to 48 h and the dedupe is ON CONFLICT (webhook_id)),
+  `batch-size` 1000, `max-per-run` 20000, `pause-ms` 200.
+- Mechanics: tenant ids from the owner pool (ids only, RefundDetailsPurgeJob pattern); per tenant under
+  `TenantContext.runAs` + RLS: collect ids oldest first (≤ what's left of the cap), DELETE by PK in batches, one
+  short transaction each. app_user already had DELETE (V1 default privileges). No index needed (the heap is ~20 MB;
+  payloads are TOAST). Freed TOAST space is reused, not returned to the OS (a VACUUM FULL / pg_repack would).
+- GDPR: `customer_data_requests.webhook_event_id` has no FK (V143) and nothing joins on it — the export and the
+  redactions find webhook rows by order GID / customer id. A data request whose event row was deleted still exports
+  (its stored payloads list just shrinks) and redacts (rt9).
+- Tests: `ShopifyWebhookRetentionTest` rt1–rt9. Revert-checked: window 1 year / 1 hour / 1 second, unprocessed
+  deletable, no guard, exhausted always counts, exhausted window 10 days, no cap, no refusal, wrong tenant context
+  for the delete — each turns its test red (rt2 needed a processed row so the run visits the tenant — the owner
+  tenant list alone was hiding the per-row rule).
+- Expected in prod (~40k rows past 7 days at deploy, ~6k/day ageing in): night 1 20,000, night 2 20,000, night 3
+  ~12k, then ~6k a night; the table settles near 7 × ~6k ≈ 40k rows.
+- Full backend suite 2026-10-21: 3180 run, 6 red — the expected ExchangeBackfillTest and GenericG3IsolationGoldenTest
+  g1/g2, plus PortalPickupAreaTest ×2 / PortalRequestsTest (login in setup) after an ~825 s stall mid-run; those two
+  classes rerun alone: 26/26 green (neither touches shopify_webhook_events).
+
+**DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; MERGED to main
+2b258b7, NOT deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
 last_polled_at` ~70k/day (1.75 GB WAL / 10 days), `shopify_webhook_events` growing ~6k rows / 25 MB a day with no
 retention, JobRunr ~16k jobs/day (Shopify webhook jobs 6.2k, Bosta webhook jobs 4.3k, print sweep 1.4k).
 - **A — the status walk's stamp** (`BostaStatusPollJob.walkTenant` → `stampChecked`): one UPDATE per page, and only

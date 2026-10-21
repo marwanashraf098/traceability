@@ -114,6 +114,14 @@ traced:
     leak-detection-ms: 20000
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
+  # shopify_webhook_events retention (ShopifyWebhookRetention, nightly 04:40 Cairo): processed rows older than
+  # `days` go, held back per tenant by the oldest event that can still run. Under 3 days refuses to run
+  # (Shopify redelivers for up to 48 h). Batches of batch-size, pause-ms apart, at most max-per-run a night.
+  webhook-retention:
+    days: ${TRACED_WEBHOOK_RETENTION_DAYS:7}
+    batch-size: 1000
+    max-per-run: 20000
+    pause-ms: 200
   # Review mode S5 — shared secret for the ops endpoints (/api/v1/ops/**, X-Ops-Secret header,
   # constant-time compare). Blank / unset → every ops endpoint answers 404 (they don't exist).
   ops-secret: ${TRACED_OPS_SECRET:}
