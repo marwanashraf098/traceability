@@ -1,0 +1,731 @@
+{
+  "01_config" : {
+    "autoApprove" : false,
+    "brandColor" : null,
+    "exchangesEnabled" : true,
+    "font" : "cairo",
+    "logoUrl" : null,
+    "pickupBooking" : true,
+    "policyText" : null,
+    "reasonCodes" : [ "wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other" ],
+    "requirePhotos" : false,
+    "returnWindowDays" : 30,
+    "storeName" : "<tenant>"
+  },
+  "02_lookupInWindow" : {
+    "body" : {
+      "deliveredAt" : "<v40>",
+      "lines" : [ {
+        "currentOptions" : [ "Sand", "M" ],
+        "deliveredQuantity" : 2,
+        "exchangeOptions" : [ {
+          "inStock" : true,
+          "options" : [ "Sand", "L" ],
+          "title" : "Sand / L",
+          "variantId" : "<v0>"
+        } ],
+        "imageUrl" : null,
+        "nonReturnable" : false,
+        "optionAxes" : [ {
+          "kind" : "colour",
+          "name" : null
+        }, {
+          "kind" : "size",
+          "name" : null
+        } ],
+        "productTitle" : "Linen Shirt",
+        "returnableQuantity" : 2,
+        "variantId" : "<v1>",
+        "variantTitle" : "Sand / M"
+      } ],
+      "orderNumber" : "#4001",
+      "pickup" : {
+        "cities" : [ {
+          "id" : "FceDyHXwpSYYF9zGW",
+          "name" : "Cairo",
+          "nameAr" : "القاهرة"
+        } ],
+        "cityId" : "FceDyHXwpSYYF9zGW",
+        "cityName" : "Cairo",
+        "cityNameAr" : "القاهرة",
+        "districts" : [ {
+          "id" : "Iy7-lFD0BE0",
+          "name" : "Nasr City - 7th District",
+          "nameAr" : "مدينة نصر - الحي السابع",
+          "zoneName" : "Nasr City",
+          "zoneNameAr" : "مدينة نصر"
+        } ],
+        "exchangeDistrictIds" : [ "Iy7-lFD0BE0" ],
+        "preselectedDistrictId" : "Iy7-lFD0BE0"
+      }
+    },
+    "outcome" : "SUCCESS"
+  },
+  "03_lookupOld" : {
+    "body" : null,
+    "outcome" : "NOT_FOUND"
+  },
+  "04_lookupWrongPhone" : {
+    "body" : null,
+    "outcome" : "NOT_FOUND"
+  },
+  "05_submit" : {
+    "body" : {
+      "reference" : "<v38>",
+      "status" : "requested"
+    },
+    "outcome" : "CREATED"
+  },
+  "06_enqueuedOnSubmit" : [ ],
+  "07_approve" : {
+    "body" : "",
+    "status" : 204
+  },
+  "08_enqueuedOnApprove" : [ "<v2>" ],
+  "09_bookingPosts" : [ {
+    "type" : 25,
+    "cod" : 0,
+    "pickupAddress" : {
+      "firstLine" : "12 Placeholder Street",
+      "secondLine" : "Near the pharmacy",
+      "buildingNumber" : "12",
+      "floor" : "3",
+      "apartment" : "7",
+      "city" : "Cairo",
+      "districtId" : "Iy7-lFD0BE0"
+    },
+    "businessLocationId" : "loc-ret",
+    "receiver" : {
+      "firstName" : "Youssef",
+      "lastName" : "Adel",
+      "phone" : "01011114001"
+    },
+    "businessReference" : "#4001",
+    "uniqueBusinessReference" : "<v2>",
+    "returnSpecs" : {
+      "packageDetails" : {
+        "itemsCount" : 2,
+        "description" : "<v38>: Linen Shirt / Sand / M × 2"
+      }
+    },
+    "returnNotes" : "Traced return request <v38>"
+  } ],
+  "10_requestAfterBooking" : {
+    "booking_error" : null,
+    "booking_status" : "booked",
+    "bosta_delivery_id" : "del-BTN+0",
+    "bosta_tracking_number" : "BTN+0",
+    "link_source" : null,
+    "linked" : false,
+    "status" : "pickup_booked",
+    "verified" : true
+  },
+  "11_submitAuto" : {
+    "body" : {
+      "reference" : "<v39>",
+      "status" : "approved"
+    },
+    "outcome" : "CREATED"
+  },
+  "12_enqueuedOnAutoApprove" : [ "<v3>" ],
+  "13_autoBookingPosts" : [ {
+    "type" : 25,
+    "cod" : 0,
+    "pickupAddress" : {
+      "firstLine" : "12 Placeholder Street",
+      "secondLine" : "Near the pharmacy",
+      "buildingNumber" : "12",
+      "floor" : "3",
+      "apartment" : "7",
+      "city" : "Cairo",
+      "districtId" : "Iy7-lFD0BE0"
+    },
+    "businessLocationId" : "loc-ret",
+    "receiver" : {
+      "firstName" : "Youssef",
+      "lastName" : "Adel",
+      "phone" : "01011114002"
+    },
+    "businessReference" : "#4002",
+    "uniqueBusinessReference" : "<v3>",
+    "returnSpecs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "<v39>: Linen Shirt / Sand / M × 1"
+      }
+    },
+    "returnNotes" : "Traced return request <v39>"
+  } ],
+  "14_approveExchange" : {
+    "body" : "",
+    "status" : 204
+  },
+  "15_enqueuedOnExchangeApprove" : [ "<v4>" ],
+  "16_exchangePosts" : [ {
+    "type" : 30,
+    "cod" : 0,
+    "dropOffAddress" : {
+      "firstLine" : "12 Placeholder Street",
+      "secondLine" : "Near the pharmacy",
+      "buildingNumber" : "12",
+      "floor" : "3",
+      "apartment" : "7",
+      "city" : "Cairo",
+      "districtId" : "Iy7-lFD0BE0"
+    },
+    "businessLocationId" : "loc-ret",
+    "receiver" : {
+      "firstName" : "Youssef",
+      "lastName" : "Adel",
+      "phone" : "01011114003"
+    },
+    "businessReference" : "#4003",
+    "uniqueBusinessReference" : "<v4>",
+    "specs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "RR-XCHNG: Linen Shirt / Sand / L"
+      }
+    },
+    "returnSpecs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "Linen Shirt / Sand / M"
+      }
+    },
+    "returnNotes" : "Traced exchange request RR-XCHNG"
+  } ],
+  "17_exchangeRow" : [ {
+    "external_id" : "internal:exchange:BTN+2",
+    "legs" : "bosta:forward:created",
+    "number" : "EXC-BTN+2",
+    "order_status" : "new",
+    "status" : "matched",
+    "tracking_number" : "BTN+2"
+  } ],
+  "18_sweep" : "SweepResult[enqueued=1, markedAmbiguous=0, verifyAttempts=0, linksRepaired=0, exchangesAttached=0]",
+  "19_enqueuedBySweep" : [ "<v5>" ],
+  "20_bookNowRefund" : {
+    "body" : "",
+    "status" : 409
+  },
+  "21_retryNotFailed" : {
+    "body" : "",
+    "status" : 409
+  },
+  "22_sweepLinks" : "SweepResult[enqueued=1, markedAmbiguous=0, verifyAttempts=0, linksRepaired=1, exchangesAttached=0]",
+  "23_enqueuedBySweep2" : [ "<v5>" ],
+  "24_returns" : {
+    "01_crpAwb" : {
+      "awb" : "BTN+0",
+      "description" : null,
+      "descriptionAr" : null,
+      "expectedPieces" : [ {
+        "awb" : "BTN+0",
+        "barcode" : "<v25>",
+        "id" : "<v28>",
+        "product_title" : "Linen Shirt",
+        "sku" : "SH-SandM",
+        "status" : "delivered",
+        "variant_title" : "Sand / M"
+      }, {
+        "awb" : "BTN+0",
+        "barcode" : "<v26>",
+        "id" : "<v29>",
+        "product_title" : "Linen Shirt",
+        "sku" : "SH-SandM",
+        "status" : "delivered",
+        "variant_title" : "Sand / M"
+      } ],
+      "itemsCount" : null,
+      "scanType" : "awb"
+    },
+    "02_piece1" : {
+      "barcode" : "<v25>",
+      "damage_reason" : null,
+      "disposition" : "pending",
+      "disposition_at" : null,
+      "id" : "<v6>",
+      "on_scanned_awb" : true,
+      "order_number" : "#4001",
+      "piece_id" : "<v28>",
+      "product_title" : "Linen Shirt",
+      "scan_source" : "barcode",
+      "scanned_at" : "<v41>",
+      "sku" : "SH-SandM",
+      "status" : "return_pending_inspection",
+      "unexpected" : false,
+      "variant_title" : "Sand / M",
+      "via_phone" : false
+    },
+    "03_piece2" : {
+      "barcode" : "<v26>",
+      "damage_reason" : null,
+      "disposition" : "pending",
+      "disposition_at" : null,
+      "id" : "<v7>",
+      "on_scanned_awb" : true,
+      "order_number" : "#4001",
+      "piece_id" : "<v29>",
+      "product_title" : "Linen Shirt",
+      "scan_source" : "barcode",
+      "scanned_at" : "<v42>",
+      "sku" : "SH-SandM",
+      "status" : "return_pending_inspection",
+      "unexpected" : false,
+      "variant_title" : "Sand / M",
+      "via_phone" : false
+    },
+    "04_autoPiece" : {
+      "barcode" : "<v27>",
+      "damage_reason" : null,
+      "disposition" : "pending",
+      "disposition_at" : null,
+      "id" : "<v8>",
+      "on_scanned_awb" : false,
+      "order_number" : "#4002",
+      "piece_id" : "<v30>",
+      "product_title" : "Linen Shirt",
+      "scan_source" : "barcode",
+      "scanned_at" : "<v43>",
+      "sku" : "SH-SandM",
+      "status" : "return_pending_inspection",
+      "unexpected" : false,
+      "variant_title" : "Sand / M",
+      "via_phone" : false
+    },
+    "05_detail" : {
+      "closed_at" : null,
+      "closed_by" : null,
+      "courierReturns" : [ {
+        "awb" : "BTN+0",
+        "description" : null,
+        "descriptionAr" : null,
+        "itemsCount" : null
+      } ],
+      "expectedPieces" : [ ],
+      "id" : "<v9>",
+      "items" : [ {
+        "barcode" : "<v25>",
+        "damage_reason" : null,
+        "disposition" : "pending",
+        "disposition_at" : null,
+        "id" : "<v6>",
+        "on_scanned_awb" : true,
+        "order_number" : "#4001",
+        "piece_id" : "<v28>",
+        "product_title" : "Linen Shirt",
+        "scan_source" : "barcode",
+        "scanned_at" : "<v41>",
+        "short_code" : "<v33>",
+        "sku" : "SH-SandM",
+        "status" : "return_pending_inspection",
+        "unexpected" : false,
+        "variant_title" : "Sand / M",
+        "via_phone" : false
+      }, {
+        "barcode" : "<v26>",
+        "damage_reason" : null,
+        "disposition" : "pending",
+        "disposition_at" : null,
+        "id" : "<v7>",
+        "on_scanned_awb" : true,
+        "order_number" : "#4001",
+        "piece_id" : "<v29>",
+        "product_title" : "Linen Shirt",
+        "scan_source" : "barcode",
+        "scanned_at" : "<v42>",
+        "short_code" : "<v34>",
+        "sku" : "SH-SandM",
+        "status" : "return_pending_inspection",
+        "unexpected" : false,
+        "variant_title" : "Sand / M",
+        "via_phone" : false
+      }, {
+        "barcode" : "<v27>",
+        "damage_reason" : null,
+        "disposition" : "pending",
+        "disposition_at" : null,
+        "id" : "<v8>",
+        "on_scanned_awb" : false,
+        "order_number" : "#4002",
+        "piece_id" : "<v30>",
+        "product_title" : "Linen Shirt",
+        "scan_source" : "barcode",
+        "scanned_at" : "<v43>",
+        "short_code" : "<v35>",
+        "sku" : "SH-SandM",
+        "status" : "return_pending_inspection",
+        "unexpected" : false,
+        "variant_title" : "Sand / M",
+        "via_phone" : false
+      } ],
+      "lastScan" : {
+        "at" : "<v44>",
+        "code" : "<v35>",
+        "kind" : "piece",
+        "label" : "Linen Shirt"
+      },
+      "note" : null,
+      "opened_at" : "<v45>",
+      "opened_by" : "<v10>",
+      "otherItems" : [ {
+        "barcode" : "<v27>",
+        "damage_reason" : null,
+        "disposition" : "pending",
+        "disposition_at" : null,
+        "id" : "<v8>",
+        "on_scanned_awb" : false,
+        "order_number" : "#4002",
+        "piece_id" : "<v30>",
+        "product_title" : "Linen Shirt",
+        "scan_source" : "barcode",
+        "scanned_at" : "<v43>",
+        "short_code" : "<v35>",
+        "sku" : "SH-SandM",
+        "status" : "return_pending_inspection",
+        "unexpected" : false,
+        "variant_title" : "Sand / M",
+        "via_phone" : false
+      } ],
+      "parcels" : [ {
+        "awb" : "BTN+0",
+        "bosta" : {
+          "description" : null,
+          "descriptionAr" : null,
+          "itemsCount" : null
+        },
+        "canMarkReceived" : false,
+        "complete" : false,
+        "counts" : {
+          "expected" : 2,
+          "scanned" : 2
+        },
+        "customerShortName" : "Youssef A.",
+        "expectedPieces" : [ ],
+        "intakeOutcome" : null,
+        "itemsRequestId" : "<v2>",
+        "itemsRequestReference" : "<v38>",
+        "leg" : "return",
+        "markedAt" : null,
+        "markedBy" : null,
+        "markedInThisSession" : false,
+        "orderNumber" : "#4001",
+        "requestItems" : [ {
+          "arrivedAt" : "<v41>",
+          "arrivedCondition" : null,
+          "id" : "<v11>",
+          "itemStatus" : "arrived",
+          "orderItemId" : null,
+          "pieceId" : "<v28>",
+          "productTitle" : "Linen Shirt",
+          "shortCode" : "<v33>",
+          "tracked" : true,
+          "unitNo" : null,
+          "variantTitle" : "Sand / M"
+        }, {
+          "arrivedAt" : "<v42>",
+          "arrivedCondition" : null,
+          "id" : "<v12>",
+          "itemStatus" : "arrived",
+          "orderItemId" : null,
+          "pieceId" : "<v29>",
+          "productTitle" : "Linen Shirt",
+          "shortCode" : "<v34>",
+          "tracked" : true,
+          "unitNo" : null,
+          "variantTitle" : "Sand / M"
+        } ],
+        "requestReference" : "<v38>",
+        "returnedAt" : null,
+        "returnedToSender" : false,
+        "scannedItems" : [ {
+          "barcode" : "<v25>",
+          "damage_reason" : null,
+          "disposition" : "pending",
+          "disposition_at" : null,
+          "id" : "<v6>",
+          "on_scanned_awb" : true,
+          "order_number" : "#4001",
+          "piece_id" : "<v28>",
+          "product_title" : "Linen Shirt",
+          "scan_source" : "barcode",
+          "scanned_at" : "<v41>",
+          "short_code" : "<v33>",
+          "sku" : "SH-SandM",
+          "status" : "return_pending_inspection",
+          "unexpected" : false,
+          "variant_title" : "Sand / M",
+          "via_phone" : false
+        }, {
+          "barcode" : "<v26>",
+          "damage_reason" : null,
+          "disposition" : "pending",
+          "disposition_at" : null,
+          "id" : "<v7>",
+          "on_scanned_awb" : true,
+          "order_number" : "#4001",
+          "piece_id" : "<v29>",
+          "product_title" : "Linen Shirt",
+          "scan_source" : "barcode",
+          "scanned_at" : "<v42>",
+          "short_code" : "<v34>",
+          "sku" : "SH-SandM",
+          "status" : "return_pending_inspection",
+          "unexpected" : false,
+          "variant_title" : "Sand / M",
+          "via_phone" : false
+        } ],
+        "shipmentId" : "<v13>",
+        "tracked" : true,
+        "unitsIn" : 0,
+        "untrackedUnits" : [ ]
+      } ],
+      "phoneScanCount" : 0,
+      "status" : "open"
+    },
+    "06_grade1" : {
+      "barcode" : "<v25>",
+      "damage_reason" : null,
+      "disposition" : "restocked",
+      "disposition_at" : "<v46>",
+      "id" : "<v6>",
+      "on_scanned_awb" : false,
+      "order_number" : null,
+      "piece_id" : "<v28>",
+      "product_title" : "Linen Shirt",
+      "scan_source" : "barcode",
+      "scanned_at" : "<v41>",
+      "sku" : "SH-SandM",
+      "status" : "available",
+      "unexpected" : false,
+      "variant_title" : "Sand / M",
+      "via_phone" : false
+    },
+    "07_grade2" : {
+      "barcode" : "<v26>",
+      "damage_reason" : "torn",
+      "disposition" : "damaged",
+      "disposition_at" : "<v47>",
+      "id" : "<v7>",
+      "on_scanned_awb" : false,
+      "order_number" : null,
+      "piece_id" : "<v29>",
+      "product_title" : "Linen Shirt",
+      "scan_source" : "barcode",
+      "scanned_at" : "<v42>",
+      "sku" : "SH-SandM",
+      "status" : "damaged",
+      "unexpected" : false,
+      "variant_title" : "Sand / M",
+      "via_phone" : false
+    },
+    "08_close" : {
+      "reason" : "SESSION_CLOSE_BLOCKED: 1 piece(s) still need a disposition before this session can close",
+      "refused" : "ReturnSessionException"
+    },
+    "09_stamps" : [ {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4001",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "delivered"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4001",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "return",
+      "state" : "returned"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4002",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "delivered"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4003",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "delivered"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4004",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "delivered"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "#4005",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "delivered"
+    }, {
+      "history" : null,
+      "intake_done" : false,
+      "number" : "EXC-BTN+2",
+      "provider" : "bosta",
+      "return_intake_outcome" : null,
+      "shipment_leg" : "forward",
+      "state" : "created"
+    } ]
+  },
+  "25_drawer_a_refund" : {
+    "body" : "{\"bookingAttemptedAt\":\"<v48>\",\"bookingError\":null,\"bookingStatus\":\"booked\",\"bookingVerifiedAt\":\"<v49>\",\"bostaTrackingNumber\":\"BTN+0\",\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v50>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011114001\",\"decidedAt\":\"<v51>\",\"decidedBy\":\"<v14>\",\"decidedByName\":\"Mona\",\"deliveredAt\":\"<v52>\",\"email\":null,\"events\":[{\"actorId\":null,\"actorName\":null,\"metadata\":{\"items\":2},\"occurredAt\":\"<v53>\",\"type\":\"requested\"},{\"actorId\":\"<v14>\",\"actorName\":\"Mona\",\"metadata\":null,\"occurredAt\":\"<v54>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v55>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v56>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"repaired\":true,\"shipment_id\":\"<v13>\",\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v57>\",\"type\":\"leg_linked\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v11>\",\"piece_id\":\"<v28>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v58>\",\"type\":\"item_arrived\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v12>\",\"piece_id\":\"<v29>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v59>\",\"type\":\"item_arrived\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":2},\"occurredAt\":\"<v60>\",\"type\":\"received\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"disposition\":\"restocked\",\"item_id\":\"<v11>\",\"piece_id\":\"<v28>\"},\"occurredAt\":\"<v61>\",\"type\":\"item_done\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"disposition\":\"damaged\",\"item_id\":\"<v12>\",\"piece_id\":\"<v29>\"},\"occurredAt\":\"<v62>\",\"type\":\"item_done\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":2},\"occurredAt\":\"<v63>\",\"type\":\"refund_pending\"}],\"history\":[{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":2},\"occurredAt\":\"<v63>\",\"type\":\"refund_pending\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"disposition\":\"damaged\",\"item_id\":\"<v12>\",\"piece_id\":\"<v29>\"},\"occurredAt\":\"<v62>\",\"type\":\"item_done\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"disposition\":\"restocked\",\"item_id\":\"<v11>\",\"piece_id\":\"<v28>\"},\"occurredAt\":\"<v61>\",\"type\":\"item_done\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":2},\"occurredAt\":\"<v60>\",\"type\":\"received\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v12>\",\"piece_id\":\"<v29>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v59>\",\"type\":\"item_arrived\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v11>\",\"piece_id\":\"<v28>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v58>\",\"type\":\"item_arrived\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"repaired\":true,\"shipment_id\":\"<v13>\",\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v57>\",\"type\":\"leg_linked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v56>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v55>\",\"type\":\"pickup_booked\"},{\"actorId\":\"<v14>\",\"actorName\":\"Mona\",\"metadata\":null,\"occurredAt\":\"<v54>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"items\":2},\"occurredAt\":\"<v53>\",\"type\":\"requested\"}],\"id\":\"<v2>\",\"items\":[{\"active\":false,\"arrivedAt\":\"<v41>\",\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":\"restocked\",\"doneAt\":\"<v46>\",\"id\":\"<v11>\",\"imageUrl\":null,\"itemStatus\":\"done\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v28>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementVariantId\":null,\"replacementVariantTitle\":null,\"shortCode\":\"<v33>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false},{\"active\":false,\"arrivedAt\":\"<v42>\",\"arrivedCondition\":null,\"damageReason\":\"torn\",\"disposition\":\"damaged\",\"doneAt\":\"<v47>\",\"id\":\"<v12>\",\"imageUrl\":null,\"itemStatus\":\"done\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v29>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementVariantId\":null,\"replacementVariantTitle\":null,\"shortCode\":\"<v34>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":\"traced_booking\",\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v15>\",\"orderNumber\":\"#4001\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":\"مدينة نصر - الحي السابع\",\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":\"<v42>\",\"reference\":\"<v38>\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":\"<v47>\",\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":\"<v13>\",\"returnTrackingNumber\":\"BTN+0\",\"status\":\"refund_pending\",\"type\":\"refund\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "25_drawer_b_auto" : {
+    "body" : "{\"bookingAttemptedAt\":\"<v64>\",\"bookingError\":null,\"bookingStatus\":\"booked\",\"bookingVerifiedAt\":\"<v65>\",\"bostaTrackingNumber\":\"BTN+1\",\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v66>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011114002\",\"decidedAt\":\"<v66>\",\"decidedBy\":null,\"decidedByName\":null,\"deliveredAt\":\"<v67>\",\"email\":null,\"events\":[{\"actorId\":null,\"actorName\":null,\"metadata\":{\"items\":1},\"occurredAt\":\"<v68>\",\"type\":\"requested\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"auto\":true},\"occurredAt\":\"<v69>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+1\"},\"occurredAt\":\"<v70>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v71>\",\"type\":\"booking_verified\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v16>\",\"piece_id\":\"<v30>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v72>\",\"type\":\"item_arrived\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":1},\"occurredAt\":\"<v73>\",\"type\":\"received\"}],\"history\":[{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"items\":1},\"occurredAt\":\"<v73>\",\"type\":\"received\"},{\"actorId\":\"<v10>\",\"actorName\":\"Fatma\",\"metadata\":{\"item_id\":\"<v16>\",\"piece_id\":\"<v30>\",\"session_id\":\"<v9>\"},\"occurredAt\":\"<v72>\",\"type\":\"item_arrived\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v71>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+1\"},\"occurredAt\":\"<v70>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"auto\":true},\"occurredAt\":\"<v69>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"items\":1},\"occurredAt\":\"<v68>\",\"type\":\"requested\"}],\"id\":\"<v3>\",\"items\":[{\"active\":true,\"arrivedAt\":\"<v43>\",\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":\"pending\",\"doneAt\":null,\"id\":\"<v16>\",\"imageUrl\":null,\"itemStatus\":\"arrived\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v30>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"changed_mind\",\"replacementVariantId\":null,\"replacementVariantTitle\":null,\"shortCode\":\"<v35>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":null,\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v17>\",\"orderNumber\":\"#4002\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":\"مدينة نصر - الحي السابع\",\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":\"<v43>\",\"reference\":\"<v39>\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":null,\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":null,\"returnTrackingNumber\":null,\"status\":\"received\",\"type\":\"refund\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "25_drawer_c_exchange" : {
+    "body" : "{\"bookNowAvailable\":false,\"bookingAttemptedAt\":\"<v74>\",\"bookingError\":null,\"bookingStatus\":\"booked\",\"bookingVerifiedAt\":\"<v75>\",\"bostaTrackingNumber\":\"BTN+2\",\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v76>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011114003\",\"decidedAt\":\"<v77>\",\"decidedBy\":\"<v14>\",\"decidedByName\":\"Mona\",\"deliveredAt\":\"<v78>\",\"email\":null,\"events\":[{\"actorId\":\"<v14>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v79>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+2\"},\"occurredAt\":\"<v80>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v81>\",\"type\":\"booking_verified\"}],\"exchange\":{\"deliveredAt\":null,\"exchangeStatus\":\"matched\",\"orderId\":\"<v18>\",\"orderNumber\":\"EXC-BTN+2\",\"orderStatus\":\"new\",\"shipmentState\":\"created\",\"trackingNumber\":\"BTN+2\",\"withCourierAt\":null},\"history\":[{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v81>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+2\"},\"occurredAt\":\"<v80>\",\"type\":\"pickup_booked\"},{\"actorId\":\"<v14>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v79>\",\"type\":\"approved\"}],\"id\":\"<v4>\",\"items\":[{\"active\":true,\"arrivedAt\":null,\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":null,\"doneAt\":null,\"id\":\"<v19>\",\"imageUrl\":null,\"itemStatus\":\"awaiting\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v31>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementAvailable\":0,\"replacementInStock\":false,\"replacementVariantId\":\"<v0>\",\"replacementVariantTitle\":\"Sand / L\",\"shortCode\":\"<v36>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":null,\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v20>\",\"orderNumber\":\"#4003\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":null,\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":null,\"reference\":\"RR-XCHNG\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":null,\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":null,\"returnTrackingNumber\":null,\"status\":\"pickup_booked\",\"type\":\"exchange\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "25_drawer_d_orphan" : {
+    "body" : "{\"bookingAttemptedAt\":null,\"bookingError\":null,\"bookingStatus\":null,\"bookingVerifiedAt\":null,\"bostaTrackingNumber\":null,\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v82>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011114005\",\"decidedAt\":\"<v83>\",\"decidedBy\":null,\"decidedByName\":null,\"deliveredAt\":\"<v84>\",\"email\":null,\"events\":[],\"history\":[],\"id\":\"<v5>\",\"items\":[{\"active\":true,\"arrivedAt\":null,\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":null,\"doneAt\":null,\"id\":\"<v21>\",\"imageUrl\":null,\"itemStatus\":\"awaiting\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v32>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementVariantId\":null,\"replacementVariantTitle\":null,\"shortCode\":\"<v37>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":null,\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v22>\",\"orderNumber\":\"#4005\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":null,\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":null,\"reference\":\"RR-SWEEP\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":null,\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":null,\"returnTrackingNumber\":null,\"status\":\"approved\",\"type\":\"refund\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "26_requestsList" : {
+    "body" : "{\"items\":[{\"arrivedCount\":1,\"awaitingCount\":0,\"bookingStatus\":\"booked\",\"closeReason\":null,\"createdAt\":\"<v85>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"id\":\"<v3>\",\"itemCount\":1,\"orderNumber\":\"#4002\",\"reasonCodes\":[\"changed_mind\"],\"reference\":\"<v39>\",\"refundOverdueDays\":null,\"refundTotal\":\"0.00\",\"status\":\"received\",\"type\":\"refund\",\"unexpectedItem\":false},{\"arrivedCount\":2,\"awaitingCount\":0,\"bookingStatus\":\"booked\",\"closeReason\":null,\"createdAt\":\"<v86>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"id\":\"<v2>\",\"itemCount\":2,\"orderNumber\":\"#4001\",\"reasonCodes\":[\"wrong_size\"],\"reference\":\"<v38>\",\"refundOverdueDays\":null,\"refundTotal\":\"0.00\",\"status\":\"refund_pending\",\"type\":\"refund\",\"unexpectedItem\":false},{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingStatus\":null,\"closeReason\":null,\"createdAt\":\"<v87>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"id\":\"<v5>\",\"itemCount\":1,\"orderNumber\":\"#4005\",\"reasonCodes\":[\"wrong_size\"],\"reference\":\"RR-SWEEP\",\"refundOverdueDays\":null,\"refundTotal\":\"0.00\",\"status\":\"approved\",\"type\":\"refund\",\"unexpectedItem\":false},{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingStatus\":\"booked\",\"closeReason\":null,\"createdAt\":\"<v88>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"id\":\"<v4>\",\"itemCount\":1,\"orderNumber\":\"#4003\",\"reasonCodes\":[\"wrong_size\"],\"reference\":\"RR-XCHNG\",\"refundOverdueDays\":null,\"refundTotal\":\"0.00\",\"status\":\"pickup_booked\",\"type\":\"exchange\",\"unexpectedItem\":false}],\"total\":4}",
+    "status" : 200
+  },
+  "27_cases" : {
+    "body" : "{\"items\":[{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v2>\",\"itemsSummary\":\"Linen Shirt Sand / M × 2\",\"itemsSummaryAr\":\"Linen Shirt Sand / M × 2\",\"kind\":\"refund\",\"legStatus\":null,\"nextStep\":\"record_refund\",\"notScanned\":false,\"orderNumber\":\"#4001\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":2,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+0\"},\"reference\":\"<v38>\",\"source\":\"returns_page\",\"stage\":\"to_do\",\"status\":\"refund_pending\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v2>\",\"shipmentId\":\"<v13>\"},\"tone\":\"action\",\"updatedAt\":\"<v63>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v3>\",\"itemsSummary\":\"Linen Shirt Sand / M\",\"itemsSummaryAr\":\"Linen Shirt Sand / M\",\"kind\":\"refund\",\"legStatus\":null,\"nextStep\":\"inspect\",\"notScanned\":false,\"orderNumber\":\"#4002\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":1,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+1\"},\"reference\":\"<v39>\",\"source\":\"returns_page\",\"stage\":\"to_do\",\"status\":\"received\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v3>\",\"shipmentId\":null},\"tone\":\"action\",\"updatedAt\":\"<v73>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v4>\",\"itemsSummary\":\"Linen Shirt Sand / M → Sand / L\",\"itemsSummaryAr\":\"Linen Shirt Sand / M → Sand / L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"on_the_way\",\"notScanned\":false,\"orderNumber\":\"#4003\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+2\"},\"reference\":\"RR-XCHNG\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"pickup_booked\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v4>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v81>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v5>\",\"itemsSummary\":\"Linen Shirt Sand / M\",\"itemsSummaryAr\":\"Linen Shirt Sand / M\",\"kind\":\"refund\",\"legStatus\":null,\"nextStep\":\"booking\",\"notScanned\":false,\"orderNumber\":\"#4005\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":null,\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":null},\"reference\":\"RR-SWEEP\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"approved\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v5>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v87>\"}],\"nextCursor\":null}",
+    "status" : 200
+  },
+  "28_caseCounts" : {
+    "body" : "{\"stages\":{\"all\":4,\"done\":0,\"in_progress\":2,\"to_do\":2},\"tiles\":{\"bookingProblem\":0,\"refundToRecord\":1,\"replacementToChoose\":0,\"toApprove\":0,\"toLinkOrder\":0}}",
+    "status" : 200
+  },
+  "29_portalSettings" : {
+    "body" : "{\"autoApprove\":false,\"bostaConnected\":true,\"brandColor\":null,\"enabled\":true,\"exchangesEnabled\":true,\"exchangesSince\":\"<v89>\",\"font\":\"cairo\",\"logo\":null,\"logoUrl\":null,\"pickupBooking\":true,\"policyText\":null,\"portalPickupBooking\":true,\"refundMethods\":[],\"requirePhotos\":false,\"returnLocationId\":\"loc-ret\",\"returnLocationName\":\"Maadi Warehouse\",\"returnWindowDays\":30,\"slug\":\"<slug>\",\"storeName\":\"<tenant>\"}",
+    "status" : 200
+  },
+  "30_requestRows" : [ {
+    "booking_status" : "booked",
+    "has_bosta_tn" : true,
+    "link_source" : "traced_booking",
+    "linked" : true,
+    "number" : "#4001",
+    "status" : "refund_pending",
+    "type" : "refund"
+  }, {
+    "booking_status" : "booked",
+    "has_bosta_tn" : true,
+    "link_source" : null,
+    "linked" : false,
+    "number" : "#4002",
+    "status" : "received",
+    "type" : "refund"
+  }, {
+    "booking_status" : "booked",
+    "has_bosta_tn" : true,
+    "link_source" : null,
+    "linked" : false,
+    "number" : "#4003",
+    "status" : "pickup_booked",
+    "type" : "exchange"
+  }, {
+    "booking_status" : null,
+    "has_bosta_tn" : false,
+    "link_source" : null,
+    "linked" : false,
+    "number" : "#4005",
+    "status" : "approved",
+    "type" : "refund"
+  } ],
+  "31_events" : [ {
+    "event_type" : "requested",
+    "number" : "#4001"
+  }, {
+    "event_type" : "approved",
+    "number" : "#4001"
+  }, {
+    "event_type" : "pickup_booked",
+    "number" : "#4001"
+  }, {
+    "event_type" : "booking_verified",
+    "number" : "#4001"
+  }, {
+    "event_type" : "leg_linked",
+    "number" : "#4001"
+  }, {
+    "event_type" : "item_arrived",
+    "number" : "#4001"
+  }, {
+    "event_type" : "item_arrived",
+    "number" : "#4001"
+  }, {
+    "event_type" : "received",
+    "number" : "#4001"
+  }, {
+    "event_type" : "item_done",
+    "number" : "#4001"
+  }, {
+    "event_type" : "item_done",
+    "number" : "#4001"
+  }, {
+    "event_type" : "refund_pending",
+    "number" : "#4001"
+  }, {
+    "event_type" : "requested",
+    "number" : "#4002"
+  }, {
+    "event_type" : "approved",
+    "number" : "#4002"
+  }, {
+    "event_type" : "pickup_booked",
+    "number" : "#4002"
+  }, {
+    "event_type" : "booking_verified",
+    "number" : "#4002"
+  }, {
+    "event_type" : "item_arrived",
+    "number" : "#4002"
+  }, {
+    "event_type" : "received",
+    "number" : "#4002"
+  }, {
+    "event_type" : "approved",
+    "number" : "#4003"
+  }, {
+    "event_type" : "pickup_booked",
+    "number" : "#4003"
+  }, {
+    "event_type" : "booking_verified",
+    "number" : "#4003"
+  } ],
+  "32_analyticsOrders" : {
+    "body" : "{\"asOf\":\"<v90>\",\"counts\":{\"awaiting_payout\":3,\"expected\":0,\"lost\":0,\"other_carrier\":0,\"overdue\":0,\"paid\":0,\"refunded\":2},\"orders\":[{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"FceDyHXwpSYYF9zGW\",\"label\":\"Cairo\",\"labelAr\":\"القاهرة\"},\"items\":1,\"name\":\"#4005\",\"netToYou\":null,\"orderId\":\"<v22>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v91>\",\"refundAmountUnknown\":false,\"total\":625.0,\"trackingNumbers\":[\"TN+5\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"FceDyHXwpSYYF9zGW\",\"label\":\"Cairo\",\"labelAr\":\"القاهرة\"},\"items\":1,\"name\":\"#4004\",\"netToYou\":null,\"orderId\":\"<v23>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v92>\",\"refundAmountUnknown\":false,\"total\":625.0,\"trackingNumbers\":[\"TN+4\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"FceDyHXwpSYYF9zGW\",\"label\":\"Cairo\",\"labelAr\":\"القاهرة\"},\"items\":1,\"name\":\"#4003\",\"netToYou\":null,\"orderId\":\"<v20>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v93>\",\"refundAmountUnknown\":false,\"total\":625.0,\"trackingNumbers\":[\"TN+3\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"refunded\",\"governorate\":{\"key\":\"FceDyHXwpSYYF9zGW\",\"label\":\"Cairo\",\"labelAr\":\"القاهرة\"},\"items\":1,\"name\":\"#4002\",\"netToYou\":null,\"orderId\":\"<v17>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v94>\",\"refundAmountUnknown\":true,\"total\":625.0,\"trackingNumbers\":[\"TN+2\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"refunded\",\"governorate\":{\"key\":\"FceDyHXwpSYYF9zGW\",\"label\":\"Cairo\",\"labelAr\":\"القاهرة\"},\"items\":2,\"name\":\"#4001\",\"netToYou\":null,\"orderId\":\"<v15>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v95>\",\"refundAmountUnknown\":true,\"total\":1250.0,\"trackingNumbers\":[\"TN+1\",\"BTN+0\"]}],\"page\":0,\"range\":{\"from\":\"<v97>\",\"to\":\"<v98>\",\"tz\":\"Africa/Cairo\"},\"size\":200,\"total\":5}",
+    "status" : 200
+  },
+  "33_analyticsProductExtras" : {
+    "body" : "{\"current\":{\"abc\":[{\"abcClass\":\"A\",\"cumulativeShare\":1.0,\"productTitle\":\"Linen Shirt\",\"realized\":1875.0,\"share\":1.0,\"sku\":\"SH-SandM\",\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\"}],\"boughtTogether\":[],\"mostFailed\":[],\"sizeCurve\":{\"noSizeUnits\":0,\"sizes\":[{\"deliveredUnits\":6,\"exchangedUnits\":1,\"returnRate\":0.5,\"returnedUnits\":3,\"share\":1.0,\"size\":\"M\",\"soldUnits\":6}],\"unparseableUnits\":0,\"unparseableValues\":[]}},\"previous\":{\"abc\":[],\"boughtTogether\":[],\"mostFailed\":[],\"sizeCurve\":{\"noSizeUnits\":0,\"sizes\":[],\"unparseableUnits\":0,\"unparseableValues\":[]}},\"previousRange\":{\"from\":\"<v99>\",\"to\":\"<v100>\",\"tz\":\"Africa/Cairo\"},\"range\":{\"from\":\"<v97>\",\"to\":\"<v98>\",\"tz\":\"Africa/Cairo\"}}",
+    "status" : 200
+  },
+  "34_analyticsSalesProducts" : {
+    "body" : "{\"products\":[{\"grossRevenue\":3750.0,\"imageUrl\":null,\"productId\":\"<v24>\",\"soldUnits\":6,\"title\":\"Linen Shirt\",\"topVariants\":[{\"soldUnits\":6,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\"}],\"variantCount\":1}],\"range\":{\"from\":\"<v97>\",\"to\":\"<v98>\",\"tz\":\"Africa/Cairo\"},\"sort\":\"units\"}",
+    "status" : 200
+  },
+  "35_analyticsSalesVariants" : {
+    "body" : "{\"range\":{\"from\":\"<v97>\",\"to\":\"<v98>\",\"tz\":\"Africa/Cairo\"},\"totals\":{\"approximateLines\":0,\"deliveredOrders\":5,\"deliveredRevenue\":3750.0,\"deliveredUnits\":6,\"grossRevenue\":3750.0,\"inTransitUnits\":0,\"netRevenue\":1875.0,\"netSoldUnits\":3,\"notShippedUnits\":0,\"orders\":5,\"otherTerminalUnits\":0,\"refusalRate\":0.0,\"refusedOrders\":0,\"refusedUnits\":0,\"returnRate\":0.5,\"returnedRevenue\":1875.0,\"returnedUnits\":3,\"returnsOnUndeliveredOrders\":0,\"soldUnits\":6,\"unverifiedNoRestockLines\":0,\"wijhaOrders\":0,\"wijhaUnits\":0},\"variants\":[{\"approximateLines\":0,\"deliveredRevenue\":3750.0,\"deliveredUnits\":6,\"grossRevenue\":3750.0,\"imageUrl\":null,\"inTransitUnits\":0,\"lastSoldAt\":\"<v91>\",\"netRevenue\":1875.0,\"netSoldUnits\":3,\"notShippedUnits\":0,\"otherTerminalUnits\":0,\"productId\":\"<v24>\",\"productTitle\":\"Linen Shirt\",\"refusalRate\":0.0,\"refusedUnits\":0,\"returnRate\":0.5,\"returnedRevenue\":1875.0,\"returnedUnits\":3,\"sku\":\"SH-SandM\",\"soldUnits\":6,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"wijhaUnits\":0}]}",
+    "status" : 200
+  },
+  "36_analyticsStockVariants" : {
+    "body" : "{\"asOf\":\"<v96>\",\"filter\":\"all\",\"hasPieces\":true,\"sort\":\"velocity\",\"stockSource\":\"pieces\",\"total\":2,\"trustLevel\":\"high\",\"variants\":[{\"avgPieceAgeDays\":0.0,\"comingBack\":1,\"daysOfCover\":5.0,\"deadStock\":false,\"deliveredUnits30\":6,\"exchangedUnits90\":1,\"lastSoldAt\":\"<v91>\",\"onHand\":1,\"productTitle\":\"Linen Shirt\",\"returnedUnits90\":3,\"returnsRate\":0.6667,\"runningLow\":true,\"sellThrough\":0.8571,\"shopifyAvailable\":null,\"sku\":\"SH-SandM\",\"soldUnits30\":6,\"stockSource\":\"pieces\",\"stockUsed\":1,\"stockValue\":0.0,\"topReturnReason\":\"wrong_size\",\"valueAtCost\":false,\"variantId\":\"<v1>\",\"variantTitle\":\"Sand / M\",\"velocityPerDay\":0.2},{\"avgPieceAgeDays\":0.0,\"comingBack\":0,\"daysOfCover\":null,\"deadStock\":true,\"deliveredUnits30\":0,\"exchangedUnits90\":0,\"lastSoldAt\":null,\"onHand\":1,\"productTitle\":\"Linen Shirt\",\"returnedUnits90\":0,\"returnsRate\":null,\"runningLow\":false,\"sellThrough\":0.0,\"shopifyAvailable\":null,\"sku\":\"SH-SandL\",\"soldUnits30\":0,\"stockSource\":\"pieces\",\"stockUsed\":1,\"stockValue\":0.0,\"topReturnReason\":null,\"valueAtCost\":false,\"variantId\":\"<v0>\",\"variantTitle\":\"Sand / L\",\"velocityPerDay\":0.0}]}",
+    "status" : 200
+  }
+}
