@@ -31,7 +31,11 @@ origin/main 2b258b7; NOT merged, NOT deployed). No migration.**
   ~12k, then ~6k a night; the table settles near 7 × ~6k ≈ 40k rows.
 - Full backend suite 2026-10-21: 3180 run, 6 red — the expected ExchangeBackfillTest and GenericG3IsolationGoldenTest
   g1/g2, plus PortalPickupAreaTest ×2 / PortalRequestsTest (login in setup) after an ~825 s stall mid-run; those two
-  classes rerun alone: 26/26 green (neither touches shopify_webhook_events).
+  classes rerun alone: 26/26 green (neither touches shopify_webhook_events). Rerun before merge: 3192 run, no hang
+  (both Portal classes green in the suite), 4 red — the 3 expected plus `GenericAnalyticsIsolationTest` (pre-G2
+  golden, `overview-top-skus`): a FLAKE FOUND ON MAIN, unrelated to slice B — `OverviewService.topSkus()` orders by
+  `units DESC` only, so a 3-way tie at 8 units (S-39 / J-30 / J-32) came back J-32 before J-30. Fix (tie-break on
+  sku) is a separate change.
 
 **DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; MERGED to main
 2b258b7, NOT deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
