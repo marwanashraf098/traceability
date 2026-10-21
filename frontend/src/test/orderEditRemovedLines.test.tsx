@@ -15,7 +15,8 @@ import type { OrderDetail, PackOrderCard, PackSessionView } from '../api'
 
 // Shopify order edits (2026-10-21): a line removed in Shopify is kept at quantity 0. The pick screen and
 // the waybill pack session hide it (nothing to pick); an order whose every line was removed says so and
-// offers no Complete; the order drawer shows it struck through, labelled "Removed in Shopify".
+// offers no Complete; the order drawer shows it struck through, labelled "Removed in Shopify" — or, for a line
+// added after the order left Traced (stored at 0), "Added after shipping — not in this parcel".
 
 function json(data: unknown, status = 200) {
   return Promise.resolve({
@@ -118,12 +119,13 @@ describe('waybill pack session', () => {
 
 // ── Order drawer ──────────────────────────────────────────────────────────────
 
-function drawerOrder(): OrderDetail {
+function drawerOrder(extra: unknown[] = []): OrderDetail {
   return {
     id: 'order-1', number: '#16443', customerName: null, customerPhone: null,
     address: null, paymentMethod: 'cod', codAmount: null, status: 'new', onHold: false,
     holdReason: null, placedAt: '2026-10-20T13:51:58Z', createdAt: '2026-10-20T13:52:05Z',
     items: [
+      ...extra,
       { id: 'item-m', productTitle: 'BLACK LEATHER SET', variantTitle: 'M', sku: 'BLS-M', quantity: 0, imageUrl: null, allocatedPieces: [] },
       { id: 'item-s', productTitle: 'BLACK LEATHER SET', variantTitle: 'S', sku: 'BLS-S', quantity: 1, imageUrl: null, allocatedPieces: [] },
     ],
@@ -138,14 +140,14 @@ function drawerOrder(): OrderDetail {
   } as unknown as OrderDetail
 }
 
-function renderDrawer(lang: 'en' | 'ar') {
+function renderDrawer(lang: 'en' | 'ar', extra: unknown[] = []) {
   const testI18n = i18next.createInstance()
   testI18n.use(initReactI18next).init({
     lng: lang, fallbackLng: 'en',
     resources: { en: { translation: en }, ar: { translation: ar } },
     interpolation: { escapeValue: false },
   })
-  const o = drawerOrder()
+  const o = drawerOrder(extra)
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     if (url.includes('/notes') || url.includes('/timeline')) return json([])
     if (url.includes('/orders/')) return json(o)
@@ -175,5 +177,27 @@ describe('order drawer', () => {
   test('Arabic label', async () => {
     renderDrawer('ar')
     expect(await screen.findByTestId('item-removed-in-shopify')).toHaveTextContent('أُزيل في Shopify')
+  })
+
+  // A line Shopify added after the order left Traced is stored at 0 (never in the parcel) — it is not
+  // "removed": its own label, not struck through.
+  const ADDED = { id: 'item-x', productTitle: 'BROWN LEATHER SET', variantTitle: 'L', sku: 'BRS-L', quantity: 0,
+    imageUrl: null, allocatedPieces: [], addedAfterShipping: true }
+
+  test('a line added after shipping is labelled "Added after shipping — not in this parcel", not struck through', async () => {
+    renderDrawer('en', [ADDED])
+    const added = await screen.findByTestId('item-added-after-shipping')
+    expect(added).toHaveTextContent('Added after shipping — not in this parcel')
+    const addedRow = added.closest('li')!
+    expect(within(addedRow).getByText('BROWN LEATHER SET')).not.toHaveClass('line-through')
+    expect(within(addedRow).queryByTestId('item-removed-in-shopify')).not.toBeInTheDocument()
+    const removedLabels = screen.getAllByTestId('item-removed-in-shopify')
+    expect(removedLabels).toHaveLength(1)
+    expect(within(removedLabels[0].closest('li')!).getByText('BLACK LEATHER SET')).toHaveClass('line-through')
+  })
+
+  test('Arabic: added after shipping', async () => {
+    renderDrawer('ar', [ADDED])
+    expect(await screen.findByTestId('item-added-after-shipping')).toHaveTextContent('أُضيف بعد الشحن — ليس في هذا الطرد')
   })
 })

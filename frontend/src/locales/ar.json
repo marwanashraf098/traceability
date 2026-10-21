@@ -354,6 +354,7 @@
       "viewInShopify": "عرض في Shopify",
       "viewAllItems": "عرض جميع المنتجات",
       "removedInShopify": "أُزيل في Shopify",
+      "addedAfterShipping": "أُضيف بعد الشحن — ليس في هذا الطرد",
       "traceTimeline": "سجل التتبع",
       "timelineEmpty": "لم يُسجَّل أي نشاط بعد",
       "timelineError": "تعذّر تحميل النشاط",

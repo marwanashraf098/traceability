@@ -44,8 +44,11 @@
   GenericG3IsolationGoldenTest g1/g2 — **also red on clean origin/main 486897a** (same 3 golden lines differ:
   weeklyTrend buckets, the orders range from/to — date-dependent, not this branch). OrdersTableAccessGuardTest caught
   `isFrozen` naming `orders` → reads `merchant_orders` now.
-- **Open:** a line ADDED to a frozen order is inserted with its current quantity, so a returned-to-sender parcel
-  would list it as unit rows though it never shipped (no alert either) — decide whether it should be 0 / alert.
+- **A line ADDED to a frozen order is stored at quantity 0** (approved 2026-10-21): it was never in the parcel, so it
+  adds no Scan returns unit rows; nothing is raised; raw keeps Shopify's line. `OrderController.OrderItem
+  .addedAfterShipping` (quantity 0 AND raw current_qty > 0) → drawer label "Added after shipping — not in this
+  parcel" (EN + AR, not struck through); every other quantity-0 line keeps "Removed in Shopify". Test h + 2 drawer
+  tests, revert-checked.
 
 **Non-Bosta couriers G3 — out at Pickups, delivered, returned parcels (2026-10-20, branch `generic-courier-g3`, built
 on a9a9f4c, rebased onto fe0c3e2 (deleted-in-Bosta slices 4 + 5, V172) and merged to main; V173; NOT deployed, no

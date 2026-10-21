@@ -194,7 +194,9 @@ public class ShopifySyncService {
             """;
 
     // The order has left Traced custody (OrderLineFreeze): an existing line keeps its quantity — it is
-    // what was shipped — and only its raw follows Shopify. A brand-new line is inserted with its quantity.
+    // what was shipped — and only its raw follows Shopify. A brand-new line is inserted with quantity 0
+    // (the caller binds 0): it was never in the parcel. Nothing is raised; the drawer labels it
+    // "Added after shipping" (quantity 0, raw current_quantity > 0).
     private static final String UPSERT_ORDER_ITEM_FROZEN = """
             INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, external_id, raw)
             VALUES (?, ?, ?, ?, ?, ?::jsonb)
@@ -438,8 +440,8 @@ public class ShopifySyncService {
             UUID orderId = up.id();
 
             boolean needsHold = false;
-            String upsertItem = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)
-                ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
+            boolean frozen = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
+            String upsertItem = frozen ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
             for (JsonNode line : payload.path("line_items")) {
                 long variantRestId = line.path("variant_id").asLong(0);
                 if (variantRestId == 0) {
@@ -461,7 +463,7 @@ public class ShopifySyncService {
                 String lineGid = line.has("admin_graphql_api_id")
                     ? line.path("admin_graphql_api_id").asText()
                     : "gid://shopify/LineItem/" + line.path("id").asLong();
-                jdbc.update(upsertItem, tenantId, orderId, variantId, qty, lineGid, toJson(line));
+                jdbc.update(upsertItem, tenantId, orderId, variantId, frozen ? 0 : qty, lineGid, toJson(line));
             }
             if (needsHold) jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
 
@@ -620,8 +622,8 @@ public class ShopifySyncService {
             UUID orderId = up.id();
 
             boolean needsHold = false;
-            String upsertItem = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)
-                ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
+            boolean frozen = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
+            String upsertItem = frozen ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
             for (ShopifyGateway.LineItem line : o.lineItems()) {
                 if (line.variantGid() == null) {
                     log.warn("Order {} line {} has no variant GID — skipping", o.name(), line.gid());
@@ -638,7 +640,7 @@ public class ShopifySyncService {
                     continue;
                 }
                 jdbc.update(upsertItem,
-                        tenantId, orderId, variantId, line.storedQuantity(), line.gid(), toJson(line));
+                        tenantId, orderId, variantId, frozen ? 0 : line.storedQuantity(), line.gid(), toJson(line));
             }
 
             if (needsHold) {

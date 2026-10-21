@@ -354,6 +354,7 @@
       "viewInShopify": "View in Shopify",
       "viewAllItems": "View all items",
       "removedInShopify": "Removed in Shopify",
+      "addedAfterShipping": "Added after shipping — not in this parcel",
       "traceTimeline": "Trace timeline",
       "timelineEmpty": "No activity recorded yet",
       "timelineError": "Couldn't load activity",

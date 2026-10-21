@@ -17,6 +17,9 @@ import java.util.stream.Collectors;
  * ShopifySyncService (both line upserts) and the repair script (inlined verbatim — see
  * OrderLineFreezeTest). Never re-derive it.
  *
+ * A line that first arrives on a frozen order is stored with quantity 0 (it was never in the parcel);
+ * nothing is raised.
+ *
  * Frozen when ANY of:
  *   1. the forward leg has a shipment_status_history row past 'created' — {@link #shippedPastCreatedSql},
  *      the ALREADY_SHIPPED guard FulfillService.scan()/complete() use;

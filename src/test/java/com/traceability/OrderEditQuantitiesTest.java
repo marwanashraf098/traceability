@@ -3,6 +3,8 @@ package com.traceability;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.traceability.fulfillment.OrderController;
+import com.traceability.fulfillment.OrderNotesService;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifySyncService;
@@ -34,6 +36,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Shopify order edits reach line quantities (2026-10-21). Every test drives a REAL REST payload through
@@ -52,7 +55,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   f  every line removed: complete() refuses (ALL_ITEMS_REMOVED_IN_SHOPIFY)
  *   g  self-pickup handed over, then refunded: frozen; still frozen once the piece is restocked (history)
  *   h  frozen order (history with_courier) gets an edit-shaped payload: no alert, no release, quantity kept,
- *      parcel unit rows unchanged; the brand-new line is inserted with its current quantity, nothing raised
+ *      parcel unit rows unchanged; the brand-new line is stored at 0 (raw keeps it), adds no unit rows,
+ *      nothing raised
  *   i  a REST payload with no current_quantity keeps today's behaviour (quantity; reduced while picking →
  *      one release + alert)
  */
@@ -85,6 +89,7 @@ class OrderEditQuantitiesTest {
     @Autowired ShopifyWebhookProcessorJob processorJob;
     @Autowired ShopifySyncService         syncService;
     @Autowired FulfillService             fulfill;
+    @Autowired org.springframework.transaction.PlatformTransactionManager txm;
     @MockBean  BostaGateway               bostaGateway;
     @MockBean  JobScheduler               jobScheduler;
 
@@ -369,8 +374,17 @@ class OrderEditQuantitiesTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM piece_events WHERE tenant_id = ? AND event_type = 'unreserved'",
             Integer.class, s.f.tenant)).isZero();
         assertThat(unitsOf(units, s, leg, s.variantM)).isEqualTo(before);
-        assertThat(s.qty(o, lineS)).as("a brand-new line on a frozen order: inserted with its current quantity")
-            .isEqualTo(1);
+        assertThat(s.qty(o, lineS)).as("a brand-new line on a frozen order: stored at 0 — never in the parcel")
+            .isZero();
+        assertThat(jdbc.queryForObject("SELECT current_qty FROM order_items WHERE order_id = ? AND external_id = ?",
+            Integer.class, o, "gid://shopify/LineItem/" + lineS)).as("raw keeps Shopify's line").isEqualTo(1);
+        assertThat(unitsOf(units, s, leg, s.variantS)).as("adds no Scan returns unit rows").isZero();
+        // Plain instance (no @PreAuthorize proxy), as OrderStatusListDetailParityTest builds it.
+        OrderController orderController = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc), fulfill);
+        List<OrderController.OrderItem> drawer = s.as(() -> orderController.detail(o).items());
+        assertThat(drawer).extracting(OrderController.OrderItem::variantTitle, OrderController.OrderItem::quantity,
+                OrderController.OrderItem::addedAfterShipping)
+            .containsExactlyInAnyOrder(tuple("M", 2, false), tuple("S", 0, true));
     }
 
     // ── i ─────────────────────────────────────────────────────────────────────

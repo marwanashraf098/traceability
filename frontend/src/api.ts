@@ -222,6 +222,8 @@ export interface OrderItem {
   quantity: number
   imageUrl: string | null
   allocatedPieces: AllocatedPiece[]
+  /** Quantity 0 because the line was added in Shopify after the order left Traced — not in the parcel. */
+  addedAfterShipping?: boolean
 }
 
 export interface DeliveryHistoryEntry {
