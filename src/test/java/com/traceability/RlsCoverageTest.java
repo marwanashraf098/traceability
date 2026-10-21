@@ -102,6 +102,8 @@ class RlsCoverageTest {
             "/api/v1/generic-shipments/carriers",
             // Flexible labeling slice 1 — labelCodeBatchPdf_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/label-codes/batches/{id}/pdf",
+            // Non-Bosta couriers G4a — otherCouriersReturns_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/tenant/portal-settings/other-couriers",
             "/api/v1/fulfill/print-jobs/latest",
             "/api/v1/fulfill/print-jobs/{jobId}",
             "/api/v1/fulfill/print-jobs/{jobId}/pdf",
@@ -691,6 +693,25 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM order_fulfillment_tracking WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void otherCouriersReturns_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Non-Bosta couriers G4a: Settings → Returns portal's "accept returns for other couriers" reads the caller's
+        // tenant row only — another tenant's switches never show through.
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("UPDATE tenants SET generic_courier_enabled = true, portal_generic_returns_enabled = false WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO tenants (id, name, generic_courier_enabled, portal_generic_returns_enabled, portal_generic_returns_since) " +
+                    "VALUES (?, 'Cov G4a Other', false, true, now())", otherTenant);
+        try {
+            ResponseEntity<Map> r = get("/api/v1/tenant/portal-settings/other-couriers", Map.class);
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(r.getBody()).as("same-tenant positive control: this tenant ships with other couriers, switch off")
+                .containsEntry("available", true).containsEntry("enabled", false).containsEntry("since", null);
+        } finally {
+            jdbc.update("UPDATE tenants SET generic_courier_enabled = false WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

@@ -298,7 +298,8 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/return-requests/{id}/refund-details",    skip(R_RETURNS));
         reg("GET /api/v1/return-requests/{id}/photos/{photoId}",  skip(R_RETURNS));
         for (String a : List.of("approve", "reject", "close", "rest-not-coming", "mark-refunded", "refunds", "link-leg",
-                                "switch-to-refund", "booking/book-now", "booking/confirm", "booking/not-booked", "booking/retry")) {
+                                "switch-to-refund", "booking/book-now", "booking/confirm", "booking/not-booked", "booking/retry",
+                                "manual-courier")) {
             reg("POST /api/v1/return-requests/{id}/" + a, skip(R_RETURNS));
         }
         reg("POST /api/v1/return-requests/{id}/refunds/{refundId}/void", skip(R_RETURNS));
@@ -332,6 +333,9 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/tenant/portal-settings/logo",   list());
         reg("PUT /api/v1/tenant/portal-settings/logo",   skip(R_CONFIG));
         reg("DELETE /api/v1/tenant/portal-settings/logo",skip(R_CONFIG));
+        // Non-Bosta couriers G4a — the "accept returns for other couriers" switch: the tenant's own flags, no order rows.
+        reg("GET /api/v1/tenant/portal-settings/other-couriers", skip("the tenant's own two switches (tenants row) — no order rows"));
+        reg("PUT /api/v1/tenant/portal-settings/other-couriers", skip(R_CONFIG));
         reg("GET /api/v1/tenant/bosta/return-locations", skip("Bosta pickup locations (mocked v2 read) — no order rows"));
         reg("PUT /api/v1/variants/{id}/non-returnable",  skip(R_CONFIG));
 
