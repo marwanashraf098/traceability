@@ -218,15 +218,26 @@ public class LabelService {
 
     // ── Rendering ─────────────────────────────────────────────────────────────
 
+    /**
+     * A piece with no short_code has no printable code (flexible labeling: an untagged piece gets
+     * its code when a label is bound to it) — it is left out, and a request with nothing left to
+     * print is the same 422 as an unfinalized session. While short_code is NOT NULL, nothing is
+     * left out.
+     */
     private byte[] renderPdf(List<Map<String, Object>> pieces,
                              float widthMm, float heightMm) throws IOException {
         List<LabelPdfRenderer.Piece> labels = pieces.stream()
+            .filter(p -> p.get("short_code") != null)
             .map(p -> new LabelPdfRenderer.Piece(
                 (String) p.get("short_code"),
                 (String) p.get("product_title"),
                 (String) p.get("variant_title"),
                 (String) p.get("sku")))
             .toList();
+        if (labels.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "No labeled pieces to print");
+        }
         return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(widthMm, heightMm));
     }
 

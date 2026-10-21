@@ -36,6 +36,7 @@ public class ScanHelperService {
         return jdbc.queryForList(
             "SELECT p.barcode AS code, p.short_code::text AS label FROM pieces p " +
             "WHERE p.tenant_id = ? AND p.variant_id = ? AND p.status = 'available' " +
+            "  AND p.short_code IS NOT NULL " +   // an untagged piece has no label to scan
             "ORDER BY p.short_code LIMIT " + LIMIT, tenantId, variantId);
     }
 
@@ -99,6 +100,7 @@ public class ScanHelperService {
     public List<Map<String, Object>> lookup(UUID tenantId) {
         return jdbc.queryForList(
             "SELECT p.barcode AS code, p.status::text AS label FROM pieces p WHERE p.tenant_id = ? " +
+            "  AND p.short_code IS NOT NULL " +   // an untagged piece has no label to scan
             "ORDER BY CASE p.status::text WHEN 'delivered' THEN 0 WHEN 'with_courier' THEN 1 " +
             "         WHEN 'packed' THEN 2 ELSE 3 END, p.short_code LIMIT 3", tenantId);
     }

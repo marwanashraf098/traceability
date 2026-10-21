@@ -561,8 +561,9 @@ export interface PieceLookupResult {
   type: 'piece'
   id: string
   barcode: string
-  /** What the printed sticker carries (P000123) — `barcode` is the internal PC-<ULID>. */
-  shortCode: string
+  /** What the printed sticker carries (P000123) — `barcode` is the internal PC-<ULID>.
+   *  null for an untagged piece (flexible labeling): no label bound yet. */
+  shortCode: string | null
   status: string
   /** Server-computed from PieceLabelReprintService.REPRINTABLE — never re-derive the status list here. */
   canReprint: boolean
@@ -3069,7 +3070,7 @@ export interface ReturnRequestDetail {
   refundedAt?: string | null
   refundedByName?: string | null
   returnTrackingNumber?: string | null
-  unexpectedItems?: Array<{ pieceId: string; shortCode: string; productTitle: string; variantTitle: string | null }>
+  unexpectedItems?: Array<{ pieceId: string; shortCode: string | null; productTitle: string; variantTitle: string | null }>
   linkableParcels?: LinkableParcel[]
   /** Step 5b — the customer agreed to a refund if the replacement sells out first. */
   refundFallbackOk?: boolean

@@ -93,7 +93,7 @@ class LookupRoutingTest {
     @Test
     void r10_short_code_wrong_length_does_not_route_to_piece() {
         assertThat(LookupController.isPieceQuery("P00001")).isFalse();   // 5 digits — too short
-        assertThat(LookupController.isPieceQuery("P0000001")).isFalse(); // 7 digits — too long
+        assertThat(LookupController.isPieceQuery("P0000001")).isTrue();  // 7 digits — past P999999 (slice 0)
         assertThat(LookupController.isPieceQuery("P")).isFalse();        // no digits
     }
 

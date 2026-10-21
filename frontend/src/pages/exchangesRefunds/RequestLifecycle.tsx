@@ -164,7 +164,7 @@ export function UnexpectedItems({ detail }: { detail: ReturnRequestDetail }) {
         {items.map(u => (
           <p key={u.pieceId} className="text-body text-primary">
             <bdi>{[u.productTitle, u.variantTitle].filter(Boolean).join(' · ')}</bdi>
-            {' · '}<span className="font-mono" dir="ltr"><bdi>{u.shortCode}</bdi></span>
+            {u.shortCode && <>{' · '}<span className="font-mono" dir="ltr"><bdi>{u.shortCode}</bdi></span></>}
             {' '}{t('exchangesRefunds.requests.drawer.unexpectedBody')}
           </p>
         ))}
