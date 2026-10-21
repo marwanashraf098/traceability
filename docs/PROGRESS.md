@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Overview top-SKUs tie-break (2026-10-21, branch `fix/top-skus-tiebreak` off main 90a6e7e; NOT merged, NOT
+deployed). No migration.** `OverviewService.topSkus()` ordered by `units DESC` only, so tied SKUs came back in any
+order (GenericAnalyticsIsolationTest's pre-G2 golden flaked on a 3-way tie at 8 units). Now `ORDER BY units DESC,
+v.sku ASC, v.id` (v.id for null skus — sku is nullable and not unique). Approved, including the order change on the
+Overview card for tied SKUs.
+- Golden: ONLY `generic-analytics-golden/overview-top-skus.json` re-recorded — same 5 rows and units, the three tied
+  at 8 now J-30, J-32, S-39 (was S-39, J-30, J-32). No other golden touched.
+- New `OverviewTopSkusTieTest`: tt1 eleven SKUs tied at the top-5 boundary, shuffled insert → leader + four lowest
+  skus, identical over 20 calls; tt2 six null-sku variants tied with one sku → sku first, then the four lowest
+  variant ids. Revert-checked: `units DESC` only → tt1 + tt2 red; `units DESC, v.sku` without v.id → tt2 red.
+- Full backend suite: 3219 run, 3 red — only ExchangeBackfillTest and GenericG3IsolationGoldenTest g1/g2.
+- **Same missing tie-break elsewhere — listed, NOT fixed (ask first):** `SalesAnalyticsService.productsSql` (top
+  products `LIMIT ?`, ends on `p.title`; and the per-product top-3 variants `array_agg … [1:3]`, ends on `v.title`
+  — append `p.id` / `v.id`); `ProductExtrasAnalyticsService.extrasOf` (most-failed products and top pairs, Java sort
+  + `subList(0, 10)`, end on titles — add `.thenComparing(productId / variantA, variantB)`); `abc()` (no limit, but
+  a tie at the 80 % / 95 % line can flip a variant's class — add `variantId`). Order-only, no limit:
+  `MoneyAnalyticsService.extraFees` by sku (`, sh.variant_id`), `SalesAnalyticsService.VARIANTS_SQL`
+  (`, s.variant_id`), `StockAnalyticsService.summary` locations (`n DESC, name` → add location id).
+
 **Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
 `feat/flexible-labeling-s1` off origin/main bcf908a; NOT merged, NOT deployed). Migration V176. Backend only, no
 screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default false, no tenant switched on).**
@@ -91,7 +110,7 @@ Slice 0:
   null — wrong for a seal piece (slice 8).
 
 **DB write churn, slice B — shopify_webhook_events retention (2026-10-21, branch `perf/webhook-retention` off
-origin/main 2b258b7; MERGED to main, NOT deployed). No migration.**
+origin/main 2b258b7; MERGED to main 90a6e7e, NOT deployed). No migration.**
 - `integrations.shopify.ShopifyWebhookRetention` (+ `ShopifyWebhookRetentionJob`, `@Recurring`
   `shopify-webhook-retention`, 04:40 Africa/Cairo, retries 0). Deletes only PROCESSED rows (`processed_at` set,
   superseded included) received before the tenant's cutoff = `LEAST(now() - days, oldest received_at of the
