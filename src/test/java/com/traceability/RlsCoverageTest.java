@@ -100,6 +100,8 @@ class RlsCoverageTest {
             "/api/v1/settings/couriers/catch-up/preview",
             // Non-Bosta couriers G3 — genericCarriers_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/generic-shipments/carriers",
+            // Flexible labeling slice 1 — labelCodeBatchPdf_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/label-codes/batches/{id}/pdf",
             "/api/v1/fulfill/print-jobs/latest",
             "/api/v1/fulfill/print-jobs/{jobId}",
             "/api/v1/fulfill/print-jobs/{jobId}/pdf",
@@ -722,6 +724,40 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM shipments WHERE order_id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void labelCodeBatchPdf_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 1: a blank-label batch PDF is the caller's own batch only.
+        UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov LC Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov LC Other', 'cov-lc-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        UUID mine = jdbc.queryForObject(
+            "INSERT INTO label_code_batches (tenant_id, kind, count, label_w_mm, label_h_mm, idempotency_key, created_by) " +
+            "VALUES (?, 'pack', 1, 50, 25, 'cov-lc-a', ?) RETURNING id", UUID.class, tenantId, ownerUserId);
+        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P990001', 'pack', ?, ?)",
+                    tenantId, mine, ownerUserId);
+        UUID theirs = jdbc.queryForObject(
+            "INSERT INTO label_code_batches (tenant_id, kind, count, label_w_mm, label_h_mm, idempotency_key, created_by) " +
+            "VALUES (?, 'pack', 1, 50, 25, 'cov-lc-b', ?) RETURNING id", UUID.class, otherTenant, otherUser);
+        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P990002', 'pack', ?, ?)",
+                    otherTenant, theirs, otherUser);
+        try {
+            ResponseEntity<byte[]> own = get("/api/v1/label-codes/batches/" + mine + "/pdf", byte[].class);
+            assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(own.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+            ResponseEntity<String> other = get("/api/v1/label-codes/batches/" + theirs + "/pdf", String.class);
+            assertThat(other.getStatusCode()).as("another tenant's batch is never served").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(other.getBody()).contains("BATCH_NOT_FOUND").doesNotContain("P990002");
+        } finally {
+            jdbc.update("DELETE FROM label_codes        WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_code_batches WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

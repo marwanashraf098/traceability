@@ -70,6 +70,8 @@ public class UserService {
         self.put("demoMode",    ReviewCapabilities.demoMode(jdbc, tenantId));
         // Non-Bosta couriers G2 — the store ships with other couriers too (courier-neutral scan texts).
         self.put("genericCourier", com.traceability.courier.GenericShipments.enabled(jdbc, tenantId));
+        // Flexible labeling — blank labels / untagged stock (no screen reads it yet).
+        self.put("flexibleLabeling", com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId));
         return self;
     }
 

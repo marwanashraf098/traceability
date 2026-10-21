@@ -203,6 +203,9 @@ class PortalOrderLeakTest {
         // Non-Bosta couriers G3 — the Orders list's carrier filter and Mark delivered.
         reg("GET /api/v1/generic-shipments/carriers",    skip("carrier names + counts only; legs joined to merchant_orders (GenericDeliveryService)"));
         reg("POST /api/v1/generic-shipments/mark-delivered", skip("order ids the caller sends; each leg is read through merchant_orders, a portal row is NO_GENERIC_SHIPMENT"));
+        reg("POST /api/v1/label-codes/batches",           skip("label codes only; no order or piece data"));
+        reg("GET /api/v1/label-codes/batches/{id}/pdf",   skip("label codes only; no order or piece data"));
+        reg("POST /api/v1/label-codes/void",              skip("label codes only; no order or piece data"));
         reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
                                                               + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
         reg("GET /api/v1/fulfill/print-jobs/latest",     list());

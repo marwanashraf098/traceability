@@ -53,6 +53,30 @@ public final class LabelPdfRenderer {
         }
     }
 
+    /**
+     * Blank labels (flexible labeling): one page per code — the barcode of the code and the code
+     * as text, laid out by BlankLabelLayout. Separate from {@link #render}, which is unchanged.
+     */
+    public static byte[] renderBlank(List<String> codes, PieceLabelLayout.Spec spec) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            LabelFonts.Loaded fonts = new LabelFonts.Loaded(doc);
+            for (String code : codes) {
+                PieceLabelLayout.Layout layout = BlankLabelLayout.layout(spec, code);
+                PDPage page = new PDPage(new PDRectangle(layout.pageWidth(), layout.pageHeight()));
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    drawBarcode(cs, doc, code, layout.barcode());
+                    for (PieceLabelLayout.TextLine line : layout.lines()) {
+                        drawLine(cs, fonts, line);
+                    }
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static void drawLine(PDPageContentStream cs, LabelFonts.Loaded fonts, PieceLabelLayout.TextLine line)
             throws IOException {
         float x = line.x();
