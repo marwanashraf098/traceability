@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Hourly sweep: deletes shopify_oauth_state rows older than 1 hour.
+ * Every 3 hours (hourly until 2026-10-21): deletes shopify_oauth_state rows older than 1 hour.
  *
  * shopify_oauth_state is intentionally NOT under tenant RLS (see V13 migration).
  * This job runs with NO TenantContext set — do not wrap it in TenantContext.runAs().
@@ -45,7 +45,7 @@ public class ShopifyStateCleanupJob {
         this.jdbc = jdbc;
     }
 
-    @Recurring(id = "shopify-state-cleanup", cron = "0 * * * *")
+    @Recurring(id = "shopify-state-cleanup", cron = "0 */3 * * *")
     @Job(name = "Shopify OAuth state cleanup")
     public void purgeExpiredStates() {
         Integer deleted = jdbc.queryForObject("SELECT purge_expired_shopify_oauth_state()", Integer.class);

@@ -13,7 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * FR-DEMO — closes the "never bootstrapped before the first 30-min DemoReseedJob tick" gap.
  *
- * DemoReseedJob's {@code cron = "*&#47;30 * * * *"} fires at fixed wall-clock minutes (:00/:30),
+ * DemoReseedJob's cron fires at fixed wall-clock minutes (then :00/:30; hourly at :00 since 2026-10-21),
  * not "30 minutes after boot" — a deploy landing at, say, minute :05 leaves up to a ~30-minute
  * window where the demo tenant genuinely does not exist, and any real traffic to
  * {@code POST /api/v1/public/demo/start} in that window 500s (confirmed prod incident).

@@ -56,6 +56,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *      An item whose tracking number is one of this tenant's in-flight shipments goes through
  *      BostaIngestionHelper.ingestListItem (the idem key drops what didn't change); the shipment counts as
  *      checked (last_polled_at). Everything else on the list is discovery's.
+ *      2026-10-21 (write churn): the walk re-reads each tenant's top page every cycle, so stamping every
+ *      in-flight item rewrote the same ~150 wide shipment rows 480× a day (~70k UPDATEs, not HOT — the
+ *      column is in shipments_poll_order_idx). The stamp is now one UPDATE per page and only touches a
+ *      shipment whose stamp is older than {@link #stampEveryMinutes()} (60, always well under the safety
+ *      net's hours), so a shipment the walk shows is still never safety-net-fetched.
  *   2. safety net: in-flight shipments not checked for bosta.poll.status-safety-net-hours (4) are fetched
  *      one by one as before (oldest first, at most status-max-per-cycle) — a shipment the walk never
  *      shows (unchanged, or missed) is still verified every few hours.
@@ -71,6 +76,9 @@ public class BostaStatusPollJob {
     // the shipment_internal_state enum and the V35 partial index predicate.
     private static final String TERMINAL_IN_CLAUSE =
         "'delivered','returned','lost','terminated','cancelled'";
+
+    /** The walk's stamp is written at most this often per shipment (capped by {@link #stampEveryMinutes()}). */
+    static final int STAMP_EVERY_MINUTES = 60;
 
     private static final String ACTIVE_BOSTA_TENANTS =
         "SELECT ca.tenant_id, ca.api_key_encrypted " +
@@ -362,6 +370,7 @@ public class BostaStatusPollJob {
                 java.util.Set<String> inFlight = inFlight(tenantId, pageTracking);
                 java.util.Set<String> suspects = suspectsAmong(tenantId, pageTracking);
                 boolean leftHead = false;
+                List<String> checked = new java.util.ArrayList<>();
                 for (com.fasterxml.jackson.databind.JsonNode item : items) {
                     String tn = item.path("trackingNumber").asText("");
                     if (tn.isBlank()) continue;
@@ -377,8 +386,7 @@ public class BostaStatusPollJob {
                         // On Bosta's own list: it exists — a suspected leg is no longer suspected (slice 4).
                         if (deletion != null && suspects.contains(tn)) deletion.clearSuspicionByTracking(tenantId, tn);
                         if (ingestionHelper.ingestListItem(tenantId, apiKey, item, "bosta_poll")) ingested++;
-                        tx.execute(s -> jdbc.update("UPDATE shipments SET last_polled_at = now() " +
-                            "WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta'", tenantId, tn));
+                        checked.add(tn);
                     } catch (BostaRateLimitException e) {
                         backOff(tenantId, e.getRetryAfterSeconds());
                         rateLimited = true;
@@ -388,6 +396,7 @@ public class BostaStatusPollJob {
                             tenantId, tn, e.toString());
                     }
                 }
+                stampChecked(tenantId, checked);   // the items ingested before a rate limit count as checked
                 if (rateLimited || reachedMark) break;
                 if (items.size() < pageLimit) { endOfList = true; break; }
                 if (inHead && leftHead) {
@@ -418,6 +427,24 @@ public class BostaStatusPollJob {
             return new WalkResult(!rateLimited, pagesRead, ingested);
         });
         return result == null ? new WalkResult(true, 0, 0) : result;
+    }
+
+    /** How old the walk's stamp may get before it is rewritten: 60 minutes, at most a quarter of the safety net. */
+    int stampEveryMinutes() {
+        return Math.max(1, Math.min(STAMP_EVERY_MINUTES, safetyNetHours * 60 / 4));
+    }
+
+    /**
+     * One UPDATE for a page's checked shipments. A stamp younger than {@link #stampEveryMinutes()} is left as
+     * it is — no row is rewritten — which still keeps the shipment out of the safety net (it looks back
+     * safety-net-hours, at least four times longer).
+     */
+    private void stampChecked(UUID tenantId, List<String> trackingNumbers) {
+        if (trackingNumbers.isEmpty()) return;
+        tx.execute(s -> jdbc.update("UPDATE shipments SET last_polled_at = now() " +
+            "WHERE tenant_id = ? AND provider = 'bosta' AND tracking_number = ANY(?::text[]) " +
+            "  AND (last_polled_at IS NULL OR last_polled_at < now() - (? * INTERVAL '1 minute'))",
+            tenantId, trackingNumbers.toArray(new String[0]), stampEveryMinutes()));
     }
 
     private void backOff(UUID tenantId, long retryAfterSeconds) {

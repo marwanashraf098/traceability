@@ -18,7 +18,7 @@ import java.util.function.ToIntFunction;
  * Returns portal P3 — photo housekeeping. Each run lists tenant ids only, on the owner pool (the
  * ReturnPickupBookingSweepJob / RefundDetailsPurgeJob pattern); the work runs per tenant in
  * TenantContext.runAs under RLS (PortalPhotoService). Logs counts only, never content.
- *   hourly — unclaimed uploads older than an hour are deleted (rows and bytes);
+ *   every 3 hours (hourly until 2026-10-21) — unclaimed uploads older than an hour are deleted (rows and bytes);
  *   daily  — claimed photos lose their bytes 90 days after the request ended.
  */
 @Component
@@ -38,7 +38,7 @@ public class ReturnPhotoJobs {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "return-photos-expire-unclaimed", cron = "17 * * * *")
+    @Recurring(id = "return-photos-expire-unclaimed", cron = "17 */3 * * *")
     @Job(name = "Return photos: expire unclaimed uploads")
     public void expireUnclaimed() {
         run("expired", "SELECT DISTINCT tenant_id FROM return_request_photos WHERE request_id IS NULL", photos::expireUnclaimed);

@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Merged-PDF slice B — every minute: fails print jobs not updated for 10 minutes
+ * Merged-PDF slice B — every 5 minutes (every minute until 2026-10-21 write-churn pass): fails print jobs not updated for 10 minutes
  * ({@link PrintJobStore#sweepStuck}) and deletes PDF bytes past their 24 h expiry
  * ({@link PrintJobStore#deleteExpiredPdfs} — the parts and the final PDF). The tenant list is a cross-tenant read of tenant ids only,
  * on the owner pool — the RefundDetailsPurgeJob pattern; every write runs per tenant in
@@ -38,7 +38,7 @@ public class PrintJobSweeper {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "print-jobs-sweep", cron = "* * * * *")
+    @Recurring(id = "print-jobs-sweep", cron = "*/5 * * * *")
     @Job(name = "Print jobs sweep")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(
