@@ -292,7 +292,7 @@ public class StockAnalyticsService {
         List<LocationCount> locs = jdbc.query(
             "SELECT p.current_location_id AS id, COALESCE(l.name, 'No location') AS name, COUNT(*) AS n " +
             "FROM pieces p LEFT JOIN locations l ON l.id = p.current_location_id " +
-            "WHERE p.tenant_id = ? AND p.status = 'available' GROUP BY 1, 2 ORDER BY n DESC, name",
+            "WHERE p.tenant_id = ? AND p.status = 'available' GROUP BY 1, 2 ORDER BY n DESC, name, id",
             (rs, i) -> new LocationCount(rs.getObject("id", UUID.class), rs.getString("name"), rs.getLong("n")), tid);
         Valued lost = jdbc.query(
             "SELECT COUNT(*) AS n, SUM(v.unit_cost) FILTER (WHERE v.unit_cost IS NOT NULL) AS cost, " +

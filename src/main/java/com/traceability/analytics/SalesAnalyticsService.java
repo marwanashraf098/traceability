@@ -538,7 +538,7 @@ public class SalesAnalyticsService {
         LEFT JOIN last_sold ls ON ls.variant_id = s.variant_id
         LEFT JOIN variants v ON v.id = s.variant_id
         LEFT JOIN products p ON p.id = v.product_id
-        ORDER BY s.is_total DESC, s.sold_units DESC, s.gross_revenue DESC, p.title, v.title
+        ORDER BY s.is_total DESC, s.sold_units DESC, s.gross_revenue DESC, p.title, v.title, s.variant_id
         """;
 
     /*
@@ -580,11 +580,11 @@ public class SalesAnalyticsService {
 
     private static String productsSql(Sort sort) {
         String variantOrder = sort == Sort.UNITS
-            ? "pv.units DESC, pv.revenue DESC, v.title"
-            : "pv.revenue DESC, pv.units DESC, v.title";
+            ? "pv.units DESC, pv.revenue DESC, v.title, v.id"
+            : "pv.revenue DESC, pv.units DESC, v.title, v.id";
         String productOrder = sort == Sort.UNITS
-            ? "pp.units DESC, pp.revenue DESC, p.title"
-            : "pp.revenue DESC, pp.units DESC, p.title";
+            ? "pp.units DESC, pp.revenue DESC, p.title, p.id"
+            : "pp.revenue DESC, pp.units DESC, p.title, p.id";
         return soldLines(false) + """
             , per_variant AS (
                 SELECT variant_id, SUM(qty) AS units, SUM(revenue) AS revenue

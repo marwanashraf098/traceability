@@ -510,7 +510,7 @@ public class MoneyAnalyticsService {
             JOIN variants v ON v.id = sh.variant_id
             JOIN products p ON p.id = v.product_id
             GROUP BY sh.variant_id, v.sku, p.title, v.title
-            ORDER BY extra_fees DESC, p.title, v.title
+            ORDER BY extra_fees DESC, p.title, v.title, sh.variant_id
             """;
         long[] est = {0};
         List<ExtraBySku> rows = jdbc.query(sql, legParams(tid, period), (rs, n) -> {

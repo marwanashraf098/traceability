@@ -458,6 +458,7 @@ public class OverviewService {
     // cancelled orders excluded. title = "{product} — {variant}" unless the variant
     // title is Shopify's single-variant placeholder ("Default Title"), matching the
     // existing Lookup.tsx precedent of hiding that placeholder rather than showing it.
+    // Ties break on sku, then variant id (null skus), so the card and the top-5 cut are stable.
     @Transactional(readOnly = true)
     public List<TopSku> topSkus() {
         UUID tid = TenantContext.require();
@@ -476,7 +477,7 @@ public class OverviewService {
               AND o.placed_at >= ?
               AND o.status <> 'cancelled'::order_status
             GROUP BY v.id, v.sku, v.title, pr.title, pr.image_url
-            ORDER BY units DESC
+            ORDER BY units DESC, v.sku ASC, v.id
             LIMIT ?
             """,
             (rs, i) -> new TopSku(

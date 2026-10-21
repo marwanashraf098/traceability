@@ -116,6 +116,31 @@ stock take).**
     close (only the close runs `markIntakeCompleteReturnLegsReturned`).
   - The Returns & exchanges page overflows at 390px (search box + table, pre-existing).
 
+**Overview top-SKUs tie-break (2026-10-21, branch `fix/top-skus-tiebreak` off main 90a6e7e; MERGED to main 2026-10-21, NOT
+deployed). No migration.** `OverviewService.topSkus()` ordered by `units DESC` only, so tied SKUs came back in any
+order (GenericAnalyticsIsolationTest's pre-G2 golden flaked on a 3-way tie at 8 units). Now `ORDER BY units DESC,
+v.sku ASC, v.id` (v.id for null skus — sku is nullable and not unique). Approved, including the order change on the
+Overview card for tied SKUs.
+- Golden: ONLY `generic-analytics-golden/overview-top-skus.json` re-recorded — same 5 rows and units, the three tied
+  at 8 now J-30, J-32, S-39 (was S-39, J-30, J-32). No other golden touched.
+- New `OverviewTopSkusTieTest`: tt1 eleven SKUs tied at the top-5 boundary, shuffled insert → leader + four lowest
+  skus, identical over 20 calls; tt2 six null-sku variants tied with one sku → sku first, then the four lowest
+  variant ids. Revert-checked: `units DESC` only → tt1 + tt2 red; `units DESC, v.sku` without v.id → tt2 red.
+- **The same missing tie-break, fixed in all six other places (approved 2026-10-21; order of exact ties only — no
+  number, filter or row membership changes):** `SalesAnalyticsService.productsSql` top products `…, p.title, p.id`
+  and its per-product top-3 variants `…, v.title, v.id`; `ProductExtrasAnalyticsService.extrasOf` most-failed
+  products `.thenComparing(productId)` and bought-together `.thenComparing(variantA).thenComparing(variantB)`;
+  `abc()` `.thenComparing(variantId)` (a tie at the 80 % / 95 % line no longer decides A/B/C by input order);
+  display-only: `MoneyAnalyticsService.extraFees` `…, sh.variant_id`, `SalesAnalyticsService.VARIANTS_SQL`
+  `…, s.variant_id`, `StockAnalyticsService.summary` locations `n DESC, name, id`. No saved golden changed.
+- Tie tests for the three top-N lists: `AnalyticsProductsTieOrderTest` pt1 (30 products tied on units, revenue AND
+  title, limit 5 → lowest ids, both sorts, default plan and `SET LOCAL enable_sort = off` — the default plan groups
+  in product-id order and a top-N sort keeps the first of equal rows, so 8 rows on the default plan alone passed on
+  the old SQL), pt2 (six tied variants → top 3 = lowest variant ids); `analytics.ProductExtrasTieOrderTest` xt1
+  most-failed, xt2 pairs, xt3 ABC — the same rows in two orders give one answer. Revert-checked: old Sales SQL →
+  pt1 + pt2 red; old comparators → xt1–xt3 red.
+- Full backend suite: 3224 run, 3 red — only ExchangeBackfillTest and GenericG3IsolationGoldenTest g1/g2.
+
 **Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
 `feat/flexible-labeling-s1` off origin/main bcf908a; MERGED to main e3c8218 2026-10-21, NOT deployed). Migration V176. Backend only, no
 screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default false, no tenant switched on).**
@@ -203,7 +228,7 @@ Slice 0:
   null — wrong for a seal piece (slice 8).
 
 **DB write churn, slice B — shopify_webhook_events retention (2026-10-21, branch `perf/webhook-retention` off
-origin/main 2b258b7; MERGED to main, NOT deployed). No migration.**
+origin/main 2b258b7; MERGED to main 90a6e7e, NOT deployed). No migration.**
 - `integrations.shopify.ShopifyWebhookRetention` (+ `ShopifyWebhookRetentionJob`, `@Recurring`
   `shopify-webhook-retention`, 04:40 Africa/Cairo, retries 0). Deletes only PROCESSED rows (`processed_at` set,
   superseded included) received before the tenant's cutoff = `LEAST(now() - days, oldest received_at of the
