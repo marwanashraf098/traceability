@@ -84,7 +84,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             {/* Short code — what the printed sticker carries; mono as spec requires for IDs.
                 The internal PC- barcode is in the meta grid ("Internal code"). */}
             <p data-testid="piece-short-code" className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
-              {result.shortCode}
+              {result.shortCode ?? result.barcode}
             </p>
             <h2 className="text-h2 text-primary leading-tight">
               {result.variant.productTitle}

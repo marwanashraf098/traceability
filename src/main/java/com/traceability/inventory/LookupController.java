@@ -49,7 +49,9 @@ public class LookupController {
      * Returns true when the scanned string is a piece barcode rather than an AWB or order number.
      *
      * Three formats are recognised:
-     *   • Short code: "P" + exactly 6 digits (e.g. "P000001") — FR-19 labels, 0.333mm/module.
+     *   • Short code: "P" + 6 or more digits (e.g. "P000001", "P1000000") — FR-19 labels,
+     *     0.333mm/module. 6 is batchReceive's MINIMUM width (%06d): a tenant's millionth piece is
+     *     P1000000. Same shape as ScanInputNormalizer and WaybillResolver.looksLikePieceCode.
      *   • Legacy PC-: "PC-<ULID>" — old label batches still in field use.
      *   • Bare ULID:  26-char Crockford base-32 string — labels after the MARGIN=0 fix, pre-FR-19.
      *
@@ -58,10 +60,10 @@ public class LookupController {
      */
     public static boolean isPieceQuery(String q) {
         if (q.startsWith("PC-")) return true;
-        // Short code: exactly "P" followed by 6 digits (length 7)
-        if (q.length() == 7 && q.charAt(0) == 'P') {
+        // Short code: "P" followed by 6 or more digits (length 7+)
+        if (q.length() >= 7 && q.charAt(0) == 'P') {
             boolean allDigits = true;
-            for (int i = 1; i < 7; i++) {
+            for (int i = 1; i < q.length(); i++) {
                 if (q.charAt(i) < '0' || q.charAt(i) > '9') { allDigits = false; break; }
             }
             if (allDigits) return true;

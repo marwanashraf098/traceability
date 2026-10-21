@@ -4,6 +4,52 @@
 
 ## Current state
 
+**Flexible labeling — slice 0 prerequisites (2026-10-21, branch `feat/flexible-labeling-s0` off origin/main 73eeb8d;
+NOT merged, NOT deployed). No migration, no visible change.** Feature: blank labels printed before packing,
+factory-labeled receiving, count-only receiving ("untagged" pieces = real piece rows with `short_code` NULL,
+`barcode` PC-ULID kept), order seal, Tag stock. Step 0 diagnosis approved 2026-10-21 with Marawan's decisions:
+- Existing stock not yet in Traced enters via count-only receiving; pieces already in Traced keep their codes.
+- Pack binding takes untagged pieces at the main warehouse only; Tag stock binds at the session's location.
+- Pre-pack label count = Σ per variant min(remaining unallocated demand, untagged remaining) + spares; leftovers
+  carry over. A SEPARATE "Print blank labels" button (PrintWaybillsDialog stays exactly as is), same scope/sort, plus
+  a standalone one on the queue for orders outside any batch. Inside the pack session only "Print 1 replacement
+  label" (a plain button).
+- Factory run close: no subset voiding; while any line is still_coming all leftover codes stay valid; final close
+  voids ALL leftover issued codes (void_reason run_closed); shortfall reasons are per line, for the report only.
+- Seal returns: partial, counted per variant; portal attribution by variant within the order (scanPiece's rule).
+- Lookup: per-variant untagged count only. v1: untagged pieces can't be transferred / held / damaged / written off
+  — screens reject them; tag first. Existing piece labels unchanged; label size applies to the new blank labels only.
+- Rollout: `flexible_labeling_enabled` off for real tenants until slices 2, 3, 4 are live; slice 7 before such a
+  tenant's stock take; slice 2's stock-take refusal guard is mandatory.
+- Approved order: 0 → 1 label_codes + blank template → 2 count-only receiving + untagged + stock-take guard → 3 Tag
+  stock → 4 Print blank labels + binding in Pick & Pack → 5 returns reprint check → 6 factory runs → 7 stock take
+  with untagged counts → 8 order seal → 9 Settings → Labels. One slice at a time, report and stop after each.
+
+Slice 0:
+- **batchReceive chunks its two INSERTs** (`InventoryLedger.RECEIVE_CHUNK` = 1,000 pieces; one counter claim, one
+  transaction, one contiguous short-code range). **Step 0 was wrong about the limit:** PgJDBC 42.7.4 allows 65,535
+  bind parameters, not 32,767 — a 4,097-unit finalize already passed; the real failure was above 8,191 units
+  ("PreparedStatement can have at most 65,535 parameters … 65,544"). BatchReceiveChunkingTest bc1 (8,193 units)
+  RED before / GREEN after; bc2 boundaries 1,000 / 1,001; bc3 1,000 pieces < 10 s.
+- **Lookup `isPieceQuery`** accepts P + 6 or more digits (was exactly 6). LookupShortCodeGrowthTest RED before /
+  GREEN after. `LookupRoutingTest.r10` line 96 flipped to isTrue (approved).
+- **short_code readers NULL-safe**, no behavior change while NOT NULL: `LabelService.renderPdf` (untagged pieces
+  left out; nothing left → 422 "No labeled pieces to print"), `ExceptionService.detectWaybillDeletedInBosta`
+  (COALESCE short_code, barcode), `ScanHelperService.pieces` / `.lookup` (`short_code IS NOT NULL`),
+  `Lookup.tsx` (`shortCode ?? barcode`), `RequestLifecycle.UnexpectedItems` (code omitted when null), api.ts types.
+  Already safe, untouched: every `short_code = ?` lookup predicate, LookupService:193, ReturnSessionService
+  lastScan / parcel items, analytics drawers, StockAnalyticsService, TransferService returnable pieces (never
+  untagged), ReturnRequestService, ReviewTenantSeeder ORDER BY. ShortCodeNullSafetyTest drops NOT NULL in its own
+  container (slice 2's schema) — n1/n2 revert-checked.
+- **Verification 2026-10-21:** full backend suite 3189 run, red only ExchangeBackfillTest (documented) and
+  GenericG3IsolationGoldenTest g1/g2 — also red on a clean origin/main 73eeb8d worktree (date-dependent golden),
+  plus r10 in that run before its approved flip (14/14 green on rerun). BostaPollJobTest.p6 green this run. Frontend
+  vitest 144 files / 1076 tests green; tsc + vite build clean.
+- **Follow-ups for later slices:** returns intake reprint writes `label_reprinted` BEFORE generating the PDF in a
+  separate call — an untagged (seal, slice 8) piece would leave an event with no label; LookupService.canReprint
+  must be false for an untagged piece (slice 2); RequestLifecycle `PieceCode` shows "not tracked" when shortCode is
+  null — wrong for a seal piece (slice 8).
+
 **DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; NOT merged, NOT
 deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
 last_polled_at` ~70k/day (1.75 GB WAL / 10 days), `shopify_webhook_events` growing ~6k rows / 25 MB a day with no

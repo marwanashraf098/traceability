@@ -1453,7 +1453,8 @@ public class ExceptionService {
             "       CASE WHEN bool_or(p.status = 'with_courier') THEN 'CRITICAL' ELSE 'HIGH' END AS severity, " +
             "       'shipment' AS subject_type, s.id AS shipment_id, s.tracking_number, " +
             "       o.id AS order_id, o.number AS order_number, s.provider_deleted_at AS occurred_at, " +
-            "       string_agg(p.short_code || ' (' || p.status::text || ')', ', ' ORDER BY p.short_code) AS pieces, " +
+            "       string_agg(COALESCE(p.short_code, p.barcode) || ' (' || p.status::text || ')', ', ' " +
+            "                  ORDER BY COALESCE(p.short_code, p.barcode)) AS pieces, " +
             "       'waybill_deleted_in_bosta:shipment:' || s.id AS subject_key " +
             "FROM shipments s " +
             "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +

@@ -262,7 +262,12 @@ public class InventoryLedger {
      *   - Round-trip 2: INSERT INTO piece_events VALUES (e1),(e2),...,(eN)
      *   - from_status = NULL  (piece did not exist before; column is nullable in V1)
      *   - to_status   = 'available'
-     *   - Total: 3 SQL statements regardless of N → ≤10s for 1,000 pieces
+     *   - Total: 3 SQL statements for N ≤ RECEIVE_CHUNK → ≤10s for 1,000 pieces
+     *
+     * Above RECEIVE_CHUNK pieces, round-trips 1 and 2 repeat per chunk (pieces chunk, then its
+     * events chunk), all in the same transaction: PgJDBC refuses a statement with more than
+     * 65,535 bind parameters, which one INSERT of 8,192+ pieces exceeds. The counter claim stays
+     * ONE round-trip, so a finalize still gets one contiguous short-code range.
      *
      * If any row fails (barcode UNIQUE violation, FK violation, RLS WITH CHECK)
      * the entire transaction rolls back — no partial/half-received session.
@@ -290,14 +295,30 @@ public class InventoryLedger {
             Long.class, tenantId, (long) n);
         long firstCode = lastValue - n + 1;
 
-        // ── Round-trip 1: insert all pieces ──────────────────────────────────
+        for (int from = 0; from < n; from += RECEIVE_CHUNK) {
+            int to = Math.min(n, from + RECEIVE_CHUNK);
+            insertReceivedPieces(specs, from, to, firstCode, actorUserId);
+            insertReceivedEvents(specs, from, to, actorUserId);
+        }
+    }
+
+    /**
+     * Pieces per multi-row INSERT in batchReceive. 8 bind parameters per piece row (3 per event
+     * row) → 8,000 per statement, well under PgJDBC's 65,535 limit; 1,000 keeps the documented
+     * 1,000-piece fast path at one statement per table.
+     */
+    static final int RECEIVE_CHUNK = 1000;
+
+    // ── Round-trip 1: insert pieces [from, to) ──────────────────────────────
+    private void insertReceivedPieces(List<ReceiveSpec> specs, int from, int to,
+                                      long firstCode, UUID actorUserId) {
         StringBuilder pieceSql = new StringBuilder(
             "INSERT INTO pieces " +
             "(id, tenant_id, variant_id, receipt_id, barcode, short_code, status, current_location_id, last_event_at, last_user_id) " +
             "VALUES ");
-        List<Object> pieceParams = new ArrayList<>(n * 10);
-        for (int i = 0; i < n; i++) {
-            if (i > 0) pieceSql.append(',');
+        List<Object> pieceParams = new ArrayList<>((to - from) * 8);
+        for (int i = from; i < to; i++) {
+            if (i > from) pieceSql.append(',');
             pieceSql.append("(?,?,?,?,?,?,'available'::piece_status,?,now(),?)");
             ReceiveSpec s = specs.get(i);
             pieceParams.add(s.pieceId());
@@ -310,18 +331,20 @@ public class InventoryLedger {
             pieceParams.add(actorUserId);
         }
         jdbc.update(pieceSql.toString(), pieceParams.toArray());
+    }
 
-        // ── Round-trip 2: insert all received events ──────────────────────────
-        // tenant_id sourced from GUC (same pattern as INSERT_EVENT in transition()).
-        // from_status = NULL literal — piece genuinely did not exist.
-        // actor_user_id is mandatory per accountability requirement (FR-6.3).
+    // ── Round-trip 2: insert received events for pieces [from, to) ──────────
+    // tenant_id sourced from GUC (same pattern as INSERT_EVENT in transition()).
+    // from_status = NULL literal — piece genuinely did not exist.
+    // actor_user_id is mandatory per accountability requirement (FR-6.3).
+    private void insertReceivedEvents(List<ReceiveSpec> specs, int from, int to, UUID actorUserId) {
         StringBuilder evtSql = new StringBuilder(
             "INSERT INTO piece_events " +
             "(tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status) " +
             "VALUES ");
-        List<Object> evtParams = new ArrayList<>(n * 3);
-        for (int i = 0; i < n; i++) {
-            if (i > 0) evtSql.append(',');
+        List<Object> evtParams = new ArrayList<>((to - from) * 3);
+        for (int i = from; i < to; i++) {
+            if (i > from) evtSql.append(',');
             evtSql.append(
                 "(NULLIF(current_setting('app.current_tenant', true), '')::uuid," +
                 " ?, 'received', ?, ?, NULL, 'available'::piece_status)");
