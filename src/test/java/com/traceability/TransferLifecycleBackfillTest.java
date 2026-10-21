@@ -35,7 +35,7 @@ class TransferLifecycleBackfillTest {
 
     @Test
     void v118Backfill_mapsEveryExistingShape_andEnforcesNewStatuses() throws Exception {
-        assertThat(Flyway.configure()
+        assertThat(FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("117").load().migrate().success).isTrue();
 
@@ -71,7 +71,7 @@ class TransferLifecycleBackfillTest {
             }
         }
 
-        MigrateResult r = Flyway.configure()
+        MigrateResult r = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("118").load().migrate();
         assertThat(r.success).isTrue();

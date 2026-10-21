@@ -48,7 +48,7 @@ class GenericYieldLockTest {
 
     @BeforeAll
     void setup() {
-        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
+        FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
             .locations("classpath:db/migration").load().migrate();
         jdbc = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
         tenant = UUID.randomUUID();

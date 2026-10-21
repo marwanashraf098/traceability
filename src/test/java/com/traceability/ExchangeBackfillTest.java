@@ -41,7 +41,7 @@ class ExchangeBackfillTest {
     @Test
     void v74Backfill_migratesOnlyEligibleUnresolvedExchangeRows() throws Exception {
         // 1. Migrate up to V73 — schema as it existed before this feature.
-        Flyway toV73 = Flyway.configure()
+        Flyway toV73 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .target("73")
@@ -76,7 +76,7 @@ class ExchangeBackfillTest {
         }
 
         // 2. Apply V74 — the migration under test.
-        Flyway toLatest = Flyway.configure()
+        Flyway toLatest = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();

@@ -51,7 +51,7 @@ class V68NotTracedRecencyFixTest {
     @Test
     void v68_correctsTieBreak_leavesAlreadyCorrectOrderUntouched() throws Exception {
         // 1. Migrate up to V56 only — schema before V57 (and V68) existed.
-        Flyway toV56 = Flyway.configure()
+        Flyway toV56 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .target("56")
@@ -103,7 +103,7 @@ class V68NotTracedRecencyFixTest {
         // 2. Apply the rest of the migrations — V57 (original, buggy tie-break) then V68
         //    (corrective) run in the same batch here, equivalent to V68 running standalone
         //    against an already-V57-migrated production database.
-        Flyway toLatest = Flyway.configure()
+        Flyway toLatest = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();

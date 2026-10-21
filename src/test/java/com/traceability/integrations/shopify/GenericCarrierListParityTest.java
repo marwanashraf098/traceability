@@ -6,6 +6,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import com.traceability.FlywayTestSupport;
 import org.flywaydb.core.Flyway;
 
 import java.util.HashSet;
@@ -27,7 +28,7 @@ class GenericCarrierListParityTest {
 
     @Test
     void javaAndSqlListsMatch_andClassifyTheSame() {
-        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
+        FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
             .locations("classpath:db/migration").load().migrate();
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
 

@@ -43,7 +43,7 @@ class MerchantOrdersViewColumnsTest {
 
     @BeforeAll
     static void migrate() {
-        Flyway.configure()
+        FlywayTestSupport.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()

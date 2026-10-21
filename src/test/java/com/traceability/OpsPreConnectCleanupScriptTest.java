@@ -58,7 +58,7 @@ class OpsPreConnectCleanupScriptTest {
 
     @BeforeEach
     void migrateAndSeed() throws Exception {
-        Flyway.configure().dataSource(pg.getJdbcUrl(), "postgres", "postgres")
+        FlywayTestSupport.configure().dataSource(pg.getJdbcUrl(), "postgres", "postgres")
             .locations("classpath:db/migration").load().migrate();
         try (Connection c = conn(); Statement s = c.createStatement()) {
             for (String t : new String[]{BROEK, FEMINE}) {

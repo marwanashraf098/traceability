@@ -54,7 +54,7 @@ class GenericCourierSnapshotScriptTest {
     }
 
     private static void migrate(String target) {
-        var cfg = Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
+        var cfg = FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres")
             .locations("classpath:db/migration");
         if (target != null) cfg = cfg.target(target);
         assertThat(cfg.load().migrate().success).isTrue();

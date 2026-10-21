@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.FlywayTestSupport;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -32,7 +33,7 @@ class IncrementLegacyMigrationTest {
 
     @Test
     void v121_marksOnlyFailedIncrementClaimsLegacy() {
-        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration").target("120").load().migrate();
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
 
@@ -59,7 +60,7 @@ class IncrementLegacyMigrationTest {
                 tenant, variant, location, "void_correction".equals(c[0]) ? -1 : 2, c[0], c[0] + "-" + c[1] + "-" + (n++), c[1]);
         }
 
-        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        FlywayTestSupport.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration").load().migrate();
 
         Map<String, Boolean> legacy = jdbc.queryForList(

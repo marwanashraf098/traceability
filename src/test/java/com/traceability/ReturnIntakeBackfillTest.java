@@ -40,7 +40,7 @@ class ReturnIntakeBackfillTest {
 
     @Test
     void v98Backfill_stampsOnlyTerminalLegsWithScanEvidence() throws Exception {
-        MigrateResult r1 = Flyway.configure()
+        MigrateResult r1 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .target("97")
@@ -83,7 +83,7 @@ class ReturnIntakeBackfillTest {
             seedEvent(c, tenantId, p5, orderOf(c, legInTransit), "return_received", "2026-09-10 10:00:00");
         }
 
-        MigrateResult r2 = Flyway.configure()
+        MigrateResult r2 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 // Pinned: later migrations must not change this V98-only count.

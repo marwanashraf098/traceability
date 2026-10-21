@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Shopify webhook ordering check — GID index (2026-10-20, branch `perf/shopify-webhook-gid-index` off main fe0c3e2;
+rebased onto origin/main 5ef0449; NOT merged, NOT deployed). Migration V175 — built as V173, renumbered (G3 took V173, order-edit quantities V174).**
+- **Why:** `ShopifyWebhookProcessorJob.supersededReason` (runs once per orders/create|updated + products/create|update
+  webhook, ~85% of traffic, and per manual re-process) filtered on `payload_raw->>'admin_graphql_api_id'` with no
+  index → Seq Scan that de-TOASTs every payload. Prod 2026-10-17: 12–16 s per call; table ~77.5k rows, 20 MB heap,
+  276 MB TOAST, 10 MB indexes.
+- **V175** (non-transactional, `.sql.conf`): `DROP INDEX CONCURRENTLY IF EXISTS` + `CREATE INDEX CONCURRENTLY
+  shopify_webhook_events_gid_applied_idx (tenant_id, (payload_raw->>'admin_graphql_api_id'), received_at DESC)
+  WHERE processed_at IS NOT NULL AND process_error IS NULL AND superseded_at IS NULL`. EXPLAIN on an 80k-row /
+  335 MB prod-shaped table (generic plan): Parallel Seq Scan ~130k buffers → Index Scan, 3 buffers, 0.04 ms;
+  index ~6 MB. MigrationSmokeTest 174, NotTracedBackfillTest 119.
+- **GOTCHA — Flyway's transactional lock deadlocks CONCURRENTLY:** Flyway 10 holds its advisory lock in an open
+  transaction on a second connection; CIC waits on that virtualxid forever (would hang prod startup). Fix:
+  `spring.flyway.postgresql.transactional-lock: false` (session lock — still one migrator at a time). Tests:
+  `FlywayTestSupport.configure()` is the ONE way to build a Flyway (all 32 calls / 20 classes switched, incl. G3's GenericG3SnapshotScriptTest at rebase; bare
+  `Flyway.configure()` reads neither application.yml nor env vars). `FlywayLockGuardTest`: yml is false, the helper
+  is false, no test calls `Flyway.configure()` directly. MigrationSmokeTest `@Timeout(120, SEPARATE_THREAD)` —
+  revert-checked: helper lock=true → both methods time out at 120 s; false → pass in 12 s.
 **Shopify order edits reach line quantities (2026-10-21, branch `fix/shopify-order-edit-quantities` off origin/main
 486897a; NOT merged, NOT deployed). Migration V174.**
 - **Bug (prod 2026-10-21):** Shopify keeps a line removed by an order edit with `quantity` unchanged and

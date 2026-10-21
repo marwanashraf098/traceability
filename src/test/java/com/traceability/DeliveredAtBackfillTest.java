@@ -33,7 +33,7 @@ class DeliveredAtBackfillTest {
 
     @Test
     void v100_backfillsForwardLegsFromEarliestSource() throws Exception {
-        MigrateResult r1 = Flyway.configure()
+        MigrateResult r1 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("99").load().migrate();
         assertThat(r1.success).isTrue();
@@ -69,7 +69,7 @@ class DeliveredAtBackfillTest {
             history(c, tenant, returnLeg, "delivered", "2026-09-11 12:00:00");
         }
 
-        MigrateResult r2 = Flyway.configure()
+        MigrateResult r2 = FlywayTestSupport.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").target("100").load().migrate();
         assertThat(r2.success).isTrue();
