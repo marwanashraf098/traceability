@@ -9,7 +9,7 @@ import java.util.Map;
 
 /**
  * Owner-authed manual trigger for the demo tenant's reseed — runs the exact same
- * ensureBootstrapped() + reseed() sequence DemoReseedJob's every-30-minutes cron
+ * ensureBootstrapped() + reseed() sequence DemoReseedJob's cron (every 30 minutes then; hourly since 2026-10-21)
  * tick runs, on demand, so a fixture change is verifiable immediately instead of
  * waiting up to 30 minutes (that cron has been unreliable throughout this build).
  *

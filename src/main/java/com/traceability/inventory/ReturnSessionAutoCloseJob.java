@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Hourly: closes idle open return sessions that have NOTHING pending, so intake completion
+ * Every 3 hours (hourly until 2026-10-21): closes idle open return sessions that have NOTHING pending, so intake completion
  * (ReturnSessionService.close() stamps shipments.return_intake_completed_at) isn't held
  * hostage by a session someone forgot to close.
  *
@@ -62,7 +62,7 @@ public class ReturnSessionAutoCloseJob {
         this.sessionService = sessionService;
     }
 
-    @Recurring(id = "return-session-auto-close", cron = "0 * * * *")
+    @Recurring(id = "return-session-auto-close", cron = "0 */3 * * *")
     @Job(name = "Auto-close idle return sessions")
     public void run() {
         List<UUID> tenantIds = ownerJdbc.queryForList("SELECT id FROM tenants", UUID.class);

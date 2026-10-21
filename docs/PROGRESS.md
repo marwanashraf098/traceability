@@ -4,6 +4,34 @@
 
 ## Current state
 
+**DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; NOT merged, NOT
+deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
+last_polled_at` ~70k/day (1.75 GB WAL / 10 days), `shopify_webhook_events` growing ~6k rows / 25 MB a day with no
+retention, JobRunr ~16k jobs/day (Shopify webhook jobs 6.2k, Bosta webhook jobs 4.3k, print sweep 1.4k).
+- **A — the status walk's stamp** (`BostaStatusPollJob.walkTenant` → `stampChecked`): one UPDATE per page, and only
+  for a shipment whose `last_polled_at` is NULL or older than `stampEveryMinutes()` (60, capped at a quarter of
+  `status-safety-net-hours`). Why: the walk re-reads each tenant's top page every 3 minutes, so the same ~150
+  in-flight rows were rewritten 480× a day, never HOT (the column is in `shipments_poll_order_idx`, V35). The
+  safety-net rule is unchanged — a shipment the walk shows is stamped at most an hour ago, far inside the 4 h
+  window. The safety net's own stamp (W2) and the suspect re-check (`BostaDeletionService.touch`) are unchanged.
+  Expected: ≤ 24 stamps/day per hot shipment instead of 480 (~70k → ≤ ~3.5k UPDATEs/day).
+- **C — recurring intervals** (all hardcoded `@Recurring` crons — no env override exists for any of them):
+  `print-jobs-sweep` every minute → `*/5` (stuck jobs fail at 10–15 min instead of 10–11; expired PDFs are already
+  410 by `expires_at`), `demo-tenant-reseed` `*/30` → hourly at :00 Cairo (demo token TTL is 90 min),
+  `return-photos-expire-unclaimed` → `17 */3`, `shopify-state-cleanup` → `0 */3`, `return-session-auto-close` →
+  `0 */3` (idle sessions close at 12–15 h instead of 12–13). Unchanged on purpose: Bosta discovery (~2 min in prod
+  via env), status poll 3 min, fulfillment-link-retry and shopify-webhook-retry 2 min, the four 10-minute sweepers,
+  shopify-reconcile 15 min, JobRunr poll 5 s. Expected: −1,224 job inserts/day (~8%).
+- Tests: `BostaStatusPollStampTest` ps1–ps3 (hot shipment stamped at most once an hour + no row rewritten on the
+  next cycle by xmin; safety net still rotates and a walked shipment stays out of it; a 429 on the walk or the
+  safety net skips the stamp). Revert-checked: unconditional stamp → ps1 red; no walk stamp → ps1–ps3 red;
+  stamping the rate-limited item → ps3 red.
+- Full backend suite 2026-10-21: 3183 run, 3 red — ExchangeBackfillTest (documented) and GenericG3IsolationGoldenTest
+  g1/g2 (date-dependent, red on clean origin/main too). Nothing else.
+- **Next:** slice B (webhook-events retention, N = 7 days configurable, per-tenant cutoff held back by the oldest
+  still-processable event; exhausted-failed rows older than 30 days don't hold it back) on its own branch after
+  A + C are deployed.
+
 **Shopify webhook ordering check — GID index (2026-10-20, branch `perf/shopify-webhook-gid-index` off main fe0c3e2;
 rebased onto origin/main 5ef0449; NOT merged, NOT deployed). Migration V175 — built as V173, renumbered (G3 took V173, order-edit quantities V174).**
 - **Why:** `ShopifyWebhookProcessorJob.supersededReason` (runs once per orders/create|updated + products/create|update
@@ -357,7 +385,7 @@ current_qty was NOT the cause.
 - **401 / 403 on mass-awb:** gateway → `BostaAuthException` (same message) → `BOSTA_AUTH`: nobody marked, no
   missing_awb, print stops, "Bosta connection problem — check Settings → Connections" (EN + AR) — also on single print
   (`fulfill.printAwb.auth`).
-- **Sweeper** (`PrintJobSweeper`, every minute, owner-pool tenant-id list only, per-tenant `runAs`): a queued /
+- **Sweeper** (`PrintJobSweeper`, every minute — every 5 minutes since 2026-10-21, owner-pool tenant-id list only, per-tenant `runAs`): a queued /
   running job with `updated_at` older than 10 min → failed `STUCK` / message PRINT_STOPPED; untried waybills
   PRINT_INTERRUPTED; saved labels stay downloadable and, for a print, are recorded as its batch; tenant unblocked. PDFs
   past expires_at → pdf / pdf_bytes NULL.

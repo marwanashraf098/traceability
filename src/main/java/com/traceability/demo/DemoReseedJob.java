@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * FR-DEMO — recurring re-seed of the shared demo tenant, every 30 minutes.
+ * FR-DEMO — recurring re-seed of the shared demo tenant, hourly (every 30 minutes until the 2026-10-21 write-churn pass).
  *
  * ensureBootstrapped() is cheap (one SELECT) once the tenant exists, so calling it on
  * every tick rather than only at application startup keeps this job self-contained: the
@@ -32,7 +32,7 @@ public class DemoReseedJob {
         this.demoSeeder = demoSeeder;
     }
 
-    @Recurring(id = "demo-tenant-reseed", cron = "*/30 * * * *", zoneId = "Africa/Cairo")
+    @Recurring(id = "demo-tenant-reseed", cron = "0 * * * *", zoneId = "Africa/Cairo")
     @Job(name = "Demo tenant re-seed")
     public void run() {
         demoSeeder.ensureBootstrapped();
