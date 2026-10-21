@@ -15,9 +15,11 @@ export interface Capabilities {
   demoMode: boolean
   /** Non-Bosta couriers G2 — the store ships with other couriers too (courier-neutral scan texts). */
   genericCourier: boolean
+  /** Flexible labeling — blank labels / untagged stock (backend FlexibleLabeling; no screen reads it yet). */
+  flexibleLabeling: boolean
 }
 
-const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false }
+const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false }
 
 let cache: { token: string; promise: Promise<Capabilities> } | null = null
 
@@ -25,9 +27,11 @@ export function loadCapabilities(): Promise<Capabilities> {
   const token = getAccessToken()
   if (!token) return Promise.resolve(NONE)
   if (cache?.token !== token) {
-    const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown } | null>('/me')
+    const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown;
+                              flexibleLabeling?: unknown } | null>('/me')
       .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true,
-                     genericCourier: me?.genericCourier === true }))
+                     genericCourier: me?.genericCourier === true,
+                     flexibleLabeling: me?.flexibleLabeling === true }))
       .catch(() => NONE)
     cache = { token, promise }
   }

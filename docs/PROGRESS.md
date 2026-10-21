@@ -4,8 +4,48 @@
 
 ## Current state
 
+**Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
+`feat/flexible-labeling-s1` off origin/main bcf908a; NOT merged, NOT deployed). Migration V176. Backend only, no
+screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default false, no tenant switched on).**
+- **V176:** `tenants.flexible_labeling_enabled`; `label_code_batches` (kind pack|tag|factory|replacement, count,
+  spares, label_w_mm / label_h_mm snapshot, idempotency_key UNIQUE per tenant, count + spares 1..2,000; app_user
+  INSERT/SELECT only) and `label_codes` (code `^P[0-9]{6,}$` UNIQUE per tenant, status issued|bound|voided, batch_id
+  composite FK (batch, tenant), piece_id → pieces with one code per piece (partial UNIQUE); CHECKs bound ⇔ piece_id,
+  bound ⇔ bound_at, voided ⇔ voided_at, voided_at ⇔ void_reason; app_user UPDATE only on the lifecycle columns, no
+  DELETE). Both RLS NULLIF + FORCE, policy in the same migration. No run_id / order_id (slices 6 / 8).
+- **`inventory.PieceCodeCounter`** — the ONE claim on piece_counters (`INSERT … ON CONFLICT DO UPDATE … RETURNING`),
+  now used by `InventoryLedger.batchReceive` (unchanged behaviour) and `labels.LabelCodeService.issue`, so a blank
+  code never collides with a received piece's short_code.
+- **`labels.LabelCodeService`** (@Transactional + TenantContext.require, `FlexibleLabeling.require` → bodyless 404):
+  `issue` (one unbroken range; a repeated key returns the same batch, `created:false`, counter claimed once; same key
+  with different kind/count/spares → 409 IDEMPOTENCY_KEY_REUSED; a concurrent duplicate waits on the unique index),
+  `voidCodes` (rows locked FOR UPDATE; any code not issued — bound / voided / another tenant's / unknown — refuses
+  the WHOLE request, 409 VOID_REFUSED with each refused id + status), `resolve` (issued | bound | voided | unknown,
+  scan-normalized; not wired into any scan path), `batchPdf` (still-issued codes only; none → 422 NO_ISSUED_CODES).
+  Errors `{code, message_en, message_ar, details}` via `LabelCodeException` in ApiExceptionHandler.
+- **Blank label:** `BlankLabelLayout` + `LabelPdfRenderer.renderBlank` — Code 128 of the code + the code (Bold 9 pt),
+  same barcode x / width as a piece label, barcode up to 15 mm tall, block centred. Size = the batch's snapshot of
+  `tenants.label_width_mm/height_mm` taken at issue, else 50×25 (a reprint matches the labels already printed).
+  `LabelPdfRenderer.render` and the piece layout are untouched.
+- **Endpoints** (owner / manager): `POST /api/v1/label-codes/batches`, `GET /api/v1/label-codes/batches/{id}/pdf`,
+  `POST /api/v1/label-codes/void`. `/me` → `flexibleLabeling`; frontend `capabilities.ts` reads it (no screen uses
+  it).
+- **Tests:** LabelCodesTest 14 (flag, roles, issue, tenant size, idempotency incl. 6 concurrent same-key requests,
+  validation, 8 threads issue + batchReceive → no code twice, void all-or-nothing, CHECK / UNIQUE / composite FK,
+  resolve, PDF pages + Code 128 decode + text, app_user RLS with same-tenant positive control + no DELETE / no
+  UPDATE of code or batch rows). Revert-checked: flag gate, idempotency, non-atomic counter, void all-or-nothing.
+  PieceLabelGoldenTest — structural fingerprint (media box + decoded content stream + barcode pixels; raw bytes
+  vary run to run by font-subset tag) recorded on bcf908a BEFORE any change, 50×25 and 40×25; revert-checked
+  (piece code 7.5 → 7.6 pt fails). Registry: RlsCoverageTest (+ batch PDF cross-tenant with positive control),
+  PortalOrderLeakTest (3 SKIP, approved), MigrationSmokeTest 175 + TENANT_SCOPED_TABLES, NotTracedBackfillTest 120.
+- **Verification 2026-10-21:** full backend suite 3208 run, red only the baseline — ExchangeBackfillTest and
+  GenericG3IsolationGoldenTest g1/g2 (BostaPollJobTest.p6 green). Frontend vitest 144 / 1076 green; tsc + vite build
+  clean.
+- **Note for a later small branch (Marawan 2026-10-21):** GenericG3IsolationGoldenTest g1/g2 is date-dependent and
+  red on main — do not fix it inside the flexible-labeling work.
+
 **Flexible labeling — slice 0 prerequisites (2026-10-21, branch `feat/flexible-labeling-s0` off origin/main 73eeb8d;
-NOT merged, NOT deployed). No migration, no visible change.** Feature: blank labels printed before packing,
+MERGED to main bcf908a 2026-10-21, NOT deployed). No migration, no visible change.** Feature: blank labels printed before packing,
 factory-labeled receiving, count-only receiving ("untagged" pieces = real piece rows with `short_code` NULL,
 `barcode` PC-ULID kept), order seal, Tag stock. Step 0 diagnosis approved 2026-10-21 with Marawan's decisions:
 - Existing stock not yet in Traced enters via count-only receiving; pieces already in Traced keep their codes.

@@ -285,15 +285,9 @@ public class InventoryLedger {
         UUID tenantId = specs.get(0).tenantId();
 
         // ── Round-trip 0: claim N sequential short codes atomically ──────────
-        // ON CONFLICT DO UPDATE increments by N; RETURNING gives the new last_value.
-        // Codes for this batch: [lastValue-N+1 .. lastValue].
-        Long lastValue = jdbc.queryForObject(
-            "INSERT INTO piece_counters (tenant_id, last_value) VALUES (?, ?) " +
-            "ON CONFLICT (tenant_id) DO UPDATE " +
-            "SET last_value = piece_counters.last_value + EXCLUDED.last_value " +
-            "RETURNING last_value",
-            Long.class, tenantId, (long) n);
-        long firstCode = lastValue - n + 1;
+        // PieceCodeCounter is the one claim (shared with blank label codes, LabelCodeService).
+        // Codes for this batch: [firstCode .. firstCode+N-1].
+        long firstCode = PieceCodeCounter.claim(jdbc, tenantId, n);
 
         for (int from = 0; from < n; from += RECEIVE_CHUNK) {
             int to = Math.min(n, from + RECEIVE_CHUNK);
@@ -326,7 +320,7 @@ public class InventoryLedger {
             pieceParams.add(s.variantId());
             pieceParams.add(s.receiptId());
             pieceParams.add("PC-" + s.pieceId());
-            pieceParams.add("P" + String.format("%06d", firstCode + i));
+            pieceParams.add(PieceCodeCounter.format(firstCode + i));
             pieceParams.add(s.locationId());
             pieceParams.add(actorUserId);
         }

@@ -36,6 +36,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -165,6 +166,19 @@ public class ApiExceptionHandler {
     ResponseEntity<ReturnSessionErrorBody> handleReturnSessionException(ReturnSessionException ex) {
         return ResponseEntity.status(ex.httpStatus())
             .body(new ReturnSessionErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
+    }
+
+    record LabelCodeErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            List<Map<String, Object>> details) {}
+
+    // Flexible labeling slice 1 — blank label codes (VOID_REFUSED lists each refused code + status).
+    @ExceptionHandler(com.traceability.labels.LabelCodeException.class)
+    ResponseEntity<LabelCodeErrorBody> handleLabelCodeException(com.traceability.labels.LabelCodeException ex) {
+        return ResponseEntity.status(ex.status())
+            .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
     record FulfillmentActivationErrorBody(
