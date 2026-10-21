@@ -1,0 +1,396 @@
+{
+  "01_approveX1" : {
+    "body" : "",
+    "status" : 204
+  },
+  "02_approveX2" : {
+    "body" : "",
+    "status" : 204
+  },
+  "03_enqueued" : [ "<v0>", "<v1>" ],
+  "04_exchangePosts" : [ {
+    "type" : 30,
+    "cod" : 0,
+    "dropOffAddress" : {
+      "firstLine" : "12 Placeholder Street",
+      "secondLine" : "Near the pharmacy",
+      "buildingNumber" : "12",
+      "floor" : "3",
+      "apartment" : "7",
+      "city" : "Cairo",
+      "districtId" : "Iy7-lFD0BE0"
+    },
+    "businessLocationId" : "loc-ret",
+    "receiver" : {
+      "firstName" : "Youssef",
+      "lastName" : "Adel",
+      "phone" : "01011117001"
+    },
+    "businessReference" : "#7001",
+    "uniqueBusinessReference" : "<v0>",
+    "specs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "RR-XCHNGA: Linen Shirt / Sand / L"
+      }
+    },
+    "returnSpecs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "Linen Shirt / Sand / M"
+      }
+    },
+    "returnNotes" : "Traced exchange request RR-XCHNGA"
+  }, {
+    "type" : 30,
+    "cod" : 0,
+    "dropOffAddress" : {
+      "firstLine" : "12 Placeholder Street",
+      "secondLine" : "Near the pharmacy",
+      "buildingNumber" : "12",
+      "floor" : "3",
+      "apartment" : "7",
+      "city" : "Cairo",
+      "districtId" : "Iy7-lFD0BE0"
+    },
+    "businessLocationId" : "loc-ret",
+    "receiver" : {
+      "firstName" : "Youssef",
+      "lastName" : "Adel",
+      "phone" : "01011117002"
+    },
+    "businessReference" : "#7002",
+    "uniqueBusinessReference" : "<v1>",
+    "specs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "RR-XCHNGB: Linen Shirt / Sand / L"
+      }
+    },
+    "returnSpecs" : {
+      "packageDetails" : {
+        "itemsCount" : 1,
+        "description" : "Linen Shirt / Sand / M"
+      }
+    },
+    "returnNotes" : "Traced exchange request RR-XCHNGB"
+  } ],
+  "05_afterBooking" : {
+    "exchanges" : [ {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+0",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+0",
+      "internal_status" : "new",
+      "matched_number" : "#7001",
+      "outbound_description" : "RR-XCHNGA: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+0"
+    }, {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+1",
+      "internal_status" : "new",
+      "matched_number" : "#7002",
+      "outbound_description" : "RR-XCHNGB: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+1"
+    } ],
+    "internalOrderLegs" : [ {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:BTN+0",
+      "history" : null,
+      "pieces" : null,
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "created"
+    }, {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "history" : null,
+      "pieces" : null,
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "created"
+    } ],
+    "requests" : [ {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7001",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    }, {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7002",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    } ]
+  },
+  "06_packX1" : [ {
+    "success" : true,
+    "code" : "SCANNED",
+    "message" : null,
+    "pieceId" : "<v18>",
+    "barcode" : "<v22>",
+    "variantId" : "<v2>",
+    "orderItemId" : "<v3>",
+    "allocatedCount" : 1,
+    "requiredQuantity" : 1,
+    "allComplete" : true
+  }, 1 ],
+  "07_packX2" : [ {
+    "success" : true,
+    "code" : "SCANNED",
+    "message" : null,
+    "pieceId" : "<v19>",
+    "barcode" : "<v23>",
+    "variantId" : "<v2>",
+    "orderItemId" : "<v4>",
+    "allocatedCount" : 1,
+    "requiredQuantity" : 1,
+    "allComplete" : true
+  }, 1 ],
+  "08_afterPack" : {
+    "exchanges" : [ {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+0",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+0",
+      "internal_status" : "packed",
+      "matched_number" : "#7001",
+      "outbound_description" : "RR-XCHNGA: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+0"
+    }, {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+1",
+      "internal_status" : "packed",
+      "matched_number" : "#7002",
+      "outbound_description" : "RR-XCHNGB: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+1"
+    } ],
+    "internalOrderLegs" : [ {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:BTN+0",
+      "history" : null,
+      "pieces" : "packed",
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "created"
+    }, {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "history" : null,
+      "pieces" : "packed",
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "created"
+    } ],
+    "requests" : [ {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7001",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    }, {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7002",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    } ]
+  },
+  "09_pickupScanX1" : {
+    "outcome" : "ACCEPTED",
+    "entry" : {
+      "shipmentId" : "<v5>",
+      "trackingNumber" : "BTN+0",
+      "orderNumber" : "EXC-BTN+0",
+      "codAmount" : null,
+      "scannedAt" : "<v26>",
+      "scannedByName" : "Fatma"
+    }
+  },
+  "10_pickupClose" : {
+    "shipmentsClosed" : 1,
+    "pieceExceptions" : [ ],
+    "leftOut" : [ ]
+  },
+  "11_webhookX2" : {
+    "enqueued" : true,
+    "webhook" : "processed"
+  },
+  "12_ingestDashboard" : {
+    "enqueued" : true,
+    "webhook" : "processed"
+  },
+  "13_tryAutoMap" : "ok",
+  "13b_ingestUnmappable" : {
+    "enqueued" : true,
+    "webhook" : "processed"
+  },
+  "13c_tryAutoMapUnmappable" : "ok",
+  "14_final" : {
+    "exchanges" : [ {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+0",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+0",
+      "internal_status" : "packed",
+      "matched_number" : "#7001",
+      "outbound_description" : "RR-XCHNGA: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+0"
+    }, {
+      "auto_matched" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "from_request" : true,
+      "inbound_description" : "Linen Shirt / Sand / M",
+      "internal_number" : "EXC-BTN+1",
+      "internal_status" : "packed",
+      "matched_number" : "#7002",
+      "outbound_description" : "RR-XCHNGB: Linen Shirt / Sand / L",
+      "status" : "matched",
+      "tracking_number" : "BTN+1"
+    }, {
+      "auto_matched" : true,
+      "external_id" : "internal:exchange:DTN+0",
+      "from_request" : false,
+      "inbound_description" : "Linen Shirt Sand M",
+      "internal_number" : "EXC-DTN+0",
+      "internal_status" : "new",
+      "matched_number" : null,
+      "outbound_description" : "Linen Shirt Sand L",
+      "status" : "unmatched",
+      "tracking_number" : "DTN+0"
+    }, {
+      "auto_matched" : false,
+      "external_id" : null,
+      "from_request" : false,
+      "inbound_description" : "Velvet Bucket Hat red",
+      "internal_number" : null,
+      "internal_status" : null,
+      "matched_number" : null,
+      "outbound_description" : "Velvet Bucket Hat",
+      "status" : "needs_mapping",
+      "tracking_number" : "DTN+1"
+    } ],
+    "internalOrderLegs" : [ {
+      "custody_locked_by_scan" : true,
+      "external_id" : "internal:exchange:BTN+0",
+      "history" : "with_courier:-",
+      "pieces" : "with_courier",
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "with_courier"
+    }, {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:BTN+1",
+      "history" : "with_courier:21",
+      "pieces" : "with_courier",
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "with_courier"
+    }, {
+      "custody_locked_by_scan" : false,
+      "external_id" : "internal:exchange:DTN+0",
+      "history" : null,
+      "pieces" : null,
+      "provider" : "bosta",
+      "shipment_leg" : "forward",
+      "state" : "created"
+    } ],
+    "requests" : [ {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7001",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    }, {
+      "booking_status" : "booked",
+      "has_tn" : true,
+      "number" : "#7002",
+      "status" : "pickup_booked",
+      "type" : "exchange",
+      "verified" : true
+    } ]
+  },
+  "15_dispatchClaims" : [ {
+    "delta" : -1,
+    "internal_order" : true,
+    "location" : "Main",
+    "piece_status" : "with_courier",
+    "status" : "applied",
+    "trigger_type" : "exchange_dispatch"
+  }, {
+    "delta" : -1,
+    "internal_order" : true,
+    "location" : "Main",
+    "piece_status" : "with_courier",
+    "status" : "applied",
+    "trigger_type" : "exchange_dispatch"
+  } ],
+  "16_alerts" : [ "exchange_needs_mapping|MEDIUM|exchange" ],
+  "17_drawerX1" : {
+    "body" : "{\"bookNowAvailable\":false,\"bookingAttemptedAt\":\"<v27>\",\"bookingError\":null,\"bookingStatus\":\"booked\",\"bookingVerifiedAt\":\"<v28>\",\"bostaTrackingNumber\":\"BTN+0\",\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v29>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011117001\",\"decidedAt\":\"<v30>\",\"decidedBy\":\"<v6>\",\"decidedByName\":\"Mona\",\"deliveredAt\":\"<v31>\",\"email\":null,\"events\":[{\"actorId\":\"<v6>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v32>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v33>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v34>\",\"type\":\"booking_verified\"}],\"exchange\":{\"deliveredAt\":null,\"exchangeStatus\":\"matched\",\"orderId\":\"<v7>\",\"orderNumber\":\"EXC-BTN+0\",\"orderStatus\":\"packed\",\"shipmentState\":\"with_courier\",\"trackingNumber\":\"BTN+0\",\"withCourierAt\":\"<v35>\"},\"history\":[{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v34>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+0\"},\"occurredAt\":\"<v33>\",\"type\":\"pickup_booked\"},{\"actorId\":\"<v6>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v32>\",\"type\":\"approved\"}],\"id\":\"<v0>\",\"items\":[{\"active\":true,\"arrivedAt\":null,\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":null,\"doneAt\":null,\"id\":\"<v8>\",\"imageUrl\":null,\"itemStatus\":\"awaiting\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v20>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementAvailable\":-1,\"replacementInStock\":false,\"replacementVariantId\":\"<v2>\",\"replacementVariantTitle\":\"Sand / L\",\"shortCode\":\"<v24>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v9>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":null,\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v10>\",\"orderNumber\":\"#7001\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":null,\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":null,\"reference\":\"RR-XCHNGA\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":null,\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":null,\"returnTrackingNumber\":null,\"status\":\"pickup_booked\",\"type\":\"exchange\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "18_drawerX2" : {
+    "body" : "{\"bookNowAvailable\":false,\"bookingAttemptedAt\":\"<v36>\",\"bookingError\":null,\"bookingStatus\":\"booked\",\"bookingVerifiedAt\":\"<v37>\",\"bostaTrackingNumber\":\"BTN+1\",\"closeNote\":null,\"closeReason\":null,\"closedAt\":null,\"closedBy\":null,\"closedByName\":null,\"createdAt\":\"<v38>\",\"currency\":\"EGP\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011117002\",\"decidedAt\":\"<v39>\",\"decidedBy\":\"<v6>\",\"decidedByName\":\"Mona\",\"deliveredAt\":\"<v40>\",\"email\":null,\"events\":[{\"actorId\":\"<v6>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v41>\",\"type\":\"approved\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+1\"},\"occurredAt\":\"<v42>\",\"type\":\"pickup_booked\"},{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v43>\",\"type\":\"booking_verified\"}],\"exchange\":{\"deliveredAt\":null,\"exchangeStatus\":\"matched\",\"orderId\":\"<v11>\",\"orderNumber\":\"EXC-BTN+1\",\"orderStatus\":\"packed\",\"shipmentState\":\"with_courier\",\"trackingNumber\":\"BTN+1\",\"withCourierAt\":\"<v44>\"},\"history\":[{\"actorId\":null,\"actorName\":null,\"metadata\":null,\"occurredAt\":\"<v43>\",\"type\":\"booking_verified\"},{\"actorId\":null,\"actorName\":null,\"metadata\":{\"source\":\"traced_booking\",\"tracking_number\":\"BTN+1\"},\"occurredAt\":\"<v42>\",\"type\":\"pickup_booked\"},{\"actorId\":\"<v6>\",\"actorName\":\"Mona\",\"metadata\":{\"type\":\"exchange\"},\"occurredAt\":\"<v41>\",\"type\":\"approved\"}],\"id\":\"<v1>\",\"items\":[{\"active\":true,\"arrivedAt\":null,\"arrivedCondition\":null,\"damageReason\":null,\"disposition\":null,\"doneAt\":null,\"id\":\"<v12>\",\"imageUrl\":null,\"itemStatus\":\"awaiting\",\"orderItemId\":null,\"photos\":[],\"photosRemoved\":null,\"pieceId\":\"<v21>\",\"productTitle\":\"Linen Shirt\",\"reasonCode\":\"wrong_size\",\"replacementAvailable\":-1,\"replacementInStock\":false,\"replacementVariantId\":\"<v2>\",\"replacementVariantTitle\":\"Sand / L\",\"shortCode\":\"<v25>\",\"tracked\":true,\"unitNo\":null,\"variantId\":\"<v9>\",\"variantTitle\":\"Sand / M\",\"viaPhone\":false}],\"linkSource\":null,\"linkableParcels\":[],\"note\":null,\"orderId\":\"<v13>\",\"orderNumber\":\"#7002\",\"orderedBeforeTraced\":false,\"pickupAddressSource\":\"order\",\"pickupCity\":null,\"pickupCityId\":\"FceDyHXwpSYYF9zGW\",\"pickupCityName\":\"Cairo\",\"pickupDistrictId\":\"Iy7-lFD0BE0\",\"pickupDistrictName\":\"Nasr City - 7th District\",\"pickupDistrictNameAr\":null,\"pickupZone\":null,\"piiRedacted\":false,\"receivedAt\":null,\"reference\":\"RR-XCHNGB\",\"refundDetailsAvailable\":false,\"refundDetailsPurgedAt\":null,\"refundFallbackOk\":false,\"refundHint\":null,\"refundMethod\":null,\"refundPendingAt\":null,\"refundTotal\":\"0.00\",\"refundedAt\":null,\"refundedByName\":null,\"refunds\":[],\"rejectionReason\":null,\"returnShipmentId\":null,\"returnTrackingNumber\":null,\"status\":\"pickup_booked\",\"type\":\"exchange\",\"unexpectedItems\":[]}",
+    "status" : 200
+  },
+  "19_cases" : {
+    "body" : "{\"items\":[{\"alerts\":[\"exchange_needs_mapping\"],\"caseType\":\"B\",\"customerName\":null,\"id\":\"<v14>\",\"itemsSummary\":\"Velvet Bucket Hat red → Velvet Bucket Hat\",\"itemsSummaryAr\":\"Velvet Bucket Hat red ← Velvet Bucket Hat\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"choose_replacement\",\"notScanned\":false,\"orderNumber\":null,\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":null,\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":null,\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":null,\"trackingNumber\":\"DTN+1\"},\"reference\":\"DTN+1\",\"source\":\"bosta\",\"stage\":\"to_do\",\"status\":\"needs_mapping\",\"target\":{\"exchangeId\":\"<v14>\",\"requestId\":null,\"shipmentId\":null},\"tone\":\"action\",\"updatedAt\":\"<v45>\"},{\"alerts\":[],\"caseType\":\"B\",\"customerName\":null,\"id\":\"<v15>\",\"itemsSummary\":\"Linen Shirt Sand M → Linen Shirt Sand L\",\"itemsSummaryAr\":\"Linen Shirt Sand M ← Linen Shirt Sand L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"link_order\",\"notScanned\":false,\"orderNumber\":null,\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":null,\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":null,\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":null,\"trackingNumber\":\"DTN+0\"},\"reference\":\"DTN+0\",\"source\":\"bosta\",\"stage\":\"to_do\",\"status\":\"unmatched\",\"target\":{\"exchangeId\":\"<v15>\",\"requestId\":null,\"shipmentId\":null},\"tone\":\"action\",\"updatedAt\":\"<v46>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v1>\",\"itemsSummary\":\"Linen Shirt Sand / M → Sand / L\",\"itemsSummaryAr\":\"Linen Shirt Sand / M → Sand / L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"on_the_way\",\"notScanned\":false,\"orderNumber\":\"#7002\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+1\"},\"reference\":\"RR-XCHNGB\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"pickup_booked\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v1>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v43>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v0>\",\"itemsSummary\":\"Linen Shirt Sand / M → Sand / L\",\"itemsSummaryAr\":\"Linen Shirt Sand / M → Sand / L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"on_the_way\",\"notScanned\":false,\"orderNumber\":\"#7001\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+0\"},\"reference\":\"RR-XCHNGA\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"pickup_booked\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v0>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v34>\"}],\"nextCursor\":null}",
+    "status" : 200
+  },
+  "20_caseCounts" : {
+    "body" : "{\"stages\":{\"all\":4,\"done\":0,\"in_progress\":2,\"to_do\":2},\"tiles\":{\"bookingProblem\":0,\"refundToRecord\":0,\"replacementToChoose\":1,\"toApprove\":0,\"toLinkOrder\":1}}",
+    "status" : 200
+  },
+  "21_casesToDo" : {
+    "body" : "{\"items\":[{\"alerts\":[\"exchange_needs_mapping\"],\"caseType\":\"B\",\"customerName\":null,\"id\":\"<v14>\",\"itemsSummary\":\"Velvet Bucket Hat red → Velvet Bucket Hat\",\"itemsSummaryAr\":\"Velvet Bucket Hat red ← Velvet Bucket Hat\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"choose_replacement\",\"notScanned\":false,\"orderNumber\":null,\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":null,\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":null,\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":null,\"trackingNumber\":\"DTN+1\"},\"reference\":\"DTN+1\",\"source\":\"bosta\",\"stage\":\"to_do\",\"status\":\"needs_mapping\",\"target\":{\"exchangeId\":\"<v14>\",\"requestId\":null,\"shipmentId\":null},\"tone\":\"action\",\"updatedAt\":\"<v45>\"},{\"alerts\":[],\"caseType\":\"B\",\"customerName\":null,\"id\":\"<v15>\",\"itemsSummary\":\"Linen Shirt Sand M → Linen Shirt Sand L\",\"itemsSummaryAr\":\"Linen Shirt Sand M ← Linen Shirt Sand L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"link_order\",\"notScanned\":false,\"orderNumber\":null,\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":0,\"bookingError\":null,\"bookingStatus\":null,\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":null,\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":null,\"trackingNumber\":\"DTN+0\"},\"reference\":\"DTN+0\",\"source\":\"bosta\",\"stage\":\"to_do\",\"status\":\"unmatched\",\"target\":{\"exchangeId\":\"<v15>\",\"requestId\":null,\"shipmentId\":null},\"tone\":\"action\",\"updatedAt\":\"<v46>\"}],\"nextCursor\":null}",
+    "status" : 200
+  },
+  "22_casesInProgress" : {
+    "body" : "{\"items\":[{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v1>\",\"itemsSummary\":\"Linen Shirt Sand / M → Sand / L\",\"itemsSummaryAr\":\"Linen Shirt Sand / M → Sand / L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"on_the_way\",\"notScanned\":false,\"orderNumber\":\"#7002\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+1\"},\"reference\":\"RR-XCHNGB\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"pickup_booked\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v1>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v43>\"},{\"alerts\":[],\"caseType\":\"A\",\"customerName\":\"Youssef Adel\",\"id\":\"<v0>\",\"itemsSummary\":\"Linen Shirt Sand / M → Sand / L\",\"itemsSummaryAr\":\"Linen Shirt Sand / M → Sand / L\",\"kind\":\"exchange\",\"legStatus\":null,\"nextStep\":\"on_the_way\",\"notScanned\":false,\"orderNumber\":\"#7001\",\"overdueDays\":null,\"reason\":{\"arrivedCount\":0,\"awaitingCount\":1,\"bookingError\":null,\"bookingStatus\":\"booked\",\"candidateCount\":0,\"candidateReferences\":null,\"closeReason\":null,\"currency\":\"EGP\",\"inspectionState\":null,\"itemsCount\":1,\"refundTotal\":\"0.00\",\"trackingNumber\":\"BTN+0\"},\"reference\":\"RR-XCHNGA\",\"source\":\"returns_page\",\"stage\":\"in_progress\",\"status\":\"pickup_booked\",\"target\":{\"exchangeId\":null,\"requestId\":\"<v0>\",\"shipmentId\":null},\"tone\":\"moving\",\"updatedAt\":\"<v34>\"}],\"nextCursor\":null}",
+    "status" : 200
+  },
+  "23_exchangesPage" : {
+    "body" : "[{\"auto_matched\":true,\"cod\":0.0,\"customer_name\":null,\"customer_phone\":null,\"goods_value\":null,\"id\":\"<v15>\",\"inbound_description\":\"Linen Shirt Sand M\",\"inbound_description_ar\":null,\"inbound_items_count\":1,\"match_method\":null,\"matched_at\":null,\"matched_order_id\":null,\"outbound_description\":\"Linen Shirt Sand L\",\"outbound_items_count\":1,\"status\":\"unmatched\",\"tracking_number\":\"DTN+0\"},{\"auto_matched\":false,\"cod\":null,\"customer_name\":\"Youssef Adel\",\"customer_phone\":\"01011117002\",\"goods_value\":null,\"id\":\"<v16>\",\"inbound_description\":\"Linen Shirt / Sand / M\",\"inbound_description_ar\":null,\"inbound_items_count\":1,\"match_method\":\"reference\",\"matched_at\":\"<v47>\",\"matched_order_id\":\"<v13>\",\"outbound_description\":\"RR-XCHNGB: Linen Shirt / Sand / L\",\"outbound_items_count\":1,\"status\":\"matched\",\"tracking_number\":\"BTN+1\"},{\"auto_matched\":false,\"cod\":null,\"customer_name\":null,\"customer_phone\":null,\"goods_value\":null,\"id\":\"<v17>\",\"inbound_description\":\"Linen Shirt / Sand / M\",\"inbound_description_ar\":null,\"inbound_items_count\":null,\"match_method\":\"reference\",\"matched_at\":\"<v48>\",\"matched_order_id\":\"<v10>\",\"outbound_description\":\"RR-XCHNGA: Linen Shirt / Sand / L\",\"outbound_items_count\":null,\"status\":\"matched\",\"tracking_number\":\"BTN+0\"},{\"auto_matched\":false,\"cod\":0.0,\"customer_name\":null,\"customer_phone\":null,\"goods_value\":null,\"id\":\"<v14>\",\"inbound_description\":\"Velvet Bucket Hat red\",\"inbound_description_ar\":null,\"inbound_items_count\":1,\"match_method\":null,\"matched_at\":null,\"matched_order_id\":null,\"outbound_description\":\"Velvet Bucket Hat\",\"outbound_items_count\":1,\"status\":\"needs_mapping\",\"tracking_number\":\"DTN+1\"}]",
+    "status" : 200
+  },
+  "24_events" : [ {
+    "event_type" : "approved",
+    "number" : "#7001"
+  }, {
+    "event_type" : "pickup_booked",
+    "number" : "#7001"
+  }, {
+    "event_type" : "booking_verified",
+    "number" : "#7001"
+  }, {
+    "event_type" : "approved",
+    "number" : "#7002"
+  }, {
+    "event_type" : "pickup_booked",
+    "number" : "#7002"
+  }, {
+    "event_type" : "booking_verified",
+    "number" : "#7002"
+  } ]
+}
