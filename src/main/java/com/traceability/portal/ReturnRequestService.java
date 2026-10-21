@@ -525,7 +525,7 @@ public class ReturnRequestService {
             "       o.address->>'firstLine' AS a_first, o.address->>'city' AS a_city, o.address->>'zone' AS a_zone, " +
             "       o.shopify_address->>'address1' AS s_first, o.shopify_address->>'address2' AS s_second, " +
             "       o.shopify_address->>'city' AS s_city, o.shopify_address->>'province' AS s_province " +
-            "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "FROM return_requests rr JOIN merchant_orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("forwardCarrierName", GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId));

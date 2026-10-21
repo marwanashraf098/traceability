@@ -326,7 +326,7 @@ metrics AS (
     JOIN tenants tt ON tt.id = s.tenant_id
     JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id
     CROSS JOIN cfg
-    WHERE s.provider = 'generic' AND s.shipment_leg = 'forward' AND s.internal_state = 'delivered'
+    WHERE s.provider::text = 'generic' AND s.shipment_leg = 'forward' AND s.internal_state = 'delivered'
       AND to_jsonb(tt) ->> 'portal_generic_returns_enabled' = 'true'
       AND s.delivered_at IS NOT NULL AND s.delivered_at <= cfg.now_ts
       AND cfg.now_ts - s.delivered_at <= interval '1 day' * tt.customer_return_window_days
@@ -343,7 +343,7 @@ metrics AS (
     UNION ALL
     SELECT s.tenant_id, 'generic_return_legs/' || s.internal_state::text, count(*)
     FROM shipments s CROSS JOIN cfg
-    WHERE s.provider = 'generic' AND s.shipment_leg = 'return' AND s.created_at < cfg.now_ts
+    WHERE s.provider::text = 'generic' AND s.shipment_leg = 'return' AND s.created_at < cfg.now_ts
     GROUP BY 1, 2
 )
 SELECT 'g4' AS section, t.name, t.id::text, m.metric, m.n::text
