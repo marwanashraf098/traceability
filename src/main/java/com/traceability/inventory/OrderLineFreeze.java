@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -69,11 +70,14 @@ public final class OrderLineFreeze {
                "))";
     }
 
-    /** True when the order's line quantities are frozen. Runs on the caller's connection / tenant context. */
+    /**
+     * True when the order's line quantities are frozen. Runs on the caller's connection / tenant context.
+     * Shopify ingest only — a portal pre-connect order is not in merchant_orders and reads as not frozen.
+     */
     public static boolean isFrozen(JdbcTemplate jdbc, UUID orderId, UUID tenantId) {
-        Boolean frozen = jdbc.queryForObject(
-            "SELECT " + frozenSql("o.id", "o.tenant_id") + " FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+        List<Boolean> frozen = jdbc.queryForList(
+            "SELECT " + frozenSql("o.id", "o.tenant_id") + " FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ?",
             Boolean.class, orderId, tenantId);
-        return Boolean.TRUE.equals(frozen);
+        return !frozen.isEmpty() && Boolean.TRUE.equals(frozen.get(0));
     }
 }
