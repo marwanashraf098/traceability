@@ -426,8 +426,11 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
   onHelperScan: ((code: string) => void) | null
 }) {
   const { t } = useTranslation()
-  const total = order.items.reduce((n, i) => n + i.quantity, 0)
-  const done = order.items.reduce((n, i) => n + Math.min(i.allocated, i.quantity), 0)
+  // A line removed by a Shopify order edit is kept at quantity 0 — nothing to pack, so it's hidden.
+  const packItems = order.items.filter(i => i.quantity > 0)
+  const allRemoved = order.items.length > 0 && packItems.length === 0
+  const total = packItems.reduce((n, i) => n + i.quantity, 0)
+  const done = packItems.reduce((n, i) => n + Math.min(i.allocated, i.quantity), 0)
   const cod = order.payment_method === 'cod' && order.cod_amount != null
 
   return (
@@ -487,8 +490,14 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
           </div>
         )}
 
+        {allRemoved && (
+          <div className="card p-4 border-warning/40 text-body text-warning-text" data-testid="all-items-removed">
+            {t('fulfill.allItemsRemoved')}
+          </div>
+        )}
+
         <div className="space-y-2.5">
-          {order.items.map(item => {
+          {packItems.map(item => {
             const complete = item.allocated >= item.quantity
             const left = Math.max(item.quantity - item.allocated, 0)
             return (

@@ -78,7 +78,8 @@ public class OrderController {
 
     public record OrderItem(
         String id, String productTitle, String variantTitle,
-        String sku, int quantity, String imageUrl, List<AllocatedPiece> allocatedPieces) {}
+        String sku, int quantity, String imageUrl, List<AllocatedPiece> allocatedPieces,
+        boolean addedAfterShipping) {}
 
     public record AttemptEntry(
         String attemptDate, String type, boolean succeeded,
@@ -1296,7 +1297,10 @@ public class OrderController {
             """
             SELECT oi.id AS item_id, oi.variant_id, oi.quantity,
                    v.title AS variant_title, v.sku,
-                   p.title AS product_title, p.image_url
+                   p.title AS product_title, p.image_url,
+                   -- Shopify order edits: a line that arrived after the order left Traced custody is stored
+                   -- at 0 (OrderLineFreeze) while Shopify still counts it — never in the parcel.
+                   (oi.quantity = 0 AND COALESCE(oi.current_qty, 0) > 0) AS added_after_shipping
             FROM order_items oi
             JOIN variants v  ON v.id = oi.variant_id
             JOIN products p  ON p.id = v.product_id
@@ -1332,7 +1336,8 @@ public class OrderController {
                 (String) row.get("sku"),
                 ((Number) row.get("quantity")).intValue(),
                 (String) row.get("image_url"),
-                pieces
+                pieces,
+                Boolean.TRUE.equals(row.get("added_after_shipping"))
             ));
         }
         return items;

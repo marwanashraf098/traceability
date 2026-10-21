@@ -122,7 +122,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     lineItems(first: 100) {
                       edges {
                         node {
-                          id quantity
+                          id quantity currentQuantity
                           variant { id }
                         }
                       }
@@ -2131,7 +2131,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
             for (JsonNode le : node.path("lineItems").path("edges")) {
                 JsonNode ln = le.path("node");
                 String variantGid = ln.path("variant").path("id").asText(null);
-                lines.add(new LineItem(ln.path("id").asText(), ln.path("quantity").asInt(1), variantGid));
+                Integer current = ln.path("currentQuantity").isIntegralNumber() ? ln.path("currentQuantity").asInt() : null;
+                lines.add(new LineItem(ln.path("id").asText(), ln.path("quantity").asInt(1), variantGid, current));
             }
 
             Instant createdAt = Instant.parse(node.path("createdAt").asText());

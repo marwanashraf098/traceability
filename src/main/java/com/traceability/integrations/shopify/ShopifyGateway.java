@@ -54,7 +54,25 @@ public interface ShopifyGateway {
             Instant  createdAt,
             JsonNode raw) {}
 
-    record LineItem(String gid, int quantity, String variantGid) {}
+    /**
+     * One imported order line. {@code quantity} is Shopify's ordered quantity (refunded / removed units
+     * included); {@code currentQuantity} excludes them — an order edit keeps a removed line with
+     * currentQuantity 0. Serialised into order_items.raw as {@code current_quantity} (the REST key, so
+     * V149's current_qty fills); left out when unknown.
+     */
+    record LineItem(String gid, int quantity, String variantGid,
+                    @com.fasterxml.jackson.annotation.JsonProperty("current_quantity")
+                    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                    Integer currentQuantity) {
+        public LineItem(String gid, int quantity, String variantGid) {
+            this(gid, quantity, variantGid, null);
+        }
+
+        /** The quantity Traced stores: the current quantity, else the ordered one. */
+        public int storedQuantity() {
+            return currentQuantity != null ? Math.max(currentQuantity, 0) : quantity;
+        }
+    }
 
     // ---- P4c: the returns portal's on-demand lookup of a pre-connect order ----
 

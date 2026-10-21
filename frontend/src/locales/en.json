@@ -353,6 +353,8 @@
       "noWaybillYet": "No Bosta waybill yet",
       "viewInShopify": "View in Shopify",
       "viewAllItems": "View all items",
+      "removedInShopify": "Removed in Shopify",
+      "addedAfterShipping": "Added after shipping — not in this parcel",
       "traceTimeline": "Trace timeline",
       "timelineEmpty": "No activity recorded yet",
       "timelineError": "Couldn't load activity",
@@ -658,6 +660,7 @@
     "units": "units",
     "locked": "Locked",
     "backToQueue": "Back to Queue",
+    "allItemsRemoved": "Every item on this order was removed in Shopify — there is nothing to pack.",
     "scanPlaceholder": "Scan or type barcode, then press Enter",
     "unscan": "Remove",
     "complete": "Complete & Pack Order",
@@ -684,6 +687,7 @@
       "ALREADY_RESERVED": "Piece is reserved for another order",
       "WRONG_VARIANT": "This item is not on this order",
       "LINE_FILLED": "This line is already complete — no more units needed",
+      "REMOVED_IN_SHOPIFY": "This item was removed from the order in Shopify",
       "WRONG_STATUS": "Item is not available to pick",
       "CLAIMED_BY_OTHER": "Another packer is packing this order right now"
     },
@@ -924,6 +928,7 @@
       "completeFailed": {
         "title": "The order didn't close",
         "WAYBILL_NOT_ON_ORDER": "The waybill that opened this order is no longer this order's waybill. Give it to a manager, or set the order aside.",
+        "ALL_ITEMS_REMOVED_IN_SHOPIFY": "Every item on this order was removed in Shopify — there is nothing to pack. Set the order aside.",
         "COMPLETE_REFUSED": "The order can't be closed: {{message}}",
         "AWB_MISMATCH": "This waybill doesn't match the order's shipment. Give it to a manager.",
         "NOT_LINKED": "The order was packed but couldn't be linked to its waybill. Try again.",

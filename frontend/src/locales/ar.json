@@ -353,6 +353,8 @@
       "noWaybillYet": "لا توجد بوليصة بوستا بعد",
       "viewInShopify": "عرض في Shopify",
       "viewAllItems": "عرض جميع المنتجات",
+      "removedInShopify": "أُزيل في Shopify",
+      "addedAfterShipping": "أُضيف بعد الشحن — ليس في هذا الطرد",
       "traceTimeline": "سجل التتبع",
       "timelineEmpty": "لم يُسجَّل أي نشاط بعد",
       "timelineError": "تعذّر تحميل النشاط",
@@ -661,6 +663,7 @@
     "units": "وحدة",
     "locked": "مقفل",
     "backToQueue": "العودة للقائمة",
+    "allItemsRemoved": "تمت إزالة كل المنتجات من هذا الطلب في Shopify — لا يوجد شيء لتغليفه.",
     "scanPlaceholder": "امسح أو أدخل الباركود ثم اضغط Enter",
     "unscan": "حذف",
     "complete": "إتمام الطلب والتعبئة",
@@ -687,6 +690,7 @@
       "ALREADY_RESERVED": "هذه القطعة محجوزة لطلب آخر",
       "WRONG_VARIANT": "هذا الصنف غير موجود في الطلب",
       "LINE_FILLED": "هذا الصنف مكتمل — لا يحتاج لمزيد من القطع",
+      "REMOVED_IN_SHOPIFY": "تمت إزالة هذا المنتج من الطلب في Shopify",
       "WRONG_STATUS": "القطعة غير متاحة للتجميع",
       "CLAIMED_BY_OTHER": "موظف آخر يجهّز هذا الطلب الآن"
     },
@@ -925,6 +929,7 @@
       "completeFailed": {
         "title": "لم يُغلق الطلب",
         "WAYBILL_NOT_ON_ORDER": "البوليصة التي فتحت هذا الطلب لم تعد بوليصته. سلّمها للمدير أو ضع الطلب جانباً.",
+        "ALL_ITEMS_REMOVED_IN_SHOPIFY": "تمت إزالة كل المنتجات من هذا الطلب في Shopify — لا يوجد شيء لتغليفه. ضع الطلب جانباً.",
         "COMPLETE_REFUSED": "لا يمكن إغلاق الطلب: {{message}}",
         "AWB_MISMATCH": "هذه البوليصة لا تطابق شحنة الطلب. سلّمها للمدير.",
         "NOT_LINKED": "غُلّف الطلب لكن تعذّر ربطه ببوليصته. حاول مرة أخرى.",

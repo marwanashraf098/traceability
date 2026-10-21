@@ -4,6 +4,52 @@
 
 ## Current state
 
+**Shopify order edits reach line quantities (2026-10-21, branch `fix/shopify-order-edit-quantities` off origin/main
+486897a; NOT merged, NOT deployed). Migration V174.**
+- **Bug (prod 2026-10-21):** Shopify keeps a line removed by an order edit with `quantity` unchanged and
+  `current_quantity` 0 (REST and GraphQL — Shopify staff confirm removed lines stay in `lineItems`). Traced read
+  `quantity` → removed lines stayed live demand; the FR-3.6 diff never saw a removal (Dolt.eg #16443: M → S, Traced
+  wanted both).
+- **Rule:** `order_items.quantity` = Shopify's CURRENT quantity (REST `current_quantity`, fallback `quantity`;
+  GraphQL `currentQuantity`, stored in the line raw as `current_quantity`) until the order is FROZEN —
+  `inventory.OrderLineFreeze` (ONE definition): forward history past 'created' (`shippedPastCreatedSql`, the
+  extracted ALREADY_SHIPPED SQL `FulfillService.hasEverShippedPastCreated` now uses) OR a packed allocation's piece
+  in `PieceStatus.LEFT_CUSTODY` (EnumSet.range WITH_COURIER..RETURN_PENDING_INSPECTION) OR a piece event FOR THE
+  ORDER into LEFT_CUSTODY (history — keeps the freeze once a returned piece is restocked and its allocation released).
+  Frozen: `handleOrderUpdated` skips the diff (no alert, no release); the upsert keeps quantity, raw still updates;
+  a brand-new line is inserted with its current quantity, nothing raised. Why frozen: `orders.status` almost never
+  advances (prod: 7,688 new / 130 awaiting_pickup / 0 delivered), so a refund after a return would raise HIGH
+  `shopify_edit_conflict` (Nuvira #3134/#3140), and `UntrackedParcelUnits.PARCEL_UNIT_CAP_SQL` reads quantity as
+  "what was shipped". `restock_type` / `fulfillable_quantity` can't tell an edit from a refund (Bosta plugin
+  fulfils at AWB creation).
+- **V174:** `order_items_quantity_check` → `quantity >= 0` (DROP, ADD NOT VALID, VALIDATE). A removed line is KEPT
+  at 0 (FKs: allocations, return_request_items, untracked_unit_intakes). MigrationSmokeTest 173,
+  NotTracedBackfillTest 118. **The unmerged `perf/shopify-webhook-gid-index` branch also has a V173 — it must
+  renumber (V175 if this merges first).**
+- **Quantity 0:** scan → `REMOVED_IN_SHOPIFY` when every line of the variant is 0 (also post-lock); complete() →
+  409 `ALL_ITEMS_REMOVED_IN_SHOPIFY` (`AllItemsRemovedException`, EN + AR; pack session maps it as a complete
+  failure). Pick screen + waybill pack session hide 0 lines (all removed → notice, no Complete); order drawer shows
+  them struck through, "Removed in Shopify"; return-case label `quantity > 0`.
+- **Repair:** `scripts/ops/2026-10-21-order-edit-quantity-repair.sql` (psql as owner, dry run default,
+  `-v commit=yes`; freeze inlined verbatim — `OrderLineFreezeTest.z3`; locks candidate lines in the commit run,
+  aborts on an active/packed allocation, xmin proof in-transaction + read-back after commit). Prod dry run
+  2026-10-21 (read-only SELECTs via the connector): **19 lines / 17 orders → 0** (Femine 13/12, Dolt.eg 3/2 incl.
+  #16443 M, Soccer corner 2/2, Crockera 1/1), no live allocation. Listed, never changed: GraphQL lines without a
+  current quantity — Little Toes #LT-21561 (3), test Account #1001, The Snouts #2212128474 / #2212134474 (packed).
+  Not applied.
+- Tests: OrderEditQuantitiesTest 9 (a–i, payloads through handleOrderUpdated; revert-checked R1–R6),
+  OrderEditQuantityRepairScriptTest 3, OrderLineFreezeTest 3, ShopifyOrderLineQuantityWireTest 3, frontend
+  orderEditRemovedLines 5 (revert-checked).
+- Full backend suite 2026-10-21: 3177 run, red only ExchangeBackfillTest (documented), BostaPollJobTest.p6 (flake) and
+  GenericG3IsolationGoldenTest g1/g2 — **also red on clean origin/main 486897a** (same 3 golden lines differ:
+  weeklyTrend buckets, the orders range from/to — date-dependent, not this branch). OrdersTableAccessGuardTest caught
+  `isFrozen` naming `orders` → reads `merchant_orders` now.
+- **A line ADDED to a frozen order is stored at quantity 0** (approved 2026-10-21): it was never in the parcel, so it
+  adds no Scan returns unit rows; nothing is raised; raw keeps Shopify's line. `OrderController.OrderItem
+  .addedAfterShipping` (quantity 0 AND raw current_qty > 0) → drawer label "Added after shipping — not in this
+  parcel" (EN + AR, not struck through); every other quantity-0 line keeps "Removed in Shopify". Test h + 2 drawer
+  tests, revert-checked.
+
 **Non-Bosta couriers G3 — out at Pickups, delivered, returned parcels (2026-10-20, branch `generic-courier-g3`, built
 on a9a9f4c, rebased onto fe0c3e2 (deleted-in-Bosta slices 4 + 5, V172) and merged to main; V173; NOT deployed, no
 tenant switched on).** Approved invariant amendment

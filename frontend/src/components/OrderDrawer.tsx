@@ -380,10 +380,10 @@ export default function OrderDrawer({
                         <li key={item.id} className="flex items-center gap-3 py-2.5 border-b border-line">
                           <ProductThumb src={item.imageUrl} alt={item.productTitle} size={40} />
                           <div className="min-w-0 flex-1">
-                            <p className="text-small font-semibold text-primary truncate">{item.productTitle}</p>
+                            <p className={`text-small font-semibold truncate ${removed(item) ? 'text-muted line-through' : 'text-primary'}`}>{item.productTitle}</p>
                             {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
                           </div>
-                          <span className="text-small text-muted flex-shrink-0">×{item.quantity}</span>
+                          <ItemQuantity item={item} />
                         </li>
                       ))}
                     </ul>
@@ -431,11 +431,11 @@ export default function OrderDrawer({
                       <div className="flex items-center gap-3">
                         <ProductThumb src={item.imageUrl} alt={item.productTitle} size={40} />
                         <div className="min-w-0 flex-1">
-                          <p className="text-small font-semibold text-primary truncate">{item.productTitle}</p>
-                          <p className="text-caption text-muted">{item.variantTitle}</p>
+                          <p className={`text-small font-semibold truncate ${removed(item) ? 'text-muted line-through' : 'text-primary'}`}>{item.productTitle}</p>
+                          <p className={`text-caption text-muted ${removed(item) ? 'line-through' : ''}`}>{item.variantTitle}</p>
                           {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
                         </div>
-                        <span className="text-small text-muted flex-shrink-0">×{item.quantity}</span>
+                        <ItemQuantity item={item} />
                       </div>
                       {/* Allocated piece barcode(s) — real allocations already on the DTO;
                           this row was previously the only thing not rendering them.
@@ -640,4 +640,29 @@ function DrawerTimeline({ items }: { items: TimelineItem[] }) {
       })}
     </ol>
   )
+}
+
+/** Shopify order edits: a quantity-0 line was removed in Shopify — unless it was added after the order left Traced. */
+function removed(item: { quantity: number; addedAfterShipping?: boolean }) {
+  return item.quantity === 0 && !item.addedAfterShipping
+}
+
+/** A line's quantity — or, for a quantity-0 line, why it is 0. */
+function ItemQuantity({ item }: { item: { quantity: number; addedAfterShipping?: boolean } }) {
+  const { t } = useTranslation()
+  if (item.quantity === 0 && item.addedAfterShipping) {
+    return (
+      <span className="text-caption font-semibold text-warning-text flex-shrink-0" data-testid="item-added-after-shipping">
+        {t('orders.drawer.addedAfterShipping')}
+      </span>
+    )
+  }
+  if (item.quantity === 0) {
+    return (
+      <span className="text-caption font-semibold text-warning-text flex-shrink-0" data-testid="item-removed-in-shopify">
+        {t('orders.drawer.removedInShopify')}
+      </span>
+    )
+  }
+  return <span className="text-small text-muted flex-shrink-0">×{item.quantity}</span>
 }

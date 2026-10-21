@@ -1053,7 +1053,12 @@ function PickScreen({
     scanner.clearQueue()
     setCompleting(true)
     try {
-      await api(`/fulfill/${orderId}/complete`, { method: 'POST' })
+      const res = await api<{ code?: string }>(`/fulfill/${orderId}/complete`, { method: 'POST' })
+      // Every line was removed in Shopify meanwhile (kept at quantity 0): nothing to pack.
+      if (res.status === 409 && res.data?.code === 'ALL_ITEMS_REMOVED_IN_SHOPIFY') {
+        await loadOrder()
+        return
+      }
       if (order?.is_self_pickup) {
         setCompleted(true)
         // Fallback auto-return if the worker doesn't interact with the completion
@@ -1166,7 +1171,10 @@ function PickScreen({
     </div>
   )
 
-  const allComplete = order.items.every(i => i.allocated >= i.quantity)
+  // A line removed by a Shopify order edit is kept at quantity 0 — nothing to pick, so it's hidden.
+  const pickItems = order.items.filter(i => i.quantity > 0)
+  const allRemoved = order.items.length > 0 && pickItems.length === 0
+  const allComplete = !allRemoved && order.items.every(i => i.allocated >= i.quantity)
   // G2: another courier's name when the order ships with one (null for a Bosta order — wording unchanged).
   const genericCarrier = order.shipment_provider === 'generic'
     ? (order.shipment_carrier || t('delivery.shippingBadge.generic_carrier_unnamed'))
@@ -1181,7 +1189,12 @@ function PickScreen({
 
   const itemsList = (
     <div className="flex-1 overflow-y-auto p-6 space-y-3">
-      {order.items.map(item => {
+      {allRemoved && (
+        <div className="card p-4 border-warning/40 text-body text-warning-text" data-testid="all-items-removed">
+          {t('fulfill.allItemsRemoved')}
+        </div>
+      )}
+      {pickItems.map(item => {
         const complete = item.allocated >= item.quantity
         return (
           <div
