@@ -5,7 +5,9 @@
 -- generic switch and generic-leg count (both must stay false / 0 — no tenant is switched on); and
 -- (G2) the analytics outcome counts of the last 30 days (section 4); and (G3, section 5) per tenant: pickups
 -- (open-session scans by courier, handovers), delivered and returned forward legs of the 30 days before as_of
--- by courier and source, generic parcels scanned back, and the returns-portal eligible order count.
+-- by courier and source, generic parcels scanned back, and the returns-portal eligible order count; and (G4a,
+-- section 6) the portal switch for other couriers, generic orders a customer could return, return requests by
+-- type and booking status, and portal-request generic return legs by state.
 -- Every value is computed by SQL that mirrors the code paths (one comment per block names the Java
 -- it mirrors). It sees what the DATABASE says: the migration's effects (enum value, the swapped
 -- uniqueness indexes, shipping_carrier_of with the named-carrier list, the V132 trigger) and any row
@@ -302,6 +304,49 @@ metrics AS (
     GROUP BY 1, 2
 )
 SELECT 'g3' AS section, t.name, t.id::text, m.metric, m.n::text
+FROM metrics m JOIN tenants t ON t.id = m.tenant_id
+ORDER BY t.name, t.id, m.metric;
+
+-- 6. G4a (V177) per tenant — portal refunds for orders shipped with another courier. "metric" → count:
+--      switch/portal_generic_returns      — 'on' only for a switched-on tenant (no line otherwise)
+--      portal_eligible_generic            — orders a customer could return now: the switch is on, the newest
+--                                           forward leg is generic, delivered (Shopify / Mark delivered) and
+--                                           inside the window (GenericPortalReturns.deliveredWithinWindow)
+--      requests/<type>/<booking_status>   — return requests created before as_of ('-' = no booking); a Bosta
+--                                           tenant's lines are identical before and after (never 'manual')
+--      generic_return_legs/<state>        — portal-request return legs (GenericLegTransitions.createPortalReturnLeg)
+--    New V177 columns are read through to_jsonb, so the script also runs on the schema before it.
+WITH cfg AS (SELECT (:'as_of')::timestamptz AS now_ts),
+metrics AS (
+    SELECT t.id AS tenant_id, 'switch/portal_generic_returns' AS metric, 1::bigint AS n
+    FROM tenants t WHERE to_jsonb(t) ->> 'portal_generic_returns_enabled' = 'true'
+    UNION ALL
+    SELECT s.tenant_id, 'portal_eligible_generic', count(DISTINCT s.order_id)
+    FROM shipments s
+    JOIN tenants tt ON tt.id = s.tenant_id
+    JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id
+    CROSS JOIN cfg
+    WHERE s.provider = 'generic' AND s.shipment_leg = 'forward' AND s.internal_state = 'delivered'
+      AND to_jsonb(tt) ->> 'portal_generic_returns_enabled' = 'true'
+      AND s.delivered_at IS NOT NULL AND s.delivered_at <= cfg.now_ts
+      AND cfg.now_ts - s.delivered_at <= interval '1 day' * tt.customer_return_window_days
+      AND o.pii_redacted_at IS NULL
+      -- the order's newest forward leg (any state) is this one
+      AND NOT EXISTS (SELECT 1 FROM shipments s2 WHERE s2.order_id = s.order_id AND s2.tenant_id = s.tenant_id
+                        AND s2.shipment_leg = 'forward' AND (s2.created_at, s2.id) > (s.created_at, s.id))
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT rr.tenant_id, 'requests/' || rr.type || '/' || coalesce(rr.booking_status, '-'), count(*)
+    FROM return_requests rr CROSS JOIN cfg
+    WHERE rr.created_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT s.tenant_id, 'generic_return_legs/' || s.internal_state::text, count(*)
+    FROM shipments s CROSS JOIN cfg
+    WHERE s.provider = 'generic' AND s.shipment_leg = 'return' AND s.created_at < cfg.now_ts
+    GROUP BY 1, 2
+)
+SELECT 'g4' AS section, t.name, t.id::text, m.metric, m.n::text
 FROM metrics m JOIN tenants t ON t.id = m.tenant_id
 ORDER BY t.name, t.id, m.metric;
 

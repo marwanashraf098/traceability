@@ -4,6 +4,51 @@
 
 ## Current state
 
+**Non-Bosta couriers G4a — portal refunds for orders shipped with other couriers (2026-10-21, branch
+`generic-courier-g4a` off origin/main 73eeb8d; NOT merged, NOT deployed, no tenant switched on). Migration V177 (built as V176; flexible labeling slice 1 took V176).**
+- **Rule (`courier.GenericPortalReturns`, the one definition):** `routeGeneric(order)` = newest forward leg generic
+  (G3's `newestForwardIsGenericSql`) AND `tenants.portal_generic_returns_enabled` (V177, default false, Settings →
+  Returns portal, owner, own endpoint `/tenant/portal-settings/other-couriers`, audit `portal_generic_returns_switch`).
+  Eligible only while that leg is `delivered` inside the window — `delivered_at` only, never `handed_over_at`
+  (Marawan 2026-10-21). Lookup adds `otherCourier {carrierName}` ONLY for such an order (absent for Bosta) and no Bosta
+  pickup area; submission refuses exchange / custom address for it. Config `otherCouriers: true` only when the switch
+  is on AND the store has a generic forward leg (a Bosta-only store's config is unchanged even with the switch on).
+- **Approval:** refund approve / auto-approve → `booking_status 'manual'` + `manual_carrier_name` (the forward leg's),
+  nothing enqueued. Every Bosta path skips 'manual' by its existing SQL (sweeper / Book now NULL, retry failed,
+  confirm / not-booked failed_ambiguous, pickup_booking_problem, linkCandidateSql) — no Bosta SQL edited. Generic
+  exchange approve → 409 `EXCHANGE_OTHER_COURIER` (G4b).
+- **`POST /return-requests/{id}/manual-courier {carrier, trackingNumber?}`** (owner/manager): carrier only → request
+  stays approved (`courier_chosen` event); with tracking → `GenericLegTransitions.createPortalReturnLeg` (provider
+  generic, leg return, source portal_request, GenericTrackingKey), `return_shipment_id`, link_source
+  `merchant_entered`, events leg_linked + pickup_booked, status pickup_booked. Same key as the order's forward
+  waybill → 409 SAME_AS_ORDER_WAYBILL (nothing changes); another shipment's key → 409 TRACKING_TAKEN. Refusals are
+  `GenericReturnException` (`{code, message_en, message_ar}`) — ResponseStatusException bodies are empty.
+- **Scan returns:** `WaybillScanKeys.lookupReturnLeg` (Scan returns only, after the forward miss) → the request's
+  parcel card. While `GenericPortalReturns.customerReturnInProgress` (a requested/approved/pickup_booked/received
+  request, or a generic return leg awaiting intake), a DELIVERED piece / the original waybill skips G3's
+  returned-to-sender marking. Close → `markIntakeCompleteReturnLegsReturned` (also finishes legs the shared
+  `resolveReturnLegIfComplete` already flipped — it writes state only, any provider). `returnLegScanEvidenceSql` unchanged.
+- **Screens:** drawer `ManualCourierPanel` replaces the Bosta booking row/spinner when `detail.otherCourier`;
+  "Book with <carrier>" pill (case rows get `reason.carrierName` in Java after the unchanged case SQL); portal
+  courier-neutral copy (`p3.pickupTextOther`), no Return/Exchange choice; EN + AR.
+- **Tests:** GenericG4aIsolationGoldenTest (recorded on 73eeb8d before any G4a code; generic off / on+portal off /
+  on+portal on → byte-identical), GenericCourierG4aTest 14, GenericG4aSnapshotScriptTest, RlsCoverageTest +1,
+  PortalOrderLeakTest registrations, MigrationSmokeTest 176 / NotTracedBackfillTest 121; vitest
+  genericCourierG4a 14; browser genericG4aLayout 24. Revert-checked: RTO-skip, 'manual' (sweeper), per-order flag
+  for Bosta, delivered-only eligibility.
+- **G3 golden made clock-independent (own commit before G4a):** its delivery-summary weekly trends (Monday-based weeks
+  over fixtures placed "now() - N days") moved with the weekday — red on origin/main from 2026-10-21. "today" is pinned
+  once per scenario, both analytics calls use that explicit range, each trend is folded into totals (the 2026-10-20
+  recording's buckets sum to exactly the new totals). Re-recorded for the only other difference,
+  `items[].addedAfterShipping` (aaa5cca, merged in 5ef0449 / V174) — checked by running the test on 486897a and e3c8218.
+- **Follow-ups for G4b (not built):**
+  - Manual requests in the cases page's "to do" bucket — today the shared case SQL derives 'booking' /
+    'awaiting_items' (in progress); only the pill says "Book with <carrier>". Needs a generic-only branch in the case SQL.
+  - Carrier on Scan returns' courier-returns list (`ShipmentLinkService.listCrpReturns`) for a generic return leg.
+  - An Arrived action outside a Scan returns session leaves a generic return leg 'created' until the next session
+    close (only the close runs `markIntakeCompleteReturnLegsReturned`).
+  - The Returns & exchanges page overflows at 390px (search box + table, pre-existing).
+
 **Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
 `feat/flexible-labeling-s1` off origin/main bcf908a; NOT merged, NOT deployed). Migration V176. Backend only, no
 screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default false, no tenant switched on).**
