@@ -229,9 +229,11 @@ public class ProductExtrasAnalyticsService {
         List<FailedProduct> f = new ArrayList<>(failed);
         f.sort(Comparator.comparing(FailedProduct::failureRate, Comparator.nullsLast(Comparator.reverseOrder()))
             .thenComparing(Comparator.comparingLong(FailedProduct::orders).reversed())
-            .thenComparing(x -> Objects.toString(x.title(), "")));
+            .thenComparing(x -> Objects.toString(x.title(), ""))
+            .thenComparing(FailedProduct::productId));
         List<Pair> p = new ArrayList<>(pairs);
-        p.sort(Comparator.comparingLong(Pair::orders).reversed().thenComparing(Pair::titleA).thenComparing(Pair::titleB));
+        p.sort(Comparator.comparingLong(Pair::orders).reversed().thenComparing(Pair::titleA).thenComparing(Pair::titleB)
+            .thenComparing(Pair::variantA).thenComparing(Pair::variantB));
         return new Extras(abc(variants), f.subList(0, Math.min(10, f.size())), sizeCurve(variants),
             p.subList(0, Math.min(10, p.size())));
     }
@@ -245,7 +247,8 @@ public class ProductExtrasAnalyticsService {
         List<VariantRow> sorted = new ArrayList<>(variants);
         sorted.sort(Comparator.comparing((VariantRow v) -> v.realized()).reversed()
             .thenComparing(v -> Objects.toString(v.productTitle(), ""))
-            .thenComparing(v -> Objects.toString(v.variantTitle(), "")));
+            .thenComparing(v -> Objects.toString(v.variantTitle(), ""))
+            .thenComparing(VariantRow::variantId));
         BigDecimal total = sorted.stream().map(VariantRow::realized).filter(r -> r.signum() > 0)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         List<AbcRow> out = new ArrayList<>();

@@ -14,14 +14,20 @@ Overview card for tied SKUs.
 - New `OverviewTopSkusTieTest`: tt1 eleven SKUs tied at the top-5 boundary, shuffled insert → leader + four lowest
   skus, identical over 20 calls; tt2 six null-sku variants tied with one sku → sku first, then the four lowest
   variant ids. Revert-checked: `units DESC` only → tt1 + tt2 red; `units DESC, v.sku` without v.id → tt2 red.
-- Full backend suite: 3219 run, 3 red — only ExchangeBackfillTest and GenericG3IsolationGoldenTest g1/g2.
-- **Same missing tie-break elsewhere — listed, NOT fixed (ask first):** `SalesAnalyticsService.productsSql` (top
-  products `LIMIT ?`, ends on `p.title`; and the per-product top-3 variants `array_agg … [1:3]`, ends on `v.title`
-  — append `p.id` / `v.id`); `ProductExtrasAnalyticsService.extrasOf` (most-failed products and top pairs, Java sort
-  + `subList(0, 10)`, end on titles — add `.thenComparing(productId / variantA, variantB)`); `abc()` (no limit, but
-  a tie at the 80 % / 95 % line can flip a variant's class — add `variantId`). Order-only, no limit:
-  `MoneyAnalyticsService.extraFees` by sku (`, sh.variant_id`), `SalesAnalyticsService.VARIANTS_SQL`
-  (`, s.variant_id`), `StockAnalyticsService.summary` locations (`n DESC, name` → add location id).
+- **The same missing tie-break, fixed in all six other places (approved 2026-10-21; order of exact ties only — no
+  number, filter or row membership changes):** `SalesAnalyticsService.productsSql` top products `…, p.title, p.id`
+  and its per-product top-3 variants `…, v.title, v.id`; `ProductExtrasAnalyticsService.extrasOf` most-failed
+  products `.thenComparing(productId)` and bought-together `.thenComparing(variantA).thenComparing(variantB)`;
+  `abc()` `.thenComparing(variantId)` (a tie at the 80 % / 95 % line no longer decides A/B/C by input order);
+  display-only: `MoneyAnalyticsService.extraFees` `…, sh.variant_id`, `SalesAnalyticsService.VARIANTS_SQL`
+  `…, s.variant_id`, `StockAnalyticsService.summary` locations `n DESC, name, id`. No saved golden changed.
+- Tie tests for the three top-N lists: `AnalyticsProductsTieOrderTest` pt1 (30 products tied on units, revenue AND
+  title, limit 5 → lowest ids, both sorts, default plan and `SET LOCAL enable_sort = off` — the default plan groups
+  in product-id order and a top-N sort keeps the first of equal rows, so 8 rows on the default plan alone passed on
+  the old SQL), pt2 (six tied variants → top 3 = lowest variant ids); `analytics.ProductExtrasTieOrderTest` xt1
+  most-failed, xt2 pairs, xt3 ABC — the same rows in two orders give one answer. Revert-checked: old Sales SQL →
+  pt1 + pt2 red; old comparators → xt1–xt3 red.
+- Full backend suite: 3224 run, 3 red — only ExchangeBackfillTest and GenericG3IsolationGoldenTest g1/g2.
 
 **Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
 `feat/flexible-labeling-s1` off origin/main bcf908a; NOT merged, NOT deployed). Migration V176. Backend only, no
