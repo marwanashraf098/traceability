@@ -178,6 +178,7 @@ class GenericG3IsolationGoldenTest {
         piece(c, recent, "delivered", "packed");
 
         Map<String, Object> out = new LinkedHashMap<>();
+        java.time.LocalDate today = java.time.LocalDate.now(com.traceability.analytics.AnalyticsPeriod.CAIRO);
         TenantContext.set(tenant);
 
         // 1. Pickup session
@@ -252,8 +253,14 @@ class GenericG3IsolationGoldenTest {
         out.put("portalCrp",    portalLookup(slug, "3004", "01011113004"));
 
         // 7. Analytics
-        out.put("analyticsDelivery", get(token, "/api/v1/analytics/delivery/summary?period=30d"));
-        out.put("analyticsOrders",   get(token, "/api/v1/analytics/orders?size=200&period=30d"));
+        // Clock-independent (2026-10-21): "today" is pinned once for the whole scenario and both calls ask for that
+        // explicit 30-day range (never straddling midnight); the delivery summary's two 8-week trends are Monday-based
+        // calendar weeks over fixtures placed "now() - N days", so which week an order falls in depends on today's
+        // weekday — each trend is folded into its totals (weeks, delivered, failed), the same every day. A fixed Clock
+        // can't do this alone: the fixtures and the shipping badge (Instant.now()) follow the real clock.
+        String range = "from=" + today.minusDays(29) + "&to=" + today;
+        out.put("analyticsDelivery", weeklyTrendTotals(get(token, "/api/v1/analytics/delivery/summary?" + range)));
+        out.put("analyticsOrders",   get(token, "/api/v1/analytics/orders?size=200&" + range));
 
         String json = mapper.copy().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
             .enable(SerializationFeature.INDENT_OUTPUT).writeValueAsString(out);
@@ -347,6 +354,33 @@ class GenericG3IsolationGoldenTest {
         h.setBearerAuth(token);
         ResponseEntity<Object> r = rest.exchange("http://localhost:" + port + path, HttpMethod.GET, new HttpEntity<>(h), Object.class);
         return Map.of("status", r.getStatusCode().value(), "body", String.valueOf(r.getBody() == null ? "" : json(r.getBody())));
+    }
+
+    /** The delivery summary with each weeklyTrend (current / previous) replaced by its totals — see the call site. */
+    @SuppressWarnings("unchecked")
+    private Object weeklyTrendTotals(Object response) {
+        Map<String, Object> r = new LinkedHashMap<>((Map<String, Object>) response);
+        try {
+            Map<String, Object> body = mapper.readValue((String) r.get("body"), Map.class);
+            for (String side : List.of("current", "previous")) {
+                Object part = body.get(side);
+                if (!(part instanceof Map<?, ?> m) || !(m.get("weeklyTrend") instanceof List<?> weeks)) continue;
+                int delivered = 0, failed = 0;
+                for (Object w : weeks) {
+                    delivered += ((Number) ((Map<String, Object>) w).get("delivered")).intValue();
+                    failed    += ((Number) ((Map<String, Object>) w).get("failed")).intValue();
+                }
+                Map<String, Object> totals = new LinkedHashMap<>();
+                totals.put("weeks", weeks.size());
+                totals.put("delivered", delivered);
+                totals.put("failed", failed);
+                ((Map<String, Object>) part).put("weeklyTrend", totals);
+            }
+            r.put("body", json(body));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        return r;
     }
 
     private Object portalLookup(String slug, String number, String phone) {
