@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 import {
   getInventoryVariantBreakdown, InventoryVariantBreakdown,
 } from '../../api'
+import { UntaggedSplit } from '../../components/UntaggedSplit'
 import { Badge, EmptyState, ProductThumb, Skeleton, Tooltip, cn } from '../../components/ui'
 
 /**
@@ -129,6 +130,15 @@ export default function VariantDrawer({
                       </table>
                     </div>
                   </section>
+
+                  {data.pieceSplit && (
+                    <section>
+                      <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2.5">
+                        {t('untagged.splitTitle')}
+                      </h3>
+                      <UntaggedSplit split={data.pieceSplit} />
+                    </section>
+                  )}
 
                   <section>
                     <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2.5">

@@ -45,7 +45,7 @@ public class ReceivingController {
         UUID sessionId = receiving.createSession(
             principal.userId(),
             req.locationId() != null ? UUID.fromString(req.locationId()) : null,
-            req.reference(), req.supplierName(), req.note());
+            req.reference(), req.supplierName(), req.note(), req.mode());
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(Map.of("sessionId", sessionId.toString()));
     }
@@ -112,7 +112,7 @@ public class ReceivingController {
 
     // ── Labels ────────────────────────────────────────────────────────────────
 
-    @GetMapping(value = "/sessions/{sessionId}/labels", produces = "application/pdf")
+    @GetMapping("/sessions/{sessionId}/labels")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<byte[]> getLabels(
             @PathVariable UUID sessionId,
@@ -122,7 +122,7 @@ public class ReceivingController {
         return pdfResponse(pdf, "labels-" + sessionId + ".pdf");
     }
 
-    @PostMapping(value = "/sessions/{sessionId}/reprint", produces = "application/pdf")
+    @PostMapping("/sessions/{sessionId}/reprint")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<byte[]> reprint(
             @PathVariable UUID sessionId,
@@ -137,7 +137,7 @@ public class ReceivingController {
 
     // ── Per-variant labels ────────────────────────────────────────────────────
 
-    @GetMapping(value = "/sessions/{sessionId}/variants/{variantId}/labels", produces = "application/pdf")
+    @GetMapping("/sessions/{sessionId}/variants/{variantId}/labels")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<byte[]> getVariantLabels(
             @PathVariable UUID sessionId,
@@ -153,7 +153,7 @@ public class ReceivingController {
         return pdfResponse(result.pdf(), filename);
     }
 
-    @PostMapping(value = "/sessions/{sessionId}/variants/{variantId}/reprint", produces = "application/pdf")
+    @PostMapping("/sessions/{sessionId}/variants/{variantId}/reprint")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<byte[]> reprintVariant(
             @PathVariable UUID sessionId,
@@ -185,6 +185,9 @@ public class ReceivingController {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    // No produces= on the label mappings (like PieceLabelController): it would also bind the JSON
+    // error bodies (e.g. 409 COUNT_ONLY_NO_LABELS) to application/pdf and turn them into a 500.
+    // The content type is set on the success response here.
     private ResponseEntity<byte[]> pdfResponse(byte[] pdf, String filename) {
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
@@ -194,8 +197,9 @@ public class ReceivingController {
 
     // ── Request records ───────────────────────────────────────────────────────
 
+    /** mode: "print_stick" (default when absent) | "count_only" (flexible labeling only). */
     public record CreateSessionRequest(
-        String locationId, String reference, String supplierName, String note) {}
+        String locationId, String reference, String supplierName, String note, String mode) {}
 
     public record AddLineRequest(String variantId, int quantity) {}
 

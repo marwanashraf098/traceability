@@ -648,6 +648,35 @@
       "edit": "Edit",
       "remove": "Remove",
       "loadMore": "Load more"
+    },
+    "mode": {
+      "title": "How will these pieces be labeled?",
+      "print_stick": {
+        "title": "Print & stick now",
+        "body": "Exactly how receiving works today. Enter quantities, print a label for every piece, stick them on before shelving."
+      },
+      "count_only": {
+        "title": "Count only, label at pack",
+        "body": "No labels now. Enter how many arrived. Pieces go in as untagged and get a label when they're packed."
+      },
+      "mainWarehouseOnly": "Count-only receiving goes into the main warehouse."
+    },
+    "countOnly": {
+      "badge": "Count only",
+      "noLabels": "No labels will be printed — these pieces go in as untagged. Each one gets a label when it's packed, or in a Tag stock session.",
+      "shopify": "Shopify goes up by {{count}} when you finish, same as normal receiving.",
+      "finish": "Finish · add {{count}} to stock",
+      "confirmBody": "This adds {{count}} untagged pieces to stock and locks the session. No labels are printed.",
+      "doneTitle": "{{count}} pieces added to stock",
+      "doneTitle_one": "1 piece added to stock",
+      "doneSub": "Added as untagged, labels go on at packing",
+      "shopifyLabel": "Shopify",
+      "shopifyUpdated": "Updated +{{count}}",
+      "shopifyUpdating": "Updating +{{count}}…",
+      "shopifyFailed": "Not updated yet — see Alerts",
+      "shopifyNone": "No change",
+      "labelsLabel": "Labels printed",
+      "labelsNone": "None"
     }
   },
   "fulfill": {
@@ -689,7 +718,8 @@
       "LINE_FILLED": "This line is already complete — no more units needed",
       "REMOVED_IN_SHOPIFY": "This item was removed from the order in Shopify",
       "WRONG_STATUS": "Item is not available to pick",
-      "CLAIMED_BY_OTHER": "Another packer is packing this order right now"
+      "CLAIMED_BY_OTHER": "Another packer is packing this order right now",
+      "PIECE_UNTAGGED": "This piece has no barcode yet — stick a label on and scan that"
     },
     "linkAwb": {
       "title": "Scan AWB Barcode",
@@ -4318,5 +4348,18 @@
     "listener": "Scan capture",
     "handled": "handled",
     "fellThrough": "browser default"
+  },
+  "untagged": {
+    "badge": "Untagged",
+    "available": "Available",
+    "labeled": "Labeled",
+    "untagged": "Untagged",
+    "splitTitle": "Labels",
+    "variantNote": "{{count}} untagged pieces have no barcode yet. They get one when packed or in a Tag stock session. They can't be reprinted, transferred, held or marked damaged until then.",
+    "variantNote_one": "1 untagged piece has no barcode yet. It gets one when packed or in a Tag stock session. It can't be reprinted, transferred, held or marked damaged until then.",
+    "listNote": "{{count}} untagged pieces — tag them first",
+    "listNote_one": "1 untagged piece — tag it first",
+    "pieceTitle": "No barcode yet",
+    "pieceNote": "This piece is untagged. It gets a label when it's packed or in a Tag stock session. Until then it can't be reprinted, transferred, held or marked damaged."
   }
 }

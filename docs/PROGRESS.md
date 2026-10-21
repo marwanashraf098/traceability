@@ -4,6 +4,73 @@
 
 ## Current state
 
+**Shopify↔Traced inventory drift check — STEP 0 diagnosis only (2026-10-21, no code, no branch). Report given in chat;
+waiting on Marawan's answers.** Key facts found:
+- Traced reads only Shopify `available` today (gateway `fetchAvailableQuantities`, analytics reader); never committed /
+  on_hand / damaged. API 2026-04 already sends `changeFromQuantity` + `@idempotent` on every adjust/move (both mandatory
+  since 2026-04; stale → `CHANGE_FROM_QUANTITY_STALE`).
+- The Bosta plugin fulfils in Shopify at AWB creation, BEFORE pick (pick queue needs a 'created' forward leg), so an
+  `available` Traced piece can already be out of Shopify on_hand. Traced never assigns the fulfilment location.
+- Compare `Sa + Sc` (available + committed) and `Sd` (damaged), never `available` alone; exact only for "quiet" SKUs
+  (no open demand, Sc = 0, no open claim / session / recent event). History-dependent statuses: damaged, on_hold,
+  lost / destroyed / voided, out_on_transfer / transferred_out (leave vs remove), exchange replacements in flight.
+- Blocker for any auto-fix: tenants that don't pack through Traced (stock trust 2026-10-08: BROEK 0 %, Jumi 4 %) —
+  there the "drift" is on Traced's side; a +N correction would oversell.
+- `ShopifyInventoryReadGuardTest` forbids code outside `analytics/` from using `variant_shopify_levels` /
+  `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
+  guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
+
+**Flexible labeling — slice 2: count-only receiving + untagged pieces + stock-take guard (2026-10-21, branch
+`feat/flexible-labeling-s2` off origin/main e3c8218, rebased onto 18f9c16; NOT merged, NOT deployed). Migrations V178 +
+V179 — built as V177 + V178, renumbered before merge (G4a took V177 on main). Flag
+`flexible_labeling_enabled` stays OFF for real tenants until slices 2, 3, 4 are live (slice 7 before such a tenant's
+stock take).**
+- **V178:** `pieces.short_code` DROP NOT NULL (UNIQUE (tenant_id, short_code) unchanged); `receipts.mode`
+  print_stick (default, every existing receipt) | count_only. **V179** (`.conf` executeInTransaction=false, DROP +
+  CREATE INDEX CONCURRENTLY, the V175 pattern): `pieces_untagged_available_idx (tenant_id, variant_id,
+  current_location_id) WHERE short_code IS NULL AND status = 'available'`. Prod size checked first (read-only
+  catalog query, 2026-10-21): pieces ≈ 6,154 rows, 4.4 MB total, 6 indexes — the partial index starts empty.
+- **Untagged** = `short_code IS NULL` (`inventory.UntaggedPieces` — the predicate, `availableCounts`, `refuse`).
+  barcode PC-ULID stays (never printed, but shown in Lookup and matched by every scan resolver — so typed internal
+  codes are refused too).
+- **Receiving:** `ReceivingService.createSession(…, mode)` — count_only needs the flag (400 COUNT_ONLY_NOT_AVAILABLE)
+  and the main warehouse (400 COUNT_ONLY_MAIN_WAREHOUSE_ONLY), both re-checked at finalize. Finalize →
+  `InventoryLedger.batchReceive(specs, actor, withCodes=false)`: same rows / received events / chunking / one
+  transaction, NO counter claim, short_code NULL. Shopify +N unchanged (same `onReceivingSessionClose` call).
+  getSession / listSessions carry `mode`; a finished count-only session also `shopify` {applied, pending, failed,
+  skipped} units from its receiving_session claims.
+- **Refusals** (`labels.UntaggedException`, ApiException {code, message_en, message_ar}): COUNT_ONLY_NO_LABELS (409)
+  on every receiving print / reprint (session + variant) before anything renders or logs; PIECE_UNTAGGED (409) on
+  generatePieceLabel(s), Lookup reprint, returns intake reprint + legacy gated reprint (BEFORE the event — the PDF
+  is a separate call), PieceAdjustService adjust / void / hold / unhold / restore, stock-take scan, returns scan;
+  pick scan → ScanResult PIECE_UNTAGGED; transfer scan-out / return-scan-out → ScanOutResult PIECE_UNTAGGED (EN+AR).
+  STOCK_TAKE_UNTAGGED_IN_SCOPE (409, names location + count) at open AND finalize
+  (`StockTakeService.refuseUntaggedInScope`, physically present statuses, variant subset honoured); plan() skips
+  untagged pieces (backstop — never written off or damage-corrected). The four receiving label mappings lost
+  `produces="application/pdf"` (the JSON 409 was turning into a 500 — same fix PieceLabelController already had).
+- **Lists:** /inventory/pieces and analytics variant pieces list labeled pieces only + `untaggedCount` (NON_NULL,
+  first page); /api/v1/pieces (no screen calls it) filters too. Lookup: `canReprint` false for untagged;
+  `variantStock` {available, labeled, untagged} and the breakdown's `pieceSplit` — flag tenants only.
+- **Other paths checked:** allocation only via the pick scan (refused); exchanges / portal pick delivered pieces only
+  (untagged never delivered); NotTracedTagger is order-level; trip pieces never include untagged (they never leave);
+  transfers' returnable-pieces are transferred_out only; ExceptionService waybill_deleted COALESCEs (slice 0);
+  scan helpers exclude (slice 0); ReviewTenantSeeder now picks `short_code IS NOT NULL`; no export endpoints exist;
+  the Shopify seed counts untagged available pieces (correct — they're stock).
+- **UI (DS v1.0, EN + AR):** Receiving create — mode chooser (flag only; Transfers-chooser card pattern, aria-pressed),
+  count only locks the location to the main warehouse; open session — notice card + "Finish · add N to stock" (grid's
+  live total); finished — CountOnlyDone (N added, +N per variant, Shopify line, Labels printed: None), no print
+  buttons; list badge "Count only". Lookup — "Untagged" badge + info note instead of reprint / adjust (only when
+  shortCode === null, never a missing field), `UntaggedSplit` (MiniStat ×3 + note). Inventory VariantDrawer split;
+  BreakdownTab and analytics SKU drawer "N untagged pieces — tag them first". fulfill.rejection.PIECE_UNTAGGED.
+- **Tests:** CountOnlyUntaggedTest 12 (r1–r3, l1–l2, a1, s1, t1–t2, k1, m1, x1 app_user with positive control);
+  every guard revert-checked (14 mutations, each fails its test). Frontend receivingCountOnly 5, lookupUntagged 3
+  (revert-checked). ShortCodeNullSafetyTest n1's untagged expectation 422 → 409 PIECE_UNTAGGED (approved).
+  MigrationSmokeTest 178, NotTracedBackfillTest 123 (after the rebase). Full backend suite 3220: red only the baseline
+  (ExchangeBackfillTest, GenericG3IsolationGoldenTest g1/g2) + n1 before its approved update (green after).
+  Frontend 146 / 1084 green; tsc + vite build clean.
+- **For later slices:** order seals (slice 8) will need the returns-scan and intake-reprint refusals revisited;
+  stock-take `resolve` (manager found / lost by piece id) relies on the snapshot never holding an untagged piece.
+
 **Non-Bosta couriers G4a — portal refunds for orders shipped with other couriers (2026-10-21, branch
 `generic-courier-g4a` off origin/main 73eeb8d; NOT merged, NOT deployed, no tenant switched on). Migration V177 (built as V176; flexible labeling slice 1 took V176).**
 - **Rule (`courier.GenericPortalReturns`, the one definition):** `routeGeneric(order)` = newest forward leg generic
@@ -50,7 +117,7 @@
   - The Returns & exchanges page overflows at 390px (search box + table, pre-existing).
 
 **Flexible labeling — slice 1: blank label codes + blank label template (2026-10-21, branch
-`feat/flexible-labeling-s1` off origin/main bcf908a; NOT merged, NOT deployed). Migration V176. Backend only, no
+`feat/flexible-labeling-s1` off origin/main bcf908a; MERGED to main e3c8218 2026-10-21, NOT deployed). Migration V176. Backend only, no
 screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default false, no tenant switched on).**
 - **V176:** `tenants.flexible_labeling_enabled`; `label_code_batches` (kind pack|tag|factory|replacement, count,
   spares, label_w_mm / label_h_mm snapshot, idempotency_key UNIQUE per tenant, count + spares 1..2,000; app_user

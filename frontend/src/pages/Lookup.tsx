@@ -11,7 +11,8 @@ import {
   restorePiece, RESTORE_REASONS, RestoreReason,
   getRoleFromToken, reprintPieceLabel, ReprintLabelError,
 } from '../api'
-import { Badge, Button, Modal, Spinner } from '../components/ui'
+import { Alert, Badge, Button, Modal, Spinner } from '../components/ui'
+import { UntaggedSplit } from '../components/UntaggedSplit'
 import OrderDrawer from '../components/OrderDrawer'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
@@ -74,6 +75,8 @@ function MetaField({ label, children, className = '' }: { label: string; childre
 
 function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh: () => void }) {
   const { t } = useTranslation()
+  // Flexible labeling: no printed code yet — nothing to reprint, and v1 allows no action until tagged.
+  const untagged = result.shortCode === null
 
   return (
     <div className="space-y-4 animate-fadeIn">
@@ -83,9 +86,15 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           <div className="min-w-0">
             {/* Short code — what the printed sticker carries; mono as spec requires for IDs.
                 The internal PC- barcode is in the meta grid ("Internal code"). */}
-            <p data-testid="piece-short-code" className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
-              {result.shortCode ?? result.barcode}
-            </p>
+            {untagged ? (
+              <div className="mb-1.5" data-testid="piece-untagged-badge">
+                <Badge tone="warning" label={t('untagged.badge')} />
+              </div>
+            ) : (
+              <p data-testid="piece-short-code" className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
+                {result.shortCode}
+              </p>
+            )}
             <h2 className="text-h2 text-primary leading-tight">
               {result.variant.productTitle}
               {result.variant.title && result.variant.title !== 'Default Title' && (
@@ -147,9 +156,23 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           </div>
         )}
 
-        <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
+        {result.variantStock && (
+          <div className="mt-4 pt-4 border-t border-line">
+            <UntaggedSplit split={result.variantStock} />
+          </div>
+        )}
 
-        <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
+        {untagged ? (
+          <div className="mt-4" data-testid="piece-untagged-note">
+            <Alert tone="info" title={t('untagged.pieceTitle')}>{t('untagged.pieceNote')}</Alert>
+          </div>
+        ) : (
+          <>
+            <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
+
+            <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
+          </>
+        )}
       </div>
 
       {/* ── Chain-of-custody timeline ── */}

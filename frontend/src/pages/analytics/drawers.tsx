@@ -186,6 +186,11 @@ function SkuDrawerBody({ variantId }: { variantId: string }) {
         {!pieces.data ? <Note>…</Note> : !top ? <CardEmpty>{t('analytics.sku.noPieces')}</CardEmpty> : (
           <QueryBlock q={history}>{h => <PieceTimeline h={h} />}</QueryBlock>
         )}
+        {!!pieces.data?.untaggedCount && (
+          <p className="text-small text-muted mt-2" data-testid="sku-untagged-note">
+            {t('untagged.listNote', { count: pieces.data.untaggedCount })}
+          </p>
+        )}
       </Section>
 
       <Section title={t('analytics.sku.recentOrders')} testId="sku-orders">

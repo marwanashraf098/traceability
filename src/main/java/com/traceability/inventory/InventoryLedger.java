@@ -280,14 +280,25 @@ public class InventoryLedger {
      */
     @Transactional
     public void batchReceive(List<ReceiveSpec> specs, UUID actorUserId) {
+        batchReceive(specs, actorUserId, true);
+    }
+
+    /**
+     * Same contract, with {@code withCodes = false} for a COUNT-ONLY receiving session (flexible
+     * labeling slice 2): no counter claim, short_code NULL — the pieces go in UNTAGGED and get their
+     * code when a blank label is bound to them. Everything else (rows, received events, one
+     * transaction, chunking) is identical.
+     */
+    @Transactional
+    public void batchReceive(List<ReceiveSpec> specs, UUID actorUserId, boolean withCodes) {
         if (specs.isEmpty()) return;
         int n = specs.size();
         UUID tenantId = specs.get(0).tenantId();
 
         // ── Round-trip 0: claim N sequential short codes atomically ──────────
         // PieceCodeCounter is the one claim (shared with blank label codes, LabelCodeService).
-        // Codes for this batch: [firstCode .. firstCode+N-1].
-        long firstCode = PieceCodeCounter.claim(jdbc, tenantId, n);
+        // Codes for this batch: [firstCode .. firstCode+N-1]. Untagged: no claim at all.
+        long firstCode = withCodes ? PieceCodeCounter.claim(jdbc, tenantId, n) : -1;
 
         for (int from = 0; from < n; from += RECEIVE_CHUNK) {
             int to = Math.min(n, from + RECEIVE_CHUNK);
@@ -320,7 +331,7 @@ public class InventoryLedger {
             pieceParams.add(s.variantId());
             pieceParams.add(s.receiptId());
             pieceParams.add("PC-" + s.pieceId());
-            pieceParams.add(PieceCodeCounter.format(firstCode + i));
+            pieceParams.add(firstCode < 0 ? null : PieceCodeCounter.format(firstCode + i));
             pieceParams.add(s.locationId());
             pieceParams.add(actorUserId);
         }

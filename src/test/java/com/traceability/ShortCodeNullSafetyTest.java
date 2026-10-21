@@ -132,12 +132,13 @@ class ShortCodeNullSafetyTest {
         }
         assertThat(labelSvc.generatePieceLabel(tagged.get(0), null, null)).isNotEmpty();
 
+        // Slice 2: an untagged piece's label is refused outright — 409 PIECE_UNTAGGED.
         assertThatThrownBy(() -> labelSvc.generatePieceLabel(untagged.get(0), null, null))
-            .isInstanceOf(ResponseStatusException.class)
-            .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOf(com.traceability.ApiException.class)
+            .satisfies(e -> assertThat(((com.traceability.ApiException) e).errorCode()).isEqualTo("PIECE_UNTAGGED"));
         assertThatThrownBy(() -> labelSvc.generatePieceLabels(untagged, null, null))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(com.traceability.ApiException.class)
+            .satisfies(e -> assertThat(((com.traceability.ApiException) e).errorCode()).isEqualTo("PIECE_UNTAGGED"));
     }
 
     @Test

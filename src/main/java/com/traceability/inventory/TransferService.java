@@ -268,13 +268,20 @@ public class TransferService {
         //    normalized (Caps Lock / Arabic layout — ScanInputNormalizer); the result echoes the raw scan.
         String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
-            "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
+            "SELECT p.id, p.variant_id, p.status, p.current_location_id, p.short_code FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
                 "لم يتم العثور على الباركود في المخزون");
+        }
+        // Flexible labeling v1: an untagged piece (matched only by its typed internal code) can't
+        // be transferred until it's tagged.
+        if (pieceRows.get(0).get("short_code") == null) {
+            return ScanOutResult.rejected("PIECE_UNTAGGED",
+                "This piece has no barcode yet (untagged). Tag it before transferring it.",
+                "هذه القطعة بدون باركود بعد (غير مُلصقة). ألصق لها ملصقًا قبل نقلها.");
         }
         Map<String, Object> piece   = pieceRows.get(0);
         String pieceId   = (String) piece.get("id");
@@ -407,13 +414,20 @@ public class TransferService {
         // 2. Piece lookup — same triple-match (and normalized lookup value) as scanOut().
         String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
-            "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
+            "SELECT p.id, p.variant_id, p.status, p.current_location_id, p.short_code FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
                 "لم يتم العثور على الباركود في المخزون");
+        }
+        // Flexible labeling v1: an untagged piece (matched only by its typed internal code) can't
+        // be transferred until it's tagged.
+        if (pieceRows.get(0).get("short_code") == null) {
+            return ScanOutResult.rejected("PIECE_UNTAGGED",
+                "This piece has no barcode yet (untagged). Tag it before transferring it.",
+                "هذه القطعة بدون باركود بعد (غير مُلصقة). ألصق لها ملصقًا قبل نقلها.");
         }
         Map<String, Object> piece   = pieceRows.get(0);
         String pieceId   = (String) piece.get("id");

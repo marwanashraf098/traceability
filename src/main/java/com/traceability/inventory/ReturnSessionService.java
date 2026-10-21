@@ -179,6 +179,9 @@ public class ReturnSessionService {
         }
 
         Map<String, Object> piece = fetchPieceByScan(cleaned, tenantId);
+        // Flexible labeling v1: an untagged piece is only matchable by its typed internal code and
+        // never leaves untagged (it's tagged at packing) — refused. Order seals (slice 8) revisit this.
+        if (piece != null && Boolean.TRUE.equals(piece.get("untagged"))) throw com.traceability.labels.UntaggedException.piece();
         if (piece != null) {
             return scanPiece(sessionId, tenantId, piece, locationId, actorUserId, viaPhone);
         }
@@ -573,6 +576,9 @@ public class ReturnSessionService {
         if (piece == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found: " + pieceId);
         }
+        // The PDF is rendered in a separate call after this commits — refuse an untagged piece
+        // HERE, so no label_reprinted event is ever recorded for a label that can't be printed.
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);
 
         ledger.recordLabelReprinted(pieceId, actorUserId,
             (UUID) piece.get("locationId"), (UUID) piece.get("orderId"), (UUID) piece.get("shipmentId"));
@@ -600,6 +606,7 @@ public class ReturnSessionService {
                 "Label reprint in the returns flow is only available for pieces in " +
                 "return_pending_inspection or damaged status (current: " + current.db + ")");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // before the event (PDF is a separate call)
 
         ledger.recordLabelReprinted(pieceId, actorUserId,
                 (UUID) piece.get("locationId"), (UUID) piece.get("orderId"), (UUID) piece.get("shipmentId"));
@@ -1331,7 +1338,7 @@ public class ReturnSessionService {
     private Map<String, Object> fetchPieceByScan(String scan, UUID tenantId) {
         String lookup = ScanInputNormalizer.normalizePiece(scan);
         return jdbc.query(
-            "SELECT p.id, p.status::text AS status, p.variant_id, " +
+            "SELECT p.id, p.status::text AS status, p.variant_id, p.short_code IS NULL AS untagged, " +
             "       p.current_order_id AS order_id, s.id AS shipment_id " +
             "FROM pieces p " +
             "LEFT JOIN orders o    ON o.id = p.current_order_id AND o.tenant_id = ? " +
@@ -1345,6 +1352,7 @@ public class ReturnSessionService {
                 m.put("variant_id", rs.getObject("variant_id", UUID.class));
                 m.put("order_id",   rs.getObject("order_id",   UUID.class));
                 m.put("shipment_id", rs.getObject("shipment_id", UUID.class));
+                m.put("untagged",   rs.getBoolean("untagged"));
                 return m;
             },
             tenantId, tenantId, lookup, lookup, lookup, tenantId);

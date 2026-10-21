@@ -265,7 +265,8 @@ export interface PieceRow {
   pieceId: string; barcode: string; shortCode: string | null; status: string; receivedAt: string | null
   location: string | null; trips: number; lastTripAt: string | null
 }
-export interface VariantPieces { variantId: string; minTrips: number; total: number; pieces: PieceRow[] }
+/** untaggedCount (flexible labeling): untagged pieces left out of the list, present only when > 0. */
+export interface VariantPieces { variantId: string; minTrips: number; total: number; pieces: PieceRow[]; untaggedCount?: number }
 
 export interface TripPiece {
   pieceId: string; barcode: string; shortCode: string | null; status: string; variantId: string; sku: string | null

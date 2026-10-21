@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
@@ -34,10 +34,14 @@ interface Props {
   onRefresh: () => void
   onFinalizeClick: () => void
   finalizing: boolean
+  /** Count-only sessions (flexible labeling): the Finalize button's label and a notice above it,
+   *  from the grid's live unit total. */
+  finalizeLabel?: (units: number) => string
+  notice?: (units: number) => ReactNode
 }
 
 export default function ProductSelectionGrid({
-  sessionId, lines, onRefresh, onFinalizeClick, finalizing,
+  sessionId, lines, onRefresh, onFinalizeClick, finalizing, finalizeLabel, notice,
 }: Props) {
   const { t } = useTranslation()
   // The grid never loads the whole catalog: `results` is the current server-side
@@ -397,6 +401,8 @@ export default function ProductSelectionGrid({
         )}
       </div>
 
+      {notice?.(totals.units)}
+
       {/* Running total + Finalize */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <span className="text-small text-muted">
@@ -405,7 +411,7 @@ export default function ProductSelectionGrid({
           })}
         </span>
         <Button loading={finalizing} disabled={totals.units === 0} onClick={onFinalizeClick}>
-          {t('receiving.finalize')}
+          {finalizeLabel ? finalizeLabel(totals.units) : t('receiving.finalize')}
         </Button>
       </div>
 

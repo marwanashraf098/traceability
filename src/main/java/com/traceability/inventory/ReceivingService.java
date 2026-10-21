@@ -1,5 +1,8 @@
 package com.traceability.inventory;
 
+import com.traceability.labels.FlexibleLabeling;
+import com.traceability.labels.UntaggedException;
+
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -28,13 +31,43 @@ public class ReceivingService {
     @Transactional
     public UUID createSession(UUID actorUserId, UUID locationId,
                               String reference, String supplierName, String note) {
+        return createSession(actorUserId, locationId, reference, supplierName, note, MODE_PRINT_STICK);
+    }
+
+    /** Today's flow: a label printed for every piece at receiving. The default. */
+    public static final String MODE_PRINT_STICK = "print_stick";
+    /** Flexible labeling slice 2: no labels now — the pieces go in untagged (short_code NULL). */
+    public static final String MODE_COUNT_ONLY  = "count_only";
+
+    /**
+     * {@code mode} null → print_stick. count_only only for a tenant with flexible labeling, and only
+     * into the main warehouse (the fulfillment location — where packing labels untagged pieces).
+     */
+    @Transactional
+    public UUID createSession(UUID actorUserId, UUID locationId,
+                              String reference, String supplierName, String note, String mode) {
         UUID tenantId = TenantContext.require();
+        String m = mode == null ? MODE_PRINT_STICK : mode;
+        if (!MODE_PRINT_STICK.equals(m) && !MODE_COUNT_ONLY.equals(m)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown receiving mode");
+        }
+        if (MODE_COUNT_ONLY.equals(m)) {
+            if (!FlexibleLabeling.enabled(jdbc, tenantId)) throw UntaggedException.countOnlyUnavailable();
+            if (!isMainWarehouse(locationId, tenantId)) throw UntaggedException.countOnlyMainWarehouse();
+        }
         UUID id = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, location_id, note, status) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open')",
-            id, tenantId, reference, supplierName, actorUserId, locationId, note);
+            "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, location_id, note, status, mode) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+            id, tenantId, reference, supplierName, actorUserId, locationId, note, m);
         return id;
+    }
+
+    private boolean isMainWarehouse(UUID locationId, UUID tenantId) {
+        if (locationId == null) return false;
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM locations WHERE id = ? AND tenant_id = ? AND is_fulfillment)",
+            Boolean.class, locationId, tenantId));
     }
 
     // ── Lines ────────────────────────────────────────────────────────────────
@@ -119,6 +152,8 @@ public class ReceivingService {
         UUID locationId = jdbc.queryForObject(
             "SELECT location_id FROM receipts WHERE id = ? AND tenant_id = ?",
             UUID.class, sessionId, tenantId);
+        boolean countOnly = MODE_COUNT_ONLY.equals(jdbc.queryForObject(
+            "SELECT mode FROM receipts WHERE id = ? AND tenant_id = ?", String.class, sessionId, tenantId));
         if (locationId == null) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Session has no location set");
@@ -149,8 +184,15 @@ public class ReceivingService {
             }
         }
 
+        // Count-only: the flag and the main warehouse are re-checked (either may have changed since
+        // the session opened) — then the same pieces and events, with no short codes claimed.
+        if (countOnly) {
+            if (!FlexibleLabeling.enabled(jdbc, tenantId)) throw UntaggedException.countOnlyUnavailable();
+            if (!isMainWarehouse(locationId, tenantId)) throw UntaggedException.countOnlyMainWarehouse();
+        }
+
         // Two-INSERT atomic commit — all pieces + events or nothing.
-        ledger.batchReceive(specs, actorUserId);
+        ledger.batchReceive(specs, actorUserId, !countOnly);
 
         // Mark session finalized.
         jdbc.update(
@@ -183,7 +225,7 @@ public class ReceivingService {
     public Map<String, Object> getSession(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT r.id, r.status, r.reference, r.supplier_name, r.note, " +
+            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.note, " +
             "       r.location_id, l.name AS location_name, " +
             "       r.received_by, r.created_at, r.finalized_at, " +
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
@@ -194,14 +236,38 @@ public class ReceivingService {
         if (rows.isEmpty()) throw notFound("session");
         Map<String, Object> session = new LinkedHashMap<>(rows.get(0));
         session.put("lines", getLines(sessionId, tenantId));
+        if (MODE_COUNT_ONLY.equals(session.get("mode")) && "finalized".equals(session.get("status"))) {
+            session.put("shopify", shopifySync(sessionId, tenantId));
+        }
         return session;
+    }
+
+    /**
+     * The count-only finished screen's "Shopify" line: units of this session's receiving claims
+     * (trigger receiving_session, keyed by the session) per outcome. No claim rows yet → pending,
+     * the after-commit sync hasn't written them.
+     */
+    private Map<String, Object> shopifySync(UUID sessionId, UUID tenantId) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("applied", 0); out.put("pending", 0); out.put("failed", 0); out.put("skipped", 0);
+        jdbc.query(
+            "SELECT CASE WHEN status IN ('applied', 'superseded_by_seed') THEN 'applied' " +
+            "            WHEN status IN ('shadow', 'pending') THEN 'pending' " +
+            "            WHEN status = 'failed' THEN 'failed' ELSE 'skipped' END AS outcome, " +
+            "       SUM(delta)::int AS units " +
+            "FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'receiving_session' AND trigger_id = ? " +
+            "GROUP BY 1",
+            rs -> { out.put(rs.getString("outcome"), rs.getInt("units")); },
+            tenantId, sessionId.toString());
+        return out;
     }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listSessions() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
-            "SELECT r.id, r.status, r.reference, r.supplier_name, r.created_at, r.finalized_at, " +
+            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.created_at, r.finalized_at, " +
             "       l.name AS location_name, " +
             "       COALESCE((SELECT SUM(rl.quantity) FROM receipt_lines rl WHERE rl.receipt_id = r.id), 0) AS line_units, " +
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +

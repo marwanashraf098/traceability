@@ -48,6 +48,7 @@ public class LabelService {
     public byte[] generateSessionLabels(UUID sessionId, Float labelW_mm, Float labelH_mm)
             throws IOException {
         UUID tenantId = TenantContext.require();
+        refuseCountOnly(sessionId, tenantId);
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
@@ -85,6 +86,7 @@ public class LabelService {
         if (pieces.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        refuseUntagged(pieces);
 
         return renderPdf(pieces,
             labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
@@ -120,6 +122,7 @@ public class LabelService {
             if (row == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
             pieces.add(row);
         }
+        refuseUntagged(pieces);
         return renderPdf(pieces,
             labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
             labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
@@ -157,6 +160,7 @@ public class LabelService {
                                             Float labelW_mm, Float labelH_mm) throws IOException {
         UUID tenantId = TenantContext.require();
         requireFinalized(sessionId, tenantId);
+        refuseCountOnly(sessionId, tenantId);
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
@@ -194,6 +198,26 @@ public class LabelService {
             "VALUES (?, ?, ?, ?, ?, ?)",
             tenantId, sessionId, variantId, actorUserId, count, note);
         return result.pdf();
+    }
+
+    /**
+     * Flexible labeling slice 2 — a count-only receiving session prints no labels, ever (its pieces
+     * are untagged): every session / variant print and reprint refuses it before rendering or
+     * logging anything (409 COUNT_ONLY_NO_LABELS, not an empty PDF).
+     */
+    private void refuseCountOnly(UUID sessionId, UUID tenantId) {
+        List<String> mode = jdbc.queryForList(
+            "SELECT mode FROM receipts WHERE id = ? AND tenant_id = ?", String.class, sessionId, tenantId);
+        if (!mode.isEmpty() && ReceivingService.MODE_COUNT_ONLY.equals(mode.get(0))) {
+            throw com.traceability.labels.UntaggedException.countOnlyReceipt();
+        }
+    }
+
+    /** An untagged piece has no code to print — refused (409 PIECE_UNTAGGED), never silently skipped. */
+    private static void refuseUntagged(List<Map<String, Object>> pieces) {
+        if (pieces.stream().anyMatch(p -> p.get("short_code") == null)) {
+            throw com.traceability.labels.UntaggedException.piece();
+        }
     }
 
     private void requireFinalized(UUID sessionId, UUID tenantId) {

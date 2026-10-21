@@ -61,6 +61,7 @@ public class StockTakeService {
         }
 
         UUID locationId = resolveFulfillmentLocation(tenantId, requestedLocationId);
+        refuseUntaggedInScope(jdbc, tenantId, locationId, variantSubset ? variantIds : null);
 
         UUID sessionId = UUID.randomUUID();
         jdbc.update(
@@ -98,6 +99,29 @@ public class StockTakeService {
      */
     public static final String PHYSICALLY_PRESENT_STATUSES_SQL =
         "('available', 'damaged', 'on_hold', 'reserved', 'packed', 'awaiting_pickup', 'return_pending_inspection')";
+
+    /**
+     * Flexible labeling slice 2 — a stock take never runs over UNTAGGED pieces: they can't be
+     * scanned, so every one would be written off as lost. Refuses (409 STOCK_TAKE_UNTAGGED_IN_SCOPE,
+     * naming the location and the count) when any physically present untagged piece is at the
+     * location, within the variant subset when there is one ({@code variantIds} null = every variant).
+     * Called at open AND at finalize (untagged stock may arrive while a session is open).
+     */
+    static void refuseUntaggedInScope(JdbcTemplate jdbc, UUID tenantId, UUID locationId, List<UUID> variantIds) {
+        Integer n = jdbc.queryForObject(
+            "SELECT count(*)::int FROM pieces p " +
+            "WHERE p.tenant_id = ? AND p.current_location_id = ? AND " + UntaggedPieces.untaggedSql("p") +
+            "  AND p.status::text IN " + PHYSICALLY_PRESENT_STATUSES_SQL +
+            (variantIds == null ? "" : " AND p.variant_id = ANY(?::uuid[])"),
+            Integer.class,
+            variantIds == null ? new Object[] { tenantId, locationId }
+                               : new Object[] { tenantId, locationId, variantIds.toArray(new UUID[0]) });
+        if (n != null && n > 0) {
+            String name = jdbc.queryForList("SELECT name FROM locations WHERE id = ? AND tenant_id = ?",
+                String.class, locationId, tenantId).stream().findFirst().orElse(null);
+            throw com.traceability.labels.UntaggedException.stockTakeUntagged(name, n);
+        }
+    }
 
     /**
      * One batched INSERT ... SELECT — the pieces physically present at the resolved location
@@ -202,12 +226,15 @@ public class StockTakeService {
 
         // Normalized for the lookup only (ScanInputNormalizer); an unknown scan stores the raw value.
         String lookup = ScanInputNormalizer.normalizePiece(barcode);
-        record PieceRow(String id, String status) {}
+        record PieceRow(String id, String status, boolean untagged) {}
         PieceRow piece = jdbc.query(
-            "SELECT id, status::text AS status FROM pieces " +
+            "SELECT id, status::text AS status, short_code IS NULL AS untagged FROM pieces " +
             "WHERE (barcode = ? OR id = ? OR short_code = ?) AND tenant_id = ?",
-            rs -> rs.next() ? new PieceRow(rs.getString("id"), rs.getString("status")) : null,
+            rs -> rs.next() ? new PieceRow(rs.getString("id"), rs.getString("status"), rs.getBoolean("untagged")) : null,
             lookup, lookup, lookup, tenantId);
+        // Flexible labeling v1: an untagged piece (only matchable by its typed internal code) is never
+        // part of a stock take — finalize refuses while one is in scope.
+        if (piece != null && piece.untagged()) throw com.traceability.labels.UntaggedException.piece();
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sessionId", sessionId);

@@ -113,6 +113,7 @@ public class PieceAdjustService {
         if (pieceRow == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
         PieceStatus current = PieceStatus.fromDb(pieceRow.status());
         UUID currentLocationId = pieceRow.currentLocationId();
 
@@ -236,6 +237,7 @@ public class PieceAdjustService {
         if (pieceRow == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
         PieceStatus current = PieceStatus.fromDb(pieceRow.status());
         UUID currentLocationId = pieceRow.currentLocationId();
 
@@ -313,6 +315,7 @@ public class PieceAdjustService {
         if (pieceRow == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
         PieceStatus current = PieceStatus.fromDb(pieceRow.status());
         UUID currentLocationId = pieceRow.currentLocationId();
 
@@ -392,6 +395,7 @@ public class PieceAdjustService {
         if (pieceRow == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
         PieceStatus current = PieceStatus.fromDb(pieceRow.status());
         if (current != PieceStatus.ON_HOLD) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -453,6 +457,7 @@ public class PieceAdjustService {
         if (status == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
         PieceStatus current = PieceStatus.fromDb(status);
 
         if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {

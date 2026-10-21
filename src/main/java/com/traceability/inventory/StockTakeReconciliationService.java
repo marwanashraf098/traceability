@@ -466,6 +466,7 @@ public class StockTakeReconciliationService {
     private static final String PLAN_EXPECTED_QUERY =
         "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, se.status_at_open, " +
         "       p.status::text AS live_status, (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, " +
+        "       " + UntaggedPieces.untaggedSql("p") + " AS untagged, " +
         "       EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = se.tenant_id AND pe.piece_id = se.piece_id " +
         "               AND pe.to_status = 'lost'::piece_status AND pe.metadata->>'reason' = 'stock_take_missing' " +
         "               AND pe.metadata->>'session_id' = se.session_id::text) AS written_off_here " +
@@ -501,6 +502,9 @@ public class StockTakeReconciliationService {
             String pieceId = (String) r.get("piece_id");
             UUID variantId = (UUID) r.get("variant_id");
 
+            // Flexible labeling: an untagged piece can't be scanned, so it is never written off or
+            // corrected by a count (finalize refuses while one is in scope; this is the backstop).
+            if (Boolean.TRUE.equals(r.get("untagged"))) continue;
             if (scanned && "damaged".equals(r.get("scanned_condition")) && "available".equals(live)) {
                 damageCorrections.add(pieceId);
             }
@@ -605,6 +609,13 @@ public class StockTakeReconciliationService {
                 "Stock take session is not open — already finalized or cancelled");
         }
         jdbc.query(LOCK_PIECES_QUERY, rs -> {}, tenantId, sessionId, tenantId, sessionId, tenantId);
+
+        // Flexible labeling slice 2: untagged stock may have arrived while the session was open.
+        StockTakeService.refuseUntaggedInScope(jdbc, tenantId, session.locationId(),
+            "variant_subset".equals(session.scopeType())
+                ? jdbc.queryForList("SELECT variant_id FROM stock_take_scope_variants WHERE session_id = ? AND tenant_id = ?",
+                                    UUID.class, sessionId, tenantId)
+                : null);
 
         FinalizePlan plan = plan(sessionId, tenantId, session.completeCount());
         if ("ZERO_SCANS".equals(plan.blockedReason())) {

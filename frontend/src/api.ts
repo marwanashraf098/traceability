@@ -565,8 +565,11 @@ export interface PieceLookupResult {
    *  null for an untagged piece (flexible labeling): no label bound yet. */
   shortCode: string | null
   status: string
-  /** Server-computed from PieceLabelReprintService.REPRINTABLE — never re-derive the status list here. */
+  /** Server-computed from PieceLabelReprintService.REPRINTABLE — never re-derive the status list here.
+   *  Always false for an untagged piece (shortCode null). */
   canReprint: boolean
+  /** Flexible labeling tenants only: the variant's available pieces, labeled vs untagged. */
+  variantStock?: { available: number; labeled: number; untagged: number }
   condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
@@ -1341,6 +1344,8 @@ export interface InventoryVariantBreakdown {
   available: number
   locations: InventoryLocationStock[]
   recentMovements: InventoryVariantMovement[]
+  /** Flexible labeling tenants only: available pieces, labeled vs untagged. */
+  pieceSplit?: { available: number; labeled: number; untagged: number }
 }
 
 export function getInventoryVariantBreakdown(variantId: string) {
@@ -1374,6 +1379,8 @@ export interface InventoryPieceRow {
 export interface InventoryPiecePage {
   items: InventoryPieceRow[]
   nextCursor: string | null
+  /** Untagged pieces matching the filters, left out of items (first page, only when > 0). */
+  untaggedCount?: number
 }
 
 export function getInventoryPieces(params: {
