@@ -1,5 +1,7 @@
 package com.traceability.portal;
 
+import com.traceability.courier.GenericLegTransitions;
+import com.traceability.courier.GenericReturnsSettingsService;
 import com.traceability.identity.CustomUserDetails;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,11 +30,16 @@ public class ReturnsPortalAdminController {
     private final RefundSuggestionService suggestions;
     private final PortalLogoService logos;
     private final PortalPhotoService photos;
+    private final GenericLegTransitions genericLegs;
+    private final GenericReturnsSettingsService genericReturns;
 
     public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
                                         ReturnLocationService returnLocations, ReturnPickupBookingService booking,
                                         RefundSuggestionService suggestions, PortalLogoService logos,
-                                        PortalPhotoService photos) {
+                                        PortalPhotoService photos, GenericLegTransitions genericLegs,
+                                        GenericReturnsSettingsService genericReturns) {
+        this.genericLegs     = genericLegs;
+        this.genericReturns  = genericReturns;
         this.logos           = logos;
         this.photos          = photos;
         this.requests        = requests;
@@ -76,6 +83,42 @@ public class ReturnsPortalAdminController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void confirmBooking(@PathVariable UUID id, @RequestBody(required = false) ConfirmBookingRequest body) {
         booking.confirmBooked(id, body == null ? null : body.trackingNumber());
+    }
+
+    // ── Non-Bosta couriers G4a: the merchant books the return with their own courier ──────────
+
+    public record ManualCourierRequest(String carrier, String trackingNumber) {}
+
+    /**
+     * A request on an order shipped with another courier (booking 'manual'): record the courier, and — when the
+     * merchant has it — the return's tracking number, which creates its generic return leg. 409 otherwise.
+     */
+    @PostMapping("/return-requests/{id}/manual-courier")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ReturnRequestService.ManualCourierResult manualCourier(@PathVariable UUID id,
+            @RequestBody(required = false) ManualCourierRequest body, @AuthenticationPrincipal CustomUserDetails principal) {
+        return requests.manualCourier(id, body == null ? null : body.carrier(), body == null ? null : body.trackingNumber(),
+            principal.userId(), genericLegs);
+    }
+
+    public record OtherCouriersRequest(Boolean enabled) {}
+
+    /** "Accept returns for orders shipped with other couriers" — read (owner / manager). */
+    @GetMapping("/tenant/portal-settings/other-couriers")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public GenericReturnsSettingsService.Settings getOtherCouriers() {
+        return genericReturns.get();
+    }
+
+    /** … and switched (owner only, audit-logged). */
+    @PutMapping("/tenant/portal-settings/other-couriers")
+    @PreAuthorize("hasRole('OWNER')")
+    public GenericReturnsSettingsService.Settings putOtherCouriers(@RequestBody(required = false) OtherCouriersRequest body,
+                                                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        if (body == null || body.enabled() == null) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "enabled is required");
+        }
+        return genericReturns.update(principal.userId(), body.enabled());
     }
 
     // ── Return requests ──────────────────────────────────────────────────────

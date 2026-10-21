@@ -103,6 +103,24 @@ public final class WaybillScanKeys {
         return rows.isEmpty() ? new Generic(Kind.NONE, key, null) : new Generic(Kind.MATCH, key, rows.get(0));
     }
 
+    /**
+     * Non-Bosta couriers G4a — Scan returns only: the generic RETURN leg (a portal request's, created from the
+     * tracking number the merchant entered) carrying {@code key}, or null. Asked only after {@link #lookup}
+     * found no generic forward shipment for the key (a key is unique per tenant across generic rows — V169),
+     * never by Pickups or Pick &amp; Pack. Bosta rows are never read (provider = 'generic').
+     */
+    public static Match lookupReturnLeg(JdbcTemplate jdbc, UUID tenantId, String key) {
+        if (key == null) return null;
+        return jdbc.query(
+            "SELECT s.id, s.order_id, s.tracking_number, s.tracking_key, s.carrier_name, s.internal_state::text AS state " +
+            "FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.tracking_key = ? " +
+            "  AND s.shipment_leg = 'return' AND s.internal_state NOT IN ('terminated', 'cancelled') LIMIT 1",
+            (rs, i) -> new Match(rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                rs.getString("tracking_number"), rs.getString("tracking_key"), rs.getString("carrier_name"),
+                rs.getString("state")),
+            tenantId, key).stream().findFirst().orElse(null);
+    }
+
     /** Arabic-block letters (not digits — those are folded): the scan came through an Arabic layout. */
     public static boolean holdsArabicLetter(String raw) {
         for (int i = 0; i < raw.length(); ) {

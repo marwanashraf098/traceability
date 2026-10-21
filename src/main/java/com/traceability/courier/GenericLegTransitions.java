@@ -171,6 +171,70 @@ public class GenericLegTransitions {
             UUID.class, tenantId, orderId).stream().findFirst().orElse(null);
     }
 
+    // ── G4a: the generic RETURN leg of a portal request ──────────────────────────────────────────
+
+    public enum ReturnLegOutcome {
+        /** The return leg was created. */
+        CREATED,
+        /** Nothing readable in the tracking number (no letters / digits). */
+        NO_KEY,
+        /** The same number as the order's own forward waybill — refused; the request continues with no leg. */
+        SAME_AS_FORWARD,
+        /** Another of this tenant's generic shipments already carries the number. */
+        KEY_TAKEN
+    }
+
+    public record ReturnLeg(ReturnLegOutcome outcome, UUID shipmentId, String trackingNumber) {}
+
+    /**
+     * G4a — the merchant booked the customer's return with their own courier and typed its tracking number:
+     * a generic return leg (provider 'generic', shipment_leg 'return', source 'portal_request', state
+     * 'created') keyed by {@link GenericTrackingKey} (unique per tenant across generic rows — V169). Never a
+     * Bosta row. The caller links it to the request, in the same transaction.
+     */
+    public ReturnLeg createPortalReturnLeg(UUID tenantId, UUID orderId, String carrierName, String rawTracking) {
+        String tracking = rawTracking == null ? null : rawTracking.strip();
+        String key = GenericTrackingKey.of(tracking);
+        if (key == null) return new ReturnLeg(ReturnLegOutcome.NO_KEY, null, null);
+        Boolean sameAsForward = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'generic' " +
+            "  AND shipment_leg = 'forward' AND tracking_key = ?)", Boolean.class, tenantId, orderId, key);
+        if (Boolean.TRUE.equals(sameAsForward)) return new ReturnLeg(ReturnLegOutcome.SAME_AS_FORWARD, null, null);
+        UUID id = UUID.randomUUID();
+        int n = jdbc.update(
+            "INSERT INTO shipments (id, tenant_id, order_id, provider, tracking_number, tracking_key, internal_state, " +
+            "    shipment_leg, source, carrier_name) " +
+            "VALUES (?, ?, ?, 'generic', ?, ?, 'created', 'return', 'portal_request', ?) ON CONFLICT DO NOTHING",
+            id, tenantId, orderId, tracking, key, carrierName);
+        if (n != 1) return new ReturnLeg(ReturnLegOutcome.KEY_TAKEN, null, null);
+        log.info("Generic return leg {} created for order {} — carrier '{}'", id, orderId, carrierName);
+        return new ReturnLeg(ReturnLegOutcome.CREATED, id, tracking);
+    }
+
+    /**
+     * G4a — a generic return leg never gets a courier status, so once Traced has its intake (stamped by a
+     * Scan returns close, or earlier by an Arrived action) it becomes 'returned' (returned_at, history source
+     * return_scan). Without this it would stay 'created' — "non-terminal" — and keep covering its order's
+     * delivered pieces forever (ShipmentLinkService.hasReturnLegAwaitingIntake). Called by the session close;
+     * generic return legs only; idempotent (returned_at set = done; a leg already moved to 'returned' by the shared
+     * resolveReturnLegIfComplete gets its returned_at and history row here).
+     * @return how many legs moved now
+     */
+    public int markIntakeCompleteReturnLegsReturned(UUID tenantId) {
+        List<UUID> moved = jdbc.queryForList(
+            "UPDATE shipments SET internal_state = 'returned', returned_at = COALESCE(returned_at, now()), " +
+            "    last_synced_at = now() " +
+            "WHERE tenant_id = ? AND provider = 'generic' AND shipment_leg = 'return' " +
+            "  AND return_intake_completed_at IS NOT NULL " +
+            // not yet returned — or flipped to 'returned' by the shared ShipmentLinkService.resolveReturnLegIfComplete
+            // (any provider: state only, no history, no returned_at) and not yet recorded here
+            "  AND (internal_state NOT IN ('returned', 'cancelled', 'terminated') " +
+            "       OR (internal_state = 'returned' AND returned_at IS NULL)) RETURNING id",
+            UUID.class, tenantId);
+        for (UUID id : moved) history(tenantId, id, "returned", SOURCE_RETURN_SCAN);
+        return moved.size();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private Map<String, Object> lockLeg(UUID tenantId, UUID shipmentId) {

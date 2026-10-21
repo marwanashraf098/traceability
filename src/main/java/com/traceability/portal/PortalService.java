@@ -1,5 +1,6 @@
 package com.traceability.portal;
 
+import com.traceability.courier.GenericPortalReturns;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -133,6 +134,9 @@ public class PortalService {
             if (!refundMethods.isEmpty()) body.put("refundMethods", refundMethods);
             // P3: whether each line needs 1–3 photos (always present).
             body.put("requirePhotos", Boolean.TRUE.equals(t.get("portal_require_photos")));
+            // Non-Bosta couriers G4a: present only when the store accepts returns for orders shipped with
+            // other couriers AND has shipped with one (absent otherwise — a Bosta-only store's config is unchanged).
+            if (GenericPortalReturns.offersOtherCouriers(jdbc, tenantId)) body.put("otherCouriers", true);
             return body;
         })));
     }
@@ -261,7 +265,10 @@ public class PortalService {
         body.put("lines",       lines);
         // Step 4c-2: the pickup area choice — only when this tenant books Bosta pickups and
         // the delivery city has pickup-available districts. City and district names only.
-        Optional<PickupAreaService.CityAreas> offer = pickupOffer(tenantId, orderId);
+        // Non-Bosta couriers G4a: an order shipped with another courier — the merchant books its pickup with
+        // that courier, so no Bosta pickup area is offered; the per-order key below exists only for it.
+        boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
+        Optional<PickupAreaService.CityAreas> offer = generic ? Optional.empty() : pickupOffer(tenantId, orderId);
         Map<String, Object> pickup = offer.map(a -> a.toJson(true)).orElse(null);
         // Step 5c: in exchange mode only districts Bosta can deliver to AND collect from — the
         // key exists only when the tenant allows exchanges (exact-key tests rely on that).
@@ -275,6 +282,11 @@ public class PortalService {
             pickup.put("cities", pickupAreas.pickupCities().stream().map(PickupAreaService.City::toJson).toList());
         }
         body.put("pickup", pickup);
+        if (generic) {
+            Map<String, Object> other = new LinkedHashMap<>();
+            other.put("carrierName", GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId));
+            body.put("otherCourier", other);
+        }
         return new Attempt(new LookupResult(Outcome.SUCCESS, body), false, raw, stripped, orderKey, ipHash);
     }
 
@@ -368,11 +380,12 @@ public class PortalService {
             if (p.get("delivered_at") == null || !Boolean.TRUE.equals(p.get("in_window"))) return null;
             return (Timestamp) p.get("delivered_at");
         }
-        // Non-Bosta couriers G3: an order whose newest forward leg is another courier's stays out of the portal
-        // until G4 — even once that leg is delivered (Shopify / Mark delivered). Lookup and submission both land here.
+        // Non-Bosta couriers G3: an order whose newest forward leg is another courier's never takes the Bosta
+        // rule below. G4a: it is eligible only while the store accepts returns for other couriers and that leg
+        // is DELIVERED (Shopify / Mark delivered) inside the window — GenericPortalReturns; null otherwise (G3).
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT " + com.traceability.courier.GenericShipments.newestForwardIsGenericSql("?"), Boolean.class, orderId))) {
-            return null;
+            return GenericPortalReturns.deliveredWithinWindow(jdbc, tenantId, orderId);
         }
         List<Map<String, Object>> delivered = jdbc.queryForList(
             "SELECT s.delivered_at, " +
@@ -614,6 +627,10 @@ public class PortalService {
             orderId, tenantId);
         if (order.isEmpty() || deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
         if (req.mode() != null && !"refund".equals(req.mode()) && !req.exchange()) throw new InvalidSubmission();
+        // Non-Bosta couriers G4a: refunds only for an order shipped with another courier (exchanges come later),
+        // and no Bosta pickup address — the merchant books the pickup with their courier.
+        boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
+        if (generic && (req.exchange() || req.customAddressChosen())) throw new InvalidSubmission();
         UUID replacement = req.exchange() ? validExchange(tenantId, orderId, req) : null;
 
         // Bind pieces line by line (the same variant may appear on two lines with different reasons).
@@ -652,7 +669,7 @@ public class PortalService {
         if (req.addressSource() != null && !"order".equals(req.addressSource()) && !req.customAddressChosen()) {
             throw new InvalidSubmission();
         }
-        Optional<PickupAreaService.CityAreas> offer = req.customAddressChosen()
+        Optional<PickupAreaService.CityAreas> offer = generic ? Optional.empty() : req.customAddressChosen()
             ? customAddressArea(tenantId, req, replacement != null) : pickupOffer(tenantId, orderId);
         CustomAddress custom = req.customAddressChosen() ? cleanCustomAddress(req.customAddress()) : null;
         PickupAreaService.District district = null;
@@ -728,12 +745,14 @@ public class PortalService {
                 "replacement_variant_id", replacement.toString()));
         if (autoApprove) {
             requests.event(tenantId, requestId, "approved", null, ReturnRequestLifecycle.meta("auto", true));
+            // G4a: approved on an order shipped with another courier → the merchant books it ('manual'); no job.
+            if (generic) ReturnRequestService.markManual(jdbc, tenantId, requestId, orderId);
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("reference", reference);
         body.put("status", autoApprove ? "approved" : "requested");
-        if (autoApprove && Boolean.TRUE.equals(jdbc.queryForObject(
+        if (autoApprove && !generic && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             body.put("_bookRequestId", requestId);   // internal — removed before the response
         }

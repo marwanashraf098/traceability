@@ -201,6 +201,12 @@ public class ReturnSessionService {
         if (generic.matched()) {
             return scanGenericAwb(sessionId, tenantId, generic.match(), viaPhone);
         }
+        // G4a: no generic forward shipment carries the key — a portal request's generic RETURN leg may (the
+        // tracking number the merchant entered). Only for a key the resolver computed (generic keys apply here).
+        if (generic.kind() == WaybillScanKeys.Kind.NONE) {
+            WaybillScanKeys.Match returnLeg = WaybillScanKeys.lookupReturnLeg(jdbc, tenantId, generic.key());
+            if (returnLeg != null) return scanGenericReturnLeg(sessionId, tenantId, returnLeg, viaPhone);
+        }
 
         // Foreign scan: nothing of ours matched. No row written, ledger untouched.
         log.warn("Foreign return scan: raw={} session={} tenant={}", rawScan, sessionId, tenantId);
@@ -216,7 +222,34 @@ public class ReturnSessionService {
      * existing awb reader work as for a Bosta parcel. Pieces move one by one as they are scanned, like Bosta's.
      */
     private Map<String, Object> scanGenericAwb(UUID sessionId, UUID tenantId, WaybillScanKeys.Match match, boolean viaPhone) {
-        genericLegs.markReturnedByScan(tenantId, match.shipmentId());
+        // G4a: while a customer return of the order is in progress (a portal request, or a generic return leg
+        // awaiting intake), its original waybill coming back is the CUSTOMER's parcel — the forward leg stays as
+        // it is (delivered), not "returned to sender". Otherwise G3 unchanged.
+        if (!com.traceability.courier.GenericPortalReturns.customerReturnInProgress(jdbc, tenantId, match.orderId())) {
+            genericLegs.markReturnedByScan(tenantId, match.shipmentId());
+        }
+        jdbc.update(
+            "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb, via_phone, shipment_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?) " +
+            "ON CONFLICT (session_id, awb) DO UPDATE SET via_phone = return_session_shipments.via_phone OR EXCLUDED.via_phone",
+            UUID.randomUUID(), tenantId, sessionId, match.trackingNumber(), viaPhone, match.shipmentId());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanType", "awb");
+        result.put("awb", match.trackingNumber());
+        result.put("carrier", match.carrierName());
+        result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        return result;
+    }
+
+    /**
+     * G4a — a portal request's generic RETURN leg scanned back by its tracking number: no courier status exists
+     * and nothing moves here. The session remembers it (its own tracking number + shipment id, like G3's
+     * generic waybill), so the request's parcel card opens and the canonical evidence rule's Rule 1 sees it;
+     * pieces move one by one as they are scanned. The leg becomes 'returned' when the session closes and
+     * stamps its intake (GenericLegTransitions.markIntakeCompleteReturnLegsReturned).
+     */
+    private Map<String, Object> scanGenericReturnLeg(UUID sessionId, UUID tenantId, WaybillScanKeys.Match match,
+                                                     boolean viaPhone) {
         jdbc.update(
             "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb, via_phone, shipment_id) " +
             "VALUES (?, ?, ?, ?, ?, ?) " +
@@ -252,6 +285,13 @@ public class ReturnSessionService {
         boolean genericReturn = false;
         if (current == PieceStatus.WITH_COURIER || current == PieceStatus.AWAITING_PICKUP || current == PieceStatus.DELIVERED) {
             UUID genericLeg = genericLegs.returnableGenericLeg(tenantId, orderId);
+            // G4a: a DELIVERED piece of an order whose customer return is in progress (a portal request on it —
+            // which is what attribution below binds to — or a generic return leg awaiting intake) is the
+            // customer's return: no "returned to sender" marking; the request rules below accept it.
+            if (genericLeg != null && current == PieceStatus.DELIVERED
+                    && com.traceability.courier.GenericPortalReturns.customerReturnInProgress(jdbc, tenantId, orderId)) {
+                genericLeg = null;
+            }
             if (genericLeg != null) {
                 genericLegs.markReturnedByScan(tenantId, genericLeg);
                 shipmentId = genericLeg;
@@ -667,6 +707,9 @@ public class ReturnSessionService {
             "  AND s.return_intake_completed_at IS NULL " +
             "  AND " + ShipmentLinkService.returnLegScanEvidenceSql("cs.session_id"),
             actorUserId, sessionId, tenantId);
+        // G4a: a generic return leg has no courier status — once its intake is stamped it is 'returned'
+        // (generic return legs only; a Bosta leg is never touched).
+        genericLegs.markIntakeCompleteReturnLegsReturned(tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>(counts);
         result.put("sessionId", sessionId.toString());

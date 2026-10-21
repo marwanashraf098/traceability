@@ -1,5 +1,9 @@
 package com.traceability.portal;
 
+import com.traceability.courier.GenericLegTransitions;
+import com.traceability.courier.GenericPortalReturns;
+import com.traceability.courier.GenericReturnException;
+import com.traceability.courier.GenericShipments;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -105,6 +109,19 @@ public class ReturnRequestService {
         Integer total = jdbc.queryForObject(
             "SELECT COUNT(*) FROM return_requests rr WHERE rr.tenant_id = ? AND (?::text IS NULL OR rr.status::text = ?)",
             Integer.class, tenantId, statusFilter, statusFilter);
+        // Non-Bosta couriers G4a: a request the merchant books with their own courier carries its carrier
+        // (the "Book with <carrier>" chip) — the key exists only on those rows.
+        List<String> manualIds = rows.stream().filter(r -> MANUAL.equals(r.get("bookingStatus")))
+            .map(r -> (String) r.get("id")).toList();
+        if (!manualIds.isEmpty()) {
+            Map<String, String> carriers = new HashMap<>();
+            jdbc.query("SELECT id::text, manual_carrier_name FROM return_requests WHERE tenant_id = ? AND id = ANY (?::uuid[])",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> carriers.put(rs.getString(1), rs.getString(2)),
+                tenantId, manualIds.toArray(new String[0]));
+            for (Map<String, Object> r : rows) {
+                if (MANUAL.equals(r.get("bookingStatus"))) r.put("manualCarrierName", carriers.get((String) r.get("id")));
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("items", rows);
         result.put("total", total);
@@ -225,6 +242,10 @@ public class ReturnRequestService {
         d.put("bostaTrackingNumber", r.get("bosta_tracking_number"));
         d.put("bookingAttemptedAt", r.get("booking_attempted_at"));
         d.put("bookingVerifiedAt", r.get("booking_verified_at"));
+        // Non-Bosta couriers G4a: the order went out with another courier — the merchant books the return with
+        // them (booking 'manual'). The key exists only for such a request; a Bosta request's detail is unchanged.
+        Map<String, Object> other = otherCourier(tenantId, id, (UUID) r.get("order_id"), (String) r.get("booking_status"));
+        if (other != null) d.put("otherCourier", other);
         d.put("createdAt", r.get("created_at"));
         d.put("decidedAt", r.get("decided_at"));
         d.put("decidedBy", r.get("decided_by"));
@@ -365,6 +386,13 @@ public class ReturnRequestService {
             actorUserId, id, tenantId);
         if (updated != 1) throw notRequested(id, tenantId);
         requests.event(tenantId, id, "approved", actorUserId, null);
+        // Non-Bosta couriers G4a: shipped with another courier → the merchant books it ('manual'); no job, ever.
+        UUID orderId = jdbc.queryForObject("SELECT order_id FROM return_requests WHERE id = ? AND tenant_id = ?",
+            UUID.class, id, tenantId);
+        if (GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId)) {
+            markManual(jdbc, tenantId, id, orderId);
+            return;
+        }
         if (bookingScheduler != null && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             bookingScheduler.enqueueAfterCommit(id, tenantId);
@@ -380,6 +408,11 @@ public class ReturnRequestService {
             "JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
             "WHERE rr.id = ? AND rr.tenant_id = ? FOR UPDATE OF rr", id, tenantId);
         if (rows.isEmpty() || !"requested".equals(rows.get(0).get("status"))) throw notRequested(id, tenantId);
+        // Non-Bosta couriers G4a: refunds only for an order shipped with another courier (exchanges: G4b).
+        if (Boolean.TRUE.equals(jdbc.queryForObject("SELECT " + GenericShipments.newestForwardIsGenericSql("rr.order_id") +
+                " FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ?", Boolean.class, id, tenantId))) {
+            throw GenericReturnException.exchangeOtherCourier();
+        }
         UUID replacement = (UUID) rows.get(0).get("replacement_variant_id");
         // The product may have been archived / set to draft in Shopify since the customer asked.
         if (replacement != null && !replacementProductActive(replacement, tenantId)) {
@@ -462,6 +495,119 @@ public class ReturnRequestService {
     }
 
     // ── Step 4d-1: lifecycle actions (owner / manager) ───────────────────────
+
+    // ── Non-Bosta couriers G4a: the merchant books the return with their own courier ────────────
+
+    /** booking_status for a request on an order shipped with another courier (V177). */
+    public static final String MANUAL = "manual";
+
+    /**
+     * An approved request on a generic order (routeGeneric): booking 'manual', the carrier defaulting to the
+     * one the order went out with. Only from no booking yet; nothing is enqueued — every Bosta path skips
+     * 'manual' (sweeper / Book now want NULL, retry 'failed', confirm / not-booked 'failed_ambiguous').
+     */
+    static void markManual(JdbcTemplate jdbc, UUID tenantId, UUID requestId, UUID orderId) {
+        jdbc.update(
+            "UPDATE return_requests SET booking_status = 'manual', " +
+            "    manual_carrier_name = COALESCE(manual_carrier_name, ?) " +
+            "WHERE id = ? AND tenant_id = ? AND booking_status IS NULL",
+            GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId), requestId, tenantId);
+    }
+
+    /** The drawer's otherCourier block, or null for a request on a Bosta order. */
+    private Map<String, Object> otherCourier(UUID tenantId, UUID requestId, UUID orderId, String bookingStatus) {
+        if (!MANUAL.equals(bookingStatus) && !Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT " + GenericShipments.newestForwardIsGenericSql("?"), Boolean.class, orderId))) {
+            return null;
+        }
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT rr.manual_carrier_name, o.customer_name, o.customer_phone, o.pii_redacted_at, " +
+            "       o.address->>'firstLine' AS a_first, o.address->>'city' AS a_city, o.address->>'zone' AS a_zone, " +
+            "       o.shopify_address->>'address1' AS s_first, o.shopify_address->>'address2' AS s_second, " +
+            "       o.shopify_address->>'city' AS s_city, o.shopify_address->>'province' AS s_province " +
+            "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("forwardCarrierName", GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId));
+        m.put("carrierName", row.get("manual_carrier_name"));
+        // Where the courier collects: the customer and the address the order was delivered to (Bosta's address
+        // first, as everywhere; else Shopify's shipping address). Owner / manager screen only.
+        Map<String, Object> pickup = new LinkedHashMap<>();
+        boolean redacted = row.get("pii_redacted_at") != null;
+        pickup.put("name", redacted ? null : row.get("customer_name"));
+        pickup.put("phone", redacted ? null : row.get("customer_phone"));
+        boolean bosta = row.get("a_first") != null || row.get("a_city") != null;
+        List<String> lines = new ArrayList<>();
+        for (Object v : bosta ? List.of(nz(row.get("a_first")), nz(row.get("a_zone")), nz(row.get("a_city")))
+                              : List.of(nz(row.get("s_first")), nz(row.get("s_second")), nz(row.get("s_city")), nz(row.get("s_province")))) {
+            if (!redacted && !((String) v).isBlank()) lines.add((String) v);
+        }
+        pickup.put("addressLines", lines);
+        m.put("pickup", pickup);
+        return m;
+    }
+
+    private static String nz(Object v) { return v == null ? "" : v.toString(); }
+
+    public record ManualCourierResult(String outcome, String carrierName, String trackingNumber, UUID returnShipmentId) {}
+
+    /**
+     * POST /return-requests/{id}/manual-courier {carrier, trackingNumber?} — owner / manager. Only a request whose
+     * booking is 'manual', still approved and holding no return leg. The carrier defaults to the order's own.
+     * With a tracking number: the ONE generic-leg writer creates the return leg (source 'portal_request'), the
+     * request holds it (return_shipment_id, link_source 'merchant_entered'), events leg_linked + pickup_booked,
+     * status pickup_booked. Never writes bosta_tracking_number. A number equal to the order's own waybill, or
+     * one another shipment holds → 409, nothing changed (the request carries on with no leg).
+     * Without one: the carrier is recorded, the request stays approved.
+     */
+    @Transactional
+    public ManualCourierResult manualCourier(UUID id, String carrierRaw, String trackingRaw, UUID actorUserId,
+                                             GenericLegTransitions legs) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> rr = jdbc.queryForList(
+            "SELECT status::text AS status, booking_status, order_id, return_shipment_id, manual_carrier_name " +
+            "FROM return_requests WHERE id = ? AND tenant_id = ? FOR UPDATE", id, tenantId)
+            .stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
+        if (!MANUAL.equals(rr.get("booking_status"))) {
+            throw GenericReturnException.notManual();
+        }
+        if (!"approved".equals(rr.get("status")) || rr.get("return_shipment_id") != null) {
+            throw GenericReturnException.alreadyBooked();
+        }
+        UUID orderId = (UUID) rr.get("order_id");
+        String carrier = carrierRaw == null || carrierRaw.isBlank() ? null : carrierRaw.strip();
+        if (carrier == null) carrier = (String) rr.get("manual_carrier_name");
+        if (carrier == null) carrier = GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId);
+        if (carrier == null || carrier.length() > 80) {
+            throw GenericReturnException.carrierRequired();
+        }
+        String tracking = trackingRaw == null || trackingRaw.isBlank() ? null : trackingRaw.strip();
+        if (tracking == null) {
+            jdbc.update("UPDATE return_requests SET manual_carrier_name = ? WHERE id = ? AND tenant_id = ?", carrier, id, tenantId);
+            requests.event(tenantId, id, "courier_chosen", actorUserId, ReturnRequestLifecycle.meta("carrier", carrier));
+            return new ManualCourierResult("CARRIER_SET", carrier, null, null);
+        }
+        if (tracking.length() > 100) {
+            throw GenericReturnException.trackingInvalid();
+        }
+        GenericLegTransitions.ReturnLeg leg = legs.createPortalReturnLeg(tenantId, orderId, carrier, tracking);
+        switch (leg.outcome()) {
+            case NO_KEY -> throw GenericReturnException.trackingInvalid();
+            case SAME_AS_FORWARD -> throw GenericReturnException.sameAsOrderWaybill();
+            case KEY_TAKEN -> throw GenericReturnException.trackingTaken();
+            case CREATED -> { }
+        }
+        jdbc.update(
+            "UPDATE return_requests SET manual_carrier_name = ?, return_shipment_id = ?, link_source = 'merchant_entered', " +
+            "    status = 'pickup_booked' WHERE id = ? AND tenant_id = ? AND status = 'approved' AND return_shipment_id IS NULL",
+            carrier, leg.shipmentId(), id, tenantId);
+        requests.event(tenantId, id, "leg_linked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+            "shipment_id", leg.shipmentId().toString(), "tracking_number", leg.trackingNumber(), "carrier", carrier));
+        requests.event(tenantId, id, "pickup_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+            "tracking_number", leg.trackingNumber(), "carrier", carrier));
+        return new ManualCourierResult("LEG_CREATED", carrier, leg.trackingNumber(), leg.shipmentId());
+    }
 
     /** POST /return-requests/{id}/link-leg {shipmentId}. */
     @Transactional
