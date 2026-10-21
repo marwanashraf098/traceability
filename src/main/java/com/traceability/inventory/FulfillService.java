@@ -484,11 +484,16 @@ public class FulfillService {
         //    the result keeps echoing the raw scan.
         String lookup = ScanInputNormalizer.normalizePiece(barcode);
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
-            "SELECT p.id, p.variant_id, p.status FROM pieces p " +
+            "SELECT p.id, p.variant_id, p.status, p.short_code FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
+        }
+        // Flexible labeling: an untagged piece has no printed code — matched here only through its
+        // typed internal code. It is packed by binding a blank label (slice 4), never this way.
+        if (pieceRows.get(0).get("short_code") == null) {
+            return ScanResult.rejected("PIECE_UNTAGGED", UNTAGGED_SCAN_MESSAGE);
         }
         Map<String, Object> piece     = pieceRows.get(0);
         String              pieceId   = (String) piece.get("id");
@@ -1387,6 +1392,9 @@ public class FulfillService {
     public record UnpackResult(
             boolean cancelled,
             int     remainingPacked) {}
+
+    static final String UNTAGGED_SCAN_MESSAGE =
+        "This piece has no barcode yet (untagged) — it gets one when a label is stuck on and scanned";
 
     public record ScanResult(
             boolean  success,

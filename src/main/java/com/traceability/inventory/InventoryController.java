@@ -355,7 +355,8 @@ public class InventoryController {
             LEFT JOIN locations l ON l.id = p.current_location_id
             WHERE p.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
               AND p.status = ?::piece_status
-            """ + windowClause;
+              AND p.short_code IS NOT NULL
+            """ + windowClause;   // flexible labeling: only labeled pieces are listed one by one
 
         final String finalBaseFrom = baseFrom;
         final String finalStatus   = status;

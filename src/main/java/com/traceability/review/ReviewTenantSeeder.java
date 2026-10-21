@@ -250,7 +250,7 @@ public class ReviewTenantSeeder {
             for (int u = 0; u < ((Number) line.get("quantity")).intValue(); u++) {
                 String barcode = as(tenant, () -> jdbc.queryForObject(
                     "SELECT barcode FROM pieces WHERE tenant_id = ? AND variant_id = ? AND status = 'available' " +
-                    "ORDER BY short_code LIMIT 1", String.class, tenant, line.get("variant_id")));
+                    "AND short_code IS NOT NULL ORDER BY short_code LIMIT 1", String.class, tenant, line.get("variant_id")));
                 FulfillService.ScanResult r = as(tenant, () -> fulfill.scan(order, barcode, worker));
                 if (!r.success()) throw new IllegalStateException("Review fixture: scan refused for order " + order + ": " + r);
             }

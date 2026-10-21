@@ -348,9 +348,16 @@ public class InventoryStockController {
         String id, String triggerType, Integer delta, String status,
         String locationName, String createdAt, String appliedAt) {}
 
+    /**
+     * pieceSplit (flexible labeling, only for tenants that have it): the variant's AVAILABLE pieces at
+     * every location split {available, labeled, untagged} (UntaggedPieces.availableCounts). Absent
+     * otherwise, so every other tenant's response is unchanged.
+     */
     public record VariantBreakdown(
         String variantId, long onHand, Long committed, long available,
-        List<LocationStock> locations, List<VariantMovement> recentMovements) {}
+        List<LocationStock> locations, List<VariantMovement> recentMovements,
+        @com.fasterxml.jackson.annotation.JsonInclude(
+            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Map<String, Object> pieceSplit) {}
 
     private static final int RECENT_MOVEMENTS_LIMIT = 10;
 
@@ -422,7 +429,9 @@ public class InventoryStockController {
 
             return new VariantBreakdown(
                 variantId.toString(), totals.onHand(), totals.committed(), totals.available(),
-                locations, movements);
+                locations, movements,
+                com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)
+                    ? UntaggedPieces.availableCounts(jdbc, tenantId, variantId) : null);
         });
     }
 
@@ -488,7 +497,16 @@ public class InventoryStockController {
         String id, String barcode, String variantTitle, String sku, String productTitle,
         String orderNumber, String trackingNumber, String locationName, String lastEventAt) {}
 
-    public record StockPiecePage(List<StockPieceRow> items, String nextCursor) {}
+    /**
+     * untaggedCount (flexible labeling): untagged pieces matching the same filters, left out of
+     * {@code items} — they have no code to list or act on. First page only, and only when &gt; 0
+     * (absent otherwise, so every existing response is unchanged).
+     */
+    public record StockPiecePage(List<StockPieceRow> items, String nextCursor,
+                                 @com.fasterxml.jackson.annotation.JsonInclude(
+                                     com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Integer untaggedCount) {
+        public StockPiecePage(List<StockPieceRow> items, String nextCursor) { this(items, nextCursor, null); }
+    }
 
     @GetMapping("/pieces")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
@@ -513,14 +531,28 @@ public class InventoryStockController {
                 "WHERE p.tenant_id = ? AND p.status = ?::piece_status ");
             params.add(tenantId);
             params.add(status);
+            StringBuilder untaggedWhere = new StringBuilder(where);
+            List<Object> untaggedParams = new ArrayList<>(params);
 
             if (variantId != null) {
                 where.append("AND p.variant_id = ? ");
                 params.add(variantId);
+                untaggedWhere.append("AND p.variant_id = ? ");
+                untaggedParams.add(variantId);
             }
             if (locationId != null) {
                 where.append("AND p.current_location_id = ? ");
                 params.add(locationId);
+                untaggedWhere.append("AND p.current_location_id = ? ");
+                untaggedParams.add(locationId);
+            }
+            // Flexible labeling: only labeled pieces are listed one by one.
+            where.append("AND p.short_code IS NOT NULL ");
+            Integer untagged = null;
+            if (cursor == null || cursor.isBlank()) {
+                int n = jdbc.queryForObject("SELECT count(*)::int FROM pieces p " + untaggedWhere
+                    + "AND " + UntaggedPieces.untaggedSql("p"), Integer.class, untaggedParams.toArray());
+                untagged = n > 0 ? n : null;
             }
             if (cursor != null && !cursor.isBlank()) {
                 String[] parts = decodeCursor(cursor);
@@ -568,7 +600,7 @@ public class InventoryStockController {
                 r.get("last_event_at") != null ? ((Timestamp) r.get("last_event_at")).toInstant().toString() : null
             )).toList();
 
-            return new StockPiecePage(items, nextCursor);
+            return new StockPiecePage(items, nextCursor, untagged);
         });
     }
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
+import { useCapabilities } from '../capabilities'
 
 import { getAccessToken } from '../auth'
 import { authFetch, getRoleFromToken } from '../api'
@@ -33,17 +34,21 @@ export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json()
 }
 
+/** print_stick = today's flow (a label per piece); count_only = flexible labeling, pieces go in untagged. */
+type ReceivingMode = 'print_stick' | 'count_only'
 interface Session {
   id: string; status: string; reference: string | null; supplier_name: string | null
   location_name: string | null; created_at: string; finalized_at: string | null
-  line_units: number; piece_count: number
+  line_units: number; piece_count: number; mode?: ReceivingMode
 }
 export interface Line {
   id: string; variant_id: string; variant_title: string; sku: string | null
   product_title: string; quantity: number; piece_count: number
 }
-interface SessionDetail extends Session { lines: Line[] }
-interface Location { id: string; name: string }
+/** Count-only finished sessions: units of this session's Shopify +N by outcome. */
+interface ShopifySync { applied: number; pending: number; failed: number; skipped: number }
+interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync }
+interface Location { id: string; name: string; is_fulfillment?: boolean }
 
 // open → warning, finalized → success, unknown → neutral
 function sessionTone(status: string): 'warning' | 'success' | 'neutral' {
@@ -60,6 +65,7 @@ export default function Receiving() {
   const [view, setView]         = useState<'list' | 'create' | 'session'>('list')
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [locations, setLocations] = useState<Location[]>([])
+  const { flexibleLabeling } = useCapabilities()
 
   useEffect(() => { loadSessions(); loadLocations() }, [])
 
@@ -83,6 +89,7 @@ export default function Receiving() {
     return (
       <CreateSessionForm
         locations={locations}
+        flexibleLabeling={flexibleLabeling}
         onCreated={(id) => { loadSessions(); openSession(id) }}
         onCancel={() => setView('list')}
       />
@@ -136,6 +143,9 @@ export default function Receiving() {
                   {/* Reference — font-mono, trace-blue like other identifiers */}
                   <td className="tbl-cell font-mono font-medium text-trace-blue">
                     {s.reference ?? <span className="text-muted font-sans font-normal">{t('common.na')}</span>}
+                    {s.mode === 'count_only' && (
+                      <span className="ms-2 font-sans"><Badge tone="neutral" label={t('receiving.countOnly.badge')} /></span>
+                    )}
                   </td>
                   <td className="tbl-cell text-muted">{s.location_name ?? '—'}</td>
                   <td className="tbl-cell text-primary">{s.line_units}</td>
@@ -158,11 +168,18 @@ export default function Receiving() {
 
 // ── Create Session Form ───────────────────────────────────────────────────────
 
-function CreateSessionForm({ locations, onCreated, onCancel }: {
-  locations: Location[]; onCreated: (id: string) => void; onCancel: () => void
+const MODES: ReceivingMode[] = ['print_stick', 'count_only']
+
+function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }: {
+  locations: Location[]; flexibleLabeling: boolean; onCreated: (id: string) => void; onCancel: () => void
 }) {
   const { t } = useTranslation()
   const [locationId, setLocationId] = useState(locations[0]?.id ?? '')
+  const [mode, setMode]             = useState<ReceivingMode>('print_stick')
+  // Count only receives into the main warehouse (packing labels untagged pieces there) — server-enforced too.
+  const mainWarehouse = locations.find(l => l.is_fulfillment)
+  const countOnly = flexibleLabeling && mode === 'count_only'
+  const effectiveLocationId = countOnly ? (mainWarehouse?.id ?? '') : locationId
   const [reference, setReference]   = useState('')
   const [supplier, setSupplier]     = useState('')
   const [note, setNote]             = useState('')
@@ -175,7 +192,11 @@ function CreateSessionForm({ locations, onCreated, onCancel }: {
     try {
       const res = await api<{ sessionId: string }>('/receiving/sessions', {
         method: 'POST',
-        body: JSON.stringify({ locationId: locationId || null, reference: reference || null, supplierName: supplier || null, note: note || null }),
+        body: JSON.stringify({
+          locationId: effectiveLocationId || null, reference: reference || null, supplierName: supplier || null, note: note || null,
+          // Sent only when the chooser is shown — every other tenant's request is exactly today's.
+          ...(flexibleLabeling ? { mode } : {}),
+        }),
       })
       onCreated(res.sessionId)
     } catch (e: unknown) { setError((e as Error).message) }
@@ -187,9 +208,35 @@ function CreateSessionForm({ locations, onCreated, onCancel }: {
       <h1 className="text-h1 text-primary">{t('receiving.newTitle')}</h1>
       {error && <Alert tone="critical" title={error} />}
       <form onSubmit={submit} className="card p-5 space-y-4">
+        {flexibleLabeling && (
+          <fieldset className="space-y-2" data-testid="receiving-mode-chooser">
+            <legend className="text-small text-muted mb-1.5">{t('receiving.mode.title')}</legend>
+            {MODES.map(m => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={mode === m}
+                data-testid={`receiving-mode-${m}`}
+                onClick={() => setMode(m)}
+                className={`w-full text-start rounded-xl border p-4 transition-colors focus-visible:border-trace-blue ${
+                  mode === m ? 'border-trace-blue bg-trace-blue/[0.06]' : 'border-line hover:border-trace-blue'}`}
+              >
+                <p className="text-body font-semibold text-primary">{t(`receiving.mode.${m}.title`)}</p>
+                <p className="text-small text-muted mt-1">{t(`receiving.mode.${m}.body`)}</p>
+              </button>
+            ))}
+          </fieldset>
+        )}
         <div className="space-y-1.5">
           <label className="text-small text-muted">{t('receiving.location')}</label>
-          {locations.length > 0 ? (
+          {countOnly ? (
+            <>
+              <p className="input w-full bg-elevated text-primary" data-testid="count-only-location">
+                {mainWarehouse?.name ?? '—'}
+              </p>
+              <p className="text-caption text-muted">{t('receiving.mode.mainWarehouseOnly')}</p>
+            </>
+          ) : locations.length > 0 ? (
             <select value={locationId} onChange={e => setLocationId(e.target.value)} className="input w-full">
               {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
@@ -202,7 +249,7 @@ function CreateSessionForm({ locations, onCreated, onCancel }: {
         <FormField label={t('receiving.supplier')}  value={supplier}  onChange={setSupplier}  placeholder="Supplier name" />
         <FormField label={t('receiving.note')}      value={note}      onChange={setNote}      placeholder="Optional note" />
         <div className="flex gap-3 pt-1">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={saving} disabled={countOnly && !mainWarehouse}>
             {t('receiving.create')}
           </Button>
           <Button type="button" variant="secondary" onClick={onCancel}>
@@ -230,6 +277,7 @@ function SessionView({ session, onRefresh, onBack }: {
   const [deleteError, setDeleteError]   = useState<string | null>(null)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const isOpen = session.status === 'open'
+  const countOnly = session.mode === 'count_only'
   const role = getRoleFromToken()
   const canDelete = isOpen && (role === 'owner' || role === 'manager')
   const totalUnits = session.lines.reduce((s, l) => s + l.quantity, 0)
@@ -307,7 +355,7 @@ function SessionView({ session, onRefresh, onBack }: {
             {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
           </p>
         </div>
-        {session.status === 'finalized' && (
+        {session.status === 'finalized' && !countOnly && (
           <div className="flex gap-2">
             <Button size="sm" onClick={printLabels}>
               {t('receiving.printLabels')} ({session.piece_count})
@@ -336,11 +384,23 @@ function SessionView({ session, onRefresh, onBack }: {
           onRefresh={onRefresh}
           onFinalizeClick={() => setShowFinalizeModal(true)}
           finalizing={finalizing}
+          {...(countOnly ? {
+            finalizeLabel: (units: number) => t('receiving.countOnly.finish', { count: units }),
+            notice: (units: number) => (
+              <div className="card p-4 space-y-1.5" data-testid="count-only-notice">
+                <p className="text-body text-primary">{t('receiving.countOnly.noLabels')}</p>
+                <p className="text-small text-muted">{t('receiving.countOnly.shopify', { count: units })}</p>
+              </div>
+            ),
+          } : {})}
         />
       )}
 
+      {/* Count only, finished: what went in — no labels to print. */}
+      {!isOpen && countOnly && <CountOnlyDone session={session} />}
+
       {/* Finalized: per-variant piece counts + label printing, unchanged. */}
-      {!isOpen && (
+      {!isOpen && !countOnly && (
         <div className="card overflow-hidden">
           <table className="min-w-full">
             <thead>
@@ -405,7 +465,7 @@ function SessionView({ session, onRefresh, onBack }: {
         </div>
       )}
 
-      {session.status === 'finalized' && (
+      {session.status === 'finalized' && !countOnly && (
         <p className="text-small text-muted">
           {t('receiving.piecesCreated', { count: session.piece_count })} ·{' '}
           {t('receiving.finalizedAt', { date: new Date(session.finalized_at!).toLocaleString() })}
@@ -420,9 +480,11 @@ function SessionView({ session, onRefresh, onBack }: {
           <div className="space-y-4">
             {finalizeError && <Alert tone="critical" title={finalizeError} />}
             <p className="text-body text-muted">
-              {t('receiving.finalizeModalBody', {
-                count: session.lines.reduce((s, l) => s + l.quantity, 0),
-              })}
+              {countOnly
+                ? t('receiving.countOnly.confirmBody', { count: totalUnits })
+                : t('receiving.finalizeModalBody', {
+                    count: session.lines.reduce((s, l) => s + l.quantity, 0),
+                  })}
             </p>
             <div className="flex gap-2">
               <Button
@@ -434,7 +496,7 @@ function SessionView({ session, onRefresh, onBack }: {
                 {t('common.cancel')}
               </Button>
               <Button className="flex-1" loading={finalizing} onClick={finalize}>
-                {t('receiving.finalizeModalConfirm')}
+                {countOnly ? t('receiving.countOnly.finish', { count: totalUnits }) : t('receiving.finalizeModalConfirm')}
               </Button>
             </div>
           </div>
@@ -469,6 +531,50 @@ function SessionView({ session, onRefresh, onBack }: {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+// ── Count only: finished ──────────────────────────────────────────────────────
+
+/** Per-variant +N (lines merged by variant), the Shopify outcome, and that no labels were printed. */
+function CountOnlyDone({ session }: { session: SessionDetail }) {
+  const { t } = useTranslation()
+  const perVariant = new Map<string, { line: Line; qty: number }>()
+  for (const l of session.lines) {
+    const v = perVariant.get(l.variant_id)
+    perVariant.set(l.variant_id, { line: l, qty: (v?.qty ?? 0) + l.quantity })
+  }
+  const total = session.piece_count
+  const s = session.shopify
+  const shopify = !s || s.pending > 0 ? t('receiving.countOnly.shopifyUpdating', { count: total })
+    : s.failed > 0 ? t('receiving.countOnly.shopifyFailed')
+    : s.applied > 0 ? t('receiving.countOnly.shopifyUpdated', { count: s.applied })
+    : t('receiving.countOnly.shopifyNone')
+  return (
+    <div className="card p-5 space-y-4" data-testid="count-only-done">
+      <div>
+        <h2 className="text-h2 text-primary">{t('receiving.countOnly.doneTitle', { count: total })}</h2>
+        <p className="text-small text-muted mt-0.5">{t('receiving.countOnly.doneSub')}</p>
+      </div>
+      <ul className="divide-y divide-line border-y border-line">
+        {[...perVariant.values()].map(({ line, qty }) => (
+          <li key={line.variant_id} className="flex items-center justify-between gap-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-body font-medium text-primary truncate"><bdi>{line.product_title}</bdi></p>
+              <p className="text-small text-muted truncate"><bdi>{line.variant_title}</bdi>
+                {line.sku && <> · <span className="font-mono" dir="ltr">{line.sku}</span></>}</p>
+            </div>
+            <span className="text-body font-semibold text-success-text tabular-nums" dir="ltr">+{qty}</span>
+          </li>
+        ))}
+      </ul>
+      <dl className="grid grid-cols-[auto,1fr] gap-x-6 gap-y-1.5 text-small">
+        <dt className="text-muted">{t('receiving.countOnly.shopifyLabel')}</dt>
+        <dd className="text-primary" data-testid="count-only-shopify">{shopify}</dd>
+        <dt className="text-muted">{t('receiving.countOnly.labelsLabel')}</dt>
+        <dd className="text-primary">{t('receiving.countOnly.labelsNone')}</dd>
+      </dl>
     </div>
   )
 }

@@ -192,7 +192,9 @@ public class LookupService {
         result.put("barcode",         piece.get("barcode"));
         result.put("shortCode",       piece.get("short_code"));
         result.put("status",          piece.get("status"));
-        result.put("canReprint",      PieceLabelReprintService.canReprint(Objects.toString(piece.get("status"), null)));
+        // An untagged piece (flexible labeling) has no code to reprint, whatever its status.
+        result.put("canReprint",      piece.get("short_code") != null
+                                      && PieceLabelReprintService.canReprint(Objects.toString(piece.get("status"), null)));
         result.put("condition",       piece.get("condition"));
         result.put("receivedAt",      piece.get("received_at"));
         result.put("variant",         variantMap);
@@ -201,6 +203,11 @@ public class LookupService {
         result.put("currentShipment", shipmentMap);
         result.put("receivingSession", sessionMap);
         result.put("timeline",        timeline);
+        // Flexible labeling: the variant's Available / Labeled / Untagged counts (only for tenants
+        // that have it — everyone else's response is unchanged).
+        if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            result.put("variantStock", UntaggedPieces.availableCounts(jdbc, tenantId, (UUID) piece.get("variant_id")));
+        }
         return result;
     }
 

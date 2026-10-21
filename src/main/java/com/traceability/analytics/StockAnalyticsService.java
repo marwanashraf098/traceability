@@ -140,7 +140,14 @@ public class StockAnalyticsService {
     public record PieceRow(String pieceId, String barcode, String shortCode, String status, Instant receivedAt,
                            String location, long trips, Instant lastTripAt) {}
 
-    public record VariantPieces(UUID variantId, int minTrips, long total, List<PieceRow> pieces) {}
+    /** untaggedCount (flexible labeling): untagged pieces left out of the list — present only when &gt; 0. */
+    public record VariantPieces(UUID variantId, int minTrips, long total, List<PieceRow> pieces,
+                                @com.fasterxml.jackson.annotation.JsonInclude(
+                                    com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Integer untaggedCount) {
+        public VariantPieces(UUID variantId, int minTrips, long total, List<PieceRow> pieces) {
+            this(variantId, minTrips, total, pieces, null);
+        }
+    }
 
     /** A piece of any variant with its trip count (GET /analytics/pieces — "Pieces moved 4+ times"). */
     public record TripPiece(String pieceId, String barcode, String shortCode, String status, UUID variantId, String sku,
@@ -618,6 +625,10 @@ public class StockAnalyticsService {
             "LEFT JOIN LATERAL (SELECT COUNT(*) AS trips, MAX(e.occurred_at) AS last_trip FROM piece_events e " +
             "                   WHERE e.piece_id = p.id AND e.tenant_id = p.tenant_id AND " + trip("e") + ") t ON true " +
             "WHERE p.tenant_id = ? AND p.variant_id = ? AND p.status <> 'voided'::piece_status AND t.trips >= ? ";
+        // Flexible labeling: only labeled pieces are listed one by one; untagged ones are counted.
+        Integer untagged = jdbc.queryForObject("SELECT COUNT(*)::int " + base + "AND " + com.traceability.inventory.UntaggedPieces.untaggedSql("p"),
+            Integer.class, tid, variantId, minTrips);
+        base += "AND p.short_code IS NOT NULL ";
         Long total = jdbc.queryForObject("SELECT COUNT(*) " + base, Long.class, tid, variantId, minTrips);
         List<PieceRow> rows = jdbc.query(
             "SELECT p.id, p.barcode, p.short_code, p.status::text AS status, p.created_at, l.name AS location, " +
@@ -626,7 +637,8 @@ public class StockAnalyticsService {
                 rs.getString("status"), OrderFacts.instant(rs.getTimestamp("created_at")), rs.getString("location"),
                 rs.getLong("trips"), OrderFacts.instant(rs.getTimestamp("last_trip"))),
             tid, variantId, minTrips, limit);
-        return new VariantPieces(variantId, minTrips, total == null ? 0 : total, rows);
+        return new VariantPieces(variantId, minTrips, total == null ? 0 : total, rows,
+            untagged != null && untagged > 0 ? untagged : null);
     }
 
     /**

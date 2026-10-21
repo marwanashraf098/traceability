@@ -58,6 +58,8 @@ export default function BreakdownTab() {
   // Piece drill state, keyed by status — one open drill at a time.
   const [pieces, setPieces] = useState<InventoryPieceRow[]>([])
   const [piecesCursor, setPiecesCursor] = useState<string | null>(null)
+  // Flexible labeling: untagged pieces of the open status, left out of the list (no code to show or act on).
+  const [untaggedCount, setUntaggedCount] = useState(0)
   const [piecesLoading, setPiecesLoading] = useState(false)
 
   useEffect(() => {
@@ -73,6 +75,7 @@ export default function BreakdownTab() {
     setOpenStatus(status)
     setPieces([])
     setPiecesCursor(null)
+    setUntaggedCount(0)
     loadPieces(status, undefined, reset)
   }
 
@@ -81,6 +84,7 @@ export default function BreakdownTab() {
     try {
       const page = await getInventoryPieces({ status, cursor, size: PIECE_PAGE_SIZE })
       setPieces(prev => replace ? page.items : [...prev, ...page.items])
+      if (!cursor) setUntaggedCount(page.untaggedCount ?? 0)
       setPiecesCursor(page.nextCursor)
     } catch {
       // Silently leave whatever was already loaded — a failed "load more" isn't fatal.
@@ -173,7 +177,12 @@ export default function BreakdownTab() {
 
                     {isStatusOpen && (
                       <div className="border-t border-line bg-charcoal/40">
-                        {pieces.length === 0 && !piecesLoading && (
+                        {untaggedCount > 0 && (
+                          <p className="px-4 py-2.5 ps-11 text-small text-warning-text" data-testid="untagged-list-note">
+                            {t('untagged.listNote', { count: untaggedCount })}
+                          </p>
+                        )}
+                        {pieces.length === 0 && !piecesLoading && untaggedCount === 0 && (
                           <p className="px-4 py-3 ps-11 text-small text-muted">{t('inventory.breakdown.noPieces')}</p>
                         )}
                         {pieces.map(p => (

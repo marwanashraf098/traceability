@@ -74,6 +74,7 @@ public class PieceLabelReprintService {
         if (!canReprint(status)) {
             throw new ReprintNotAllowedException();
         }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // no code to reprint — before any event
 
         // Same context ReturnSessionService.recordReprint() records: the piece's location, its
         // order, and that order's forward shipment (newest first — an order can have a
