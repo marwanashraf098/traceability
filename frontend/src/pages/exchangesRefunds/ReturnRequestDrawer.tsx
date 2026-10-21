@@ -13,6 +13,7 @@ import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 import ExchangeProgressView from './ExchangeProgressView'
 import CustomerRefundChoice from './CustomerRefundChoice'
 import ItemPhotos from './ItemPhotos'
+import ManualCourierPanel from './ManualCourierPanel'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -340,7 +341,11 @@ function DrawerContent({
   const bookingLocksArea = detail.bookingStatus === 'pending' || detail.bookingStatus === 'booked'
     || detail.bookingStatus === 'needs_review'
   const areaEditable = (detail.status === 'requested' || detail.status === 'approved') && !bookingLocksArea
-  const showBooking = detail.bookingStatus != null || (detail.status === 'approved' && pickupBooking)
+  // G4a: a request whose order went out with another courier never shows the Bosta booking row (or its
+  // spinner) — the merchant books their own courier in ManualCourierPanel.
+  const otherCourier = detail.otherCourier != null
+  const showBooking = !otherCourier && (detail.bookingStatus != null || (detail.status === 'approved' && pickupBooking))
+  const showManual = otherCourier && detail.bookingStatus === 'manual'
   const isRequested = detail.status === 'requested'
   const reasonLength = reason.length
 
@@ -581,6 +586,7 @@ function DrawerContent({
               )}
             </Field>
           )}
+          {showManual && <ManualCourierPanel detail={detail} onChanged={async () => { await load(); onChanged() }} />}
           {showBooking && (
             <div className="col-span-2 min-w-0" data-testid="booking-row">
               <dt className="text-caption text-muted mb-0.5">{t('exchangesRefunds.requests.drawer.bookingLabel')}</dt>
@@ -693,7 +699,12 @@ function DrawerContent({
       {isRequested && mode === 'view' && (
         <div className="p-5 border-t border-line space-y-3" data-testid="request-footer">
           <p className="text-small text-muted" data-testid="approve-helper">
-            {t(pickupBooking ? 'exchangesRefunds.requests.drawer.helperBooking' : 'exchangesRefunds.requests.drawer.helperManual')}
+            {otherCourier
+              ? (detail.type === 'exchange'
+                ? t('exchangesRefunds.requests.drawer.helperOtherCourierExchange')
+                : t('exchangesRefunds.requests.drawer.helperOtherCourier', {
+                    carrier: detail.otherCourier?.forwardCarrierName || t('exchangesRefunds.requests.drawer.manual.theirCourier') }))
+              : t(pickupBooking ? 'exchangesRefunds.requests.drawer.helperBooking' : 'exchangesRefunds.requests.drawer.helperManual')}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="outline" disabled={busy != null} onClick={() => { setMode('reject'); setReasonError(false) }}>

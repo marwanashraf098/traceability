@@ -402,8 +402,22 @@ function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
   )
 }
 
+/**
+ * G4a — an approved request on an order shipped with another courier (booking 'manual'): the merchant books the
+ * pickup with that courier. The case list derives it as 'booking' / 'awaiting_items' (its SQL is shared with
+ * Bosta requests and unchanged); the pill says "Book with <carrier>" instead.
+ */
+export function booksWithOwnCourier(c: ReturnCase): boolean {
+  return c.caseType === 'A' && c.reason?.bookingStatus === 'manual'
+    && (c.nextStep === 'booking' || c.nextStep === 'awaiting_items')
+}
+
 /** The pill: the next step's label (a few carry a value — refunded amount, closed reason). */
 export function nextStepLabel(t: TFunction, c: ReturnCase): string {
+  if (booksWithOwnCourier(c)) {
+    return t('returnsExchanges.next.book_with_courier.label', {
+      carrier: c.reason?.carrierName || t('returnsExchanges.next.book_with_courier.theirCourier') })
+  }
   const k = `returnsExchanges.next.${c.nextStep}`
   if (c.nextStep === 'refunded' && c.reason?.refundTotal && Number(c.reason.refundTotal) > 0) {
     return t(`${k}.labelAmount`, { amount: formatMoney(c.reason.refundTotal, c.reason.currency ?? 'EGP') })
@@ -421,6 +435,7 @@ export function nextStepLabel(t: TFunction, c: ReturnCase): string {
 
 /** The one short reason line under the pill; null when there is nothing useful to add. */
 export function reasonLine(t: TFunction, c: ReturnCase): string | null {
+  if (booksWithOwnCourier(c)) return t('returnsExchanges.next.book_with_courier.reason')
   const k = `returnsExchanges.next.${c.nextStep}`
   const r = c.reason ?? ({} as ReturnCase['reason'])
   switch (c.nextStep) {

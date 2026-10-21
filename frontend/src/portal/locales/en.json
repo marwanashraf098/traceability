@@ -117,7 +117,8 @@
     "landmarkLabel": "Landmark",
     "landmarkPlaceholder": "e.g. next to the pharmacy",
     "areaRequired": "Choose your area.",
-    "governorateRequired": "Choose your governorate."
+    "governorateRequired": "Choose your governorate.",
+    "pickupTextOther": "{{store}} arranges a pickup with {{carrier}} from the address this order was delivered to."
   },
   "p4": {
     "title": "Request sent",

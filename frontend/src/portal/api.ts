@@ -22,6 +22,8 @@ export interface PortalConfig {
   refundMethods?: string[]
   /** P3 — each line needs 1–3 photos (else photos are optional, up to 3). */
   requirePhotos?: boolean
+  /** G4a — present (true) only when the store also accepts returns for orders shipped with other couriers. */
+  otherCouriers?: boolean
 }
 
 /** Step 5b — one axis of a product's options (colour, size, …). */
@@ -101,6 +103,8 @@ export interface LookupResult {
   deliveredAt: string
   lines: LookupLine[]
   pickup: PickupOffer | null
+  /** G4a — present only for an order shipped with another courier: the store books its pickup with them. */
+  otherCourier?: { carrierName: string | null }
 }
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */

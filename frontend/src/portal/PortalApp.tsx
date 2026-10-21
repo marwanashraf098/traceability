@@ -348,7 +348,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }
 
   // ── X1 / X2 (Step 5b) ─────────────────────────────────────────────────────
-  const exchangesOn = config?.exchangesEnabled === true
+  // G4a: an order shipped with another courier — refunds only (exchanges for other couriers come later), and the
+  // store books its pickup with that courier (no Bosta wording, no pickup-area choice: lookup sends no pickup).
+  const otherCourier = order?.otherCourier ?? null
+  const exchangesOn = config?.exchangesEnabled === true && otherCourier == null
   const exchangeMode = exchangesOn && mode === 'exchange'
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
@@ -996,7 +999,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <p className="pp-muted pp-small">
             {t(customChosen
               ? (exchangeMode ? 'p3.pickupTextExchangeCustom' : 'p3.pickupTextCustom')
-              : exchangeMode ? 'p3.pickupTextExchange' : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}
+              : exchangeMode ? 'p3.pickupTextExchange'
+              : otherCourier ? (otherCourier.carrierName ? 'p3.pickupTextOther' : 'p3.pickupText')
+              : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText',
+              { carrier: otherCourier?.carrierName ?? '', store })}
           </p>
           {pickup && addressChoice && (
             <fieldset className="pp-fieldset pp-addresschoice" data-testid="address-choice">
@@ -1167,7 +1173,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           store={store}
           result={result}
           email={sentEmail}
-          pickupBooking={config.pickupBooking}
+          pickupBooking={config.pickupBooking && otherCourier == null}
           exchange={exchangeMode && exchangeLine && exchangeTarget ? {
             product: exchangeLine.productTitle,
             from: optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle),
@@ -1257,7 +1263,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <InfoIcon />
           <p>
             {t('p1.windowNote', { count: config.returnWindowDays })}{' '}
-            {t(config.pickupBooking ? 'p1.pickupNoteBooking' : 'p1.pickupNote')}
+            {t(config.pickupBooking && !config.otherCouriers ? 'p1.pickupNoteBooking' : 'p1.pickupNote')}
           </p>
         </div>
       )}

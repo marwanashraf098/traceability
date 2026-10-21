@@ -261,6 +261,7 @@ public class ReturnCaseService {
         }
         List<Map<String, Object>> items = new ArrayList<>();
         for (Map<String, Object> r : rows) items.add(toItem(r));
+        addManualCarriers(tenantId, items);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("items", items);
         body.put("nextCursor", next);
@@ -343,6 +344,31 @@ public class ReturnCaseService {
 
     private static ResponseStatusException bad(String field) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown " + field);
+    }
+
+    /**
+     * Non-Bosta couriers G4a — a request the merchant books with their own courier (booking 'manual') carries
+     * the courier for its "Book with <carrier>" pill: reason.carrierName, on those rows only (a Java step after
+     * the shared case query, which is unchanged).
+     */
+    @SuppressWarnings("unchecked")
+    private void addManualCarriers(UUID tenantId, List<Map<String, Object>> items) {
+        List<String> ids = new ArrayList<>();
+        for (Map<String, Object> m : items) {
+            if ("A".equals(m.get("caseType")) && "manual".equals(((Map<String, Object>) m.get("reason")).get("bookingStatus"))) {
+                ids.add((String) m.get("id"));
+            }
+        }
+        if (ids.isEmpty()) return;
+        Map<String, String> carriers = new HashMap<>();
+        jdbc.query("SELECT id::text, manual_carrier_name FROM return_requests WHERE tenant_id = ? AND id = ANY (?::uuid[])",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs -> carriers.put(rs.getString(1), rs.getString(2)),
+            tenantId, ids.toArray(new String[0]));
+        for (Map<String, Object> m : items) {
+            if (ids.contains((String) m.get("id"))) {
+                ((Map<String, Object>) m.get("reason")).put("carrierName", carriers.get((String) m.get("id")));
+            }
+        }
     }
 
     private static Map<String, Object> toItem(Map<String, Object> r) {

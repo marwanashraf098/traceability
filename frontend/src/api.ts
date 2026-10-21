@@ -2831,6 +2831,8 @@ export interface ReturnCase {
     currency: string | null
     closeReason: string | null
     inspectionState: 'in_transit' | 'needs_inspection' | 'resolved' | 'received_untracked' | null
+    /** G4a — only on a request booked with the merchant's own courier (bookingStatus 'manual'). */
+    carrierName?: string | null
   }
   alerts: string[]
   itemsSummary: string
@@ -2885,6 +2887,8 @@ export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other'
 
 /** Step 4c-3 — the Bosta return pickup booking (null = never attempted). */
 export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous' | 'needs_review'
+  /** G4a — the order went out with another courier: the merchant books the return with them. */
+  | 'manual'
 
 export interface ReturnRequestRow {
   id: string
@@ -2907,6 +2911,8 @@ export interface ReturnRequestRow {
   refundOverdueDays?: number | null
   /** A product that isn't part of the request came back (unexpected_item_received). */
   unexpectedItem?: boolean
+  /** G4a — present only when bookingStatus is 'manual': the courier the merchant books the return with. */
+  manualCarrierName?: string | null
   /** Step 5b — 'exchange' for a same-product size/colour exchange. Absent on older responses. */
   type?: 'refund' | 'exchange'
 }
@@ -3046,6 +3052,8 @@ export interface ReturnRequestDetail {
   piiRedacted?: boolean
   /** Step 4c-3 — the Bosta return pickup booking. */
   bookingStatus?: BookingStatus | null
+  /** G4a — present only for an order shipped with another courier (never on a Bosta order's request). */
+  otherCourier?: OtherCourierReturn
   bookingError?: string | null
   bostaTrackingNumber?: string | null
   bookingAttemptedAt?: string | null
@@ -3137,6 +3145,48 @@ export function markBookingNotBooked(id: string) {
 }
 
 /** "It was booked — enter tracking number" (checked against Bosta by the backend). */
+/** G4a — the drawer's block for a request whose order went out with another courier. */
+export interface OtherCourierReturn {
+  /** The courier the order was delivered with. */
+  forwardCarrierName: string | null
+  /** The courier the merchant books the return with (defaults to the order's). */
+  carrierName: string | null
+  /** Where the courier collects: the customer and the delivery address. Null fields after a privacy request. */
+  pickup: { name: string | null; phone: string | null; addressLines: string[] }
+}
+
+export interface ManualCourierResult {
+  outcome: 'CARRIER_SET' | 'LEG_CREATED'
+  carrierName: string
+  trackingNumber: string | null
+  returnShipmentId: string | null
+}
+
+/** G4a — record the courier and, optionally, the return's tracking number (creates its return parcel). */
+export function setManualCourier(id: string, carrier: string, trackingNumber?: string) {
+  return transferCommandRequest<ManualCourierResult>(`/return-requests/${id}/manual-courier`, {
+    method: 'POST', body: JSON.stringify({ carrier, trackingNumber: trackingNumber || null }),
+  })
+}
+
+export interface OtherCouriersReturnsSetting {
+  /** The store ships with other couriers (Settings → Couriers). */
+  available: boolean
+  enabled: boolean
+  since: string | null
+}
+
+/** G4a — "Accept returns for orders shipped with other couriers". */
+export function getOtherCouriersReturns() {
+  return request<OtherCouriersReturnsSetting>('/tenant/portal-settings/other-couriers')
+}
+
+export function setOtherCouriersReturns(enabled: boolean) {
+  return transferCommandRequest<OtherCouriersReturnsSetting>('/tenant/portal-settings/other-couriers', {
+    method: 'PUT', body: JSON.stringify({ enabled }),
+  })
+}
+
 export function confirmBooking(id: string, trackingNumber: string) {
   return transferCommandRequest<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
 }

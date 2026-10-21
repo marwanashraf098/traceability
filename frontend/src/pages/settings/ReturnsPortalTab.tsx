@@ -4,8 +4,10 @@ import { Search } from 'lucide-react'
 import {
   getPortalSettings, getPortalVariants, getReturnLocations, savePortalSettings, setVariantNonReturnable,
   BostaReturnLocation, PortalSettings, PortalSettingsError, PortalSettingsInput, PortalVariantRow,
-  ReturnLocationsError,
+  ReturnLocationsError, OtherCouriersReturnsSetting, TransferCommandError, getOtherCouriersReturns, getRoleFromToken,
+  setOtherCouriersReturns,
 } from '../../api'
+import { useCapabilities } from '../../capabilities'
 import { Button, Input, Skeleton, Toggle, cn, useToast } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
 import { FontPicker, LogoUploader, PortalPreview, useUploadedLogoUrl } from './PortalBranding'
@@ -298,6 +300,8 @@ export default function ReturnsPortalTab() {
           onChange={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
         />
 
+        <OtherCouriersRow />
+
         <RefundMethodsRow value={refundMethods} onChange={setRefundMethods} />
 
         <SwitchRow
@@ -513,6 +517,61 @@ function ReturnLocationRow({
       )}
       {error && <p className="text-small text-critical" role="alert" data-testid="error-returnLocationId">{error}</p>}
       <p id="portal-return-location-help" className="text-small text-muted">{t('settings.portal.returnLocation.help')}</p>
+    </div>
+  )
+}
+
+/**
+ * Non-Bosta couriers G4a — "Accept returns for orders shipped with other couriers": shown only to a store that
+ * ships with other couriers (or has it switched on). Saved at once on its own endpoint (owner only, audit-logged),
+ * not with "Save changes"; a manager sees it read-only.
+ */
+function OtherCouriersRow() {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const { genericCourier } = useCapabilities()
+  const [setting, setSetting] = useState<OtherCouriersReturnsSetting | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>()
+  const owner = getRoleFromToken() === 'owner'
+
+  useEffect(() => {
+    if (!genericCourier) return
+    let cancelled = false
+    getOtherCouriersReturns().then(s => { if (!cancelled) setSetting(s) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [genericCourier])
+
+  if (!setting || (!setting.available && !setting.enabled)) return null
+
+  async function change(v: boolean) {
+    setSaving(true)
+    setError(undefined)
+    try {
+      const s = await setOtherCouriersReturns(v)
+      setSetting(s)
+      toast({ tone: 'success', message: t(v ? 'settings.portal.otherCouriers.savedOn' : 'settings.portal.otherCouriers.savedOff') })
+    } catch (e) {
+      setError(e instanceof TransferCommandError ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
+        : t('settings.portal.otherCouriers.saveFailed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div data-testid="other-couriers-row">
+      <SwitchRow
+        title={t('settings.portal.otherCouriers.title')}
+        description={t('settings.portal.otherCouriers.description')}
+        checked={setting.enabled}
+        disabled={saving || !owner || (!setting.enabled && !setting.available)}
+        note={!owner ? t('settings.portal.otherCouriers.ownerOnly') : undefined}
+        noteTestId="other-couriers-note"
+        error={error}
+        errorTestId="error-otherCouriers"
+        onChange={change}
+      />
     </div>
   )
 }

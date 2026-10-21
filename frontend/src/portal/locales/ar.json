@@ -117,7 +117,8 @@
     "landmarkLabel": "علامة مميزة",
     "landmarkPlaceholder": "مثال: بجوار الصيدلية",
     "areaRequired": "اختر منطقتك.",
-    "governorateRequired": "اختر محافظتك."
+    "governorateRequired": "اختر محافظتك.",
+    "pickupTextOther": "يرتّب {{store}} استلامًا مع {{carrier}} من العنوان الذي وصل إليه هذا الطلب."
   },
   "p4": {
     "title": "تم إرسال الطلب",
