@@ -152,7 +152,8 @@ describe('G4a layouts', () => {
         type('pp-phone', '01012345678')
         ;(document.querySelector('form button[type=submit]') as HTMLElement).click()
         await expect.poll(() => document.querySelector('[data-testid="portal-line"]')).toBeTruthy()
-        expect(document.querySelector('input[name="pp-mode"]')).toBeNull()
+        // G4b: the Return / Exchange choice is offered for another courier's order too (Return stays the default)
+        expect(document.querySelectorAll('input[name="pp-mode"]').length).toBe(2)
         const line = document.querySelector<HTMLElement>('[data-testid="portal-line"]')!
         line.querySelectorAll<HTMLButtonElement>('button')[1].click()
         await expect.poll(() => line.querySelector('select')).toBeTruthy()
