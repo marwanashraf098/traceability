@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Non-Bosta couriers G4b — portal EXCHANGES for orders shipped with other couriers + G4a follow-ups (2026-10-22, branch
+`generic-courier-g4b` off origin/main b9ca5c2; NOT merged, NOT deployed, no tenant switched on). Migration V180.**
+- **Option B (approved 2026-10-21):** no exchanges row. Approve (switch on, stock re-checked) →
+  `GenericExchanges.attachGenericForRequest`: internal order `internal:exchange:rr:<request id>` (`EXC-RR-…`, customer
+  name / phone / shopify_address copied), `return_requests.replacement_order_id` (composite FK on the new
+  `orders (id, tenant_id)` UNIQUE), booking 'manual', nothing enqueued. Switch off + generic order → 409
+  OTHER_COURIER_RETURNS_OFF (G4a's "coming soon" refusal removed).
+- **manual-courier** gains `outboundTrackingNumber` (exchanges): `GenericLegTransitions.createReplacementForwardLeg`
+  (source merchant_entered) → pickable → packs by waybill scan → Pickups; optional return waybill must differ
+  (SAME_AS_OUTBOUND, also across calls); all-or-nothing in one call; each once.
+- **Step 5a amendment** (CLAUDE.md): inner JOIN exchanges → EXISTS(exchanges names it) OR EXISTS(an exchange request
+  names it); the inferred handover in `GenericLegTransitions.deliver` fires the same hook (setter-injected,
+  `@Lazy` ShopifyInventoryService on the bean).
+- **Follow-ups done:** cases 'book_with_courier' ('to do') for manual requests still to be booked (exchange until its
+  outbound waybill; refund until courier_chosen / return waybill — then 'awaiting_items'); `listCrpReturns` adds
+  `carrier` on generic rows only (that list has no screen today — `/refunds` is used by no page); the drawer's Arrived
+  also moves the generic return leg to returned (undo → created, history return_scan). GDPR CustomerSubject includes
+  the replacement order.
+- **Tests:** GenericG4bIsolationGoldenTest (recorded on b9ca5c2 before any G4b code: Bosta type-30 flow end to end,
+  pickup-close and webhook dispatch claims, tryAutoMap / exchange_needs_mapping, exchanges rows, drawer progress,
+  cases buckets — off / on+portal off / on+portal on identical), GenericCourierG4bTest 10, GenericG4bSnapshotScriptTest,
+  vitest genericCourierG4b 6, browser genericG4bLayout 24; MigrationSmokeTest 179 / NotTracedBackfillTest 124.
+  Revert-checked: 5a EXISTS, inferred-handover hook, same-key refusal, to-do bucket. G4a tests edited only where G4b
+  changes the asserted behaviour (backend a3 → switch-off refusal; vitest pill → book_with_courier; portal Exchange choice
+  now offered).
+- **Decision for Marawan:** "Mark delivered without a pickup" can't reach the inferred handover — G3's rule is that
+  Mark delivered applies only to legs with the courier; the inferred handover comes only from Shopify's 'delivered',
+  which never exists for an internal replacement. Tested by calling the inferred path directly. Loosen for replacements?
+- **Follow-ups (not built):** "Exchange" chip on Orders list / Pick & Pack queue and the Overview exchanges tile read
+  `JOIN exchanges` (generic replacements show as plain orders — cosmetic, shared SQL); the replacement reserves no stock
+  between approval and its outbound waybill (committed only once pickable).
+
 **Shopify↔Traced inventory drift check — STEP 0 diagnosis only (2026-10-21, no code, no branch). Report given in chat;
 waiting on Marawan's answers.** Key facts found:
 - Traced reads only Shopify `available` today (gateway `fetchAvailableQuantities`, analytics reader); never committed /
