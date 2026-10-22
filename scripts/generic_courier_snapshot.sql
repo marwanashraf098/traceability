@@ -315,6 +315,8 @@ ORDER BY t.name, t.id, m.metric;
 --      requests/<type>/<booking_status>   — return requests created before as_of ('-' = no booking); a Bosta
 --                                           tenant's lines are identical before and after (never 'manual')
 --      generic_return_legs/<state>        — portal-request return legs (GenericLegTransitions.createPortalReturnLeg)
+--      replacement_orders/<status>/<leg>  — G4b: generic exchange replacement orders by status / outbound leg state
+--      replacement_dispatch/<status>      — G4b: their Step-5a exchange_dispatch claims
 --    New V177 columns are read through to_jsonb, so the script also runs on the schema before it.
 WITH cfg AS (SELECT (:'as_of')::timestamptz AS now_ts),
 metrics AS (
@@ -344,6 +346,24 @@ metrics AS (
     SELECT s.tenant_id, 'generic_return_legs/' || s.internal_state::text, count(*)
     FROM shipments s CROSS JOIN cfg
     WHERE s.provider::text = 'generic' AND s.shipment_leg = 'return' AND s.created_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    -- G4b (V180): generic exchange replacement orders (internal:exchange:rr:<request>) by order status and the
+    -- state of their outbound leg ('-' = no outbound waybill yet). Bosta replacements are 'internal:exchange:<AWB>'.
+    SELECT o.tenant_id, 'replacement_orders/' || o.status::text || '/' || coalesce(
+               (SELECT s.internal_state::text FROM shipments s WHERE s.order_id = o.id AND s.shipment_leg = 'forward'
+                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1), '-'), count(*)
+    FROM orders o CROSS JOIN cfg
+    WHERE o.external_id LIKE 'internal:exchange:rr:%' AND o.created_at < cfg.now_ts
+    GROUP BY 1, 2
+    UNION ALL
+    -- their Step-5a decrements (exchange_dispatch claims of pieces allocated to them), by claim status
+    SELECT a.tenant_id, 'replacement_dispatch/' || a.status, count(*)
+    FROM shopify_inventory_adjustments a CROSS JOIN cfg
+    WHERE a.trigger_type = 'exchange_dispatch' AND a.created_at < cfg.now_ts
+      AND EXISTS (SELECT 1 FROM allocations al JOIN order_items oi ON oi.id = al.order_item_id
+                  JOIN orders o ON o.id = oi.order_id
+                  WHERE al.piece_id = a.trigger_id AND o.external_id LIKE 'internal:exchange:rr:%')
     GROUP BY 1, 2
 )
 SELECT 'g4' AS section, t.name, t.id::text, m.metric, m.n::text
