@@ -65,6 +65,9 @@ class OrdersTableAccessGuardTest {
           "orders/cancelled looks the order up by Shopify external_id, then updates that id"),
         e("inventory/ExchangeService.java#commit", ALREADY_EXCLUDED_BY_KEY,
           "INSERTs a new internal:exchange: replacement order; never reads or writes another row"),
+        e("courier/GenericExchanges.java#attachGenericForRequest", ALREADY_EXCLUDED_BY_KEY,
+            "G4b: INSERTs a generic exchange's internal replacement order, external_id 'internal:exchange:rr:<request>' — "
+            + "never a portal row (reads the original through merchant_orders), the same shape as ExchangeService#commit"),
         // ── SAFE_BY_ID
         e("fulfillment/OrderCarrier.java#recompute", SAFE_BY_ID,
           "recomputes one order's carrier class from its own shipments; no list, no count"),
