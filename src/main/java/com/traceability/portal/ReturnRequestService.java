@@ -349,7 +349,7 @@ public class ReturnRequestService {
      * Null until the exchange exists. Read-only; the stages themselves are derived in the UI.
      */
     private Map<String, Object> exchangeProgress(UUID tenantId, UUID requestId) {
-        return jdbc.queryForList(
+        Map<String, Object> bosta = jdbc.queryForList(
             "SELECT e.tracking_number AS \"trackingNumber\", e.status AS \"exchangeStatus\", " +
             "       o.id AS \"orderId\", o.number AS \"orderNumber\", o.status::text AS \"orderStatus\", " +
             "       s.internal_state::text AS \"shipmentState\", s.delivered_at AS \"deliveredAt\", " +
@@ -361,6 +361,22 @@ public class ReturnRequestService {
             "    WHERE order_id = o.id AND tenant_id = e.tenant_id AND shipment_leg = 'forward' " +
             "    ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
             "WHERE e.tenant_id = ? AND e.return_request_id = ?", tenantId, requestId)
+            .stream().findFirst().orElse(null);
+        if (bosta != null) return bosta;
+        // G4b: a generic exchange has no exchanges row — the same shape from the request's replacement order
+        // (trackingNumber = its outbound waybill once entered; exchangeStatus null). Null until the replacement exists.
+        return jdbc.queryForList(
+            "SELECT s.tracking_number AS \"trackingNumber\", NULL::text AS \"exchangeStatus\", " +
+            "       o.id AS \"orderId\", o.number AS \"orderNumber\", o.status::text AS \"orderStatus\", " +
+            "       s.internal_state::text AS \"shipmentState\", s.delivered_at AS \"deliveredAt\", " +
+            "       (SELECT MIN(h.occurred_at) FROM shipment_status_history h WHERE h.shipment_id = s.id " +
+            "          AND h.internal_state = 'with_courier') AS \"withCourierAt\" " +
+            "FROM return_requests rr " +
+            "JOIN merchant_orders o ON o.id = rr.replacement_order_id AND o.tenant_id = rr.tenant_id " +
+            "LEFT JOIN LATERAL (SELECT id, tracking_number, internal_state, delivered_at FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = rr.tenant_id AND shipment_leg = 'forward' " +
+            "    ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
+            "WHERE rr.tenant_id = ? AND rr.id = ?", tenantId, requestId)
             .stream().findFirst().orElse(null);
     }
 
@@ -408,10 +424,14 @@ public class ReturnRequestService {
             "JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
             "WHERE rr.id = ? AND rr.tenant_id = ? FOR UPDATE OF rr", id, tenantId);
         if (rows.isEmpty() || !"requested".equals(rows.get(0).get("status"))) throw notRequested(id, tenantId);
-        // Non-Bosta couriers G4a: refunds only for an order shipped with another courier (exchanges: G4b).
-        if (Boolean.TRUE.equals(jdbc.queryForObject("SELECT " + GenericShipments.newestForwardIsGenericSql("rr.order_id") +
-                " FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ?", Boolean.class, id, tenantId))) {
-            throw GenericReturnException.exchangeOtherCourier();
+        // Non-Bosta couriers G4b: an order shipped with another courier is exchanged with that courier (never a Bosta
+        // type 30) — only while the store accepts returns for other couriers (G4a's switch), like the portal itself.
+        UUID orderId = jdbc.queryForObject("SELECT order_id FROM return_requests WHERE id = ? AND tenant_id = ?",
+            UUID.class, id, tenantId);
+        boolean genericOrder = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT " + GenericShipments.newestForwardIsGenericSql("?"), Boolean.class, orderId));
+        if (genericOrder && !GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId)) {
+            throw GenericReturnException.exchangeSwitchOff();
         }
         UUID replacement = (UUID) rows.get(0).get("replacement_variant_id");
         // The product may have been archived / set to draft in Shopify since the customer asked.
@@ -428,6 +448,13 @@ public class ReturnRequestService {
             "UPDATE return_requests SET status = 'approved', decided_at = now(), decided_by = ? " +
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'", actorUserId, id, tenantId);
         requests.event(tenantId, id, "approved", actorUserId, ReturnRequestLifecycle.meta("type", "exchange"));
+        // G4b: the replacement order now (internal:exchange:rr:<id>, named by replacement_order_id), booking 'manual'
+        // — the merchant books the exchange with their courier; nothing is enqueued.
+        if (genericOrder) {
+            com.traceability.courier.GenericExchanges.attachGenericForRequest(jdbc, tenantId, id);
+            markManual(jdbc, tenantId, id, orderId);
+            return;
+        }
         // Step 5c: book the Bosta exchange only AFTER this approval commits (a rollback → no job),
         // when the tenant books pickups and allows exchanges.
         if (bookingScheduler != null && Boolean.TRUE.equals(jdbc.queryForObject(
@@ -544,35 +571,59 @@ public class ReturnRequestService {
         }
         pickup.put("addressLines", lines);
         m.put("pickup", pickup);
+        // G4b: a generic exchange — the replacement the merchant ships (its outbound waybill once entered).
+        Map<String, Object> rep = jdbc.queryForList(
+            "SELECT o.id AS \"orderId\", o.number AS \"orderNumber\", s.tracking_number AS \"outboundTrackingNumber\", " +
+            "       s.internal_state::text AS \"outboundState\" " +
+            "FROM return_requests rr JOIN merchant_orders o ON o.id = rr.replacement_order_id AND o.tenant_id = rr.tenant_id " +
+            "LEFT JOIN LATERAL (SELECT tracking_number, internal_state FROM shipments WHERE order_id = o.id " +
+            "    AND tenant_id = rr.tenant_id AND shipment_leg = 'forward' ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
+            "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId).stream().findFirst().orElse(null);
+        if (rep != null) m.put("replacement", rep);
         return m;
     }
 
     private static String nz(Object v) { return v == null ? "" : v.toString(); }
 
-    public record ManualCourierResult(String outcome, String carrierName, String trackingNumber, UUID returnShipmentId) {}
+    public record ManualCourierResult(String outcome, String carrierName, String trackingNumber, UUID returnShipmentId,
+                                      String outboundTrackingNumber) {}
 
     /**
-     * POST /return-requests/{id}/manual-courier {carrier, trackingNumber?} — owner / manager. Only a request whose
-     * booking is 'manual', still approved and holding no return leg. The carrier defaults to the order's own.
-     * With a tracking number: the ONE generic-leg writer creates the return leg (source 'portal_request'), the
-     * request holds it (return_shipment_id, link_source 'merchant_entered'), events leg_linked + pickup_booked,
-     * status pickup_booked. Never writes bosta_tracking_number. A number equal to the order's own waybill, or
-     * one another shipment holds → 409, nothing changed (the request carries on with no leg).
-     * Without one: the carrier is recorded, the request stays approved.
+     * POST /return-requests/{id}/manual-courier {carrier, trackingNumber?, outboundTrackingNumber?} — owner / manager.
+     * Only a request whose booking is 'manual'. The carrier defaults to the order's own.
+     *
+     * Refund (G4a): only while approved and holding no return leg. With a tracking number: the ONE generic-leg
+     * writer creates the return leg (source 'portal_request'), the request holds it (return_shipment_id,
+     * link_source 'merchant_entered'), events leg_linked + pickup_booked, status pickup_booked. Without one: the
+     * carrier is recorded, the request stays approved.
+     *
+     * Exchange (G4b): while approved or pickup_booked. outboundTrackingNumber (required to ship, once) → the
+     * replacement's generic forward leg (source 'merchant_entered') → the replacement becomes pickable; status
+     * pickup_booked. trackingNumber (optional, once) → the old item's return leg as for a refund; it must differ
+     * from the replacement's outbound waybill (SAME_AS_OUTBOUND). Both may come in one call (all or nothing).
+     *
+     * Never writes bosta_tracking_number. A number equal to the order's own waybill, or one another shipment holds
+     * → 409, nothing changed.
      */
     @Transactional
-    public ManualCourierResult manualCourier(UUID id, String carrierRaw, String trackingRaw, UUID actorUserId,
-                                             GenericLegTransitions legs) {
+    public ManualCourierResult manualCourier(UUID id, String carrierRaw, String trackingRaw, String outboundRaw,
+                                             UUID actorUserId, GenericLegTransitions legs) {
         UUID tenantId = TenantContext.require();
         Map<String, Object> rr = jdbc.queryForList(
-            "SELECT status::text AS status, booking_status, order_id, return_shipment_id, manual_carrier_name " +
+            "SELECT status::text AS status, booking_status, order_id, return_shipment_id, manual_carrier_name, type, " +
+            "       replacement_order_id " +
             "FROM return_requests WHERE id = ? AND tenant_id = ? FOR UPDATE", id, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
         if (!MANUAL.equals(rr.get("booking_status"))) {
             throw GenericReturnException.notManual();
         }
-        if (!"approved".equals(rr.get("status")) || rr.get("return_shipment_id") != null) {
+        boolean exchange = "exchange".equals(rr.get("type"));
+        String outbound = outboundRaw == null || outboundRaw.isBlank() ? null : outboundRaw.strip();
+        if (outbound != null && !exchange) throw GenericReturnException.notAnExchange();
+        String status = (String) rr.get("status");
+        if (exchange ? !("approved".equals(status) || "pickup_booked".equals(status))
+                     : (!"approved".equals(status) || rr.get("return_shipment_id") != null)) {
             throw GenericReturnException.alreadyBooked();
         }
         UUID orderId = (UUID) rr.get("order_id");
@@ -583,13 +634,51 @@ public class ReturnRequestService {
             throw GenericReturnException.carrierRequired();
         }
         String tracking = trackingRaw == null || trackingRaw.isBlank() ? null : trackingRaw.strip();
-        if (tracking == null) {
+        if ((tracking != null && tracking.length() > 100) || (outbound != null && outbound.length() > 100)) {
+            throw GenericReturnException.trackingInvalid();
+        }
+        if (tracking == null && outbound == null) {
             jdbc.update("UPDATE return_requests SET manual_carrier_name = ? WHERE id = ? AND tenant_id = ?", carrier, id, tenantId);
             requests.event(tenantId, id, "courier_chosen", actorUserId, ReturnRequestLifecycle.meta("carrier", carrier));
-            return new ManualCourierResult("CARRIER_SET", carrier, null, null);
+            return new ManualCourierResult("CARRIER_SET", carrier, null, null, null);
         }
-        if (tracking.length() > 100) {
-            throw GenericReturnException.trackingInvalid();
+        if (exchange && tracking != null && rr.get("return_shipment_id") != null) throw GenericReturnException.alreadyBooked();
+
+        // G4b: the old item's return waybill must never be the replacement's outbound one (entered now or before).
+        UUID replacementOrder = (UUID) rr.get("replacement_order_id");
+        if (exchange && tracking != null) {
+            String returnKey = com.traceability.courier.GenericTrackingKey.of(tracking);
+            String outboundKey = outbound != null ? com.traceability.courier.GenericTrackingKey.of(outbound)
+                : replacementOrder == null ? null : jdbc.queryForList(
+                    "SELECT tracking_key FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'generic' " +
+                    "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled') " +
+                    "ORDER BY created_at DESC, id DESC LIMIT 1", String.class, tenantId, replacementOrder)
+                    .stream().findFirst().orElse(null);
+            if (returnKey != null && returnKey.equals(outboundKey)) throw GenericReturnException.sameAsOutbound();
+        }
+
+        String outboundTn = null;
+        if (outbound != null) {
+            if (replacementOrder == null) throw GenericReturnException.notAnExchange();
+            GenericLegTransitions.ForwardLeg fwd = legs.createReplacementForwardLeg(tenantId, replacementOrder, carrier, outbound);
+            switch (fwd.outcome()) {
+                case NO_KEY -> throw GenericReturnException.trackingInvalid();
+                case ALREADY_HAS_LEG -> throw GenericReturnException.outboundAlreadySet();
+                case KEY_TAKEN -> throw GenericReturnException.trackingTaken();
+                case CREATED -> { }
+            }
+            outboundTn = fwd.trackingNumber();
+            jdbc.update("UPDATE return_requests SET manual_carrier_name = ?, " +
+                "    status = CASE WHEN status = 'approved' THEN 'pickup_booked'::return_request_status ELSE status END " +
+                "WHERE id = ? AND tenant_id = ?", carrier, id, tenantId);
+            requests.event(tenantId, id, "replacement_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+                "shipment_id", fwd.shipmentId().toString(), "tracking_number", outboundTn, "carrier", carrier));
+            requests.event(tenantId, id, "pickup_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+                "tracking_number", outboundTn, "carrier", carrier));
+        }
+
+        if (tracking == null) {
+            return new ManualCourierResult("OUTBOUND_CREATED", carrier, null, null, outboundTn);
         }
         GenericLegTransitions.ReturnLeg leg = legs.createPortalReturnLeg(tenantId, orderId, carrier, tracking);
         switch (leg.outcome()) {
@@ -597,6 +686,14 @@ public class ReturnRequestService {
             case SAME_AS_FORWARD -> throw GenericReturnException.sameAsOrderWaybill();
             case KEY_TAKEN -> throw GenericReturnException.trackingTaken();
             case CREATED -> { }
+        }
+        if (exchange) {
+            jdbc.update("UPDATE return_requests SET manual_carrier_name = ?, return_shipment_id = ?, link_source = 'merchant_entered' " +
+                "WHERE id = ? AND tenant_id = ? AND return_shipment_id IS NULL", carrier, leg.shipmentId(), id, tenantId);
+            requests.event(tenantId, id, "leg_linked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+                "shipment_id", leg.shipmentId().toString(), "tracking_number", leg.trackingNumber(), "carrier", carrier));
+            return new ManualCourierResult(outboundTn != null ? "LEGS_CREATED" : "LEG_CREATED", carrier,
+                leg.trackingNumber(), leg.shipmentId(), outboundTn);
         }
         jdbc.update(
             "UPDATE return_requests SET manual_carrier_name = ?, return_shipment_id = ?, link_source = 'merchant_entered', " +
@@ -606,7 +703,7 @@ public class ReturnRequestService {
             "shipment_id", leg.shipmentId().toString(), "tracking_number", leg.trackingNumber(), "carrier", carrier));
         requests.event(tenantId, id, "pickup_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
             "tracking_number", leg.trackingNumber(), "carrier", carrier));
-        return new ManualCourierResult("LEG_CREATED", carrier, leg.trackingNumber(), leg.shipmentId());
+        return new ManualCourierResult("LEG_CREATED", carrier, leg.trackingNumber(), leg.shipmentId(), null);
     }
 
     /** POST /return-requests/{id}/link-leg {shipmentId}. */

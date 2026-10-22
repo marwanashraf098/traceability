@@ -13,11 +13,34 @@ public class GenericReturnException extends ApiException {
         super(code, en, ar, status);
     }
 
-    public static GenericReturnException exchangeOtherCourier() {
-        return new GenericReturnException("EXCHANGE_OTHER_COURIER",
-            "Exchanges for orders shipped with other couriers are coming soon. Switch it to a refund or reject it.",
-            "الاستبدال للطلبات المشحونة مع شركات شحن أخرى قادم قريبًا. حوّله إلى استرداد أو ارفضه.",
+    public static GenericReturnException exchangeSwitchOff() {
+        return new GenericReturnException("OTHER_COURIER_RETURNS_OFF",
+            "This order was shipped with another courier. Switch on \"Accept returns for orders shipped with other couriers\" "
+                + "in Settings → Returns portal to approve it, or reject it.",
+            "تم شحن هذا الطلب مع شركة شحن أخرى. فعّل \"قبول الإرجاع للطلبات المشحونة مع شركات شحن أخرى\" من الإعدادات ← بوابة الإرجاع للموافقة عليه، أو ارفضه.",
             HttpStatus.CONFLICT);
+    }
+
+    public static GenericReturnException sameAsOutbound() {
+        return new GenericReturnException("SAME_AS_OUTBOUND",
+            "The return waybill must be different from the replacement's outbound waybill. Enter the return's own number, "
+                + "or leave it empty — the old item can still be scanned in by its piece.",
+            "يجب أن تختلف بوليصة الإرجاع عن بوليصة إرسال البديل. أدخل رقم الإرجاع الخاص، أو اتركه فارغًا — يمكن استلام المنتج القديم بمسح قطعته.",
+            HttpStatus.CONFLICT);
+    }
+
+    public static GenericReturnException outboundAlreadySet() {
+        return new GenericReturnException("OUTBOUND_ALREADY_SET",
+            "The replacement already has its outbound waybill.",
+            "البديل له بوليصة إرسال بالفعل.",
+            HttpStatus.CONFLICT);
+    }
+
+    public static GenericReturnException notAnExchange() {
+        return new GenericReturnException("NOT_AN_EXCHANGE",
+            "Only an exchange has a replacement to send.",
+            "الاستبدال فقط له بديل للإرسال.",
+            HttpStatus.BAD_REQUEST);
     }
 
     public static GenericReturnException notManual() {

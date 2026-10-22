@@ -240,9 +240,12 @@ class GenericCourierG4aTest {
             "VALUES (?, ?, 'exchange', 'requested', ?) RETURNING id", UUID.class, t.id(), o.id(), ref());
         jdbc.update("INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, replacement_variant_id) " +
             "VALUES (?, ?, ?, ?, 'wrong_size', ?)", t.id(), rr, pieceId(o.pieces().get(0)), t.variant(), t.variant());
+        // G4b: generic exchanges are approved while the store accepts returns for other couriers — refused only with
+        // that switch off (never booked with Bosta either way).
+        jdbc.update("UPDATE tenants SET portal_generic_returns_enabled = false WHERE id = ?", t.id());
         ResponseEntity<Object> r = post(t.ownerToken(), "/api/v1/return-requests/" + rr + "/approve", null);
         assertThat(r.getStatusCode().value()).isEqualTo(409);
-        assertThat(String.valueOf(r.getBody())).contains("EXCHANGE_OTHER_COURIER").contains("coming soon");
+        assertThat(String.valueOf(r.getBody())).contains("OTHER_COURIER_RETURNS_OFF");
         assertThat(row(rr)).containsEntry("status", "requested");
         assertThat(bookingJobs()).isEmpty();
     }

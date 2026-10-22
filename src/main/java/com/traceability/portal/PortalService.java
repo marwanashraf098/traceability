@@ -627,10 +627,10 @@ public class PortalService {
             orderId, tenantId);
         if (order.isEmpty() || deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
         if (req.mode() != null && !"refund".equals(req.mode()) && !req.exchange()) throw new InvalidSubmission();
-        // Non-Bosta couriers G4a: refunds only for an order shipped with another courier (exchanges come later),
-        // and no Bosta pickup address — the merchant books the pickup with their courier.
+        // Non-Bosta couriers G4a / G4b: no Bosta pickup address for an order shipped with another courier — the
+        // merchant books the pickup (and, for an exchange, the replacement's delivery) with their courier.
         boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
-        if (generic && (req.exchange() || req.customAddressChosen())) throw new InvalidSubmission();
+        if (generic && req.customAddressChosen()) throw new InvalidSubmission();
         UUID replacement = req.exchange() ? validExchange(tenantId, orderId, req) : null;
 
         // Bind pieces line by line (the same variant may appear on two lines with different reasons).

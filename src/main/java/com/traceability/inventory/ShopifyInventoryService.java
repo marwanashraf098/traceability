@@ -398,8 +398,10 @@ public class ShopifyInventoryService {
      * Step 5a — called (after commit) when a piece first leaves Traced custody. Decrements
      * Shopify by 1 only when the piece is the replacement of an internal exchange order:
      * allocated (active/packed) to an order with external_id 'internal:exchange:%' that an
-     * exchanges row names as its outbound_order_id, and the piece's current location is a
-     * fulfillment location. Anything else — a Shopify order, a demo order — is a silent no-op.
+     * exchanges row names as its outbound_order_id (Bosta) or an exchange request names as its
+     * replacement_order_id (generic, G4b amendment 2026-10-21), and the piece's current location is a
+     * fulfillment location. Anything else — a Shopify order, a demo order, an internal order no one
+     * names — is a silent no-op.
      */
     @Async
     public CompletableFuture<Void> onExchangeReplacementDispatched(UUID tenantId, String pieceId) {
@@ -430,9 +432,14 @@ public class ShopifyInventoryService {
             "  AND EXISTS (SELECT 1 FROM allocations a " +
             "              JOIN order_items oi ON oi.id = a.order_item_id " +
             "              JOIN orders o ON o.id = oi.order_id AND o.tenant_id = p.tenant_id " +
-            "              JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id " +
             "              WHERE a.piece_id = p.id AND a.status IN " + allocationStatuses +
-            "                AND o.external_id LIKE 'internal:exchange:%')",
+            "                AND o.external_id LIKE 'internal:exchange:%' " +
+            // G4b amendment (approved 2026-10-21): the internal order must be NAMED as a replacement — by an
+            // exchanges row (Bosta, unchanged) or by an exchange request's replacement_order_id (generic). Never
+            // the bare prefix: a stray internal order no one names never decrements.
+            "                AND (EXISTS (SELECT 1 FROM exchanges e WHERE e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id) " +
+            "                  OR EXISTS (SELECT 1 FROM return_requests rr WHERE rr.replacement_order_id = o.id " +
+            "                               AND rr.tenant_id = o.tenant_id AND rr.type = 'exchange')))",
             rs -> rs.next() ? new DispatchRow(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)) : null,
             pieceId, tenantId));
         if (row == null) return;   // not an internal exchange replacement — nothing to do

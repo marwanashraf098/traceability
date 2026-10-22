@@ -40,7 +40,9 @@ public class ReturnCaseService {
 
     /** Next steps per stage. */
     static final List<String> TO_DO = List.of("booking_problem", "choose_replacement", "approve", "inspect",
-        "record_refund", "add_in_receiving", "link_order", "link_request", "scan");
+        "record_refund", "add_in_receiving", "link_order", "link_request", "scan",
+        // G4b: a request the merchant books with their own courier (booking 'manual' only)
+        "book_with_courier");
     static final List<String> IN_PROGRESS = List.of("booking", "awaiting_items", "on_the_way");
     /** done: refunded, exchanged, received (good) · rejected, closed, cancelled, dismissed, returned_no_exchange (closed) · lost (problem). */
     static final List<String> DONE_GOOD = List.of("refunded", "exchanged", "received");
@@ -83,6 +85,14 @@ public class ReturnCaseService {
         "         WHEN rr.status = 'refund_pending' THEN 'record_refund' " +
         "         WHEN ir.open THEN 'add_in_receiving' " +
         "         WHEN rr.status = 'received' THEN 'inspect' " +
+        // Non-Bosta couriers G4b: booked with the merchant's own courier (booking 'manual' — never a Bosta request).
+        // 'To do' until the merchant has booked it: an exchange until its replacement's outbound waybill is entered
+        // (that makes it pickup_booked), a refund until the courier is recorded (courier_chosen) or its return
+        // waybill is entered (pickup_booked). After the courier is recorded with no waybill: awaiting the items.
+        "         WHEN rr.status = 'approved' AND rr.booking_status = 'manual' AND (rr.type = 'exchange' OR NOT EXISTS ( " +
+        "              SELECT 1 FROM return_request_events ce WHERE ce.request_id = rr.id AND ce.tenant_id = rr.tenant_id " +
+        "                AND ce.event_type = 'courier_chosen')) THEN 'book_with_courier' " +
+        "         WHEN rr.status = 'approved' AND rr.booking_status = 'manual' THEN 'awaiting_items' " +
         "         WHEN rr.status = 'approved' AND (rr.booking_status = 'pending' OR t.portal_pickup_booking) THEN 'booking' " +
         "         WHEN rr.status = 'approved' THEN 'awaiting_items' " +
         "         WHEN rr.status = 'pickup_booked' THEN 'on_the_way' " +

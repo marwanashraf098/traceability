@@ -48,10 +48,18 @@ public class GenericLegTransitions {
 
     private final JdbcTemplate jdbc;
     private final InventoryLedger ledger;
+    /** G4b: the Step-5a decrement for a replacement piece leaving custody on the inferred handover (bean only). */
+    private com.traceability.inventory.ShopifyInventoryService shopifyInventory;
 
     public GenericLegTransitions(JdbcTemplate jdbc, InventoryLedger ledger) {
         this.jdbc = jdbc;
         this.ledger = ledger;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyInventory(@org.springframework.context.annotation.Lazy
+                                    com.traceability.inventory.ShopifyInventoryService shopifyInventory) {
+        this.shopifyInventory = shopifyInventory;
     }
 
     public enum Delivered {
@@ -113,8 +121,19 @@ public class GenericLegTransitions {
                 "  AND internal_state = 'created'", shipmentId, tenantId);
             if (n != 1) return Delivered.NOT_ELIGIBLE;
             history(tenantId, shipmentId, "with_courier", SOURCE_INFERRED_HANDOVER);
-            movePieces(orderId, shipmentId, List.of(PieceStatus.PACKED, PieceStatus.AWAITING_PICKUP), PieceStatus.WITH_COURIER,
-                "handed_to_courier", null, "{\"event\":\"generic_inferred_handover\",\"source\":\"shopify\"}");
+            List<Moved> left = movePieces(orderId, shipmentId, List.of(PieceStatus.PACKED, PieceStatus.AWAITING_PICKUP),
+                PieceStatus.WITH_COURIER, "handed_to_courier", null,
+                "{\"event\":\"generic_inferred_handover\",\"source\":\"shopify\"}");
+            // G4b (approved 2026-10-21): the piece really left Traced custody — the Step-5a decrement for an internal
+            // exchange replacement runs once this commits (a no-op for any other order; once per piece by its claim),
+            // exactly as PickupSessionService.closeSession does for the pickup handover.
+            for (Moved m : left) {
+                if (shopifyInventory != null && com.traceability.inventory.ShopifyInventoryService.leavesCustody(m.from(), PieceStatus.WITH_COURIER)) {
+                    String pieceId = m.pieceId();
+                    com.traceability.inventory.ShopifyInventoryService.afterCommit(() ->
+                        shopifyInventory.onExchangeReplacementDispatched(tenantId, pieceId));
+                }
+            }
             inferred = true;
         } else if (!"with_courier".equals(state)) {
             return Delivered.NOT_ELIGIBLE;
@@ -211,6 +230,38 @@ public class GenericLegTransitions {
         return new ReturnLeg(ReturnLegOutcome.CREATED, id, tracking);
     }
 
+    // ── G4b: the replacement's OUTBOUND leg (generic exchange) ───────────────────────────────────
+
+    public enum ForwardLegOutcome { CREATED, NO_KEY, KEY_TAKEN, ALREADY_HAS_LEG }
+
+    public record ForwardLeg(ForwardLegOutcome outcome, UUID shipmentId, String trackingNumber) {}
+
+    /**
+     * G4b — the merchant booked the replacement's delivery with their courier and typed its waybill: a generic
+     * FORWARD leg on the internal replacement order (source 'merchant_entered', state 'created'), keyed by
+     * {@link GenericTrackingKey}. From here the replacement is pickable (FulfillService.PICKABLE_SHIPMENT_GATE: newest
+     * forward leg 'created'), packs by waybill scan (G2) and leaves at a Pickups close (G3). One live forward leg per
+     * order (V104) — a second call finds ALREADY_HAS_LEG. Never a Bosta row.
+     */
+    public ForwardLeg createReplacementForwardLeg(UUID tenantId, UUID orderId, String carrierName, String rawTracking) {
+        String tracking = rawTracking == null ? null : rawTracking.strip();
+        String key = GenericTrackingKey.of(tracking);
+        if (key == null) return new ForwardLeg(ForwardLegOutcome.NO_KEY, null, null);
+        Boolean live = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND order_id = ? AND shipment_leg = 'forward' " +
+            "  AND internal_state NOT IN ('terminated', 'cancelled'))", Boolean.class, tenantId, orderId);
+        if (Boolean.TRUE.equals(live)) return new ForwardLeg(ForwardLegOutcome.ALREADY_HAS_LEG, null, null);
+        UUID id = UUID.randomUUID();
+        int n = jdbc.update(
+            "INSERT INTO shipments (id, tenant_id, order_id, provider, tracking_number, tracking_key, internal_state, " +
+            "    shipment_leg, source, carrier_name) " +
+            "VALUES (?, ?, ?, 'generic', ?, ?, 'created', 'forward', 'merchant_entered', ?) ON CONFLICT DO NOTHING",
+            id, tenantId, orderId, tracking, key, carrierName);
+        if (n != 1) return new ForwardLeg(ForwardLegOutcome.KEY_TAKEN, null, null);
+        log.info("Generic replacement leg {} created for order {} — carrier '{}'", id, orderId, carrierName);
+        return new ForwardLeg(ForwardLegOutcome.CREATED, id, tracking);
+    }
+
     /**
      * G4a — a generic return leg never gets a courier status, so once Traced has its intake (stamped by a
      * Scan returns close, or earlier by an Arrived action) it becomes 'returned' (returned_at, history source
@@ -221,6 +272,14 @@ public class GenericLegTransitions {
      * @return how many legs moved now
      */
     public int markIntakeCompleteReturnLegsReturned(UUID tenantId) {
+        return markIntakeCompleteReturnLegsReturned(jdbc, tenantId);
+    }
+
+    /**
+     * The same, on the caller's JdbcTemplate (G4b: the drawer's Arrived outside a Scan returns session —
+     * ReturnRequestLifecycle — stamps intake without a session close, so it runs this right after).
+     */
+    public static int markIntakeCompleteReturnLegsReturned(JdbcTemplate jdbc, UUID tenantId) {
         List<UUID> moved = jdbc.queryForList(
             "UPDATE shipments SET internal_state = 'returned', returned_at = COALESCE(returned_at, now()), " +
             "    last_synced_at = now() " +
@@ -231,7 +290,23 @@ public class GenericLegTransitions {
             "  AND (internal_state NOT IN ('returned', 'cancelled', 'terminated') " +
             "       OR (internal_state = 'returned' AND returned_at IS NULL)) RETURNING id",
             UUID.class, tenantId);
-        for (UUID id : moved) history(tenantId, id, "returned", SOURCE_RETURN_SCAN);
+        for (UUID id : moved) history(jdbc, tenantId, id, "returned", SOURCE_RETURN_SCAN);
+        return moved.size();
+    }
+
+    /**
+     * G4b — the Arrived undo cleared a generic return leg's intake stamp: the leg goes back to 'created' (history
+     * source return_scan), so it never sits in 'returned' without its intake (which would read as "back but never
+     * scanned in"). Generic return legs only; only one in 'returned' with no intake moves.
+     */
+    public static int unreturnIntakeClearedReturnLegs(JdbcTemplate jdbc, UUID tenantId, UUID requestId) {
+        List<UUID> moved = jdbc.queryForList(
+            "UPDATE shipments s SET internal_state = 'created', returned_at = NULL, last_synced_at = now() " +
+            "FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ? AND s.id = rr.return_shipment_id " +
+            "  AND s.tenant_id = rr.tenant_id AND s.provider = 'generic' AND s.shipment_leg = 'return' " +
+            "  AND s.internal_state = 'returned' AND s.return_intake_completed_at IS NULL RETURNING s.id",
+            UUID.class, requestId, tenantId);
+        for (UUID id : moved) history(jdbc, tenantId, id, "created", SOURCE_RETURN_SCAN);
         return moved.size();
     }
 
@@ -255,13 +330,20 @@ public class GenericLegTransitions {
     }
 
     private void history(UUID tenantId, UUID shipmentId, String state, String source) {
+        history(jdbc, tenantId, shipmentId, state, source);
+    }
+
+    private static void history(JdbcTemplate jdbc, UUID tenantId, UUID shipmentId, String state, String source) {
         jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, occurred_at, source) " +
             "VALUES (?, ?, ?, now(), ?)", tenantId, shipmentId, state, source);
     }
 
+    record Moved(String pieceId, PieceStatus from) {}
+
     /** The order's allocated pieces in one of {@code from} → {@code to}, each through the ledger; others untouched. */
-    private void movePieces(UUID orderId, UUID shipmentId, List<PieceStatus> from, PieceStatus to, String eventType,
-                            UUID actorUserId, String metadata) {
+    private List<Moved> movePieces(UUID orderId, UUID shipmentId, List<PieceStatus> from, PieceStatus to, String eventType,
+                                   UUID actorUserId, String metadata) {
+        List<Moved> moved = new java.util.ArrayList<>();
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT p.id, p.status::text AS status FROM pieces p " +
             "JOIN allocations a ON a.piece_id = p.id JOIN order_items oi ON oi.id = a.order_item_id " +
@@ -272,11 +354,13 @@ public class GenericLegTransitions {
             try {
                 ledger.transition((String) pr.get("id"), current, to, eventType, actorUserId,
                     new TransitionContext(orderId, shipmentId, null, orderId, metadata));
+                moved.add(new Moved((String) pr.get("id"), current));
             } catch (StateConflictException e) {
                 if (e.getActual() != to) log.warn("Piece {} in unexpected state {} for {} — skipped", pr.get("id"), e.getActual(), to);
             } catch (IllegalTransitionException e) {
                 log.warn("No legal transition {} → {} for piece {} — skipped", current, to, pr.get("id"));
             }
         }
+        return moved;
     }
 }

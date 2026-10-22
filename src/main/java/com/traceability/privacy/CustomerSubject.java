@@ -71,6 +71,11 @@ public record CustomerSubject(
             exchanges.add((UUID) row.get("id"));
             if (row.get("outbound_order_id") != null) orders.add((UUID) row.get("outbound_order_id"));
         }
+        // G4b: a generic exchange's replacement order (no exchanges row) carries a copy of the customer's name,
+        // phone and address — it is the customer's data too. Bosta requests never name one (NULL).
+        orders.addAll(jdbc.queryForList(
+            "SELECT replacement_order_id FROM return_requests WHERE tenant_id = ? AND order_id = ANY(?::uuid[]) " +
+            "  AND replacement_order_id IS NOT NULL", UUID.class, tenantId, direct));
 
         UUID[] all = orders.toArray(new UUID[0]);
         Set<String> outGids = new LinkedHashSet<>(requestedGids);

@@ -734,7 +734,9 @@ public class ShipmentLinkService {
             // The leg's inspection state — one SQL expression shared with the Returns & exchanges
             // case list (ReturnCaseRules.inspectionStateSql); see the comment in the row mapper.
             "       " + com.traceability.returncases.ReturnCaseRules.inspectionStateSql("sh", "pc.n") + " AS inspection_state, " +
-            "       rq.reference AS request_reference " +
+            "       rq.reference AS request_reference, " +
+            // G4b: a generic (non-Bosta courier) return leg names its carrier on the list
+            "       CASE WHEN sh.provider = 'generic' THEN COALESCE(NULLIF(btrim(sh.carrier_name), ''), '') END AS generic_carrier " +
             "FROM shipments sh " +
             "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
             "LEFT JOIN return_requests rq ON rq.return_shipment_id = sh.id AND rq.tenant_id = sh.tenant_id " +
@@ -778,6 +780,9 @@ public class ShipmentLinkService {
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
                 row.put("request_reference", rs.getString("request_reference"));
                 row.put("pending_inspection_count", rs.getInt("pending_inspection_count"));
+                // G4b: only a generic return leg carries its carrier (the key is absent for Bosta legs)
+                String genericCarrier = rs.getString("generic_carrier");
+                if (genericCarrier != null) row.put("carrier", genericCarrier.isEmpty() ? null : genericCarrier);
                 return row;
             },
             tenantId, size, page * size);

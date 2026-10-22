@@ -386,6 +386,9 @@ public class ReturnRequestLifecycle {
             "  AND NOT EXISTS (SELECT 1 FROM return_request_items i WHERE i.request_id = rr.id " +
             "                  AND i.tenant_id = rr.tenant_id AND i.item_status = 'awaiting')",
             actor, sessionId, requestId, tenantId);
+        // G4b: a generic return leg has no courier status — with its intake now stamped (also from the drawer,
+        // outside any Scan returns session) it is 'returned', the same rule as a session close. Generic legs only.
+        com.traceability.courier.GenericLegTransitions.markIntakeCompleteReturnLegsReturned(jdbc, tenantId);
         reevaluate(tenantId, requestId, actor);
     }
 
@@ -433,6 +436,8 @@ public class ReturnRequestLifecycle {
             "FROM return_requests rr " +
             "WHERE rr.id = ? AND rr.tenant_id = ? AND s.id = rr.return_shipment_id AND s.tenant_id = rr.tenant_id " +
             "  AND s.return_intake_outcome = 'request_items_arrived'", requestId, tenantId);
+        // G4b: its generic return leg goes back to 'created' with the intake (never 'returned' without it).
+        com.traceability.courier.GenericLegTransitions.unreturnIntakeClearedReturnLegs(jdbc, tenantId, requestId);
         event(tenantId, requestId, "item_arrival_undone", actor, meta("item_id", itemId.toString(),
             "session_id", sessionId == null ? null : sessionId.toString()));
         reevaluate(tenantId, requestId, actor);

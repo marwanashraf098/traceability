@@ -87,7 +87,7 @@ public class ReturnsPortalAdminController {
 
     // ── Non-Bosta couriers G4a: the merchant books the return with their own courier ──────────
 
-    public record ManualCourierRequest(String carrier, String trackingNumber) {}
+    public record ManualCourierRequest(String carrier, String trackingNumber, String outboundTrackingNumber) {}
 
     /**
      * A request on an order shipped with another courier (booking 'manual'): record the courier, and — when the
@@ -98,7 +98,7 @@ public class ReturnsPortalAdminController {
     public ReturnRequestService.ManualCourierResult manualCourier(@PathVariable UUID id,
             @RequestBody(required = false) ManualCourierRequest body, @AuthenticationPrincipal CustomUserDetails principal) {
         return requests.manualCourier(id, body == null ? null : body.carrier(), body == null ? null : body.trackingNumber(),
-            principal.userId(), genericLegs);
+            body == null ? null : body.outboundTrackingNumber(), principal.userId(), genericLegs);
     }
 
     public record OtherCouriersRequest(Boolean enabled) {}
