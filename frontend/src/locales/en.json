@@ -677,6 +677,43 @@
       "shopifyNone": "No change",
       "labelsLabel": "Labels printed",
       "labelsNone": "None"
+    },
+    "import": {
+      "open": "Import from file",
+      "template": "Download template",
+      "templateCsv": "CSV",
+      "templateFailed": "Couldn't download the template. Try again.",
+      "title": "Import quantities from a file",
+      "subtitle": "Upload a Shopify inventory export (.csv or .xlsx) for one location. The \"On hand (new)\" column is what arrived.",
+      "shopifyWarning": "Don't also import this file into Shopify — Traced adds these quantities to Shopify when you finish receiving.",
+      "choose": "Choose file",
+      "chooseAnother": "Choose another file",
+      "formats": ".csv or .xlsx, up to 5 MB",
+      "tooLarge": "The file is too large — the limit is 5 MB.",
+      "failed": "Something went wrong. Try again.",
+      "summary": "{{count}} rows · {{units}} units to add",
+      "summary_one": "1 row · {{units}} units to add",
+      "skipped": "{{count}} rows with no quantity skipped",
+      "sameAsShopify": "Same as Shopify stock — is this really what arrived?",
+      "remove": "Remove this row",
+      "notAdded": "Not added ({{count}})",
+      "notAdded_one": "Not added (1)",
+      "row": "Row {{n}}",
+      "apply": "Add {{count}} units to this session",
+      "apply_one": "Add 1 unit to this session",
+      "added": "{{count}} units added to the session",
+      "added_one": "1 unit added to the session",
+      "close": "Close",
+      "reason": {
+        "not_in_traced": "Not in Traced",
+        "ambiguous": "Several products match — add a SKU",
+        "gift_card": "Gift card",
+        "not_tracked": "Not tracked",
+        "duplicate": "Duplicate row",
+        "negative": "Negative quantity",
+        "not_integer": "Not a whole number",
+        "too_large": "Quantity too large"
+      }
     }
   },
   "fulfill": {

@@ -206,6 +206,9 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/label-codes/batches",           skip("label codes only; no order or piece data"));
         reg("GET /api/v1/label-codes/batches/{id}/pdf",   skip("label codes only; no order or piece data"));
         reg("POST /api/v1/label-codes/void",              skip("label codes only; no order or piece data"));
+        reg("POST /api/v1/receiving/sessions/{sessionId}/import/preview", skip("receiving import: variants and receipt lines only, no order data"));
+        reg("POST /api/v1/receiving/sessions/{sessionId}/import/apply",   skip("receiving import: variants and receipt lines only, no order data"));
+        reg("GET /api/v1/receiving/import/template",                     skip("receiving import: variants and receipt lines only, no order data"));
         reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
                                                               + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
         reg("GET /api/v1/fulfill/print-jobs/latest",     list());

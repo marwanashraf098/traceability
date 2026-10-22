@@ -676,6 +676,39 @@
       "shopifyNone": "لا تغيير",
       "labelsLabel": "الملصقات المطبوعة",
       "labelsNone": "لا شيء"
+    },
+    "import": {
+      "open": "استيراد من ملف",
+      "template": "تنزيل القالب",
+      "templateCsv": "CSV",
+      "templateFailed": "تعذّر تنزيل القالب. حاول مرة أخرى.",
+      "title": "استيراد الكميات من ملف",
+      "subtitle": "ارفع ملف تصدير مخزون من Shopify (‎.csv‎ أو ‎.xlsx‎) لموقع واحد. عمود \"On hand (new)\" هو ما وصل.",
+      "shopifyWarning": "لا تستورد هذا الملف إلى Shopify أيضًا — يضيف Traced هذه الكميات إلى Shopify عند إنهاء الاستلام.",
+      "choose": "اختر ملفًا",
+      "chooseAnother": "اختر ملفًا آخر",
+      "formats": "‎.csv‎ أو ‎.xlsx‎، حتى 5 ميجابايت",
+      "tooLarge": "الملف كبير جدًا — الحد الأقصى 5 ميجابايت.",
+      "failed": "حدث خطأ. حاول مرة أخرى.",
+      "summary": "{{count}} صف · {{units}} وحدة للإضافة",
+      "skipped": "تم تخطي {{count}} صف بدون كمية",
+      "sameAsShopify": "مطابق لمخزون Shopify — هل هذا فعلًا ما وصل؟",
+      "remove": "إزالة هذا الصف",
+      "notAdded": "لم تُضف ({{count}})",
+      "row": "صف {{n}}",
+      "apply": "إضافة {{count}} وحدة إلى الجلسة",
+      "added": "أُضيفت {{count}} وحدة إلى الجلسة",
+      "close": "إغلاق",
+      "reason": {
+        "not_in_traced": "غير موجود في Traced",
+        "ambiguous": "أكثر من منتج مطابق — أضف SKU",
+        "gift_card": "بطاقة هدية",
+        "not_tracked": "غير متتبَّع",
+        "duplicate": "صف مكرر",
+        "negative": "كمية سالبة",
+        "not_integer": "ليس رقمًا صحيحًا",
+        "too_large": "كمية كبيرة جدًا"
+      }
     }
   },
   "fulfill": {

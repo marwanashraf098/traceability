@@ -20,8 +20,77 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — PLAN CHANGE (Marawan, 2026-10-21, after slice 2).** (1) No blank labels anywhere: every label
+code is unique AND tied to a variant, printed as a normal NAMED piece label (PieceLabelLayout exactly as today);
+BlankLabelLayout goes in slice 3 unless something still needs it. (2) Order seal DROPPED entirely (no seal tables, no
+per-product "Per piece / Order seal" setting). (3) Spares dropped — a torn / misprinted label is "Print 1 replacement
+label" (named, for that line's variant). Revised slices: 0 ✅ 1 ✅ 2 ✅ 2b Excel import ✅ (below) → 3 named codes
+(label_codes.variant_id NOT NULL for new codes, optional order_id / order_item_id for pack grouping; kinds pack | tag |
+factory | replacement) + InventoryLedger.bindLabel (code → one untagged available piece of the code's variant at the
+main warehouse, else NO_UNTAGGED_STOCK) + Tag stock (main warehouse only) → 4 packing labels in order sequence (named
+labels for each order's untagged units, then ONE text-only separator: tracking number / order number, no barcode) +
+binding in Pick & Pack (both modes; same-variant label printed for another order allowed + recorded; other variant →
+WRONG_VARIANT; unused pack codes stay valid for any untagged piece of the variant) → 5 returns verify only → 6 factory
+runs with named labels (per-line close: Short-shipped / Lost voids THAT line's leftovers, Still coming keeps them) → 7
+stock take counting untagged pieces → 8 Settings → Labels (default receiving mode only). Rollout:
+`flexible_labeling_enabled` off for every real tenant until slices 2, 3, 4 AND 7 are live. Standing approval: NEW
+entries in RlsCoverageTest / PortalOrderLeakTest / MigrationSmokeTest / NotTracedBackfillTest are pre-approved (list
+them); changing an EXISTING assertion still needs approval.
+
+**Receiving import (flexible labeling slice 2b) — Shopify inventory export → a receiving session's lines (2026-10-21,
+branch `feat/receiving-import` off origin/main b9ca5c2; NOT merged, NOT deployed). No migration.** Print & stick for
+EVERY tenant (no flag); a count-only session only with the flag (COUNT_ONLY_NOT_AVAILABLE). Owner / manager.
+- **Endpoints** (`receiving.ReceivingImportController`): `POST /api/v1/receiving/sessions/{id}/import/preview`
+  (multipart `file`; writes NOTHING), `POST …/import/apply` ({lines: [{variantId, quantity}]}), `GET
+  /api/v1/receiving/import/template?format=xlsx|csv`. Session must be open + this tenant's (404 / 409).
+- **File** (`receiving.ShopifyInventoryFile`): CSV (in-house RFC 4180 parser, UTF-8 only, BOM stripped) or .xlsx
+  (dhatim fastexcel-reader 0.18.4; old .xls refused with "save as .xlsx"). Headers matched by NAME (trimmed,
+  case-insensitive); required: Handle, Title, Option1–3 Value, SKU, Location, On hand (current), On hand (new). Limits:
+  5 MB, 20,000 rows; an .xlsx is unpacked into a counting sink first (central directory via commons-compress, real
+  bytes counted, ≤ 60 MB / 500 entries) — a zip bomb is refused before parsing. Whole-file errors are
+  `ImportException` {code, message_en, message_ar}.
+- **Rules** (`ReceivingImportService.preview`): quantity = "On hand (new)" as-is; several distinct Location values →
+  the whole file refused ("This file has several locations. Export one location only from Shopify."); Location value
+  otherwise ignored. Empty / "not stocked" / 0 skipped (counted). Negative / non-integer / > 100,000 → unmatched rows.
+  Matching, first rule with EXACTLY one variant: SKU (non-empty, unique in the tenant) → Handle + Option1/2/3
+  ("Default Title" alone = a single-variant product) → product Title + variant title (the options joined " / ").
+  Several candidates → "ambiguous" (never a guess). Two rows for one variant → both "duplicate". Gift card
+  (products.raw gift_card / product_type) and not-tracked (variants.raw inventory_management present and empty) →
+  unmatched. "On hand (new)" == "On hand (current)" → `sameAsShopify` warning, row kept.
+- **Why the title rule (decision, 2026-10-21):** prod has only 1,413 / 5,935 products with a stored handle and 7,163 /
+  25,010 variants with option values (the GraphQL catalog import stores neither; only REST product webhooks do), 3,429
+  variants without SKU and 717 duplicate-SKU groups — SKU + Handle alone would miss most catalogs. No variant stores
+  inventory_management today, so "not tracked" fires only where a webhook stored it.
+- **Apply:** adds to the variant's oldest existing line, else inserts a line — exactly what typing it in does;
+  validates every variant is the tenant's (IMPORT_UNKNOWN_VARIANT) and 1..100,000. Nothing is received until the normal
+  finalize; finalize / labels / Shopify +N unchanged.
+- **Template:** Shopify's 23 headers in Shopify's order; one row per ACTIVE variant sorted by title then options;
+  Handle / option names from the stored product (empty when Traced has none — the title rule still matches it);
+  values from option1..3 else the variant title split " / "; Location = main warehouse name; On hand (current) =
+  available pieces at the main warehouse; On hand (new) empty. .xlsx (fastexcel) or CSV with a UTF-8 BOM.
+- **pom:** + org.dhatim:fastexcel / fastexcel-reader 0.18.4, + commons-io 2.16.1 pinned (commons-compress needs it;
+  the test-scoped docker-java-core otherwise won with 2.13.0 → NoSuchMethodError on the test classpath).
+- **UI** (`pages/receiving/ReceivingImport.tsx`, DS v1.0, EN + AR): "Import from file" + "Download template" (+ CSV)
+  above the grid of an open session (both modes); the import is a full-width card (the shared Modal is max-w-md): the
+  Shopify double-import warning, file picker (5 MB checked before upload), preview (thumb, product · variant, SKU,
+  quantity, same-as-Shopify note, remove), "Not added" rows with readable reasons, skipped count, "Add N units to this
+  session". Server errors shown as message_en / message_ar by language, never raw.
+- **Tests:** ReceivingImportTest 11 (fixture `src/test/resources/fixtures/shopify/inventory_export_sample.csv` — the
+  merchant's real export: 4 locations × 25 variants, On hand (new) empty → refused as several locations; one-location
+  variants built from it with columns REVERSED); revert-checked: several locations, apply adds, count-only gate, zip
+  bomb, template active-only, headers by position, duplicates, same-as-Shopify, gift card — each fails its test.
+  Frontend receivingImport 4. Registry entries (standing approval): RlsCoverageTest COVERED
+  `/api/v1/receiving/import/template` + `receivingImport_crossTenantIsolated_withSameTenantPositiveControl` (template,
+  preview, apply — another tenant's session 404, own works); PortalOrderLeakTest 3 SKIP.
+- **Verification 2026-10-22:** full backend suite 3260 run: red ExchangeBackfillTest (baseline) + 4 that all pass
+  alone (62/62 on rerun): AnalyticsB1Test.payoutLag, PieceShopifySyncC2Test.a1, ReturnRestockSyncTest.rs7 (async /
+  timing) and CountOnlyUntaggedTest.r3 — a 401: the class took 5,205 s wall-clock inside the suite and its token,
+  minted once in @BeforeAll, outlived the 30-minute access-token TTL. Test plumbing fixed (not an assertion): a token
+  is minted per request in CountOnlyUntaggedTest, LabelCodesTest and ReceivingImportTest. GenericG3IsolationGoldenTest
+  is green now (re-recorded on main). Frontend 148 / 1102 green; tsc + vite build clean.
+
 **Flexible labeling — slice 2: count-only receiving + untagged pieces + stock-take guard (2026-10-21, branch
-`feat/flexible-labeling-s2` off origin/main e3c8218, rebased onto 18f9c16; NOT merged, NOT deployed). Migrations V178 +
+`feat/flexible-labeling-s2` off origin/main e3c8218, rebased onto 18f9c16; MERGED to main b9ca5c2 2026-10-21, NOT deployed). Migrations V178 +
 V179 — built as V177 + V178, renumbered before merge (G4a took V177 on main). Flag
 `flexible_labeling_enabled` stays OFF for real tenants until slices 2, 3, 4 are live (slice 7 before such a tenant's
 stock take).**
@@ -68,8 +137,8 @@ stock take).**
   MigrationSmokeTest 178, NotTracedBackfillTest 123 (after the rebase). Full backend suite 3220: red only the baseline
   (ExchangeBackfillTest, GenericG3IsolationGoldenTest g1/g2) + n1 before its approved update (green after).
   Frontend 146 / 1084 green; tsc + vite build clean.
-- **For later slices:** order seals (slice 8) will need the returns-scan and intake-reprint refusals revisited;
-  stock-take `resolve` (manager found / lost by piece id) relies on the snapshot never holding an untagged piece.
+- **For later slices:** stock-take `resolve` (manager found / lost by piece id) relies on the snapshot never holding
+  an untagged piece.
 
 **Non-Bosta couriers G4a — portal refunds for orders shipped with other couriers (2026-10-21, branch
 `generic-courier-g4a` off origin/main 73eeb8d; NOT merged, NOT deployed, no tenant switched on). Migration V177 (built as V176; flexible labeling slice 1 took V176).**
@@ -159,7 +228,7 @@ screen; every endpoint 404 unless `tenants.flexible_labeling_enabled` (default f
 **Flexible labeling — slice 0 prerequisites (2026-10-21, branch `feat/flexible-labeling-s0` off origin/main 73eeb8d;
 MERGED to main bcf908a 2026-10-21, NOT deployed). No migration, no visible change.** Feature: blank labels printed before packing,
 factory-labeled receiving, count-only receiving ("untagged" pieces = real piece rows with `short_code` NULL,
-`barcode` PC-ULID kept), order seal, Tag stock. Step 0 diagnosis approved 2026-10-21 with Marawan's decisions:
+`barcode` PC-ULID kept), Tag stock (order seal dropped 2026-10-21 — see the plan change above). Step 0 diagnosis approved 2026-10-21 with Marawan's decisions:
 - Existing stock not yet in Traced enters via count-only receiving; pieces already in Traced keep their codes.
 - Pack binding takes untagged pieces at the main warehouse only; Tag stock binds at the session's location.
 - Pre-pack label count = Σ per variant min(remaining unallocated demand, untagged remaining) + spares; leftovers
@@ -168,14 +237,14 @@ factory-labeled receiving, count-only receiving ("untagged" pieces = real piece 
   label" (a plain button).
 - Factory run close: no subset voiding; while any line is still_coming all leftover codes stay valid; final close
   voids ALL leftover issued codes (void_reason run_closed); shortfall reasons are per line, for the report only.
-- Seal returns: partial, counted per variant; portal attribution by variant within the order (scanPiece's rule).
 - Lookup: per-variant untagged count only. v1: untagged pieces can't be transferred / held / damaged / written off
   — screens reject them; tag first. Existing piece labels unchanged; label size applies to the new blank labels only.
 - Rollout: `flexible_labeling_enabled` off for real tenants until slices 2, 3, 4 are live; slice 7 before such a
   tenant's stock take; slice 2's stock-take refusal guard is mandatory.
 - Approved order: 0 → 1 label_codes + blank template → 2 count-only receiving + untagged + stock-take guard → 3 Tag
   stock → 4 Print blank labels + binding in Pick & Pack → 5 returns reprint check → 6 factory runs → 7 stock take
-  with untagged counts → 8 order seal → 9 Settings → Labels. One slice at a time, report and stop after each.
+  with untagged counts → 8 order seal → 9 Settings → Labels (superseded by the 2026-10-21 plan change above). One slice
+  at a time, report and stop after each.
 
 Slice 0:
 - **batchReceive chunks its two INSERTs** (`InventoryLedger.RECEIVE_CHUNK` = 1,000 pieces; one counter claim, one
@@ -198,9 +267,8 @@ Slice 0:
   plus r10 in that run before its approved flip (14/14 green on rerun). BostaPollJobTest.p6 green this run. Frontend
   vitest 144 files / 1076 tests green; tsc + vite build clean.
 - **Follow-ups for later slices:** returns intake reprint writes `label_reprinted` BEFORE generating the PDF in a
-  separate call — an untagged (seal, slice 8) piece would leave an event with no label; LookupService.canReprint
-  must be false for an untagged piece (slice 2); RequestLifecycle `PieceCode` shows "not tracked" when shortCode is
-  null — wrong for a seal piece (slice 8).
+  separate call (refused for untagged pieces since slice 2); LookupService.canReprint false for an untagged piece
+  (done in slice 2).
 
 **DB write churn, slice B — shopify_webhook_events retention (2026-10-21, branch `perf/webhook-retention` off
 origin/main 2b258b7; MERGED to main, NOT deployed). No migration.**

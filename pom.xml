@@ -101,6 +101,25 @@
             <artifactId>pdfbox</artifactId>
             <version>3.0.3</version>
         </dependency>
+        <!-- Receiving import / template: Shopify inventory export as .xlsx (writer + streaming reader).
+             CSV is parsed in-house (ShopifyInventoryFile). -->
+        <dependency>
+            <groupId>org.dhatim</groupId>
+            <artifactId>fastexcel</artifactId>
+            <version>0.18.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.dhatim</groupId>
+            <artifactId>fastexcel-reader</artifactId>
+            <version>0.18.4</version>
+        </dependency>
+        <!-- commons-compress (via fastexcel-reader) needs commons-io 2.16+; the test-scoped docker-java-core
+             would otherwise win with 2.13.0 on the test classpath (NoSuchMethodError reading an .xlsx). -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.16.1</version>
+        </dependency>
         <!-- Code 128 barcode rendering into label PDFs -->
         <dependency>
             <groupId>com.google.zxing</groupId>
