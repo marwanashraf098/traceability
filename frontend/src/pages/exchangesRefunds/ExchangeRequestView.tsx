@@ -161,7 +161,10 @@ export default function ExchangeRequestView({
         <div className="px-6 py-4 border-t border-line space-y-3" data-testid="exchange-footer">
           {!soldOut && (
             <p className="text-small text-secondary" data-testid="exchange-approve-helper">
-              {t('exchangesRefunds.requests.exchange.approveHelper')}
+              {detail.otherCourier
+                ? t('exchangesRefunds.requests.exchange.approveHelperOther', {
+                    carrier: detail.otherCourier.forwardCarrierName || t('exchangesRefunds.requests.drawer.manual.theirCourier') })
+                : t('exchangesRefunds.requests.exchange.approveHelper')}
             </p>
           )}
           <div className="flex gap-3">

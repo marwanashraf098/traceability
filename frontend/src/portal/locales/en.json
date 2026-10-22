@@ -118,7 +118,8 @@
     "landmarkPlaceholder": "e.g. next to the pharmacy",
     "areaRequired": "Choose your area.",
     "governorateRequired": "Choose your governorate.",
-    "pickupTextOther": "{{store}} arranges a pickup with {{carrier}} from the address this order was delivered to."
+    "pickupTextOther": "{{store}} arranges a pickup with {{carrier}} from the address this order was delivered to.",
+    "pickupTextExchangeOther": "{{store}} sends your new size and arranges collecting the old item from the address this order was delivered to."
   },
   "p4": {
     "title": "Request sent",
@@ -165,7 +166,8 @@
     "title": "Exchange requested",
     "stepReview": "{{store}} reviews your request.",
     "stepCourier": "One Bosta courier brings your new size and takes the old one in the same visit.",
-    "stepReady": "Keep the old item ready, unworn and with its tags. Nothing to pay."
+    "stepReady": "Keep the old item ready, unworn and with its tags. Nothing to pay.",
+    "stepCourierOther": "{{store}} sends your new size and arranges collecting the old one."
   },
   "rf": {
     "title": "How should we refund you?",

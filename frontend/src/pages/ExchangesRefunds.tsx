@@ -403,13 +403,12 @@ function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
 }
 
 /**
- * G4a — an approved request on an order shipped with another courier (booking 'manual'): the merchant books the
- * pickup with that courier. The case list derives it as 'booking' / 'awaiting_items' (its SQL is shared with
- * Bosta requests and unchanged); the pill says "Book with <carrier>" instead.
+ * G4a / G4b — an approved request on an order shipped with another courier (booking 'manual') that the merchant
+ * still has to book with that courier: the case list derives 'book_with_courier' ('to do'); the pill names the
+ * carrier ("Book with <carrier>").
  */
 export function booksWithOwnCourier(c: ReturnCase): boolean {
-  return c.caseType === 'A' && c.reason?.bookingStatus === 'manual'
-    && (c.nextStep === 'booking' || c.nextStep === 'awaiting_items')
+  return c.nextStep === 'book_with_courier'
 }
 
 /** The pill: the next step's label (a few carry a value — refunded amount, closed reason). */

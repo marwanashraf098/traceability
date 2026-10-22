@@ -8,6 +8,7 @@ import { dateTimeLabel } from './requestFormat'
 import { CloseDialog, UntrackedArrivedControls } from './RequestLifecycle'
 import { BookingState } from './ReturnRequestDrawer'
 import CustomerRefundChoice from './CustomerRefundChoice'
+import ManualCourierPanel from './ManualCourierPanel'
 
 /**
  * Step 5c (mockup X5) — an approved exchange request: what goes out, the Bosta exchange trip,
@@ -43,7 +44,12 @@ export default function ExchangeProgressView({
   const eventAt = (type: string) => history.find(e => e.type === type)?.occurredAt ?? null
   const when = (iso: string | null | undefined) => (iso ? dateTimeLabel(i18n.language, iso) : null)
 
-  const booked = ex != null || detail.bookingStatus === 'booked' || detail.bookingStatus === 'needs_review'
+  // G4b: an exchange the merchant books with their own courier (detail.otherCourier) — the replacement exists from
+  // approval, so "booked" means its outbound waybill was entered; no Bosta booking row.
+  const generic = detail.otherCourier != null
+  const carrier = detail.otherCourier?.carrierName ?? detail.otherCourier?.forwardCarrierName ?? null
+  const booked = generic ? ex?.trackingNumber != null
+    : ex != null || detail.bookingStatus === 'booked' || detail.bookingStatus === 'needs_review'
   const packed = ex != null && (PACKED_ORDER.includes(ex.orderStatus ?? '') || LEFT_SHIPMENT.includes(ex.shipmentState ?? ''))
   const withCourier = ex != null && (ex.withCourierAt != null || LEFT_SHIPMENT.includes(ex.shipmentState ?? ''))
   const swapped = ex != null && ex.shipmentState === 'delivered'
@@ -53,7 +59,8 @@ export default function ExchangeProgressView({
   const flags: Array<[string, boolean, ReactNode?]> = [
     ['approved', detail.decidedAt != null, [when(detail.decidedAt), detail.decidedByName].filter(Boolean).join(' · ')],
     ['booked', booked, booked
-      ? [when(eventAt('pickup_booked')), t('exchangesRefunds.requests.exchange.progress.byTraced')].filter(Boolean).join(' · ')
+      ? [when(eventAt('pickup_booked')), generic ? carrier : t('exchangesRefunds.requests.exchange.progress.byTraced')]
+          .filter(Boolean).join(' · ')
       : undefined],
     ['packing', packed],
     ['withCourier', withCourier, when(ex?.withCourierAt)],
@@ -64,7 +71,7 @@ export default function ExchangeProgressView({
   const firstTodo = open ? flags.findIndex(f => !f[1]) : -1
   const steps: Step[] = flags.map(([key, done, meta], i) => ({
     key,
-    label: t(`exchangesRefunds.requests.exchange.progress.${key}`),
+    label: t(`exchangesRefunds.requests.exchange.progress.${generic && (key === 'booked' || key === 'swapped') ? key + 'Other' : key}`),
     state: done ? 'done' : i === firstTodo ? 'current' : 'todo',
     meta: done ? (meta || undefined)
       : i === firstTodo && key === 'packing' && ex != null ? t('exchangesRefunds.requests.exchange.progress.packingNow')
@@ -90,7 +97,7 @@ export default function ExchangeProgressView({
     }
   }
 
-  const bookingProblem = detail.bookingStatus != null && detail.bookingStatus !== 'booked'
+  const bookingProblem = !generic && detail.bookingStatus != null && detail.bookingStatus !== 'booked'
 
   return (
     <>
@@ -104,7 +111,13 @@ export default function ExchangeProgressView({
               <bdi>{item.replacementVariantTitle}</bdi>
             </p>
             <ItemPhotos requestId={detail.id} item={item} />
-            {(detail.bostaTrackingNumber || ex?.orderNumber) && (
+            {generic && ex?.orderNumber && (
+              <p className="text-small text-secondary" data-testid="exchange-trip-line">
+                {t('exchangesRefunds.requests.exchange.progress.order')}{' '}
+                <bdi className="font-mono" dir="ltr" data-testid="exchange-order-number">{ex.orderNumber}</bdi>
+              </p>
+            )}
+            {!generic && (detail.bostaTrackingNumber || ex?.orderNumber) && (
               <p className="text-small text-secondary" data-testid="exchange-trip-line">
                 {detail.bostaTrackingNumber && (
                   <>
@@ -146,6 +159,12 @@ export default function ExchangeProgressView({
               {t('exchangesRefunds.requests.exchange.progress.bookNow')}
             </Button>
           </div>
+        )}
+
+        {generic && detail.bookingStatus === 'manual' && (
+          <dl className="grid grid-cols-2 gap-x-4" data-testid="exchange-manual">
+            <ManualCourierPanel detail={detail} onChanged={onReload} />
+          </dl>
         )}
 
         {bookingProblem && (

@@ -1569,7 +1569,18 @@
           "savedWithTracking": "Return booked with {{carrier}}",
           "carrierRequired": "Choose the courier.",
           "bookedWith": "Booked with {{carrier}} ·",
-          "bookedNoTracking": "With {{carrier}} — no return tracking number. Scan the items in when the parcel arrives."
+          "bookedNoTracking": "With {{carrier}} — no return tracking number. Scan the items in when the parcel arrives.",
+          "labelExchange": "Exchange delivery",
+          "titleExchange": "Book the exchange with {{carrier}}",
+          "helpExchange": "Traced doesn't book this courier. Book the delivery of the new size with them, then enter its waybill here — that sends the replacement to Pick & Pack. The return waybill for the old item is optional; without it, scan the old item's piece when it arrives.",
+          "deliverTo": "Deliver to and collect from",
+          "outboundLabel": "Replacement waybill (going out)",
+          "returnLabel": "Return waybill (old item)",
+          "saveOutbound": "Save and send to Pick & Pack",
+          "savedOutbound": "Replacement booked with {{carrier}} — it is in Pick & Pack.",
+          "outboundWith": "Replacement with {{carrier}} ·",
+          "returnWith": "Old item back with {{carrier}} ·",
+          "noReturnWaybill": "No return waybill — scan the old item's piece when it arrives."
         }
       },
       "attention": "Attention",
@@ -1734,8 +1745,11 @@
           "state": {
             "done": "done",
             "current": "in progress"
-          }
-        }
+          },
+          "bookedOther": "Replacement booked with the courier",
+          "swappedOther": "Replacement delivered"
+        },
+        "approveHelperOther": "This order went out with {{carrier}}. Approving creates the replacement order — then book the exchange with {{carrier}} and enter its waybill here."
       },
       "untracked": {
         "arrivedSellable": "Arrived · sellable",

@@ -177,13 +177,13 @@ describe('Drawer — a request on an order shipped with another courier', () => 
 })
 
 describe('Returns & exchanges — the "Book with <carrier>" pill', () => {
-  const base = { caseType: 'A', kind: 'refund', nextStep: 'booking', reason: { bookingStatus: 'manual', carrierName: 'Aramex' } }
-  test('manual → Book with Aramex (both derived steps); Bosta booking unchanged', () => {
+  // G4b: the case list derives 'book_with_courier' ('to do') for a manual request still to be booked.
+  const base = { caseType: 'A', kind: 'refund', nextStep: 'book_with_courier', reason: { bookingStatus: 'manual', carrierName: 'Aramex' } }
+  test('book_with_courier → Book with Aramex; a Bosta booking step unchanged', () => {
     const t = i18n.getFixedT('en')
     expect(nextStepLabel(t, base as unknown as ReturnCase)).toBe('Book with Aramex')
-    expect(nextStepLabel(t, { ...base, nextStep: 'awaiting_items' } as unknown as ReturnCase)).toBe('Book with Aramex')
     expect(reasonLine(t, base as unknown as ReturnCase)).toBe('Book the pickup with the courier, then add it to the request.')
-    expect(nextStepLabel(t, { ...base, reason: { bookingStatus: null } } as unknown as ReturnCase))
+    expect(nextStepLabel(t, { ...base, nextStep: 'booking', reason: { bookingStatus: null } } as unknown as ReturnCase))
       .not.toContain('Book with')
     expect(nextStepLabel(i18n.getFixedT('ar'), base as unknown as ReturnCase)).toBe('احجز مع Aramex')
   })
@@ -289,11 +289,11 @@ async function throughPortal(lang: PortalLang) {
 describe('Customer portal — an order shipped with another courier', () => {
   afterEach(() => { document.documentElement.dir = 'ltr'; document.documentElement.lang = 'en' })
 
-  test('EN: neutral P1 note, no Return / Exchange choice, P3 names the courier, no address choice, no Bosta anywhere', async () => {
+  test('EN: neutral P1 note, Return / Exchange choice (G4b), P3 names the courier, no address choice, no Bosta anywhere', async () => {
     portalBackend(CONFIG, LOOKUP)
     const r = await throughPortal('en')
     expect(r.note).toContain('The store will arrange a courier to collect the item from your address.')
-    expect(r.modeChoice).toBeNull()
+    expect(r.modeChoice).not.toBeNull()
     expect(r.pickupCard).toHaveTextContent('Nour Studio arranges a pickup with Aramex from the address this order was delivered to.')
     expect(r.addressChoice).toBeNull()
     expect(screen.getByTestId('sent-lead')).toHaveTextContent('Your return is approved. A courier will contact you to collect it.')

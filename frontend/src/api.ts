@@ -2795,6 +2795,8 @@ export interface RefundLeg {
   /** Step 5: the return_to_receive exception for this leg is still open (untracked parcel
    *  marked received, not yet added in Receiving). Absent on older responses. */
   awaiting_receiving?: boolean
+  /** G4b — present only for a generic (non-Bosta courier) return leg: its carrier. */
+  carrier?: string | null
 }
 
 export function getRefunds(page = 0, size = 100) {
@@ -3160,19 +3162,28 @@ export interface OtherCourierReturn {
   carrierName: string | null
   /** Where the courier collects: the customer and the delivery address. Null fields after a privacy request. */
   pickup: { name: string | null; phone: string | null; addressLines: string[] }
+  /** G4b — a generic exchange: the replacement the merchant ships (its outbound waybill once entered). */
+  replacement?: { orderId: string; orderNumber: string; outboundTrackingNumber: string | null; outboundState: string | null }
 }
 
 export interface ManualCourierResult {
-  outcome: 'CARRIER_SET' | 'LEG_CREATED'
+  outcome: 'CARRIER_SET' | 'LEG_CREATED' | 'OUTBOUND_CREATED' | 'LEGS_CREATED'
   carrierName: string
   trackingNumber: string | null
   returnShipmentId: string | null
+  /** G4b — the replacement's outbound waybill, when this call set it. */
+  outboundTrackingNumber?: string | null
 }
 
-/** G4a — record the courier and, optionally, the return's tracking number (creates its return parcel). */
-export function setManualCourier(id: string, carrier: string, trackingNumber?: string) {
+/**
+ * G4a — record the courier and, optionally, the return's tracking number (creates its return parcel).
+ * G4b — for an exchange, also the replacement's outbound waybill (makes the replacement pickable).
+ */
+export function setManualCourier(id: string, carrier: string, trackingNumber?: string, outboundTrackingNumber?: string) {
   return transferCommandRequest<ManualCourierResult>(`/return-requests/${id}/manual-courier`, {
-    method: 'POST', body: JSON.stringify({ carrier, trackingNumber: trackingNumber || null }),
+    method: 'POST', body: JSON.stringify(outboundTrackingNumber
+      ? { carrier, trackingNumber: trackingNumber || null, outboundTrackingNumber }
+      : { carrier, trackingNumber: trackingNumber || null }),
   })
 }
 

@@ -348,10 +348,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }
 
   // ── X1 / X2 (Step 5b) ─────────────────────────────────────────────────────
-  // G4a: an order shipped with another courier — refunds only (exchanges for other couriers come later), and the
-  // store books its pickup with that courier (no Bosta wording, no pickup-area choice: lookup sends no pickup).
+  // G4a / G4b: an order shipped with another courier — the store books the pickup (and, for an exchange, the
+  // replacement's delivery) with that courier: no Bosta wording, no pickup-area choice (lookup sends no pickup).
   const otherCourier = order?.otherCourier ?? null
-  const exchangesOn = config?.exchangesEnabled === true && otherCourier == null
+  const exchangesOn = config?.exchangesEnabled === true
   const exchangeMode = exchangesOn && mode === 'exchange'
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
@@ -999,7 +999,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <p className="pp-muted pp-small">
             {t(customChosen
               ? (exchangeMode ? 'p3.pickupTextExchangeCustom' : 'p3.pickupTextCustom')
-              : exchangeMode ? 'p3.pickupTextExchange'
+              : exchangeMode ? (otherCourier ? 'p3.pickupTextExchangeOther' : 'p3.pickupTextExchange')
               : otherCourier ? (otherCourier.carrierName ? 'p3.pickupTextOther' : 'p3.pickupText')
               : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText',
               { carrier: otherCourier?.carrierName ?? '', store })}
@@ -1174,6 +1174,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           result={result}
           email={sentEmail}
           pickupBooking={config.pickupBooking && otherCourier == null}
+          otherCourier={otherCourier != null}
           exchange={exchangeMode && exchangeLine && exchangeTarget ? {
             product: exchangeLine.productTitle,
             from: optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle),
@@ -1578,7 +1579,7 @@ function PolicyDialog({ text, onClose }: { text: string; onClose: () => void }) 
 }
 
 function SentScreen({
-  headingRef, store, result, email, pickupBooking, exchange,
+  headingRef, store, result, email, pickupBooking, exchange, otherCourier = false,
 }: {
   headingRef: React.RefObject<HTMLHeadingElement>
   store: string
@@ -1586,6 +1587,8 @@ function SentScreen({
   email: string | null
   pickupBooking: boolean
   exchange: { product: string; from: string; to: string } | null
+  /** G4b — the order went out with another courier: the exchange step names no Bosta courier. */
+  otherCourier?: boolean
 }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -1608,7 +1611,7 @@ function SentScreen({
   }
 
   const steps = exchange
-    ? [t('x3.stepReview', { store }), t('x3.stepCourier'), t('x3.stepReady')]
+    ? [t('x3.stepReview', { store }), otherCourier ? t('x3.stepCourierOther', { store }) : t('x3.stepCourier'), t('x3.stepReady')]
     : [
         ...(approved ? [] : [t('p4.stepReview', { store })]),
         pickupBooking ? t('p4.stepCollectBooking') : t('p4.stepCollect', { store }),
