@@ -5,7 +5,8 @@
 ## Current state
 
 **Non-Bosta couriers G4b — portal EXCHANGES for orders shipped with other couriers + G4a follow-ups (2026-10-22, branch
-`generic-courier-g4b` off origin/main b9ca5c2; NOT merged, NOT deployed, no tenant switched on). Migration V180.**
+`generic-courier-g4b` off origin/main b9ca5c2, rebased onto e415f18; merged to main 2026-10-23, NOT deployed, no tenant
+switched on). Migration V180.**
 - **Option B (approved 2026-10-21):** no exchanges row. Approve (switch on, stock re-checked) →
   `GenericExchanges.attachGenericForRequest`: internal order `internal:exchange:rr:<request id>` (`EXC-RR-…`, customer
   name / phone / shopify_address copied), `return_requests.replacement_order_id` (composite FK on the new
@@ -29,12 +30,17 @@
   Revert-checked: 5a EXISTS, inferred-handover hook, same-key refusal, to-do bucket. G4a tests edited only where G4b
   changes the asserted behaviour (backend a3 → switch-off refusal; vitest pill → book_with_courier; portal Exchange choice
   now offered).
-- **Decision for Marawan:** "Mark delivered without a pickup" can't reach the inferred handover — G3's rule is that
-  Mark delivered applies only to legs with the courier; the inferred handover comes only from Shopify's 'delivered',
-  which never exists for an internal replacement. Tested by calling the inferred path directly. Loosen for replacements?
-- **Follow-ups (not built):** "Exchange" chip on Orders list / Pick & Pack queue and the Overview exchanges tile read
-  `JOIN exchanges` (generic replacements show as plain orders — cosmetic, shared SQL); the replacement reserves no stock
-  between approval and its outbound waybill (committed only once pickable).
+- **Decision (Marawan 2026-10-23):** Mark delivered does NOT skip the pickup scan for replacement orders — G3's rule
+  stays (Mark delivered only on legs with the courier; the inferred handover only from Shopify's 'delivered'). The
+  inferred-handover 5a hook stays as built (tested by calling that path directly).
+- **Follow-ups (not built):**
+  - Re-check the replacement's stock when its outbound waybill is entered; warn if it is out of stock (today it reserves
+    nothing between approval and the outbound waybill — committed only once pickable).
+  - "Exchange" chip on the Orders list / Pick & Pack queue and the Overview exchanges tile for generic replacements
+    (all read `JOIN exchanges` — shared SQL).
+  - Merchants who don't use Pickups: their replacements can't be marked delivered (no pickup scan, no Shopify
+    fulfillment). Revisit with a real merchant; option: Mark delivered on packed generic legs with an inferred handover
+    + the LOW alert.
 
 **Shopify↔Traced inventory drift check — STEP 0 diagnosis only (2026-10-21, no code, no branch). Report given in chat;
 waiting on Marawan's answers.** Key facts found:
