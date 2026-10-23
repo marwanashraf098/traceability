@@ -701,7 +701,8 @@ function DrawerContent({
           <p className="text-small text-muted" data-testid="approve-helper">
             {otherCourier
               ? (detail.type === 'exchange'
-                ? t('exchangesRefunds.requests.drawer.helperOtherCourierExchange')
+                ? t('exchangesRefunds.requests.drawer.helperOtherCourierExchange', {
+                    carrier: detail.otherCourier?.forwardCarrierName || t('exchangesRefunds.requests.drawer.manual.theirCourier') })
                 : t('exchangesRefunds.requests.drawer.helperOtherCourier', {
                     carrier: detail.otherCourier?.forwardCarrierName || t('exchangesRefunds.requests.drawer.manual.theirCourier') }))
               : t(pickupBooking ? 'exchangesRefunds.requests.drawer.helperBooking' : 'exchangesRefunds.requests.drawer.helperManual')}

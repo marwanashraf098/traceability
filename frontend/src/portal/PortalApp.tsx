@@ -351,7 +351,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   // G4a / G4b: an order shipped with another courier — the store books the pickup (and, for an exchange, the
   // replacement's delivery) with that courier: no Bosta wording, no pickup-area choice (lookup sends no pickup).
   const otherCourier = order?.otherCourier ?? null
-  const exchangesOn = config?.exchangesEnabled === true
+  // G4b fix: the lookup says exchangesOffered:false when the store offers exchanges, but not for this order.
+  const exchangesOn = config?.exchangesEnabled === true && order?.exchangesOffered !== false
   const exchangeMode = exchangesOn && mode === 'exchange'
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null

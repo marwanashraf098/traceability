@@ -1598,7 +1598,7 @@
         "customAddressRedacted": "The address was removed after a privacy request.",
         "piiRemoved": "The customer's email, note and any typed pickup address were removed after a privacy request.",
         "helperOtherCourier": "This order went out with {{carrier}}. Approving doesn't book Bosta — book the pickup with {{carrier}}, then add the courier and tracking number here.",
-        "helperOtherCourierExchange": "Exchanges for orders shipped with other couriers are coming soon. Reject this request, or switch it to a refund if the customer agrees.",
+        "helperOtherCourierExchange": "This order went out with {{carrier}}. Approving doesn't book Bosta — it creates the replacement order. Book the exchange with {{carrier}}, then add the replacement's waybill here.",
         "manual": {
           "label": "Return pickup",
           "title": "Book the pickup with {{carrier}}",
@@ -2479,7 +2479,10 @@
         "description": "Customers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.",
         "needsBosta": "Connect Bosta first.",
         "needsLocation": "Choose where returns go back to and save first.",
-        "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first."
+        "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first.",
+        "descriptionOtherCouriers": "Customers can ask for another size or colour of the same product. Orders shipped with Bosta: approving books one Bosta exchange trip — the courier brings the new item and collects the old one (needs Bosta pickup booking on). Orders shipped with other couriers: you book the exchange with your courier.",
+        "needsBostaOrOtherCouriers": "Connect Bosta, or turn on \"Accept returns for orders shipped with other couriers\" below.",
+        "noOrdersEligible": "No order can be exchanged right now. Turn on Bosta pickup booking, or returns for orders shipped with other couriers."
       },
       "refundMethods": {
         "title": "Refund methods",
@@ -2510,7 +2513,8 @@
       },
       "otherCouriers": {
         "title": "Accept returns for orders shipped with other couriers",
-        "description": "Customers can ask for a refund on orders you delivered with another courier. You book the return pickup with that courier — Traced never books Bosta for these orders. Exchanges for them are coming soon.",
+        "description": "Customers can ask for a refund on orders you delivered with another courier — or an exchange, when \"Allow exchanges\" is on. You book the return pickup with that courier — Traced never books Bosta for these orders.",
+        "offKeepsExchanges": "Turning this off leaves \"Allow exchanges\" on, but orders shipped with other couriers can no longer be returned or exchanged in the portal.",
         "ownerOnly": "Only the owner can change this.",
         "savedOn": "Returns for other couriers' orders are on.",
         "savedOff": "Returns for other couriers' orders are off.",

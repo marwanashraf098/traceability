@@ -305,7 +305,10 @@ public class PortalSettingsService {
             }
         }
         // Step 5c: exchanges are booked through pickup booking — switching it off switches them off.
-        if (!on) jdbc.update("UPDATE tenants SET portal_exchanges_enabled = false WHERE id = ?", tenantId);
+        // G4b fix: unless the store accepts returns for other couriers — those exchanges don't need Bosta
+        // (Bosta orders then stop being offered an exchange: PortalService.exchangesForOrder).
+        if (!on) jdbc.update("UPDATE tenants SET portal_exchanges_enabled = false " +
+            "WHERE id = ? AND NOT portal_generic_returns_enabled", tenantId);
         jdbc.update(
             "UPDATE tenants SET portal_pickup_booking = ?, " +
             "    portal_pickup_booking_since = CASE WHEN ? AND NOT portal_pickup_booking THEN now() " +
@@ -317,9 +320,14 @@ public class PortalSettingsService {
      * Step 5c — "Allow exchanges". On needs Bosta pickup booking on (after this PUT's own booking
      * change), an active Bosta account and a saved return location. Switching it on stamps
      * portal_exchanges_since, so the booking sweeper books only exchanges approved from then on.
+     * G4b fix: a store that accepts returns for other couriers (portal_generic_returns_enabled) may switch it
+     * on without Bosta — those exchanges are booked by the merchant; its Bosta orders are offered an exchange
+     * only while Bosta pickup booking is on (PortalService.exchangesForOrder).
      */
     private void setExchanges(UUID tenantId, boolean on) {
-        if (on) {
+        boolean otherCouriers = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_generic_returns_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        if (on && !otherCouriers) {
             Map<String, Object> account = jdbc.queryForList(
                 "SELECT return_business_location_id FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1", tenantId)

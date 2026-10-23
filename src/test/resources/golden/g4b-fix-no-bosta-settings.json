@@ -1,0 +1,28 @@
+{
+  "s0_get" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":30,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":false,\"portalPickupBooking\":false,\"returnLocationId\":null,\"returnLocationName\":null,\"bostaConnected\":false,\"exchangesEnabled\":false,\"exchangesSince\":null,\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}",
+  "s1_exchanges" : {
+    "status" : 409,
+    "body" : "{\"field\":\"exchangesEnabled\",\"error\":\"EXCHANGES_NEEDS_BOSTA\",\"message\":\"Connect Bosta before allowing exchanges.\"}"
+  },
+  "s2_booking" : {
+    "status" : 409,
+    "body" : "{\"field\":\"pickupBooking\",\"error\":\"BOOKING_NEEDS_BOSTA\",\"message\":\"Connect Bosta before turning on pickup booking.\"}"
+  },
+  "s3_both" : {
+    "status" : 409,
+    "body" : "{\"field\":\"pickupBooking\",\"error\":\"BOOKING_NEEDS_BOSTA\",\"message\":\"Connect Bosta before turning on pickup booking.\"}"
+  },
+  "s4_get" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":30,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":false,\"portalPickupBooking\":false,\"returnLocationId\":null,\"returnLocationName\":null,\"bostaConnected\":false,\"exchangesEnabled\":false,\"exchangesSince\":null,\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}",
+  "s5_config" : {
+    "storeName" : "Golden Store",
+    "returnWindowDays" : 30,
+    "reasonCodes" : [ "wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other" ],
+    "logoUrl" : null,
+    "brandColor" : null,
+    "policyText" : null,
+    "autoApprove" : false,
+    "pickupBooking" : false,
+    "font" : "cairo",
+    "requirePhotos" : false
+  }
+}

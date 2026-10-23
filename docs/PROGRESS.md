@@ -4,6 +4,29 @@
 
 ## Current state
 
+**G4b fix — "Allow exchanges" without Bosta (2026-10-23, branch `generic-courier-g4b-fix` off origin/main 0fe62fe; NOT
+deployed, no tenant switched on). No migration.** Live test (prod, test store with no Bosta): the switch was disabled
+("Connect Bosta first"), so a non-Bosta store could never offer exchanges; tests passed only because fixtures set it.
+- **Rule:** "Allow exchanges" can be switched on with Bosta (pickup booking on + return location, unchanged) OR with
+  "Accept returns for orders shipped with other couriers" on (`PortalSettingsService.setExchanges`; the UI matches).
+  On such a store pickup booking off leaves exchanges on (`setPickupBooking`), and a Bosta order is offered an exchange
+  only while Bosta pickup booking is on (`PortalService.exchangesForOrder` — lookup options + submission; lookup adds
+  `exchangesOffered:false` only then, and the portal skips the Return / Exchange choice). Every expression reduces to
+  the old one when the other-couriers switch is off.
+- **Turning the other-couriers switch off** leaves "Allow exchanges" as it is; generic orders stop being eligible
+  (routeGeneric). The switch says so beforehand (shown when exchanges are on and Bosta can't take them), and the
+  exchanges row then says no order can be exchanged right now. Edge: if that store later turns Bosta booking on,
+  exchanges are already on for Bosta orders.
+- **Copy (EN + AR):** neutral exchanges description when the other-couriers switch is on (Bosta-only text unchanged);
+  "coming soon" removed from the other-couriers switch and from the drawer's approve helper for a generic exchange
+  (that one was stale since G4b — approving works); disabled note "Connect Bosta, or turn on …" only for a store that
+  ships with other couriers.
+- **Tests:** GenericG4bExchangeSettingsTest 3 (enabled through the REAL settings endpoints, portal offers + submits +
+  approves an exchange on a no-Bosta store; switch-off; mixed store), GenericG4bFixBostaSettingsGoldenTest 4 (raw
+  settings JSON + portal config / lookup / submit, Bosta and no-Bosta stores, with and without other couriers —
+  recorded on 0fe62fe before the fix), vitest genericCourierG4bFix 19 (incl. a Bosta-only text snapshot recorded
+  before the fix). No existing test edited. The flaky G4b golden fix was already on main (0fe62fe).
+
 **Non-Bosta couriers G4b — portal EXCHANGES for orders shipped with other couriers + G4a follow-ups (2026-10-22, branch
 `generic-courier-g4b` off origin/main b9ca5c2, rebased onto e415f18; merged to main 2026-10-23, NOT deployed, no tenant
 switched on). Migration V180.**

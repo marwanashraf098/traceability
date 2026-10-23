@@ -105,6 +105,8 @@ export interface LookupResult {
   pickup: PickupOffer | null
   /** G4a — present only for an order shipped with another courier: the store books its pickup with them. */
   otherCourier?: { carrierName: string | null }
+  /** G4b fix: false only when the store offers exchanges but not for this order; absent otherwise. */
+  exchangesOffered?: false
 }
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */

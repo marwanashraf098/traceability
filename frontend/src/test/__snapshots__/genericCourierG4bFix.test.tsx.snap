@@ -1,0 +1,91 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > ar: Bosta, booking off 1`] = `
+{
+  "booking": "احجز استلام بوسطة عند الموافقةعند التفعيل، تؤدي الموافقة على الطلب إلى حجز مندوب بوسطة لاستلامه من منطقة العميل. ومع تفعيل الموافقة التلقائية، يُحجز الاستلام فور إرسال الطلب.متوقف",
+  "exchanges": "السماح بالاستبداليمكن للعملاء طلب مقاس أو لون آخر من نفس المنتج. الموافقة تحجز رحلة استبدال واحدة مع بوسطة: يُحضر المندوب المنتج الجديد ويستلم القديم.فعّل «احجز استلام بوسطة عند الموافقة» واحفظ أولًا.متوقف",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > ar: Bosta, booking on 1`] = `
+{
+  "booking": "احجز استلام بوسطة عند الموافقةعند التفعيل، تؤدي الموافقة على الطلب إلى حجز مندوب بوسطة لاستلامه من منطقة العميل. ومع تفعيل الموافقة التلقائية، يُحجز الاستلام فور إرسال الطلب.مفعّل",
+  "exchanges": "السماح بالاستبداليمكن للعملاء طلب مقاس أو لون آخر من نفس المنتج. الموافقة تحجز رحلة استبدال واحدة مع بوسطة: يُحضر المندوب المنتج الجديد ويستلم القديم.متوقف",
+  "exchangesDisabled": false,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > ar: Bosta, exchanges on 1`] = `
+{
+  "booking": "احجز استلام بوسطة عند الموافقةعند التفعيل، تؤدي الموافقة على الطلب إلى حجز مندوب بوسطة لاستلامه من منطقة العميل. ومع تفعيل الموافقة التلقائية، يُحجز الاستلام فور إرسال الطلب.مفعّل",
+  "exchanges": "السماح بالاستبداليمكن للعملاء طلب مقاس أو لون آخر من نفس المنتج. الموافقة تحجز رحلة استبدال واحدة مع بوسطة: يُحضر المندوب المنتج الجديد ويستلم القديم.مفعّل",
+  "exchangesDisabled": false,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > ar: Bosta, no location 1`] = `
+{
+  "booking": "احجز استلام بوسطة عند الموافقةعند التفعيل، تؤدي الموافقة على الطلب إلى حجز مندوب بوسطة لاستلامه من منطقة العميل. ومع تفعيل الموافقة التلقائية، يُحجز الاستلام فور إرسال الطلب.اختر مكان عودة المرتجعات واحفظ أولًا.متوقف",
+  "exchanges": "السماح بالاستبداليمكن للعملاء طلب مقاس أو لون آخر من نفس المنتج. الموافقة تحجز رحلة استبدال واحدة مع بوسطة: يُحضر المندوب المنتج الجديد ويستلم القديم.اختر مكان عودة المرتجعات واحفظ أولًا.متوقف",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > ar: no Bosta 1`] = `
+{
+  "booking": "احجز استلام بوسطة عند الموافقةعند التفعيل، تؤدي الموافقة على الطلب إلى حجز مندوب بوسطة لاستلامه من منطقة العميل. ومع تفعيل الموافقة التلقائية، يُحجز الاستلام فور إرسال الطلب.اربط بوسطة أولًا.متوقف",
+  "exchanges": "السماح بالاستبداليمكن للعملاء طلب مقاس أو لون آخر من نفس المنتج. الموافقة تحجز رحلة استبدال واحدة مع بوسطة: يُحضر المندوب المنتج الجديد ويستلم القديم.اربط بوسطة أولًا.متوقف",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > en: Bosta, booking off 1`] = `
+{
+  "booking": "Book Bosta pickups when I approveWhen on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.Off",
+  "exchanges": "Allow exchangesCustomers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.Turn on "Book Bosta pickups when I approve" and save first.Off",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > en: Bosta, booking on 1`] = `
+{
+  "booking": "Book Bosta pickups when I approveWhen on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.On",
+  "exchanges": "Allow exchangesCustomers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.Off",
+  "exchangesDisabled": false,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > en: Bosta, exchanges on 1`] = `
+{
+  "booking": "Book Bosta pickups when I approveWhen on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.On",
+  "exchanges": "Allow exchangesCustomers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.On",
+  "exchangesDisabled": false,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > en: Bosta, no location 1`] = `
+{
+  "booking": "Book Bosta pickups when I approveWhen on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.Choose where returns go back to and save first.Off",
+  "exchanges": "Allow exchangesCustomers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.Choose where returns go back to and save first.Off",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;
+
+exports[`Golden — a Bosta-only store’s settings text is unchanged > en: no Bosta 1`] = `
+{
+  "booking": "Book Bosta pickups when I approveWhen on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.Connect Bosta first.Off",
+  "exchanges": "Allow exchangesCustomers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.Connect Bosta first.Off",
+  "exchangesDisabled": true,
+  "otherCouriersRow": false,
+}
+`;

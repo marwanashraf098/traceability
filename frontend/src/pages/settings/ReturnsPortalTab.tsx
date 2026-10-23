@@ -69,6 +69,20 @@ export default function ReturnsPortalTab() {
   // P3: "Require photos" (sent only when changed).
   const [requirePhotos, setRequirePhotos] = useState(false)
   const uploadedLogoUrl = useUploadedLogoUrl(saved?.logo?.version)
+  // G4a's "Accept returns for orders shipped with other couriers" (its own endpoint) — G4b fix: with it on,
+  // "Allow exchanges" no longer needs Bosta. Loaded only for a store that ships with other couriers.
+  const { genericCourier } = useCapabilities()
+  const [otherCouriers, setOtherCouriers] = useState<OtherCouriersReturnsSetting | null>(null)
+  useEffect(() => {
+    if (!genericCourier) return
+    let cancelled = false
+    getOtherCouriersReturns().then(s => { if (!cancelled) setOtherCouriers(s) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [genericCourier])
+  const otherCouriersShown = !!otherCouriers && (otherCouriers.available || otherCouriers.enabled)
+  const otherCouriersOn = !!otherCouriers?.enabled
+  /** Bosta orders can be exchanged: pickup booking on with Bosta connected (saved state). */
+  const bostaExchangePath = !!saved?.portalPickupBooking && !!saved?.bostaConnected
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -278,20 +292,24 @@ export default function ReturnsPortalTab() {
           error={errors.pickupBooking}
           onChange={v => {
             setBookingOn(v)
-            // Exchanges are booked through pickup booking — switching it off switches them off.
-            if (!v) setExchangesOn(false)
+            // Exchanges are booked through pickup booking — switching it off switches them off,
+            // unless they're on for other couriers' orders too (G4b fix; the backend agrees).
+            if (!v && !otherCouriersOn) setExchangesOn(false)
             setErrors(e => ({ ...e, pickupBooking: undefined }))
           }}
         />
 
-        {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location. */}
+        {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location —
+            or (G4b fix) with returns for other couriers' orders on. */}
         <SwitchRow
           title={t('settings.portal.exchanges.title')}
-          description={t('settings.portal.exchanges.description')}
+          description={t(otherCouriersOn ? 'settings.portal.exchanges.descriptionOtherCouriers' : 'settings.portal.exchanges.description')}
           checked={exchangesOn}
-          disabled={!exchangesOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
-          note={exchangesOn ? undefined
-            : !saved.bostaConnected ? t('settings.portal.exchanges.needsBosta')
+          disabled={!exchangesOn && !otherCouriersOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
+          note={exchangesOn
+            ? (otherCouriersShown && !otherCouriersOn && !bostaExchangePath ? t('settings.portal.exchanges.noOrdersEligible') : undefined)
+            : otherCouriersOn ? undefined
+            : !saved.bostaConnected ? t(otherCouriersShown ? 'settings.portal.exchanges.needsBostaOrOtherCouriers' : 'settings.portal.exchanges.needsBosta')
               : !saved.returnLocationId ? t('settings.portal.exchanges.needsLocation')
                 : !bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
           noteTestId="exchanges-note"
@@ -300,7 +318,10 @@ export default function ReturnsPortalTab() {
           onChange={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
         />
 
-        <OtherCouriersRow />
+        {otherCouriers && otherCouriersShown && (
+          <OtherCouriersRow setting={otherCouriers} onSaved={setOtherCouriers}
+            offKeepsExchanges={!!saved.exchangesEnabled && !bostaExchangePath} />
+        )}
 
         <RefundMethodsRow value={refundMethods} onChange={setRefundMethods} />
 
@@ -526,30 +547,24 @@ function ReturnLocationRow({
  * ships with other couriers (or has it switched on). Saved at once on its own endpoint (owner only, audit-logged),
  * not with "Save changes"; a manager sees it read-only.
  */
-function OtherCouriersRow() {
+function OtherCouriersRow({ setting, onSaved, offKeepsExchanges }: {
+  setting: OtherCouriersReturnsSetting
+  onSaved: (s: OtherCouriersReturnsSetting) => void
+  /** G4b fix: exchanges are on and Bosta can't take them — say that switching this off leaves them on. */
+  offKeepsExchanges: boolean
+}) {
   const { t, i18n } = useTranslation()
   const { toast } = useToast()
-  const { genericCourier } = useCapabilities()
-  const [setting, setSetting] = useState<OtherCouriersReturnsSetting | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | undefined>()
   const owner = getRoleFromToken() === 'owner'
-
-  useEffect(() => {
-    if (!genericCourier) return
-    let cancelled = false
-    getOtherCouriersReturns().then(s => { if (!cancelled) setSetting(s) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [genericCourier])
-
-  if (!setting || (!setting.available && !setting.enabled)) return null
 
   async function change(v: boolean) {
     setSaving(true)
     setError(undefined)
     try {
       const s = await setOtherCouriersReturns(v)
-      setSetting(s)
+      onSaved(s)
       toast({ tone: 'success', message: t(v ? 'settings.portal.otherCouriers.savedOn' : 'settings.portal.otherCouriers.savedOff') })
     } catch (e) {
       setError(e instanceof TransferCommandError ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
@@ -566,7 +581,8 @@ function OtherCouriersRow() {
         description={t('settings.portal.otherCouriers.description')}
         checked={setting.enabled}
         disabled={saving || !owner || (!setting.enabled && !setting.available)}
-        note={!owner ? t('settings.portal.otherCouriers.ownerOnly') : undefined}
+        note={!owner ? t('settings.portal.otherCouriers.ownerOnly')
+          : setting.enabled && offKeepsExchanges ? t('settings.portal.otherCouriers.offKeepsExchanges') : undefined}
         noteTestId="other-couriers-note"
         error={error}
         errorTestId="error-otherCouriers"

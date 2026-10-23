@@ -1,0 +1,111 @@
+{
+  "s0_get" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":30,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":false,\"portalPickupBooking\":false,\"returnLocationId\":\"loc\",\"returnLocationName\":\"Maadi\",\"bostaConnected\":true,\"exchangesEnabled\":false,\"exchangesSince\":null,\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}",
+  "s1_exchangesBeforeBooking" : {
+    "status" : 409,
+    "body" : "{\"field\":\"exchangesEnabled\",\"error\":\"EXCHANGES_NEEDS_BOOKING\",\"message\":\"Turn on Bosta pickup booking before allowing exchanges.\"}"
+  },
+  "s2_bookingOn" : {
+    "status" : 200,
+    "body" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":14,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":true,\"portalPickupBooking\":true,\"returnLocationId\":\"loc\",\"returnLocationName\":\"Maadi\",\"bostaConnected\":true,\"exchangesEnabled\":false,\"exchangesSince\":null,\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}"
+  },
+  "s3_exchangesOn" : {
+    "status" : 200,
+    "body" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":14,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":true,\"portalPickupBooking\":true,\"returnLocationId\":\"loc\",\"returnLocationName\":\"Maadi\",\"bostaConnected\":true,\"exchangesEnabled\":true,\"exchangesSince\":\"T1\",\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}"
+  },
+  "s4_config" : {
+    "storeName" : "Golden Store",
+    "returnWindowDays" : 14,
+    "reasonCodes" : [ "wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other" ],
+    "logoUrl" : null,
+    "brandColor" : null,
+    "policyText" : null,
+    "autoApprove" : false,
+    "pickupBooking" : true,
+    "exchangesEnabled" : true,
+    "font" : "cairo",
+    "requirePhotos" : false
+  },
+  "s5_lookup" : {
+    "orderNumber" : "#9301",
+    "deliveredAt" : "T2",
+    "lines" : [ {
+      "variantId" : "U1",
+      "productTitle" : "Linen Shirt",
+      "variantTitle" : "Sand / M",
+      "imageUrl" : null,
+      "deliveredQuantity" : 1,
+      "returnableQuantity" : 1,
+      "nonReturnable" : false,
+      "optionAxes" : [ {
+        "name" : null,
+        "kind" : "colour"
+      }, {
+        "name" : null,
+        "kind" : "size"
+      } ],
+      "currentOptions" : [ "Sand", "M" ],
+      "exchangeOptions" : [ {
+        "variantId" : "U2",
+        "title" : "Sand / L",
+        "options" : [ "Sand", "L" ],
+        "inStock" : true
+      } ]
+    } ],
+    "pickup" : {
+      "cityId" : "FceDyHXwpSYYF9zGW",
+      "cityName" : "Cairo",
+      "cityNameAr" : "القاهرة",
+      "districts" : [ {
+        "id" : "Iy7-lFD0BE0",
+        "name" : "Nasr City - 7th District",
+        "nameAr" : "مدينة نصر - الحي السابع",
+        "zoneName" : "Nasr City",
+        "zoneNameAr" : "مدينة نصر"
+      } ],
+      "preselectedDistrictId" : "Iy7-lFD0BE0",
+      "exchangeDistrictIds" : [ "Iy7-lFD0BE0" ],
+      "cities" : [ {
+        "id" : "FceDyHXwpSYYF9zGW",
+        "name" : "Cairo",
+        "nameAr" : "القاهرة"
+      } ]
+    }
+  },
+  "s6_submit" : "CREATED",
+  "s6_request" : {
+    "type" : "exchange",
+    "status" : "requested",
+    "booking_status" : null
+  },
+  "s7_bookingOff" : {
+    "status" : 200,
+    "body" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":14,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":false,\"portalPickupBooking\":false,\"returnLocationId\":\"loc\",\"returnLocationName\":\"Maadi\",\"bostaConnected\":true,\"exchangesEnabled\":false,\"exchangesSince\":\"T1\",\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}"
+  },
+  "s8_get" : "{\"slug\":\"SLUG\",\"enabled\":true,\"autoApprove\":false,\"returnWindowDays\":14,\"logoUrl\":null,\"brandColor\":null,\"policyText\":null,\"pickupBooking\":false,\"portalPickupBooking\":false,\"returnLocationId\":\"loc\",\"returnLocationName\":\"Maadi\",\"bostaConnected\":true,\"exchangesEnabled\":false,\"exchangesSince\":\"T1\",\"font\":\"cairo\",\"storeName\":\"Golden Store\",\"refundMethods\":[],\"requirePhotos\":false,\"logo\":null}",
+  "s9_config" : {
+    "storeName" : "Golden Store",
+    "returnWindowDays" : 14,
+    "reasonCodes" : [ "wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other" ],
+    "logoUrl" : null,
+    "brandColor" : null,
+    "policyText" : null,
+    "autoApprove" : false,
+    "pickupBooking" : false,
+    "font" : "cairo",
+    "requirePhotos" : false
+  },
+  "s9_lookup" : {
+    "orderNumber" : "#9301",
+    "deliveredAt" : "T2",
+    "lines" : [ {
+      "variantId" : "U1",
+      "productTitle" : "Linen Shirt",
+      "variantTitle" : "Sand / M",
+      "imageUrl" : null,
+      "deliveredQuantity" : 1,
+      "returnableQuantity" : 0,
+      "nonReturnable" : false
+    } ],
+    "pickup" : null
+  }
+}

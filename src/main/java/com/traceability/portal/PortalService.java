@@ -93,6 +93,20 @@ public class PortalService {
             "SELECT portal_exchanges_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId));
     }
 
+    /**
+     * G4b fix — whether THIS order may be exchanged. An order shipped with another courier: "Allow exchanges"
+     * (the order is portal-eligible only through GenericPortalReturns.routeGeneric). A Bosta order: "Allow
+     * exchanges", and — on a store that accepts returns for other couriers, where "Allow exchanges" no longer
+     * implies Bosta pickup booking — Bosta pickup booking on. A store without the other-couriers switch: exactly
+     * "Allow exchanges", as before.
+     */
+    private boolean exchangesForOrder(UUID tenantId, UUID orderId) {
+        if (GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId)) return exchangesEnabled(tenantId);
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_exchanges_enabled AND (NOT portal_generic_returns_enabled OR portal_pickup_booking) " +
+            "FROM tenants WHERE id = ?", Boolean.class, tenantId));
+    }
+
     /** Hatch #14. Null for an unknown or disabled slug. */
     public UUID resolveTenant(String slug) {
         if (slug == null || slug.isBlank()) return null;
@@ -249,7 +263,9 @@ public class PortalService {
         recordAttempt(tenantId, orderKey, true, ipHash, ondemandOutcome);
         // Step 5b: when the store offers exchanges, each line also carries what it could be
         // exchanged for (siblings of the same product, in stock or not) — absent otherwise.
-        if (exchangesEnabled(tenantId)) {
+        // G4b fix: per order (a Bosta order on a store whose exchanges are on for other couriers only gets none).
+        boolean orderExchanges = exchangesForOrder(tenantId, orderId);
+        if (orderExchanges) {
             Map<UUID, com.traceability.inventory.VariantStockService.VariantStock> stock =
                 new com.traceability.inventory.VariantStockService(jdbc).computeAll();
             ExchangeOptions options = new ExchangeOptions(jdbc);
@@ -282,6 +298,9 @@ public class PortalService {
             pickup.put("cities", pickupAreas.pickupCities().stream().map(PickupAreaService.City::toJson).toList());
         }
         body.put("pickup", pickup);
+        // G4b fix: present (false) only when the store offers exchanges but not for this order — the portal then
+        // skips the Return / Exchange choice. Absent otherwise, so every other lookup is unchanged.
+        if (!orderExchanges && exchangesEnabled(tenantId)) body.put("exchangesOffered", false);
         if (generic) {
             Map<String, Object> other = new LinkedHashMap<>();
             other.put("carrierName", GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId));
@@ -826,7 +845,7 @@ public class PortalService {
      * replacement variant id; anything else is the generic invalid-submission 400.
      */
     private UUID validExchange(UUID tenantId, UUID orderId, SubmitRequest req) {
-        if (!exchangesEnabled(tenantId)) throw new InvalidSubmission();
+        if (!exchangesForOrder(tenantId, orderId)) throw new InvalidSubmission();
         if (req.lines().size() != 1) throw new InvalidSubmission();
         SubmitLine line = req.lines().get(0);
         UUID replacement = req.replacementVariantId();
