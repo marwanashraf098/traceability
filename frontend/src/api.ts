@@ -1733,7 +1733,10 @@ export async function scanStockTakePiece(sessionId: string, barcode: string, con
   })
   if (!res.ok) {
     const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
-    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+    // Only a refusal that carries a readable message becomes ServerMessageError; a body-less one
+    // (session not open, bad request…) stays the plain error it always was — flash only, no text.
+    if (b?.message_en) throw new ServerMessageError(res.status, b.code, b.message_en, b.message_ar)
+    throw new Error(`${res.status}: ${res.statusText}`)
   }
   return await res.json() as StockTakeScanResult
 }
@@ -2085,6 +2088,9 @@ export interface PackOrderLine {
   quantity: number
   allocated: number
   allocatedPieces: Array<{ piece_id: string; barcode: string; allocation_status: string; piece_status: string }>
+  /** Flexible labeling slice 4 — present only for a switched-on tenant (PackLabelLine). */
+  labelsUnused?: number
+  untaggedStock?: number
 }
 
 /** GET /fulfill/{id}'s shape plus area / courierType / batch. */
@@ -2103,6 +2109,8 @@ export interface PackOrderCard {
   batchNo: number | null
   batchPrintedAt: string | null
   items: PackOrderLine[]
+  /** Flexible labeling slice 4 — present only for a switched-on tenant. */
+  labels?: PackOrderLabels
 }
 
 export interface PackSessionRecent {
@@ -2149,6 +2157,8 @@ export interface PackScanResult {
   allocatedCount: number
   requiredQuantity: number
   allComplete: boolean
+  /** Flexible labeling slice 4 — set only on refusals the server words in both languages. */
+  messageAr?: string
 }
 
 export interface PackScanResponse {
@@ -3721,4 +3731,57 @@ export async function openLabelBatchPdf(batchId: string) {
     throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
   }
   window.open(URL.createObjectURL(await res.blob()), '_blank')
+}
+
+// ── Flexible labeling: packing labels (slice 4) ──────────────────────────────
+
+/** A pack-screen line's label status (FulfillService.getOrder via PackLabels — switched-on tenants only). */
+export interface PackLabelLine {
+  id: string
+  quantity: number
+  allocated: number
+  /** Issued, unused pack / replacement labels printed for this line. */
+  labelsUnused?: number
+  /** Untagged pieces of the line's product left at the main warehouse. */
+  untaggedStock?: number
+}
+/** "Labels for this order: used of printed used". */
+export interface PackOrderLabels { printed: number; used: number }
+
+export type PackLabelScope = 'new' | 'all' | 'last'
+export type PackLabelRequest = { scope: PackLabelScope; sort: PrintSort } | { orderId: string }
+export interface PackLabelPart { part: number; of: number; labels: number; orderIds: string[] }
+export interface PackLabelSummary {
+  labels: number; orders: number; reused: number; unitsWithoutLabel: number; ordersConsidered: number
+  parts: PackLabelPart[]
+}
+
+export function previewPackLabels(req: PackLabelRequest) {
+  return requestReadable<PackLabelSummary>('/pack-labels/preview', { method: 'POST', body: JSON.stringify(req) })
+}
+
+/** Issues what's missing (a line's unused labels are reprinted, never issued twice); answers the parts to open. */
+export function printPackLabels(req: PackLabelRequest) {
+  return requestReadable<PackLabelSummary>('/pack-labels/print', { method: 'POST', body: JSON.stringify(req) })
+}
+
+async function openPdfFrom(path: string, body: unknown) {
+  const res = await authFetch(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  window.open(URL.createObjectURL(await res.blob()), '_blank')
+}
+
+/** One part's label PDF, in sequence (each order's labels, then a separator). */
+export function openPackLabelsPdf(orderIds: string[]) {
+  return openPdfFrom('/pack-labels/pdf', { orderIds })
+}
+
+/** "Print 1 replacement label" for one order line — opens the 1-label PDF. */
+export function printPackReplacement(orderId: string, orderItemId: string, idempotencyKey: string) {
+  return openPdfFrom('/pack-labels/replacement', { orderId, orderItemId, idempotencyKey })
 }

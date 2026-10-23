@@ -81,8 +81,43 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slice 4: packing labels in order sequence + binding in Pick & Pack (2026-10-23, branch
+`feat/flexible-labeling-s4` off origin/main ccc8f8b; NOT merged, NOT deployed). Migration V182 (one index). Behind
+`flexible_labeling_enabled`.**
+- **Print labels** (`labels/PackLabelService`, `POST /api/v1/pack-labels/{preview,print,pdf,replacement}`,
+  isAuthenticated like Print waybills; 404 with the switch off). Orders = `PackPrintBatchStore.candidates(scope, sort)`
+  (first 490, the waybill job's own rule), or scope `last` (the store's newest waybill print, by position — "new" no
+  longer matches once the waybills are printed), or one order (queue row button; any order still to pack: new /
+  ready_to_pick / self_pickup_pending, not on hold, merchant_orders). Per order, per line (oi.id = pack-screen order),
+  each UNALLOCATED unit of a variant with untagged available stock at main gets one `pack` code (order_id +
+  order_item_id), capped by the variant's untagged count across the print in sequence. A line's issued, unbound pack
+  codes are REUSED first (never issued twice); per-tenant advisory lock around print. New codes issued in ≤ 2,000-code
+  batches. PDF per part (≤ 2,000 labels, never splitting an order): labels then ONE text-only separator
+  (`LabelPdfRenderer.Separator`: tracking, then order number; number alone without tracking; no barcode; same 50×25).
+  Piece-label drawing unchanged (PieceLabelGoldenTest green).
+- **Binding** in `FulfillService.scan` (waybill mode via PackSessionStore.scanPiece): piece miss → issued code →
+  `scanLabel`: line of the code's variant with room (optional client `orderItemId`, else first by oi.id), same FOR UPDATE
+  + recount as a piece scan, all BEFORE writing → `bindLabel` (BindRef.packScan; `label_order_id` in metadata when printed
+  for another order) → transition + allocation; anything after the bind throws (rolls the bind back). Refusals:
+  WRONG_VARIANT ("This label is for X, this order needs Y", EN+AR), CODE_VOIDED, NO_UNTAGGED_STOCK, LABEL_JUST_USED
+  (race). `ScanResult.messageAr` (JSON only when set) carries server-worded refusals. Switch off → unchanged
+  (LABEL_NOT_USED_YET / PIECE_NOT_FOUND). `FlexibleLabeling.enabled` now reads an invisible tenants row as off.
+- **Pack screens** (PickScreen + PackSessionScreen, `pages/fulfill/packLabels.tsx`): highlighted line (first unfilled,
+  tap to choose, auto-advance), "Label printed" / "Needs label" (+ hint), "Labels for this order: x of y used",
+  "Print 1 replacement label" (plain button, kind replacement, refused with no untagged stock). Label fields come from
+  `PackLabels.decorate` on getOrder (switch-on only). SAFETY-CRITICAL scan handlers untouched — so the client does NOT
+  send orderItemId (the server's first-line rule equals the highlight unless a later same-variant line was tapped).
+- **Stock take fix (slice 3 regression):** only a refusal with a message becomes ServerMessageError; body-less 409/404/400
+  are the plain error again (flash only).
+- **Tests:** PackLabelsTest 18 (p1–p6, b1–b5, e1 queue / e2 waybill HTTP, r1, s1, f1, x1 app_user, x2 portal); vitest
+  packLabels 7. Revert-checked 14 backend + 8 frontend mutations. Registries: MigrationSmokeTest 181,
+  NotTracedBackfillTest 126, PortalOrderLeakTest 4 SKIP. TagStockTest.s1: pick scan now asserted with the switch off
+  (finally), voided → CODE_VOIDED (approved).
+- **Open:** awaiting-waybill orders aren't in the Pick & Pack queue, so their single-order "Print labels" has no button
+  yet (the endpoint accepts them).
+
 **Flexible labeling — slice 3: named label codes + Tag stock (2026-10-23, branch `feat/flexible-labeling-s3` off
-origin/main b7f6080; NOT merged, NOT deployed). Migration V181. Behind `flexible_labeling_enabled` (off for every real
+origin/main b7f6080; merged to main ccc8f8b 2026-10-23, NOT deployed). Migration V181. Behind `flexible_labeling_enabled` (off for every real
 tenant). Prod checked first (read-only, 2026-10-23): label_codes 0 rows, label_code_batches 0 rows; prod Flyway at V179.**
 - **V181:** label_codes `variant_id NOT NULL` (FK variants), `order_id` / `order_item_id` NULL (packing grouping, slice 4;
   CHECK item ⇒ order), partial index (tenant, variant) WHERE issued; label_code_batches DROP spares / label_w_mm /

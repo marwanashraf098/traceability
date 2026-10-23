@@ -29,13 +29,33 @@ public final class LabelPdfRenderer {
 
     private LabelPdfRenderer() {}
 
+    /** One page of a label PDF: a piece label, or (packing labels, flexible labeling slice 4) a separator. */
+    public sealed interface Page permits Piece, Separator {}
+
     /** What one label shows. */
-    public record Piece(String shortCode, String productTitle, String variantTitle, String sku) {}
+    public record Piece(String shortCode, String productTitle, String variantTitle, String sku) implements Page {}
+
+    /**
+     * The page between two orders' packing labels: plain text, NO barcode (so it can never be scanned as a
+     * piece). {@code line2} null → one line only.
+     */
+    public record Separator(String line1, String line2) implements Page {}
+
+    static final float SEPARATOR_MARGIN_MM = 2f, SEPARATOR_LINE1_PT = 14f, SEPARATOR_LINE2_PT = 11f, SEPARATOR_MIN_PT = 6f;
 
     public static byte[] render(List<Piece> pieces, PieceLabelLayout.Spec spec) throws IOException {
+        return renderPages(List.copyOf(pieces), spec);
+    }
+
+    public static byte[] renderPages(List<? extends Page> pages, PieceLabelLayout.Spec spec) throws IOException {
         try (PDDocument doc = new PDDocument()) {
             LabelFonts.Loaded fonts = new LabelFonts.Loaded(doc);
-            for (Piece p : pieces) {
+            for (Page item : pages) {
+                if (item instanceof Separator sep) {
+                    drawSeparator(doc, fonts, sep, spec);
+                    continue;
+                }
+                Piece p = (Piece) item;
                 PieceLabelLayout.Layout layout = PieceLabelLayout.layout(
                     spec, p.shortCode(), p.productTitle(), p.variantTitle(), p.sku());
                 PDPage page = new PDPage(new PDRectangle(layout.pageWidth(), layout.pageHeight()));
@@ -50,6 +70,38 @@ public final class LabelPdfRenderer {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
             return out.toByteArray();
+        }
+    }
+
+    /** Same page size as a piece label; each line centred, shrunk to fit the width. */
+    private static void drawSeparator(PDDocument doc, LabelFonts.Loaded fonts, Separator sep, PieceLabelLayout.Spec spec)
+            throws IOException {
+        float w = spec.widthMm() * PieceLabelLayout.MM, h = spec.heightMm() * PieceLabelLayout.MM;
+        PDPage page = new PDPage(new PDRectangle(w, h));
+        doc.addPage(page);
+        float maxW = w - 2 * SEPARATOR_MARGIN_MM * PieceLabelLayout.MM;
+        try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+            if (sep.line2() == null) {
+                drawCentred(cs, fonts, sep.line1(), LabelFonts.Face.BOLD, SEPARATOR_LINE1_PT, maxW, w, h * 0.42f);
+            } else {
+                drawCentred(cs, fonts, sep.line1(), LabelFonts.Face.BOLD, SEPARATOR_LINE1_PT, maxW, w, h * 0.58f);
+                drawCentred(cs, fonts, sep.line2(), LabelFonts.Face.REGULAR, SEPARATOR_LINE2_PT, maxW, w, h * 0.22f);
+            }
+        }
+    }
+
+    private static void drawCentred(PDPageContentStream cs, LabelFonts.Loaded fonts, String text, LabelFonts.Face face,
+                                    float size, float maxW, float pageW, float baseline) throws IOException {
+        List<LabelFonts.Run> runs = LabelFonts.runs(text == null ? "" : text, face);
+        while (size > SEPARATOR_MIN_PT && LabelFonts.width(runs, size) > maxW) size -= 0.5f;
+        float x = (pageW - LabelFonts.width(runs, size)) / 2;
+        for (LabelFonts.Run run : runs) {
+            cs.beginText();
+            cs.setFont(fonts.font(run.face()), size);
+            cs.newLineAtOffset(x, baseline);
+            cs.showText(run.text());
+            cs.endText();
+            x += LabelFonts.width(List.of(run), size);
         }
     }
 

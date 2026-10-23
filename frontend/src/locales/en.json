@@ -758,7 +758,10 @@
       "WRONG_STATUS": "Item is not available to pick",
       "CLAIMED_BY_OTHER": "Another packer is packing this order right now",
       "PIECE_UNTAGGED": "This piece has no barcode yet — stick a label on and scan that",
-      "LABEL_NOT_USED_YET": "Label not used yet — tag it in Tag stock first"
+      "LABEL_NOT_USED_YET": "Label not used yet — tag it in Tag stock first",
+      "LABEL_JUST_USED": "This label was just used by another scan — scan it again",
+      "CODE_VOIDED": "This label was voided — throw it away and print a new one",
+      "NO_UNTAGGED_STOCK": "No untagged piece of this product is left — keep this label for the next one"
     },
     "linkAwb": {
       "title": "Scan AWB Barcode",
@@ -1069,6 +1072,43 @@
         "packed": "Packed {{number}}",
         "completeFailed": "Couldn't finish {{number}} — see the tablet",
         "notApplied": "Not applied — scan again"
+      }
+    },
+    "labels": {
+      "button": "Print labels",
+      "rowButton": "Labels",
+      "printed_one": "Label printed",
+      "printed_other": "{{count}} labels printed",
+      "needs": "Needs label",
+      "needsHint": "No label printed yet — use “Print 1 replacement label”, or scan a labeled piece",
+      "counter": "Labels for this order: {{used}} of {{printed}} used",
+      "forLine": "For {{name}}",
+      "replacement": "Print 1 replacement label",
+      "error": "Couldn't print the label — try again",
+      "dialog": {
+        "title": "Print labels",
+        "titleOrder": "Print labels · {{number}}",
+        "intro": "Labels for the pieces that don't have one yet, in the same order as the waybill stack. Each order's labels end with a plain separator showing its tracking number.",
+        "introOrder": "Labels for this order's pieces that don't have one yet.",
+        "newHint": "Orders whose waybills haven't been printed yet",
+        "allHint": "Every order ready to pack",
+        "last": "Same orders as the last waybill print",
+        "lastHint": "In that print's order — use this after printing the waybills",
+        "summary_one": "{{count}} label for {{orders}} orders",
+        "summary_other": "{{count}} labels for {{orders}} orders",
+        "fromLabeled_one": "{{count}} piece is packed from labeled stock — no label needed",
+        "fromLabeled_other": "{{count}} pieces are packed from labeled stock — no label needed",
+        "reused_one": "{{count}} was printed before and is printed again (not a new label)",
+        "reused_other": "{{count}} were printed before and are printed again (not new labels)",
+        "parts": "Printed in {{count}} parts of up to 2,000 labels",
+        "counting": "Counting labels…",
+        "print_one": "Print {{count}} label",
+        "print_other": "Print {{count}} labels",
+        "done_one": "{{count}} label ready for {{orders}} orders",
+        "done_other": "{{count}} labels ready for {{orders}} orders",
+        "partsHint": "Open each part in turn — an order is never split between parts.",
+        "openPart": "Open part {{part}} of {{of}} ({{count}} labels)",
+        "openAgain": "Open the labels again"
       }
     }
   },

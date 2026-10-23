@@ -15,6 +15,10 @@ import {
   WaybillOutcome,
 } from '../../api'
 import { usePhoneScanTarget } from '../../phone/usePhoneScanTarget'
+import {
+  LineLabelStatus, PackLabelsBar, hasLabelFields, lineDisplayName, lineHighlightClass, scanRejectionText,
+  usePackLineHighlight,
+} from './packLabels'
 import { PhoneScanButton } from '../../phone/PhoneScanButton'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
@@ -122,10 +126,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
       return { success: false }
     }
     if (r.status === 'rejected') {
-      const code = r.scan?.code ?? 'ERROR'
-      setPieceError(t(`fulfill.waybill.pieceReject.${code}`, {
-        defaultValue: t(`fulfill.rejection.${code}`, { defaultValue: r.scan?.message ?? code }),
-      }))
+      setPieceError(scanRejectionText(t, i18n.language, r.scan ?? { code: null, message: null }, 'fulfill.waybill.pieceReject'))
       return { success: false }
     }
     if (r.scan?.pieceId) {
@@ -143,10 +144,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
     if (r.status === 'completed') return t('fulfill.waybill.phone.packed', { number: r.packed?.orderNumber ?? '' })
     if (r.status === 'complete_failed') return t('fulfill.waybill.phone.completeFailed', { number: order?.number ?? '' })
     if (r.status === 'rejected') {
-      const code = r.scan?.code ?? 'ERROR'
-      return t(`fulfill.waybill.pieceReject.${code}`, {
-        defaultValue: t(`fulfill.rejection.${code}`, { defaultValue: r.scan?.message ?? code }),
-      })
+      return scanRejectionText(t, i18n.language, r.scan ?? { code: null, message: null }, 'fulfill.waybill.pieceReject')
     }
     const line = r.order?.items.find(i => i.allocatedPieces.some(p => p.piece_id === r.scan?.pieceId))
     return line
@@ -235,6 +233,15 @@ export default function PackSessionScreen({ initial, onEnded }: {
     finally { setBusy(false) }
   }
 
+  /** After a replacement label is printed: the open order's card again (its label counter). */
+  async function reloadOrder() {
+    try {
+      const v = await getPackSession(view.id)
+      setView(v)
+      setOrder(v.openOrder)
+    } catch { /* the counter refreshes on the next scan */ }
+  }
+
   async function confirmSetAside(reason: SetAsideReason) {
     if (!order || busy) return
     setBusy(true)
@@ -316,6 +323,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
               onRetry={retry}
               onSetAside={openSetAside}
               onHelperScan={helperScan}
+              onLabelsChanged={reloadOrder}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center" data-testid="session-waiting">
@@ -412,7 +420,8 @@ export default function PackSessionScreen({ initial, onEnded }: {
   )
 }
 
-function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo, onRetry, onSetAside, onHelperScan }: {
+function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo, onRetry, onSetAside, onHelperScan,
+  onLabelsChanged }: {
   order: PackOrderCard
   lastScan: LastScan
   pieceError: string | null
@@ -424,10 +433,16 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
   onSetAside: () => void
   /** Review mode S7: set only for a scanHelpers tenant — piece chips per unfinished line. */
   onHelperScan: ((code: string) => void) | null
+  /** Flexible labeling slice 4: a replacement label was printed — reload the card (its label counter). */
+  onLabelsChanged: () => void
 }) {
   const { t } = useTranslation()
   // A line removed by a Shopify order edit is kept at quantity 0 — nothing to pack, so it's hidden.
   const packItems = order.items.filter(i => i.quantity > 0)
+  // Flexible labeling slice 4: the highlighted line (first unfilled, auto-advancing) — display only.
+  const lineHighlight = usePackLineHighlight(packItems)
+  const labelled = hasLabelFields(order.labels)
+  const highlightedLine = packItems.find(i => i.id === lineHighlight.highlighted) ?? null
   const allRemoved = order.items.length > 0 && packItems.length === 0
   const total = packItems.reduce((n, i) => n + i.quantity, 0)
   const done = packItems.reduce((n, i) => n + Math.min(i.allocated, i.quantity), 0)
@@ -496,6 +511,11 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
           </div>
         )}
 
+        {hasLabelFields(order.labels) && (
+          <PackLabelsBar orderId={order.id} labels={order.labels} line={highlightedLine}
+            lineName={highlightedLine ? lineDisplayName(highlightedLine) : ''} onPrinted={onLabelsChanged} />
+        )}
+
         <div className="space-y-2.5">
           {packItems.map(item => {
             const complete = item.allocated >= item.quantity
@@ -503,7 +523,11 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
             return (
               <div key={item.id}>
               <div
-                className={cn('card p-3.5 flex items-center gap-4', complete ? 'border-success/40 bg-success/[0.06]' : '')}>
+                data-testid={`pack-line-${item.id}`}
+                data-highlighted={labelled && item.id === lineHighlight.highlighted ? 'true' : undefined}
+                onClick={labelled ? () => lineHighlight.select(item.id) : undefined}
+                className={cn('card p-3.5 flex items-center gap-4', complete ? 'border-success/40 bg-success/[0.06]' : '',
+                  labelled && lineHighlightClass(item.id === lineHighlight.highlighted))}>
                 <ProductThumb src={item.imageUrl} alt={item.product_title} size={88} cdnWidth={176} />
                 <div className="flex-1 min-w-0">
                   <p className="text-body font-semibold text-primary break-words">{item.product_title}</p>
@@ -511,6 +535,7 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
                     <p className="text-small text-muted break-words">{item.variant_title}</p>
                   )}
                   {item.sku && <p className="text-caption text-muted font-mono break-words">{item.sku}</p>}
+                  <LineLabelStatus line={item} />
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className={cn('text-h4 font-mono', complete ? 'text-success-text' : 'text-primary')}>

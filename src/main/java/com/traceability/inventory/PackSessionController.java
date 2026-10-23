@@ -61,7 +61,7 @@ public class PackSessionController {
     public PackSessionService.ScanResponse scan(@PathVariable UUID id, @PathVariable UUID orderId,
                                                 @RequestBody CodeRequest req,
                                                 @AuthenticationPrincipal CustomUserDetails p) {
-        return svc.scan(id, orderId, req.code(), p.userId());
+        return svc.scan(id, orderId, req.code(), req.orderItemId(), p.userId());
     }
 
     /** Retry complete+link after complete_failed. */
@@ -97,6 +97,7 @@ public class PackSessionController {
         store.end(id, p.userId());
     }
 
-    public record CodeRequest(String code) {}
+    /** orderItemId: piece scans only, optional — the highlighted line (flexible labeling slice 4). */
+    public record CodeRequest(String code, UUID orderItemId) {}
     public record SetAsideRequest(String reason) {}
 }

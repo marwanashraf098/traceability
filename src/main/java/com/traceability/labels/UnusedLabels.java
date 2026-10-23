@@ -38,6 +38,14 @@ public final class UnusedLabels {
         return rows.stream().findFirst();
     }
 
+    /** Slice 4 (Pick &amp; Pack): a VOIDED label code — refused by name instead of "not found". */
+    public static boolean isVoided(JdbcTemplate jdbc, UUID tenantId, String normalizedCode) {
+        if (normalizedCode == null || normalizedCode.isBlank()) return false;
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM label_codes WHERE tenant_id = ? AND code = ? AND status = 'voided')",
+            Boolean.class, tenantId, normalizedCode));
+    }
+
     /** For the paths that answer with an exception body: 409 {code: LABEL_NOT_USED_YET, message_en, message_ar}. */
     public static ApiException notUsedYet() {
         return new NotUsedYet();
