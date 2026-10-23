@@ -102,6 +102,8 @@ class RlsCoverageTest {
             "/api/v1/generic-shipments/carriers",
             // Flexible labeling slice 1 — labelCodeBatchPdf_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/label-codes/batches/{id}/pdf",
+            // Receiving import (slice 2b) — receivingImport_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/receiving/import/template",
             // Non-Bosta couriers G4a — otherCouriersReturns_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/tenant/portal-settings/other-couriers",
             "/api/v1/fulfill/print-jobs/latest",
@@ -781,6 +783,76 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
+    }
+
+    @Test
+    void receivingImport_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Receiving import (slice 2b): the template lists the caller's variants only; preview and apply
+        // answer 404 for another tenant's session, and work on the caller's own (positive control).
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID(), otherProduct = UUID.randomUUID(),
+             otherVariant = UUID.randomUUID(), otherUser = UUID.randomUUID(), otherSession = UUID.randomUUID();
+        UUID mySession = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov RI Other')", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov RI', 'cov-ri-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-ri-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-CVG-RI-B', 'Other Tenant Gadget', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-CVG-RI-B', 'Default Title', 'CVG-RI-OTHER')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO receipts (id, tenant_id, reference, received_by, status) VALUES (?, ?, 'CVG-RI-B', ?, 'open')",
+                    otherSession, otherTenant, otherUser);
+        jdbc.update("INSERT INTO receipts (id, tenant_id, reference, received_by, location_id, status) " +
+                    "VALUES (?, ?, 'CVG-RI-A', ?, ?, 'open')", mySession, tenantId, ownerUserId, locationId);
+        byte[] csv = ("Handle,Title,Option1 Value,Option2 Value,Option3 Value,SKU,Location,On hand (current),On hand (new)\n" +
+                      ",Coverage Widget,Default,,,CVG-001,Main,0,2\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            ResponseEntity<byte[]> template = get("/api/v1/receiving/import/template?format=csv", byte[].class);
+            assertThat(template.getStatusCode()).isEqualTo(HttpStatus.OK);
+            String body = new String(template.getBody(), java.nio.charset.StandardCharsets.UTF_8);
+            assertThat(body).as("same-tenant positive control").contains("CVG-001");
+            assertThat(body).as("another tenant's variants never listed").doesNotContain("CVG-RI-OTHER");
+
+            ResponseEntity<Map> ownPreview = importPreview(mySession, csv);
+            assertThat(ownPreview.getStatusCode()).as("own session previews").isEqualTo(HttpStatus.OK);
+            assertThat((List<?>) ownPreview.getBody().get("matched")).hasSize(1);
+            assertThat(importPreview(otherSession, csv).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+
+            Map<String, Object> lines = Map.of("lines", List.of(Map.of("variantId", variantId.toString(), "quantity", 2)));
+            assertThat(importApply(mySession, lines).getStatusCode()).as("own session applies").isEqualTo(HttpStatus.OK);
+            assertThat(importApply(otherSession, lines).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM receipt_lines WHERE receipt_id = ?", Integer.class, otherSession))
+                .as("nothing written into another tenant's session").isZero();
+        } finally {
+            jdbc.update("DELETE FROM receipt_lines WHERE receipt_id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM receipts WHERE id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    private ResponseEntity<Map> importPreview(UUID session, byte[] file) {
+        org.springframework.util.LinkedMultiValueMap<String, Object> body = new org.springframework.util.LinkedMultiValueMap<>();
+        body.add("file", new org.springframework.core.io.ByteArrayResource(file) {
+            @Override public String getFilename() { return "import.csv"; }
+        });
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(ownerToken);
+        h.setContentType(MediaType.MULTIPART_FORM_DATA);
+        return rest.exchange(base() + "/api/v1/receiving/sessions/" + session + "/import/preview",
+            HttpMethod.POST, new HttpEntity<>(body, h), Map.class);
+    }
+
+    private ResponseEntity<Map> importApply(UUID session, Object body) {
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(ownerToken);
+        h.setContentType(MediaType.APPLICATION_JSON);
+        return rest.exchange(base() + "/api/v1/receiving/sessions/" + session + "/import/apply",
+            HttpMethod.POST, new HttpEntity<>(body, h), Map.class);
     }
 
     @Test

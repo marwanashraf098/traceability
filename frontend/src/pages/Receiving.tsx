@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
+import { ReceivingImportControls } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
 
 import { getAccessToken } from '../auth'
@@ -377,6 +378,9 @@ function SessionView({ session, onRefresh, onBack }: {
 
       {/* Open: the product-card selection grid IS the entry mechanism —
           replaces the old type-ahead search + flat lines table entirely. */}
+      {/* Import a Shopify inventory export into this session (both modes; the server gates count only). */}
+      {isOpen && <ReceivingImportControls sessionId={session.id} onApplied={onRefresh} />}
+
       {isOpen && (
         <ProductSelectionGrid
           sessionId={session.id}

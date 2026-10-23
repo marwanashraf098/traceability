@@ -96,7 +96,9 @@ class LabelCodesTest {
 
     UUID tenantA, ownerA, workerA, variantA, locationA;
     UUID tenantB, ownerB;
-    String ownerToken, workerToken;
+    /** Minted per request: a token lives 30 min, and a class can run longer than that inside the full suite. */
+    private String ownerToken()  { return jwt.issueAccessToken(ownerA, tenantA, "owner"); }
+    private String workerToken() { return jwt.issueAccessToken(workerA, tenantA, "worker"); }
 
     @BeforeAll
     void setup() {
@@ -120,8 +122,6 @@ class LabelCodesTest {
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default) " +
                     "VALUES (?, ?, 'LC Warehouse', 'warehouse', true)", locationA, tenantA);
 
-        ownerToken  = jwt.issueAccessToken(ownerA, tenantA, "owner");
-        workerToken = jwt.issueAccessToken(workerA, tenantA, "worker");
 
         DriverManagerDataSource raw = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw");
         TenantAwareDataSource ds = new TenantAwareDataSource(raw);
@@ -155,11 +155,11 @@ class LabelCodesTest {
         jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantA);
 
         assertThat(me().get("flexibleLabeling")).isEqualTo(false);
-        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-off"), ownerToken).getStatusCode())
+        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-off"), ownerToken()).getStatusCode())
             .isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(getPdf(b.id(), ownerToken).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(getPdf(b.id(), ownerToken()).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(post("/api/v1/label-codes/void",
-                Map.of("codeIds", List.of(b.codes().get(0).id()), "reason", "x"), ownerToken).getStatusCode())
+                Map.of("codeIds", List.of(b.codes().get(0).id()), "reason", "x"), ownerToken()).getStatusCode())
             .isEqualTo(HttpStatus.NOT_FOUND);
         assertThatThrownBy(() -> labels.resolve(b.codes().get(0).code()))
             .hasMessageContaining("404");
@@ -168,19 +168,19 @@ class LabelCodesTest {
 
         jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantA);
         assertThat(me().get("flexibleLabeling")).isEqualTo(true);
-        ResponseEntity<Map> on = post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-on"), ownerToken);
+        ResponseEntity<Map> on = post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-on"), ownerToken());
         assertThat(on.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((List<?>) on.getBody().get("codes")).hasSize(1);
     }
 
     @Test
     void f2_workers_are_refused() {
-        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f2"), workerToken).getStatusCode())
+        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f2"), workerToken()).getStatusCode())
             .isEqualTo(HttpStatus.FORBIDDEN);
         LabelCodeService.Batch b = labels.issue(ownerA, "pack", 1, 0, "f2-seed");
-        assertThat(getPdf(b.id(), workerToken).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(getPdf(b.id(), workerToken()).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(post("/api/v1/label-codes/void", Map.of("codeIds", List.of(b.codes().get(0).id()), "reason", "x"),
-            workerToken).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            workerToken()).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     // ── issue ─────────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ class LabelCodesTest {
             .satisfies(e -> assertThat(((LabelCodeException) e).code()).isEqualTo(LabelCodeException.Code.IDEMPOTENCY_KEY_REUSED));
 
         // Over HTTP, the same key answers the same batch.
-        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 4, 1, "i3-key"), ownerToken);
+        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 4, 1, "i3-key"), ownerToken());
         assertThat(http.getBody().get("id")).isEqualTo(first.id().toString());
         assertThat(http.getBody().get("created")).isEqualTo(false);
     }
@@ -269,7 +269,7 @@ class LabelCodesTest {
         assertCode(() -> labels.issue(ownerA, "pack", 1, 0, " "), LabelCodeException.Code.INVALID_IDEMPOTENCY_KEY);
         assertThat(labels.issue(ownerA, "factory", 1999, 1, "i5-max").codes()).hasSize(2000);
 
-        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 2001, 0, "i5-http"), ownerToken);
+        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 2001, 0, "i5-http"), ownerToken());
         assertThat(http.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(http.getBody()).containsEntry("code", "INVALID_COUNT").containsKeys("message_en", "message_ar");
     }
@@ -339,10 +339,10 @@ class LabelCodesTest {
             .as("another tenant's code is untouched").isEqualTo("issued");
         TenantContext.set(tenantA);
 
-        ResponseEntity<Map> http = post("/api/v1/label-codes/void", Map.of("codeIds", List.of(c2, c3), "reason", "spare"), ownerToken);
+        ResponseEntity<Map> http = post("/api/v1/label-codes/void", Map.of("codeIds", List.of(c2, c3), "reason", "spare"), ownerToken());
         assertThat(http.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(http.getBody()).containsEntry("voided", 2);
-        ResponseEntity<Map> again = post("/api/v1/label-codes/void", Map.of("codeIds", List.of(c3), "reason", "spare"), ownerToken);
+        ResponseEntity<Map> again = post("/api/v1/label-codes/void", Map.of("codeIds", List.of(c3), "reason", "spare"), ownerToken());
         assertThat(again.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(again.getBody()).containsEntry("code", "VOID_REFUSED");
     }
@@ -415,7 +415,7 @@ class LabelCodesTest {
     @Test
     void p1_pdf_prints_still_issued_codes_at_the_batch_size() throws Exception {
         LabelCodeService.Batch b = labels.issue(ownerA, "pack", 3, 0, "p1");
-        ResponseEntity<byte[]> pdf = getPdf(b.id(), ownerToken);
+        ResponseEntity<byte[]> pdf = getPdf(b.id(), ownerToken());
         assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
         assertPages(pdf.getBody(), 50f, 25f, b.codes().stream().map(LabelCodeService.IssuedCode::code).toList());
@@ -430,7 +430,7 @@ class LabelCodesTest {
 
         labels.voidCodes(List.of(b.codes().get(0).id(), b.codes().get(2).id()), "done");
         ResponseEntity<Map> none = rest.exchange(base() + "/api/v1/label-codes/batches/" + b.id() + "/pdf",
-            HttpMethod.GET, new HttpEntity<>(auth(ownerToken)), Map.class);
+            HttpMethod.GET, new HttpEntity<>(auth(ownerToken())), Map.class);
         assertThat(none.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(none.getBody()).containsEntry("code", "NO_ISSUED_CODES");
 
@@ -438,7 +438,7 @@ class LabelCodesTest {
         UUID theirs = labels.issue(ownerB, "pack", 1, 0, "p1-b").id();
         TenantContext.set(tenantA);
         ResponseEntity<Map> foreign = rest.exchange(base() + "/api/v1/label-codes/batches/" + theirs + "/pdf",
-            HttpMethod.GET, new HttpEntity<>(auth(ownerToken)), Map.class);
+            HttpMethod.GET, new HttpEntity<>(auth(ownerToken())), Map.class);
         assertThat(foreign.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(foreign.getBody()).containsEntry("code", "BATCH_NOT_FOUND");
     }
@@ -549,7 +549,7 @@ class LabelCodesTest {
     }
 
     private Map<String, Object> me() {
-        return rest.exchange(base() + "/api/v1/me", HttpMethod.GET, new HttpEntity<>(auth(ownerToken)), Map.class).getBody();
+        return rest.exchange(base() + "/api/v1/me", HttpMethod.GET, new HttpEntity<>(auth(ownerToken())), Map.class).getBody();
     }
 
     private ResponseEntity<Map> post(String path, Object body, String token) {

@@ -90,7 +90,6 @@ class CountOnlyUntaggedTest {
     @MockBean  ShopifyInventoryService shopifyInventory;
 
     UUID tenant, owner, variantA, variantB, main, side, otherTenant, otherOwner, otherMain, otherVariant;
-    String ownerToken;
 
     @BeforeAll
     void setup() {
@@ -100,7 +99,6 @@ class CountOnlyUntaggedTest {
         otherTenant = UUID.randomUUID(); otherOwner = UUID.randomUUID(); otherMain = UUID.randomUUID(); otherVariant = UUID.randomUUID();
         seedTenant(tenant, owner, main, side, "CO", variantA, variantB);
         seedTenant(otherTenant, otherOwner, otherMain, UUID.randomUUID(), "CX", otherVariant, UUID.randomUUID());
-        ownerToken = jwt.issueAccessToken(owner, tenant, "owner");
     }
 
     private void seedTenant(UUID t, UUID user, UUID mainLoc, UUID sideLoc, String p, UUID v1, UUID v2) {
@@ -456,7 +454,7 @@ class CountOnlyUntaggedTest {
 
     private HttpHeaders auth() {
         HttpHeaders h = new HttpHeaders();
-        h.setBearerAuth(ownerToken);
+        h.setBearerAuth(jwt.issueAccessToken(owner, tenant, "owner"));   // fresh: a token lives 30 min, a class can run longer in the full suite
         h.setContentType(MediaType.APPLICATION_JSON);
         return h;
     }
