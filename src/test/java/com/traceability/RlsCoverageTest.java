@@ -104,6 +104,9 @@ class RlsCoverageTest {
             "/api/v1/label-codes/batches/{id}/pdf",
             // Receiving import (slice 2b) — receivingImport_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/receiving/import/template",
+            // Flexible labeling slice 3 — tagStock_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/tag-stock",
+            "/api/v1/tag-stock/sessions/{id}",
             // Non-Bosta couriers G4a — otherCouriersReturns_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/tenant/portal-settings/other-couriers",
             "/api/v1/fulfill/print-jobs/latest",
@@ -753,22 +756,24 @@ class RlsCoverageTest {
 
     @Test
     void labelCodeBatchPdf_crossTenantIsolated_withSameTenantPositiveControl() {
-        // Flexible labeling slice 1: a blank-label batch PDF is the caller's own batch only.
+        // Flexible labeling slice 1 (named since slice 3): a label-code batch PDF is the caller's own batch only.
         UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov LC Other', true)", otherTenant);
         jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
                     "VALUES (?, ?, 'Cov LC Other', 'cov-lc-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
         jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        // Fixture rows in the V181 shape (named codes: variant_id required; no blank-label size columns). The other
+        // tenant's code borrows this tenant's variant id only to satisfy the FK — its batch is refused before any read.
         UUID mine = jdbc.queryForObject(
-            "INSERT INTO label_code_batches (tenant_id, kind, count, label_w_mm, label_h_mm, idempotency_key, created_by) " +
-            "VALUES (?, 'pack', 1, 50, 25, 'cov-lc-a', ?) RETURNING id", UUID.class, tenantId, ownerUserId);
-        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P990001', 'pack', ?, ?)",
-                    tenantId, mine, ownerUserId);
+            "INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by) " +
+            "VALUES (?, 'pack', 1, 'cov-lc-a', ?) RETURNING id", UUID.class, tenantId, ownerUserId);
+        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id) VALUES (?, 'P990001', 'pack', ?, ?, ?)",
+                    tenantId, mine, ownerUserId, variantId);
         UUID theirs = jdbc.queryForObject(
-            "INSERT INTO label_code_batches (tenant_id, kind, count, label_w_mm, label_h_mm, idempotency_key, created_by) " +
-            "VALUES (?, 'pack', 1, 50, 25, 'cov-lc-b', ?) RETURNING id", UUID.class, otherTenant, otherUser);
-        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P990002', 'pack', ?, ?)",
-                    otherTenant, theirs, otherUser);
+            "INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by) " +
+            "VALUES (?, 'pack', 1, 'cov-lc-b', ?) RETURNING id", UUID.class, otherTenant, otherUser);
+        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id) VALUES (?, 'P990002', 'pack', ?, ?, ?)",
+                    otherTenant, theirs, otherUser, variantId);
         try {
             ResponseEntity<byte[]> own = get("/api/v1/label-codes/batches/" + mine + "/pdf", byte[].class);
             assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
@@ -781,6 +786,55 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM label_code_batches WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void tagStock_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 3: Tag stock lists the caller's untagged stock only; another tenant's session is 404.
+        UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherSession = UUID.randomUUID();
+        UUID otherStore = UUID.randomUUID(), otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov TS Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov TS', 'cov-ts-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                    "VALUES (?, ?, 'Cov TS Main', 'warehouse', true, true)", otherLoc, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-ts-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-CVG-TS-B', 'Other Tenant Hoodie', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-CVG-TS-B', 'Default Title', 'CVG-TS-OTHER')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES ('01CVGTSOTHERPIECE000000001', ?, ?, 'PC-01CVGTSOTHERPIECE000000001', NULL, 'available', ?)",
+                    otherTenant, otherVariant, otherLoc);
+        jdbc.update("INSERT INTO tag_sessions (id, tenant_id, location_id, started_by) VALUES (?, ?, ?, ?)",
+                    otherSession, otherTenant, otherLoc, otherUser);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES ('01CVGTSMINEPIECE0000000001', ?, ?, 'PC-01CVGTSMINEPIECE0000000001', NULL, 'available', ?)",
+                    tenantId, variantId, locationId);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        UUID mySession = UUID.randomUUID();
+        jdbc.update("INSERT INTO tag_sessions (id, tenant_id, location_id, started_by) VALUES (?, ?, ?, ?)",
+                    mySession, tenantId, locationId, ownerUserId);
+        try {
+            ResponseEntity<String> list = get("/api/v1/tag-stock", String.class);
+            assertThat(list.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(list.getBody()).as("same-tenant positive control").contains("Coverage Widget");
+            assertThat(list.getBody()).as("another tenant's stock never listed").doesNotContain("Other Tenant Hoodie");
+            assertThat(get("/api/v1/tag-stock/sessions/" + mySession, String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(get("/api/v1/tag-stock/sessions/" + otherSession, String.class).getStatusCode())
+                .as("another tenant's session").isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM tag_sessions WHERE id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM pieces WHERE id IN ('01CVGTSOTHERPIECE000000001', '01CVGTSMINEPIECE0000000001')");
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

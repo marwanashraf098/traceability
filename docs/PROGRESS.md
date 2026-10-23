@@ -58,6 +58,54 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slice 3: named label codes + Tag stock (2026-10-23, branch `feat/flexible-labeling-s3` off
+origin/main b7f6080; NOT merged, NOT deployed). Migration V181. Behind `flexible_labeling_enabled` (off for every real
+tenant). Prod checked first (read-only, 2026-10-23): label_codes 0 rows, label_code_batches 0 rows; prod Flyway at V179.**
+- **V181:** label_codes `variant_id NOT NULL` (FK variants), `order_id` / `order_item_id` NULL (packing grouping, slice 4;
+  CHECK item ⇒ order), partial index (tenant, variant) WHERE issued; label_code_batches DROP spares / label_w_mm /
+  label_h_mm, count CHECK 1..2,000 (replaces V176's auto-named `label_code_batches_count_check`), `tag_session_id` composite
+  FK; `tag_sessions` (main warehouse, started / ended by) RLS NULLIF + FORCE, app_user UPDATE only ended_at / ended_by,
+  no DELETE.
+- **Blank labels gone:** BlankLabelLayout + LabelPdfRenderer.renderBlank deleted. `LabelCodeService.issue(kind,
+  lines[{variantId, count, orderId?, orderItemId?}], key[, tagSessionId])` — every code tied to its line's variant;
+  variants must be the tenant's (UNKNOWN_VARIANT), an order line must be the tenant's, of that order and that variant
+  (INVALID_ORDER_REF); cap 2,000 in all; same key → same batch only for the same kind + per-variant / order-line counts.
+  `batchPdf` = the NORMAL named piece label (LabelPdfRenderer.render, PieceLabelLayout, 50×25 like LabelService).
+- **`InventoryLedger.bindLabel(codeId, actor, BindRef, rawScan)`** — the 5th piece_events writer: code row FOR UPDATE;
+  voided → CODE_VOIDED, unknown / another tenant's → UNKNOWN_CODE, already bound → `alreadyBound` (nothing written);
+  else ONE untagged available piece of THE CODE'S variant at the main warehouse (`ORDER BY created_at, id LIMIT 1 FOR
+  UPDATE SKIP LOCKED`, none → NO_UNTAGGED_STOCK), conditional UPDATEs on pieces (short_code = code) and label_codes
+  (issued → bound), `label_bound` event (status unchanged, metadata label_code_id / code / tag_session_id /
+  pack_session_id / via_phone). No Shopify call. `noRollbackFor = LabelCodeException` — every refusal happens before a
+  write, so a scan loop's transaction can catch it. Lookup timeline phrase `label_bound`.
+- **"Label not used yet — tag it in Tag stock first"** (`labels.UnusedLabels`, ISSUED codes only; voided stays "not
+  found"): pick scan (ScanResult LABEL_NOT_USED_YET), transfer scan-out / return-scan-out / scan-back (EN + AR), returns
+  scan and stock-take scan (409 ApiException), Lookup → `{type: "label_code", code, status: "issued", variant, …}`.
+  Stock-take scan screen now shows a refused scan's server message on its scan line (`ServerMessageError`,
+  `scanStockTakePiece` reads the body) — slice 2's PIECE_UNTAGGED was a bare red flash there before.
+- **Tag stock** (`labels.TagStockService` / `TagStockController` `/api/v1/tag-stock`, owner + manager, flag-gated 404):
+  overview (main warehouse labeled / untagged totals; variants with untagged pieces, most first, search ≤ 200), start
+  (resumes the caller's open session), print (N ≤ the variant's untagged, TOO_MANY_LABELS), replacement (1, kind
+  replacement), scan (TAGGED / ALREADY_TAGGED — any piece label — / REJECTED:<code> with EN + AR; `via phone` only
+  through PhoneScanSource), session summary (per variant printed / tagged / unused + live counts), end, void unused (this
+  session's still-issued codes, reason `tag_session_unused`).
+- **Screens (DS v1.0, EN + AR):** `/tag-stock` list in the shell (MiniStats, search, variant rows, N field capped,
+  "Print N labels" → PDF → scan loop), `/tag-stock/:id/scan` full-screen (shared useScanner + paired phone, ScanShell
+  untouched, tagged counter, current variant's untagged left / labeled, last scan line + via-phone tag, "Change product",
+  plain "Print 1 replacement label", End session → confirm), `/tag-stock/:id/summary` in the shell (table + "Void unused
+  labels"). Sidebar "Tag stock" only with the `flexibleLabeling` capability. Lookup "Label not used yet" card.
+- **Tests:** TagStockTest 11 (b1–b6, b4b held-lock, s1, t1, f1, x1 app_user); revert-checked: main-warehouse filter,
+  variant filter, pick-scan message, print cap, flag gate, and b4b both ways (no SKIP LOCKED → B waits for A; no lock +
+  unconditional UPDATE). Finding: removing SKIP LOCKED alone keeps the OUTCOME correct (FOR UPDATE re-checks and moves on
+  at READ COMMITTED; the label_codes.piece_id unique index backs it) — SKIP LOCKED is the no-wait property, which b4b
+  pins. LabelCodesTest rewritten to the named API (approved) + p2: a code label's PDF has exactly the piece label's
+  fingerprint (PieceLabelGoldenTest.fingerprint, now public). Frontend tagStock 5 (tg4 / tg5 revert-checked). Registry
+  (standing approval): MigrationSmokeTest 180 + tag_sessions, NotTracedBackfillTest 125, PortalOrderLeakTest 8 SKIP
+  (tag-stock), RlsCoverageTest COVERED `/api/v1/tag-stock` + `/api/v1/tag-stock/sessions/{id}` with a cross-tenant test
+  (positive control); its slice-1 `labelCodeBatchPdf` fixture INSERTs moved to the V181 shape (no assertion changed).
+- **Verification 2026-10-23:** full backend suite 3294 run, red only ExchangeBackfillTest (baseline); the three
+  timing-sensitive classes passed in this run. Frontend 150 / 1113 green; tsc + vite build clean.
+
 **Flexible labeling — PLAN CHANGE (Marawan, 2026-10-21, after slice 2).** (1) No blank labels anywhere: every label
 code is unique AND tied to a variant, printed as a normal NAMED piece label (PieceLabelLayout exactly as today);
 BlankLabelLayout goes in slice 3 unless something still needs it. (2) Order seal DROPPED entirely (no seal tables, no
@@ -76,7 +124,7 @@ entries in RlsCoverageTest / PortalOrderLeakTest / MigrationSmokeTest / NotTrace
 them); changing an EXISTING assertion still needs approval.
 
 **Receiving import (flexible labeling slice 2b) — Shopify inventory export → a receiving session's lines (2026-10-21,
-branch `feat/receiving-import` off origin/main b9ca5c2; NOT merged, NOT deployed). No migration.** Print & stick for
+branch `feat/receiving-import` off origin/main b9ca5c2; MERGED to main b7f6080 2026-10-23, NOT deployed). No migration.** Print & stick for
 EVERY tenant (no flag); a count-only session only with the flag (COUNT_ONLY_NOT_AVAILABLE). Owner / manager.
 - **Endpoints** (`receiving.ReceivingImportController`): `POST /api/v1/receiving/sessions/{id}/import/preview`
   (multipart `file`; writes NOTHING), `POST …/import/apply` ({lines: [{variantId, quantity}]}), `GET
@@ -106,8 +154,11 @@ EVERY tenant (no flag); a count-only session only with the flag (COUNT_ONLY_NOT_
   Handle / option names from the stored product (empty when Traced has none — the title rule still matches it);
   values from option1..3 else the variant title split " / "; Location = main warehouse name; On hand (current) =
   available pieces at the main warehouse; On hand (new) empty. .xlsx (fastexcel) or CSV with a UTF-8 BOM.
-- **pom:** + org.dhatim:fastexcel / fastexcel-reader 0.18.4, + commons-io 2.16.1 pinned (commons-compress needs it;
-  the test-scoped docker-java-core otherwise won with 2.13.0 → NoSuchMethodError on the test classpath).
+- **pom:** + org.dhatim:fastexcel / fastexcel-reader 0.18.4, + commons-io 2.16.1 pinned. **Correction (2026-10-23):**
+  the pin is NOT test-only — it fixes PRODUCTION too. `mvn dependency:list -DincludeScope=runtime`: before 2b no
+  commons-io at runtime; 2b WITHOUT the pin → commons-io 2.13.0 on the runtime classpath (Maven nearest-wins takes
+  docker-java-core's 2.13.0 and promotes it to compile) → commons-compress NoSuchMethodError reading any .xlsx in
+  prod; WITH the pin → 2.16.1. Nothing else in the runtime classpath uses commons-io.
 - **UI** (`pages/receiving/ReceivingImport.tsx`, DS v1.0, EN + AR): "Import from file" + "Download template" (+ CSV)
   above the grid of an open session (both modes); the import is a full-width card (the shared Modal is max-w-md): the
   Shopify double-import warning, file picker (5 MB checked before upload), preview (thumb, product · variant, SKU,
@@ -120,6 +171,10 @@ EVERY tenant (no flag); a count-only session only with the flag (COUNT_ONLY_NOT_
   Frontend receivingImport 4. Registry entries (standing approval): RlsCoverageTest COVERED
   `/api/v1/receiving/import/template` + `receivingImport_crossTenantIsolated_withSameTenantPositiveControl` (template,
   preview, apply — another tenant's session 404, own works); PortalOrderLeakTest 3 SKIP.
+- **Follow-ups, NOT this work (Marawan 2026-10-23):** (a) backfill product handle + variant option values from Shopify
+  for catalog-imported products (the GraphQL catalog import stores neither — only 24% of prod products have a
+  handle); (b) find why one test class takes ~87 min wall-clock inside the full suite (CountOnlyUntaggedTest: 5,205 s
+  in the 2026-10-22 run vs ~52 s alone).
 - **Verification 2026-10-22:** full backend suite 3260 run: red ExchangeBackfillTest (baseline) + 4 that all pass
   alone (62/62 on rerun): AnalyticsB1Test.payoutLag, PieceShopifySyncC2Test.a1, ReturnRestockSyncTest.rs7 (async /
   timing) and CountOnlyUntaggedTest.r3 — a 401: the class took 5,205 s wall-clock inside the suite and its token,

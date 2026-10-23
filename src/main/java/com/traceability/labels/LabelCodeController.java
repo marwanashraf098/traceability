@@ -14,18 +14,19 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Flexible labeling slice 1 — blank label codes. Owner + manager for now (slices 3 / 4 decide
+ * Flexible labeling — named label codes (slice 1, named since slice 3). Owner + manager for now (slices 3 / 4 decide
  * worker access per screen). 404 unless the tenant has flexible labeling (LabelCodeService).
  *
- *   POST /api/v1/label-codes/batches          {kind, count, spares, idempotencyKey} → the batch + its codes
- *   GET  /api/v1/label-codes/batches/{id}/pdf the batch's still-issued codes as blank labels
+ *   POST /api/v1/label-codes/batches          {kind, lines: [{variantId, count, orderId?, orderItemId?}], idempotencyKey}
+ *                                             → the batch + its codes (each tied to its variant)
+ *   GET  /api/v1/label-codes/batches/{id}/pdf the batch's still-issued codes as named piece labels
  *   POST /api/v1/label-codes/void             {codeIds, reason} → {voided}
  */
 @RestController
 @RequestMapping("/api/v1/label-codes")
 public class LabelCodeController {
 
-    public record IssueRequest(String kind, Integer count, Integer spares, String idempotencyKey) {}
+    public record IssueRequest(String kind, List<LabelCodeService.Line> lines, String idempotencyKey) {}
     public record VoidRequest(List<UUID> codeIds, String reason) {}
 
     private final LabelCodeService service;
@@ -38,8 +39,7 @@ public class LabelCodeController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public LabelCodeService.Batch issue(@RequestBody IssueRequest req,
                                         @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.issue(principal.userId(), req.kind(),
-            req.count() == null ? 0 : req.count(), req.spares() == null ? 0 : req.spares(), req.idempotencyKey());
+        return service.issue(principal.userId(), req.kind(), req.lines(), req.idempotencyKey());
     }
 
     @GetMapping("/batches/{id}/pdf")

@@ -488,6 +488,10 @@ public class FulfillService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
+            // Flexible labeling: a printed label nobody has tagged a piece with yet (slice 4 binds here).
+            if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
+                return ScanResult.rejected(com.traceability.labels.UnusedLabels.CODE, com.traceability.labels.UnusedLabels.MESSAGE_EN);
+            }
             return ScanResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
         }
         // Flexible labeling: an untagged piece has no printed code — matched here only through its

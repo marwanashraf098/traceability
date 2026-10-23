@@ -599,7 +599,17 @@ export interface OrderLookupResult {
   orderNumber: string | null
 }
 
-export type LookupResult = PieceLookupResult | TrackingLookupResult | OrderLookupResult
+/** Flexible labeling: a printed label code no piece carries yet (issued, not tagged in Tag stock / packing). */
+export interface LabelCodeLookupResult {
+  type: 'label_code'
+  code: string
+  status: 'issued'
+  variant: LookupVariant
+  messageEn: string
+  messageAr: string
+}
+
+export type LookupResult = PieceLookupResult | TrackingLookupResult | OrderLookupResult | LabelCodeLookupResult
 
 export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
@@ -1706,11 +1716,26 @@ export type ScanDevice = 'hardware' | 'phone'
 const withRelay = <T extends object>(body: T, relayEventId?: string) =>
   JSON.stringify(relayEventId ? { ...body, relayEventId } : body)
 
-export function scanStockTakePiece(sessionId: string, barcode: string, condition: StockTakeCondition, relayEventId?: string) {
-  return request<StockTakeScanResult>(`/stock-takes/sessions/${sessionId}/scan`, {
+/** A refused request whose body carried {code, message_en, message_ar} — shown as-is, never the raw status. */
+export class ServerMessageError extends Error {
+  constructor(public status: number, public code: string | undefined, public messageEn: string, public messageAr?: string) {
+    super(messageEn)
+  }
+  messageFor(lang: string) { return (lang.startsWith('ar') ? this.messageAr : undefined) || this.messageEn }
+}
+
+/** A refused stock-take scan (e.g. an untagged piece, a label not used yet) throws ServerMessageError. */
+export async function scanStockTakePiece(sessionId: string, barcode: string, condition: StockTakeCondition, relayEventId?: string) {
+  const res = await authFetch(`/stock-takes/sessions/${sessionId}/scan`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: withRelay({ barcode, condition }, relayEventId),
   })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  return await res.json() as StockTakeScanResult
 }
 
 /** Idempotent: unscanning a piece that was never scanned is a 204 no-op, not an error. */
@@ -3625,4 +3650,75 @@ export function markGenericDelivered(orderIds: string[]) {
   return request<MarkDeliveredResult[]>('/generic-shipments/mark-delivered', {
     method: 'POST', body: JSON.stringify({ orderIds }),
   })
+}
+
+// ── Flexible labeling: Tag stock (slice 3) ───────────────────────────────────
+
+export interface TagVariantStock {
+  variantId: string; productTitle: string; variantTitle: string; sku: string | null; imageUrl: string | null
+  untagged: number; labeled: number; unusedLabels: number
+}
+export interface TagStockOverview { labeled: number; untagged: number; variants: TagVariantStock[] }
+export interface TagSessionVariant {
+  variantId: string; productTitle: string; variantTitle: string; sku: string | null; imageUrl: string | null
+  printed: number; tagged: number; unused: number; untaggedLeft: number; labeled: number
+}
+export interface TagSession { id: string; startedAt: string; endedAt: string | null; tagged: number; variants: TagSessionVariant[] }
+export interface LabelCodeBatch { id: string; kind: string; count: number; created: boolean; codes: { id: string; code: string; variantId: string }[] }
+/** outcome: TAGGED | ALREADY_TAGGED | REJECTED:<code> */
+export interface TagScanOutcome {
+  outcome: string; code: string; messageEn: string | null; messageAr: string | null
+  variant: TagVariantStock | null; taggedThisSession: number; viaPhone: boolean
+}
+
+/** Like request(), but a refusal throws ServerMessageError with the server's {message_en, message_ar}. */
+async function requestReadable<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const res = await authFetch(path, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers as Record<string, string>) } })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  return await res.json() as T
+}
+
+export function getTagStock(q?: string) {
+  return requestReadable<TagStockOverview>(`/tag-stock${q ? `?q=${encodeURIComponent(q)}` : ''}`)
+}
+export function startTagSession() {
+  return requestReadable<TagSession>('/tag-stock/sessions', { method: 'POST' })
+}
+export function getTagSession(id: string) {
+  return requestReadable<TagSession>(`/tag-stock/sessions/${id}`)
+}
+export function printTagLabels(sessionId: string, variantId: string, count: number, idempotencyKey: string) {
+  return requestReadable<LabelCodeBatch>(`/tag-stock/sessions/${sessionId}/print`, {
+    method: 'POST', body: JSON.stringify({ variantId, count, idempotencyKey }),
+  })
+}
+export function printTagReplacement(sessionId: string, variantId: string, idempotencyKey: string) {
+  return requestReadable<LabelCodeBatch>(`/tag-stock/sessions/${sessionId}/replacement`, {
+    method: 'POST', body: JSON.stringify({ variantId, idempotencyKey }),
+  })
+}
+export function scanTagLabel(sessionId: string, code: string, relayEventId?: string) {
+  return requestReadable<TagScanOutcome>(`/tag-stock/sessions/${sessionId}/scan`, {
+    method: 'POST', body: withRelay({ code }, relayEventId),
+  })
+}
+export function endTagSession(id: string) {
+  return requestReadable<TagSession>(`/tag-stock/sessions/${id}/end`, { method: 'POST' })
+}
+export function voidUnusedTagLabels(id: string, variantId?: string) {
+  return requestReadable<{ voided: number }>(`/tag-stock/sessions/${id}/void-unused`, {
+    method: 'POST', body: JSON.stringify(variantId ? { variantId } : {}),
+  })
+}
+/** The batch's still-issued codes as named piece labels — opened in a new tab to print. */
+export async function openLabelBatchPdf(batchId: string) {
+  const res = await authFetch(`/label-codes/batches/${batchId}/pdf`)
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  window.open(URL.createObjectURL(await res.blob()), '_blank')
 }

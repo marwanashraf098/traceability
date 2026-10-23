@@ -209,6 +209,12 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/preview", skip("receiving import: variants and receipt lines only, no order data"));
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/apply",   skip("receiving import: variants and receipt lines only, no order data"));
         reg("GET /api/v1/receiving/import/template",                     skip("receiving import: variants and receipt lines only, no order data"));
+        for (String k : List.of("GET /api/v1/tag-stock", "POST /api/v1/tag-stock/sessions", "GET /api/v1/tag-stock/sessions/{id}",
+                "POST /api/v1/tag-stock/sessions/{id}/print", "POST /api/v1/tag-stock/sessions/{id}/replacement",
+                "POST /api/v1/tag-stock/sessions/{id}/scan", "POST /api/v1/tag-stock/sessions/{id}/end",
+                "POST /api/v1/tag-stock/sessions/{id}/void-unused")) {
+            reg(k, skip("Tag stock: variants, untagged pieces and label codes at the main warehouse; no order data"));
+        }
         reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
                                                               + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
         reg("GET /api/v1/fulfill/print-jobs/latest",     list());
