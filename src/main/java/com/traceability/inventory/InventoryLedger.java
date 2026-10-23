@@ -409,6 +409,90 @@ public class InventoryLedger {
                 statusDb, statusDb, null, null);
     }
 
+    // ---- bindLabel -----------------------------------------------------------
+
+    /**
+     * Where a bind happened, for the label_bound event's metadata: a Tag stock session (slice 3) or a
+     * pack scan (slice 4), and whether the scan came from the paired phone.
+     */
+    public record BindRef(UUID tagSessionId, UUID packSessionId, UUID orderId, boolean viaPhone) {
+        public static BindRef tagSession(UUID id, boolean viaPhone) { return new BindRef(id, null, null, viaPhone); }
+    }
+
+    /** {@code alreadyBound}: the code was bound before this call (no new event, nothing changed). */
+    public record BindResult(boolean alreadyBound, String pieceId, UUID variantId, String code) {}
+
+    /**
+     * Flexible labeling slice 3 — binds an ISSUED label code to ONE untagged available piece of THE CODE'S
+     * variant at the main warehouse (oldest first by created_at, id; FOR UPDATE SKIP LOCKED, so two binds
+     * never take the same piece), sets pieces.short_code to the code, marks the code bound and appends a
+     * {@code label_bound} piece event (status unchanged — tagging moves no stock and never calls Shopify).
+     * The fifth piece_events writer here; pieces / piece_events stay ledger-only.
+     *
+     * Errors: UNKNOWN_CODE (no such code for this tenant), CODE_VOIDED, NO_UNTAGGED_STOCK (no untagged available
+     * piece of the variant at the main warehouse), NO_MAIN_WAREHOUSE. A code already bound → {@code alreadyBound}
+     * with its piece, nothing written. Caller contract: TenantContext set, flag checked by the caller.
+     */
+    // noRollbackFor: every refusal (UNKNOWN_CODE, CODE_VOIDED, NO_MAIN_WAREHOUSE, NO_UNTAGGED_STOCK) is thrown
+    // before anything is written, so a caller's transaction (a scan loop) may catch it and carry on.
+    @Transactional(isolation = Isolation.READ_COMMITTED, noRollbackFor = com.traceability.labels.LabelCodeException.class)
+    public BindResult bindLabel(UUID codeId, UUID actorUserId, BindRef ref, String rawScan) {
+        java.util.Map<String, Object> code = jdbc.query(
+            "SELECT id, code, status, piece_id, variant_id FROM label_codes " +
+            "WHERE id = ? AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid FOR UPDATE",
+            rs -> {
+                if (!rs.next()) return null;
+                java.util.Map<String, Object> m = new java.util.HashMap<>();
+                m.put("code", rs.getString("code"));
+                m.put("status", rs.getString("status"));
+                m.put("piece_id", rs.getString("piece_id"));
+                m.put("variant_id", rs.getObject("variant_id", UUID.class));
+                return m;
+            },
+            codeId);
+        if (code == null) throw com.traceability.labels.LabelCodeException.unknownCode();
+        String codeText = (String) code.get("code");
+        UUID variantId = (UUID) code.get("variant_id");
+        if ("voided".equals(code.get("status"))) throw com.traceability.labels.LabelCodeException.codeVoided();
+        if ("bound".equals(code.get("status"))) return new BindResult(true, (String) code.get("piece_id"), variantId, codeText);
+
+        List<UUID> main = jdbc.queryForList(
+            "SELECT id FROM locations WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
+            "AND is_fulfillment", UUID.class);
+        if (main.isEmpty()) throw com.traceability.labels.LabelCodeException.noMainWarehouse();
+        UUID mainId = main.get(0);
+
+        List<String> piece = jdbc.queryForList(
+            "SELECT id FROM pieces WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
+            "  AND variant_id = ? AND current_location_id = ? AND short_code IS NULL AND status = 'available' " +
+            "ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED",
+            String.class, variantId, mainId);
+        if (piece.isEmpty()) throw com.traceability.labels.LabelCodeException.noUntaggedStock();
+        String pieceId = piece.get(0);
+
+        int tagged = jdbc.update(
+            "UPDATE pieces SET short_code = ?, last_event_at = now(), last_user_id = ? " +
+            "WHERE id = ? AND short_code IS NULL AND status = 'available'",
+            codeText, actorUserId, pieceId);
+        int bound = jdbc.update(
+            "UPDATE label_codes SET status = 'bound', piece_id = ?, bound_by = ?, bound_at = now() " +
+            "WHERE id = ? AND status = 'issued'",
+            pieceId, actorUserId, codeId);
+        if (tagged != 1 || bound != 1) throw new IllegalStateException("bindLabel lost its claim on " + codeText);
+
+        StringBuilder meta = new StringBuilder("{\"label_code_id\":\"").append(codeId).append("\",\"code\":\"")
+            .append(codeText).append('"');
+        if (ref != null && ref.tagSessionId() != null)  meta.append(",\"tag_session_id\":\"").append(ref.tagSessionId()).append('"');
+        if (ref != null && ref.packSessionId() != null) meta.append(",\"pack_session_id\":\"").append(ref.packSessionId()).append('"');
+        if (ref != null && ref.viaPhone()) meta.append(",\"via_phone\":true");
+        meta.append('}');
+        jdbc.update(INSERT_EVENT,
+                pieceId, "label_bound", actorUserId,
+                ref == null ? null : ref.orderId(), null, mainId,
+                "available", "available", meta.toString(), rawScan);
+        return new BindResult(false, pieceId, variantId, codeText);
+    }
+
     /** Specification for one piece to be created via batchReceive. */
     public record ReceiveSpec(
             String pieceId,

@@ -211,6 +211,10 @@ public class ReturnSessionService {
             if (returnLeg != null) return scanGenericReturnLeg(sessionId, tenantId, returnLeg, viaPhone);
         }
 
+        // Flexible labeling: a printed label nobody has tagged a piece with yet.
+        if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, ScanInputNormalizer.normalizePiece(cleaned)).isPresent()) {
+            throw com.traceability.labels.UnusedLabels.notUsedYet();
+        }
         // Foreign scan: nothing of ours matched. No row written, ledger untouched.
         log.warn("Foreign return scan: raw={} session={} tenant={}", rawScan, sessionId, tenantId);
         throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,

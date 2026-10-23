@@ -39,6 +39,8 @@ public class LookupService {
         if ("sold_offbook".equals(eventType))            return "sold_offbook";
         if ("lost_at_vendor".equals(eventType))          return "lost_at_vendor";
         if ("label_reprinted".equals(eventType))         return "label_reprinted";
+        // Flexible labeling slice 3 — a label code bound to an untagged piece (Tag stock / packing).
+        if ("label_bound".equals(eventType))             return "label_bound";
         // FR-22.10 (B1) — backfilled here: relocated_out was left unmapped and fell through
         // to the generic "status_changed" label; B2's return leg needs the same treatment
         // for consistency, so both are added together.
@@ -100,6 +102,10 @@ public class LookupService {
                 "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
                 lookup, lookup, lookup, tenantId);
         } catch (EmptyResultDataAccessException e) {
+            // Flexible labeling: no piece carries this code, but it is a printed label nobody has tagged a piece
+            // with yet — show what it was printed for instead of "not found".
+            var unused = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup);
+            if (unused.isPresent()) return unusedLabelResult(unused.get());
             throw new LookupNotFoundException("PIECE_NOT_FOUND", barcode);
         }
 
@@ -208,6 +214,26 @@ public class LookupService {
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
             result.put("variantStock", UntaggedPieces.availableCounts(jdbc, tenantId, (UUID) piece.get("variant_id")));
         }
+        return result;
+    }
+
+    /**
+     * {type: "label_code", code, status: "issued", variant{id, title, sku, productTitle}, messageEn, messageAr} —
+     * an issued label code (no piece yet). Lookup shows it with "tag it in Tag stock first".
+     */
+    private static Map<String, Object> unusedLabelResult(com.traceability.labels.UnusedLabels.Unused u) {
+        Map<String, Object> variant = new LinkedHashMap<>();
+        variant.put("id", u.variantId());
+        variant.put("title", u.variantTitle());
+        variant.put("sku", u.sku());
+        variant.put("productTitle", u.productTitle());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type", "label_code");
+        result.put("code", u.code());
+        result.put("status", "issued");
+        result.put("variant", variant);
+        result.put("messageEn", com.traceability.labels.UnusedLabels.MESSAGE_EN);
+        result.put("messageAr", com.traceability.labels.UnusedLabels.MESSAGE_AR);
         return result;
     }
 

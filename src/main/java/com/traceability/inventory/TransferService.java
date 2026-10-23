@@ -272,6 +272,11 @@ public class TransferService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
+            // Flexible labeling: a printed label nobody has tagged a piece with yet.
+            if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
+                return ScanOutResult.rejected(com.traceability.labels.UnusedLabels.CODE,
+                    com.traceability.labels.UnusedLabels.MESSAGE_EN, com.traceability.labels.UnusedLabels.MESSAGE_AR);
+            }
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
                 "لم يتم العثور على الباركود في المخزون");
@@ -418,6 +423,11 @@ public class TransferService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
+            // Flexible labeling: a printed label nobody has tagged a piece with yet.
+            if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
+                return ScanOutResult.rejected(com.traceability.labels.UnusedLabels.CODE,
+                    com.traceability.labels.UnusedLabels.MESSAGE_EN, com.traceability.labels.UnusedLabels.MESSAGE_AR);
+            }
             return ScanOutResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
                 "لم يتم العثور على الباركود في المخزون");
@@ -683,6 +693,10 @@ public class TransferService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
+            if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
+                return ScanBackResult.rejected(com.traceability.labels.UnusedLabels.CODE,
+                    com.traceability.labels.UnusedLabels.MESSAGE_EN, com.traceability.labels.UnusedLabels.MESSAGE_AR);
+            }
             return ScanBackResult.rejected("PIECE_NOT_FOUND",
                 "Barcode not found in inventory",
                 "لم يتم العثور على الباركود في المخزون");

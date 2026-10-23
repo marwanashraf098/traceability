@@ -5,7 +5,7 @@ import {
   ScanLine, SearchX, ChevronDown, Lock, RotateCcw, Search, Printer,
 } from 'lucide-react'
 import {
-  lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, TimelineEvent,
+  lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, LabelCodeLookupResult, TimelineEvent,
   adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
   voidPiece, holdPiece, unholdPiece, VOID_REASONS, HOLD_REASONS, VoidReason, HoldReason,
   restorePiece, RESTORE_REASONS, RestoreReason,
@@ -67,6 +67,31 @@ function MetaField({ label, children, className = '' }: { label: string; childre
     <div className={`bg-surface border border-line rounded-lg p-3 ${className}`}>
       <p className="text-caption text-muted mb-1">{label}</p>
       <p className="text-small text-primary font-semibold">{children}</p>
+    </div>
+  )
+}
+
+// ── Unused label code (flexible labeling) ────────────────────────────────────
+
+/** A label printed for a product that no piece carries yet — what it's for, and to tag it first. */
+function LabelCodeView({ result }: { result: LabelCodeLookupResult }) {
+  const { t } = useTranslation()
+  return (
+    <div className="card p-6 space-y-4 animate-fadeIn" data-testid="label-code-view">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-caption text-muted font-mono uppercase tracking-widest mb-1" dir="ltr">{result.code}</p>
+          <h2 className="text-h2 text-primary leading-tight">
+            <bdi>{result.variant.productTitle}</bdi>
+            {result.variant.title && result.variant.title !== 'Default Title' && (
+              <span className="text-muted font-normal"> / <bdi>{result.variant.title}</bdi></span>
+            )}
+          </h2>
+          {result.variant.sku && <p className="text-small text-muted font-mono mt-1" dir="ltr">{result.variant.sku}</p>}
+        </div>
+        <Badge tone="warning" label={t('lookup.labelCode.issued')} className="flex-shrink-0 mt-1" />
+      </div>
+      <Alert tone="info" title={t('lookup.labelCode.title')}>{t('lookup.labelCode.body')}</Alert>
     </div>
   )
 }
@@ -902,6 +927,9 @@ export default function LookupPage() {
 
       {result && !loading && result.type === 'piece' && (
         <PieceView result={result as PieceLookupResult} onRefresh={() => doLookup(query)} />
+      )}
+      {result && !loading && result.type === 'label_code' && (
+        <LabelCodeView result={result as LabelCodeLookupResult} />
       )}
       {result && !loading && result.type === 'tracking' && (
         <TrackingView result={result as TrackingLookupResult} />

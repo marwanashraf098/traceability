@@ -240,6 +240,10 @@ public class StockTakeService {
         out.put("sessionId", sessionId);
         out.put("barcode", barcode);
 
+        // Flexible labeling: a printed label nobody has tagged a piece with yet — not an unknown scan.
+        if (piece == null && com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
+            throw com.traceability.labels.UnusedLabels.notUsedYet();
+        }
         if (piece == null) {
             jdbc.update(
                 "INSERT INTO stock_take_scans " +

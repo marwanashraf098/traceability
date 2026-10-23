@@ -32,6 +32,9 @@ import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
+import TagStock from './pages/TagStock'
+import TagStockScan from './pages/TagStockScan'
+import TagStockSummary from './pages/TagStockSummary'
 import ScanProbe from './pages/ScanProbe'
 import StockTakeReview from './pages/StockTakeReview'
 import Transfers from './pages/Transfers'
@@ -342,6 +345,37 @@ export default function App() {
             <RequireAuth>
               <OwnerOnlyRoute>
                 <Layout><StockTake /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        {/* Flexible labeling — Tag stock: list + summary in the shell, the scan loop full-screen. */}
+        <Route
+          path="/tag-stock"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><TagStock /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tag-stock/:id/scan"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <TagStockScan />
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tag-stock/:id/summary"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><TagStockSummary /></Layout>
               </OwnerOnlyRoute>
             </RequireAuth>
           }

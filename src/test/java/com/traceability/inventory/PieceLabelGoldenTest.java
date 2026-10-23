@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  *   g1 — 50×25 (today's every label) and 40×25 match the recorded fingerprints
  */
-class PieceLabelGoldenTest {
+public class PieceLabelGoldenTest {
 
     static final String GOLDEN_50x25 = "048326eae89a68e1b69952e7f3b4a2e10449a9d2475a623d72476af83a66b8fa";
     static final String GOLDEN_40x25 = "8f93d6a7c6edc1ea067416177dca9bd9b6a45c9f7be5057ef92b8c94544d8ef5";
@@ -39,7 +39,8 @@ class PieceLabelGoldenTest {
         assertThat(fingerprint(LabelPdfRenderer.render(PIECES, PieceLabelLayout.Spec.of(40f, 25f)))).isEqualTo(GOLDEN_40x25);
     }
 
-    static String fingerprint(byte[] pdf) throws Exception {
+    /** Shared with LabelCodesTest.p2 (code labels must print exactly like piece labels). */
+    public static String fingerprint(byte[] pdf) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             for (PDPage page : doc.getPages()) {

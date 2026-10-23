@@ -10,7 +10,7 @@ import { ViaPhoneTag } from '../phone/ViaPhoneTag'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner, Modal } from '../components/ui'
 import {
-  getStockTakeSession, scanStockTakePiece, unscanStockTakePiece, cancelStockTake,
+  getStockTakeSession, scanStockTakePiece, unscanStockTakePiece, cancelStockTake, ServerMessageError,
   StockTakeCondition, StockTakeClassification, StockTakeSessionDetail, ScanDevice,
 } from '../api'
 
@@ -56,7 +56,7 @@ const FEEDBACK_STYLE: Record<keyof Tally, { icon: LucideIcon; text: string; bg: 
 
 export default function StockTakeScan() {
   const { id } = useParams<{ id: string }>()
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [session, setSession] = useState<StockTakeSessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,9 +92,16 @@ export default function StockTakeScan() {
       if (!id) return { success: false }
       // A phone scan names its relay event; the server decides whether it counts as one.
       const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
-      const result = relayEventId
-        ? await scanStockTakePiece(id, barcode, condition, relayEventId)
-        : await scanStockTakePiece(id, barcode, condition)
+      let result
+      try {
+        result = relayEventId
+          ? await scanStockTakePiece(id, barcode, condition, relayEventId)
+          : await scanStockTakePiece(id, barcode, condition)
+      } catch (e: unknown) {
+        // A refusal with a readable reason (untagged piece, a label not used yet) — shown on the scan line.
+        if (e instanceof ServerMessageError) return { success: false, label: e.messageFor(i18n.language) }
+        throw e
+      }
       const cls = result.classification
       const success = isCounted(cls)
       const bucket = bucketOf(cls)

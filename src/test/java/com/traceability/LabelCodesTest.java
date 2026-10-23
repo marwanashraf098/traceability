@@ -7,6 +7,9 @@ import com.google.zxing.oned.Code128Reader;
 import com.traceability.identity.JwtService;
 import com.traceability.inventory.ReceivingService;
 import com.traceability.labels.LabelCodeException;
+import com.traceability.inventory.LabelPdfRenderer;
+import com.traceability.inventory.PieceLabelGoldenTest;
+import com.traceability.inventory.PieceLabelLayout;
 import com.traceability.labels.LabelCodeService;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -41,23 +44,26 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Flexible labeling slice 1 — blank label codes (V176, LabelCodeService, /api/v1/label-codes).
+ * Flexible labeling — NAMED label codes (V176, named since V181 / slice 3; LabelCodeService, /api/v1/label-codes).
  *
  *   f1  flag off → every endpoint 404 and /me flexibleLabeling false; on → /me true, issue works
  *   f2  workers are refused (owner / manager only)
- *   i1  issue: count + spares codes, one unbroken P-range, all issued, size 50×25 by default
- *   i2  issue takes the tenant's label size (40×25)
+ *   i1  issue: one code per unit, one unbroken P-range, all issued, each tied to the line's variant
+ *   i2  several lines → each code carries its own line's variant; a foreign variant / wrong order line refused
  *   i3  idempotency: same key twice → one batch, same codes, the counter claimed once;
  *       same key, different request → 409 IDEMPOTENCY_KEY_REUSED
  *   i4  idempotency under concurrency: the same key from 6 threads → one batch
- *   i5  validation: kind, 0 / 2,001 codes, missing key → 400 with a code
+ *   i5  validation: kind, 0 / empty / 2,001 codes in all, missing key → 400 with a code
  *   c1  issue() alongside batchReceive (8 threads) → no code is ever handed out twice
  *   v1  void: issued → voided; a voided / bound / foreign / unknown code refuses the WHOLE request
  *   v2  void validation (no ids, no reason) → 400
  *   k1  CHECK / UNIQUE constraints reject invalid states (status ⇔ piece_id, ⇔ voided_at, code shape, duplicates)
  *   r1  resolve: issued / bound / voided / unknown, scan-normalized
- *   p1  PDF: one page per still-issued code at the batch size, each barcode decodes to its code;
- *       reprint after a void leaves the voided code out; nothing issued → 422; another tenant's batch → 404
+ *   p1  PDF: one NAMED piece label (code, product, variant, SKU) per still-issued code at 50×25, each barcode
+ *       decodes to its code; reprint after a void leaves the voided code out; nothing issued → 422; another
+ *       tenant's batch → 404
+ *   p2  a code label's PDF has exactly the piece label's fingerprint (PieceLabelGoldenTest.fingerprint, 50×25) —
+ *       code labels and piece labels can never drift apart
  *   a1  app_user: issue + void work under RLS; another tenant sees nothing (same-tenant positive control);
  *       no DELETE, no UPDATE of the code / batch rows
  */
@@ -94,7 +100,7 @@ class LabelCodesTest {
     JdbcTemplate        appUserJdbc;
     TransactionTemplate appUserTx;
 
-    UUID tenantA, ownerA, workerA, variantA, locationA;
+    UUID tenantA, ownerA, workerA, variantA, variantA2, locationA, variantB;
     UUID tenantB, ownerB;
     /** Minted per request: a token lives 30 min, and a class can run longer than that inside the full suite. */
     private String ownerToken()  { return jwt.issueAccessToken(ownerA, tenantA, "owner"); }
@@ -121,6 +127,17 @@ class LabelCodesTest {
                     "VALUES (?, ?, ?, 'LC-V', 'Blue', 'LCBLUE')", variantA, tenantA, productA);
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default) " +
                     "VALUES (?, ?, 'LC Warehouse', 'warehouse', true)", locationA, tenantA);
+        variantA2 = UUID.randomUUID();
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'LC-V2', 'Red', 'LCRED')", variantA2, tenantA, productA);
+        UUID storeB = UUID.randomUUID(), productB = UUID.randomUUID();
+        variantB = UUID.randomUUID();
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'lc-b.myshopify.com', 'disconnected')", storeB, tenantB);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'LC-PB', 'LC B Widget', 'active')", productB, tenantB, storeB);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'LC-VB', 'Blue', 'LCBBLUE')", variantB, tenantB, productB);
 
 
         DriverManagerDataSource raw = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw");
@@ -151,11 +168,11 @@ class LabelCodesTest {
 
     @Test
     void f1_flag_off_refuses_every_endpoint_and_me_reports_it() {
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 2, 0, "f1-seed");
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(2), "f1-seed");
         jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantA);
 
         assertThat(me().get("flexibleLabeling")).isEqualTo(false);
-        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-off"), ownerToken()).getStatusCode())
+        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, "f1-off"), ownerToken()).getStatusCode())
             .isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(getPdf(b.id(), ownerToken()).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(post("/api/v1/label-codes/void",
@@ -168,16 +185,16 @@ class LabelCodesTest {
 
         jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantA);
         assertThat(me().get("flexibleLabeling")).isEqualTo(true);
-        ResponseEntity<Map> on = post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f1-on"), ownerToken());
+        ResponseEntity<Map> on = post("/api/v1/label-codes/batches", issueBody("pack", 1, "f1-on"), ownerToken());
         assertThat(on.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((List<?>) on.getBody().get("codes")).hasSize(1);
     }
 
     @Test
     void f2_workers_are_refused() {
-        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, 0, "f2"), workerToken()).getStatusCode())
+        assertThat(post("/api/v1/label-codes/batches", issueBody("pack", 1, "f2"), workerToken()).getStatusCode())
             .isEqualTo(HttpStatus.FORBIDDEN);
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 1, 0, "f2-seed");
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(1), "f2-seed");
         assertThat(getPdf(b.id(), workerToken()).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(post("/api/v1/label-codes/void", Map.of("codeIds", List.of(b.codes().get(0).id()), "reason", "x"),
             workerToken()).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
@@ -187,12 +204,11 @@ class LabelCodesTest {
 
     @Test
     void i1_issue_claims_one_unbroken_range_of_issued_codes() {
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 3, 2, "i1");
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(5), "i1");
 
         assertThat(b.created()).isTrue();
         assertThat(b.codes()).hasSize(5);
-        assertThat(b.labelWidthMm()).isEqualByComparingTo("50");
-        assertThat(b.labelHeightMm()).isEqualByComparingTo("25");
+        assertThat(b.codes()).extracting(LabelCodeService.IssuedCode::variantId).containsOnly(variantA);
         List<Long> n = b.codes().stream().map(c -> {
             assertThat(c.code()).matches("P[0-9]{6,}");
             return Long.parseLong(c.code().substring(1));
@@ -205,19 +221,21 @@ class LabelCodesTest {
     }
 
     @Test
-    void i2_issue_takes_the_tenants_label_size() {
-        jdbc.update("UPDATE tenants SET label_width_mm = 40, label_height_mm = 25 WHERE id = ?", tenantA);
-        LabelCodeService.Batch b = labels.issue(ownerA, "tag", 1, 0, "i2");
-        assertThat(b.labelWidthMm()).isEqualByComparingTo("40");
-        assertThat(jdbc.queryForObject("SELECT label_w_mm FROM label_code_batches WHERE id = ?", Double.class, b.id()))
-            .isEqualTo(40.0);
+    void i2_each_code_carries_its_lines_variant_and_unknown_variants_are_refused() {
+        LabelCodeService.Batch b = labels.issue(ownerA, "tag", List.of(
+            new LabelCodeService.Line(variantA, 2, null, null), new LabelCodeService.Line(variantA2, 1, null, null)), "i2");
+        assertThat(b.codes()).extracting(LabelCodeService.IssuedCode::variantId).containsExactly(variantA, variantA, variantA2);
+        assertThat(count("SELECT count(*) FROM label_codes WHERE batch_id = ? AND variant_id = ?", b.id(), variantA2)).isEqualTo(1);
+        assertCode(() -> labels.issue(ownerA, "tag", nB(1), "i2-foreign"), LabelCodeException.Code.UNKNOWN_VARIANT);
+        assertCode(() -> labels.issue(ownerA, "pack", List.of(new LabelCodeService.Line(variantA, 1, UUID.randomUUID(), UUID.randomUUID())),
+            "i2-order"), LabelCodeException.Code.INVALID_ORDER_REF);
     }
 
     @Test
     void i3_same_key_twice_returns_the_same_batch_and_never_issues_twice() {
-        LabelCodeService.Batch first  = labels.issue(ownerA, "pack", 4, 1, "i3-key");
+        LabelCodeService.Batch first  = labels.issue(ownerA, "pack", n(5), "i3-key");
         long counterAfterFirst = jdbc.queryForObject("SELECT last_value FROM piece_counters WHERE tenant_id = ?", Long.class, tenantA);
-        LabelCodeService.Batch second = labels.issue(ownerA, "pack", 4, 1, "i3-key");
+        LabelCodeService.Batch second = labels.issue(ownerA, "pack", n(5), "i3-key");
 
         assertThat(second.id()).isEqualTo(first.id());
         assertThat(second.created()).isFalse();
@@ -227,12 +245,12 @@ class LabelCodesTest {
         assertThat(jdbc.queryForObject("SELECT last_value FROM piece_counters WHERE tenant_id = ?", Long.class, tenantA))
             .as("the counter is claimed once").isEqualTo(counterAfterFirst);
 
-        assertThatThrownBy(() -> labels.issue(ownerA, "pack", 5, 1, "i3-key"))
+        assertThatThrownBy(() -> labels.issue(ownerA, "pack", n(6), "i3-key"))
             .isInstanceOf(LabelCodeException.class)
             .satisfies(e -> assertThat(((LabelCodeException) e).code()).isEqualTo(LabelCodeException.Code.IDEMPOTENCY_KEY_REUSED));
 
         // Over HTTP, the same key answers the same batch.
-        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 4, 1, "i3-key"), ownerToken());
+        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 5, "i3-key"), ownerToken());
         assertThat(http.getBody().get("id")).isEqualTo(first.id().toString());
         assertThat(http.getBody().get("created")).isEqualTo(false);
     }
@@ -247,7 +265,7 @@ class LabelCodesTest {
             for (int t = 0; t < threads; t++) {
                 ids.add(pool.submit(() -> TenantContext.runAs(tenantA, () -> {
                     go.await();
-                    return labels.issue(ownerA, "pack", 10, 0, "i4-key").id();
+                    return labels.issue(ownerA, "pack", n(10), "i4-key").id();
                 })));
             }
             Set<UUID> distinct = new HashSet<>();
@@ -262,14 +280,15 @@ class LabelCodesTest {
 
     @Test
     void i5_validation_refuses_with_a_code() {
-        assertCode(() -> labels.issue(ownerA, "sticker", 1, 0, "i5a"), LabelCodeException.Code.INVALID_KIND);
-        assertCode(() -> labels.issue(ownerA, "pack", 0, 0, "i5b"), LabelCodeException.Code.INVALID_COUNT);
-        assertCode(() -> labels.issue(ownerA, "pack", 2000, 1, "i5c"), LabelCodeException.Code.INVALID_COUNT);
-        assertCode(() -> labels.issue(ownerA, "pack", -1, 3, "i5d"), LabelCodeException.Code.INVALID_COUNT);
-        assertCode(() -> labels.issue(ownerA, "pack", 1, 0, " "), LabelCodeException.Code.INVALID_IDEMPOTENCY_KEY);
-        assertThat(labels.issue(ownerA, "factory", 1999, 1, "i5-max").codes()).hasSize(2000);
+        assertCode(() -> labels.issue(ownerA, "sticker", n(1), "i5a"), LabelCodeException.Code.INVALID_KIND);
+        assertCode(() -> labels.issue(ownerA, "pack", n(0), "i5b"), LabelCodeException.Code.INVALID_COUNT);
+        assertCode(() -> labels.issue(ownerA, "pack", List.of(), "i5c"), LabelCodeException.Code.INVALID_COUNT);
+        assertCode(() -> labels.issue(ownerA, "pack", List.of(new LabelCodeService.Line(variantA, 1500, null, null),
+            new LabelCodeService.Line(variantA2, 501, null, null)), "i5d"), LabelCodeException.Code.INVALID_COUNT);  // 2,001 in all
+        assertCode(() -> labels.issue(ownerA, "pack", n(1), " "), LabelCodeException.Code.INVALID_IDEMPOTENCY_KEY);
+        assertThat(labels.issue(ownerA, "factory", n(2000), "i5-max").codes()).hasSize(2000);
 
-        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 2001, 0, "i5-http"), ownerToken());
+        ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 2001, "i5-http"), ownerToken());
         assertThat(http.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(http.getBody()).containsEntry("code", "INVALID_COUNT").containsKeys("message_en", "message_ar");
     }
@@ -289,7 +308,7 @@ class LabelCodesTest {
                     go.await();
                     for (int round = 0; round < 3; round++) {
                         if (k % 2 == 0) {
-                            labels.issue(ownerA, "pack", 150, 0, "c1-" + k + "-" + round);
+                            labels.issue(ownerA, "pack", n(150), "c1-" + k + "-" + round);
                         } else {
                             UUID s = receiving.createSession(ownerA, locationA, "C1-" + k + "-" + round, null, null);
                             receiving.addLine(s, variantA, 150);
@@ -314,7 +333,7 @@ class LabelCodesTest {
 
     @Test
     void v1_void_is_issued_only_and_all_or_nothing() {
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 4, 0, "v1");
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(4), "v1");
         UUID c0 = b.codes().get(0).id(), c1 = b.codes().get(1).id(), c2 = b.codes().get(2).id(), c3 = b.codes().get(3).id();
 
         assertThat(labels.voidCodes(List.of(c0), "torn")).isEqualTo(1);
@@ -323,7 +342,7 @@ class LabelCodesTest {
 
         bind(c1);
         TenantContext.set(tenantB);
-        UUID foreign = labels.issue(ownerB, "pack", 1, 0, "v1-b").codes().get(0).id();
+        UUID foreign = labels.issue(ownerB, "pack", nB(1), "v1-b").codes().get(0).id();
         TenantContext.set(tenantA);
 
         LabelCodeException e = catchThrowableOfType(
@@ -349,7 +368,7 @@ class LabelCodesTest {
 
     @Test
     void v2_void_validation() {
-        UUID c = labels.issue(ownerA, "pack", 1, 0, "v2").codes().get(0).id();
+        UUID c = labels.issue(ownerA, "pack", n(1), "v2").codes().get(0).id();
         assertCode(() -> labels.voidCodes(List.of(), "x"), LabelCodeException.Code.INVALID_VOID_REQUEST);
         assertCode(() -> labels.voidCodes(List.of(c), " "), LabelCodeException.Code.INVALID_VOID_REQUEST);
         assertCode(() -> labels.voidCodes(List.of(c), "x".repeat(101)), LabelCodeException.Code.INVALID_VOID_REQUEST);
@@ -360,7 +379,7 @@ class LabelCodesTest {
 
     @Test
     void k1_constraints_reject_invalid_states() {
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 2, 0, "k1");
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(2), "k1");
         UUID c = b.codes().get(0).id();
         String piece = receivePiece();
 
@@ -375,24 +394,26 @@ class LabelCodesTest {
         jdbc.update("UPDATE label_codes SET status = 'bound', piece_id = ?, bound_at = now() WHERE id = ?", piece, c);
         assertViolation("UPDATE label_codes SET status = 'bound', piece_id = ?, bound_at = now() WHERE id = ?",
             piece, b.codes().get(1).id());                                                                      // one code per piece
-        assertViolation("INSERT INTO label_code_batches (tenant_id, kind, count, spares, label_w_mm, label_h_mm, " +
-            "idempotency_key, created_by) VALUES (?, 'pack', 2000, 1, 50, 25, 'k1-cap', ?)", tenantA, ownerA);  // > 2,000
+        assertViolation("INSERT INTO label_code_batches (tenant_id, kind, count, " +
+            "idempotency_key, created_by) VALUES (?, 'pack', 2001, 'k1-cap', ?)", tenantA, ownerA);  // > 2,000
+        assertViolation("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P999002', 'pack', ?, ?)",
+            tenantA, b.id(), ownerA);                                                                           // no variant
 
         // The same code in another tenant is fine (unique per tenant).
-        UUID otherBatch = jdbc.queryForObject("INSERT INTO label_code_batches (tenant_id, kind, count, label_w_mm, label_h_mm, " +
-            "idempotency_key, created_by) VALUES (?, 'pack', 1, 50, 25, 'k1-b', ?) RETURNING id", UUID.class, tenantB, ownerB);
-        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, ?, 'pack', ?, ?)",
-            tenantB, b.codes().get(1).code(), otherBatch, ownerB);
+        UUID otherBatch = jdbc.queryForObject("INSERT INTO label_code_batches (tenant_id, kind, count, " +
+            "idempotency_key, created_by) VALUES (?, 'pack', 1, 'k1-b', ?) RETURNING id", UUID.class, tenantB, ownerB);
+        jdbc.update("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id) VALUES (?, ?, 'pack', ?, ?, ?)",
+            tenantB, b.codes().get(1).code(), otherBatch, ownerB, variantB);
         // A code can't point at another tenant's batch (composite FK).
-        assertViolation("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by) VALUES (?, 'P999001', 'pack', ?, ?)",
-            tenantA, otherBatch, ownerA);
+        assertViolation("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id) VALUES (?, 'P999001', 'pack', ?, ?, ?)",
+            tenantA, otherBatch, ownerA, variantA);
     }
 
     // ── resolve ───────────────────────────────────────────────────────────────
 
     @Test
     void r1_resolve_reports_each_status() {
-        LabelCodeService.Batch b = labels.issue(ownerA, "tag", 3, 0, "r1");
+        LabelCodeService.Batch b = labels.issue(ownerA, "tag", n(3), "r1");
         String issued = b.codes().get(0).code();
         labels.voidCodes(List.of(b.codes().get(1).id()), "torn");
         String piece = receivePiece();
@@ -413,8 +434,8 @@ class LabelCodesTest {
     // ── PDF ───────────────────────────────────────────────────────────────────
 
     @Test
-    void p1_pdf_prints_still_issued_codes_at_the_batch_size() throws Exception {
-        LabelCodeService.Batch b = labels.issue(ownerA, "pack", 3, 0, "p1");
+    void p1_pdf_prints_still_issued_codes_as_named_labels() throws Exception {
+        LabelCodeService.Batch b = labels.issue(ownerA, "pack", n(3), "p1");
         ResponseEntity<byte[]> pdf = getPdf(b.id(), ownerToken());
         assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
@@ -423,9 +444,8 @@ class LabelCodesTest {
         labels.voidCodes(List.of(b.codes().get(1).id()), "torn");
         assertPages(labels.batchPdf(b.id()), 50f, 25f, List.of(b.codes().get(0).code(), b.codes().get(2).code()));
 
+        // Named labels ignore the tenant's (blank-label era) size setting — always 50×25 like every piece label.
         jdbc.update("UPDATE tenants SET label_width_mm = 40, label_height_mm = 25 WHERE id = ?", tenantA);
-        LabelCodeService.Batch small = labels.issue(ownerA, "tag", 1, 1, "p1-small");
-        assertPages(labels.batchPdf(small.id()), 40f, 25f, small.codes().stream().map(LabelCodeService.IssuedCode::code).toList());
         assertPages(labels.batchPdf(b.id()), 50f, 25f, List.of(b.codes().get(0).code(), b.codes().get(2).code()));
 
         labels.voidCodes(List.of(b.codes().get(0).id(), b.codes().get(2).id()), "done");
@@ -435,7 +455,7 @@ class LabelCodesTest {
         assertThat(none.getBody()).containsEntry("code", "NO_ISSUED_CODES");
 
         TenantContext.set(tenantB);
-        UUID theirs = labels.issue(ownerB, "pack", 1, 0, "p1-b").id();
+        UUID theirs = labels.issue(ownerB, "pack", nB(1), "p1-b").id();
         TenantContext.set(tenantA);
         ResponseEntity<Map> foreign = rest.exchange(base() + "/api/v1/label-codes/batches/" + theirs + "/pdf",
             HttpMethod.GET, new HttpEntity<>(auth(ownerToken())), Map.class);
@@ -443,12 +463,21 @@ class LabelCodesTest {
         assertThat(foreign.getBody()).containsEntry("code", "BATCH_NOT_FOUND");
     }
 
+    @Test
+    void p2_a_code_label_has_exactly_the_piece_labels_fingerprint() throws Exception {
+        LabelCodeService.Batch b = labels.issue(ownerA, "tag", n(2), "p2");
+        List<LabelPdfRenderer.Piece> asPieces = b.codes().stream()
+            .map(c -> new LabelPdfRenderer.Piece(c.code(), "LC Widget", "Blue", "LCBLUE")).toList();
+        String pieceLabels = PieceLabelGoldenTest.fingerprint(LabelPdfRenderer.render(asPieces, PieceLabelLayout.Spec.of(50f, 25f)));
+        assertThat(PieceLabelGoldenTest.fingerprint(labels.batchPdf(b.id()))).isEqualTo(pieceLabels);
+    }
+
     // ── app_user (RLS + privileges) ───────────────────────────────────────────
 
     @Test
     void a1_app_user_issues_and_voids_under_rls_and_never_deletes() {
         LabelCodeService asApp = new LabelCodeService(appUserJdbc);
-        LabelCodeService.Batch b = appUserTx.execute(s -> asApp.issue(ownerA, "pack", 3, 0, "a1"));
+        LabelCodeService.Batch b = appUserTx.execute(s -> asApp.issue(ownerA, "pack", n(3), "a1"));
         assertThat(b.codes()).hasSize(3);
         Integer voided = appUserTx.execute(s -> asApp.voidCodes(List.of(b.codes().get(0).id()), "torn"));
         assertThat(voided).isEqualTo(1);
@@ -491,7 +520,7 @@ class LabelCodesTest {
                 assertThat(decodeBarcode(page)).isEqualTo(codes.get(i));
                 assertThat(text).contains(codes.get(i));
             }
-            assertThat(text.strip().split("\\s+")).as("the code and nothing else").hasSize(codes.size());
+            assertThat(text).as("a named label: product, variant, SKU").contains("LC Widget").contains("Blue").contains("LCBLUE");
         }
     }
 
@@ -561,8 +590,18 @@ class LabelCodesTest {
             HttpMethod.GET, new HttpEntity<>(auth(token)), byte[].class);
     }
 
-    private static Map<String, Object> issueBody(String kind, int count, int spares, String key) {
-        return Map.of("kind", kind, "count", count, "spares", spares, "idempotencyKey", key);
+    private Map<String, Object> issueBody(String kind, int count, String key) {
+        return Map.of("kind", kind, "lines", List.of(Map.of("variantId", variantA.toString(), "count", count)), "idempotencyKey", key);
+    }
+
+    /** n codes of tenant A's variant. */
+    private List<LabelCodeService.Line> n(int count) {
+        return List.of(new LabelCodeService.Line(variantA, count, null, null));
+    }
+
+    /** n codes of tenant B's variant. */
+    private List<LabelCodeService.Line> nB(int count) {
+        return List.of(new LabelCodeService.Line(variantB, count, null, null));
     }
 
     private HttpHeaders auth(String token) {

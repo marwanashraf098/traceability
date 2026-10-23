@@ -1,5 +1,6 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { useCapabilities } from '../capabilities'
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import type { LucideIcon } from 'lucide-react'
@@ -19,7 +20,8 @@ import { sharedSearch } from '../analytics/period'
 // Owner/manager nav, in display order. A section with no visible items renders no header.
 // The worker nav is separate and fixed (Home + the three worker screens).
 
-type NavItem = { to: string; icon: LucideIcon; labelKey: string }
+/** capability: shown only when /me grants it (e.g. Tag stock needs flexible labeling). */
+type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' }
 type NavSection = { id: string; headerKey?: string; items: NavItem[] }
 
 const OWNER_SECTIONS: NavSection[] = [
@@ -37,6 +39,7 @@ const OWNER_SECTIONS: NavSection[] = [
     { to: '/receiving',  icon: Inbox,         labelKey: 'nav.receiving' },
     { to: '/transfers',  icon: Repeat,        labelKey: 'nav.transfers' },
     { to: '/stock-take', icon: ClipboardList, labelKey: 'nav.stocktake' },
+    { to: '/tag-stock',  icon: Tag,           labelKey: 'nav.tagStock', capability: 'flexibleLabeling' },
   ] },
   { id: 'returns', headerKey: 'nav.sections.returns', items: [
     { to: '/exchanges', icon: ArrowRightLeft, labelKey: 'nav.exchangesRefunds' },
@@ -330,6 +333,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
   navOpen: boolean
   onCloseNav: () => void
 }) {
+  const caps = useCapabilities()
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { pathname, search } = useLocation()
@@ -429,7 +433,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
           OWNER_SECTIONS.filter(s => s.items.length > 0).map(s => (
             <div key={s.id} className="flex flex-col gap-0.5">
               {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
-              {s.items.map(link)}
+              {s.items.filter(i => !i.capability || caps[i.capability]).map(link)}
             </div>
           ))
         )}

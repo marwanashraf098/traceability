@@ -42,7 +42,8 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
-    "closeMenu": "Close menu"
+    "closeMenu": "Close menu",
+    "tagStock": "Tag stock"
   },
   "overview": {
     "title": "Overview",
@@ -756,7 +757,8 @@
       "REMOVED_IN_SHOPIFY": "This item was removed from the order in Shopify",
       "WRONG_STATUS": "Item is not available to pick",
       "CLAIMED_BY_OTHER": "Another packer is packing this order right now",
-      "PIECE_UNTAGGED": "This piece has no barcode yet — stick a label on and scan that"
+      "PIECE_UNTAGGED": "This piece has no barcode yet — stick a label on and scan that",
+      "LABEL_NOT_USED_YET": "Label not used yet — tag it in Tag stock first"
     },
     "linkAwb": {
       "title": "Scan AWB Barcode",
@@ -1144,6 +1146,7 @@
       "sold_offbook": "Marked sold off-book at vendor",
       "lost_at_vendor": "Marked lost at vendor",
       "label_reprinted": "Label reprinted",
+      "label_bound": "Label stuck on and scanned — piece tagged",
       "relocated_out": "Moved to {{location}} — can't be picked until brought back",
       "return_transfer_out": "Sent out on return to {{location}}",
       "voided": "Voided — removed from sellable stock",
@@ -1167,6 +1170,11 @@
       "sold": "Sold (Off-book)",
       "voided": "Voided",
       "on_hold": "On Hold"
+    },
+    "labelCode": {
+      "issued": "Label not used yet",
+      "title": "Label not used yet — tag it in Tag stock first",
+      "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock."
     }
   },
   "returns": {
@@ -3537,7 +3545,8 @@
       "stockTake": "Stock take · {{name}}",
       "transferOut": "Transfer out · {{ref}}",
       "transferReconcile": "Transfer reconcile · {{ref}}",
-      "returns": "Scan returns · {{ref}}"
+      "returns": "Scan returns · {{ref}}",
+      "tagStock": "Tag stock"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",
@@ -4412,5 +4421,56 @@
     "listNote_one": "1 untagged piece — tag it first",
     "pieceTitle": "No barcode yet",
     "pieceNote": "This piece is untagged. It gets a label when it's packed or in a Tag stock session. Until then it can't be reprinted, transferred, held or marked damaged."
+  },
+  "tagStock": {
+    "title": "Tag stock",
+    "subtitle": "Give untagged pieces in the main warehouse their labels: print, stick one on each piece, scan it.",
+    "goScan": "Continue scanning",
+    "labeled": "Labeled",
+    "untagged": "Untagged",
+    "labeledShare": "Labeled share",
+    "search": "Search product, variant or SKU",
+    "noMatch": "No untagged product matches your search.",
+    "allTagged": "Every piece in the main warehouse has a label.",
+    "untaggedCount": "{{count}} untagged",
+    "labeledCount": "{{count}} labeled",
+    "howMany": "Labels to print",
+    "print": "Print {{count}} labels",
+    "print_one": "Print 1 label",
+    "unusedExisting": "{{count}} labels already printed for this product and not used yet — they still work.",
+    "error": "Something went wrong. Try again.",
+    "unavailable": "Tag stock isn't available for this account.",
+    "scan": {
+      "changeProduct": "Change product",
+      "end": "End session",
+      "placeholder": "Scan the label you just stuck on…",
+      "taggedLabel": "Tagged this session",
+      "untaggedLeft": "Untagged left",
+      "labeled": "Labeled",
+      "replacement": "Print 1 replacement label",
+      "scanToStart": "Scan a label to start — the label knows its product.",
+      "tagged": "Tagged · {{product}}",
+      "alreadyTagged": "Already tagged",
+      "backToList": "Back to Tag stock",
+      "endTitle": "End this session?",
+      "endBody": "Labels you printed and didn't use stay valid for their product. You can void them on the next screen."
+    },
+    "summary": {
+      "title": "Session summary",
+      "tagged": "{{count}} pieces tagged",
+      "tagged_one": "1 piece tagged",
+      "product": "Product",
+      "printed": "Printed",
+      "taggedCol": "Tagged",
+      "unused": "Labels not used",
+      "none": "Nothing was printed or tagged in this session.",
+      "unusedTitle": "{{count}} labels not used",
+      "unusedTitle_one": "1 label not used",
+      "unusedBody": "They stay valid for their product — scan them in a later session. Or void them if they were thrown away.",
+      "void": "Void unused labels",
+      "voided": "{{count}} labels voided",
+      "voided_one": "1 label voided",
+      "back": "Back to Tag stock"
+    }
   }
 }
