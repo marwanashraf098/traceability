@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -15,9 +16,11 @@ public final class FlexibleLabeling {
 
     private FlexibleLabeling() {}
 
+    /** A tenants row the caller can't see (no / another tenant context under RLS) reads as off, never an error. */
     public static boolean enabled(JdbcTemplate jdbc, UUID tenantId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT flexible_labeling_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        List<Boolean> on = jdbc.queryForList(
+            "SELECT flexible_labeling_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId);
+        return !on.isEmpty() && Boolean.TRUE.equals(on.get(0));
     }
 
     /** 404 (bodyless, like the scan helpers) unless the tenant has it — the endpoints don't exist for it. */

@@ -16,7 +16,19 @@ public class LabelCodeException extends RuntimeException {
         INVALID_VOID_REQUEST, VOID_REFUSED, BATCH_NOT_FOUND, NO_ISSUED_CODES,
         // slice 3 — named codes, binding, Tag stock
         UNKNOWN_VARIANT, INVALID_ORDER_REF, UNKNOWN_CODE, CODE_VOIDED, NO_UNTAGGED_STOCK, NO_MAIN_WAREHOUSE,
-        TOO_MANY_LABELS, TAG_SESSION_NOT_FOUND, TAG_SESSION_ENDED
+        TOO_MANY_LABELS, TAG_SESSION_NOT_FOUND, TAG_SESSION_ENDED,
+        // slice 4 — packing labels
+        INVALID_PRINT_REQUEST, ORDER_NOT_PACKABLE
+    }
+
+    static LabelCodeException invalidPrintRequest() {
+        return new LabelCodeException(HttpStatus.BAD_REQUEST, Code.INVALID_PRINT_REQUEST,
+            "Choose which orders to print labels for", "اختر الطلبات التي تريد طباعة ملصقاتها");
+    }
+
+    static LabelCodeException orderNotPackable() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.ORDER_NOT_PACKABLE,
+            "This order isn't waiting to be packed", "هذا الطلب ليس في انتظار التجهيز");
     }
 
     static LabelCodeException invalidKind() {

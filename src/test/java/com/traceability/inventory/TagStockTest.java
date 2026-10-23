@@ -331,7 +331,14 @@ class TagStockTest {
         countOnly(variantA, 1);
         var c = code(variantA);
 
-        FulfillService.ScanResult pick = fulfill.scan(UUID.randomUUID(), c.code(), owner);
+        // Slice 4: with the switch on the pick scan BINDS the label (PackLabelsTest); with it off it still says this.
+        FulfillService.ScanResult pick;
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenant);
+        try {
+            pick = fulfill.scan(UUID.randomUUID(), c.code(), owner);
+        } finally {
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenant);
+        }
         assertThat(pick.code()).isEqualTo("LABEL_NOT_USED_YET");
         assertThat(pick.message()).isEqualTo("Label not used yet — tag it in Tag stock first");
 
@@ -349,7 +356,7 @@ class TagStockTest {
         assertThat((Map<String, Object>) l.get("variant")).containsEntry("title", "Blue").containsEntry("productTitle", "Tag Shirt");
 
         labels.voidCodes(List.of(c.id()), "torn");
-        assertThat(fulfill.scan(UUID.randomUUID(), c.code(), owner).code()).as("voided → not found").isEqualTo("PIECE_NOT_FOUND");
+        assertThat(fulfill.scan(UUID.randomUUID(), c.code(), owner).code()).as("voided → refused by name (slice 4)").isEqualTo("CODE_VOIDED");
     }
 
     // ── Tag stock ─────────────────────────────────────────────────────────────

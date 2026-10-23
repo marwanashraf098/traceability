@@ -185,6 +185,12 @@ public class PackSessionStore {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public FulfillService.ScanResult scanPiece(UUID sessionId, UUID orderId, String code, UUID userId) {
+        return scanPiece(sessionId, orderId, code, null, userId);
+    }
+
+    /** {@code orderItemId}: the highlighted line, passed to FulfillService.scan (flexible labeling slice 4). */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public FulfillService.ScanResult scanPiece(UUID sessionId, UUID orderId, String code, UUID orderItemId, UUID userId) {
         UUID tenantId = TenantContext.require();
         Session s = load(sessionId, userId, tenantId, true, true);
         requireOpenOrder(s, orderId);
@@ -205,7 +211,7 @@ public class PackSessionStore {
                 "This waybill was deleted in Bosta. The order was set aside — put the waybill to one side and give it to a manager.");
         }
         PackClaim.take(jdbc, orderId, tenantId, userId);
-        return fulfill.scan(orderId, code, userId);
+        return fulfill.scan(orderId, code, userId, orderItemId);
     }
 
     /** Undo one scanned piece — only while the order is still open in this session. */

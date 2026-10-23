@@ -215,6 +215,11 @@ class PortalOrderLeakTest {
                 "POST /api/v1/tag-stock/sessions/{id}/void-unused")) {
             reg(k, skip("Tag stock: variants, untagged pieces and label codes at the main warehouse; no order data"));
         }
+        // Flexible labeling slice 4 — packing labels (a portal order is ORDER_NOT_PACKABLE: PackLabelsTest.x2).
+        reg("POST /api/v1/pack-labels/preview",     skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
+        reg("POST /api/v1/pack-labels/print",       skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
+        reg("POST /api/v1/pack-labels/pdf",         skip("label PDF (binary) for order ids the caller sends; codes joined to merchant_orders"));
+        reg("POST /api/v1/pack-labels/replacement", skip("label PDF (binary) for one order line, read through merchant_orders"));
         reg("POST /api/v1/fulfill/print-jobs",           skip("starts a print job; its waybills come only from PackPrintBatchStore.candidates "
                                                               + "(merchant_orders) or an existing batch's reprint items — no order query of its own"));
         reg("GET /api/v1/fulfill/print-jobs/latest",     list());

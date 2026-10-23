@@ -413,10 +413,14 @@ public class InventoryLedger {
 
     /**
      * Where a bind happened, for the label_bound event's metadata: a Tag stock session (slice 3) or a
-     * pack scan (slice 4), and whether the scan came from the paired phone.
+     * pack scan (slice 4: {@code orderId} = the order being packed, {@code labelOrderId} = the order the label
+     * was printed for, recorded only when it differs), and whether the scan came from the paired phone.
      */
-    public record BindRef(UUID tagSessionId, UUID packSessionId, UUID orderId, boolean viaPhone) {
-        public static BindRef tagSession(UUID id, boolean viaPhone) { return new BindRef(id, null, null, viaPhone); }
+    public record BindRef(UUID tagSessionId, UUID packSessionId, UUID orderId, UUID labelOrderId, boolean viaPhone) {
+        public static BindRef tagSession(UUID id, boolean viaPhone) { return new BindRef(id, null, null, null, viaPhone); }
+        public static BindRef packScan(UUID orderId, UUID labelOrderId) {
+            return new BindRef(null, null, orderId, labelOrderId, false);
+        }
     }
 
     /** {@code alreadyBound}: the code was bound before this call (no new event, nothing changed). */
@@ -484,6 +488,9 @@ public class InventoryLedger {
             .append(codeText).append('"');
         if (ref != null && ref.tagSessionId() != null)  meta.append(",\"tag_session_id\":\"").append(ref.tagSessionId()).append('"');
         if (ref != null && ref.packSessionId() != null) meta.append(",\"pack_session_id\":\"").append(ref.packSessionId()).append('"');
+        if (ref != null && ref.labelOrderId() != null && !ref.labelOrderId().equals(ref.orderId())) {
+            meta.append(",\"label_order_id\":\"").append(ref.labelOrderId()).append('"');
+        }
         if (ref != null && ref.viaPhone()) meta.append(",\"via_phone\":true");
         meta.append('}');
         jdbc.update(INSERT_EVENT,

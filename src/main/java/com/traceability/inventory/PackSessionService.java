@@ -40,8 +40,12 @@ public class PackSessionService {
     }
 
     public ScanResponse scan(UUID sessionId, UUID orderId, String code, UUID userId) {
+        return scan(sessionId, orderId, code, null, userId);
+    }
+
+    public ScanResponse scan(UUID sessionId, UUID orderId, String code, UUID orderItemId, UUID userId) {
         UUID tenantId = TenantContext.require();
-        FulfillService.ScanResult r = store.scanPiece(sessionId, orderId, code, userId);
+        FulfillService.ScanResult r = store.scanPiece(sessionId, orderId, code, orderItemId, userId);
         if (!r.success()) {
             return new ScanResponse("rejected", r, card(sessionId, userId, tenantId), null, null, null);
         }

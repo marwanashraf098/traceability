@@ -390,7 +390,10 @@ public class FulfillService {
             order.put("shipment_provider", "generic");
             order.put("shipment_carrier", carrier);
         }
-        order.put("items", getItemsWithAllocations(orderId, tenantId));
+        List<Map<String, Object>> items = getItemsWithAllocations(orderId, tenantId);
+        order.put("items", items);
+        // Flexible labeling slice 4: per-line label status + the order's label counter (switched-on tenants only).
+        com.traceability.labels.PackLabels.decorate(jdbc, tenantId, orderId, order, items);
         return order;
     }
 
@@ -458,6 +461,16 @@ public class FulfillService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanResult scan(UUID orderId, String barcode, UUID actorUserId) {
+        return scan(orderId, barcode, actorUserId, null);
+    }
+
+    /**
+     * {@code preferredOrderItemId}: flexible labeling slice 4 — the line the pack screen has highlighted. Used only
+     * when an issued label code is bound at this scan, and only if that line is of the label's variant and has room;
+     * otherwise the first line of the variant with room (line order = the pack screen's, by id). Ignored for pieces.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanResult scan(UUID orderId, String barcode, UUID actorUserId, UUID preferredOrderItemId) {
         UUID tenantId = TenantContext.require();
 
         // 0. Re-verify eligibility server-side — the queue list filter (PICKABLE_ORDERS_FILTER)
@@ -488,9 +501,18 @@ public class FulfillService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             lookup, lookup, lookup, tenantId);
         if (pieceRows.isEmpty()) {
-            // Flexible labeling: a printed label nobody has tagged a piece with yet (slice 4 binds here).
-            if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
-                return ScanResult.rejected(com.traceability.labels.UnusedLabels.CODE, com.traceability.labels.UnusedLabels.MESSAGE_EN);
+            // Flexible labeling slice 4: an issued label code nobody has stuck on a piece yet is bound HERE, to an
+            // untagged piece of its variant, and packed in the same transaction (switched-on tenants only).
+            var unused = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup);
+            if (unused.isPresent()) {
+                if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+                    return ScanResult.rejected(com.traceability.labels.UnusedLabels.CODE, com.traceability.labels.UnusedLabels.MESSAGE_EN);
+                }
+                return scanLabel(orderId, tenantId, unused.get(), barcode, actorUserId, preferredOrderItemId);
+            }
+            if (com.traceability.labels.UnusedLabels.isVoided(jdbc, tenantId, lookup) && com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+                var e = com.traceability.labels.LabelCodeException.codeVoided();
+                return ScanResult.rejectedLocalized("CODE_VOIDED", e.messageEn(), e.messageAr());
             }
             return ScanResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
         }
@@ -623,6 +645,91 @@ public class FulfillService {
 
         return ScanResult.success(pieceId, barcode, variantId, orderItemId,
             (int) newAllocated, (int) lockedQuantity, allComplete);
+    }
+
+    /**
+     * Slice 4 — an issued label code scanned on an order: the code's variant must match a line WITH ROOM (the
+     * same line checks and FOR UPDATE as a piece scan, all BEFORE anything is written); then
+     * {@link InventoryLedger#bindLabel} tags an untagged piece of that variant and the piece goes through the
+     * existing reserve / allocate step — one transaction, so an allocate failure rolls the bind back too (every
+     * failure after the bind throws; nothing after it returns a rejection). A label printed for ANOTHER order of
+     * the same variant is allowed; the order it was printed for is recorded on the label_bound event.
+     */
+    private ScanResult scanLabel(UUID orderId, UUID tenantId, com.traceability.labels.UnusedLabels.Unused label,
+                                 String barcode, UUID actorUserId, UUID preferredOrderItemId) {
+        requireMerchantOrder(orderId, tenantId);
+        UUID variantId = label.variantId();
+        // Lines of the label's variant, in the pack screen's line order (getItemsWithAllocations: ORDER BY oi.id).
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT oi.id AS order_item_id, oi.quantity, " +
+            "       (SELECT COUNT(*) FROM allocations a " +
+            "        WHERE a.order_item_id = oi.id AND a.status IN ('active','packed')) AS allocated " +
+            "FROM order_items oi WHERE oi.order_id = ? AND oi.variant_id = ? AND oi.tenant_id = ? ORDER BY oi.id",
+            orderId, variantId, tenantId);
+        if (items.isEmpty()) return labelWrongVariant(orderId, tenantId, label);
+
+        UUID orderItemId = null;
+        for (Map<String, Object> item : items) {
+            boolean room = ((Number) item.get("allocated")).longValue() < ((Number) item.get("quantity")).longValue();
+            if (!room) continue;
+            UUID id = (UUID) item.get("order_item_id");
+            if (id.equals(preferredOrderItemId)) { orderItemId = id; break; }
+            if (orderItemId == null) orderItemId = id;
+        }
+        if (orderItemId == null) {
+            if (items.stream().allMatch(i -> ((Number) i.get("quantity")).longValue() == 0)) {
+                return ScanResult.rejected("REMOVED_IN_SHOPIFY", "This item was removed from the order in Shopify");
+            }
+            return ScanResult.rejected("LINE_FILLED", "This line is already complete");
+        }
+
+        // Same lock-then-recount as a piece scan (see scan() step 5 for why the count is a separate statement).
+        long lockedQuantity = ((Number) jdbc.queryForList(
+            "SELECT quantity FROM order_items WHERE id = ? FOR UPDATE", orderItemId).get(0).get("quantity")).longValue();
+        Long counted = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM allocations WHERE order_item_id = ? AND status IN ('active','packed')",
+            Long.class, orderItemId);
+        long lockedAllocated = counted != null ? counted : 0L;
+        if (lockedQuantity == 0) return ScanResult.rejected("REMOVED_IN_SHOPIFY", "This item was removed from the order in Shopify");
+        if (lockedAllocated >= lockedQuantity) return ScanResult.rejected("LINE_FILLED", "This line is already complete");
+
+        UUID labelOrderId = jdbc.queryForObject("SELECT order_id FROM label_codes WHERE id = ?", UUID.class, label.id());
+        InventoryLedger.BindResult bound;
+        try {
+            bound = ledger.bindLabel(label.id(), actorUserId, InventoryLedger.BindRef.packScan(orderId, labelOrderId), barcode);
+        } catch (com.traceability.labels.LabelCodeException e) {
+            // Thrown before bindLabel writes anything (its noRollbackFor contract) — a plain refusal.
+            return ScanResult.rejectedLocalized(e.code().name(), e.messageEn(), e.messageAr());
+        }
+        // A code bound meanwhile (a concurrent scan won it) is that piece now — the piece path's answer.
+        if (bound.alreadyBound()) return ScanResult.rejected("LABEL_JUST_USED", "This label was just used by another scan — scan it again");
+
+        // From here on nothing returns a rejection: a failure must throw so the bind rolls back with it.
+        ledger.transition(bound.pieceId(), PieceStatus.AVAILABLE, PieceStatus.RESERVED,
+            "scan", actorUserId, TransitionContext.forOrder(orderId, orderId));
+        jdbc.update(
+            "INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status, allocated_by, allocated_at) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, 'active', ?, now())",
+            tenantId, orderItemId, bound.pieceId(), actorUserId);
+        return ScanResult.success(bound.pieceId(), barcode, variantId, orderItemId,
+            (int) lockedAllocated + 1, (int) lockedQuantity, isOrderFullyScanned(orderId, tenantId));
+    }
+
+    /** "This label is for <product · variant>, this order needs <the order's unfilled lines>". */
+    private ScanResult labelWrongVariant(UUID orderId, UUID tenantId, com.traceability.labels.UnusedLabels.Unused label) {
+        List<String> needs = jdbc.queryForList(
+            "SELECT pr.title || CASE WHEN v.title IS NULL OR v.title = 'Default Title' THEN '' ELSE ' · ' || v.title END " +
+            "FROM order_items oi JOIN variants v ON v.id = oi.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE oi.order_id = ? AND oi.tenant_id = ? AND oi.quantity > " +
+            "      (SELECT COUNT(*) FROM allocations a WHERE a.order_item_id = oi.id AND a.status IN ('active','packed')) " +
+            "ORDER BY oi.id", String.class, orderId, tenantId);
+        String is = label.productTitle() + (label.variantTitle() == null || "Default Title".equals(label.variantTitle())
+            ? "" : " · " + label.variantTitle());
+        String need = needs.isEmpty() ? "nothing more" : String.join(", ", needs);
+        String needAr = needs.isEmpty() ? "لا شيء آخر" : String.join("، ", needs);
+        return ScanResult.rejectedLocalized("WRONG_VARIANT",
+            "This label is for " + is + ", this order needs " + need,
+            "هذا الملصق لـ " + is + "، وهذا الطلب يحتاج " + needAr);
     }
 
     // ── Un-scan ───────────────────────────────────────────────────────────────
@@ -1400,6 +1507,11 @@ public class FulfillService {
     static final String UNTAGGED_SCAN_MESSAGE =
         "This piece has no barcode yet (untagged) — it gets one when a label is stuck on and scanned";
 
+    /**
+     * {@code messageAr}: set only on the flexible-labeling refusals whose text the server words (a label for
+     * another product, a voided label, no untagged piece left) — the screens then show message / messageAr as
+     * sent. Null (and left out of the JSON) everywhere else, so every other response is unchanged.
+     */
     public record ScanResult(
             boolean  success,
             String   code,
@@ -1410,17 +1522,23 @@ public class FulfillService {
             UUID     orderItemId,
             int      allocatedCount,
             int      requiredQuantity,
-            boolean  allComplete) {
+            boolean  allComplete,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String   messageAr) {
 
         static ScanResult success(String pieceId, String barcode, UUID variantId,
                                   UUID orderItemId, int allocated, int required,
                                   boolean allComplete) {
             return new ScanResult(true, "SCANNED", null, pieceId, barcode,
-                variantId, orderItemId, allocated, required, allComplete);
+                variantId, orderItemId, allocated, required, allComplete, null);
         }
 
         static ScanResult rejected(String code, String message) {
-            return new ScanResult(false, code, message, null, null, null, null, 0, 0, false);
+            return new ScanResult(false, code, message, null, null, null, null, 0, 0, false, null);
+        }
+
+        static ScanResult rejectedLocalized(String code, String messageEn, String messageAr) {
+            return new ScanResult(false, code, messageEn, null, null, null, null, 0, 0, false, messageAr);
         }
     }
 }

@@ -3,11 +3,16 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
-  Lock, Layers, RefreshCw, ChevronRight, Printer,
+  Lock, Layers, RefreshCw, ChevronRight, Printer, Tag,
 } from 'lucide-react'
 import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
 import Layout from '../components/Layout'
 import PrintWaybillsDialog from './fulfill/PrintWaybillsDialog'
+import {
+  LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
+  scanRejectionText, usePackLineHighlight,
+} from './fulfill/packLabels'
+import type { PackOrderLabels } from '../api'
 import { getAccessToken } from '../auth'
 import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
@@ -73,6 +78,9 @@ interface OrderItem {
   imageUrl: string | null
   allocated: number
   allocatedPieces: AllocatedPiece[]
+  /** Flexible labeling slice 4 — present only for a switched-on tenant. */
+  labelsUnused?: number
+  untaggedStock?: number
 }
 
 interface OrderDetail {
@@ -96,6 +104,8 @@ interface OrderDetail {
   /** S2 — this shipment's waybill was printed in a print batch. */
   awbPrinted?: boolean
   items: OrderItem[]
+  /** Flexible labeling slice 4 — present only for a switched-on tenant. */
+  labels?: PackOrderLabels
 }
 
 interface ScanResult {
@@ -107,6 +117,8 @@ interface ScanResult {
   allocatedCount: number
   requiredQuantity: number
   allComplete: boolean
+  /** Flexible labeling slice 4 — set only on refusals the server words in both languages. */
+  messageAr?: string
 }
 
 interface CancelResult {
@@ -646,6 +658,9 @@ function QueueView({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [showPrint, setShowPrint] = useState(false)
+  // Flexible labeling slice 4: "Print labels" (switched-on tenants only) — the waybill set, or one order.
+  const { flexibleLabeling } = useCapabilities()
+  const [labelsFor, setLabelsFor] = useState<{ orderId?: string; number?: string | null } | null>(null)
 
   // Empty-queue hint: open orders held out of the queue ONLY because no Bosta waybill
   // exists yet (PICKABLE_ORDERS_FILTER requires a 'created' forward shipment). Fetched
@@ -724,6 +739,11 @@ function QueueView({
           {printable.length > 0 && (
             <Button size="sm" iconStart={Printer} onClick={() => setShowPrint(true)}>
               {t('fulfill.printBatch.button')}
+            </Button>
+          )}
+          {flexibleLabeling && pickQueue.length > 0 && (
+            <Button size="sm" variant="secondary" iconStart={Tag} onClick={() => setLabelsFor({})}>
+              {t('fulfill.labels.button')}
             </Button>
           )}
           <Button variant="secondary" size="sm" iconStart={Layers} onClick={() => navigate('/fulfill/gather')}>
@@ -817,7 +837,7 @@ function QueueView({
 
                   {paymentPill(order)}
 
-                  <div>
+                  <div className="flex items-center gap-2">
                     {order.locked_by ? (
                       <span className="inline-flex items-center gap-1.5 bg-warning/[0.14] border border-warning/[0.30] text-warning-text text-caption font-semibold px-2 py-0.5 rounded-full">
                         <Lock size={10} strokeWidth={2} />
@@ -826,12 +846,25 @@ function QueueView({
                     ) : (
                       <Badge status={order.status} />
                     )}
+                    {flexibleLabeling && (
+                      // The row opens the order; this button must not — the span stops the click there.
+                      <span data-testid={`row-labels-${order.id}`} onClick={e => e.stopPropagation()}>
+                        <Button size="sm" variant="ghost" iconStart={Tag}
+                          onClick={() => setLabelsFor({ orderId: order.id, number: order.number })}>
+                          {t('fulfill.labels.rowButton')}
+                        </Button>
+                      </span>
+                    )}
                   </div>
                 </div>
               )
             })}
           </div>
         </>
+      )}
+
+      {labelsFor && (
+        <PrintLabelsDialog orderId={labelsFor.orderId} orderNumber={labelsFor.number} onClose={() => setLabelsFor(null)} />
       )}
 
       {showPrint && (
@@ -967,6 +1000,9 @@ function PickScreen({
 
   useEffect(() => { loadOrder() }, [loadOrder])
 
+  // Flexible labeling slice 4: the highlighted line (first unfilled, auto-advancing) — display only.
+  const lineHighlight = usePackLineHighlight(order ? order.items.filter(i => i.quantity > 0) : [])
+
   // S2 — a waybill already printed in a print batch counts as printed: Complete doesn't ask
   // for a reprint. Only ever turns the flag on.
   useEffect(() => { if (order?.awbPrinted) setAwbPrintedOnce(true) }, [order?.awbPrinted])
@@ -1024,7 +1060,7 @@ function PickScreen({
     describe: (code, o) => lastResult
       ? (o.success
           ? `${lastResult.barcode ?? code} · ${lastResult.allocatedCount}/${lastResult.requiredQuantity}`
-          : t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code }))
+          : scanRejectionText(t, i18n.language, lastResult))
       : null,
     paused: showCancelConfirm,
   })
@@ -1194,12 +1230,26 @@ function PickScreen({
           {t('fulfill.allItemsRemoved')}
         </div>
       )}
+      {hasLabelFields(order.labels) && (
+        <PackLabelsBar
+          orderId={order.id}
+          labels={order.labels}
+          line={pickItems.find(i => i.id === lineHighlight.highlighted) ?? null}
+          lineName={(() => { const l = pickItems.find(i => i.id === lineHighlight.highlighted); return l ? lineDisplayName(l) : '' })()}
+          onPrinted={loadOrder}
+        />
+      )}
       {pickItems.map(item => {
         const complete = item.allocated >= item.quantity
+        const labelled = hasLabelFields(order.labels)
         return (
           <div
             key={item.id}
-            className={`card p-3.5 flex items-start gap-3 md:gap-4 ${complete ? 'border-success/40' : ''}`}
+            data-testid={`pick-line-${item.id}`}
+            data-highlighted={labelled && item.id === lineHighlight.highlighted ? 'true' : undefined}
+            onClick={labelled ? () => lineHighlight.select(item.id) : undefined}
+            className={`card p-3.5 flex items-start gap-3 md:gap-4 ${complete ? 'border-success/40' : ''} ${
+              labelled ? lineHighlightClass(item.id === lineHighlight.highlighted) : ''}`}
           >
             {/* Product image (S1) — fixed 88px tile in every state (image / none / failed),
                 so a line never shifts; a missing or broken image shows ProductThumb's
@@ -1222,6 +1272,7 @@ function PickScreen({
                   </p>
                   {/* SKU — font-mono per spec */}
                   {item.sku && <p className="text-caption text-muted font-mono break-words">{item.sku}</p>}
+                  <LineLabelStatus line={item} />
                 </div>
                 <span className={`text-body font-mono font-semibold flex-shrink-0 ${
                   complete ? 'text-success-text' : 'text-muted'
@@ -1273,7 +1324,7 @@ function PickScreen({
   const scanFeedback = lastResult && (
     lastResult.success
       ? <><span>✓ </span><span className="font-mono">{lastResult.barcode}</span></>
-      : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`
+      : `✗ ${scanRejectionText(t, i18n.language, lastResult)}`
   )
 
   // SAFETY-CRITICAL scan input — ref, onKeyDown, autoFocus: do not modify. P1 (approved by

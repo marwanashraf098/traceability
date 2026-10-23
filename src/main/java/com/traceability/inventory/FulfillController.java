@@ -82,7 +82,7 @@ public class FulfillController {
             @PathVariable UUID orderId,
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return svc.scan(orderId, req.barcode(), principal.userId());
+        return svc.scan(orderId, req.barcode(), principal.userId(), req.orderItemId());
     }
 
     @DeleteMapping("/{orderId}/scan/{pieceId}")
@@ -198,7 +198,8 @@ public class FulfillController {
         return svc.unpackPiece(orderId, pieceId, principal.userId());
     }
 
-    public record ScanRequest(String barcode) {}
+    /** orderItemId: optional — the highlighted line (flexible labeling slice 4; used only when a label is bound). */
+    public record ScanRequest(String barcode, UUID orderItemId) {}
     public record AwbLinkRequest(String trackingNumber) {}
     public record SelfPickupRequest(boolean selfPickup) {}
     public record ConvertToSelfPickupRequest(String reason) {}
