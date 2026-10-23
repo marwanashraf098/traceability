@@ -282,8 +282,10 @@ class GenericG4bIsolationGoldenTest {
         Ord o1 = order(c, "#7001", b + 1);
         Ord o2 = order(c, "#7002", b + 2);
         String spare1 = stockPiece(c, variant2), spare2 = stockPiece(c, variant2);
-        UUID x1 = exchangeRequest(c, o1, "RR-XCHNGA");
-        UUID x2 = exchangeRequest(c, o2, "RR-XCHNGB");
+        // Distinct ages: back-to-back now() calls can land on the same millisecond, which merges
+        // two timestamp tokens and shifts the numbering of every later one.
+        UUID x1 = exchangeRequest(c, o1, "RR-XCHNGA", "3 hours");
+        UUID x2 = exchangeRequest(c, o2, "RR-XCHNGB", "2 hours 59 minutes");
 
         Map<String, Object> out = new LinkedHashMap<>();
         String token = jwt.issueAccessToken(owner, tenant, "owner");
@@ -481,12 +483,12 @@ class GenericG4bIsolationGoldenTest {
         return piece(c, variant, "available", null, null);
     }
 
-    private UUID exchangeRequest(Ctx c, Ord o, String reference) {
+    private UUID exchangeRequest(Ctx c, Ord o, String reference, String age) {
         UUID id = jdbc.queryForObject(
             "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, created_at, pickup_city_id, " +
             "    pickup_city_name, pickup_district_id, pickup_district_name) " +
-            "VALUES (?, ?, 'exchange', 'requested', ?, now() - interval '3 hours', ?, 'Cairo', ?, 'Nasr City - 7th District') RETURNING id",
-            UUID.class, c.tenant(), o.id(), reference, CAIRO, NASR);
+            "VALUES (?, ?, 'exchange', 'requested', ?, now() - ?::interval, ?, 'Cairo', ?, 'Nasr City - 7th District') RETURNING id",
+            UUID.class, c.tenant(), o.id(), reference, age, CAIRO, NASR);
         jdbc.update("INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, replacement_variant_id) " +
             "VALUES (?, ?, (SELECT id FROM pieces WHERE short_code = ?), ?, 'wrong_size', ?)",
             c.tenant(), id, o.piece(), c.variant(), c.variant2());
