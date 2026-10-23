@@ -61,7 +61,11 @@ public class StockTakeService {
         }
 
         UUID locationId = resolveFulfillmentLocation(tenantId, requestedLocationId);
-        refuseUntaggedInScope(jdbc, tenantId, locationId, variantSubset ? variantIds : null);
+        // Flexible labeling slice 7: with the switch on, untagged pieces are counted per variant
+        // (StockTakeUntagged); with it off a stock take still refuses to run over them.
+        if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            refuseUntaggedInScope(jdbc, tenantId, locationId, variantSubset ? variantIds : null);
+        }
 
         UUID sessionId = UUID.randomUUID();
         jdbc.update(
@@ -101,11 +105,12 @@ public class StockTakeService {
         "('available', 'damaged', 'on_hold', 'reserved', 'packed', 'awaiting_pickup', 'return_pending_inspection')";
 
     /**
-     * Flexible labeling slice 2 — a stock take never runs over UNTAGGED pieces: they can't be
-     * scanned, so every one would be written off as lost. Refuses (409 STOCK_TAKE_UNTAGGED_IN_SCOPE,
-     * naming the location and the count) when any physically present untagged piece is at the
-     * location, within the variant subset when there is one ({@code variantIds} null = every variant).
-     * Called at open AND at finalize (untagged stock may arrive while a session is open).
+     * Flexible labeling slice 2 — with the switch OFF a stock take never runs over UNTAGGED pieces:
+     * they can't be scanned, so every one would be written off as lost. Refuses (409
+     * STOCK_TAKE_UNTAGGED_IN_SCOPE, naming the location and the count) when any physically present
+     * untagged piece is at the location, within the variant subset when there is one ({@code variantIds}
+     * null = every variant). Called at open AND at finalize (untagged stock may arrive while a session is
+     * open). Slice 7: with the switch ON they are counted instead and this is not called.
      */
     static void refuseUntaggedInScope(JdbcTemplate jdbc, UUID tenantId, UUID locationId, List<UUID> variantIds) {
         Integer n = jdbc.queryForObject(
@@ -135,8 +140,8 @@ public class StockTakeService {
             return jdbc.update(con -> {
                 var ps = con.prepareStatement(
                     "INSERT INTO stock_take_expected " +
-                    "(tenant_id, session_id, piece_id, variant_id, status_at_open) " +
-                    "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
+                    "(tenant_id, session_id, piece_id, variant_id, status_at_open, untagged_at_open) " +
+                    "SELECT ?, ?, p.id, p.variant_id, p.status::text, " + UntaggedPieces.untaggedSql("p") + " " +
                     "FROM pieces p " +
                     "WHERE p.tenant_id = ? AND p.current_location_id = ? AND p.variant_id = ANY(?) " +
                     "  AND p.status::text IN " + PHYSICALLY_PRESENT_STATUSES_SQL);
@@ -150,8 +155,8 @@ public class StockTakeService {
         }
         return jdbc.update(
             "INSERT INTO stock_take_expected " +
-            "(tenant_id, session_id, piece_id, variant_id, status_at_open) " +
-            "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
+            "(tenant_id, session_id, piece_id, variant_id, status_at_open, untagged_at_open) " +
+            "SELECT ?, ?, p.id, p.variant_id, p.status::text, " + UntaggedPieces.untaggedSql("p") + " " +
             "FROM pieces p " +
             "WHERE p.tenant_id = ? AND p.current_location_id = ? " +
             "  AND p.status::text IN " + PHYSICALLY_PRESENT_STATUSES_SQL,
@@ -232,8 +237,8 @@ public class StockTakeService {
             "WHERE (barcode = ? OR id = ? OR short_code = ?) AND tenant_id = ?",
             rs -> rs.next() ? new PieceRow(rs.getString("id"), rs.getString("status"), rs.getBoolean("untagged")) : null,
             lookup, lookup, lookup, tenantId);
-        // Flexible labeling v1: an untagged piece (only matchable by its typed internal code) is never
-        // part of a stock take — finalize refuses while one is in scope.
+        // Flexible labeling: an untagged piece (only matchable by its typed internal code) is never
+        // scanned — slice 7 counts untagged pieces per variant instead (switch off: refused at open/finalize).
         if (piece != null && piece.untagged()) throw com.traceability.labels.UntaggedException.piece();
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -331,6 +336,58 @@ public class StockTakeService {
         return "out_of_scope";
     }
 
+    // ── Flexible labeling slice 7: untagged counts ────────────────────────────
+
+    /** Largest untagged count accepted for one variant (a typo guard, far above any real shelf). */
+    static final int MAX_UNTAGGED_COUNT = 100_000;
+
+    /**
+     * Types (or, with {@code counted} null, clears) the untagged count for one variant of an open session.
+     * Only for a switched-on tenant and a variant with untagged pieces in this session's snapshot. 0 is a real
+     * count (every expected untagged piece is missing); a blank count blocks finalize.
+     */
+    @Transactional
+    public Map<String, Object> setUntaggedCount(UUID sessionId, UUID variantId, Integer counted, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpenSession(sessionId, tenantId);
+        if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            throw com.traceability.labels.UntaggedException.untaggedCountUnavailable();
+        }
+        if (!StockTakeUntagged.inSnapshot(jdbc, tenantId, sessionId, variantId)) {
+            throw com.traceability.labels.UntaggedException.notUntaggedInSession();
+        }
+        if (counted == null) {
+            jdbc.update("DELETE FROM stock_take_untagged_counts WHERE session_id = ? AND variant_id = ? AND tenant_id = ?",
+                sessionId, variantId, tenantId);
+        } else {
+            if (counted < 0 || counted > MAX_UNTAGGED_COUNT) {
+                throw com.traceability.labels.UntaggedException.invalidUntaggedCount(MAX_UNTAGGED_COUNT);
+            }
+            jdbc.update(
+                "INSERT INTO stock_take_untagged_counts (tenant_id, session_id, variant_id, counted, counted_by) " +
+                "VALUES (?, ?, ?, ?, ?) " +
+                "ON CONFLICT (session_id, variant_id) DO UPDATE SET counted = EXCLUDED.counted, " +
+                "  counted_by = EXCLUDED.counted_by, counted_at = now()",
+                tenantId, sessionId, variantId, counted, actorUserId);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sessionId", sessionId);
+        out.put("variantId", variantId);
+        out.put("counted", counted);
+        return out;
+    }
+
+    /** The untagged rows for the counting screen (switch on only; an empty list otherwise). */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> untaggedCounts(UUID sessionId) {
+        UUID tenantId = TenantContext.require();
+        SessionRow session = requireSession(sessionId, tenantId);
+        if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) return List.of();
+        boolean open = "open".equals(session.status());
+        return StockTakeUntagged.rows(jdbc, tenantId, sessionId, session.locationId(), open).stream()
+            .map(r -> StockTakeUntagged.toResponse(r, open)).toList();
+    }
+
     // ── Step 6.1: list + detail reads ────────────────────────────────────────
 
     /**
@@ -345,10 +402,10 @@ public class StockTakeService {
             "SELECT s.id AS session_id, s.status, s.scope_type, s.opened_by, " +
             "       u.name AS opened_by_name, s.opened_at, " +
             "       (SELECT COUNT(*) FROM stock_take_expected se " +
-            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged')) AS expected, " +
+            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged') AND NOT se.untagged_at_open) AS expected, " +
             "       (SELECT COUNT(*) FROM stock_take_expected se " +
             "        JOIN stock_take_scans ts ON ts.session_id = se.session_id AND ts.piece_id = se.piece_id " +
-            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged')) AS counted " +
+            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged') AND NOT se.untagged_at_open) AS counted " +
             "FROM stock_take_sessions s " +
             "LEFT JOIN users u ON u.id = s.opened_by " +
             "WHERE s.tenant_id = ? " +
@@ -420,6 +477,12 @@ public class StockTakeService {
             "FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? AND status = 'pushed'",
             Integer.class, sessionId, tenantId);
         row.put("pushedToShopify", pushed.isEmpty() ? 0 : pushed.get(0));
+        // Flexible labeling slice 7: the counting screen's untagged rows (switch on only — absent otherwise).
+        if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            boolean open = "open".equals(row.get("status"));
+            row.put("untagged", StockTakeUntagged.rows(jdbc, tenantId, sessionId, (UUID) row.get("locationId"), open).stream()
+                .map(r -> StockTakeUntagged.toResponse(r, open)).toList());
+        }
         return row;
     }
 
@@ -510,7 +573,7 @@ public class StockTakeService {
             "FROM stock_take_expected se " +
             "JOIN stock_take_sessions sts ON sts.id = se.session_id " +
             "LEFT JOIN stock_take_scans ts ON ts.session_id = se.session_id AND ts.piece_id = se.piece_id " +
-            "WHERE sts.tenant_id = ? AND sts.status = 'finalized'",
+            "WHERE sts.tenant_id = ? AND sts.status = 'finalized' AND NOT se.untagged_at_open",
             rs -> {
                 rs.next();
                 return new VarianceInputs(rs.getLong("expected_on_shelf"), rs.getLong("counted"));

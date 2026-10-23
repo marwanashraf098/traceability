@@ -43,7 +43,7 @@ public class StockTakeReconciliationService {
 
     private static final String EXPECTED_QUERY =
         "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, " +
-        "       se.status_at_open, p.status::text AS live_status, " +
+        "       se.status_at_open, p.status::text AS live_status, se.untagged_at_open, " +
         "       (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, ts.scan_device, " +
         "       o.id AS order_id, o.number AS order_number, " +
         "       s.id AS shipment_id, s.tracking_number " +
@@ -115,6 +115,8 @@ public class StockTakeReconciliationService {
         int totalCounted = 0;
 
         for (Map<String, Object> row : expectedRows) {
+            // Slice 7: untagged pieces are counted per variant (the "untagged" section), never row by row.
+            if (Boolean.TRUE.equals(row.get("untagged_at_open"))) continue;
             String liveStatus = (String) row.get("live_status");
             String statusAtOpen = (String) row.get("status_at_open");
             boolean scanned = Boolean.TRUE.equals(row.get("scanned"));
@@ -186,6 +188,12 @@ public class StockTakeReconciliationService {
         // modal shows exactly these numbers.
         if ("open".equals(session.status())) {
             out.put("finalizePlan", plan(sessionId, tenantId, session.completeCount()).toResponse());
+        }
+        // Slice 7: the per-variant untagged counts (switch on only — the key is absent otherwise).
+        if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            boolean open = "open".equals(session.status());
+            out.put("untagged", StockTakeUntagged.rows(jdbc, tenantId, sessionId, session.locationId(), open).stream()
+                .map(r -> StockTakeUntagged.toResponse(r, open)).toList());
         }
         return out;
     }
@@ -280,6 +288,12 @@ public class StockTakeReconciliationService {
 
     private Map<String, Object> resolveOne(StockTakeService.SessionRow session, UUID tenantId,
                                            String pieceId, String action, UUID actorUserId) {
+        // Slice 7: an untagged piece is counted per variant — never found / written off / damaged one by one.
+        if (UntaggedPieces.isUntagged(jdbc, tenantId, pieceId) || Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM stock_take_expected WHERE session_id = ? AND tenant_id = ? " +
+                "  AND piece_id = ? AND untagged_at_open)", Boolean.class, session.id(), tenantId, pieceId))) {
+            throw com.traceability.labels.UntaggedException.countedPerProduct();
+        }
         return switch (action) {
             case "found"        -> resolveFound(session, tenantId, pieceId, actorUserId);
             case "lost"         -> resolveLost(session, tenantId, pieceId, actorUserId);
@@ -424,7 +438,17 @@ public class StockTakeReconciliationService {
      */
     public record FinalizePlan(int scans, int expectedFree, int scannedFree, boolean completeCount,
                                List<WriteOff> writeOffs, List<String> damageCorrections, List<Found> founds,
-                               int driftSkipped, int alreadyWrittenOff, List<Map<String, Object>> byVariant) {
+                               int driftSkipped, int alreadyWrittenOff, List<Map<String, Object>> byVariant,
+                               boolean untaggedCounting, List<StockTakeUntagged.Row> untagged) {
+
+        /** Slice 7: the untagged pieces finalize writes off — the counted shortfall, oldest first. */
+        public List<String> untaggedWriteOffs() {
+            return untagged.stream().flatMap(r -> r.writeOffs().stream()).toList();
+        }
+
+        public int untaggedMissingCounts() {
+            return (int) untagged.stream().filter(StockTakeUntagged.Row::missing).count();
+        }
 
         public double coverage() {
             return expectedFree == 0 ? 1.0 : (double) scannedFree / expectedFree;
@@ -436,8 +460,13 @@ public class StockTakeReconciliationService {
 
         /** Why finalize would be refused right now, or null. */
         public String blockedReason() {
-            if (scans == 0) return "ZERO_SCANS";
-            if (!completeCount && (!writeOffs.isEmpty() || alreadyWrittenOff > 0)) return "ATTESTATION_REQUIRED";
+            // Slice 7: a session whose only free stock is untagged is finished by its counts, not by scans.
+            boolean onlyUntagged = untaggedCounting && !untagged.isEmpty() && expectedFree == 0;
+            if (scans == 0 && !onlyUntagged) return "ZERO_SCANS";
+            if (untaggedMissingCounts() > 0) return "UNTAGGED_COUNT_MISSING";
+            if (!completeCount && (!writeOffs.isEmpty() || alreadyWrittenOff > 0 || !untaggedWriteOffs().isEmpty())) {
+                return "ATTESTATION_REQUIRED";
+            }
             return null;
         }
 
@@ -453,8 +482,16 @@ public class StockTakeReconciliationService {
             m.put("foundIncrements", founds.stream().filter(Found::shopifyIncrement).count());
             m.put("driftSkipped", driftSkipped);
             m.put("alreadyWrittenOff", alreadyWrittenOff);
-            m.put("shopifyDecrement", byVariant.stream().mapToInt(v -> (Integer) v.get("shopifyDecrement")).sum());
+            m.put("shopifyDecrement", byVariant.stream().mapToInt(v -> (Integer) v.get("shopifyDecrement")).sum()
+                + untaggedWriteOffs().size());
             m.put("byVariant", byVariant);
+            if (untaggedCounting) {
+                // Slice 7: every untagged write-off is FROM available, so each one is −1 in Shopify too.
+                m.put("untagged", untagged.stream().map(r -> StockTakeUntagged.toResponse(r, true)).toList());
+                m.put("untaggedWriteOffs", untaggedWriteOffs().size());
+                m.put("untaggedExtra", untagged.stream().mapToInt(StockTakeUntagged.Row::extra).sum());
+                m.put("untaggedMissingCounts", untaggedMissingCounts());
+            }
             m.put("requiresTypedConfirmation", requiresTypedConfirmation());
             m.put("minCoveragePercent", Math.round(StockTakeFinalizePolicy.MIN_COVERAGE * 100));
             m.put("maxWriteOffPercent", Math.round(StockTakeFinalizePolicy.MAX_WRITE_OFF_SHARE * 100));
@@ -466,7 +503,7 @@ public class StockTakeReconciliationService {
     private static final String PLAN_EXPECTED_QUERY =
         "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, se.status_at_open, " +
         "       p.status::text AS live_status, (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, " +
-        "       " + UntaggedPieces.untaggedSql("p") + " AS untagged, " +
+        "       " + UntaggedPieces.untaggedSql("p") + " AS untagged, se.untagged_at_open, " +
         "       EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = se.tenant_id AND pe.piece_id = se.piece_id " +
         "               AND pe.to_status = 'lost'::piece_status AND pe.metadata->>'reason' = 'stock_take_missing' " +
         "               AND pe.metadata->>'session_id' = se.session_id::text) AS written_off_here " +
@@ -485,6 +522,10 @@ public class StockTakeReconciliationService {
         "ORDER BY p.id FOR UPDATE";
 
     FinalizePlan plan(UUID sessionId, UUID tenantId, boolean completeCount) {
+        boolean untaggedCounting = com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId);
+        List<StockTakeUntagged.Row> untagged = untaggedCounting
+            ? StockTakeUntagged.rows(jdbc, tenantId, sessionId, stockTake.requireSession(sessionId, tenantId).locationId(), true)
+            : List.of();
         List<Map<String, Object>> rows = jdbc.queryForList(PLAN_EXPECTED_QUERY, sessionId, tenantId);
         Integer scans = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND tenant_id = ? AND piece_id IS NOT NULL",
@@ -502,9 +543,10 @@ public class StockTakeReconciliationService {
             String pieceId = (String) r.get("piece_id");
             UUID variantId = (UUID) r.get("variant_id");
 
-            // Flexible labeling: an untagged piece can't be scanned, so it is never written off or
-            // corrected by a count (finalize refuses while one is in scope; this is the backstop).
-            if (Boolean.TRUE.equals(r.get("untagged"))) continue;
+            // Flexible labeling: an untagged piece can't be scanned, so the labeled rules never write it off
+            // or correct it — slice 7's counted shortfall (StockTakeUntagged) is the ONLY way a stock take
+            // writes one off. Untagged at open or now: both are skipped.
+            if (Boolean.TRUE.equals(r.get("untagged")) || Boolean.TRUE.equals(r.get("untagged_at_open"))) continue;
             if (scanned && "damaged".equals(r.get("scanned_condition")) && "available".equals(live)) {
                 damageCorrections.add(pieceId);
             }
@@ -546,7 +588,7 @@ public class StockTakeReconciliationService {
             }
         }
         return new FinalizePlan(scans == null ? 0 : scans, expectedFree, scannedFree, completeCount,
-            writeOffs, damageCorrections, founds, driftSkipped, alreadyWrittenOff, variants);
+            writeOffs, damageCorrections, founds, driftSkipped, alreadyWrittenOff, variants, untaggedCounting, untagged);
     }
 
     private static Map<String, Object> variantRow(Map<String, Object> r) {
@@ -610,17 +652,23 @@ public class StockTakeReconciliationService {
         }
         jdbc.query(LOCK_PIECES_QUERY, rs -> {}, tenantId, sessionId, tenantId, sessionId, tenantId);
 
-        // Flexible labeling slice 2: untagged stock may have arrived while the session was open.
-        StockTakeService.refuseUntaggedInScope(jdbc, tenantId, session.locationId(),
-            "variant_subset".equals(session.scopeType())
-                ? jdbc.queryForList("SELECT variant_id FROM stock_take_scope_variants WHERE session_id = ? AND tenant_id = ?",
-                                    UUID.class, sessionId, tenantId)
-                : null);
+        // Flexible labeling slice 2: with the switch OFF, untagged stock (which may have arrived while the
+        // session was open) still refuses finalize. Slice 7: with it ON, it is counted instead.
+        if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
+            StockTakeService.refuseUntaggedInScope(jdbc, tenantId, session.locationId(),
+                "variant_subset".equals(session.scopeType())
+                    ? jdbc.queryForList("SELECT variant_id FROM stock_take_scope_variants WHERE session_id = ? AND tenant_id = ?",
+                                        UUID.class, sessionId, tenantId)
+                    : null);
+        }
 
         FinalizePlan plan = plan(sessionId, tenantId, session.completeCount());
         if ("ZERO_SCANS".equals(plan.blockedReason())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "ZERO_SCANS: nothing was scanned in this stock take — finalizing would write off the whole count");
+        }
+        if ("UNTAGGED_COUNT_MISSING".equals(plan.blockedReason())) {
+            throw com.traceability.labels.UntaggedException.untaggedCountMissing(plan.untaggedMissingCounts());
         }
         if ("ATTESTATION_REQUIRED".equals(plan.blockedReason())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -635,9 +683,24 @@ public class StockTakeReconciliationService {
 
         // 3. Apply the count.
         for (WriteOff w : plan.writeOffs()) {
+            // Second layer: the labeled not-scanned rule never writes off an untagged piece.
+            if (UntaggedPieces.isUntagged(jdbc, tenantId, w.pieceId())) {
+                throw new IllegalStateException("labeled write-off of an untagged piece " + w.pieceId());
+            }
             String metadata = "{\"session_id\":\"" + sessionId + "\",\"reason\":\"stock_take_missing\"}";
             ledger.transition(w.pieceId(), PieceStatus.fromDb(w.origin()), PieceStatus.LOST, "adjusted", actorUserId,
                 new TransitionContext(null, null, null, null, metadata));
+        }
+        // Slice 7: the counted untagged shortfall — the same available → lost write-off (reason
+        // stock_take_missing), so the same per-variant pushStockTakeWriteOff below decrements Shopify.
+        for (String pieceId : plan.untaggedWriteOffs()) {
+            String metadata = "{\"session_id\":\"" + sessionId + "\",\"reason\":\"stock_take_missing\",\"untagged\":true}";
+            ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.LOST, "adjusted", actorUserId,
+                new TransitionContext(null, null, null, null, metadata));
+        }
+        for (StockTakeUntagged.Row r : plan.untagged()) {
+            jdbc.update("UPDATE stock_take_untagged_counts SET expected_at_finalize = ? " +
+                "WHERE session_id = ? AND variant_id = ? AND tenant_id = ?", r.expected(), sessionId, r.variantId(), tenantId);
         }
         for (String pieceId : plan.damageCorrections()) {
             pieceAdjustService.adjustPiece(pieceId, "damaged", "damaged_in_storage",
@@ -712,6 +775,7 @@ public class StockTakeReconciliationService {
         auditMeta.put("damageCorrections", plan.damageCorrections().size());
         auditMeta.put("founds", plan.founds().size());
         auditMeta.put("driftSkipped", plan.driftSkipped());
+        if (plan.untaggedCounting()) auditMeta.put("untaggedWriteOffs", plan.untaggedWriteOffs().size());
         auditService.record(actorUserId, "stock_take_finalize", "stock_take_session", sessionId.toString(), auditMeta);
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -722,6 +786,10 @@ public class StockTakeReconciliationService {
         out.put("damageCorrections", plan.damageCorrections().size());
         out.put("founds", plan.founds().size());
         out.put("driftSkipped", plan.driftSkipped());
+        if (plan.untaggedCounting()) {
+            out.put("untaggedWriteOffs", plan.untaggedWriteOffs().size());
+            out.put("untaggedExtra", plan.untagged().stream().mapToInt(StockTakeUntagged.Row::extra).sum());
+        }
         out.put("shopifySyncStatus", claimStatus);
         return out;
     }

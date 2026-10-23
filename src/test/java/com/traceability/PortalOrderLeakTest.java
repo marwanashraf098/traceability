@@ -394,6 +394,8 @@ class PortalOrderLeakTest {
                 "POST /api/v1/stock-takes/sessions/{sessionId}/sync/mark-resolved",
                 "POST /api/v1/stock-takes/sessions/{sessionId}/sync/repush",
                 "DELETE /api/v1/stock-takes/sessions/{sessionId}/scan/{pieceId}",
+                "GET /api/v1/stock-takes/sessions/{sessionId}/untagged-counts",
+                "PUT /api/v1/stock-takes/sessions/{sessionId}/untagged-counts/{variantId}",
                 "GET /api/v1/transfers/{transferId}", "POST /api/v1/transfers",
                 "POST /api/v1/transfers/{transferId}/begin-reconcile", "POST /api/v1/transfers/{transferId}/cancel",
                 "POST /api/v1/transfers/{transferId}/classify", "POST /api/v1/transfers/{transferId}/close",

@@ -3057,7 +3057,10 @@
         "typedPrompt": "Coverage is {{coverage}}% (below {{minCoverage}}%) or more than {{maxShare}}% of the stock would be written off. Type {{count}} to confirm.",
         "typedLabel": "Number of pieces to write off",
         "zeroScans": "Nothing was scanned in this count — it can't be finalized. Scan the shelf first, or cancel the count.",
-        "attestationRequired": "Attest that the count covered the full scope before finalizing write-offs."
+        "attestationRequired": "Attest that the count covered the full scope before finalizing write-offs.",
+        "untaggedMissing": "Enter the untagged count for {{count}} product(s) before finalizing.",
+        "untaggedWriteOff": "−{{count}} untagged written off as lost",
+        "untaggedExtra": "+{{count}} extra found (not added)"
       },
       "finalizeUnderstand": "I understand this permanently decrements Shopify inventory.",
       "finalizeConfirmButton": "Finalize + Push to Shopify",
@@ -3091,6 +3094,21 @@
       "repush": "Re-push",
       "nothingToPush": "Nothing to send to Shopify — no available stock was written off",
       "superseded": "Covered by the stock seed — Shopify was set to the current count when the warehouse was linked"
+    },
+    "untagged": {
+      "title": "Untagged pieces",
+      "hint": "These pieces have no label yet, so they can't be scanned. Count them on the shelf and type the number for each product — type 0 if there are none.",
+      "expected": "Untagged: expected {{count}}",
+      "counted": "counted",
+      "countedValue": "counted {{count}}",
+      "inputLabel": "Untagged count for {{variant}}",
+      "missing": "Enter the count — type 0 if there are none.",
+      "matches": "Matches",
+      "writeOffOpen": "−{{count}} untagged will be written off as lost",
+      "writeOffDone": "−{{count}} untagged written off as lost",
+      "extra": "{{count}} extra {{variant}} found — receive them with count-only receiving.",
+      "invalid": "Enter a whole number, 0 or more.",
+      "saveError": "Couldn't save the count. Try again."
     }
   },
   "transfers": {

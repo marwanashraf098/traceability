@@ -93,6 +93,26 @@ public class StockTakeController {
         stockTake.unscan(sessionId, pieceId);
     }
 
+    // ── Flexible labeling slice 7: untagged counts ───────────────────────────
+
+    /** Per-variant untagged rows for the counting screen (empty unless flexible labeling is on). */
+    @GetMapping("/sessions/{sessionId}/untagged-counts")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> untaggedCounts(@PathVariable UUID sessionId) {
+        return stockTake.untaggedCounts(sessionId);
+    }
+
+    /** Type the untagged count for one variant ({"counted": n}); {"counted": null} clears it. */
+    @PutMapping("/sessions/{sessionId}/untagged-counts/{variantId}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> setUntaggedCount(
+            @PathVariable UUID sessionId,
+            @PathVariable UUID variantId,
+            @RequestBody UntaggedCountRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return stockTake.setUntaggedCount(sessionId, variantId, req == null ? null : req.counted(), principal.userId());
+    }
+
     // ── Reconciliation + resolutions (Step 4) ────────────────────────────────
 
     @GetMapping("/sessions/{sessionId}/reconciliation")
@@ -160,6 +180,8 @@ public class StockTakeController {
 
     /** relayEventId: optional — the phone relay event this scan arrived as (Q1b); never trusted as-is. */
     public record ScanRequest(String barcode, String condition, UUID relayEventId) {}
+
+    public record UntaggedCountRequest(Integer counted) {}
 
     /** confirmWriteOffs: the write-off count the user typed, when the finalize plan requires it. */
     public record FinalizeRequest(Integer confirmWriteOffs) {}

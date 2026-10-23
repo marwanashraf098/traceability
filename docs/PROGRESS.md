@@ -4,6 +4,29 @@
 
 ## Current state
 
+**Dolt.eg x2 whole-tenant purge — COMMITTED on prod 2026-10-23 18:09:32 UTC (ops only, no code).** Sessions revoked
+18:03 UTC (30-min wait cut short by Marawan after a clean 5-min activity check); purge PASS (11,214 live + 9 dup rows
+incl. the Bosta courier_accounts row; 86 other-tenant tables / 360,964 rows hash-unchanged); JobRunr history 5,943 jobs
+removed (READ COMMITTED); post-check PASS (0 rows / uuid / text hits; shop, emails, Bosta freed). `~/.traced-prod.pgpass`
+deleted. App logs not checked — SSH to 167.233.46.223 is refused from this Mac; monitored via the DB instead. Tenants
+c8236578 (live: bdrskb-fw.myshopify.com, Bosta, 287 orders) and a93414d0 (empty duplicate signup). Kit in
+`~/Documents/traced-backups/dolt-2026-10-23/` (Jumi 2026-10-10 pattern, two targets, 73 tenant_id tables incl. the 7
+added since Jumi); backup `traced-prod-pre-dolt-purge-2026-10-23.dump` (restore verified: counts match prod except
+live-appending inbound tables).
+- **Gotcha (new):** JobRunr's housekeeping updates finished jobs constantly → a REPEATABLE READ `DELETE FROM jobrunr_jobs`
+  serialization-fails ("could not serialize access due to concurrent update"). JobRunr history now goes in a separate
+  READ COMMITTED step (`dolt_jobrunr_cleanup.sql`); the purge transaction keeps only the no-live-jobs guard.
+- **Restore gotcha:** `pg_restore` of a prod dump fails on `orders` (generated column → unqualified analytics_* functions
+  under the dump's empty search_path). Restore as SQL with the `set_config('search_path','',false)` line replaced by
+  `SET search_path = public, pg_catalog`.
+- Shopify location gid://shopify/Location/127435407729 was made by `locationAdd` (merchant-owned) — the app uninstall
+  doesn't remove it; the merchant deletes it in Shopify admin. Purge makes no Shopify / Bosta calls.
+- Re-signup worked: new tenant 1e5217e6 "Dolt.eg" created 18:29 UTC (embedded App Store onboarding, a different owner
+  email), shop reconnected via OAuth, Bosta connected, its own new Shopify location 127603048817. All shop webhooks
+  since the purge landed on it; 0 JobRunr jobs / failures naming the purged ids (checked 22:32 UTC).
+- Follow-ups: merchant deletes the OLD Shopify location 127435407729 (NOT 127603048817, the new tenant's) and the Traced webhook in their Bosta dashboard (until then
+  Bosta posts get 401 "unknown secret"); the app stays installed in their Shopify admin (webhooks acked + dropped).
+
 **G4b fix — "Allow exchanges" without Bosta (2026-10-23, branch `generic-courier-g4b-fix` off origin/main 0fe62fe; NOT
 deployed, no tenant switched on). No migration.** Live test (prod, test store with no Bosta): the switch was disabled
 ("Connect Bosta first"), so a non-Bosta store could never offer exchanges; tests passed only because fixtures set it.
@@ -81,8 +104,40 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slice 7: stock take counts untagged pieces (2026-10-23, branch `feat/flexible-labeling-s7` off
+origin/main 9245635; NOT merged, NOT deployed). Migration V183. Behind `flexible_labeling_enabled`.**
+- **Switch ON:** the slice-2 refusal is gone at open and finalize. The snapshot records `stock_take_expected.untagged_at_open`;
+  untagged pieces never go through the labeled rules (scan, per-row Found / lost / mark damaged → 409
+  UNTAGGED_COUNTED_PER_PRODUCT, the not-scanned write-off, damage correction, coverage, list / summary variance).
+- **Counts** (`stock_take_untagged_counts`, RLS; `GET/PUT /stock-takes/sessions/{id}/untagged-counts[/{variantId}]`,
+  owner/manager like every stock-take endpoint): one typed number per variant with untagged pieces in the snapshot;
+  `null` clears; 0 is a real count. Expected = snapshot pieces untagged at open that are STILL untagged, available and at
+  the session location (a piece bound to a label mid-count leaves the count, like the labeled drift guard). Untagged
+  stock received after open isn't expected (a surplus, never written off). `StockTakeUntagged` is the one place that
+  picks untagged write-offs.
+- **Finalize:** blank count while expected > 0 → 409 UNTAGGED_COUNT_MISSING ("Enter the untagged count for N
+  products", EN+AR). Shortfall → (expected − counted) pieces, oldest first (created_at, id), `available → lost`
+  `adjusted`, metadata `reason=stock_take_missing` (+ `untagged:true`) — the existing stock-take write-off, so the
+  existing per-variant `pushStockTakeWriteOff` (named decrement #1, StockTakeShopifyPushJob) carries the −N; no new
+  decrement path. Surplus → nothing written; "N extra … found — receive them with count-only receiving". Untagged
+  write-offs need the attestation (like labeled ones); the typed confirmation stays labeled-only. A session whose only
+  free stock is untagged finalizes on its counts with zero scans (ZERO_SCANS otherwise unchanged). Backstop: a labeled
+  write-off of an untagged piece throws.
+- **Switch OFF:** exactly as before, incl. the refusal — its text no longer says "Tag them" (Tag stock is hidden then):
+  "… has N untagged pieces from flexible labeling. Turn flexible labeling back on to count them." No untagged keys in
+  any response.
+- **UI:** `pages/stocktake/UntaggedCounts.tsx` on the counting screen ("Untagged: expected X · counted [__]", plain
+  number inputs, never auto-focused; container stops click propagation like TransferReconcile so the untouched
+  SAFETY-CRITICAL click-refocus doesn't steal the cursor; blur saves, Enter returns focus to the scan bar) and on
+  Review (editable while open, result when finalized). Finalize modal: blank-count block, per-variant
+  "−N untagged written off as lost" / "+N extra found (not added)". Rows come on the session detail / reconciliation
+  (no extra request with the switch off).
+- **Tests:** StockTakeUntaggedCountTest 11 (u1–u9, f1, x1 app_user), RlsCoverageTest +1, vitest stocktakeUntagged 6.
+  CountOnlyUntaggedTest.t1 now runs with the switch off (finally) + the new refusal text (approved). Registries:
+  MigrationSmokeTest 182 + RLS table, NotTracedBackfillTest 127, PortalOrderLeakTest 2 SKIP, RlsCoverageTest 1 COVERED.
+
 **Flexible labeling — slice 4: packing labels in order sequence + binding in Pick & Pack (2026-10-23, branch
-`feat/flexible-labeling-s4` off origin/main ccc8f8b; NOT merged, NOT deployed). Migration V182 (one index). Behind
+`feat/flexible-labeling-s4` off origin/main ccc8f8b; merged to main 9245635 2026-10-23, NOT deployed). Migration V182 (one index). Behind
 `flexible_labeling_enabled`.**
 - **Print labels** (`labels/PackLabelService`, `POST /api/v1/pack-labels/{preview,print,pdf,replacement}`,
   isAuthenticated like Print waybills; 404 with the switch off). Orders = `PackPrintBatchStore.candidates(scope, sort)`

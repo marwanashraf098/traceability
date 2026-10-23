@@ -1674,6 +1674,35 @@ export interface StockTakeSessionDetail {
   writtenOff?: number
   /** Units actually decremented in Shopify by this session's push (0 until it is pushed). */
   pushedToShopify?: number
+  /** Flexible labeling slice 7: per-variant untagged counts — present only while the switch is on. */
+  untagged?: StockTakeUntaggedRow[]
+}
+
+/**
+ * Flexible labeling slice 7 — one variant's untagged count. Open session: expected is live and writeOff is what
+ * finalize would write off now (counted short, oldest first). Finalized: what finalize compared with and did.
+ * counted null = not typed yet (blocks finalize while expected > 0).
+ */
+export interface StockTakeUntaggedRow {
+  variantId: string
+  variantTitle: string
+  sku: string | null
+  productTitle: string
+  expected: number
+  counted: number | null
+  writeOff: number
+  extra: number
+}
+
+export function getStockTakeUntaggedCounts(sessionId: string) {
+  return requestReadable<StockTakeUntaggedRow[]>(`/stock-takes/sessions/${sessionId}/untagged-counts`)
+}
+
+/** counted null clears the count. A refusal carries its own words (ServerMessageError). */
+export function setStockTakeUntaggedCount(sessionId: string, variantId: string, counted: number | null) {
+  return requestReadable<{ sessionId: string; variantId: string; counted: number | null }>(
+    `/stock-takes/sessions/${sessionId}/untagged-counts/${variantId}`,
+    { method: 'PUT', body: JSON.stringify({ counted }) })
 }
 
 export function getStockTakeSession(sessionId: string) {
@@ -1807,7 +1836,13 @@ export interface StockTakeFinalizePlan {
   requiresTypedConfirmation: boolean
   minCoveragePercent: number
   maxWriteOffPercent: number
-  blockedReason: 'ZERO_SCANS' | 'ATTESTATION_REQUIRED' | null
+  blockedReason: 'ZERO_SCANS' | 'UNTAGGED_COUNT_MISSING' | 'ATTESTATION_REQUIRED' | null
+  /** Flexible labeling slice 7 (switch on only): untagged pieces counted per variant. shopifyDecrement
+   *  above already includes untaggedWriteOffs (each one is an available → lost write-off). */
+  untagged?: StockTakeUntaggedRow[]
+  untaggedWriteOffs?: number
+  untaggedExtra?: number
+  untaggedMissingCounts?: number
 }
 
 export interface StockTakeReconciliation {
@@ -1823,6 +1858,8 @@ export interface StockTakeReconciliation {
   /** Q1b: count scans in the session, and how many of them came from a paired phone. */
   scanCount?: number
   phoneScanCount?: number
+  /** Flexible labeling slice 7: per-variant untagged counts — present only while the switch is on. */
+  untagged?: StockTakeUntaggedRow[]
 }
 
 export function getStockTakeReconciliation(sessionId: string) {
