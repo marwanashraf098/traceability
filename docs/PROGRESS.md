@@ -223,8 +223,8 @@ stock take).**
     close (only the close runs `markIntakeCompleteReturnLegsReturned`).
   - The Returns & exchanges page overflows at 390px (search box + table, pre-existing).
 
-**Overview top-SKUs tie-break (2026-10-21, branch `fix/top-skus-tiebreak` off main 90a6e7e; MERGED to main 2026-10-21, NOT
-deployed). No migration.** `OverviewService.topSkus()` ordered by `units DESC` only, so tied SKUs came back in any
+**Overview top-SKUs tie-break (2026-10-21, branch `fix/top-skus-tiebreak` off main 90a6e7e; MERGED to main e415f18 2026-10-21,
+DEPLOYED to prod 2026-10-23). No migration.** `OverviewService.topSkus()` ordered by `units DESC` only, so tied SKUs came back in any
 order (GenericAnalyticsIsolationTest's pre-G2 golden flaked on a 3-way tie at 8 units). Now `ORDER BY units DESC,
 v.sku ASC, v.id` (v.id for null skus — sku is nullable and not unique). Approved, including the order change on the
 Overview card for tied SKUs.
@@ -334,7 +334,7 @@ Slice 0:
   (done in slice 2).
 
 **DB write churn, slice B — shopify_webhook_events retention (2026-10-21, branch `perf/webhook-retention` off
-origin/main 2b258b7; MERGED to main 90a6e7e, NOT deployed). No migration.**
+origin/main 2b258b7; MERGED to main 90a6e7e, DEPLOYED to prod 2026-10-23). No migration.**
 - `integrations.shopify.ShopifyWebhookRetention` (+ `ShopifyWebhookRetentionJob`, `@Recurring`
   `shopify-webhook-retention`, 04:40 Africa/Cairo, retries 0). Deletes only PROCESSED rows (`processed_at` set,
   superseded included) received before the tenant's cutoff = `LEAST(now() - days, oldest received_at of the
@@ -367,7 +367,7 @@ origin/main 2b258b7; MERGED to main 90a6e7e, NOT deployed). No migration.**
   sku) is a separate change.
 
 **DB write churn, slices A + C (2026-10-21, branch `perf/db-write-churn` off origin/main 73eeb8d; MERGED to main
-2b258b7, NOT deployed). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
+2b258b7, DEPLOYED to prod 2026-10-21). No migration.** Step 0 diagnosis (prod pg_stat_statements since 2026-10-09): `UPDATE shipments SET
 last_polled_at` ~70k/day (1.75 GB WAL / 10 days), `shopify_webhook_events` growing ~6k rows / 25 MB a day with no
 retention, JobRunr ~16k jobs/day (Shopify webhook jobs 6.2k, Bosta webhook jobs 4.3k, print sweep 1.4k).
 - **A — the status walk's stamp** (`BostaStatusPollJob.walkTenant` → `stampChecked`): one UPDATE per page, and only
@@ -395,7 +395,8 @@ retention, JobRunr ~16k jobs/day (Shopify webhook jobs 6.2k, Bosta webhook jobs 
   A + C are deployed.
 
 **Shopify webhook ordering check — GID index (2026-10-20, branch `perf/shopify-webhook-gid-index` off main fe0c3e2;
-rebased onto origin/main 5ef0449; NOT merged, NOT deployed). Migration V175 — built as V173, renumbered (G3 took V173, order-edit quantities V174).**
+rebased onto origin/main 5ef0449; MERGED to main 73eeb8d 2026-10-21, DEPLOYED to prod 2026-10-21 (with the Flyway session
+lock)). Migration V175 — built as V173, renumbered (G3 took V173, order-edit quantities V174).**
 - **Why:** `ShopifyWebhookProcessorJob.supersededReason` (runs once per orders/create|updated + products/create|update
   webhook, ~85% of traffic, and per manual re-process) filtered on `payload_raw->>'admin_graphql_api_id'` with no
   index → Seq Scan that de-TOASTs every payload. Prod 2026-10-17: 12–16 s per call; table ~77.5k rows, 20 MB heap,
