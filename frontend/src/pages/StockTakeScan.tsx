@@ -11,8 +11,10 @@ import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner, Modal } from '../components/ui'
 import {
   getStockTakeSession, scanStockTakePiece, unscanStockTakePiece, cancelStockTake, ServerMessageError,
+  getStockTakeUntaggedCounts,
   StockTakeCondition, StockTakeClassification, StockTakeSessionDetail, ScanDevice,
 } from '../api'
+import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
 
 // FR-21 Step 6.3, screen 3 — blind full-screen scan. NOT Layout-wrapped, matching
 // the /fulfill precedent. Uses the Step 6.2 shared scanner — no scan mechanics
@@ -22,6 +24,8 @@ import {
 // outcomes-only tally (never compared to an expected number), and an Abandon-count
 // affordance mirroring Returns' own abandon link. No expected quantity, coverage %,
 // progress bar, or "X of Y" anywhere on this screen — that stays exclusive to Review.
+// Flexible labeling slice 7: untagged pieces can't be scanned, so each product with untagged pieces gets a
+// blind "Untagged count [__]" field — a typed count, never a scan, and no expected number (UntaggedCountsPanel).
 
 interface ScanData {
   pieceId: string | null
@@ -127,6 +131,12 @@ export default function StockTakeScan() {
     const bucket = bucketOf(data.classification)
     setTally(prev => ({ ...prev, [bucket]: Math.max(0, prev[bucket] - 1) }))
     if (isCounted(data.classification)) setCounted(c => Math.max(0, c - 1))
+  }
+
+  async function reloadUntagged() {
+    if (!id) return
+    const rows = await getStockTakeUntaggedCounts(id)
+    setSession(prev => (prev ? { ...prev, untagged: rows } : prev))
   }
 
   async function handleAbandon() {
@@ -253,6 +263,16 @@ export default function StockTakeScan() {
             )
           })}
         </div>
+
+        {session.untagged && (
+          <UntaggedCountsPanel
+            sessionId={id}
+            rows={session.untagged}
+            editable={session.status === 'open'}
+            onSaved={reloadUntagged}
+            scanInputRef={scanner.inputRef}
+          />
+        )}
 
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('stocktake.scan.recent')}</h2>

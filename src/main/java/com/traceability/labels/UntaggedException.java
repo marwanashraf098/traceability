@@ -47,15 +47,58 @@ public class UntaggedException extends ApiException {
             HttpStatus.BAD_REQUEST);
     }
 
-    /** Stock take start / finalize over a location (and scope) holding untagged pieces. */
+    /**
+     * Stock take start / finalize over a location (and scope) holding untagged pieces — switch OFF only
+     * (slice 7 counts them while it's on). Tag stock is hidden then, so the message never sends them there.
+     */
     public static UntaggedException stockTakeUntagged(String locationName, int n) {
         String where = locationName == null || locationName.isBlank() ? "This location" : locationName;
         String whereAr = locationName == null || locationName.isBlank() ? "هذا الموقع" : locationName;
         return new UntaggedException("STOCK_TAKE_UNTAGGED_IN_SCOPE",
             "Can't start a stock take here yet — " + where + " has " + n + " untagged piece" + (n == 1 ? "" : "s")
-                + ". Tag them before running a stock take, so nothing is wrongly written off as lost.",
+                + " from flexible labeling. Turn flexible labeling back on to count them.",
             "لا يمكن بدء جرد هنا بعد — يوجد في " + whereAr + " عدد " + n
-                + " قطعة غير مُلصقة. ألصق لها ملصقات قبل الجرد، حتى لا يُشطب شيء على أنه مفقود عن طريق الخطأ.",
+                + " قطعة غير مُلصقة من الملصقات المرنة. أعد تفعيل الملصقات المرنة لعدّها.",
+            HttpStatus.CONFLICT);
+    }
+
+    /** Slice 7: finalize while some variant with untagged pieces has no count typed (0 must be typed). */
+    public static UntaggedException untaggedCountMissing(int products) {
+        return new UntaggedException("UNTAGGED_COUNT_MISSING",
+            "Enter the untagged count for " + products + " product" + (products == 1 ? "" : "s") + " (type 0 if there are none).",
+            "أدخل عدد القطع غير المُلصقة لعدد " + products + " منتج (اكتب 0 إذا لم يوجد شيء).",
+            HttpStatus.CONFLICT);
+    }
+
+    /** Slice 7: an untagged count typed while the tenant doesn't have flexible labeling. */
+    public static UntaggedException untaggedCountUnavailable() {
+        return new UntaggedException("UNTAGGED_COUNT_NOT_AVAILABLE",
+            "Untagged counts aren't available for this account.",
+            "عدّ القطع غير المُلصقة غير متاح لهذا الحساب.",
+            HttpStatus.BAD_REQUEST);
+    }
+
+    /** Slice 7: an untagged count for a variant this stock take has no untagged pieces of. */
+    public static UntaggedException notUntaggedInSession() {
+        return new UntaggedException("NOT_UNTAGGED_IN_SESSION",
+            "This product has no untagged pieces in this stock take.",
+            "لا توجد قطع غير مُلصقة من هذا المنتج في هذا الجرد.",
+            HttpStatus.BAD_REQUEST);
+    }
+
+    /** Slice 7: a negative or absurd untagged count. */
+    public static UntaggedException invalidUntaggedCount(int max) {
+        return new UntaggedException("INVALID_UNTAGGED_COUNT",
+            "Enter a whole number from 0 to " + max + ".",
+            "أدخل رقمًا صحيحًا من 0 إلى " + max + ".",
+            HttpStatus.BAD_REQUEST);
+    }
+
+    /** Slice 7: Found / write-off / mark damaged on one untagged piece — they're counted per product. */
+    public static UntaggedException countedPerProduct() {
+        return new UntaggedException("UNTAGGED_COUNTED_PER_PRODUCT",
+            "Untagged pieces are counted per product, not one by one — enter the untagged count instead.",
+            "تُعدّ القطع غير المُلصقة لكل منتج وليس قطعة قطعة — أدخل عدد القطع غير المُلصقة بدلًا من ذلك.",
             HttpStatus.CONFLICT);
     }
 }

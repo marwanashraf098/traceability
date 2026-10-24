@@ -13,6 +13,7 @@ import {
   StockTakeCommittedError, StockTakeReconciliation, StockTakeSessionDetail,
   StockTakePieceRow, PieceCommittedError, StockTakeFinalizePlan,
 } from '../api'
+import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
 
 // FR-21 Step 6.3, screen 4 + 5 — reconciliation/disposition + sync panel.
 
@@ -166,6 +167,11 @@ export default function StockTakeReview() {
         </div>
       )}
 
+      {/* Flexible labeling slice 7 — untagged pieces, counted per product (switch on only). */}
+      {reconciliation.untagged && (
+        <UntaggedCountsPanel sessionId={id} rows={reconciliation.untagged} editable={isOpen} onSaved={load} />
+      )}
+
       {/* Disposition buckets */}
       <div className="space-y-3">
         {BUCKET_ORDER.map(key => (
@@ -287,6 +293,9 @@ function FinalizeModal({
   const blocked = plan?.blockedReason ?? null
   const typedOk = !plan?.requiresTypedConfirmation || typedCount.trim() === String(plan.writeOffs)
   const tracedOnly = plan ? plan.byVariant.reduce((n, v) => n + v.damaged + v.onHold, 0) : 0
+  // Slice 7: untagged write-offs are written off (and leave Shopify) like any not-found piece.
+  const untaggedWriteOffs = plan?.untaggedWriteOffs ?? 0
+  const untaggedRows = plan?.untagged?.filter(r => r.writeOff > 0 || r.extra > 0) ?? []
 
   return (
     <Modal title={t('stocktake.review.finalizeConfirmTitle')} onClose={onCancel}>
@@ -295,13 +304,16 @@ function FinalizeModal({
           <Alert tone="critical" title={t('stocktake.review.finalize.zeroScans')} />
         )}
         <PhoneScanShare phone={phoneScanCount} total={scanCount} />
+        {blocked === 'UNTAGGED_COUNT_MISSING' && (
+          <Alert tone="warning" title={t('stocktake.review.finalize.untaggedMissing', { count: plan?.untaggedMissingCounts ?? 0 })} />
+        )}
         {blocked === 'ATTESTATION_REQUIRED' && (
           <Alert tone="warning" title={t('stocktake.review.finalize.attestationRequired')} />
         )}
         {plan && !blocked && (
           <>
             <p className="text-body text-primary" data-testid="finalize-summary">
-              {t('stocktake.review.finalize.summary', { count: plan.writeOffs, shopify: plan.shopifyDecrement })}
+              {t('stocktake.review.finalize.summary', { count: plan.writeOffs + untaggedWriteOffs, shopify: plan.shopifyDecrement })}
             </p>
             {plan.byVariant.length > 0 && (
               <div className="rounded-lg border border-line bg-elevated p-3 space-y-1.5" data-testid="finalize-variants">
@@ -313,6 +325,20 @@ function FinalizeModal({
                         writeOffs: v.available + v.damaged + v.onHold, shopify: v.shopifyDecrement,
                       })}
                     </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {untaggedRows.length > 0 && (
+              <div className="rounded-lg border border-line bg-elevated p-3 space-y-1.5" data-testid="finalize-untagged">
+                {untaggedRows.map(r => (
+                  <div key={r.variantId} className="flex items-center justify-between gap-3 text-small">
+                    <span className="text-muted">{r.variantTitle}</span>
+                    {r.writeOff > 0 ? (
+                      <span className="font-mono text-danger">{t('stocktake.review.finalize.untaggedWriteOff', { count: r.writeOff })}</span>
+                    ) : (
+                      <span className="text-info">{t('stocktake.review.finalize.untaggedExtra', { count: r.extra })}</span>
+                    )}
                   </div>
                 ))}
               </div>

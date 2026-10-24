@@ -41,8 +41,8 @@ import static org.mockito.Mockito.*;
  *       untagged piece — no label_reprinted event
  *   a1  hold / void / adjust (damaged, lost, destroyed) refuse an untagged piece — no event, no change
  *   s1  a typed internal code is refused by the pick, transfer, stock-take and returns scans
- *   t1  stock take: start refused while untagged pieces are in scope (location + variant subset);
- *       a subset without them starts; finalize refused when untagged stock arrived after open
+ *   t1  stock take, switch OFF (slice 7): start refused while untagged pieces are in scope (location + variant
+ *       subset); a subset without them starts; finalize refused when untagged stock arrived after open
  *   t2  backstop: plan() never writes off (or damage-corrects) an untagged piece even if one is expected
  *   k1  Lookup: canReprint false for an untagged piece; variantStock counts only with the flag
  *   m1  mixed variant: on_hand / committed / available unchanged in meaning; breakdown pieceSplit;
@@ -300,25 +300,33 @@ class CountOnlyUntaggedTest {
     void t1_stock_take_start_and_finalize_refuse_untagged_stock_in_scope() {
         printStick(variantB, 2);
         countOnly(variantA, 3);
+        // Slice 7: with the switch ON untagged pieces are counted (StockTakeUntaggedCountTest); the refusal
+        // is the switch-OFF behaviour. Restored in finally so a failure can't leak it into later tests.
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenant);
+        try {
+            ApiException e = catchThrowableOfType(() -> stockTakes.openSession("all", null, main, null, owner), ApiException.class);
+            assertThat(e.errorCode()).isEqualTo("STOCK_TAKE_UNTAGGED_IN_SCOPE");
+            assertThat(e.messageEn()).isEqualTo("Can't start a stock take here yet — CO Main has 3 untagged pieces " +
+                "from flexible labeling. Turn flexible labeling back on to count them.");
+            assertThat(e.messageAr()).contains("CO Main").contains("3");
+            assertCode(() -> stockTakes.openSession("variant_subset", List.of(variantA), main, null, owner),
+                "STOCK_TAKE_UNTAGGED_IN_SCOPE");
+            assertThat(count("SELECT count(*) FROM stock_take_sessions WHERE tenant_id = ?", tenant)).isZero();
 
-        ApiException e = catchThrowableOfType(() -> stockTakes.openSession("all", null, main, null, owner), ApiException.class);
-        assertThat(e.errorCode()).isEqualTo("STOCK_TAKE_UNTAGGED_IN_SCOPE");
-        assertThat(e.messageEn()).isEqualTo("Can't start a stock take here yet — CO Main has 3 untagged pieces. " +
-            "Tag them before running a stock take, so nothing is wrongly written off as lost.");
-        assertThat(e.messageAr()).contains("CO Main").contains("3");
-        assertCode(() -> stockTakes.openSession("variant_subset", List.of(variantA), main, null, owner),
-            "STOCK_TAKE_UNTAGGED_IN_SCOPE");
-        assertThat(count("SELECT count(*) FROM stock_take_sessions WHERE tenant_id = ?", tenant)).isZero();
-
-        // A subset without untagged pieces starts — and finalize refuses once untagged stock of it arrives.
-        UUID st = (UUID) stockTakes.openSession("variant_subset", List.of(variantB), main, null, owner).get("sessionId");
-        String b = jdbc.queryForObject("SELECT short_code FROM pieces WHERE variant_id = ? AND short_code IS NOT NULL LIMIT 1",
-            String.class, variantB);
-        stockTakes.scan(st, b, "good", owner, false);
-        countOnly(variantB, 1);
-        assertCode(() -> reconciliation.finalizeSession(st, owner, 1), "STOCK_TAKE_UNTAGGED_IN_SCOPE");
-        assertThat(count("SELECT count(*) FROM pieces WHERE tenant_id = ? AND status = 'lost'", tenant)).isZero();
-        assertThat(jdbc.queryForObject("SELECT status FROM stock_take_sessions WHERE id = ?", String.class, st)).isEqualTo("open");
+            // A subset without untagged pieces starts — and finalize refuses once untagged stock of it arrives.
+            UUID st = (UUID) stockTakes.openSession("variant_subset", List.of(variantB), main, null, owner).get("sessionId");
+            String b = jdbc.queryForObject("SELECT short_code FROM pieces WHERE variant_id = ? AND short_code IS NOT NULL LIMIT 1",
+                String.class, variantB);
+            stockTakes.scan(st, b, "good", owner, false);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenant);    // count-only needs it
+            countOnly(variantB, 1);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenant);
+            assertCode(() -> reconciliation.finalizeSession(st, owner, 1), "STOCK_TAKE_UNTAGGED_IN_SCOPE");
+            assertThat(count("SELECT count(*) FROM pieces WHERE tenant_id = ? AND status = 'lost'", tenant)).isZero();
+            assertThat(jdbc.queryForObject("SELECT status FROM stock_take_sessions WHERE id = ?", String.class, st)).isEqualTo("open");
+        } finally {
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenant);
+        }
     }
 
     @Test
