@@ -877,7 +877,8 @@ class RlsCoverageTest {
         try {
             ResponseEntity<String> mine = get("/api/v1/stock-takes/sessions/" + mySession + "/untagged-counts", String.class);
             assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(mine.getBody()).as("same-tenant positive control").contains(variantId.toString()).contains("\"expected\":1");
+            assertThat(mine.getBody()).as("same-tenant positive control").contains(variantId.toString()).contains("\"counted\":null");
+            assertThat(mine.getBody()).as("the counting screen is blind").doesNotContain("expected");
             assertThat(mine.getBody()).as("another tenant's variant never listed").doesNotContain(otherVariant.toString());
             assertThat(get("/api/v1/stock-takes/sessions/" + otherSession + "/untagged-counts", String.class).getStatusCode())
                 .as("another tenant's session").isEqualTo(HttpStatus.NOT_FOUND);

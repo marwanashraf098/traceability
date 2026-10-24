@@ -3107,8 +3107,9 @@
       "writeOffOpen": "−{{count}} untagged will be written off as lost",
       "writeOffDone": "−{{count}} untagged written off as lost",
       "extra": "{{count}} extra {{variant}} found — receive them with count-only receiving.",
-      "invalid": "Enter a whole number, 0 or more.",
-      "saveError": "Couldn't save the count. Try again."
+      "saveError": "Couldn't save the count. Try again.",
+      "countLabel": "Untagged count",
+      "looksLikeScan": "Looks like a scan — tap the scan bar first"
     }
   },
   "transfers": {

@@ -48,6 +48,8 @@ import static org.mockito.Mockito.*;
  *   u8  count validation (no untagged pieces of the variant, negative, too large) and drift: an untagged piece
  *       bound while the session is open leaves the expected count and is never written off
  *   u9  a session whose only free stock is untagged finalizes on its counts with zero scans
+ *   b1  the counting screen stays blind: its responses (session detail, untagged-counts, the count PUT) carry no
+ *       expected / write-off / extra — only Review's reconciliation does
  *   f1  switch off: no untagged keys anywhere, counts refused, finalize exactly as before
  *   x1  app_user: counts and rows are tenant-scoped (same-tenant positive control)
  */
@@ -374,6 +376,34 @@ class StockTakeUntaggedCountTest {
         UUID s2 = open(t);
         count(t, s2, a, 2);
         assertThat(finalizePlan(t, s2)).containsEntry("blockedReason", "ZERO_SCANS");
+    }
+
+    // ── b1 ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void b1_the_counting_screen_responses_carry_no_expected_number() {
+        T t = tenant("b1", true);
+        V a = variant(t, "b1");
+        untagged(t, a, 4);
+        UUID s = open(t);
+        count(t, s, a, 1);
+        Set<String> blind = Set.of("variantId", "variantTitle", "sku", "productTitle", "counted");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> onDetail = (List<Map<String, Object>>)
+            TenantContext.runAs(t.tenant(), () -> stockTake.getSessionDetail(s)).get("untagged");
+        assertThat(onDetail).singleElement().satisfies(r -> {
+            assertThat(r.keySet()).isEqualTo(blind);
+            assertThat(r).containsEntry("counted", 1);
+        });
+        List<Map<String, Object>> counts = TenantContext.runAs(t.tenant(), () -> stockTake.untaggedCounts(s));
+        assertThat(counts).singleElement().satisfies(r -> assertThat(r.keySet()).isEqualTo(blind));
+        Map<String, Object> put = TenantContext.runAs(t.tenant(), () -> stockTake.setUntaggedCount(s, a.id(), 2, t.user()));
+        assertThat(put.keySet()).containsExactlyInAnyOrder("sessionId", "variantId", "counted");
+
+        // Review (owner / manager) keeps expected vs counted and the outcome.
+        assertThat(untaggedRow(finalizePlan(t, s), a)).containsEntry("expected", 4).containsEntry("counted", 2)
+            .containsEntry("writeOff", 2);
     }
 
     // ── f1 ────────────────────────────────────────────────────────────────────

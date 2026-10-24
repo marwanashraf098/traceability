@@ -105,7 +105,13 @@ waiting on Marawan's answers.** Key facts found:
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
 **Flexible labeling — slice 7: stock take counts untagged pieces (2026-10-23, branch `feat/flexible-labeling-s7` off
-origin/main 9245635; NOT merged, NOT deployed). Migration V183. Behind `flexible_labeling_enabled`.**
+origin/main 9245635; merged to main 2026-10-24, NOT deployed). Migration V183. Behind `flexible_labeling_enabled`.**
+- **Fixes before merge (Marawan, 2026-10-24):** (1) the counting screen is BLIND — session detail `untagged` and
+  `GET …/untagged-counts` carry only {variantId, variantTitle, sku, productTitle, counted} (`toBlindResponse`); expected
+  vs counted and "−N written off / +N extra" are on Review's reconciliation / finalize plan only. (2) Scan-into-field
+  guard: the count field is a text input (digits only, 1–5); a letter or 6+ digits is never saved and never handed to
+  the scanner — the field clears and says "Looks like a scan — tap the scan bar first"; leaving that cleared field
+  doesn't clear the saved count. Server max is 99,999 to match.
 - **Switch ON:** the slice-2 refusal is gone at open and finalize. The snapshot records `stock_take_expected.untagged_at_open`;
   untagged pieces never go through the labeled rules (scan, per-row Found / lost / mark damaged → 409
   UNTAGGED_COUNTED_PER_PRODUCT, the not-scanned write-off, damage correction, coverage, list / summary variance).
@@ -126,13 +132,14 @@ origin/main 9245635; NOT merged, NOT deployed). Migration V183. Behind `flexible
 - **Switch OFF:** exactly as before, incl. the refusal — its text no longer says "Tag them" (Tag stock is hidden then):
   "… has N untagged pieces from flexible labeling. Turn flexible labeling back on to count them." No untagged keys in
   any response.
-- **UI:** `pages/stocktake/UntaggedCounts.tsx` on the counting screen ("Untagged: expected X · counted [__]", plain
-  number inputs, never auto-focused; container stops click propagation like TransferReconcile so the untouched
+- **UI:** `pages/stocktake/UntaggedCounts.tsx` on the counting screen ("Untagged count [__]", plain
+  digit inputs, never auto-focused; container stops click propagation like TransferReconcile so the untouched
   SAFETY-CRITICAL click-refocus doesn't steal the cursor; blur saves, Enter returns focus to the scan bar) and on
   Review (editable while open, result when finalized). Finalize modal: blank-count block, per-variant
   "−N untagged written off as lost" / "+N extra found (not added)". Rows come on the session detail / reconciliation
   (no extra request with the switch off).
-- **Tests:** StockTakeUntaggedCountTest 11 (u1–u9, f1, x1 app_user), RlsCoverageTest +1, vitest stocktakeUntagged 6.
+- **Tests:** StockTakeUntaggedCountTest 12 (u1–u9, b1 blind, f1, x1 app_user), RlsCoverageTest +1, vitest
+  stocktakeUntagged 9 (incl. "P000123" / 10-digit rejected, "60" saves).
   CountOnlyUntaggedTest.t1 now runs with the switch off (finally) + the new refusal text (approved). Registries:
   MigrationSmokeTest 182 + RLS table, NotTracedBackfillTest 127, PortalOrderLeakTest 2 SKIP, RlsCoverageTest 1 COVERED.
 

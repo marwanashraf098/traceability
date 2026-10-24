@@ -90,6 +90,21 @@ final class StockTakeUntagged {
             "  AND variant_id = ? AND untagged_at_open)", Boolean.class, sessionId, tenantId, variantId));
     }
 
+    /**
+     * The COUNTING screen's row — blind (Marawan, slice 7 fix): which products to count and what was typed, never
+     * the expected number, the write-off or the extra. Those are Review / finalize only (toResponse).
+     */
+    static java.util.Map<String, Object> toBlindResponse(Row r) {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("variantId", r.variantId());
+        m.put("variantTitle", r.variantTitle());
+        m.put("sku", r.sku());
+        m.put("productTitle", r.productTitle());
+        m.put("counted", r.counted());
+        return m;
+    }
+
+    /** Review / finalize (owner / manager): expected vs counted and the outcome. */
     static java.util.Map<String, Object> toResponse(Row r, boolean open) {
         java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
         m.put("variantId", r.variantId());

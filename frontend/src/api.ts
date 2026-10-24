@@ -1674,8 +1674,17 @@ export interface StockTakeSessionDetail {
   writtenOff?: number
   /** Units actually decremented in Shopify by this session's push (0 until it is pushed). */
   pushedToShopify?: number
-  /** Flexible labeling slice 7: per-variant untagged counts — present only while the switch is on. */
-  untagged?: StockTakeUntaggedRow[]
+  /** Flexible labeling slice 7: what the counting screen counts — BLIND (no expected number); switch on only. */
+  untagged?: StockTakeUntaggedCount[]
+}
+
+/** Flexible labeling slice 7 — the counting screen's row: which product to count and what was typed. Blind. */
+export interface StockTakeUntaggedCount {
+  variantId: string
+  variantTitle: string
+  sku: string | null
+  productTitle: string
+  counted: number | null
 }
 
 /**
@@ -1683,19 +1692,15 @@ export interface StockTakeSessionDetail {
  * finalize would write off now (counted short, oldest first). Finalized: what finalize compared with and did.
  * counted null = not typed yet (blocks finalize while expected > 0).
  */
-export interface StockTakeUntaggedRow {
-  variantId: string
-  variantTitle: string
-  sku: string | null
-  productTitle: string
+export interface StockTakeUntaggedRow extends StockTakeUntaggedCount {
   expected: number
-  counted: number | null
   writeOff: number
   extra: number
 }
 
+/** The counting screen's rows — blind. */
 export function getStockTakeUntaggedCounts(sessionId: string) {
-  return requestReadable<StockTakeUntaggedRow[]>(`/stock-takes/sessions/${sessionId}/untagged-counts`)
+  return requestReadable<StockTakeUntaggedCount[]>(`/stock-takes/sessions/${sessionId}/untagged-counts`)
 }
 
 /** counted null clears the count. A refusal carries its own words (ServerMessageError). */

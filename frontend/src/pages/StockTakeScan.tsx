@@ -24,8 +24,8 @@ import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
 // outcomes-only tally (never compared to an expected number), and an Abandon-count
 // affordance mirroring Returns' own abandon link. No expected quantity, coverage %,
 // progress bar, or "X of Y" anywhere on this screen — that stays exclusive to Review.
-// Exception (flexible labeling slice 7, by spec): untagged pieces can't be scanned, so their per-product
-// row shows "expected X · counted [__]" — a typed count, never a scan (UntaggedCountsPanel).
+// Flexible labeling slice 7: untagged pieces can't be scanned, so each product with untagged pieces gets a
+// blind "Untagged count [__]" field — a typed count, never a scan, and no expected number (UntaggedCountsPanel).
 
 interface ScanData {
   pieceId: string | null

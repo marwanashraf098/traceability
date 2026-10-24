@@ -3,27 +3,41 @@ import type { RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Tag } from 'lucide-react'
 import { Input } from '../../components/ui'
-import { setStockTakeUntaggedCount, ServerMessageError, StockTakeUntaggedRow } from '../../api'
+import {
+  setStockTakeUntaggedCount, ServerMessageError, StockTakeUntaggedCount, StockTakeUntaggedRow,
+} from '../../api'
 
 // Flexible labeling slice 7 — untagged pieces (no label yet) can't be scanned, so a stock take counts them
 // per product: the person types how many are on the shelf. Shown only when the server sends rows (switch on).
 //
-// The count fields are plain number inputs — never auto-focused, never a second scan input. On the counting
-// screen the panel sits next to useScanner's scan bar: its container stops click propagation (the same
+// The counting screen is BLIND: it gets StockTakeUntaggedCount rows (no expected number) and shows only
+// "Untagged count [__]". Expected vs counted and the outcome ("−N written off" / "+N extra found") are on
+// Review only, which gets StockTakeUntaggedRow.
+//
+// The count fields are plain text inputs (digits only) — never auto-focused, never a second scan input. On the
+// counting screen the panel sits next to useScanner's scan bar: its container stops click propagation (the same
 // technique as Modal and TransferReconcile) so the SAFETY-CRITICAL click-refocus listener, untouched, doesn't
 // pull the cursor back to the scan bar while someone types here; leaving a field saves it, and Enter hands
-// focus back to the scan bar.
+// focus back to the scan bar. A value that isn't 1–5 digits is a scan that landed here: it is never saved and
+// never handed to the scanner — the field clears and says so.
 
-/** "" → null (not counted yet); a whole number ≥ 0 → that number; anything else → undefined (invalid). */
-function parseCount(draft: string): number | null | undefined {
+const MAX_DIGITS = 5
+
+/** "" → null (not counted); 1–5 digits → that number; anything else (a letter, 6+ digits) → 'scan'. */
+function parseCount(draft: string): number | null | 'scan' {
   const v = draft.trim()
   if (v === '') return null
-  return /^\d+$/.test(v) ? Number(v) : undefined
+  return new RegExp(`^\\d{1,${MAX_DIGITS}}$`).test(v) ? Number(v) : 'scan'
+}
+
+function isReviewRow(r: StockTakeUntaggedCount): r is StockTakeUntaggedRow {
+  return 'expected' in r
 }
 
 export function UntaggedCountsPanel({ sessionId, rows, editable, onSaved, scanInputRef }: {
   sessionId: string
-  rows: StockTakeUntaggedRow[]
+  /** Counting screen: blind rows. Review: rows with expected and the outcome. */
+  rows: StockTakeUntaggedCount[] | StockTakeUntaggedRow[]
   /** Open session: counts can be typed. Finalized: the result only. */
   editable: boolean
   /** After a count is saved or cleared — the caller reloads its rows / plan. */
@@ -47,7 +61,7 @@ export function UntaggedCountsPanel({ sessionId, rows, editable, onSaved, scanIn
         </div>
       </div>
       <ul className="divide-y divide-line">
-        {rows.map(r => (
+        {rows.map((r: StockTakeUntaggedCount) => (
           <UntaggedRow key={r.variantId} sessionId={sessionId} row={r} editable={editable}
             onSaved={onSaved} scanInputRef={scanInputRef} />
         ))}
@@ -58,7 +72,7 @@ export function UntaggedCountsPanel({ sessionId, rows, editable, onSaved, scanIn
 
 function UntaggedRow({ sessionId, row, editable, onSaved, scanInputRef }: {
   sessionId: string
-  row: StockTakeUntaggedRow
+  row: StockTakeUntaggedCount
   editable: boolean
   onSaved: () => void | Promise<void>
   scanInputRef?: RefObject<HTMLInputElement | null>
@@ -68,13 +82,22 @@ function UntaggedRow({ sessionId, row, editable, onSaved, scanInputRef }: {
   const [draft, setDraft] = useState(saved)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // After a rejected scan the field is empty but the saved count is untouched: leaving it is not a "clear".
+  const [rejected, setRejected] = useState(false)
   useEffect(() => { setDraft(saved) }, [saved])
 
   const name = row.productTitle ? `${row.productTitle} · ${row.variantTitle}` : row.variantTitle
+  const review = isReviewRow(row)
 
   async function save() {
     const value = parseCount(draft)
-    if (value === undefined) { setError(t('stocktake.untagged.invalid')); return }
+    if (value === 'scan') {
+      setDraft('')
+      setRejected(true)
+      setError(t('stocktake.untagged.looksLikeScan'))
+      return
+    }
+    if (rejected && value === null) return
     if (value === row.counted) { setError(null); return }
     setSaving(true)
     setError(null)
@@ -95,24 +118,27 @@ function UntaggedRow({ sessionId, row, editable, onSaved, scanInputRef }: {
         {row.sku && <div className="text-caption text-muted font-mono">{row.sku}</div>}
       </div>
       <div className="flex items-center gap-2 text-small">
-        <span className="text-muted">{t('stocktake.untagged.expected', { count: row.expected })}</span>
-        <span className="text-muted" aria-hidden>·</span>
+        {review && (
+          <>
+            <span className="text-muted">{t('stocktake.untagged.expected', { count: row.expected })}</span>
+            <span className="text-muted" aria-hidden>·</span>
+          </>
+        )}
         {editable ? (
           <label className="flex items-center gap-2">
-            <span className="text-muted">{t('stocktake.untagged.counted')}</span>
+            <span className="text-muted">{t(review ? 'stocktake.untagged.counted' : 'stocktake.untagged.countLabel')}</span>
             <span className="w-20">
               <Input
-                type="number"
+                type="text"
                 inputMode="numeric"
-                min={0}
-                step={1}
+                autoComplete="off"
                 className="font-mono"
                 value={draft}
                 disabled={saving}
                 invalid={!!error}
                 aria-label={t('stocktake.untagged.inputLabel', { variant: name })}
                 data-testid={`untagged-input-${row.variantId}`}
-                onChange={e => setDraft(e.target.value)}
+                onChange={e => { setDraft(e.target.value); setRejected(false) }}
                 onBlur={save}
                 onKeyDown={e => {
                   if (e.key !== 'Enter') return
@@ -128,15 +154,17 @@ function UntaggedRow({ sessionId, row, editable, onSaved, scanInputRef }: {
           <span className="text-primary font-mono">{t('stocktake.untagged.countedValue', { count: row.counted ?? 0 })}</span>
         )}
       </div>
-      <div className="basis-full">
-        <UntaggedOutcome row={row} open={editable} name={name} />
-        {error && <p className="text-caption text-danger mt-1" role="alert">{error}</p>}
-      </div>
+      {(review || error) && (
+        <div className="basis-full">
+          {review && <UntaggedOutcome row={row} open={editable} name={name} />}
+          {error && <p className="text-caption text-danger mt-1" role="alert">{error}</p>}
+        </div>
+      )}
     </li>
   )
 }
 
-/** What finalize will do (open) or did (finalized) for one product's untagged pieces. */
+/** Review only: what finalize will do (open) or did (finalized) for one product's untagged pieces. */
 export function UntaggedOutcome({ row, open, name }: { row: StockTakeUntaggedRow; open: boolean; name: string }) {
   const { t } = useTranslation()
   if (row.counted === null) {

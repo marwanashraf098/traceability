@@ -7,7 +7,7 @@ import StockTakeScan from '../pages/StockTakeScan'
 import StockTakeReview from '../pages/StockTakeReview'
 
 // Flexible labeling slice 7 — untagged pieces are counted per product by a typed number.
-//   su1  counting screen: "Untagged: expected X · counted [__]" per product, a plain number input
+//   su1  counting screen is BLIND: "Untagged count [__]" per product, no expected number, no outcome
 //   su2  the count saves on leaving the field (typed number; blank → cleared), never auto-focused, and
 //        clicking into it keeps the cursor there (the scan bar's click-refocus doesn't take it back)
 //   su3  Enter hands focus back to the scan bar (and saves once)
@@ -15,6 +15,8 @@ import StockTakeReview from '../pages/StockTakeReview'
 //   su5  review: per-product outcome — written off as lost / extra found (receive with count-only) / missing
 //   su6  finalize modal: blank count blocks with the product count; write-offs and extras listed per product,
 //        the summary count includes untagged write-offs
+//   su7  scan-into-field: "P000123" and a 10-digit waybill are rejected — field cleared, "Looks like a scan",
+//        nothing saved, nothing sent to the scanner; "60" saves
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -38,6 +40,11 @@ function row(overrides: Partial<api.StockTakeUntaggedRow> = {}): api.StockTakeUn
     variantId: 'va', variantTitle: 'Blue / M', sku: 'BLU-M', productTitle: 'Hoodie',
     expected: 3, counted: null, writeOff: 0, extra: 0, ...overrides,
   }
+}
+
+/** What the counting screen gets: blind — no expected / writeOff / extra. */
+function blind(overrides: Partial<api.StockTakeUntaggedCount> = {}): api.StockTakeUntaggedCount {
+  return { variantId: 'va', variantTitle: 'Blue / M', sku: 'BLU-M', productTitle: 'Hoodie', counted: null, ...overrides }
 }
 
 function session(overrides: Partial<api.StockTakeSessionDetail> = {}): api.StockTakeSessionDetail {
@@ -92,24 +99,25 @@ describe('Stock take — untagged counts (flexible labeling slice 7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.setStockTakeUntaggedCount).mockResolvedValue({ sessionId: SESSION_ID, variantId: 'va', counted: 2 })
-    vi.mocked(api.getStockTakeUntaggedCounts).mockResolvedValue([row({ counted: 2, writeOff: 1 })])
+    vi.mocked(api.getStockTakeUntaggedCounts).mockResolvedValue([blind({ counted: 2 })])
   })
 
-  test('su1 — the counting screen shows each product with untagged pieces: expected and a number field', async () => {
-    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [row()] }))
+  test('su1 — the counting screen is blind: "Untagged count [__]" per product, no expected number', async () => {
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [blind()] }))
     renderScan()
     const panel = await screen.findByTestId('untagged-counts')
     expect(panel).toHaveTextContent('Untagged pieces')
     expect(panel).toHaveTextContent('Hoodie · Blue / M')
-    expect(panel).toHaveTextContent('Untagged: expected 3')
+    expect(panel).toHaveTextContent('Untagged count')
+    expect(panel).not.toHaveTextContent(/expected/i)
+    expect(panel).not.toHaveTextContent('Enter the count')            // outcome lines are Review only
     const input = within(panel).getByTestId('untagged-input-va')
-    expect(input).toHaveAttribute('type', 'number')
-    expect(input).toHaveValue(null)
-    expect(panel).toHaveTextContent('Enter the count — type 0 if there are none.')
+    expect(input).toHaveAttribute('inputmode', 'numeric')
+    expect(input).toHaveValue('')
   })
 
   test('su2 — saves on leaving the field; never auto-focused; a click keeps the cursor in the field; blank clears', async () => {
-    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [row({ counted: 1 })] }))
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [blind({ counted: 1 })] }))
     renderScan()
     const scanInput = await screen.findByPlaceholderText('Scan barcode…')
     const input = await screen.findByTestId('untagged-input-va')
@@ -123,7 +131,8 @@ describe('Stock take — untagged counts (flexible labeling slice 7)', () => {
     await userEvent.click(screen.getByTestId('counted-display'))      // leave the field
     await waitFor(() => expect(api.setStockTakeUntaggedCount).toHaveBeenCalledWith(SESSION_ID, 'va', 2))
     expect(api.setStockTakeUntaggedCount).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.getByTestId('untagged-writeoff')).toHaveTextContent('−1 untagged will be written off as lost'))
+    await waitFor(() => expect(input).toHaveValue('2'))
+    expect(screen.queryByTestId('untagged-writeoff')).not.toBeInTheDocument()   // blind: no outcome here
 
     await userEvent.click(input)
     await userEvent.clear(input)
@@ -132,7 +141,7 @@ describe('Stock take — untagged counts (flexible labeling slice 7)', () => {
   })
 
   test('su3 — Enter returns focus to the scan bar and saves once', async () => {
-    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [row()] }))
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [blind()] }))
     renderScan()
     const scanInput = await screen.findByPlaceholderText('Scan barcode…')
     const input = await screen.findByTestId('untagged-input-va')
@@ -190,5 +199,38 @@ describe('Stock take — untagged counts (flexible labeling slice 7)', () => {
     expect(untagged).toHaveTextContent('−2 untagged written off as lost')
     expect(untagged).toHaveTextContent('Red / L')
     expect(untagged).toHaveTextContent('+3 extra found (not added)')
+  })
+
+  test.each([
+    ['a scanned piece label', 'P000123'],
+    ['a scanned 10-digit waybill', '7770000012'],
+  ])('su7 — %s typed into the count field is rejected: cleared, "Looks like a scan", nothing saved', async (_what, value) => {
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [blind({ counted: 4 })] }))
+    renderScan()
+    const scanInput = await screen.findByPlaceholderText('Scan barcode…')
+    const input = await screen.findByTestId('untagged-input-va')
+    await userEvent.click(input)
+    await userEvent.clear(input)
+    await userEvent.type(input, `${value}{Enter}`)                    // a scanner ends with Enter
+    expect(await screen.findByRole('alert')).toHaveTextContent('Looks like a scan — tap the scan bar first')
+    expect(input).toHaveValue('')
+    expect(scanInput).toHaveFocus()
+    expect(scanInput).toHaveValue('')                                 // never handed to the scanner
+    // Leaving the cleared field again doesn't wipe the saved count either.
+    await userEvent.click(input)
+    await userEvent.click(screen.getByTestId('counted-display'))
+    expect(api.setStockTakeUntaggedCount).not.toHaveBeenCalled()
+    expect(api.scanStockTakePiece).not.toHaveBeenCalled()
+  })
+
+  test('su7 — "60" saves', async () => {
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({ untagged: [blind()] }))
+    renderScan()
+    const input = await screen.findByTestId('untagged-input-va')
+    await userEvent.click(input)
+    await userEvent.type(input, '60{Enter}')
+    await waitFor(() => expect(api.setStockTakeUntaggedCount).toHaveBeenCalledWith(SESSION_ID, 'va', 60))
+    expect(api.setStockTakeUntaggedCount).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

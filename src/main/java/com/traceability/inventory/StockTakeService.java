@@ -338,8 +338,8 @@ public class StockTakeService {
 
     // ── Flexible labeling slice 7: untagged counts ────────────────────────────
 
-    /** Largest untagged count accepted for one variant (a typo guard, far above any real shelf). */
-    static final int MAX_UNTAGGED_COUNT = 100_000;
+    /** Largest untagged count accepted for one variant: 5 digits, like the count field (a longer value is a scan). */
+    static final int MAX_UNTAGGED_COUNT = 99_999;
 
     /**
      * Types (or, with {@code counted} null, clears) the untagged count for one variant of an open session.
@@ -377,7 +377,7 @@ public class StockTakeService {
         return out;
     }
 
-    /** The untagged rows for the counting screen (switch on only; an empty list otherwise). */
+    /** The untagged rows for the counting screen — BLIND, no expected number (switch on only; empty otherwise). */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> untaggedCounts(UUID sessionId) {
         UUID tenantId = TenantContext.require();
@@ -385,7 +385,7 @@ public class StockTakeService {
         if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) return List.of();
         boolean open = "open".equals(session.status());
         return StockTakeUntagged.rows(jdbc, tenantId, sessionId, session.locationId(), open).stream()
-            .map(r -> StockTakeUntagged.toResponse(r, open)).toList();
+            .map(StockTakeUntagged::toBlindResponse).toList();
     }
 
     // ── Step 6.1: list + detail reads ────────────────────────────────────────
@@ -477,11 +477,12 @@ public class StockTakeService {
             "FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? AND status = 'pushed'",
             Integer.class, sessionId, tenantId);
         row.put("pushedToShopify", pushed.isEmpty() ? 0 : pushed.get(0));
-        // Flexible labeling slice 7: the counting screen's untagged rows (switch on only — absent otherwise).
+        // Flexible labeling slice 7: the counting screen's untagged rows — BLIND, no expected number (switch on
+        // only — absent otherwise). Expected vs counted is on the reconciliation (Review) only.
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
             boolean open = "open".equals(row.get("status"));
             row.put("untagged", StockTakeUntagged.rows(jdbc, tenantId, sessionId, (UUID) row.get("locationId"), open).stream()
-                .map(r -> StockTakeUntagged.toResponse(r, open)).toList());
+                .map(StockTakeUntagged::toBlindResponse).toList());
         }
         return row;
     }
