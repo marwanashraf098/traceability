@@ -663,6 +663,94 @@ class PackLabelsTest {
 
     // ── HTTP ──────────────────────────────────────────────────────────────────
 
+    // ── "Everything ready to pack" = the whole Pick & Pack queue (live-test fix, 2026-10-25) ──────────────
+
+    /** An order shipped with another courier: a generic forward leg in 'created', with or without a tracking number. */
+    private UUID genericOrder(String number, int minutesAgo, String trackingNumber, Object... variantQty) {
+        UUID o = order(number, minutesAgo, false, variantQty);
+        jdbc.update("UPDATE orders SET is_self_pickup = false WHERE id = ?", o);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, tracking_key, carrier_name, source, " +
+            "shopify_fulfillment_id, internal_state, shipment_leg) VALUES (?, ?, 'generic', ?, ?, 'J&T', 'shopify_fulfillment', ?, " +
+            "'created', 'forward')", tenant, o, trackingNumber,
+            trackingNumber.replaceAll("[^A-Za-z0-9]", "").toUpperCase(java.util.Locale.ROOT), "gid://shopify/Fulfillment/" + o);
+        return o;
+    }
+
+    @Test
+    void q1_everything_ready_to_pack_is_every_order_in_the_queue_any_courier_no_tracking_or_self_pickup() {
+        untagged(variantA, 20);
+        UUID bosta = order("#Q1", 50, true, variantA, 1);
+        UUID generic = genericOrder("#Q2", 40, "JT-0042 77", variantA, 1);
+        UUID noTracking = order("#Q3", 30, true, variantA, 1);
+        jdbc.update("UPDATE shipments SET tracking_number = NULL WHERE order_id = ?", noTracking);   // waybill not issued yet
+        UUID pickup = order("#Q4", 20, false, variantA, 1);
+        UUID noShipment = order("#Q5", 10, false, variantA, 1);
+        jdbc.update("UPDATE orders SET is_self_pickup = false WHERE id = ?", noShipment);            // not in the queue
+
+        List<UUID> queue = fulfill.getQueue().stream().map(r -> (UUID) r.get("id")).toList();
+        assertThat(queue).containsExactlyInAnyOrder(bosta, generic, noTracking, pickup);
+
+        assertThat(sequence(packLabels.preview(all("oldest")))).containsExactly(bosta, generic, noTracking, pickup);
+        assertThat(sequence(packLabels.preview(all("newest")))).containsExactly(pickup, noTracking, generic, bosta);
+        PackLabelService.Summary printed = packLabels.print(all("oldest"), owner);
+        assertThat(printed.labels()).isEqualTo(4);
+        assertThat(printed.queueNeedsLabels()).isFalse();
+        assertThat(count("SELECT count(*)::int FROM label_codes WHERE order_id = ?", noShipment))
+            .as("an order the queue doesn't list gets no label").isZero();
+    }
+
+    @Test
+    void q2_waybill_scopes_stay_bosta_only_and_point_at_everything_when_they_find_nothing() {
+        untagged(variantA, 20);
+        UUID generic = genericOrder("#Q6", 30, "JT-9", variantA, 1);
+        UUID pickup = order("#Q7", 20, false, variantA, 1);
+
+        // A store with no Bosta waybill orders: the waybill scopes find nothing and say the queue needs labels.
+        PackLabelService.Summary none = packLabels.preview(new PackLabelService.Request("new", "oldest", null));
+        assertThat(none.ordersConsidered()).isZero();
+        assertThat(none.queueNeedsLabels()).isTrue();
+        assertThat(packLabels.preview(new PackLabelService.Request("last", null, null)).queueNeedsLabels()).isTrue();
+        assertThat(packLabels.preview(all("oldest")).queueNeedsLabels()).isFalse();
+        assertThat(sequence(packLabels.preview(all("oldest")))).containsExactly(generic, pickup);
+
+        // With Bosta waybill orders, "new" is exactly the waybill print's candidates — unchanged.
+        UUID bosta1 = order("#Q8", 15, true, variantA, 1);
+        UUID bosta2 = order("#Q9", 5, true, variantA, 1);
+        PackLabelService.Summary fresh = packLabels.preview(new PackLabelService.Request("new", "oldest", null));
+        assertThat(sequence(fresh)).containsExactly(bosta1, bosta2);
+        assertThat(fresh.queueNeedsLabels()).isFalse();
+        assertThat(new PackPrintBatchStore(jdbc, 30).candidates("new", "oldest").stream()
+            .map(PackPrintBatchStore.Candidate::orderId).toList()).containsExactly(bosta1, bosta2);
+
+        // Nothing to label anywhere (no untagged stock left for the queue's lines) → no hint.
+        jdbc.update("DELETE FROM piece_events WHERE tenant_id = ?", tenant);
+        jdbc.update("DELETE FROM pieces WHERE tenant_id = ?", tenant);
+        PackLabelService.Summary empty = packLabels.preview(new PackLabelService.Request("new", "oldest", null));
+        assertThat(empty.orders()).isZero();
+        assertThat(empty.queueNeedsLabels()).isFalse();
+    }
+
+    @Test
+    void q3_the_separator_shows_another_couriers_tracking_number_then_the_order_number() throws Exception {
+        untagged(variantA, 2);
+        UUID generic = genericOrder("#Q10", 10, "JT-0042 77", variantA, 1);
+        PackLabelService.Summary printed = packLabels.print(all("oldest"), owner);
+        List<String> pages = pageTexts(packLabels.pdf(printed.parts().get(0).orderIds()));
+        assertThat(pages).hasSize(2);
+        assertThat(pages.get(1).lines().map(String::trim).toList()).containsExactly("JT-0042 77", "#Q10");
+        assertThat(sequence(printed)).containsExactly(generic);
+    }
+
+    @Test
+    void q4_a_part_never_holds_more_orders_than_one_pdf_request_takes() {
+        untagged(variantA, PrintJobRunner.MAX_WAYBILLS_PER_JOB + 1);
+        for (int i = 0; i <= PrintJobRunner.MAX_WAYBILLS_PER_JOB; i++) order("#M" + i, 600 - i, false, variantA, 1);
+        PackLabelService.Summary s = packLabels.preview(all("oldest"));
+        assertThat(s.labels()).isEqualTo(PrintJobRunner.MAX_WAYBILLS_PER_JOB + 1);
+        assertThat(s.parts()).extracting(p -> p.orderIds().size())
+            .containsExactly(PrintJobRunner.MAX_WAYBILLS_PER_JOB, 1);
+    }
+
     private <T> ResponseEntity<T> post(String token, String path, Object body, Class<T> type) {
         HttpHeaders h = new HttpHeaders();
         h.setBearerAuth(token);

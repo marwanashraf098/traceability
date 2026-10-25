@@ -81,6 +81,22 @@ public class PackPrintBatchStore {
     }
 
     /**
+     * Flexible labeling — "Everything ready to pack" in Print labels: the ids of exactly the orders the Pick &amp; Pack
+     * queue lists ({@link FulfillService#PICKABLE_ORDERS_FILTER}, unchanged, with the same lookback) — any courier, no
+     * tracking number yet, self-pickup — sorted like {@link #candidates} (o.created_at then o.id). Not used by the
+     * waybill print.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> queueOrderIds(String sort) {
+        UUID tenantId = TenantContext.require();
+        String dir = "newest".equals(sort) ? "DESC" : "ASC";
+        return jdbc.queryForList(
+            "SELECT o.id FROM merchant_orders o " + FulfillService.PICKABLE_ORDERS_FILTER +
+            "ORDER BY o.created_at " + dir + ", o.id " + dir,
+            UUID.class, tenantId, lookbackDays);
+    }
+
+    /**
      * The paper the print dialog preselects: the store's Bosta awb_format, else A4 (BostaAwbService's own fallback).
      * Review mode (V130): a simulated-courier tenant has no courier row → A4, which the simulated
      * renderer prints (A6 when the dialog asks for it) — no change needed here.

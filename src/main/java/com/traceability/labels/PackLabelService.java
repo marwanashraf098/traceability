@@ -15,10 +15,12 @@ import java.util.*;
 /**
  * Flexible labeling slice 4 — packing labels, printed BEFORE packing in the waybill stack's order.
  *
- * <p>Which orders: the waybill print's own candidates ({@link PackPrintBatchStore#candidates} — same scope, same
- * sort, the first {@link PrintJobRunner#MAX_WAYBILLS_PER_JOB}, never copied), or the orders of the store's last
- * waybill print in its PDF order (scope {@code last}: "new" stops matching once those waybills are printed), or
- * one order (the queue's single-order "Print labels" — self-pickup, another courier, no waybill yet).
+ * <p>Which orders: scope {@code all} ("Everything ready to pack") = every order in the Pick &amp; Pack queue
+ * ({@link PackPrintBatchStore#queueOrderIds} — the queue's own predicate: any courier, no tracking number yet,
+ * self-pickup) in the chosen sort; scope {@code new} = the waybill print's own candidates
+ * ({@link PackPrintBatchStore#candidates} — Bosta waybills not printed yet, same sort, the first
+ * {@link PrintJobRunner#MAX_WAYBILLS_PER_JOB}, never copied); scope {@code last} = the orders of the store's last
+ * waybill print in its PDF order; or one order (the queue's single-order "Print labels").
  *
  * <p>Which units: per order (in that sequence), per line (pack-screen order, by id), each UNALLOCATED unit whose
  * variant still has untagged available stock at the main warehouse gets ONE named label (kind {@code pack}, with
@@ -28,7 +30,8 @@ import java.util.*;
  *
  * <p>Output: one PDF per part, in sequence — an order's labels, then ONE text-only separator (tracking number, then
  * order number; the order number alone when there is no tracking number); orders needing no label are skipped.
- * A part holds at most {@link #MAX_LABELS_PER_PART} labels and never splits an order.
+ * A part holds at most {@link #MAX_LABELS_PER_PART} labels and {@link PrintJobRunner#MAX_WAYBILLS_PER_JOB} orders
+ * (what one PDF request takes) and never splits an order.
  */
 @Service
 public class PackLabelService {
@@ -51,7 +54,8 @@ public class PackLabelService {
      * already issued for their line (reprinted, not new); unitsWithoutLabel = unpacked units that get none (their
      * product has no untagged piece left — packed from labeled stock); ordersConsidered = the orders looked at.
      */
-    public record Summary(int labels, int orders, int reused, int unitsWithoutLabel, int ordersConsidered, List<Part> parts) {}
+    public record Summary(int labels, int orders, int reused, int unitsWithoutLabel, int ordersConsidered, List<Part> parts,
+                          boolean queueNeedsLabels) {}
 
     private record OrderRef(UUID orderId) {}
     private record Item(UUID id, UUID orderId, UUID variantId, int unallocated) {}
@@ -75,7 +79,18 @@ public class PackLabelService {
     public Summary preview(Request req) {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
-        return summarize(plan(tenantId, orders(tenantId, req)));
+        return withQueueHint(tenantId, req, summarize(plan(tenantId, orders(tenantId, req))));
+    }
+
+    /**
+     * A waybill scope (new / last) that finds no order needing a label while the queue has some (another courier,
+     * no waybill yet, self-pickup) says so — the dialog then points at "Everything ready to pack".
+     */
+    private Summary withQueueHint(UUID tenantId, Request req, Summary s) {
+        if (req.orderId() != null || "all".equals(req.scope()) || s.orders() > 0) return s;
+        List<OrderRef> queue = candidates.queueOrderIds("oldest").stream().map(OrderRef::new).toList();
+        boolean needs = plan(tenantId, queue).unitsByOrder().values().stream().anyMatch(u -> !u.isEmpty());
+        return new Summary(s.labels(), s.orders(), s.reused(), s.unitsWithoutLabel(), s.ordersConsidered(), s.parts(), needs);
     }
 
     /** Issues the missing codes (reusing a line's unbound ones first) and answers the parts to fetch as PDFs. */
@@ -115,7 +130,7 @@ public class PackLabelService {
             }
         }
         if (!chunk.isEmpty()) codes.issue(actorUserId, "pack", chunk, key + ":" + chunkNo);
-        return summarize(plan);
+        return withQueueHint(tenantId, req, summarize(plan));
     }
 
     // ── which orders ──────────────────────────────────────────────────────────
@@ -143,6 +158,11 @@ public class PackLabelService {
                 (rs, i) -> new OrderRef(rs.getObject(1, UUID.class)), tenantId, tenantId);
         }
         if (req.sort() == null || !SORTS.contains(req.sort())) throw LabelCodeException.invalidPrintRequest();
+        if ("all".equals(req.scope())) {
+            // "Everything ready to pack": the whole Pick & Pack queue — not the waybill candidates, which are
+            // Bosta orders with a waybill only (a store shipping with another courier would see 0 orders).
+            return candidates.queueOrderIds(req.sort()).stream().map(OrderRef::new).toList();
+        }
         List<PackPrintBatchStore.Candidate> all = candidates.candidates(req.scope(), req.sort());
         return all.subList(0, Math.min(PrintJobRunner.MAX_WAYBILLS_PER_JOB, all.size())).stream()
             .map(c -> new OrderRef(c.orderId())).toList();
@@ -219,7 +239,8 @@ public class PackLabelService {
             labels += units.size();
             reused += (int) units.stream().filter(u -> u.existingCodeId() != null).count();
             int last = partOrders.size() - 1;
-            if (last < 0 || (partLabels.get(last) + units.size() > MAX_LABELS_PER_PART && partLabels.get(last) > 0)) {
+            if (last < 0 || (partLabels.get(last) + units.size() > MAX_LABELS_PER_PART && partLabels.get(last) > 0)
+                    || partOrders.get(last).size() == PrintJobRunner.MAX_WAYBILLS_PER_JOB) {
                 partOrders.add(new ArrayList<>());
                 partLabels.add(0);
                 last++;
@@ -231,7 +252,7 @@ public class PackLabelService {
         for (int i = 0; i < partOrders.size(); i++) {
             parts.add(new Part(i + 1, partOrders.size(), partLabels.get(i), List.copyOf(partOrders.get(i))));
         }
-        return new Summary(labels, orders, reused, plan.unitsWithoutLabel(), plan.orders().size(), parts);
+        return new Summary(labels, orders, reused, plan.unitsWithoutLabel(), plan.orders().size(), parts, false);
     }
 
     // ── the PDF ───────────────────────────────────────────────────────────────

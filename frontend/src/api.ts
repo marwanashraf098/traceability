@@ -3796,6 +3796,8 @@ export interface PackLabelPart { part: number; of: number; labels: number; order
 export interface PackLabelSummary {
   labels: number; orders: number; reused: number; unitsWithoutLabel: number; ordersConsidered: number
   parts: PackLabelPart[]
+  /** A waybill scope (new / last) found no order needing a label while the Pick & Pack queue has some. */
+  queueNeedsLabels?: boolean
 }
 
 export function previewPackLabels(req: PackLabelRequest) {
