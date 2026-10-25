@@ -685,10 +685,10 @@
         "footer": "Best for big deliveries and fast movers."
       },
       "mainWarehouseOnly": "Count-only stock goes to the main warehouse.",
-      "default": "Default",
       "change": "Change",
       "back": "Back",
-      "printStickBadge": "Print & stick"
+      "printStickBadge": "Print & stick",
+      "yourDefault": "Your default"
     },
     "countOnly": {
       "badge": "Count only",
@@ -1256,7 +1256,9 @@
       "voided": "Voided — removed from sellable stock",
       "held": "Placed on hold",
       "unheld": "Released from hold — back to available",
-      "location_corrected": "Location corrected to the main warehouse"
+      "location_corrected": "Location corrected to the main warehouse",
+      "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}}",
+      "label_bound_tag": "Label {{code}} attached in Tag stock"
     },
     "pieceStatus": {
       "available": "Available",
@@ -2397,7 +2399,8 @@
       "pickpack": "Pick & Pack",
       "portal": "Returns portal",
       "privacy": "Privacy",
-      "couriers": "Couriers"
+      "couriers": "Couriers",
+      "labels": "Labels"
     },
     "sections": {
       "businessDetails": "Business details",
@@ -2692,6 +2695,13 @@
       "includeRecentBefore": "Also include open orders whose tracking was added in the last",
       "includeRecentAfter": "days",
       "daysLabel": "Days"
+    },
+    "labels": {
+      "title": "Labels",
+      "subtitle": "How receiving starts for this store.",
+      "defaultMode": "Default receiving mode",
+      "note": "Receiving still asks every time — this only picks the card that's already selected. Anyone can choose the other one.",
+      "error": "Couldn't save. Try again."
     }
   },
   "users": {

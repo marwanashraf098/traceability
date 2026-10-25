@@ -580,14 +580,45 @@ public class ReturnSessionService {
         if (piece == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found: " + pieceId);
         }
-        // The PDF is rendered in a separate call after this commits — refuse an untagged piece
-        // HERE, so no label_reprinted event is ever recorded for a label that can't be printed.
+        // An untagged piece has no label to print — refused before any event.
         UntaggedPieces.refuse(jdbc, tenantId, pieceId);
 
         ledger.recordLabelReprinted(pieceId, actorUserId,
             (UUID) piece.get("locationId"), (UUID) piece.get("orderId"), (UUID) piece.get("shipmentId"));
 
         return Map.of("pieceId", pieceId, "barcode", piece.get("barcode"));
+    }
+
+    /** Renders the reprinted label (the caller's PDF); may fail — then nothing is recorded. */
+    @FunctionalInterface
+    public interface LabelPdf { byte[] render() throws java.io.IOException; }
+
+    /**
+     * The intake "Reprint label" (flexible labeling slice 5 fix): renders the PDF FIRST and only then records
+     * label_reprinted through {@link #recordReprint} (which validates the session and the piece) — one transaction,
+     * so a print that fails, or a refusal, never leaves a reprint event. Prints the piece's own code — for a piece
+     * labeled at packing, the code bound to it then.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public byte[] reprintLabel(UUID sessionId, String pieceId, UUID actorUserId, LabelPdf pdf) throws java.io.IOException {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        byte[] bytes = pdf.render();
+        recordReprint(sessionId, pieceId, actorUserId);
+        return bytes;
+    }
+
+    /**
+     * The old gated reprint's endpoint (GET /returns/pieces/{id}/label), render-first (flexible labeling slice 5 fix,
+     * 2026-10-25): renders the PDF, then {@link #validateAndRecordReprint} — the gate itself, unchanged — validates
+     * and records label_reprinted, in one transaction. A print that fails, or a piece the gate refuses, leaves no
+     * event (it used to record first, in a separate call).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public byte[] reprintGated(String pieceId, UUID actorUserId, LabelPdf pdf) throws java.io.IOException {
+        byte[] bytes = pdf.render();
+        validateAndRecordReprint(pieceId, actorUserId);
+        return bytes;
     }
 
     /**

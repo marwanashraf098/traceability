@@ -94,7 +94,7 @@ describe('Receiving — two-step start (switch on)', () => {
     const chooser = await screen.findByTestId('receiving-mode-chooser')
     expect(within(chooser).getByRole('heading').textContent).toBe('How do you want to receive this delivery?')
     const stick = screen.getByTestId('receiving-mode-print_stick')
-    expect(stick.textContent).toContain('Default')
+    expect(stick.textContent).toContain('Your default')                   // slice 8: was the static 'Default' badge
     expect(stick.textContent).toContain('Every piece has a barcode from day one.')
     expect(screen.getByTestId('receiving-mode-count_only').textContent).toContain('Best for big deliveries and fast movers.')
     expect(screen.queryByText('Location')).toBeNull()                         // nothing else on the screen

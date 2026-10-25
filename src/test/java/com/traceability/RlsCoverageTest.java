@@ -105,6 +105,8 @@ class RlsCoverageTest {
             // Receiving import (slice 2b) — receivingImport_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/receiving/import/template",
             // Flexible labeling slice 3 — tagStock_crossTenantIsolated_withSameTenantPositiveControl below.
+            // Flexible labeling slice 8 — labelSettings_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/label-settings",
             "/api/v1/tag-stock",
             "/api/v1/tag-stock/sessions/{id}",
             // Flexible labeling slice 7 — stockTakeUntaggedCounts_crossTenantIsolated_withSameTenantPositiveControl below.
@@ -892,6 +894,24 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
             jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
             jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void labelSettings_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 8: the receiving default mode is read from the caller's own tenants row only.
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled, receiving_default_mode) " +
+                    "VALUES (?, 'Cov LS Other', true, 'print_stick')", otherTenant);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true, receiving_default_mode = 'count_only' WHERE id = ?", tenantId);
+        try {
+            ResponseEntity<String> mine = get("/api/v1/label-settings", String.class);
+            assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(mine.getBody()).as("same-tenant positive control").contains("\"receivingDefaultMode\":\"count_only\"");
+            assertThat(mine.getBody()).as("never another tenant's row").doesNotContain("print_stick");
+        } finally {
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false, receiving_default_mode = 'print_stick' WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

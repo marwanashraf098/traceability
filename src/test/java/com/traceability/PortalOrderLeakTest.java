@@ -219,6 +219,8 @@ class PortalOrderLeakTest {
         }
         // Flexible labeling slice 4 — packing labels (a portal order is ORDER_NOT_PACKABLE: PackLabelsTest.x2).
         reg("POST /api/v1/pack-labels/preview",     skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
+        reg("GET /api/v1/label-settings",           skip("tenant setting (receiving default mode) — no order data"));
+        reg("PUT /api/v1/label-settings",           skip("tenant setting (receiving default mode) — no order data"));
         reg("POST /api/v1/pack-labels/plan",        skip("counts only: PackPrintBatchStore.candidates / queueOrderIds / the last batch, each read through merchant_orders"));
         reg("POST /api/v1/pack-labels/print",       skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
         reg("POST /api/v1/pack-labels/pdf",         skip("label PDF (binary) for order ids the caller sends; codes joined to merchant_orders"));

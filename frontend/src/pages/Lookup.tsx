@@ -40,6 +40,7 @@ function TimelinePhrase({ event }: { event: TimelineEvent }) {
         orderNumber:  event.orderNumber  ?? '',
         location:     event.locationName ?? '',
         toStatus:     event.toStatus     ?? '',
+        code:         event.labelCode    ?? '',
         defaultValue: event.phraseKey.replace(/_/g, ' '),
       })}
     </span>

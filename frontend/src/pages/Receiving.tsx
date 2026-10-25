@@ -7,7 +7,7 @@ import { useCapabilities } from '../capabilities'
 import { ArrowLeft, Barcode, PackageCheck } from 'lucide-react'
 
 import { getAccessToken } from '../auth'
-import { authFetch, getRoleFromToken } from '../api'
+import { authFetch, getRoleFromToken, getLabelSettings } from '../api'
 
 function authHeaders() {
   const t = getAccessToken()
@@ -185,6 +185,20 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
   const [locationId, setLocationId] = useState(locations[0]?.id ?? '')
   const [mode, setMode]             = useState<ReceivingMode>('print_stick')
   const [step, setStep]             = useState<'choose' | 'form'>(flexibleLabeling ? 'choose' : 'form')
+  // Slice 8: the store's default (Settings › Labels) is pre-selected on step 1 — any card can still be clicked.
+  const [defaultMode, setDefaultMode] = useState<ReceivingMode>('print_stick')
+  useEffect(() => {
+    if (!flexibleLabeling) return
+    let cancelled = false
+    getLabelSettings()
+      .then(s => {
+        if (cancelled || !s?.receivingDefaultMode) return
+        setDefaultMode(s.receivingDefaultMode)
+        setMode(s.receivingDefaultMode)
+      })
+      .catch(() => { /* print & stick stays pre-selected */ })
+    return () => { cancelled = true }
+  }, [flexibleLabeling])
   // Count only receives into the main warehouse (packing labels untagged pieces there) — server-enforced too.
   const mainWarehouse = locations.find(l => l.is_fulfillment)
   const countOnly = flexibleLabeling && mode === 'count_only'
@@ -234,7 +248,9 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
               >
                 <div className="flex items-start justify-between gap-2">
                   <Icon size={22} strokeWidth={1.75} className="text-trace-blue" />
-                  {m === 'print_stick' && <Badge tone="neutral" label={t('receiving.mode.default')} />}
+                  {m === defaultMode && (
+                    <span data-testid={`receiving-mode-default-${m}`}><Badge tone="info" label={t('receiving.mode.yourDefault')} /></span>
+                  )}
                 </div>
                 <div className="space-y-1.5 flex-1">
                   <p className="text-h3 text-primary">{t(`receiving.mode.${m}.title`)}</p>

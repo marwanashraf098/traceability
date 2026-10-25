@@ -10,8 +10,10 @@ import ReturnsPortalTab from './ReturnsPortalTab'
 import PickPackTab from './PickPackTab'
 import PrivacyTab from './PrivacyTab'
 import CouriersTab from './CouriersTab'
+import LabelsTab from './LabelsTab'
+import { useCapabilities } from '../../capabilities'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'couriers' | 'portal' | 'privacy'
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'labels' | 'couriers' | 'portal' | 'privacy'
 const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'couriers', 'portal']
 
 /**
@@ -41,14 +43,21 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  *
  * GDPR build A adds "Privacy" (?tab=privacy) — Shopify customer data requests to download.
  * Owner only (every /privacy endpoint is owner-only server-side); managers don't see the tab.
+ *
+ * Flexible labeling slice 8 adds "Labels" (?tab=labels) — the default receiving mode. Owner and manager edit; shown
+ * only while the tenant has flexible labeling (the switch itself is admin-only and not here).
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
   const role = getRoleFromToken()
   const isOwner = role === 'owner'
   const isWorker = role === 'worker'
+  const { flexibleLabeling } = useCapabilities()
 
-  const visibleTabs: TabKey[] = isWorker ? [] : isOwner ? [...ALL_TABS, 'privacy'] : ALL_TABS
+  const base: TabKey[] = flexibleLabeling
+    ? ALL_TABS.flatMap(k => (k === 'pickpack' ? ['pickpack', 'labels'] as TabKey[] : [k]))
+    : ALL_TABS
+  const visibleTabs: TabKey[] = isWorker ? [] : isOwner ? [...base, 'privacy'] : base
 
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -79,6 +88,7 @@ export default function SettingsPage() {
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'locations' && <LocationsTab />}
         {activeTab === 'pickpack' && <PickPackTab isOwner={isOwner} />}
+        {activeTab === 'labels' && <LabelsTab />}
         {activeTab === 'couriers' && <CouriersTab isOwner={isOwner} />}
         {activeTab === 'portal' && <ReturnsPortalTab />}
         {activeTab === 'privacy' && <PrivacyTab />}
