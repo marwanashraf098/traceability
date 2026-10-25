@@ -2,10 +2,14 @@ package com.traceability.labels;
 
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.inventory.PhoneScanSource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
 
@@ -17,7 +21,11 @@ import java.util.UUID;
  *   POST /api/v1/tag-stock/sessions                        start (or resume the caller's open session)
  *   GET  /api/v1/tag-stock/sessions/{id}                   per-variant printed / tagged / unused
  *   POST /api/v1/tag-stock/sessions/{id}/print             {variantId, count, idempotencyKey} → batch
- *   POST /api/v1/tag-stock/sessions/{id}/replacement       {variantId, idempotencyKey} → batch of 1
+ *   POST /api/v1/tag-stock/sessions/{id}/reprint           {variantId} → PDF of this session's unused tag labels (none issued)
+ *   POST /api/v1/tag-stock/sessions/{id}/replacement       {variantId, idempotencyKey} → batch of 1 (an unused
+ *                                                          replacement code of the variant is reused first)
+ *   POST /api/v1/tag-stock/leftovers/{variantId}/pdf       labels left unused by ended sessions, reprinted
+ *                                                          (void them with POST /api/v1/label-codes/void)
  *   POST /api/v1/tag-stock/sessions/{id}/scan              {code, relayEventId?} → TAGGED | ALREADY_TAGGED | REJECTED:…
  *   POST /api/v1/tag-stock/sessions/{id}/end
  *   POST /api/v1/tag-stock/sessions/{id}/void-unused       {variantId?} → {voided}
@@ -30,6 +38,7 @@ public class TagStockController {
     public record ReplacementRequest(UUID variantId, String idempotencyKey) {}
     public record ScanRequest(String code, UUID relayEventId) {}
     public record VoidRequest(UUID variantId) {}
+    public record ReprintRequest(UUID variantId) {}
 
     private final TagStockService service;
     private final PhoneScanSource phoneScanSource;
@@ -41,8 +50,9 @@ public class TagStockController {
 
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public TagStockService.Overview overview(@RequestParam(required = false) String q) {
-        return service.overview(q);
+    public TagStockService.Overview overview(@RequestParam(required = false) String q,
+                                             @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.overview(q, principal.userId());
     }
 
     @PostMapping("/sessions")
@@ -63,6 +73,27 @@ public class TagStockController {
                                         @AuthenticationPrincipal CustomUserDetails principal) {
         if (req == null || req.variantId() == null || req.count() == null || req.count() < 1) throw LabelCodeException.invalidCount();
         return service.print(id, req.variantId(), req.count(), req.idempotencyKey(), principal.userId());
+    }
+
+    // No produces= (like the label endpoints): a JSON error body must stay writable.
+    @PostMapping("/sessions/{id}/reprint")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> reprint(@PathVariable UUID id, @RequestBody ReprintRequest req) throws IOException {
+        if (req == null || req.variantId() == null) throw LabelCodeException.unknownVariant();
+        return pdf(service.reprintUnused(id, req.variantId()), "tag-labels-" + id);
+    }
+
+    @PostMapping("/leftovers/{variantId}/pdf")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> leftoverPdf(@PathVariable UUID variantId) throws IOException {
+        return pdf(service.leftoverPdf(variantId), "unused-labels-" + variantId);
+    }
+
+    private static ResponseEntity<byte[]> pdf(byte[] bytes, String name) {
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_PDF)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + name + ".pdf\"")
+            .body(bytes);
     }
 
     @PostMapping("/sessions/{id}/replacement")

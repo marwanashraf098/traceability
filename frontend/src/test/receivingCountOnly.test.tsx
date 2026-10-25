@@ -115,11 +115,12 @@ describe('Receiving › mode chooser', () => {
 describe('Receiving › count only session', () => {
   beforeEach(() => setup(true))
 
-  async function openSession() {
+  async function openSession(mode: 'count_only' | 'print_stick' = 'count_only') {
     renderWithProviders(<ToastProvider><Receiving /></ToastProvider>)
     // The list is empty in this backend — open the session through the create flow.
     const user = userEvent.setup()
     await user.click(await screen.findByRole('button', { name: /new/i }))
+    await user.click(await screen.findByTestId(`receiving-mode-${mode}`))   // step 1: pick the mode (2026-10-25 redesign)
     await user.click(await screen.findByRole('button', { name: /create/i }))
   }
 
@@ -153,7 +154,7 @@ describe('Receiving › count only session', () => {
   test('c5 — a finished print-and-stick session still prints labels', async () => {
     detail = base({ mode: 'print_stick', status: 'finalized', finalized_at: new Date().toISOString(), piece_count: 5,
       lines: LINES.map(l => ({ ...l, piece_count: l.quantity })) })
-    await openSession()
+    await openSession('print_stick')
     expect(await screen.findByRole('button', { name: /print labels/i })).toBeTruthy()
     expect(screen.queryByTestId('count-only-done')).toBeNull()
   })

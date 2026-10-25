@@ -231,6 +231,29 @@ public class LabelCodeService {
 
     // ── PDF ───────────────────────────────────────────────────────────────────
 
+    /**
+     * Named piece labels for the given codes that are still ISSUED (a reprint never prints a bound or voided code);
+     * 422 NO_ISSUED_CODES when none is. Same order and layout as {@link #batchPdf}. Callers pick the codes.
+     */
+    @Transactional(readOnly = true)
+    public byte[] codesPdf(List<UUID> codeIds) throws IOException {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        List<LabelPdfRenderer.Piece> labels = codeIds == null || codeIds.isEmpty() ? List.of() : jdbc.query(
+            "SELECT lc.code, pr.title AS product_title, v.title AS variant_title, v.sku " +
+            "FROM label_codes lc JOIN variants v ON v.id = lc.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE lc.tenant_id = ? AND lc.id = ANY(?::uuid[]) AND lc.status = 'issued' " +
+            "ORDER BY length(lc.code), lc.code",
+            (rs, i) -> new LabelPdfRenderer.Piece(rs.getString("code"), rs.getString("product_title"),
+                rs.getString("variant_title"), rs.getString("sku")),
+            tenantId, codeIds.toArray(new UUID[0]));
+        if (labels.isEmpty()) {
+            throw new LabelCodeException(HttpStatus.UNPROCESSABLE_ENTITY, LabelCodeException.Code.NO_ISSUED_CODES,
+                "These labels are already used or voided", "هذه الملصقات مستخدمة أو ملغاة");
+        }
+        return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(LABEL_WIDTH_MM, LABEL_HEIGHT_MM));
+    }
+
     /** The batch's still-issued codes as named piece labels (a reprint prints nothing bound or voided). */
     @Transactional(readOnly = true)
     public byte[] batchPdf(UUID batchId) throws IOException {

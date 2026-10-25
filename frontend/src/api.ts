@@ -3709,8 +3709,15 @@ export function markGenericDelivered(orderIds: string[]) {
 export interface TagVariantStock {
   variantId: string; productTitle: string; variantTitle: string; sku: string | null; imageUrl: string | null
   untagged: number; labeled: number; unusedLabels: number
+  /** Tag labels printed in the caller's open session and not used yet — reprinted before new ones. */
+  unusedThisSession?: number
 }
-export interface TagStockOverview { labeled: number; untagged: number; variants: TagVariantStock[] }
+/** Labels left unused by ENDED Tag stock sessions, per product: reprint or void them. */
+export interface TagLeftover {
+  variantId: string; productTitle: string; variantTitle: string; sku: string | null; imageUrl: string | null
+  count: number; codeIds: string[]
+}
+export interface TagStockOverview { labeled: number; untagged: number; variants: TagVariantStock[]; leftovers?: TagLeftover[] }
 export interface TagSessionVariant {
   variantId: string; productTitle: string; variantTitle: string; sku: string | null; imageUrl: string | null
   printed: number; tagged: number; unused: number; untaggedLeft: number; labeled: number
@@ -3763,6 +3770,29 @@ export function endTagSession(id: string) {
 export function voidUnusedTagLabels(id: string, variantId?: string) {
   return requestReadable<{ voided: number }>(`/tag-stock/sessions/${id}/void-unused`, {
     method: 'POST', body: JSON.stringify(variantId ? { variantId } : {}),
+  })
+}
+async function openPdfResponse(res: Response) {
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  window.open(URL.createObjectURL(await res.blob()), '_blank')
+}
+/** This session's unused tag labels for a product, reprinted (the same codes — nothing new issued). */
+export async function openTagReprintPdf(sessionId: string, variantId: string) {
+  await openPdfResponse(await authFetch(`/tag-stock/sessions/${sessionId}/reprint`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ variantId }),
+  }))
+}
+/** A product's labels left over from ended sessions, reprinted. */
+export async function openTagLeftoverPdf(variantId: string) {
+  await openPdfResponse(await authFetch(`/tag-stock/leftovers/${variantId}/pdf`, { method: 'POST' }))
+}
+/** The existing all-or-nothing void of issued codes. */
+export function voidLabelCodes(codeIds: string[], reason: string) {
+  return requestReadable<{ voided: number }>('/label-codes/void', {
+    method: 'POST', body: JSON.stringify({ codeIds, reason }),
   })
 }
 /** The batch's still-issued codes as named piece labels — opened in a new tab to print. */

@@ -651,16 +651,22 @@
       "loadMore": "Load more"
     },
     "mode": {
-      "title": "How will these pieces be labeled?",
+      "title": "How do you want to receive this delivery?",
       "print_stick": {
         "title": "Print & stick now",
-        "body": "Exactly how receiving works today. Enter quantities, print a label for every piece, stick them on before shelving."
+        "body": "Exactly how receiving works today. Enter quantities, print a label for every piece, stick them on before shelving.",
+        "footer": "Every piece has a barcode from day one."
       },
       "count_only": {
         "title": "Count only, label at pack",
-        "body": "No labels now. Enter how many arrived. Pieces go in as untagged and get a label when they're packed."
+        "body": "No labels now. Enter how many arrived. Pieces go in as untagged and get a label when they're packed.",
+        "footer": "Best for big deliveries and fast movers."
       },
-      "mainWarehouseOnly": "Count-only receiving goes into the main warehouse."
+      "mainWarehouseOnly": "Count-only stock goes to the main warehouse.",
+      "default": "Default",
+      "change": "Change",
+      "back": "Back",
+      "printStickBadge": "Print & stick"
     },
     "countOnly": {
       "badge": "Count only",
@@ -680,21 +686,14 @@
       "labelsNone": "None"
     },
     "import": {
-      "open": "Import from file",
+      "open": "Import from Excel",
       "template": "Download template",
-      "templateCsv": "CSV",
       "templateFailed": "Couldn't download the template. Try again.",
       "title": "Import quantities from a file",
-      "subtitle": "Upload a Shopify inventory export (.csv or .xlsx) for one location. The \"On hand (new)\" column is what arrived.",
       "shopifyWarning": "Don't also import this file into Shopify — Traced adds these quantities to Shopify when you finish receiving.",
-      "choose": "Choose file",
-      "chooseAnother": "Choose another file",
       "formats": ".csv or .xlsx, up to 5 MB",
       "tooLarge": "The file is too large — the limit is 5 MB.",
       "failed": "Something went wrong. Try again.",
-      "summary": "{{count}} rows · {{units}} units to add",
-      "summary_one": "1 row · {{units}} units to add",
-      "skipped": "{{count}} rows with no quantity skipped",
       "sameAsShopify": "Same as Shopify stock — is this really what arrived?",
       "remove": "Remove this row",
       "notAdded": "Not added ({{count}})",
@@ -714,7 +713,25 @@
         "negative": "Negative quantity",
         "not_integer": "Not a whole number",
         "too_large": "Quantity too large"
-      }
+      },
+      "step1": "Download the template",
+      "step2": "Type what arrived in the 'On hand (new)' column.",
+      "step3": "Upload the file",
+      "formatXlsx": "Excel (.xlsx)",
+      "formatCsv": "CSV",
+      "shopifyExportNote": "Or use a Shopify inventory export for one location.",
+      "drop": "Drag a file here, or click to browse",
+      "reading": "Reading…",
+      "removeFile": "Remove this file",
+      "chipMatched_one": "1 product matched · {{units}} units to add",
+      "chipMatched_other": "{{count}} products matched · {{units}} units to add",
+      "chipNotAdded": "{{count}} not added",
+      "chipSkipped": "{{count}} skipped",
+      "newEmpty": "The 'On hand (new)' column is empty. Type the quantities that arrived in that column and upload again — or use the stock numbers already in the file.",
+      "useCurrent": "Use On hand (current) instead",
+      "usingCurrent": "Using On hand (current)",
+      "allRemoved": "Every row was removed — nothing to add.",
+      "nothingMatched": "No product in this file has a quantity to add."
     }
   },
   "fulfill": {
@@ -4535,6 +4552,20 @@
       "voided": "{{count}} labels voided",
       "voided_one": "1 label voided",
       "back": "Back to Tag stock"
+    },
+    "reprintUnused": "Reprint the {{count}} unused labels",
+    "reprintUnused_one": "Reprint the 1 unused label",
+    "printNew": "Print new labels",
+    "reprintHint": "Labels printed earlier in this session aren't used yet — reprint the same codes instead of new ones.",
+    "leftovers": {
+      "title": "Unused labels",
+      "subtitle": "Left over from ended sessions. They still work when scanned — reprint them, or void the ones thrown away.",
+      "count": "{{count}} unused",
+      "reprint": "Reprint",
+      "void": "Void",
+      "voidTitle": "Void {{count}} unused labels?",
+      "voidTitle_one": "Void 1 unused label?",
+      "voidBody": "These labels will stop working. If any of them was already scanned, nothing is voided."
     }
   }
 }

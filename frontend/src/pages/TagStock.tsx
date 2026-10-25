@@ -3,16 +3,21 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Barcode, Tag } from 'lucide-react'
 import {
-  getTagStock, startTagSession, printTagLabels, openLabelBatchPdf, ServerMessageError,
-  TagStockOverview, TagVariantStock,
+  getTagStock, startTagSession, printTagLabels, openLabelBatchPdf, openTagReprintPdf, openTagLeftoverPdf, voidLabelCodes,
+  ServerMessageError, TagLeftover, TagStockOverview, TagVariantStock,
 } from '../api'
-import { Alert, Badge, Button, EmptyState, Input, MiniStat, ProductThumb, Spinner } from '../components/ui'
+import { Alert, Badge, Button, EmptyState, Input, MiniStat, Modal, ProductThumb, Spinner } from '../components/ui'
 
 /**
  * Flexible labeling slice 3 — Tag stock, the LIST view (in the shell): the main warehouse's labeled vs untagged
  * totals and the variants that still have untagged pieces (most untagged first, searchable). Pick one, choose
  * how many labels (default and max = its untagged count), print them; the scan loop (/tag-stock/:id/scan)
  * opens for that variant. Owner / manager; main warehouse only.
+ *
+ * Live-test fix (2026-10-25): when the caller's open session already printed labels for the product that aren't
+ * used yet, the panel defaults to "Reprint the N unused labels" (the same codes — nothing new issued), with
+ * "Print new labels" as the secondary choice. Labels left over from ENDED sessions are listed under
+ * "Unused labels" with Reprint and Void (the existing all-or-nothing void).
  */
 export default function TagStock() {
   const { t, i18n } = useTranslation()
@@ -24,7 +29,10 @@ export default function TagStock() {
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [count, setCount] = useState(0)
-  const [busy, setBusy] = useState<'print' | 'resume' | null>(null)
+  const [busy, setBusy] = useState<'print' | 'reprint' | 'resume' | null>(null)
+  // The secondary choice: print NEW labels although this session's unused ones exist.
+  const [printNew, setPrintNew] = useState(false)
+  const [reload, setReload] = useState(0)
 
   const readable = (e: unknown) =>
     e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('tagStock.error')
@@ -39,12 +47,26 @@ export default function TagStock() {
     }, query ? 250 : 0)
     return () => clearTimeout(handle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
+  }, [query, reload])
 
   function choose(v: TagVariantStock) {
     setSelected(v.variantId)
     setCount(v.untagged)
+    setPrintNew(false)
     setError(null)
+  }
+
+  async function reprint(v: TagVariantStock) {
+    setBusy('reprint'); setError(null)
+    try {
+      const session = await startTagSession()
+      await openTagReprintPdf(session.id, v.variantId)
+      navigate(`/tag-stock/${session.id}/scan?variant=${v.variantId}`)
+    } catch (e: unknown) {
+      setError(readable(e))
+    } finally {
+      setBusy(null)
+    }
   }
 
   async function print(v: TagVariantStock) {
@@ -128,7 +150,15 @@ export default function TagStock() {
                     <span className="text-caption text-muted">{t('tagStock.labeledCount', { count: v.labeled })}</span>
                   </div>
                 </button>
-                {selected === v.variantId && (
+                {selected === v.variantId && (v.unusedThisSession ?? 0) > 0 && !printNew ? (
+                  <div className="flex flex-wrap items-center gap-3 ps-[56px]" data-testid="tag-reprint-panel">
+                    <Button loading={busy === 'reprint'} onClick={() => reprint(v)}>
+                      {t('tagStock.reprintUnused', { count: v.unusedThisSession })}
+                    </Button>
+                    <Button variant="secondary" onClick={() => setPrintNew(true)}>{t('tagStock.printNew')}</Button>
+                    <p className="text-caption text-muted basis-full">{t('tagStock.reprintHint')}</p>
+                  </div>
+                ) : selected === v.variantId && (
                   <div className="flex flex-wrap items-end gap-3 ps-[56px]" data-testid="tag-print-panel">
                     <label className="space-y-1.5">
                       <span className="text-small text-muted block">{t('tagStock.howMany')}</span>
@@ -149,6 +179,88 @@ export default function TagStock() {
           </ul>
         )}
       </div>
+
+      {data?.leftovers && data.leftovers.length > 0 && (
+        <LeftoverLabels leftovers={data.leftovers} onChanged={() => setReload(n => n + 1)} />
+      )}
     </div>
+  )
+}
+
+/** Labels left unused by ended sessions — they still bind when scanned; reprint them, or void the thrown-away ones. */
+function LeftoverLabels({ leftovers, onChanged }: { leftovers: TagLeftover[]; onChanged: () => void }) {
+  const { t, i18n } = useTranslation()
+  const [busy, setBusy] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<TagLeftover | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const readable = (e: unknown) =>
+    e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('tagStock.error')
+
+  async function reprint(l: TagLeftover) {
+    setBusy(`reprint:${l.variantId}`); setError(null)
+    try { await openTagLeftoverPdf(l.variantId) }
+    catch (e: unknown) { setError(readable(e)) }
+    finally { setBusy(null) }
+  }
+
+  async function doVoid(l: TagLeftover) {
+    setBusy(`void:${l.variantId}`); setError(null)
+    try {
+      await voidLabelCodes(l.codeIds, 'tag_session_leftover')
+      setConfirm(null)
+      onChanged()
+    } catch (e: unknown) {
+      setError(readable(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <section className="card p-4 space-y-3" data-testid="tag-leftovers">
+      <div>
+        <h2 className="text-h3 text-primary">{t('tagStock.leftovers.title')}</h2>
+        <p className="text-small text-muted mt-0.5">{t('tagStock.leftovers.subtitle')}</p>
+      </div>
+      {error && <Alert tone="critical" title={error} />}
+      <ul className="divide-y divide-line">
+        {leftovers.map(l => (
+          <li key={l.variantId} className="py-3 flex flex-wrap items-center gap-3" data-testid={`tag-leftover-${l.variantId}`}>
+            <ProductThumb src={l.imageUrl} alt={l.productTitle} size={40} />
+            <div className="min-w-0 flex-1">
+              <p className="text-body font-medium text-primary truncate"><bdi>{l.productTitle}</bdi></p>
+              <p className="text-small text-muted truncate">
+                <bdi>{l.variantTitle}</bdi>
+                {l.sku && <> · <span className="font-mono" dir="ltr">{l.sku}</span></>}
+              </p>
+            </div>
+            <Badge tone="neutral" label={t('tagStock.leftovers.count', { count: l.count })} />
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" loading={busy === `reprint:${l.variantId}`} onClick={() => reprint(l)}>
+                {t('tagStock.leftovers.reprint')}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setConfirm(l)}>{t('tagStock.leftovers.void')}</Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {confirm && (
+        <Modal title={t('tagStock.leftovers.voidTitle', { count: confirm.count })}
+          onClose={() => { if (!busy) setConfirm(null) }}>
+          <div className="space-y-4">
+            <p className="text-body text-muted">{t('tagStock.leftovers.voidBody')}</p>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1" disabled={!!busy} onClick={() => setConfirm(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button variant="destructive" className="flex-1" loading={busy === `void:${confirm.variantId}`}
+                onClick={() => doVoid(confirm)}>
+                {t('tagStock.leftovers.void')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </section>
   )
 }

@@ -4,6 +4,18 @@
 
 ## Current state
 
+**A (Shopify location address) + B (onboarding gate) + C (Lookup Sold / Exchange) — STEP 0 diagnosis only (2026-10-25,
+no code, no branch). Report given in chat; waiting on Marawan's answers.** Key facts:
+- A: both location-create paths send `address {countryCode: EG}` only (`ShopifyLocationProvisioningService:153`,
+  `LocationController:182`); no `locationEdit` / address read in the gateway; `write_locations` granted on all 21
+  connected stores (prod). EG provinceCode = ISO-3166-2 (C, GZ, ALX…); only countryCode is schema-required.
+- B: `locations` has NO address columns; OAuth callback success lands in Shopify ADMIN (embedded), not Traced — no
+  return-to exists. Demo and review tenants' stores are 'disconnected' (explicit bypass needed). Prod: 55 tenants,
+  21 connected, 32 would be gated (30 never connected, 0 pieces; 2 had a store).
+- C: `sold` status exists (V65, only `out_on_transfer:sold`); no `available:sold`; Sold needs a new named decrement
+  (approval). Lookup Exchange needs a merchant-created `return_requests` exchange row (no `origin` column today);
+  5a −1 fires only after pack + Pickups close; closing a G4b exchange doesn't cancel its replacement order.
+
 **Dolt.eg x2 whole-tenant purge — COMMITTED on prod 2026-10-23 18:09:32 UTC (ops only, no code).** Sessions revoked
 18:03 UTC (30-min wait cut short by Marawan after a clean 5-min activity check); purge PASS (11,214 live + 9 dup rows
 incl. the Bosta courier_accounts row; 86 other-tenant tables / 360,964 rows hash-unchanged); JobRunr history 5,943 jobs
@@ -104,8 +116,31 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — live-test fixes + redesign (2026-10-25, branch `feat/flexible-labeling-live-fixes` off
+origin/main 5d20797; NOT merged, NOT deployed). No migration.**
+- **Receiving start (switch ON only):** step 1 "How do you want to receive this delivery?" — two cards (Print & stick
+  now · Default / Count only, label at pack, each with body + footer); a click picks the mode and goes to step 2
+  (today's form, "<mode> · Change" on top, Back link; count only locks the main warehouse: "Count-only stock goes to the
+  main warehouse."). Session header: mode badge next to the status. Switch OFF: today's form, no badge, no mode sent.
+- **Import from Excel (everyone):** ONE header button opens the panel: 1 Download the template (.xlsx default / CSV
+  + "Or use a Shopify inventory export for one location."), 2 type what arrived in "On hand (new)", 3 drag-and-drop /
+  browse (file name + ×). The Shopify warning once, small, above the upload. Summary chips (matched · units, not
+  added, skipped), matched list, collapsible "Not added (N)", "Add N units" disabled at 0 with the reason.
+- **Empty "On hand (new)":** preview returns `newColumnEmpty` (every stocked row empty) → the message instead of
+  "0 rows · 0 units"; "Use On hand (current) instead" re-previews the same file with `column=current` (same matching /
+  skipping / validation; same-as-Shopify flag off; IMPORT_BAD_COLUMN for anything else). Never automatic.
+- **Tag stock:** `POST /tag-stock/sessions/{id}/reprint` (this session's unused tag codes of the variant, same
+  codes, nothing issued — `LabelCodeService.codesPdf`); the list's panel defaults to "Reprint the N unused labels"
+  (`VariantStock.unusedThisSession`), "Print new labels" secondary. Replacement reuses an unused replacement code of
+  the variant (no order refs, single-code batch) before issuing. "Unused labels" (codes left by ENDED sessions):
+  `Overview.leftovers`, Reprint (`POST /tag-stock/leftovers/{variantId}/pdf`), Void (existing `/label-codes/void`,
+  all-or-nothing, after a confirm).
+- **Tests:** ReceivingImportTest c1–c2, TagStockTest r1–r4; vitest receivingRedesign 7, tagStockReprint 5. Revert-checked
+  6 backend + 7 frontend. Registries: PortalOrderLeakTest 2 SKIP. Existing tests edited (approved, wording/clicks only):
+  receivingImport helpers + i1/i2/i4, receivingCountOnly c3–c5 helper.
+
 **Flexible labeling — Print labels "Everything ready to pack" = the whole Pick & Pack queue (2026-10-25, branch
-`fix/pack-labels-queue-scope` off origin/main 703ec20; NOT merged, NOT deployed). No migration. Behind
+`fix/pack-labels-queue-scope` off origin/main 703ec20; merged to main 5d20797 2026-10-25, NOT deployed). No migration. Behind
 `flexible_labeling_enabled`.** Live test (tenant testReciving, other-courier orders, no Bosta): Print labels showed
 "0 labels for 0 orders" — every scope used the waybill print's candidates (Bosta orders with a waybill only).
 - Scope `all` → `PackPrintBatchStore.queueOrderIds(sort)`: exactly the orders the queue lists

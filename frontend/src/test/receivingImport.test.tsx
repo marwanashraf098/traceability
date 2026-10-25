@@ -7,7 +7,7 @@ import Receiving from '../pages/Receiving'
 
 /**
  * Receiving import (slice 2b) — the screen side:
- *   i1  an open print-and-stick session (no flag) offers "Import from file" + "Download template"
+ *   i1  an open print-and-stick session (no flag) offers "Import from Excel"; its panel offers "Download template"
  *   i2  upload → preview: matched rows, the "same as Shopify" warning, not-added rows with readable
  *       reasons, skipped count, the Shopify warning; removing a row changes the total; confirm sends
  *       only the kept rows and refreshes the session
@@ -74,19 +74,20 @@ async function openSession() {
   const user = userEvent.setup()
   renderWithProviders(<ToastProvider><Receiving /></ToastProvider>)
   await user.click(await screen.findByText('REC-9'))
-  await screen.findByRole('button', { name: /import from file/i })
+  await screen.findByRole('button', { name: /import from excel/i })
   return user
 }
 
 async function uploadFile(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: /import from file/i }))
+  await user.click(screen.getByRole('button', { name: /import from excel/i }))
   const input = screen.getByTestId('import-file') as HTMLInputElement
   await user.upload(input, new File(['Handle,Title'], 'shop.csv', { type: 'text/csv' }))
 }
 
 describe('Receiving › import from file', () => {
   test('i1 — an open session offers import and the template (no flag needed)', async () => {
-    await openSession()
+    const user = await openSession()
+    await user.click(screen.getByRole('button', { name: /import from excel/i }))
     expect(screen.getByRole('button', { name: /download template/i })).toBeTruthy()
   })
 
@@ -96,17 +97,18 @@ describe('Receiving › import from file', () => {
     const panel = await screen.findByTestId('import-panel')
     expect(panel.textContent).toContain("Don't also import this file into Shopify — Traced adds these quantities to Shopify when you finish receiving.")
     const preview = await screen.findByTestId('import-preview')
-    expect(preview.textContent).toContain('2 rows · 13 units to add')
-    expect(preview.textContent).toContain('15 rows with no quantity skipped')
+    expect(preview.textContent).toContain('2 products matched · 13 units to add')
+    expect(preview.textContent).toContain('15 skipped')
     expect(within(screen.getByTestId('import-row-10')).getByTestId('same-as-shopify').textContent)
       .toBe('Same as Shopify stock — is this really what arrived?')
     expect(within(screen.getByTestId('import-row-9')).queryByTestId('same-as-shopify')).toBeNull()
     const notAdded = screen.getByTestId('import-unmatched')
+    await user.click(within(notAdded).getByRole('button', { name: 'Not added (2)' }))   // collapsed by default
     expect(notAdded.textContent).toContain('Gift card')
     expect(notAdded.textContent).toContain('Negative quantity')
 
     await user.click(within(screen.getByTestId('import-row-10')).getByRole('button', { name: /remove this row/i }))
-    expect(screen.getByTestId('import-preview').textContent).toContain('1 row · 3 units to add')
+    expect(screen.getByTestId('import-preview').textContent).toContain('1 product matched · 3 units to add')
     await user.click(screen.getByRole('button', { name: 'Add 3 units to this session' }))
 
     await waitFor(() => expect(calls.some(c => c.url.endsWith('/import/apply'))).toBe(true))
@@ -127,6 +129,7 @@ describe('Receiving › import from file', () => {
 
   test('i4 — Download template fetches the .xlsx template', async () => {
     const user = await openSession()
+    await user.click(screen.getByRole('button', { name: /import from excel/i }))
     await user.click(screen.getByRole('button', { name: /download template/i }))
     await waitFor(() => expect(calls.some(c => c.url.endsWith('/receiving/import/template?format=xlsx'))).toBe(true))
   })

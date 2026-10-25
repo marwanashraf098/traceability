@@ -26,6 +26,10 @@ import java.util.stream.Collectors;
  *       Title + variant title (the option values joined " / ", the way Shopify builds a variant title).
  *       Several candidates → unmatched "ambiguous", never a guess. Two rows for one variant → both are
  *       unmatched "duplicate". A matched row whose "On hand (new)" equals "On hand (current)" is flagged.</li>
+ *   <li>"On hand (new)" empty on every row (a raw Shopify export — the stock is in "On hand (current)"):
+ *       {@code newColumnEmpty} tells the screen so; only an explicit second preview with
+ *       {@code column = current} reads "On hand (current)" as the quantity received (same matching, skipping
+ *       and validation; the same-as-Shopify flag is off, since the quantity IS Shopify's number). Never automatic.</li>
  *   <li>{@link #apply}: adds the chosen quantities to the session's lines (to an existing line of the
  *       variant, else a new line) — exactly what typing them in would do. Nothing is received until the
  *       normal finalize; finalize, labels and Shopify +N are unchanged.</li>
@@ -46,7 +50,14 @@ public class ReceivingImportService {
                              String imageUrl, int quantity, Integer onHandCurrent, boolean sameAsShopify, String matchedBy) {}
     public record UnmatchedRow(int rowNumber, String handle, String title, String options, String sku, String value,
                                String reason) {}
-    public record Preview(String location, int units, List<MatchedRow> matched, List<UnmatchedRow> unmatched, int skipped) {}
+    /**
+     * quantityColumn: "new" (On hand (new), the default) or "current" (On hand (current), only when asked for).
+     * newColumnEmpty: every row that isn't "not stocked" has an empty On hand (new) (and there is at least one).
+     */
+    public record Preview(String location, int units, List<MatchedRow> matched, List<UnmatchedRow> unmatched, int skipped,
+                          String quantityColumn, boolean newColumnEmpty) {}
+
+    public static final String COLUMN_NEW = "new", COLUMN_CURRENT = "current";
     public record ApplyLine(UUID variantId, Integer quantity) {}
     public record Applied(int linesAdded, int linesUpdated, int units) {}
     public record Template(byte[] bytes, String contentType, String filename) {}
@@ -66,7 +77,15 @@ public class ReceivingImportService {
 
     @Transactional(readOnly = true)
     public Preview preview(UUID sessionId, String filename, byte[] bytes) {
+        return preview(sessionId, filename, bytes, COLUMN_NEW);
+    }
+
+    @Transactional(readOnly = true)
+    public Preview preview(UUID sessionId, String filename, byte[] bytes, String column) {
         UUID tenantId = TenantContext.require();
+        boolean current = COLUMN_CURRENT.equals(column);
+        if (column != null && !current && !COLUMN_NEW.equals(column)) throw ImportException.badColumn();
+        String quantityHeader = current ? ShopifyInventoryFile.ON_HAND_CURRENT : ShopifyInventoryFile.ON_HAND_NEW;
         requireImportable(sessionId, tenantId);
         List<ShopifyInventoryFile.FileRow> rows = ShopifyInventoryFile.parse(filename, bytes);
 
@@ -78,8 +97,14 @@ public class ReceivingImportService {
         List<UnmatchedRow> unmatched = new ArrayList<>();
         Map<UUID, List<MatchedRow>> byVariant = new LinkedHashMap<>();
         int skipped = 0;
+        boolean anyStocked = false, anyNewValue = false;
         for (ShopifyInventoryFile.FileRow r : rows) {
-            String value = r.get(ShopifyInventoryFile.ON_HAND_NEW);
+            String newValue = r.get(ShopifyInventoryFile.ON_HAND_NEW);
+            if (!newValue.equalsIgnoreCase("not stocked")) {
+                anyStocked = true;
+                if (!newValue.isBlank()) anyNewValue = true;
+            }
+            String value = r.get(quantityHeader);
             String reason = null;
             Integer qty = null;
             if (value.isBlank() || value.equalsIgnoreCase("not stocked")) { skipped++; continue; }
@@ -92,35 +117,38 @@ public class ReceivingImportService {
                 else if (q > MAX_QUANTITY) reason = "too_large";
                 else qty = (int) q;
             }
-            if (reason != null) { unmatched.add(unmatched(r, reason)); continue; }
+            if (reason != null) { unmatched.add(unmatched(r, reason, value)); continue; }
 
             Matcher.Result m = matcher.match(r);
-            if (m.variant() == null) { unmatched.add(unmatched(r, m.reason())); continue; }
+            if (m.variant() == null) { unmatched.add(unmatched(r, m.reason(), value)); continue; }
             CatalogVariant v = m.variant();
-            if (v.giftCard())   { unmatched.add(unmatched(r, "gift_card")); continue; }
-            if (v.notTracked()) { unmatched.add(unmatched(r, "not_tracked")); continue; }
-            Integer current = parseIntOrNull(r.get(ShopifyInventoryFile.ON_HAND_CURRENT));
+            if (v.giftCard())   { unmatched.add(unmatched(r, "gift_card", value)); continue; }
+            if (v.notTracked()) { unmatched.add(unmatched(r, "not_tracked", value)); continue; }
+            Integer onHandCurrent = parseIntOrNull(r.get(ShopifyInventoryFile.ON_HAND_CURRENT));
             byVariant.computeIfAbsent(v.id(), k -> new ArrayList<>()).add(new MatchedRow(r.rowNumber(), v.id(),
-                v.productTitle(), v.variantTitle(), v.sku(), v.imageUrl(), qty, current,
-                current != null && current.intValue() == qty, m.by()));
+                v.productTitle(), v.variantTitle(), v.sku(), v.imageUrl(), qty, onHandCurrent,
+                !current && onHandCurrent != null && onHandCurrent.intValue() == qty, m.by()));
         }
 
         List<MatchedRow> matched = new ArrayList<>();
         for (List<MatchedRow> group : byVariant.values()) {
             if (group.size() == 1) { matched.add(group.get(0)); continue; }
             Set<Integer> dup = group.stream().map(MatchedRow::rowNumber).collect(Collectors.toSet());
-            for (ShopifyInventoryFile.FileRow r : rows) if (dup.contains(r.rowNumber())) unmatched.add(unmatched(r, "duplicate"));
+            for (ShopifyInventoryFile.FileRow r : rows) {
+                if (dup.contains(r.rowNumber())) unmatched.add(unmatched(r, "duplicate", r.get(quantityHeader)));
+            }
         }
         matched.sort(Comparator.comparingInt(MatchedRow::rowNumber));
         unmatched.sort(Comparator.comparingInt(UnmatchedRow::rowNumber));
         int units = matched.stream().mapToInt(MatchedRow::quantity).sum();
-        return new Preview(locations.isEmpty() ? null : locations.iterator().next(), units, matched, unmatched, skipped);
+        return new Preview(locations.isEmpty() ? null : locations.iterator().next(), units, matched, unmatched, skipped,
+            current ? COLUMN_CURRENT : COLUMN_NEW, anyStocked && !anyNewValue);
     }
 
-    private static UnmatchedRow unmatched(ShopifyInventoryFile.FileRow r, String reason) {
+    private static UnmatchedRow unmatched(ShopifyInventoryFile.FileRow r, String reason, String value) {
         String options = Stream3.join(r.get(ShopifyInventoryFile.OPT1), r.get(ShopifyInventoryFile.OPT2), r.get(ShopifyInventoryFile.OPT3));
         return new UnmatchedRow(r.rowNumber(), r.get(ShopifyInventoryFile.HANDLE), r.get(ShopifyInventoryFile.TITLE),
-            options, r.get(ShopifyInventoryFile.SKU), r.get(ShopifyInventoryFile.ON_HAND_NEW), reason);
+            options, r.get(ShopifyInventoryFile.SKU), value, reason);
     }
 
     private static Integer parseIntOrNull(String s) {

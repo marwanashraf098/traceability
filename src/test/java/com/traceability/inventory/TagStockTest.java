@@ -411,6 +411,117 @@ class TagStockTest {
         assertThat(tagStock.start(owner).id()).as("a new session after the end").isNotEqualTo(s.id());
     }
 
+    // ── reprint instead of new codes (live-test fix, 2026-10-25) ──────────────────
+
+    private static String pdfText(byte[] pdf) throws java.io.IOException {
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            return new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+        }
+    }
+
+    private int codesOf(UUID variant) { return count("SELECT count(*) FROM label_codes WHERE variant_id = ?", variant); }
+
+    @Test
+    void r1_a_second_print_in_the_same_session_reprints_the_same_codes_and_issues_none() throws Exception {
+        countOnly(variantA, 10);
+        TagStockService.Session s = tagStock.start(owner);
+        LabelCodeService.Batch b = tagStock.print(s.id(), variantA, 3, "r1-a", owner);
+        assertThat(tagStock.overview(null, owner).variants()).filteredOn(v -> v.variantId().equals(variantA))
+            .singleElement().extracting(TagStockService.VariantStock::unusedThisSession).isEqualTo(3);
+
+        var outside = code(variantA);                                                   // not printed in this session
+        int before = codesOf(variantA);
+        String text = pdfText(tagStock.reprintUnused(s.id(), variantA));
+        for (LabelCodeService.IssuedCode c : b.codes()) assertThat(text).contains(c.code());
+        assertThat(text).as("only this session's labels").doesNotContain(outside.code());
+        assertThat(codesOf(variantA)).as("a reprint issues nothing").isEqualTo(before);
+
+        tagStock.scan(s.id(), b.codes().get(0).code(), owner, false);                   // one is used now
+        String after = pdfText(tagStock.reprintUnused(s.id(), variantA));
+        assertThat(after).doesNotContain(b.codes().get(0).code()).contains(b.codes().get(1).code());
+
+        // "Print new labels" still issues new ones.
+        LabelCodeService.Batch more = tagStock.print(s.id(), variantA, 2, "r1-b", owner);
+        assertThat(more.codes()).hasSize(2).extracting(LabelCodeService.IssuedCode::code).doesNotContainAnyElementsOf(
+            b.codes().stream().map(LabelCodeService.IssuedCode::code).toList());
+        assertThat(codesOf(variantA)).isEqualTo(before + 2);
+
+        // Without a session open the list shows 0 unused this session; another session's codes don't count.
+        assertThat(tagStock.overview(null, worker).variants()).filteredOn(v -> v.variantId().equals(variantA))
+            .singleElement().extracting(TagStockService.VariantStock::unusedThisSession).isEqualTo(0);
+        assertCode(() -> tagStock.reprintUnused(s.id(), variantB), "NO_ISSUED_CODES");
+    }
+
+    @Test
+    void r2_a_replacement_reuses_an_unused_replacement_code_of_the_variant() {
+        countOnly(variantA, 3);
+        TagStockService.Session s = tagStock.start(owner);
+        LabelCodeService.Batch first = tagStock.replacement(s.id(), variantA, "r2-1", owner);
+        int before = codesOf(variantA);
+        LabelCodeService.Batch again = tagStock.replacement(s.id(), variantA, "r2-2", owner);
+        assertThat(again.created()).isFalse();
+        assertThat(again.id()).isEqualTo(first.id());
+        assertThat(again.codes()).singleElement().extracting(LabelCodeService.IssuedCode::code).isEqualTo(first.codes().get(0).code());
+        assertThat(codesOf(variantA)).as("reused, none issued").isEqualTo(before);
+
+        tagStock.scan(s.id(), first.codes().get(0).code(), owner, false);              // used → a new one next time
+        LabelCodeService.Batch fresh = tagStock.replacement(s.id(), variantA, "r2-3", owner);
+        assertThat(fresh.created()).isTrue();
+        assertThat(fresh.codes().get(0).code()).isNotEqualTo(first.codes().get(0).code());
+        assertThat(tagStock.replacement(s.id(), variantB, "r2-4", owner).codes().get(0).variantId())
+            .as("never another variant's code").isEqualTo(variantB);
+    }
+
+    @Test
+    void r3_leftovers_from_ended_sessions_are_listed_reprinted_and_voided() throws Exception {
+        countOnly(variantA, 5);
+        TagStockService.Session s = tagStock.start(owner);
+        LabelCodeService.Batch b = tagStock.print(s.id(), variantA, 3, "r3-a", owner);
+        tagStock.scan(s.id(), b.codes().get(0).code(), owner, false);
+        assertThat(tagStock.overview(null, owner).leftovers()).as("an open session's labels aren't leftovers").isEmpty();
+
+        tagStock.end(s.id(), owner);
+        List<TagStockService.Leftover> left = tagStock.overview(null, owner).leftovers();
+        assertThat(left).singleElement().satisfies(l -> {
+            assertThat(l.variantId()).isEqualTo(variantA);
+            assertThat(l.count()).isEqualTo(2);
+            assertThat(l.codeIds()).containsExactlyInAnyOrder(b.codes().get(1).id(), b.codes().get(2).id());
+        });
+        int before = codesOf(variantA);
+        String text = pdfText(tagStock.leftoverPdf(variantA));
+        assertThat(text).contains(b.codes().get(1).code()).contains(b.codes().get(2).code()).doesNotContain(b.codes().get(0).code());
+        assertThat(codesOf(variantA)).isEqualTo(before);
+
+        // Void = the existing all-or-nothing void.
+        assertThat(labels.voidCodes(left.get(0).codeIds(), "tag_session_leftover")).isEqualTo(2);
+        assertThat(tagStock.overview(null, owner).leftovers()).isEmpty();
+        assertCode(() -> tagStock.leftoverPdf(variantA), "NO_ISSUED_CODES");
+    }
+
+    @Test
+    void r4_switch_off_hides_reprint_and_leftovers_and_http_answers_a_pdf_when_on() {
+        countOnly(variantA, 2);
+        TagStockService.Session s = tagStock.start(owner);
+        tagStock.print(s.id(), variantA, 1, "r4-a", owner);
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(jwt.issueAccessToken(owner, tenant, "owner"));
+        h.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        ResponseEntity<byte[]> pdf = rest.exchange(base() + "/api/v1/tag-stock/sessions/" + s.id() + "/reprint", HttpMethod.POST,
+            new HttpEntity<>(Map.of("variantId", variantA.toString()), h), byte[].class);
+        assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pdf.getHeaders().getContentType().toString()).isEqualTo("application/pdf");
+
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenant);
+        try {
+            assertThatThrownBy(() -> tagStock.reprintUnused(s.id(), variantA)).hasMessageContaining("404");
+            assertThatThrownBy(() -> tagStock.leftoverPdf(variantA)).hasMessageContaining("404");
+            assertThat(rest.exchange(base() + "/api/v1/tag-stock/leftovers/" + variantA + "/pdf", HttpMethod.POST,
+                new HttpEntity<>(h), String.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenant);
+        }
+    }
+
     // ── flag, roles, RLS ──────────────────────────────────────────────────────
 
     @Test
