@@ -18,8 +18,46 @@ public interface ShopifyLocationGateway {
      * decision is that every location Traced creates has this set true (it's always a
      * fulfillment-flagged location; see the is_fulfillment gate on LocationController).
      */
-    record LocationInput(String name, String address1, String city, String countryCode,
-                          boolean fulfillsOnlineOrders) {}
+    record LocationInput(String name, String address1, String address2, String city, String provinceCode,
+                          String zip, String countryCode, boolean fulfillsOnlineOrders) {
+
+        /** A location created with this address (any field may be null — only countryCode is required). */
+        public static LocationInput of(String name, LocationAddress address, boolean fulfillsOnlineOrders) {
+            return new LocationInput(name, address.address1(), address.address2(), address.city(),
+                address.provinceCode(), address.zip(), address.countryCode(), fulfillsOnlineOrders);
+        }
+    }
+
+    /**
+     * A Shopify location address (feature A, 2026-10-25). Blank strings are normalised to null so
+     * two addresses compare equal exactly when Shopify would show the same thing.
+     */
+    record LocationAddress(String address1, String address2, String city, String provinceCode,
+                           String zip, String countryCode) {
+        public LocationAddress {
+            address1     = blankToNull(address1);
+            address2     = blankToNull(address2);
+            city         = blankToNull(city);
+            provinceCode = blankToNull(provinceCode);
+            zip          = blankToNull(zip);
+            countryCode  = blankToNull(countryCode);
+        }
+
+        /** "Empty" per the fill rule: address1, city and provinceCode all blank (country / zip don't count). */
+        public boolean isEmpty() {
+            return address1 == null && city == null && provinceCode == null;
+        }
+
+        private static String blankToNull(String v) {
+            return v == null || v.isBlank() ? null : v.trim();
+        }
+    }
+
+    /**
+     * What readLocationAddress returns: the location's Shopify name, its address, and whether local
+     * pickup is switched on there (localPickupSettingsV2 non-null).
+     */
+    record LocationAddressState(String name, LocationAddress address, boolean localPickupEnabled) {}
 
     record LocationResult(String shopifyLocationId, String name) {}
 
@@ -51,4 +89,22 @@ public interface ShopifyLocationGateway {
      * @throws ShopifyException on Shopify userErrors
      */
     void deactivate(String shopDomain, String token, String shopifyLocationGid, String idempotencyKey);
+
+    /**
+     * Reads one location's name, address and local-pickup setting (read only). Empty when Shopify
+     * has no location with that id.
+     *
+     * @throws ShopifyException on a Shopify / transport failure
+     */
+    Optional<LocationAddressState> readLocationAddress(String shopDomain, String token, String shopifyLocationGid);
+
+    /**
+     * Edits ONLY the address of one location (locationEdit with input { address } — never name,
+     * never fulfillsOnlineOrders, never metafields; an address edit touches no inventory quantity).
+     * Callers write only to the Traced Main Warehouse GID. Safe to repeat: the same address sent
+     * twice leaves the same result.
+     *
+     * @throws ShopifyException on Shopify userErrors or a transport failure
+     */
+    void editLocationAddress(String shopDomain, String token, String shopifyLocationGid, LocationAddress address);
 }

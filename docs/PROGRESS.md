@@ -4,8 +4,45 @@
 
 ## Current state
 
+**A — Egyptian address on Traced's Shopify location (2026-10-25, branch `feat/location-address` off origin/main f0b3074,
+commits 6e27d3a + cf18ef0; merged to main 2026-10-25, NOT deployed). V184.** Every location Traced created carried only
+`address {countryCode: EG}`. Gateway: `LocationInput` gains address2 / provinceCode / zip; `readLocationAddress` (name,
+address, `localPickupSettingsV2`) and `editLocationAddress` (`locationEdit` input `{ address }` only — never name /
+fulfillsOnlineOrders, no inventory). **Traced's main location is identified ONLY by its linked Shopify location id (the
+is_fulfillment row's `shopify_location_id`) — never by its Shopify name, which merchants may rename (Marawan,
+2026-10-25).** **Fill rule — ONE definition, `MainLocationAddressService.apply(tenantId, desired, dryRun)`:** write only
+when the Shopify address is empty (address1, city, provinceCode all blank) or still exactly equals
+`locations.shopify_address_written` (what Traced last wrote); else `has_address`, never overwritten. Local pickup on
+blocks ONLY the generic address (`local_pickup_on`); a real merchant address is still written (approved). Generic =
+"Main warehouse", Cairo, C, 11511, EG. Outcomes on `locations.shopify_address_outcome` (filled / has_address /
+missing_scope / not_linked / failed / local_pickup_on) + `_dry_run` / `_checked_at` / `_error`; final = filled /
+has_address / local_pickup_on in write mode, retried later = failed / not_linked / missing_scope (approved). New
+locations — provisioning and the LocationController fulfillment create (approved) — are created with the address
+(`MainLocationAddressSource`: B's merchant address via a @Primary bean, else generic); a reused "Traced Main Warehouse"
+goes through the fill rule. B's entry point: `setMainLocationAddressAfterCommit(UUID tenantId, LocationAddress address)`
+(after commit, JobRunr `MainLocationAddressJob`, retried on failed). **Backfill** `LocationAddressBackfillJob`
+(owner-pool tenant listing like CatalogBackfillJob, per tenant under runAs; skips only not_linked), started at startup
+by `LocationAddressBackfillTrigger` (approved): `TRACED_LOCATION_ADDRESS_BACKFILL_MODE` = **dry-run (default; re-reads
+Shopify once a day while left on dry-run)** | write | off. Marawan sets it to off after the write run. Prod (DB,
+read-only): 21 connected stores, all with write_locations and the main location linked → not_linked 0, missing_scope 0;
+the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome, shopify_address_dry_run, count(*)
+FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
+RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
+- **Next (staged, STOP after each):** Marawan deploys A alone and reads the dry-run counts → B rebases on A (drop B's 4
+  push-state columns — A's `shopify_address_*` is the single record; B's retryable job calls A's fill rule
+  SYNCHRONOUSLY; filled / has_address → done, failed / not_linked / missing_scope → LOW alert + retry; A's address
+  source reads B's V185 columns; province → provinceCode, city → city, street → address1, building + floor → address2,
+  real addresses send NO zip; gate /fulfill/gather too; step-2 save creates a missing main warehouse; drop the Overview
+  "location" step, editing ConnectionsOnboardingTest o1/o3 + overview.test ov13/ov14 — approved) → C1 rebases on A + B
+  ("Not sold" gets a short confirm; no reason codes; shared "Sold (Off-book)" label OK; CLAUDE.md → seven named
+  decrements, pushPieceSold approved 2026-10-25, in C1's merge commit).
+- **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
+  the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
+  decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are
+  unchanged. C2 gets its own Step-0-light check before build.
+
 **A (Shopify location address) + B (onboarding gate) + C (Lookup Sold / Exchange) — STEP 0 diagnosis only (2026-10-25,
-no code, no branch). Report given in chat; waiting on Marawan's answers.** Key facts:
+no code, no branch). Report given in chat; answered by Marawan the same day (see A above).** Key facts:
 - A: both location-create paths send `address {countryCode: EG}` only (`ShopifyLocationProvisioningService:153`,
   `LocationController:182`); no `locationEdit` / address read in the gateway; `write_locations` granted on all 21
   connected stores (prod). EG provinceCode = ISO-3166-2 (C, GZ, ALX…); only countryCode is schema-required.
@@ -57,7 +94,9 @@ deployed, no tenant switched on). No migration.** Live test (prod, test store wi
 - **Turning the other-couriers switch off** leaves "Allow exchanges" as it is; generic orders stop being eligible
   (routeGeneric). The switch says so beforehand (shown when exchanges are on and Bosta can't take them), and the
   exchanges row then says no order can be exchanged right now. Edge: if that store later turns Bosta booking on,
-  exchanges are already on for Bosta orders.
+  exchanges are already on for Bosta orders. **Approved by Marawan (2026-10-23):** turning the other-couriers switch
+  off leaves "Allow exchanges" as it is — no automatic turn-off — including that edge case (a no-Bosta store that
+  later turns on Bosta pickup booking has exchanges live for Bosta orders straight away).
 - **Copy (EN + AR):** neutral exchanges description when the other-couriers switch is on (Bosta-only text unchanged);
   "coming soon" removed from the other-couriers switch and from the drawer's approve helper for a generic exchange
   (that one was stale since G4b — approving works); disabled note "Connect Bosta, or turn on …" only for a store that

@@ -114,6 +114,10 @@ traced:
     leak-detection-ms: 20000
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
+  # Feature A — address backfill for the Traced Main Warehouse Shopify location (LocationAddressBackfillJob).
+  # dry-run (default: reads Shopify, records the would-be outcome, never edits) | write | off.
+  location-address-backfill:
+    mode: ${TRACED_LOCATION_ADDRESS_BACKFILL_MODE:dry-run}
   # shopify_webhook_events retention (ShopifyWebhookRetention, nightly 04:40 Cairo): processed rows older than
   # `days` go, held back per tenant by the oldest event that can still run. Under 3 days refuses to run
   # (Shopify redelivers for up to 48 h). Batches of batch-size, pause-ms apart, at most max-per-run a night.

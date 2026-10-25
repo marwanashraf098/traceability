@@ -29,4 +29,14 @@ class StubShopifyLocationGateway implements ShopifyLocationGateway {
     public void deactivate(String shopDomain, String token, String shopifyLocationGid, String idempotencyKey) {
         throw new ShopifyException(MSG);
     }
+
+    @Override
+    public Optional<LocationAddressState> readLocationAddress(String shopDomain, String token, String shopifyLocationGid) {
+        throw new ShopifyException(MSG);
+    }
+
+    @Override
+    public void editLocationAddress(String shopDomain, String token, String shopifyLocationGid, LocationAddress address) {
+        throw new ShopifyException(MSG);
+    }
 }
