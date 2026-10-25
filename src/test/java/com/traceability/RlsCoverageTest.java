@@ -341,6 +341,11 @@ class RlsCoverageTest {
                     "connection status; uses tx.execute()"),
             entry("/api/v1/onboarding/status",
                     "onboarding state — not a list"),
+            entry("/api/v1/setup/address",
+                    "onboarding gate: the tenant's own main-warehouse address + static governorate list — "
+                    + "not a list; tenant scoping asserted as app_user by OnboardingGateTest"),
+            entry("/api/v1/embedded/setup",
+                    "onboarding gate step for the embedded tenant — a single value, not a list"),
             entry("/api/v1/bosta/sync/status",
                     "connection status — not an RLS list"),
             entry("/api/v1/bosta/pickup/manifest/{pickupId}",

@@ -176,7 +176,7 @@ public class RevenueAnalyticsService {
         String id = cityId;
         String fallbackName = cityName;
         if (id == null && provinceCode != null) {
-            String bostaName = MoneyAnalyticsService.PROVINCE_TO_BOSTA_CITY.get(provinceCode.trim().toUpperCase(Locale.ROOT));
+            String bostaName = com.traceability.geo.EgyptProvinces.TO_BOSTA_CITY.get(provinceCode.trim().toUpperCase(Locale.ROOT));
             if (bostaName != null) {
                 id = cities.idByName().get(bostaName.toLowerCase(Locale.ROOT));
                 fallbackName = bostaName;

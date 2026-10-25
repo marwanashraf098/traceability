@@ -3401,7 +3401,8 @@
       "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when Traced confirms it was deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
-      "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta."
+      "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta.",
+      "WAREHOUSE_ADDRESS_PUSHED": "Clears when the address reaches Shopify — Traced keeps retrying. If it stays, save the address again."
     },
     "returnToReceive": {
       "markedBy": "Marked received by {{name}} in session {{session}}",
@@ -4606,6 +4607,48 @@
       "voidTitle": "Void {{count}} unused labels?",
       "voidTitle_one": "Void 1 unused label?",
       "voidBody": "These labels will stop working. If any of them was already scanned, nothing is voided."
+    }
+  },
+  "setupGate": {
+    "stepsLabel": "Setup steps",
+    "step1": "Connect Shopify",
+    "step1Done": "Shopify connected",
+    "step2": "Main warehouse address",
+    "connectTitle": "Connect your Shopify store",
+    "connectBody": "Traced needs your store to bring in your products and new orders. You can start using Traced once setup is done — it takes about 2 minutes.",
+    "connectFooter": "Traced only tracks orders placed after you connect. Your store stays linked to this account — you can't switch it to a different store later.",
+    "backToTraced": "Back to Traced",
+    "address": {
+      "title": "Where is your main warehouse?",
+      "body": "This is where you receive, store and pack your stock.",
+      "governorate": "Governorate",
+      "governoratePlaceholder": "Choose a governorate",
+      "city": "City / area",
+      "cityPlaceholder": "e.g. Nasr City",
+      "street": "Street address",
+      "streetPlaceholder": "Street name and number",
+      "building": "Building",
+      "floor": "Floor",
+      "optional": "(optional)",
+      "shopifyNote": "We also put this address on the “Traced Main Warehouse” location in your Shopify. Shopify needs it to show your products as in stock.",
+      "finish": "Finish setup",
+      "save": "Save address",
+      "errGovernorate": "Choose a governorate.",
+      "errCity": "Enter the city or area.",
+      "errStreet": "Enter the street address.",
+      "errSave": "Couldn't save the address. Please try again.",
+      "errLoad": "Couldn't load this page. Refresh to try again."
+    },
+    "manager": {
+      "title": "Waiting for the owner to finish setup",
+      "bodyShopify": "The account owner needs to connect the Shopify store before Traced can be used. Ask them to sign in and finish setup.",
+      "bodyAddress": "The account owner needs to add the main warehouse address before Traced can be used. Ask them to sign in and finish setup.",
+      "check": "Check again"
+    },
+    "banner": {
+      "title": "Add your warehouse address",
+      "body": "Shopify needs your main warehouse's address to show your products as in stock.",
+      "cta": "Add address"
     }
   }
 }

@@ -43,8 +43,10 @@ function linkClass() {
   return 'inline-flex items-center gap-1.5 text-small font-medium text-brand hover:underline'
 }
 
-export default function StoreFinder({ initialInput, onNavigate }: {
+export default function StoreFinder({ initialInput, onNavigate, hideIntro = false }: {
   initialInput?: string
+  /** The onboarding gate shows its own title and intro above the finder. */
+  hideIntro?: boolean
   /** Leaves the page for Shopify's approval screen — window.location by default; a seam for tests. */
   onNavigate?: (url: string) => void
 }) {
@@ -170,10 +172,12 @@ export default function StoreFinder({ initialInput, onNavigate }: {
 
   return (
     <form onSubmit={onSubmit} className="space-y-3" data-testid="store-finder">
-      <div>
-        <h4 className="text-body-lg font-semibold text-primary">{t('connections.shopify.finder.title')}</h4>
-        <p className="text-body text-muted">{t('connections.shopify.finder.body')}</p>
-      </div>
+      {!hideIntro && (
+        <div>
+          <h4 className="text-body-lg font-semibold text-primary">{t('connections.shopify.finder.title')}</h4>
+          <p className="text-body text-muted">{t('connections.shopify.finder.body')}</p>
+        </div>
+      )}
       <div>
         <label htmlFor="storeFinderInput" className="block text-small text-muted font-medium mb-1.5">
           {t('connections.shopify.finder.label')}

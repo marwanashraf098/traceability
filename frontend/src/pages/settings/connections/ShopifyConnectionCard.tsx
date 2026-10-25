@@ -34,7 +34,7 @@ function deriveUiState(shopify: ConnectionsStatus['shopify']): UiState {
 // rendered itself; anything else (unknown, empty, tampered) falls back to the generic message.
 const CALLBACK_ERROR_CODES = ['SHOP_LINKED_ELSEWHERE', 'SHOP_MISMATCH', 'INSTALL_EXPIRED', 'INSTALL_FAILED']
 
-function callbackErrorKey(code: string): string {
+export function callbackErrorKey(code: string): string {
   return CALLBACK_ERROR_CODES.includes(code)
     ? `connections.shopify.callbackError.${code}`
     : 'connections.shopify.callbackError.generic'

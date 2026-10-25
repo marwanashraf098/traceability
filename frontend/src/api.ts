@@ -1078,9 +1078,15 @@ export interface Me {
   role: 'owner' | 'manager' | 'worker'
   /** App-wide Shopify upgrade notice (owner / manager only; always null for a worker). */
   shopifyUpgradeStage?: ShopifyUpgradeStage
+  /** Onboarding gate (V185): what the tenant must still set up before using Traced (owner / manager; null for a worker). */
+  setupStep?: SetupStep
+  /** Grandfathered tenants: setup done but the main warehouse has no address yet — the soft banner. */
+  warehouseAddressNeeded?: boolean
 }
 
 export type ShopifyUpgradeStage = 'upgrade' | 'delete_old_app' | null
+
+export type SetupStep = 'shopify' | 'address' | null
 
 /** "Log out" — THIS device only: ends this device's session (and its phone pairing when
  *  {@code deviceId} — the browser's station device id — is given). Other devices, a station
@@ -3893,4 +3899,31 @@ export function openPackLabelsPdf(orderIds: string[]) {
 /** "Print 1 replacement label" for one order line — opens the 1-label PDF. */
 export function printPackReplacement(orderId: string, orderItemId: string, idempotencyKey: string) {
   return openPdfFrom('/pack-labels/replacement', { orderId, orderItemId, idempotencyKey })
+}
+
+// ── Onboarding gate — main warehouse address (V185, owner only) ──────────────────────
+
+export interface SetupArea { nameEn: string; nameAr: string | null }
+export interface SetupGovernorate { code: string; nameEn: string; nameAr: string; areas: SetupArea[] }
+export interface WarehouseAddressInput {
+  provinceCode: string
+  city: string
+  street: string
+  building?: string | null
+  floor?: string | null
+}
+export interface SetupAddressView {
+  address: (WarehouseAddressInput & { building: string | null; floor: string | null }) | null
+  provinces: SetupGovernorate[]
+}
+
+export function getSetupAddress() {
+  return requestReadable<SetupAddressView>('/setup/address')
+}
+
+/** Saves the main warehouse address; answers the tenant's setupStep after the save (null = gate done). */
+export function saveSetupAddress(address: WarehouseAddressInput) {
+  return requestReadable<{ setupStep: SetupStep }>('/setup/address', {
+    method: 'PUT', body: JSON.stringify(address),
+  })
 }

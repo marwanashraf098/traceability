@@ -12,6 +12,7 @@ import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
 import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
 import ShopifyUpgradeBanner from './ShopifyUpgradeBanner'
+import WarehouseAddressBanner from './WarehouseAddressBanner'
 import { stationDeviceId } from '../phone/PhoneScanProvider'
 
 // In-shell screens that run a live scan loop (useScanner): the app-wide upgrade notice stays off them.
@@ -264,6 +265,8 @@ export default function Layout({ children }: { children: ReactNode }) {
             onConfirmed={() => getMe().then(setMe).catch(err => console.error('Failed to reload /me', err))}
           />
         )}
+        {/* Onboarding gate (V185) — grandfathered owners without a warehouse address; never on scan loops */}
+        {!hidesUpgradeNotice(pathname) && <WarehouseAddressBanner me={me} />}
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6 max-[899px]:p-4">
