@@ -241,9 +241,10 @@ public class ReturnSessionController {
     // ── Pre-existing, untouched (FR-12 change 3) — old single-piece gated reprint ──
 
     /**
-     * Requires piece to be in return_pending_inspection or damaged. Kept exactly as it
+     * Requires piece to be in return_pending_inspection or damaged. The gate is kept exactly as it
      * was — not widened, not merged with the new reprint-label surface above (see
-     * ReturnSessionService.validateAndRecordReprint()'s javadoc for why).
+     * ReturnSessionService.validateAndRecordReprint()'s javadoc for why). Since 2026-10-25 the PDF
+     * renders before the event is recorded (ReturnSessionService.reprintGated).
      */
     @GetMapping("/pieces/{pieceId}/label")
     @PreAuthorize("isAuthenticated()")
@@ -252,8 +253,10 @@ public class ReturnSessionController {
             @RequestParam(required = false) Float widthMm,
             @RequestParam(required = false) Float heightMm,
             @AuthenticationPrincipal CustomUserDetails principal) throws IOException {
-        sessionService.validateAndRecordReprint(pieceId, principal.userId());
-        byte[] pdf = labelService.generatePieceLabel(pieceId, widthMm, heightMm);
+        // The gate is unchanged; only the order is: the PDF renders first and the event is recorded after it, in one
+        // transaction (slice 5 fix), so a failed or refused print never leaves a label_reprinted event.
+        byte[] pdf = sessionService.reprintGated(pieceId, principal.userId(),
+            () -> labelService.generatePieceLabel(pieceId, widthMm, heightMm));
         return ResponseEntity.ok()
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + pieceId + ".pdf\"")

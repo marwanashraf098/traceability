@@ -871,6 +871,33 @@ class PackLabelsTest {
     }
 
     @Test
+    void rt5_the_old_gated_reprint_records_its_event_only_after_the_pdf_and_keeps_its_gate() throws Exception {
+        String[] p = packedAndDelivered("#RT5");
+        String piece = p[0], code = p[1];
+        UUID order = UUID.fromString(p[2]);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, 'returning', 'return')", tenant, order, String.valueOf(TRACKING.incrementAndGet()));
+        // The gate: a delivered piece is refused, and leaves no event even though its PDF rendered.
+        assertThatThrownBy(() -> returnSessions.reprintGated(piece, worker, () -> labelService.generatePieceLabel(piece, null, null)))
+            .hasMessageContaining("return_pending_inspection or damaged");
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece)).isZero();
+
+        returnSessions.scan(returnSessions.createSession(null, worker), code, main, worker);   // → return_pending_inspection
+        assertThatThrownBy(() -> returnSessions.reprintGated(piece, worker, () -> { throw new IOException("printer jammed"); }))
+            .isInstanceOf(IOException.class);
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece))
+            .as("a failed print leaves no event").isZero();
+
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(jwt.issueAccessToken(worker, tenant, "worker"));
+        ResponseEntity<byte[]> pdf = rest.exchange("http://localhost:" + port + "/api/v1/returns/pieces/" + piece + "/label",
+            HttpMethod.GET, new HttpEntity<>(h), byte[].class);
+        assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pageTexts(pdf.getBody())).singleElement().satisfies(t -> assertThat(t).contains(code));
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece)).isEqualTo(1);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void rt4_lookup_names_the_label_and_where_it_went_on() {
         String[] p = packedAndDelivered("#RT4");

@@ -609,6 +609,19 @@ public class ReturnSessionService {
     }
 
     /**
+     * The old gated reprint's endpoint (GET /returns/pieces/{id}/label), render-first (flexible labeling slice 5 fix,
+     * 2026-10-25): renders the PDF, then {@link #validateAndRecordReprint} — the gate itself, unchanged — validates
+     * and records label_reprinted, in one transaction. A print that fails, or a piece the gate refuses, leaves no
+     * event (it used to record first, in a separate call).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public byte[] reprintGated(String pieceId, UUID actorUserId, LabelPdf pdf) throws java.io.IOException {
+        byte[] bytes = pdf.render();
+        validateAndRecordReprint(pieceId, actorUserId);
+        return bytes;
+    }
+
+    /**
      * PRE-EXISTING, UNTOUCHED (FR-12 change 3) — the old single-piece gated reprint path.
      * Kept exactly as it was: only return_pending_inspection/damaged pieces qualify.
      * recordReprint() above is a deliberately separate, unrestricted surface for the new
