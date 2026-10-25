@@ -104,6 +104,22 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — Print labels "Everything ready to pack" = the whole Pick & Pack queue (2026-10-25, branch
+`fix/pack-labels-queue-scope` off origin/main 703ec20; NOT merged, NOT deployed). No migration. Behind
+`flexible_labeling_enabled`.** Live test (tenant testReciving, other-courier orders, no Bosta): Print labels showed
+"0 labels for 0 orders" — every scope used the waybill print's candidates (Bosta orders with a waybill only).
+- Scope `all` → `PackPrintBatchStore.queueOrderIds(sort)`: exactly the orders the queue lists
+  (`FulfillService.PICKABLE_ORDERS_FILTER`, unchanged, same lookback) — any courier, no tracking number yet,
+  self-pickup — sorted like the waybill print (created_at, id). `new` / `last` unchanged (Bosta waybill candidates /
+  the last waybill print). Print waybills untouched (`candidates` not changed; the new method isn't used by it).
+- A waybill scope finding no order to label while the queue has some → `Summary.queueNeedsLabels` → the dialog says
+  "No Bosta waybill orders in this scope. Use 'Everything ready to pack' to label all orders in the queue." (EN+AR).
+- A part now also holds at most 490 orders (what one PDF request takes) — the queue isn't capped at 490 like the
+  waybill candidates. Separator unchanged: it already reads the newest forward leg of any provider.
+- NOTE: an order with no shipment that isn't self-pickup is NOT in the queue (the queue predicate), so it isn't
+  labeled — asserted in q1.
+- Tests: PackLabelsTest q1–q4 (+4, 22), vitest packLabels pl7 (+1). Revert-checked 4 backend + 1 frontend.
+
 **Flexible labeling — slice 7: stock take counts untagged pieces (2026-10-23, branch `feat/flexible-labeling-s7` off
 origin/main 9245635; merged to main 2026-10-24, NOT deployed). Migration V183. Behind `flexible_labeling_enabled`.**
 - **Fixes before merge (Marawan, 2026-10-24):** (1) the counting screen is BLIND — session detail `untagged` and

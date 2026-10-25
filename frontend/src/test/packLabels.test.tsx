@@ -130,6 +130,24 @@ describe('Print labels — queue', () => {
     expect(screen.queryByTestId('fulfill-pick')).toBeNull()          // the row button didn't open the order
   })
 
+  test('pl7 — a waybill scope with no Bosta orders points at "Everything ready to pack", which labels the queue', async () => {
+    setup(true)
+    summary = { ...SUMMARY, labels: 0, orders: 0, unitsWithoutLabel: 0, reused: 0, ordersConsidered: 0, parts: [],
+      queueNeedsLabels: true } as typeof SUMMARY
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await user.click(await screen.findByRole('button', { name: 'Print labels' }))
+    const dialog = await screen.findByTestId('print-labels-dialog')
+    expect(await within(dialog).findByTestId('print-labels-queue-hint')).toHaveTextContent(
+      "No Bosta waybill orders in this scope. Use 'Everything ready to pack' to label all orders in the queue.")
+
+    summary = SUMMARY
+    await user.click(within(dialog).getByText('Everything ready to pack'))
+    await waitFor(() => expect(posted('/pack-labels/preview').at(-1)!.body).toEqual({ scope: 'all', sort: 'oldest' }))
+    await waitFor(() => expect(within(dialog).getByTestId('print-labels-summary').textContent).toContain('3 labels for 2 orders'))
+    expect(within(dialog).queryByTestId('print-labels-queue-hint')).toBeNull()
+  })
+
   test('pl2 — switch off: no "Print labels" and no row button', async () => {
     setup(false)
     renderWithProviders(<Fulfill />)

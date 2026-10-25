@@ -136,8 +136,9 @@ export function lineDisplayName(l: { product_title: string; variant_title: strin
 // ── "Print labels" (queue) ─────────────────────────────────────────────────────
 
 /**
- * The queue's "Print labels": the same orders and order as the waybill print (scope + sort), or the store's last
- * waybill print, or one order (`orderId`). Shows "N labels for M orders" before printing, then opens the PDF part
+ * The queue's "Print labels": "New only" = the waybill print's own orders (Bosta waybills not printed yet),
+ * "Everything ready to pack" = every order in the Pick & Pack queue (any courier, self-pickup), "Same orders as
+ * the last waybill print" = that print's orders — or one order (`orderId`). Shows "N labels for M orders" before printing, then opens the PDF part
  * by part (each ≤ 2,000 labels, never splitting an order).
  */
 export function PrintLabelsDialog({ orderId, orderNumber, onClose }: {
@@ -267,6 +268,11 @@ export function PrintLabelsDialog({ orderId, orderNumber, onClose }: {
                   )}
                   {summary.parts.length > 1 && (
                     <p className="text-small text-muted">{t('fulfill.labels.dialog.parts', { count: summary.parts.length })}</p>
+                  )}
+                  {summary.orders === 0 && summary.queueNeedsLabels && (
+                    <p className="text-small text-warning font-medium" data-testid="print-labels-queue-hint">
+                      {t('fulfill.labels.dialog.queueHint')}
+                    </p>
                   )}
                 </>
               ) : (

@@ -1090,8 +1090,8 @@
         "titleOrder": "Print labels · {{number}}",
         "intro": "Labels for the pieces that don't have one yet, in the same order as the waybill stack. Each order's labels end with a plain separator showing its tracking number.",
         "introOrder": "Labels for this order's pieces that don't have one yet.",
-        "newHint": "Orders whose waybills haven't been printed yet",
-        "allHint": "Every order ready to pack",
+        "newHint": "Bosta orders whose waybills haven't been printed yet",
+        "allHint": "Every order in the Pick & Pack queue — any courier, self-pickup too",
         "last": "Same orders as the last waybill print",
         "lastHint": "In that print's order — use this after printing the waybills",
         "summary_one": "{{count}} label for {{orders}} orders",
@@ -1108,7 +1108,8 @@
         "done_other": "{{count}} labels ready for {{orders}} orders",
         "partsHint": "Open each part in turn — an order is never split between parts.",
         "openPart": "Open part {{part}} of {{of}} ({{count}} labels)",
-        "openAgain": "Open the labels again"
+        "openAgain": "Open the labels again",
+        "queueHint": "No Bosta waybill orders in this scope. Use 'Everything ready to pack' to label all orders in the queue."
       }
     }
   },
