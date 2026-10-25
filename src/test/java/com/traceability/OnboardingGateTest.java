@@ -9,6 +9,7 @@ import org.jobrunr.jobs.lambdas.IocJobLambda;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -53,6 +54,8 @@ import static org.mockito.Mockito.*;
  *   g8 push job: pusher throws → 'failed' + the class name, rethrown, LOW alert warehouse_address_push_failed
  *      listed; PUSHED → 'pushed', alert gone; NOT_LINKED → status cleared; a push for a superseded save
  *      writes nothing
+ *   g9 GET /api/v1/embedded/setup (Shopify session token): the same rule — 'address' for a connected tenant
+ *      without an address, null once grandfathered
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -96,6 +99,8 @@ class OnboardingGateTest {
     @MockBean  BostaGateway     bosta;
     @MockBean  JobScheduler     jobScheduler;
     @MockBean  MainLocationAddressPusher pusher;
+    @Value("${shopify.client-id}")     String clientId;
+    @Value("${shopify.client-secret}") String clientSecret;
 
     JdbcTemplate owner;   // postgres — fixtures and assertions only
 
@@ -304,6 +309,24 @@ class OnboardingGateTest {
         });
         assertThatThrownBy(() -> pushJob.push(t.id(), t.location())).isInstanceOf(RuntimeException.class);
         assertThat(address(t)).containsEntry("address_shopify_push_status", "pending");
+    }
+
+    // ── g9 ───────────────────────────────────────────────────────────────────
+
+    @Test @Order(9)
+    void g9_embeddedSetupStep() throws Exception {
+        Tenant t = tenant("embedded");
+        UUID s = store(t, "connected");
+        String shop = owner.queryForObject("SELECT shop_domain FROM stores WHERE id = ?", String.class, s);
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(ShopifySessionTokenFilterTest.makeToken(shop, clientId, clientSecret, 300, false));
+        ResponseEntity<Map> r = rest.exchange(url("/api/v1/embedded/setup"), HttpMethod.GET, new HttpEntity<>(h), Map.class);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(r.getBody()).containsEntry("setupStep", "address");
+
+        owner.update("UPDATE tenants SET setup_completed_at = now() WHERE id = ?", t.id());
+        r = rest.exchange(url("/api/v1/embedded/setup"), HttpMethod.GET, new HttpEntity<>(h), Map.class);
+        assertThat(r.getBody()).containsEntry("setupStep", null);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
