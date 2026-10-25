@@ -1259,8 +1259,8 @@
       "handover": "تم التسليم للعميل (استلام من المتجر)",
       "unpacked": "تم فك تعبئة القطعة — الإلغاء جارٍ",
       "unreserved": "أُعيدت للمخزون (أُلغي الطلب)",
-      "label_bound_packing": "أُلصق الملصق {{code}} عند التغليف · الطلب {{orderNumber}} · بواسطة {{actor}}",
-      "label_bound_tag": "أُلصق الملصق {{code}} في لصق المخزون · بواسطة {{actor}}"
+      "label_bound_packing": "أُلصق الملصق {{code}} عند التغليف · الطلب {{orderNumber}}",
+      "label_bound_tag": "أُلصق الملصق {{code}} في لصق المخزون"
     },
     "pieceStatus": {
       "available": "متاح",

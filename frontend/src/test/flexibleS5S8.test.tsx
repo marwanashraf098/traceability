@@ -12,8 +12,8 @@ import Receiving from '../pages/Receiving'
 
 /**
  * Flexible labeling slices 5 + 8 — the screen side.
- *   lk1  Lookup history: a label bound at packing reads "Label P000033 attached at packing · order #1002 · by Mona";
- *        one bound in Tag stock reads "Label … attached in Tag stock · by …"
+ *   lk1  Lookup history: a label bound at packing reads "Label P000033 attached at packing · order #1002"; one bound
+ *        in Tag stock reads "Label … attached in Tag stock" (the row shows the person already)
  *   sl1  Settings: "Labels" only with the switch on; the default receiving mode is saved (owner) …
  *   sl2  … and by a manager too
  *   rc1  Receiving step 1 pre-selects the saved default ("Your default"); the other card still works
@@ -88,8 +88,9 @@ describe('Slice 5 — Lookup history', () => {
     } as api.PieceLookupResult)
     renderWithProviders(<LookupPage />)
     await userEvent.type(screen.getByRole('textbox'), 'P000033{Enter}')
-    expect(await screen.findByText('Label P000033 attached at packing · order #1002 · by Mona')).toBeTruthy()
-    expect(screen.getByText('Label P000044 attached in Tag stock · by Omar')).toBeTruthy()
+    expect(await screen.findByText('Label P000033 attached at packing · order #1002')).toBeTruthy()
+    expect(screen.getByText('Label P000044 attached in Tag stock')).toBeTruthy()
+    expect(screen.getAllByText('Mona').length).toBeGreaterThan(0)                // the person, on the row itself
   })
 })
 

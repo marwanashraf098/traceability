@@ -129,14 +129,17 @@ merged, NOT deployed). Migration V184.**
   session close stamps the return leg (canonical evidence rule 2). A torn label: "Reprint label" in the return session
   prints the SAME code. **Fix (parked bug):** the intake reprint used to record `label_reprinted` in one call and render
   the PDF in another; now `ReturnSessionService.reprintLabel` renders first, then records through `recordReprint`
-  (which validates), one transaction, so a failed print or a refusal leaves no event. (The old gated GET /returns/pieces/{id}/label has the same order and is untouched — it
-  is marked "kept exactly as it was".) Lookup: label_bound reads "Label P000033 attached at packing · order #1002 · by
-  <user>" / "… attached in Tag stock · by <user>" (phraseKey label_bound_packing / label_bound_tag + labelCode).
+  (which validates), one transaction, so a failed print or a refusal leaves no event. The old gated GET /returns/pieces/{id}/label had the same order and was
+  fixed the same way in its own commit — `reprintGated` renders, then the unchanged `validateAndRecordReprint` gate
+  validates and records; the "kept exactly as it was" comment protects that status GATE (only
+  return_pending_inspection / damaged, never widened — the transfers-spec precedent), not the event order (rt5).
+  Lookup: label_bound reads "Label P000033 attached at packing · order #1002" / "Label … attached in Tag stock" (the
+  row already shows the person; phraseKey label_bound_packing / label_bound_tag + labelCode).
 - **Slice 8 — Settings › Labels:** `tenants.receiving_default_mode` (V184, NOT NULL DEFAULT 'print_stick', CHECK);
   `GET/PUT /api/v1/label-settings` (owner + manager; 404 with the switch off). Tab shown only with the switch on.
   Receiving step 1 pre-selects the default card with "Your default" (replaces the static "Default" badge); the other
   card still works. No self-serve switch — flexible_labeling_enabled stays admin-only.
-- **Tests:** PackLabelsTest rt1–rt4, LabelSettingsTest 5, RlsCoverageTest +1; vitest flexibleS5S8 5. Revert-checked 4
+- **Tests:** PackLabelsTest rt1–rt5, LabelSettingsTest 5, RlsCoverageTest +1; vitest flexibleS5S8 5. Revert-checked 4
   backend + 3 frontend. Registries: MigrationSmokeTest 183, NotTracedBackfillTest 128, PortalOrderLeakTest 2 SKIP,
   RlsCoverageTest 1 COVERED. Test edit: receivingRedesign rs1 'Default' → 'Your default'.
 

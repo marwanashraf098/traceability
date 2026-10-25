@@ -1257,8 +1257,8 @@
       "held": "Placed on hold",
       "unheld": "Released from hold — back to available",
       "location_corrected": "Location corrected to the main warehouse",
-      "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}} · by {{actor}}",
-      "label_bound_tag": "Label {{code}} attached in Tag stock · by {{actor}}"
+      "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}}",
+      "label_bound_tag": "Label {{code}} attached in Tag stock"
     },
     "pieceStatus": {
       "available": "Available",

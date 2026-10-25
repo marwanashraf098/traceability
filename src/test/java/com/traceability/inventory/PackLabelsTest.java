@@ -905,7 +905,7 @@ class PackLabelsTest {
         Map<String, Object> bound = ((List<Map<String, Object>>) r.get("timeline")).stream()
             .filter(e -> "label_bound".equals(e.get("eventType"))).findFirst().orElseThrow();
         assertThat(bound).containsEntry("phraseKey", "label_bound_packing").containsEntry("labelCode", p[1])
-            .containsEntry("orderNumber", "#RT4").containsEntry("actor", "O");
+            .containsEntry("orderNumber", "#RT4").containsEntry("actor", "O");      // the row shows the person; the line doesn't repeat it
 
         // In Tag stock: the event carries the tag session.
         untagged(variantB, 1);

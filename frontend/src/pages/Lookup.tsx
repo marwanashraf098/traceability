@@ -41,7 +41,6 @@ function TimelinePhrase({ event }: { event: TimelineEvent }) {
         location:     event.locationName ?? '',
         toStatus:     event.toStatus     ?? '',
         code:         event.labelCode    ?? '',
-        actor:        event.isSystem ? t('lookup.system') : event.actor,
         defaultValue: event.phraseKey.replace(/_/g, ' '),
       })}
     </span>
