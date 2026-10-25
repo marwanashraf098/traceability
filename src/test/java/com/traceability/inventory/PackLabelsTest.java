@@ -97,6 +97,10 @@ class PackLabelsTest {
     @Autowired FulfillService fulfill;
     @Autowired ReceivingService receiving;
     @Autowired VariantStockService variantStock;
+    @Autowired ReturnSessionService returnSessions;
+    @Autowired LabelService labelService;
+    @Autowired LookupService lookup;
+    @Autowired InventoryLedger ledger;
     @Autowired org.springframework.transaction.PlatformTransactionManager txManager;
     @MockBean  ShopifyInventoryService shopifyInventory;
     @MockBean  BostaGateway bostaGateway;
@@ -145,7 +149,7 @@ class PackLabelsTest {
         for (UUID t : List.of(tenant, other)) {
             jdbc.update("DELETE FROM pack_session_orders WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM pack_sessions WHERE tenant_id = ?", t);
-            for (String table : List.of("allocations", "label_codes", "label_code_batches", "piece_events", "pieces", "receipt_lines",
+            for (String table : List.of("return_session_items", "return_session_shipments", "return_sessions", "allocations", "label_codes", "label_code_batches", "piece_events", "pieces", "receipt_lines",
                     "receipts", "piece_counters", "pack_print_batch_items", "pack_print_batches", "shipment_status_history",
                     "shipments", "order_items", "orders")) {
                 jdbc.update("DELETE FROM " + table + " WHERE tenant_id = ?", t);
@@ -796,6 +800,94 @@ class PackLabelsTest {
         PackLabelService.PrintPlan all = packLabels.printPlan(all("oldest"));
         assertThat(all.labels().labels()).isEqualTo(1);
         assertThat(all.labels().queueNeedsLabels()).isFalse();
+    }
+
+    // ── slice 5: returns for pieces labeled at packing ───────────────────────────
+
+    /** count-only → printed → bound at the pack scan → packed → shipped → delivered. The piece id and its code. */
+    private String[] packedAndDelivered(String number) {
+        untagged(variantA, 1);
+        UUID o = order(number, 10, true, variantA, 1);
+        String code = printFor(o).get(0);
+        assertThat(fulfill.scan(o, code, owner).success()).isTrue();
+        fulfill.complete(o, owner);
+        String piece = jdbc.queryForObject("SELECT id FROM pieces WHERE short_code = ?", String.class, code);
+        UUID shipment = jdbc.queryForObject("SELECT id FROM shipments WHERE order_id = ? AND shipment_leg = 'forward'", UUID.class, o);
+        ledger.transition(piece, PieceStatus.PACKED, PieceStatus.WITH_COURIER, "courier_update", owner,
+            new TransitionContext(o, shipment, null, o, null, null));      // as the pickup close / Bosta webhook do
+        ledger.transition(piece, PieceStatus.WITH_COURIER, PieceStatus.DELIVERED, "courier_update", owner,
+            new TransitionContext(o, shipment, null, o, null, null));      // as the pickup close / Bosta webhook do
+        return new String[] { piece, code, o.toString() };
+    }
+
+    @Test
+    void rt1_a_piece_labeled_at_packing_returns_restocks_and_counts_as_return_scan_evidence() {
+        String[] p = packedAndDelivered("#RT1");
+        String piece = p[0], code = p[1];
+        UUID order = UUID.fromString(p[2]);
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_bound'", piece)).isEqualTo(1);
+        UUID leg = jdbc.queryForObject("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, 'returning', 'return') RETURNING id", UUID.class, tenant, order, String.valueOf(TRACKING.incrementAndGet()));
+
+        UUID rs = returnSessions.createSession(null, worker);
+        Map<String, Object> scanned = returnSessions.scan(rs, code, main, worker);      // found by its code, like any piece
+        assertThat(scanned.toString()).contains(piece);
+        assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, piece))
+            .isEqualTo("return_pending_inspection");
+
+        returnSessions.disposition(rs, piece, "restock", null, main, worker, "worker");
+        assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, piece)).isEqualTo("available");
+        assertThat(jdbc.queryForObject("SELECT short_code FROM pieces WHERE id = ?", String.class, piece)).as("keeps its code").isEqualTo(code);
+
+        returnSessions.close(rs, worker);
+        assertThat(jdbc.queryForObject("SELECT return_intake_completed_at FROM shipments WHERE id = ?", java.time.OffsetDateTime.class, leg))
+            .as("the canonical return scan-evidence rule counts the scan").isNotNull();
+    }
+
+    @Test
+    void rt2_a_torn_label_on_return_reprints_the_same_code() throws Exception {
+        String[] p = packedAndDelivered("#RT2");
+        String piece = p[0], code = p[1];
+        UUID rs = returnSessions.createSession(null, worker);
+        String token = jwt.issueAccessToken(worker, tenant, "worker");
+        ResponseEntity<byte[]> pdf = post(token, "/api/v1/returns/sessions/" + rs + "/pieces/" + piece + "/reprint-label", Map.of(), byte[].class);
+        assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pageTexts(pdf.getBody())).singleElement().satisfies(t -> assertThat(t).contains(code).contains("Linen Shirt"));
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece)).isEqualTo(1);
+        assertThat(count("SELECT count(*)::int FROM label_codes WHERE tenant_id = ?", tenant)).as("no new code").isEqualTo(1);
+    }
+
+    @Test
+    void rt3_a_failed_reprint_never_leaves_a_label_reprinted_event() throws Exception {
+        String[] p = packedAndDelivered("#RT3");
+        String piece = p[0];
+        UUID rs = returnSessions.createSession(null, worker);
+        assertThatThrownBy(() -> returnSessions.reprintLabel(rs, piece, worker, () -> { throw new IOException("printer jammed"); }))
+            .isInstanceOf(IOException.class);
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece)).isZero();
+        byte[] ok = returnSessions.reprintLabel(rs, piece, worker, () -> labelService.generatePieceLabel(piece, null, null));
+        assertThat(ok).isNotEmpty();
+        assertThat(count("SELECT count(*)::int FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'", piece)).isEqualTo(1);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rt4_lookup_names_the_label_and_where_it_went_on() {
+        String[] p = packedAndDelivered("#RT4");
+        Map<String, Object> r = lookup.lookupPiece(p[1], false);
+        Map<String, Object> bound = ((List<Map<String, Object>>) r.get("timeline")).stream()
+            .filter(e -> "label_bound".equals(e.get("eventType"))).findFirst().orElseThrow();
+        assertThat(bound).containsEntry("phraseKey", "label_bound_packing").containsEntry("labelCode", p[1])
+            .containsEntry("orderNumber", "#RT4").containsEntry("actor", "O");
+
+        // In Tag stock: the event carries the tag session.
+        untagged(variantB, 1);
+        LabelCodeService.IssuedCode c = labels.issue(owner, "tag", List.of(new LabelCodeService.Line(variantB, 1, null, null)),
+            "rt4-tag").codes().get(0);
+        ledger.bindLabel(c.id(), owner, InventoryLedger.BindRef.tagSession(UUID.randomUUID(), false), c.code());
+        Map<String, Object> tagBound = ((List<Map<String, Object>>) lookup.lookupPiece(c.code(), false).get("timeline")).stream()
+            .filter(e -> "label_bound".equals(e.get("eventType"))).findFirst().orElseThrow();
+        assertThat(tagBound).containsEntry("phraseKey", "label_bound_tag").containsEntry("labelCode", c.code());
     }
 
     private <T> ResponseEntity<T> post(String token, String path, Object body, Class<T> type) {

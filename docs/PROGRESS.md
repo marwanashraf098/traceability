@@ -122,8 +122,26 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slices 5 + 8 (2026-10-25, branch `feat/flexible-labeling-s5-s8` off origin/main 470055e; NOT
+merged, NOT deployed). Migration V184.**
+- **Slice 5 — returns of pieces labeled at packing (verified, small fixes):** count-only → printed → bound at the pack
+  scan → shipped / delivered → return scan by its code → return_pending_inspection → restock (keeps its code) → the
+  session close stamps the return leg (canonical evidence rule 2). A torn label: "Reprint label" in the return session
+  prints the SAME code. **Fix (parked bug):** the intake reprint used to record `label_reprinted` in one call and render
+  the PDF in another; now `ReturnSessionService.reprintLabel` renders first, then records through `recordReprint`
+  (which validates), one transaction, so a failed print or a refusal leaves no event. (The old gated GET /returns/pieces/{id}/label has the same order and is untouched — it
+  is marked "kept exactly as it was".) Lookup: label_bound reads "Label P000033 attached at packing · order #1002 · by
+  <user>" / "… attached in Tag stock · by <user>" (phraseKey label_bound_packing / label_bound_tag + labelCode).
+- **Slice 8 — Settings › Labels:** `tenants.receiving_default_mode` (V184, NOT NULL DEFAULT 'print_stick', CHECK);
+  `GET/PUT /api/v1/label-settings` (owner + manager; 404 with the switch off). Tab shown only with the switch on.
+  Receiving step 1 pre-selects the default card with "Your default" (replaces the static "Default" badge); the other
+  card still works. No self-serve switch — flexible_labeling_enabled stays admin-only.
+- **Tests:** PackLabelsTest rt1–rt4, LabelSettingsTest 5, RlsCoverageTest +1; vitest flexibleS5S8 5. Revert-checked 4
+  backend + 3 frontend. Registries: MigrationSmokeTest 183, NotTracedBackfillTest 128, PortalOrderLeakTest 2 SKIP,
+  RlsCoverageTest 1 COVERED. Test edit: receivingRedesign rs1 'Default' → 'Your default'.
+
 **Flexible labeling — UI pass from the live test (2026-10-25, branch `feat/flexible-labeling-ui-pass` off origin/main
-f0b3074; NOT merged, NOT deployed). No migration. Switch on only unless stated.**
+f0b3074; merged to main 470055e 2026-10-25, NOT deployed). No migration. Switch on only unless stated.**
 - **A. Tag stock → Inventory "Untagged (N)" tab** (sidebar entry removed; /tag-stock redirects to
   /inventory?tab=untagged; scan loop + summary keep their routes). Tick products (select all = default qty = untagged
   count, qty 1..untagged), sticky bar "N labels for M products · includes N reprints" → `POST

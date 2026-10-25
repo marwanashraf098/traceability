@@ -529,6 +529,8 @@ export interface TimelineEvent {
   locationName: string | null
   metadata: unknown
   occurredAt: string
+  /** label_bound only: the code that went on the piece (phraseKey label_bound_packing / label_bound_tag). */
+  labelCode?: string | null
 }
 
 export interface LookupVariant {
@@ -3850,6 +3852,15 @@ export interface PackLabelSummary {
 
 export function previewPackLabels(req: PackLabelRequest) {
   return requestReadable<PackLabelSummary>('/pack-labels/preview', { method: 'POST', body: JSON.stringify(req) })
+}
+
+/** Flexible labeling slice 8 — Settings › Labels (owner + manager; 404 with the switch off). */
+export type ReceivingDefaultMode = 'print_stick' | 'count_only'
+export function getLabelSettings() {
+  return requestReadable<{ receivingDefaultMode: ReceivingDefaultMode }>('/label-settings')
+}
+export function updateLabelSettings(body: { receivingDefaultMode: ReceivingDefaultMode }) {
+  return requestReadable<{ receivingDefaultMode: ReceivingDefaultMode }>('/label-settings', { method: 'PUT', body: JSON.stringify(body) })
 }
 
 /** "Print for packing": waybill + label counts for one scope + sort (switch on). lastBatchId: the newest waybill print. */

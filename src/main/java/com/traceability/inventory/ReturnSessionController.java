@@ -228,8 +228,10 @@ public class ReturnSessionController {
             @RequestParam(required = false) Float widthMm,
             @RequestParam(required = false) Float heightMm,
             @AuthenticationPrincipal CustomUserDetails principal) throws IOException {
-        sessionService.recordReprint(sessionId, pieceId, principal.userId());
-        byte[] pdf = labelService.generatePieceLabel(pieceId, widthMm, heightMm);
+        // The event is recorded only after the PDF rendered, in one transaction (slice 5 fix — it used to be
+        // recorded first, in a separate call, so a failed print left a label_reprinted event behind).
+        byte[] pdf = sessionService.reprintLabel(sessionId, pieceId, principal.userId(),
+            () -> labelService.generatePieceLabel(pieceId, widthMm, heightMm));
         return ResponseEntity.ok()
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + pieceId + ".pdf\"")

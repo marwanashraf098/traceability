@@ -11,6 +11,10 @@ import java.util.*;
 @Service
 public class LookupService {
 
+    /** The label code in a label_bound event's metadata ({"code":"P000033", …}). */
+    private static final java.util.regex.Pattern LABEL_CODE = java.util.regex.Pattern.compile("\"code\"\\s*:\\s*\"([^\"]+)\"");
+
+
     private final JdbcTemplate jdbc;
 
     public LookupService(JdbcTemplate jdbc) {
@@ -110,6 +114,7 @@ public class LookupService {
         }
 
         // 2. Timeline — all events newest-first, with actor name, order number, tracking.
+        // (label_bound rows also carry labelCode and a packing / Tag stock phraseKey — flexible labeling slice 5.)
         List<Map<String, Object>> rawEvents = jdbc.queryForList(
             "SELECT pe.id, pe.event_type, pe.from_status, pe.to_status, pe.occurred_at, " +
             "       pe.order_id, pe.shipment_id, pe.location_id, pe.metadata, " +
@@ -137,6 +142,14 @@ public class LookupService {
             event.put("id",           e.get("id"));
             event.put("eventType",    eType);
             event.put("phraseKey",    phraseKey(eType, from, to));
+            if ("label_bound".equals(eType)) {
+                // Slice 5: which label went on, and where — at packing (the event names the order) or in Tag stock.
+                String meta = e.get("metadata") == null ? "" : e.get("metadata").toString();
+                java.util.regex.Matcher code = LABEL_CODE.matcher(meta);
+                event.put("labelCode", code.find() ? code.group(1) : null);
+                event.put("phraseKey", meta.contains("\"tag_session_id\"") ? "label_bound_tag"
+                    : e.get("order_id") != null ? "label_bound_packing" : "label_bound");
+            }
             event.put("actor",        actor != null ? actor : "System");
             event.put("isSystem",     actor == null);
             event.put("fromStatus",   from);
