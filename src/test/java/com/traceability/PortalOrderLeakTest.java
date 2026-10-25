@@ -212,7 +212,8 @@ class PortalOrderLeakTest {
         for (String k : List.of("GET /api/v1/tag-stock", "POST /api/v1/tag-stock/sessions", "GET /api/v1/tag-stock/sessions/{id}",
                 "POST /api/v1/tag-stock/sessions/{id}/print", "POST /api/v1/tag-stock/sessions/{id}/replacement",
                 "POST /api/v1/tag-stock/sessions/{id}/scan", "POST /api/v1/tag-stock/sessions/{id}/end",
-                "POST /api/v1/tag-stock/sessions/{id}/void-unused")) {
+                "POST /api/v1/tag-stock/sessions/{id}/void-unused",
+                "POST /api/v1/tag-stock/sessions/{id}/reprint", "POST /api/v1/tag-stock/leftovers/{variantId}/pdf")) {
             reg(k, skip("Tag stock: variants, untagged pieces and label codes at the main warehouse; no order data"));
         }
         // Flexible labeling slice 4 — packing labels (a portal order is ORDER_NOT_PACKABLE: PackLabelsTest.x2).

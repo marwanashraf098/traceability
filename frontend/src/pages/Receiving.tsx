@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
-import { ReceivingImportControls } from './receiving/ReceivingImport'
+import { ImportFromExcelButton, ImportPanel } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
+import { ArrowLeft, Barcode, PackageCheck } from 'lucide-react'
 
 import { getAccessToken } from '../auth'
 import { authFetch, getRoleFromToken } from '../api'
@@ -101,6 +102,7 @@ export default function Receiving() {
     return (
       <SessionView
         session={activeSession}
+        flexibleLabeling={flexibleLabeling}
         onRefresh={() => openSession(activeSession.id)}
         onBack={() => { loadSessions(); setView('list') }}
       />
@@ -171,12 +173,18 @@ export default function Receiving() {
 
 const MODES: ReceivingMode[] = ['print_stick', 'count_only']
 
+/**
+ * Switch ON: two steps — "How do you want to receive this delivery?" (two cards; a click picks the mode and goes
+ * straight on), then today's form with the chosen mode on top ("… · Change") and a Back link. Switch OFF: today's
+ * form exactly (no chooser, no mode sent).
+ */
 function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }: {
   locations: Location[]; flexibleLabeling: boolean; onCreated: (id: string) => void; onCancel: () => void
 }) {
   const { t } = useTranslation()
   const [locationId, setLocationId] = useState(locations[0]?.id ?? '')
   const [mode, setMode]             = useState<ReceivingMode>('print_stick')
+  const [step, setStep]             = useState<'choose' | 'form'>(flexibleLabeling ? 'choose' : 'form')
   // Count only receives into the main warehouse (packing labels untagged pieces there) — server-enforced too.
   const mainWarehouse = locations.find(l => l.is_fulfillment)
   const countOnly = flexibleLabeling && mode === 'count_only'
@@ -204,29 +212,62 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
     finally { setSaving(false) }
   }
 
-  return (
-    <div className="max-w-lg space-y-4">
-      <h1 className="text-h1 text-primary">{t('receiving.newTitle')}</h1>
-      {error && <Alert tone="critical" title={error} />}
-      <form onSubmit={submit} className="card p-5 space-y-4">
-        {flexibleLabeling && (
-          <fieldset className="space-y-2" data-testid="receiving-mode-chooser">
-            <legend className="text-small text-muted mb-1.5">{t('receiving.mode.title')}</legend>
-            {MODES.map(m => (
+  if (flexibleLabeling && step === 'choose') {
+    return (
+      <div className="max-w-3xl space-y-4" data-testid="receiving-mode-chooser">
+        <button type="button" onClick={onCancel} className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
+          ← {t('receiving.back')}
+        </button>
+        <h1 className="text-h1 text-primary">{t('receiving.mode.title')}</h1>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {MODES.map(m => {
+            const Icon = m === 'print_stick' ? Barcode : PackageCheck
+            return (
               <button
                 key={m}
                 type="button"
                 aria-pressed={mode === m}
                 data-testid={`receiving-mode-${m}`}
-                onClick={() => setMode(m)}
-                className={`w-full text-start rounded-xl border p-4 transition-colors focus-visible:border-trace-blue ${
-                  mode === m ? 'border-trace-blue bg-trace-blue/[0.06]' : 'border-line hover:border-trace-blue'}`}
+                onClick={() => { setMode(m); setStep('form') }}
+                className={`card text-start p-5 flex flex-col gap-3 transition-colors focus-visible:border-trace-blue ${
+                  mode === m ? 'border-trace-blue bg-trace-blue/[0.06]' : 'hover:border-trace-blue'}`}
               >
-                <p className="text-body font-semibold text-primary">{t(`receiving.mode.${m}.title`)}</p>
-                <p className="text-small text-muted mt-1">{t(`receiving.mode.${m}.body`)}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <Icon size={22} strokeWidth={1.75} className="text-trace-blue" />
+                  {m === 'print_stick' && <Badge tone="neutral" label={t('receiving.mode.default')} />}
+                </div>
+                <div className="space-y-1.5 flex-1">
+                  <p className="text-h3 text-primary">{t(`receiving.mode.${m}.title`)}</p>
+                  <p className="text-small text-muted">{t(`receiving.mode.${m}.body`)}</p>
+                </div>
+                <p className="text-caption text-muted border-t border-line pt-3">{t(`receiving.mode.${m}.footer`)}</p>
               </button>
-            ))}
-          </fieldset>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-lg space-y-4">
+      {flexibleLabeling && (
+        <button type="button" onClick={() => setStep('choose')} data-testid="receiving-mode-back"
+          className="inline-flex items-center gap-1 text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
+          <ArrowLeft size={14} strokeWidth={2} className="rtl:rotate-180" /> {t('receiving.mode.back')}
+        </button>
+      )}
+      <h1 className="text-h1 text-primary">{t('receiving.newTitle')}</h1>
+      {error && <Alert tone="critical" title={error} />}
+      <form onSubmit={submit} className="card p-5 space-y-4">
+        {flexibleLabeling && (
+          <p className="text-small text-primary" data-testid="receiving-mode-chosen">
+            <span className="font-semibold">{t(`receiving.mode.${mode}.title`)}</span>
+            {' · '}
+            <button type="button" onClick={() => setStep('choose')} className="text-trace-blue hover:text-trace-blue-hover">
+              {t('receiving.mode.change')}
+            </button>
+          </p>
         )}
         <div className="space-y-1.5">
           <label className="text-small text-muted">{t('receiving.location')}</label>
@@ -264,8 +305,8 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
 
 // ── Session View ──────────────────────────────────────────────────────────────
 
-function SessionView({ session, onRefresh, onBack }: {
-  session: SessionDetail; onRefresh: () => void; onBack: () => void
+function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
+  session: SessionDetail; flexibleLabeling: boolean; onRefresh: () => void; onBack: () => void
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -277,6 +318,7 @@ function SessionView({ session, onRefresh, onBack }: {
   const [deleting, setDeleting]         = useState(false)
   const [deleteError, setDeleteError]   = useState<string | null>(null)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [importOpen, setImportOpen]     = useState(false)
   const isOpen = session.status === 'open'
   const countOnly = session.mode === 'count_only'
   const role = getRoleFromToken()
@@ -354,6 +396,11 @@ function SessionView({ session, onRefresh, onBack }: {
           </h1>
           <p className="text-small text-muted mt-0.5 flex items-center gap-2">
             {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
+            {flexibleLabeling && (
+              <span data-testid="receiving-session-mode">
+                <Badge tone="neutral" label={t(countOnly ? 'receiving.countOnly.badge' : 'receiving.mode.printStickBadge')} />
+              </span>
+            )}
           </p>
         </div>
         {session.status === 'finalized' && !countOnly && (
@@ -366,10 +413,16 @@ function SessionView({ session, onRefresh, onBack }: {
             </Button>
           </div>
         )}
-        {canDelete && (
-          <Button size="sm" variant="destructive" onClick={() => setShowDeleteModal(true)}>
-            {t('receiving.deleteSession')}
-          </Button>
+        {(isOpen || canDelete) && (
+          <div className="flex flex-wrap gap-2">
+            {/* Import a Shopify inventory export into this session (both modes; the server gates count only). */}
+            {isOpen && <ImportFromExcelButton onClick={() => setImportOpen(true)} />}
+            {canDelete && (
+              <Button size="sm" variant="destructive" onClick={() => setShowDeleteModal(true)}>
+                {t('receiving.deleteSession')}
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -378,8 +431,10 @@ function SessionView({ session, onRefresh, onBack }: {
 
       {/* Open: the product-card selection grid IS the entry mechanism —
           replaces the old type-ahead search + flat lines table entirely. */}
-      {/* Import a Shopify inventory export into this session (both modes; the server gates count only). */}
-      {isOpen && <ReceivingImportControls sessionId={session.id} onApplied={onRefresh} />}
+      {isOpen && importOpen && (
+        <ImportPanel sessionId={session.id} onClose={() => setImportOpen(false)}
+          onApplied={() => { setImportOpen(false); onRefresh() }} />
+      )}
 
       {isOpen && (
         <ProductSelectionGrid

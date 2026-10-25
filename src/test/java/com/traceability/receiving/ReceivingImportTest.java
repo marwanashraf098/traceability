@@ -266,6 +266,60 @@ class ReceivingImportTest {
     }
 
     @Test
+    void c1_an_empty_on_hand_new_column_is_named_and_on_hand_current_is_used_only_when_asked() throws Exception {
+        UUID s = session(null);
+        byte[] raw = ShopifyInventoryFile.writeCsv(oneLocation(Map.of()));     // a raw export: "On hand (new)" empty
+
+        ReceivingImportService.Preview p = imports.preview(s, "raw.csv", raw);
+        assertThat(p.newColumnEmpty()).isTrue();
+        assertThat(p.quantityColumn()).isEqualTo("new");
+        assertThat(p.matched()).isEmpty();
+
+        ReceivingImportService.Preview cur = imports.preview(s, "raw.csv", raw, "current");
+        assertThat(cur.quantityColumn()).isEqualTo("current");
+        assertThat(cur.newColumnEmpty()).as("still describes the file").isTrue();
+        assertThat(cur.matched()).isNotEmpty().allSatisfy(r -> {
+            assertThat(r.quantity()).isEqualTo(r.onHandCurrent());
+            assertThat(r.sameAsShopify()).as("the quantity IS Shopify's number").isFalse();
+        });
+        assertThat(cur.matched()).filteredOn(r -> r.variantId().equals(v.get("the-complete-snowboard|Dawn")))
+            .singleElement().extracting(ReceivingImportService.MatchedRow::quantity).isEqualTo(10);
+        assertThat(cur.units()).isEqualTo(cur.matched().stream().mapToInt(ReceivingImportService.MatchedRow::quantity).sum());
+        // Same matching / skipping rules: the gift card is still refused, nothing goes to a row twice.
+        assertThat(cur.unmatched()).extracting(ReceivingImportService.UnmatchedRow::reason).doesNotContain("duplicate");
+
+        // Over HTTP: column=current.
+        LinkedMultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", new ByteArrayResource(raw) { @Override public String getFilename() { return "raw.csv"; } });
+        body.add("column", "current");
+        HttpHeaders h = auth();
+        h.setContentType(MediaType.MULTIPART_FORM_DATA);
+        ResponseEntity<Map> http = rest.exchange(base() + "/api/v1/receiving/sessions/" + s + "/import/preview", HttpMethod.POST,
+            new HttpEntity<>(body, h), Map.class);
+        assertThat(http.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.getBody()).containsEntry("quantityColumn", "current").containsEntry("units", cur.units());
+
+        assertCode(() -> imports.preview(s, "raw.csv", raw, "available"), "IMPORT_BAD_COLUMN");
+        assertThat(count("SELECT count(*) FROM receipt_lines WHERE receipt_id = ?", s)).as("previews write nothing").isZero();
+        assertThat(count("SELECT count(*) FROM pieces WHERE tenant_id = ?", tenant)).isZero();
+    }
+
+    @Test
+    void c2_a_normal_file_is_unaffected() throws Exception {
+        UUID s = session(null);
+        ReceivingImportService.Preview p = imports.preview(s, "shop.csv", ShopifyInventoryFile.writeCsv(oneLocation(VALUES)));
+        assertThat(p.newColumnEmpty()).isFalse();
+        assertThat(p.quantityColumn()).isEqualTo("new");
+        assertThat(p.matched()).extracting(ReceivingImportService.MatchedRow::variantId)
+            .contains(v.get("the-complete-snowboard|Ice"), v.get("the-complete-snowboard|Dawn"));
+        assertThat(p.matched()).filteredOn(ReceivingImportService.MatchedRow::sameAsShopify).hasSize(1);   // Dawn, as before
+        // Only "not stocked" rows (and no other stocked row) → not "empty".
+        Map<String, String> notStocked = new HashMap<>();
+        oneLocation(Map.of()).stream().skip(1).forEach(r -> notStocked.put(r.get(0) + "|" + r.get(3), "not stocked"));
+        assertThat(imports.preview(s, "ns.csv", ShopifyInventoryFile.writeCsv(oneLocation(notStocked))).newColumnEmpty()).isFalse();
+    }
+
+    @Test
     void f3_xlsx_gives_the_same_preview() throws Exception {
         UUID s = session(null);
         List<List<String>> table = oneLocation(VALUES);

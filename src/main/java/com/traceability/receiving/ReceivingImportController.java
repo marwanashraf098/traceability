@@ -14,7 +14,8 @@ import java.util.UUID;
 /**
  * Receiving import (slice 2b). Owner + manager, like the rest of receiving.
  *
- *   POST /api/v1/receiving/sessions/{id}/import/preview   multipart "file" (.csv / .xlsx) → the preview (writes nothing)
+ *   POST /api/v1/receiving/sessions/{id}/import/preview   multipart "file" (.csv / .xlsx), optional "column"
+ *                                                         (new | current) → the preview (writes nothing)
  *   POST /api/v1/receiving/sessions/{id}/import/apply     {lines: [{variantId, quantity}]} → adds to the session's lines
  *   GET  /api/v1/receiving/import/template?format=xlsx|csv  every active variant in Shopify's export layout
  */
@@ -33,11 +34,13 @@ public class ReceivingImportController {
     @PostMapping("/sessions/{sessionId}/import/preview")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ReceivingImportService.Preview preview(@PathVariable UUID sessionId,
-                                                  @RequestParam(value = "file", required = false) MultipartFile file)
+                                                  @RequestParam(value = "file", required = false) MultipartFile file,
+                                                  @RequestParam(value = "column", required = false) String column)
             throws IOException {
         if (file == null || file.isEmpty()) throw ImportException.emptyFile();
         if (file.getSize() > ShopifyInventoryFile.MAX_BYTES) throw ImportException.tooLarge();
-        return service.preview(sessionId, file.getOriginalFilename(), file.getBytes());
+        return service.preview(sessionId, file.getOriginalFilename(), file.getBytes(),
+            column == null ? ReceivingImportService.COLUMN_NEW : column);
     }
 
     @PostMapping("/sessions/{sessionId}/import/apply")

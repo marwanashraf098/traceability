@@ -19,9 +19,13 @@ import java.util.*;
 @Service
 public class TagStockService {
 
+    /** unusedThisSession: issued tag codes printed in the caller's open session (0 without one) — reprint first. */
     public record VariantStock(UUID variantId, String productTitle, String variantTitle, String sku, String imageUrl,
-                               int untagged, int labeled, int unusedLabels) {}
-    public record Overview(int labeled, int untagged, List<VariantStock> variants) {}
+                               int untagged, int labeled, int unusedLabels, int unusedThisSession) {}
+    /** leftovers: labels left unused by ENDED sessions, per variant (reprint or void them). */
+    public record Overview(int labeled, int untagged, List<VariantStock> variants, List<Leftover> leftovers) {}
+    public record Leftover(UUID variantId, String productTitle, String variantTitle, String sku, String imageUrl,
+                           int count, List<UUID> codeIds) {}
     public record SessionVariant(UUID variantId, String productTitle, String variantTitle, String sku, String imageUrl,
                                  int printed, int tagged, int unused, int untaggedLeft, int labeled) {}
     public record Session(UUID id, String startedAt, String endedAt, int tagged, List<SessionVariant> variants) {}
@@ -43,9 +47,15 @@ public class TagStockService {
     /** Variants with untagged stock (most untagged first), filtered by product / variant / SKU; warehouse totals. */
     @Transactional(readOnly = true)
     public Overview overview(String query) {
+        return overview(query, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Overview overview(String query, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
         UUID main = mainWarehouse(tenantId);
+        UUID openSession = actorUserId == null ? null : openSession(tenantId, actorUserId);
         Map<String, Object> totals = jdbc.queryForMap(
             "SELECT count(*) FILTER (WHERE short_code IS NOT NULL)::int AS labeled, " +
             "       count(*) FILTER (WHERE short_code IS NULL)::int AS untagged " +
@@ -56,13 +66,58 @@ public class TagStockService {
             (q.isEmpty() ? "" : "AND (pr.title ILIKE ? OR v.title ILIKE ? OR v.sku ILIKE ?) ") +
             "ORDER BY s.untagged DESC, pr.title, v.title LIMIT 200",
             VARIANT_ROW,
-            q.isEmpty() ? new Object[] { tenantId, main, tenantId, tenantId }
-                        : new Object[] { tenantId, main, tenantId, tenantId, like(q), like(q), like(q) });
-        return new Overview((Integer) totals.get("labeled"), (Integer) totals.get("untagged"), variants);
+            q.isEmpty() ? new Object[] { openSession, tenantId, main, tenantId, tenantId }
+                        : new Object[] { openSession, tenantId, main, tenantId, tenantId, like(q), like(q), like(q) });
+        return new Overview((Integer) totals.get("labeled"), (Integer) totals.get("untagged"), variants,
+            leftovers(tenantId, null));
     }
 
+    /**
+     * Labels left over from ENDED Tag stock sessions: issued tag / replacement codes (no order refs) whose batch
+     * belongs to a session that has ended. They still bind when scanned; the list offers reprint and void.
+     */
+    private List<Leftover> leftovers(UUID tenantId, UUID variantId) {
+        Map<UUID, List<UUID>> codes = new LinkedHashMap<>();
+        Map<UUID, Object[]> info = new HashMap<>();
+        jdbc.query(
+            "SELECT lc.id, lc.variant_id, pr.title AS product_title, v.title AS variant_title, v.sku, pr.image_url " +
+            "FROM label_codes lc " +
+            "JOIN label_code_batches b ON b.id = lc.batch_id AND b.tenant_id = lc.tenant_id " +
+            "JOIN tag_sessions ts ON ts.id = b.tag_session_id AND ts.tenant_id = b.tenant_id AND ts.ended_at IS NOT NULL " +
+            "JOIN variants v ON v.id = lc.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE lc.tenant_id = ? AND lc.status = 'issued' AND lc.kind IN ('tag','replacement') AND lc.order_id IS NULL " +
+            "  AND (?::uuid IS NULL OR lc.variant_id = ?) " +
+            "ORDER BY pr.title, v.title, length(lc.code), lc.code",
+            rs -> {
+                UUID v = rs.getObject("variant_id", UUID.class);
+                codes.computeIfAbsent(v, k -> new ArrayList<>()).add(rs.getObject("id", UUID.class));
+                info.putIfAbsent(v, new Object[] { rs.getString("product_title"), rs.getString("variant_title"),
+                    rs.getString("sku"), rs.getString("image_url") });
+            },
+            tenantId, variantId, variantId);
+        List<Leftover> out = new ArrayList<>();
+        codes.forEach((v, ids) -> {
+            Object[] i = info.get(v);
+            out.add(new Leftover(v, (String) i[0], (String) i[1], (String) i[2], (String) i[3], ids.size(), List.copyOf(ids)));
+        });
+        return out;
+    }
+
+    /** A variant's leftover labels (ended sessions) as a PDF — the same codes, nothing new issued. */
+    @Transactional(readOnly = true)
+    public byte[] leftoverPdf(UUID variantId) throws java.io.IOException {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        List<Leftover> l = leftovers(tenantId, variantId);
+        return labelCodes.codesPdf(l.isEmpty() ? List.of() : l.get(0).codeIds());
+    }
+
+    /** First parameter: the session whose unused tag codes count as unusedThisSession (NULL → 0). */
     private static final String VARIANT_SQL =
         "SELECT v.id, pr.title AS product_title, v.title AS variant_title, v.sku, pr.image_url, " +
+        "       (SELECT count(*)::int FROM label_codes lc JOIN label_code_batches b ON b.id = lc.batch_id " +
+        "          AND b.tenant_id = lc.tenant_id WHERE lc.tenant_id = v.tenant_id AND lc.variant_id = v.id " +
+        "          AND lc.status = 'issued' AND lc.kind = 'tag' AND b.tag_session_id = ?::uuid) AS unused_session, " +
         "       coalesce(s.untagged, 0) AS untagged, coalesce(s.labeled, 0) AS labeled, " +
         "       (SELECT count(*)::int FROM label_codes lc WHERE lc.tenant_id = v.tenant_id AND lc.variant_id = v.id " +
         "          AND lc.status = 'issued') AS unused " +
@@ -75,11 +130,12 @@ public class TagStockService {
 
     private static final org.springframework.jdbc.core.RowMapper<VariantStock> VARIANT_ROW = (rs, i) -> new VariantStock(
         rs.getObject("id", UUID.class), rs.getString("product_title"), rs.getString("variant_title"), rs.getString("sku"),
-        rs.getString("image_url"), rs.getInt("untagged"), rs.getInt("labeled"), rs.getInt("unused"));
+        rs.getString("image_url"), rs.getInt("untagged"), rs.getInt("labeled"), rs.getInt("unused"),
+        rs.getInt("unused_session"));
 
-    private VariantStock variantStock(UUID tenantId, UUID main, UUID variantId) {
+    private VariantStock variantStock(UUID tenantId, UUID main, UUID variantId, UUID sessionId) {
         List<VariantStock> rows = jdbc.query(VARIANT_SQL + "WHERE v.tenant_id = ? AND v.id = ?", VARIANT_ROW,
-            tenantId, main, tenantId, tenantId, variantId);
+            sessionId, tenantId, main, tenantId, tenantId, variantId);
         if (rows.isEmpty()) throw LabelCodeException.unknownVariant();
         return rows.get(0);
     }
@@ -96,14 +152,19 @@ public class TagStockService {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
         UUID main = mainWarehouse(tenantId);
+        UUID open = openSession(tenantId, actorUserId);
+        UUID id = open == null
+            ? jdbc.queryForObject("INSERT INTO tag_sessions (tenant_id, location_id, started_by) VALUES (?, ?, ?) RETURNING id",
+                UUID.class, tenantId, main, actorUserId)
+            : open;
+        return session(tenantId, main, id);
+    }
+
+    private UUID openSession(UUID tenantId, UUID actorUserId) {
         List<UUID> open = jdbc.queryForList(
             "SELECT id FROM tag_sessions WHERE tenant_id = ? AND started_by = ? AND ended_at IS NULL " +
             "ORDER BY started_at DESC, id DESC LIMIT 1", UUID.class, tenantId, actorUserId);
-        UUID id = open.isEmpty()
-            ? jdbc.queryForObject("INSERT INTO tag_sessions (tenant_id, location_id, started_by) VALUES (?, ?, ?) RETURNING id",
-                UUID.class, tenantId, main, actorUserId)
-            : open.get(0);
-        return session(tenantId, main, id);
+        return open.isEmpty() ? null : open.get(0);
     }
 
     @Transactional(readOnly = true)
@@ -120,19 +181,50 @@ public class TagStockService {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
         requireSession(tenantId, sessionId, true);
-        VariantStock v = variantStock(tenantId, mainWarehouse(tenantId), variantId);
+        VariantStock v = variantStock(tenantId, mainWarehouse(tenantId), variantId, sessionId);
         if (count > v.untagged()) throw LabelCodeException.tooManyLabels(v.untagged());
         return labelCodes.issue(actorUserId, "tag", List.of(new LabelCodeService.Line(variantId, count, null, null)),
             idempotencyKey, sessionId);
     }
 
-    /** One named label for a torn / misprinted one (kind replacement, same variant). */
+    /**
+     * Reprint, not reissue (live-test fix): the variant's tag codes printed in THIS session that are still unused,
+     * as a PDF of the same codes. Nothing is issued. 422 NO_ISSUED_CODES when there are none.
+     */
+    @Transactional(readOnly = true)
+    public byte[] reprintUnused(UUID sessionId, UUID variantId) throws java.io.IOException {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        requireSession(tenantId, sessionId, true);
+        List<UUID> ids = jdbc.queryForList(
+            "SELECT lc.id FROM label_codes lc JOIN label_code_batches b ON b.id = lc.batch_id AND b.tenant_id = lc.tenant_id " +
+            "WHERE lc.tenant_id = ? AND lc.variant_id = ? AND lc.status = 'issued' AND lc.kind = 'tag' AND b.tag_session_id = ?",
+            UUID.class, tenantId, variantId, sessionId);
+        return labelCodes.codesPdf(ids);
+    }
+
+    /**
+     * One named label for a torn / misprinted one (kind replacement, same variant). An unused replacement code of
+     * the variant (no order refs, still issued — from any Tag stock print) is reprinted before a new one is issued;
+     * its batch is answered with created = false (a replacement batch holds that one code).
+     */
     @Transactional
     public LabelCodeService.Batch replacement(UUID sessionId, UUID variantId, String idempotencyKey, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
         requireSession(tenantId, sessionId, true);
-        variantStock(tenantId, mainWarehouse(tenantId), variantId);
+        variantStock(tenantId, mainWarehouse(tenantId), variantId, sessionId);
+        List<LabelCodeService.Batch> unused = jdbc.query(
+            "SELECT lc.id, lc.code, lc.batch_id FROM label_codes lc " +
+            "WHERE lc.tenant_id = ? AND lc.variant_id = ? AND lc.kind = 'replacement' AND lc.status = 'issued' " +
+            "  AND lc.order_id IS NULL " +
+            "  AND (SELECT count(*) FROM label_codes o WHERE o.batch_id = lc.batch_id AND o.tenant_id = lc.tenant_id) = 1 " +
+            // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+            "ORDER BY lc.created_at, lc.id LIMIT 1",
+            (rs, i) -> new LabelCodeService.Batch(rs.getObject("batch_id", UUID.class), "replacement", 1, false,
+                List.of(new LabelCodeService.IssuedCode(rs.getObject("id", UUID.class), rs.getString("code"), variantId))),
+            tenantId, variantId);
+        if (!unused.isEmpty()) return unused.get(0);
         return labelCodes.issue(actorUserId, "replacement", List.of(new LabelCodeService.Line(variantId, 1, null, null)),
             idempotencyKey, sessionId);
     }
@@ -163,16 +255,16 @@ public class TagStockService {
             InventoryLedger.BindResult r = ledger.bindLabel((UUID) label.get(0).get("id"), actorUserId,
                 InventoryLedger.BindRef.tagSession(sessionId, viaPhone), raw);
             if (r.alreadyBound()) return info(tenantId, main, sessionId, variantId, code, viaPhone);
-            return new ScanOutcome("TAGGED", code, null, null, variantStock(tenantId, main, variantId),
+            return new ScanOutcome("TAGGED", code, null, null, variantStock(tenantId, main, variantId, sessionId),
                 taggedIn(tenantId, sessionId), viaPhone);
         } catch (LabelCodeException e) {
-            return rejected(tenantId, sessionId, code, e, viaPhone, variantStock(tenantId, main, variantId));
+            return rejected(tenantId, sessionId, code, e, viaPhone, variantStock(tenantId, main, variantId, sessionId));
         }
     }
 
     private ScanOutcome info(UUID tenantId, UUID main, UUID sessionId, UUID variantId, String code, boolean viaPhone) {
         return new ScanOutcome("ALREADY_TAGGED", code, "Already tagged", "مُلصقة بالفعل",
-            variantStock(tenantId, main, variantId), taggedIn(tenantId, sessionId), viaPhone);
+            variantStock(tenantId, main, variantId, sessionId), taggedIn(tenantId, sessionId), viaPhone);
     }
 
     private ScanOutcome rejected(UUID tenantId, UUID sessionId, String code, LabelCodeException e, boolean viaPhone) {

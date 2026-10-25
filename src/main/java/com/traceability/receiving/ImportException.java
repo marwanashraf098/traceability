@@ -20,6 +20,12 @@ public class ImportException extends ApiException {
         return new ImportException(code, en, ar, HttpStatus.BAD_REQUEST);
     }
 
+    /** The preview's quantity column is "new" (On hand (new)) or "current" (On hand (current)). */
+    public static ImportException badColumn() {
+        return bad("IMPORT_BAD_COLUMN", "Choose On hand (new) or On hand (current).",
+            "اختر On hand (new) أو On hand (current).");
+    }
+
     public static ImportException emptyFile() {
         return bad("IMPORT_EMPTY_FILE", "The file is empty.", "الملف فارغ.");
     }
