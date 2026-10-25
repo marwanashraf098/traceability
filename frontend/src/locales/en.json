@@ -42,8 +42,7 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
-    "closeMenu": "Close menu",
-    "tagStock": "Tag stock"
+    "closeMenu": "Close menu"
   },
   "overview": {
     "title": "Overview",
@@ -203,7 +202,9 @@
     "tabs": {
       "stock": "Stock by location",
       "breakdown": "Stock breakdown",
-      "ledger": "Movement ledger"
+      "ledger": "Movement ledger",
+      "untagged": "Untagged ({{count}})",
+      "untaggedPlain": "Untagged"
     },
     "stock": {
       "searchPlaceholder": "Search SKU or product",
@@ -284,7 +285,28 @@
     },
     "prev": "Previous",
     "next": "Next",
-    "showing": "Showing {{from}}–{{to}} of {{total}}"
+    "showing": "Showing {{from}}–{{to}} of {{total}}",
+    "untagged": {
+      "intro": "Pieces in the main warehouse that don't have a label yet. Tick products, print their labels, then scan each label onto a piece.",
+      "share": "{{labeled}} of {{total}} pieces labeled",
+      "selectAll": "Select all",
+      "pick": "Select {{product}}",
+      "counts": "{{untagged}} untagged · {{labeled}} labeled",
+      "unused_one": "1 unused label",
+      "unused_other": "{{count}} unused labels",
+      "qty": "Qty",
+      "qtyFor": "Labels for {{product}}",
+      "bar_one": "{{count}} label for {{products}} products",
+      "bar_other": "{{count}} labels for {{products}} products",
+      "reprints_one": "includes 1 reprint",
+      "reprints_other": "includes {{count}} reprints",
+      "tooMany": "At most {{max}} labels per print — print in parts.",
+      "print": "Print labels",
+      "printed_one": "1 label printed for {{products}} products.",
+      "printed_other": "{{count}} labels printed for {{products}} products.",
+      "openAgain": "Open the labels again",
+      "startScanning": "Start scanning"
+    }
   },
   "auth": {
     "tagline": "Nothing moves untraced.",
@@ -1128,6 +1150,30 @@
         "openAgain": "Open the labels again",
         "queueHint": "No Bosta waybill orders in this scope. Use 'Everything ready to pack' to label all orders in the queue."
       }
+    },
+    "print": {
+      "button": "Print",
+      "title": "Print for packing",
+      "readyTitle": "Ready",
+      "what": "What to print",
+      "newHint": "Orders whose waybills haven't been printed yet",
+      "allHint": "Every order in the Pick & Pack queue",
+      "last": "Same orders as the last print",
+      "lastHint": "Reprint the last print's waybills and label the same orders",
+      "waybills": "Waybills — {{count}} (Bosta orders)",
+      "labels": "Piece labels — {{count}} for {{orders}} orders",
+      "noWaybills": "No Bosta waybills in these orders",
+      "noLabels": "No untagged pieces in these orders",
+      "counting": "Counting…",
+      "print": "Print",
+      "printing": "Printing…",
+      "waybillsHeading": "Waybills",
+      "waybillsHeadingPaper": "Waybills ({{paper}})",
+      "labelsHeading": "Piece labels (50×25)",
+      "openLabels": "Open labels (50×25) · {{count}}",
+      "openLabelsPart": "Open labels part {{part}} of {{of}} (50×25) · {{count}}",
+      "noLabelsNow": "No piece labels were needed.",
+      "noLabelsUseAll": "No untagged pieces in these orders — choose 'Everything ready to pack' to include all orders in the queue."
     }
   },
   "lookup": {
@@ -4504,37 +4550,25 @@
     "pieceNote": "This piece is untagged. It gets a label when it's packed or in a Tag stock session. Until then it can't be reprinted, transferred, held or marked damaged."
   },
   "tagStock": {
-    "title": "Tag stock",
-    "subtitle": "Give untagged pieces in the main warehouse their labels: print, stick one on each piece, scan it.",
     "goScan": "Continue scanning",
-    "labeled": "Labeled",
-    "untagged": "Untagged",
-    "labeledShare": "Labeled share",
     "search": "Search product, variant or SKU",
     "noMatch": "No untagged product matches your search.",
     "allTagged": "Every piece in the main warehouse has a label.",
-    "untaggedCount": "{{count}} untagged",
-    "labeledCount": "{{count}} labeled",
-    "howMany": "Labels to print",
-    "print": "Print {{count}} labels",
-    "print_one": "Print 1 label",
-    "unusedExisting": "{{count}} labels already printed for this product and not used yet — they still work.",
     "error": "Something went wrong. Try again.",
-    "unavailable": "Tag stock isn't available for this account.",
     "scan": {
-      "changeProduct": "Change product",
       "end": "End session",
       "placeholder": "Scan the label you just stuck on…",
       "taggedLabel": "Tagged this session",
-      "untaggedLeft": "Untagged left",
-      "labeled": "Labeled",
       "replacement": "Print 1 replacement label",
       "scanToStart": "Scan a label to start — the label knows its product.",
-      "tagged": "Tagged · {{product}}",
       "alreadyTagged": "Already tagged",
-      "backToList": "Back to Tag stock",
+      "backToList": "Back to Untagged stock",
       "endTitle": "End this session?",
-      "endBody": "Labels you printed and didn't use stay valid for their product. You can void them on the next screen."
+      "endBody": "Labels you printed and didn't use stay valid for their product. You can void them on the next screen.",
+      "progress": "Printed for this session",
+      "replacementTitle": "Print 1 replacement label",
+      "replacementWhich": "Which product is the label for?",
+      "replacementPrint": "Print"
     },
     "summary": {
       "title": "Session summary",
@@ -4553,10 +4587,6 @@
       "voided_one": "1 label voided",
       "back": "Back to Tag stock"
     },
-    "reprintUnused": "Reprint the {{count}} unused labels",
-    "reprintUnused_one": "Reprint the 1 unused label",
-    "printNew": "Print new labels",
-    "reprintHint": "Labels printed earlier in this session aren't used yet — reprint the same codes instead of new ones.",
     "leftovers": {
       "title": "Unused labels",
       "subtitle": "Left over from ended sessions. They still work when scanned — reprint them, or void the ones thrown away.",

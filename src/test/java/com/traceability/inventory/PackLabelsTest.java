@@ -40,7 +40,7 @@ import static org.mockito.Mockito.*;
  * Flexible labeling slice 4 — packing labels printed in order sequence, bound at the pack scan.
  *
  *   p1  the print set follows the waybill print's candidates, scope and sort (oldest / newest); orders needing no
- *       label are skipped; the PDF is each order's labels then ONE separator, in that order
+ *       label are skipped; the PDF is ONE separator (the order's header) then that order's labels, in that order
  *   p2  only UNALLOCATED units of variants with untagged stock at the main warehouse; capped at the untagged count
  *       across the print, first come first served; the summary counts units packed from labeled stock
  *   p3  never issued twice for the same order item: a second print reuses (reprints) the unbound codes
@@ -256,12 +256,12 @@ class PackLabelsTest {
         assertThat(printed.orders()).isEqualTo(2);
         List<String> pages = pageTexts(packLabels.pdf(printed.parts().get(0).orderIds()));
         List<String> c1 = packCodes(first), c3 = packCodes(third);
-        assertThat(pages).hasSize(5);                          // 1 label + sep, 2 labels + sep — none for #P2
-        assertThat(pages.get(0)).contains(c1.get(0)).contains("Linen Shirt");
-        assertThat(pages.get(1)).contains(tracking(first)).contains("#P1");
-        assertThat(pages.get(2)).contains(c3.get(0));
-        assertThat(pages.get(3)).contains(c3.get(1));
-        assertThat(pages.get(4)).contains(tracking(third)).contains("#P3");
+        assertThat(pages).hasSize(5);                          // sep + 1 label, sep + 2 labels — none for #P2, nothing after
+        assertThat(pages.get(0)).contains(tracking(first)).contains("#P1");
+        assertThat(pages.get(1)).contains(c1.get(0)).contains("Linen Shirt");
+        assertThat(pages.get(2)).contains(tracking(third)).contains("#P3");
+        assertThat(pages.get(3)).contains(c3.get(0));
+        assertThat(pages.get(4)).contains(c3.get(1));
         assertThat(count("SELECT count(*)::int FROM label_codes WHERE order_id = ?", onlyC)).isZero();
     }
 
@@ -299,7 +299,7 @@ class PackLabelsTest {
         assertThat(again.reused()).isEqualTo(2);
         assertThat(packCodes(o)).isEqualTo(codes);
         assertThat(count("SELECT count(*)::int FROM label_codes WHERE tenant_id = ?", tenant)).isEqualTo(2);
-        assertThat(pageTexts(packLabels.pdf(List.of(o))).subList(0, 2))
+        assertThat(pageTexts(packLabels.pdf(List.of(o))).subList(1, 3))                  // after the order's header
             .satisfiesExactly(p -> assertThat(p).contains(codes.get(0)), p -> assertThat(p).contains(codes.get(1)));
     }
 
@@ -314,11 +314,12 @@ class PackLabelsTest {
         byte[] pdf = packLabels.pdf(List.of(courier, pickup));
         List<String> pages = pageTexts(pdf);
         assertThat(pages).hasSize(4);
-        assertThat(pages.get(1).lines().map(String::trim).toList()).containsExactly(tracking(courier), "#S1");
-        assertThat(pages.get(3).lines().map(String::trim).toList()).containsExactly("#S2");
-        assertThat(pageHasImage(pdf, 0)).as("a label carries its barcode").isTrue();
-        assertThat(pageHasImage(pdf, 1)).as("a separator has no barcode").isFalse();
-        assertThat(pageHasImage(pdf, 3)).isFalse();
+        assertThat(pages.get(0).lines().map(String::trim).toList()).containsExactly(tracking(courier), "#S1");
+        assertThat(pages.get(2).lines().map(String::trim).toList()).containsExactly("#S2");
+        assertThat(pageHasImage(pdf, 1)).as("a label carries its barcode").isTrue();
+        assertThat(pageHasImage(pdf, 0)).as("a separator has no barcode").isFalse();
+        assertThat(pageHasImage(pdf, 2)).isFalse();
+        assertThat(pageHasImage(pdf, 3)).as("the PDF ends with a label, not a separator").isTrue();
     }
 
     @Test
@@ -737,7 +738,7 @@ class PackLabelsTest {
         PackLabelService.Summary printed = packLabels.print(all("oldest"), owner);
         List<String> pages = pageTexts(packLabels.pdf(printed.parts().get(0).orderIds()));
         assertThat(pages).hasSize(2);
-        assertThat(pages.get(1).lines().map(String::trim).toList()).containsExactly("JT-0042 77", "#Q10");
+        assertThat(pages.get(0).lines().map(String::trim).toList()).containsExactly("JT-0042 77", "#Q10");
         assertThat(sequence(printed)).containsExactly(generic);
     }
 
@@ -749,6 +750,52 @@ class PackLabelsTest {
         assertThat(s.labels()).isEqualTo(PrintJobRunner.MAX_WAYBILLS_PER_JOB + 1);
         assertThat(s.parts()).extracting(p -> p.orderIds().size())
             .containsExactly(PrintJobRunner.MAX_WAYBILLS_PER_JOB, 1);
+    }
+
+    @Test
+    void q5_print_for_packing_counts_waybills_and_labels_of_the_same_scope_and_sort() {
+        untagged(variantA, 10);
+        UUID bosta1 = order("#W1", 40, true, variantA, 1);
+        UUID generic = genericOrder("#W2", 30, "JT-77", variantA, 2);
+        UUID pickup = order("#W3", 20, false, variantA, 1);
+        UUID bosta2 = order("#W4", 10, true, variantA, 1);
+
+        PackLabelService.PrintPlan all = packLabels.printPlan(all("oldest"));
+        assertThat(all.waybills()).as("Bosta waybills only").isEqualTo(2);
+        assertThat(all.labels().labels()).isEqualTo(5);
+        assertThat(all.labels().orders()).isEqualTo(4);
+        assertThat(sequence(all.labels())).containsExactly(bosta1, generic, pickup, bosta2);
+        assertThat(all.lastBatchId()).isNull();
+        assertThat(sequence(packLabels.printPlan(all("newest")).labels())).containsExactly(bosta2, pickup, generic, bosta1);
+
+        PackLabelService.PrintPlan fresh = packLabels.printPlan(new PackLabelService.Request("new", "oldest", null));
+        assertThat(fresh.waybills()).isEqualTo(2);
+        assertThat(sequence(fresh.labels())).containsExactly(bosta1, bosta2);
+
+        UUID batch = jdbc.queryForObject("INSERT INTO pack_print_batches (tenant_id, batch_no, printed_by, paper, sort, scope, " +
+            "waybill_count, order_guaranteed) VALUES (?, 1, ?, 'A4', 'oldest', 'new', 1, true) RETURNING id", UUID.class, tenant, owner);
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "SELECT ?, tenant_id, order_id, id, tracking_number, 1 FROM shipments WHERE order_id = ?", batch, bosta2);
+        PackLabelService.PrintPlan last = packLabels.printPlan(new PackLabelService.Request("last", null, null));
+        assertThat(last.lastBatchId()).isEqualTo(batch);
+        assertThat(last.waybills()).isEqualTo(1);
+        assertThat(sequence(last.labels())).containsExactly(bosta2);
+        assertThat(packLabels.printPlan(new PackLabelService.Request("new", "oldest", null)).waybills())
+            .as("the printed one is no longer new").isEqualTo(1);
+        assertThat(count("SELECT count(*)::int FROM label_codes WHERE tenant_id = ?", tenant)).as("a plan issues nothing").isZero();
+    }
+
+    @Test
+    void q6_the_plan_says_when_only_everything_ready_to_pack_has_labels() {
+        untagged(variantA, 2);
+        genericOrder("#W9", 10, "JT-9", variantA, 1);                       // the queue's only order: another courier
+        PackLabelService.PrintPlan fresh = packLabels.printPlan(new PackLabelService.Request("new", "oldest", null));
+        assertThat(fresh.labels().labels()).isZero();
+        assertThat(fresh.labels().queueNeedsLabels()).isTrue();
+        assertThat(packLabels.printPlan(new PackLabelService.Request("last", null, null)).labels().queueNeedsLabels()).isTrue();
+        PackLabelService.PrintPlan all = packLabels.printPlan(all("oldest"));
+        assertThat(all.labels().labels()).isEqualTo(1);
+        assertThat(all.labels().queueNeedsLabels()).isFalse();
     }
 
     private <T> ResponseEntity<T> post(String token, String path, Object body, Class<T> type) {

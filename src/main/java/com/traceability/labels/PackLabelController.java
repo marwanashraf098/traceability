@@ -42,6 +42,13 @@ public class PackLabelController {
         return service.preview(req);
     }
 
+    /** "Print for packing": waybill + label counts for one scope + sort (switch on; same roles as preview). */
+    @PostMapping("/plan")
+    @PreAuthorize("isAuthenticated()")
+    public PackLabelService.PrintPlan plan(@RequestBody PackLabelService.Request req) {
+        return service.printPlan(req);
+    }
+
     @PostMapping("/print")
     @PreAuthorize("isAuthenticated()")
     public PackLabelService.Summary print(@RequestBody PackLabelService.Request req,

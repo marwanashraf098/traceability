@@ -10,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -39,6 +40,8 @@ public class TagStockController {
     public record ScanRequest(String code, UUID relayEventId) {}
     public record VoidRequest(UUID variantId) {}
     public record ReprintRequest(UUID variantId) {}
+    public record PrintManyRequest(List<TagStockService.PrintLine> lines, String idempotencyKey) {}
+    public record PdfRequest(List<TagStockService.PrintGroup> groups) {}
 
     private final TagStockService service;
     private final PhoneScanSource phoneScanSource;
@@ -73,6 +76,22 @@ public class TagStockController {
                                         @AuthenticationPrincipal CustomUserDetails principal) {
         if (req == null || req.variantId() == null || req.count() == null || req.count() < 1) throw LabelCodeException.invalidCount();
         return service.print(id, req.variantId(), req.count(), req.idempotencyKey(), principal.userId());
+    }
+
+    /** Several products in one print: reusable labels reprinted first, the rest issued. */
+    @PostMapping("/sessions/{id}/print-many")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public TagStockService.PrintMany printMany(@PathVariable UUID id, @RequestBody PrintManyRequest req,
+                                               @AuthenticationPrincipal CustomUserDetails principal) {
+        if (req == null) throw LabelCodeException.invalidCount();
+        return service.printMany(id, req.lines(), req.idempotencyKey(), principal.userId());
+    }
+
+    /** One PDF for a print-many result, grouped by product with a product header before each group. */
+    @PostMapping("/sessions/{id}/pdf")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> groupsPdf(@PathVariable UUID id, @RequestBody PdfRequest req) throws IOException {
+        return pdf(service.groupsPdf(id, req == null ? null : req.groups()), "tag-labels-" + id);
     }
 
     // No produces= (like the label endpoints): a JSON error body must stay writable.

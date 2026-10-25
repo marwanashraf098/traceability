@@ -97,7 +97,7 @@ export default function TagStockSummary() {
         {unused > 0 && (
           <Button variant="secondary" loading={voiding} onClick={voidUnused}>{t('tagStock.summary.void')}</Button>
         )}
-        <Button onClick={() => navigate('/tag-stock')}>{t('tagStock.summary.back')}</Button>
+        <Button onClick={() => navigate('/inventory?tab=untagged')}>{t('tagStock.summary.back')}</Button>
       </div>
     </div>
   )

@@ -28,8 +28,9 @@ import java.util.*;
  * in order sequence. A line's issued, unbound pack codes are REUSED (reprinted) before any new one is issued, so the
  * same order item is never issued twice; a per-tenant advisory lock keeps two prints from both issuing.
  *
- * <p>Output: one PDF per part, in sequence — an order's labels, then ONE text-only separator (tracking number, then
- * order number; the order number alone when there is no tracking number); orders needing no label are skipped.
+ * <p>Output: one PDF per part, in sequence — ONE text-only separator as the order's header (tracking number, then
+ * order number; the order number alone when there is no tracking number), then that order's labels; nothing after
+ * the last order's labels; orders needing no label are skipped.
  * A part holds at most {@link #MAX_LABELS_PER_PART} labels and {@link PrintJobRunner#MAX_WAYBILLS_PER_JOB} orders
  * (what one PDF request takes) and never splits an order.
  */
@@ -131,6 +132,43 @@ public class PackLabelService {
         }
         if (!chunk.isEmpty()) codes.issue(actorUserId, "pack", chunk, key + ":" + chunkNo);
         return withQueueHint(tenantId, req, summarize(plan));
+    }
+
+    // ── one Print for packing (waybills + labels) ─────────────────────────────
+
+    /**
+     * The "Print for packing" dialog's counts for one scope + sort (UI pass 2026-10-25): how many Bosta waybills a
+     * print would send (the waybill job's own candidates, first {@link PrintJobRunner#MAX_WAYBILLS_PER_JOB}; for
+     * {@code last}, the newest waybill print's items whose order isn't cancelled — what its reprint sends) and the
+     * label summary for the same scope + sort. {@code lastBatchId} is the newest waybill print (null without one).
+     */
+    public record PrintPlan(int waybills, UUID lastBatchId, Summary labels) {}
+
+    @Transactional(readOnly = true)
+    public PrintPlan printPlan(Request req) {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        if (req == null || req.orderId() != null) throw LabelCodeException.invalidPrintRequest();
+        // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+        List<UUID> last = jdbc.queryForList("SELECT id FROM pack_print_batches WHERE tenant_id = ? " +
+            "ORDER BY created_at DESC, id DESC LIMIT 1", UUID.class, tenantId);
+        UUID lastBatchId = last.isEmpty() ? null : last.get(0);
+        int waybills;
+        if ("last".equals(req.scope())) {
+            Integer n = lastBatchId == null ? 0 : jdbc.queryForObject(
+                "SELECT count(*)::int FROM pack_print_batch_items bi " +
+                "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+                "WHERE bi.tenant_id = ? AND bi.batch_id = ? AND o.status <> 'cancelled'", Integer.class, tenantId, lastBatchId);
+            waybills = n == null ? 0 : n;
+        } else {
+            if (req.scope() == null || !SCOPES.contains(req.scope()) || req.sort() == null || !SORTS.contains(req.sort())) {
+                throw LabelCodeException.invalidPrintRequest();
+            }
+            waybills = Math.min(PrintJobRunner.MAX_WAYBILLS_PER_JOB, candidates.candidates(req.scope(), req.sort()).size());
+        }
+        // labels.queueNeedsLabels: this scope has nothing to label but "Everything ready to pack" would (the reason the
+        // dialog shows on its disabled labels checkbox).
+        return new PrintPlan(waybills, lastBatchId, withQueueHint(tenantId, req, summarize(plan(tenantId, orders(tenantId, req)))));
     }
 
     // ── which orders ──────────────────────────────────────────────────────────
@@ -258,8 +296,8 @@ public class PackLabelService {
     // ── the PDF ───────────────────────────────────────────────────────────────
 
     /**
-     * One part: for each order in the given sequence its issued, unbound pack codes (line order, then code; at
-     * most the line's unpacked units), then a separator. Orders with none are skipped. Nothing is issued here.
+     * One part: for each order in the given sequence a separator (its header), then its issued, unbound pack codes
+     * (line order, then code; at most the line's unpacked units). Orders with none are skipped. Nothing is issued here.
      */
     @Transactional(readOnly = true)
     public byte[] pdf(List<UUID> orderIds) throws IOException {
@@ -306,15 +344,17 @@ public class PackLabelService {
             List<Row> rows = byOrder.getOrDefault(orderId, List.of());
             Map<UUID, Integer> perItem = new HashMap<>();
             // Rows come in line order = the pack screen's (order_items.id, Postgres uuid order), then code order.
-            int before = pages.size();
+            List<LabelPdfRenderer.Page> orderLabels = new ArrayList<>();
             for (Row r : rows) {
                 int used = perItem.merge(r.itemId(), 1, Integer::sum);
-                if (used <= r.unallocated()) pages.add(r.label());
+                if (used <= r.unallocated()) orderLabels.add(r.label());
             }
-            if (pages.size() == before) continue;
-            labels += pages.size() - before;
+            if (orderLabels.isEmpty()) continue;
+            labels += orderLabels.size();
+            // Live test 2026-10-25: the separator is the order's HEADER — before its labels, never after them.
             String[] head = heads.getOrDefault(orderId, new String[] { null, null });
             pages.add(separator(head[0], head[1]));
+            pages.addAll(orderLabels);
         }
         if (labels > MAX_LABELS_PER_PART) throw LabelCodeException.invalidPrintRequest();
         if (labels == 0) {
