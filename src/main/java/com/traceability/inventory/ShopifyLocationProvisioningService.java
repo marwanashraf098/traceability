@@ -46,14 +46,20 @@ public class ShopifyLocationProvisioningService {
     private final TransactionTemplate tx;
     private final ShopifyLocationGateway shopifyLocations;
     private final ShopifyTokenProvider tokenProvider;
+    private final MainLocationAddressService addressService;
+    private final MainLocationAddressSource addressSource;
 
     public ShopifyLocationProvisioningService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                                ShopifyLocationGateway shopifyLocations,
-                                               ShopifyTokenProvider tokenProvider) {
+                                               ShopifyTokenProvider tokenProvider,
+                                               MainLocationAddressService addressService,
+                                               MainLocationAddressSource addressSource) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
         this.tokenProvider    = tokenProvider;
+        this.addressService   = addressService;
+        this.addressSource    = addressSource;
     }
 
     /**
@@ -146,11 +152,15 @@ public class ShopifyLocationProvisioningService {
 
             // findByName first — reconnect/retry after a previous partially-completed sync
             // (Shopify location created, local UPDATE never landed) must not create a duplicate.
+            // Feature A: the merchant's own address when one exists (feature B), else the generic one.
+            ShopifyLocationGateway.LocationAddress address =
+                addressSource.merchantAddress(tenantId).orElse(MainLocationAddressService.GENERIC);
             Optional<ShopifyLocationGateway.LocationResult> found =
                 shopifyLocations.findByName(shopDomain, token, SHOPIFY_LOCATION_NAME);
             ShopifyLocationGateway.LocationResult result = found.orElseGet(() ->
                 shopifyLocations.create(shopDomain, token,
-                    new ShopifyLocationGateway.LocationInput(SHOPIFY_LOCATION_NAME, null, null, "EG", true)));
+                    ShopifyLocationGateway.LocationInput.of(SHOPIFY_LOCATION_NAME, address, true)));
+            boolean created = found.isEmpty();
 
             final String shopifyLocId = result.shopifyLocationId();
             tx.execute(s -> {
@@ -158,8 +168,14 @@ public class ShopifyLocationProvisioningService {
                     "UPDATE locations SET shopify_location_id = ?, shopify_sync_status = 'linked', " +
                     "shopify_synced_at = now(), shopify_sync_error = NULL WHERE id = ? AND tenant_id = ?",
                     shopifyLocId, locationId, tenantId);
+                if (created) addressService.recordCreatedWith(locationId, tenantId, address);
                 return null;
             });
+            if (!created) {
+                // An existing "Traced Main Warehouse" was reused: same fill-only rule as the backfill
+                // (never overwrites a merchant-set address). Never fails the link.
+                fillExistingAddress(tenantId, address);
+            }
             log.info("Traced Main Warehouse linked: tenant={} location={} shopifyLocationId={}",
                 tenantId, locationId, shopifyLocId);
         } catch (Exception e) {
@@ -173,6 +189,16 @@ public class ShopifyLocationProvisioningService {
             });
             log.warn("Traced Main Warehouse provisioning failed: tenant={} location={} error={}",
                 tenantId, locationId, errMsg);
+        }
+    }
+
+    private void fillExistingAddress(UUID tenantId, ShopifyLocationGateway.LocationAddress address) {
+        try {
+            MainLocationAddressService.Result r = addressService.apply(tenantId, address, false, false);
+            log.info("Traced Main Warehouse address on reuse: tenant={} outcome={}", tenantId, r.outcome());
+        } catch (Exception e) {
+            log.warn("Traced Main Warehouse address check failed on reuse: tenant={} error={}", tenantId,
+                e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         }
     }
 }

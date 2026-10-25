@@ -41,12 +41,18 @@ public class LocationController {
     private final ShopifyTokenProvider   tokenProvider;
     private final ShopifyFulfillmentActivationService fulfillmentActivationService;
     private final StoreRepository        storeRepository;
+    private final MainLocationAddressService addressService;
+    private final MainLocationAddressSource  addressSource;
 
     public LocationController(JdbcTemplate jdbc, PlatformTransactionManager txm,
                               ShopifyLocationGateway shopifyLocations,
                               ShopifyTokenProvider tokenProvider,
                               ShopifyFulfillmentActivationService fulfillmentActivationService,
-                              StoreRepository storeRepository) {
+                              StoreRepository storeRepository,
+                              MainLocationAddressService addressService,
+                              MainLocationAddressSource addressSource) {
+        this.addressService   = addressService;
+        this.addressSource    = addressSource;
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
@@ -178,8 +184,11 @@ public class LocationController {
             String token = tokenProvider.getValidToken(store.id());
             // fulfillsOnlineOrders=true unconditionally — every location Traced creates is,
             // by the gate above, a fulfillment location; its stock must gate storefront sales.
+            // Feature A: created WITH an address (the merchant's when feature B has one, else generic).
+            ShopifyLocationGateway.LocationAddress address =
+                addressSource.merchantAddress(tenantId).orElse(MainLocationAddressService.GENERIC);
             ShopifyLocationGateway.LocationInput input =
-                new ShopifyLocationGateway.LocationInput(name.trim(), null, null, "EG", true);
+                ShopifyLocationGateway.LocationInput.of(name.trim(), address, true);
             ShopifyLocationGateway.LocationResult result =
                 shopifyLocations.create(store.shopDomain(), token, input);
 
@@ -189,6 +198,7 @@ public class LocationController {
                     "UPDATE locations SET shopify_location_id = ?, shopify_sync_status = 'linked', " +
                     "shopify_synced_at = now() WHERE id = ? AND tenant_id = ?",
                     shopifyLocId, id, tenantId);
+                addressService.recordCreatedWith(id, tenantId, address);
                 return null;
             });
             syncStatus = "linked";
