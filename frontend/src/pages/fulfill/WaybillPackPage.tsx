@@ -9,6 +9,8 @@ import {
   FulfillQueueRow, PackSessionView,
 } from '../../api'
 import PrintWaybillsDialog from './PrintWaybillsDialog'
+import PrintForPackingDialog from './PrintForPackingDialog'
+import { useCapabilities } from '../../capabilities'
 import PackSessionScreen from './PackSessionScreen'
 import SessionSummaryScreen from './SessionSummaryScreen'
 import { PrintBatchesToday, PrintedNotPacked } from './PackLists'
@@ -68,6 +70,8 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listsKey, setListsKey] = useState(0)
+  // Switch on: ONE "Print" (waybills + piece labels — label printing in waybill mode). Off: exactly as before.
+  const { flexibleLabeling } = useCapabilities()
   const isOwner = getRoleFromToken() === 'owner'
 
   const load = useCallback(async () => {
@@ -122,9 +126,15 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="secondary" iconStart={Printer} onClick={() => setShowPrint(true)} disabled={ready.length === 0}>
-              {t('fulfill.printBatch.button')}
-            </Button>
+            {flexibleLabeling ? (
+              <Button variant="secondary" iconStart={Printer} onClick={() => setShowPrint(true)} disabled={ready.length === 0}>
+                {t('fulfill.print.button')}
+              </Button>
+            ) : (
+              <Button variant="secondary" iconStart={Printer} onClick={() => setShowPrint(true)} disabled={ready.length === 0}>
+                {t('fulfill.printBatch.button')}
+              </Button>
+            )}
             <Button iconStart={ScanLine} loading={starting} onClick={start}>
               {openSessionId ? t('fulfill.waybill.resumeSession') : t('fulfill.waybill.startSession')}
             </Button>
@@ -167,7 +177,11 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
         <PrintedNotPacked refreshKey={listsKey} />
       </div>
 
-      {showPrint && (
+      {showPrint && flexibleLabeling && (
+        <PrintForPackingDialog
+          onClose={didPrint => { setShowPrint(false); if (didPrint) { load(); setListsKey(k => k + 1) } }} />
+      )}
+      {showPrint && !flexibleLabeling && (
         <PrintWaybillsDialog
           newCount={ready.length - printed}
           allCount={ready.length}

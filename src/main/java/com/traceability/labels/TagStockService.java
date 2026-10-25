@@ -20,8 +20,14 @@ import java.util.*;
 public class TagStockService {
 
     /** unusedThisSession: issued tag codes printed in the caller's open session (0 without one) — reprint first. */
+    /** reusableLabels: issued tag / replacement codes of the variant with no order refs — reprinted before new ones. */
     public record VariantStock(UUID variantId, String productTitle, String variantTitle, String sku, String imageUrl,
-                               int untagged, int labeled, int unusedLabels, int unusedThisSession) {}
+                               int untagged, int labeled, int unusedLabels, int unusedThisSession, int reusableLabels) {}
+    /** One product's labels in a multi-product print: reused (reprinted) codes first, then new ones. */
+    public record PrintGroup(UUID variantId, String productTitle, String variantTitle, String sku, List<UUID> codeIds,
+                             int reprints) {}
+    public record PrintMany(int labels, int reprints, int issued, List<PrintGroup> groups) {}
+    public record PrintLine(UUID variantId, Integer count) {}
     /** leftovers: labels left unused by ENDED sessions, per variant (reprint or void them). */
     public record Overview(int labeled, int untagged, List<VariantStock> variants, List<Leftover> leftovers) {}
     public record Leftover(UUID variantId, String productTitle, String variantTitle, String sku, String imageUrl,
@@ -118,6 +124,8 @@ public class TagStockService {
         "       (SELECT count(*)::int FROM label_codes lc JOIN label_code_batches b ON b.id = lc.batch_id " +
         "          AND b.tenant_id = lc.tenant_id WHERE lc.tenant_id = v.tenant_id AND lc.variant_id = v.id " +
         "          AND lc.status = 'issued' AND lc.kind = 'tag' AND b.tag_session_id = ?::uuid) AS unused_session, " +
+        "       (SELECT count(*)::int FROM label_codes lc WHERE lc.tenant_id = v.tenant_id AND lc.variant_id = v.id " +
+        "          AND lc.status = 'issued' AND lc.kind IN ('tag','replacement') AND lc.order_id IS NULL) AS reusable, " +
         "       coalesce(s.untagged, 0) AS untagged, coalesce(s.labeled, 0) AS labeled, " +
         "       (SELECT count(*)::int FROM label_codes lc WHERE lc.tenant_id = v.tenant_id AND lc.variant_id = v.id " +
         "          AND lc.status = 'issued') AS unused " +
@@ -131,7 +139,7 @@ public class TagStockService {
     private static final org.springframework.jdbc.core.RowMapper<VariantStock> VARIANT_ROW = (rs, i) -> new VariantStock(
         rs.getObject("id", UUID.class), rs.getString("product_title"), rs.getString("variant_title"), rs.getString("sku"),
         rs.getString("image_url"), rs.getInt("untagged"), rs.getInt("labeled"), rs.getInt("unused"),
-        rs.getInt("unused_session"));
+        rs.getInt("unused_session"), rs.getInt("reusable"));
 
     private VariantStock variantStock(UUID tenantId, UUID main, UUID variantId, UUID sessionId) {
         List<VariantStock> rows = jdbc.query(VARIANT_SQL + "WHERE v.tenant_id = ? AND v.id = ?", VARIANT_ROW,
@@ -185,6 +193,107 @@ public class TagStockService {
         if (count > v.untagged()) throw LabelCodeException.tooManyLabels(v.untagged());
         return labelCodes.issue(actorUserId, "tag", List.of(new LabelCodeService.Line(variantId, count, null, null)),
             idempotencyKey, sessionId);
+    }
+
+    /**
+     * Inventory → Untagged (UI pass 2026-10-25): labels for several products in ONE print. Per product (in the order
+     * given), its reusable codes — issued tag / replacement codes with no order refs, oldest first — are reprinted
+     * first and only the remainder is newly issued (one issue call, the caller's idempotency key, this session).
+     * A retry with the same key reuses what the first attempt issued, so nothing is ever issued twice; a per-tenant
+     * lock keeps two prints from both issuing. count ≤ the product's untagged pieces; ≤ 2,000 labels in all.
+     */
+    @Transactional
+    public PrintMany printMany(UUID sessionId, List<PrintLine> lines, String idempotencyKey, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        requireSession(tenantId, sessionId, true);
+        if (lines == null || lines.isEmpty()) throw LabelCodeException.invalidCount();
+        Map<UUID, Integer> wanted = new LinkedHashMap<>();
+        int total = 0;
+        for (PrintLine l : lines) {
+            if (l == null || l.variantId() == null || l.count() == null || l.count() < 1 || wanted.containsKey(l.variantId())) {
+                throw LabelCodeException.invalidCount();
+            }
+            wanted.put(l.variantId(), l.count());
+            total += l.count();
+        }
+        if (total > LabelCodeService.MAX_CODES_PER_BATCH) throw LabelCodeException.invalidCount();
+        jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtext('tag-print:' || ?::text))::text", String.class, tenantId);
+        UUID main = mainWarehouse(tenantId);
+
+        Map<UUID, VariantStock> stock = new LinkedHashMap<>();
+        Map<UUID, List<UUID>> reused = new LinkedHashMap<>();
+        List<LabelCodeService.Line> toIssue = new ArrayList<>();
+        for (Map.Entry<UUID, Integer> e : wanted.entrySet()) {
+            VariantStock v = variantStock(tenantId, main, e.getKey(), sessionId);
+            if (e.getValue() > v.untagged()) throw LabelCodeException.tooManyLabels(v.untagged());
+            stock.put(e.getKey(), v);
+            List<UUID> ids = jdbc.queryForList(
+                "SELECT id FROM label_codes WHERE tenant_id = ? AND variant_id = ? AND status = 'issued' " +
+                "  AND kind IN ('tag','replacement') AND order_id IS NULL " +
+                // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+                "ORDER BY created_at, length(code), code LIMIT ? FOR UPDATE",
+                UUID.class, tenantId, e.getKey(), e.getValue());
+            reused.put(e.getKey(), ids);
+            int rest = e.getValue() - ids.size();
+            if (rest > 0) toIssue.add(new LabelCodeService.Line(e.getKey(), rest, null, null));
+        }
+        Map<UUID, List<UUID>> fresh = new HashMap<>();
+        if (!toIssue.isEmpty()) {
+            LabelCodeService.Batch b = labelCodes.issue(actorUserId, "tag", toIssue, idempotencyKey, sessionId);
+            for (LabelCodeService.IssuedCode c : b.codes()) fresh.computeIfAbsent(c.variantId(), k -> new ArrayList<>()).add(c.id());
+        }
+        List<PrintGroup> groups = new ArrayList<>();
+        int reprints = 0, issued = 0;
+        for (UUID variantId : wanted.keySet()) {
+            VariantStock v = stock.get(variantId);
+            List<UUID> ids = new ArrayList<>(reused.get(variantId));
+            List<UUID> added = fresh.getOrDefault(variantId, List.of());
+            ids.addAll(added);
+            reprints += reused.get(variantId).size();
+            issued += added.size();
+            groups.add(new PrintGroup(variantId, v.productTitle(), v.variantTitle(), v.sku(), List.copyOf(ids),
+                reused.get(variantId).size()));
+        }
+        return new PrintMany(reprints + issued, reprints, issued, groups);
+    }
+
+    /**
+     * ONE PDF for a multi-product print, grouped by product: a plain-text product separator (product name, then the
+     * variant — no barcode) as each group's HEADER, then that product's labels; nothing after the last label. Prints
+     * only codes of that product that are still issued.
+     */
+    @Transactional(readOnly = true)
+    public byte[] groupsPdf(UUID sessionId, List<PrintGroup> groups) throws java.io.IOException {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        requireSession(tenantId, sessionId, false);
+        List<com.traceability.inventory.LabelPdfRenderer.Page> pages = new ArrayList<>();
+        int labels = 0;
+        for (PrintGroup g : groups == null ? List.<PrintGroup>of() : groups) {
+            if (g == null || g.variantId() == null || g.codeIds() == null || g.codeIds().isEmpty()) continue;
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT lc.code, pr.title AS product_title, v.title AS variant_title, v.sku " +
+                "FROM label_codes lc JOIN variants v ON v.id = lc.variant_id JOIN products pr ON pr.id = v.product_id " +
+                "WHERE lc.tenant_id = ? AND lc.variant_id = ? AND lc.id = ANY(?::uuid[]) AND lc.status = 'issued' " +
+                "ORDER BY length(lc.code), lc.code",
+                tenantId, g.variantId(), g.codeIds().toArray(new UUID[0]));
+            if (rows.isEmpty()) continue;
+            Map<String, Object> first = rows.get(0);
+            pages.add(new com.traceability.inventory.LabelPdfRenderer.Separator(
+                (String) first.get("product_title"), (String) first.get("variant_title")));
+            for (Map<String, Object> r : rows) {
+                pages.add(new com.traceability.inventory.LabelPdfRenderer.Piece((String) r.get("code"),
+                    (String) r.get("product_title"), (String) r.get("variant_title"), (String) r.get("sku")));
+            }
+            labels += rows.size();
+        }
+        if (labels == 0) {
+            throw new LabelCodeException(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                LabelCodeException.Code.NO_ISSUED_CODES, "These labels are already used or voided", "هذه الملصقات مستخدمة أو ملغاة");
+        }
+        return com.traceability.inventory.LabelPdfRenderer.renderPages(pages,
+            com.traceability.inventory.PieceLabelLayout.Spec.of(LabelCodeService.LABEL_WIDTH_MM, LabelCodeService.LABEL_HEIGHT_MM));
     }
 
     /**

@@ -3,15 +3,13 @@ import { Routes, Route } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import * as api from '../api'
-import TagStock from '../pages/TagStock'
-import TagStockScan from '../pages/TagStockScan'
+import UntaggedTab from '../pages/inventory/UntaggedTab'
 import { ToastProvider } from '../components/ui'
 
 /**
- * Tag stock — reprint instead of new codes (live-test fix, 2026-10-25).
- *   tr1  a product whose labels from this session aren't used yet: "Reprint the N unused labels" is the default
- *        (same codes, nothing issued), "Print new labels" the secondary choice that prints new ones
- *   tr2  no unused labels this session: the count field and "Print N labels", as before
+ * Tag stock — unused labels from ended sessions (live-test fix, 2026-10-25; now in Inventory → Untagged, UI pass
+ * the same day — the per-product "Reprint the N unused labels" panel it also tested is gone: a print reuses
+ * unused labels automatically, see flexibleUiPass ut2 and TagStockTest m1).
  *   tr3  "Unused labels" from ended sessions: Reprint opens their PDF; Void asks first, then voids exactly those codes
  *   tr4  no leftovers → no "Unused labels" section
  */
@@ -38,8 +36,7 @@ function routes() {
   return (
     <ToastProvider>
       <Routes>
-        <Route path="/tag-stock" element={<TagStock />} />
-        <Route path="/tag-stock/:id/scan" element={<TagStockScan />} />
+        <Route path="/inventory" element={<UntaggedTab />} />
       </Routes>
     </ToastProvider>
   )
@@ -58,38 +55,8 @@ beforeEach(() => {
 })
 
 describe('Tag stock — reprint, not reissue', () => {
-  test('tr1 — unused labels from this session: reprint them by default; "Print new labels" prints new ones', async () => {
-    renderWithProviders(routes(), { initialEntries: ['/tag-stock'] })
-    await userEvent.click(await screen.findByTestId('tag-variant-v-blue'))
-    const panel = screen.getByTestId('tag-reprint-panel')
-    expect(screen.queryByTestId('tag-print-panel')).toBeNull()
-    await userEvent.click(within(panel).getByRole('button', { name: 'Reprint the 10 unused labels' }))
-    await waitFor(() => expect(api.openTagReprintPdf).toHaveBeenCalledWith('s1', 'v-blue'))
-    expect(api.printTagLabels).not.toHaveBeenCalled()
-    await screen.findByTestId('tag-stock-scan')
-  })
-
-  test('tr1b — "Print new labels" is the secondary choice and issues new ones', async () => {
-    renderWithProviders(routes(), { initialEntries: ['/tag-stock'] })
-    await userEvent.click(await screen.findByTestId('tag-variant-v-blue'))
-    await userEvent.click(within(screen.getByTestId('tag-reprint-panel')).getByRole('button', { name: 'Print new labels' }))
-    const qty = within(screen.getByTestId('tag-print-panel')).getByRole('spinbutton') as HTMLInputElement
-    await userEvent.clear(qty)
-    await userEvent.type(qty, '2')
-    await userEvent.click(screen.getByRole('button', { name: 'Print 2 labels' }))
-    await waitFor(() => expect(api.printTagLabels).toHaveBeenCalledWith('s1', 'v-blue', 2, expect.any(String)))
-    expect(api.openTagReprintPdf).not.toHaveBeenCalled()
-  })
-
-  test('tr2 — nothing unused this session: the count field, as before', async () => {
-    renderWithProviders(routes(), { initialEntries: ['/tag-stock'] })
-    await userEvent.click(await screen.findByTestId('tag-variant-v-red'))
-    expect(screen.queryByTestId('tag-reprint-panel')).toBeNull()
-    expect(within(screen.getByTestId('tag-print-panel')).getByRole('spinbutton')).toBeTruthy()
-  })
-
   test('tr3 — unused labels from ended sessions: reprint; void asks first and voids exactly those codes', async () => {
-    renderWithProviders(routes(), { initialEntries: ['/tag-stock'] })
+    renderWithProviders(routes(), { initialEntries: ['/inventory'] })
     const row = await screen.findByTestId('tag-leftover-v-green')
     expect(row.textContent).toContain('Green')
     expect(row.textContent).toContain('2 unused')
@@ -110,8 +77,8 @@ describe('Tag stock — reprint, not reissue', () => {
 
   test('tr4 — no leftovers, no section', async () => {
     vi.mocked(api.getTagStock).mockResolvedValue({ labeled: 0, untagged: 14, variants: [BLUE, RED] })
-    renderWithProviders(routes(), { initialEntries: ['/tag-stock'] })
-    await screen.findByTestId('tag-variant-v-blue')
+    renderWithProviders(routes(), { initialEntries: ['/inventory'] })
+    await screen.findByTestId('untagged-row-v-blue')
     expect(screen.queryByTestId('tag-leftovers')).toBeNull()
   })
 })

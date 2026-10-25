@@ -10,8 +10,9 @@ import * as api from '../api'
 
 /**
  * Flexible labeling slice 4 — packing labels in Pick & Pack.
- *   pl1  queue (switch on): "Print labels" next to "Print waybills" → summary "N labels for M orders" (+ labeled
- *        stock / reprinted lines) → Print → the single part's PDF opens; a row's "Labels" prints that one order
+ *   pl1  queue (switch on): a row's "Labels" → summary "N labels for M orders" (+ labeled stock / reprinted lines)
+ *        → Print → the single part's PDF opens; another row's "Labels" prints that one order (UI pass 2026-10-25: the
+ *        queue-level "Print labels" became the one "Print" — flexibleUiPass pp2–pp5)
  *   pl2  switch off: no "Print labels", no row button — the queue as before
  *   pl3  pick screen: the first unfilled line is highlighted, "Label printed" / "Needs label", the counter; when the
  *        line fills the highlight moves on; "Print 1 replacement label" prints for the highlighted line
@@ -110,16 +111,16 @@ describe('Print labels — queue', () => {
     setup(true)
     const user = userEvent.setup()
     renderWithProviders(<Fulfill />)
-    await user.click(await screen.findByRole('button', { name: 'Print labels' }))
+    await user.click(within(await screen.findByTestId('row-labels-o1')).getByRole('button', { name: 'Labels' }))
     const dialog = await screen.findByTestId('print-labels-dialog')
     await waitFor(() => expect(within(dialog).getByTestId('print-labels-summary').textContent).toContain('3 labels for 2 orders'))
     expect(dialog.textContent).toContain('1 piece is packed from labeled stock')
     expect(dialog.textContent).toContain('1 was printed before')
-    expect(posted('/pack-labels/preview')[0].body).toEqual({ scope: 'new', sort: 'oldest' })
+    expect(posted('/pack-labels/preview')[0].body).toEqual({ orderId: 'o1' })
 
     await user.click(within(dialog).getByRole('button', { name: 'Print 3 labels' }))
     await waitFor(() => expect(posted('/pack-labels/pdf')).toHaveLength(1))
-    expect(posted('/pack-labels/print')[0].body).toEqual({ scope: 'new', sort: 'oldest' })
+    expect(posted('/pack-labels/print')[0].body).toEqual({ orderId: 'o1' })
     expect(posted('/pack-labels/pdf')[0].body).toEqual({ orderIds: ['o1', 'o2'] })
     expect(window.open).toHaveBeenCalledWith('blob:x', '_blank')
     await user.click(within(dialog).getByRole('button', { name: 'Done' }))
@@ -128,24 +129,6 @@ describe('Print labels — queue', () => {
     await screen.findByTestId('print-labels-dialog')
     await waitFor(() => expect(posted('/pack-labels/preview').at(-1)!.body).toEqual({ orderId: 'o2' }))
     expect(screen.queryByTestId('fulfill-pick')).toBeNull()          // the row button didn't open the order
-  })
-
-  test('pl7 — a waybill scope with no Bosta orders points at "Everything ready to pack", which labels the queue', async () => {
-    setup(true)
-    summary = { ...SUMMARY, labels: 0, orders: 0, unitsWithoutLabel: 0, reused: 0, ordersConsidered: 0, parts: [],
-      queueNeedsLabels: true } as typeof SUMMARY
-    const user = userEvent.setup()
-    renderWithProviders(<Fulfill />)
-    await user.click(await screen.findByRole('button', { name: 'Print labels' }))
-    const dialog = await screen.findByTestId('print-labels-dialog')
-    expect(await within(dialog).findByTestId('print-labels-queue-hint')).toHaveTextContent(
-      "No Bosta waybill orders in this scope. Use 'Everything ready to pack' to label all orders in the queue.")
-
-    summary = SUMMARY
-    await user.click(within(dialog).getByText('Everything ready to pack'))
-    await waitFor(() => expect(posted('/pack-labels/preview').at(-1)!.body).toEqual({ scope: 'all', sort: 'oldest' }))
-    await waitFor(() => expect(within(dialog).getByTestId('print-labels-summary').textContent).toContain('3 labels for 2 orders'))
-    expect(within(dialog).queryByTestId('print-labels-queue-hint')).toBeNull()
   })
 
   test('pl2 — switch off: no "Print labels" and no row button', async () => {
@@ -163,7 +146,7 @@ describe('Print labels — queue', () => {
       { part: 1, of: 2, labels: 1500, orderIds: ['o1'] }, { part: 2, of: 2, labels: 1100, orderIds: ['o2', 'o3'] }] }
     const user = userEvent.setup()
     renderWithProviders(<Fulfill />)
-    await user.click(await screen.findByRole('button', { name: 'Print labels' }))
+    await user.click(within(await screen.findByTestId('row-labels-o1')).getByRole('button', { name: 'Labels' }))
     const dialog = await screen.findByTestId('print-labels-dialog')
     await waitFor(() => expect(dialog.textContent).toContain('Printed in 2 parts'))
     await user.click(within(dialog).getByRole('button', { name: 'Print 2600 labels' }))

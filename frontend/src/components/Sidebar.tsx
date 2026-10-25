@@ -20,7 +20,7 @@ import { sharedSearch } from '../analytics/period'
 // Owner/manager nav, in display order. A section with no visible items renders no header.
 // The worker nav is separate and fixed (Home + the three worker screens).
 
-/** capability: shown only when /me grants it (e.g. Tag stock needs flexible labeling). */
+/** capability: shown only when /me grants it (a /me capability flag, e.g. flexibleLabeling). */
 type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' }
 type NavSection = { id: string; headerKey?: string; items: NavItem[] }
 
@@ -39,7 +39,6 @@ const OWNER_SECTIONS: NavSection[] = [
     { to: '/receiving',  icon: Inbox,         labelKey: 'nav.receiving' },
     { to: '/transfers',  icon: Repeat,        labelKey: 'nav.transfers' },
     { to: '/stock-take', icon: ClipboardList, labelKey: 'nav.stocktake' },
-    { to: '/tag-stock',  icon: Tag,           labelKey: 'nav.tagStock', capability: 'flexibleLabeling' },
   ] },
   { id: 'returns', headerKey: 'nav.sections.returns', items: [
     { to: '/exchanges', icon: ArrowRightLeft, labelKey: 'nav.exchangesRefunds' },

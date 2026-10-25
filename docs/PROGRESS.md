@@ -15,6 +15,12 @@ no code, no branch). Report given in chat; waiting on Marawan's answers.** Key f
 - C: `sold` status exists (V65, only `out_on_transfer:sold`); no `available:sold`; Sold needs a new named decrement
   (approval). Lookup Exchange needs a merchant-created `return_requests` exchange row (no `origin` column today);
   5a −1 fires only after pack + Pickups close; closing a G4b exchange doesn't cancel its replacement order.
+- 5a audit (same day, read-only): fires from PickupSessionService:569, BostaWebhookJob:766 (applyMappedState — live
+  type-30 picked_up / exchanged_returned), GenericLegTransitions:131 (unreachable for internal orders), re-push :708.
+  A generic replacement never in Pickups never gets its −1. Claim key is piece_id alone → a piece sent as a
+  replacement a 2nd time never decrements (gap, flagged). Prod: 4 replacement pieces (Nuvira 2 left, both applied;
+  Snouts 2 never left — one sits in return_pending_inspection since 2026-08-26 with no −1, a later restock +1 would
+  overstate Shopify by 1). 0 generic replacements in prod.
 
 **Dolt.eg x2 whole-tenant purge — COMMITTED on prod 2026-10-23 18:09:32 UTC (ops only, no code).** Sessions revoked
 18:03 UTC (30-min wait cut short by Marawan after a clean 5-min activity check); purge PASS (11,214 live + 9 dup rows
@@ -116,8 +122,33 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — UI pass from the live test (2026-10-25, branch `feat/flexible-labeling-ui-pass` off origin/main
+f0b3074; NOT merged, NOT deployed). No migration. Switch on only unless stated.**
+- **A. Tag stock → Inventory "Untagged (N)" tab** (sidebar entry removed; /tag-stock redirects to
+  /inventory?tab=untagged; scan loop + summary keep their routes). Tick products (select all = default qty = untagged
+  count, qty 1..untagged), sticky bar "N labels for M products · includes N reprints" → `POST
+  /tag-stock/sessions/{id}/print-many` (per product: reusable codes — issued tag / replacement, no order refs — first,
+  then ONE issue call for the rest; per-tenant lock; a same-key retry issues nothing) → ONE PDF `POST
+  /tag-stock/sessions/{id}/pdf` (product separator — name / variant, plain text — as each group's header, nothing at
+  the end). "Start scanning" → the scan loop: no product picking (binds by the code's variant), "P000123 → product /
+  variant", per-product tagged of printed (from the print, else the session's own), replacement asks which product.
+  Leftover Reprint / Void now inside the tab. `VariantStock.reusableLabels`.
+- **B. One "Print" in Pick & Pack** (queue AND waybill mode; switch off: "Print waybills" + dialog exactly as before):
+  "Print for packing" — scope (new / all / last), order, paper, and checkboxes "Waybills — N (Bosta orders)" /
+  "Piece labels — N for M orders" from `POST /pack-labels/plan` (waybill job's candidates, ≤ 490; last = the newest
+  waybill print's items not cancelled; labels = the slice 4 plan; disabled with a reason at 0 — "…choose 'Everything
+  ready to pack'…" when only the whole queue has labels). Waybills = today's print job (last → reprint job of that
+  batch); labels = printPackLabels; Ready shows them separately (PrintJobPanel / one button per part); a waybill
+  failure never blocks labels. The per-row "Labels" stays.
+- **C. Packing labels:** the order separator is the HEADER (before the order's labels), nothing at the end — batch
+  and per-row print.
+- **Tests:** PackLabelsTest q5, q6 (+ p1, p3, p4, q3 header-first), TagStockTest m1–m4; vitest flexibleUiPass 10.
+  Revert-checked 5 backend + 10 frontend. Registries: PortalOrderLeakTest 3 SKIP. Existing tests: moved to the new
+  screens (tagStock tg1–tg3, tagStockReprint tr3–tr4, packLabels pl1/pl5); removed with approval: tg2 untagged-left
+  checks, tr1/tr1b/tr2, pl7.
+
 **Flexible labeling — live-test fixes + redesign (2026-10-25, branch `feat/flexible-labeling-live-fixes` off
-origin/main 5d20797; NOT merged, NOT deployed). No migration.**
+origin/main 5d20797; merged to main f0b3074 2026-10-25, NOT deployed). No migration.**
 - **Receiving start (switch ON only):** step 1 "How do you want to receive this delivery?" — two cards (Print & stick
   now · Default / Count only, label at pack, each with body + footer); a click picks the mode and goes to step 2
   (today's form, "<mode> · Change" on top, Back link; count only locks the main warehouse: "Count-only stock goes to the

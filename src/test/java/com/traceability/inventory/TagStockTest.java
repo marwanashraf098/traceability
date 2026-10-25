@@ -522,6 +522,110 @@ class TagStockTest {
         }
     }
 
+    // ── Inventory → Untagged: several products in one print (UI pass 2026-10-25) ─────────
+
+    private static List<String> pdfPages(byte[] pdf) throws java.io.IOException {
+        List<String> out = new ArrayList<>();
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            var strip = new org.apache.pdfbox.text.PDFTextStripper();
+            for (int i = 1; i <= doc.getNumberOfPages(); i++) { strip.setStartPage(i); strip.setEndPage(i); out.add(strip.getText(doc).trim()); }
+        }
+        return out;
+    }
+
+    private static boolean pdfPageHasImage(byte[] pdf, int index) throws java.io.IOException {
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            var page = doc.getPage(index);
+            for (var name : page.getResources().getXObjectNames()) if (page.getResources().isImageXObject(name)) return true;
+            return false;
+        }
+    }
+
+    @Test
+    void m1_reusable_labels_are_reprinted_first_and_only_the_rest_is_issued_and_a_retry_issues_nothing() {
+        countOnly(variantA, 5);
+        countOnly(variantB, 3);
+        var oldA1 = code(variantA);
+        var oldA2 = code(variantA);
+        TagStockService.Session s = tagStock.start(owner);
+        assertThat(tagStock.overview(null, owner).variants()).filteredOn(v -> v.variantId().equals(variantA))
+            .singleElement().extracting(TagStockService.VariantStock::reusableLabels).isEqualTo(2);
+        int before = count("SELECT count(*) FROM label_codes WHERE tenant_id = ?", tenant);
+
+        List<TagStockService.PrintLine> lines = List.of(new TagStockService.PrintLine(variantA, 3), new TagStockService.PrintLine(variantB, 2));
+        TagStockService.PrintMany r = tagStock.printMany(s.id(), lines, "m1-key", owner);
+        assertThat(r.labels()).isEqualTo(5);
+        assertThat(r.reprints()).isEqualTo(2);
+        assertThat(r.issued()).isEqualTo(3);
+        assertThat(r.groups()).extracting(TagStockService.PrintGroup::variantId).containsExactly(variantA, variantB);
+        assertThat(r.groups().get(0).codeIds()).hasSize(3).startsWith(oldA1.id(), oldA2.id());
+        assertThat(r.groups().get(0).reprints()).isEqualTo(2);
+        assertThat(r.groups().get(1).codeIds()).hasSize(2);
+        assertThat(count("SELECT count(*) FROM label_codes WHERE tenant_id = ?", tenant)).isEqualTo(before + 3);
+
+        TagStockService.PrintMany retry = tagStock.printMany(s.id(), lines, "m1-key", owner);
+        assertThat(retry.issued()).as("a retry issues nothing").isZero();
+        assertThat(retry.groups().get(0).codeIds()).containsExactlyInAnyOrderElementsOf(r.groups().get(0).codeIds());
+        assertThat(retry.groups().get(1).codeIds()).containsExactlyInAnyOrderElementsOf(r.groups().get(1).codeIds());
+        assertThat(count("SELECT count(*) FROM label_codes WHERE tenant_id = ?", tenant)).isEqualTo(before + 3);
+    }
+
+    @Test
+    void m2_one_pdf_grouped_by_product_with_the_product_header_first_and_nothing_at_the_end() throws Exception {
+        countOnly(variantA, 2);
+        countOnly(variantB, 1);
+        TagStockService.Session s = tagStock.start(owner);
+        TagStockService.PrintMany r = tagStock.printMany(s.id(),
+            List.of(new TagStockService.PrintLine(variantA, 2), new TagStockService.PrintLine(variantB, 1)), "m2", owner);
+        byte[] pdf = tagStock.groupsPdf(s.id(), r.groups());
+        List<String> pages = pdfPages(pdf);
+        assertThat(pages).hasSize(5);                                  // header A, 2 labels, header B, 1 label
+        assertThat(pages.get(0).lines().map(String::trim).toList()).containsExactly("Tag Shirt", "Blue");
+        assertThat(pages.get(3).lines().map(String::trim).toList()).containsExactly("Tag Shirt", "Red");
+        String a1 = jdbc.queryForObject("SELECT code FROM label_codes WHERE id = ?", String.class, r.groups().get(0).codeIds().get(0));
+        String b1 = jdbc.queryForObject("SELECT code FROM label_codes WHERE id = ?", String.class, r.groups().get(1).codeIds().get(0));
+        assertThat(pages.get(1) + pages.get(2)).contains(a1);
+        assertThat(pages.get(4)).contains(b1);
+        assertThat(pdfPageHasImage(pdf, 0)).as("a product header has no barcode").isFalse();
+        assertThat(pdfPageHasImage(pdf, 3)).isFalse();
+        assertThat(pdfPageHasImage(pdf, 4)).as("the PDF ends with a label").isTrue();
+    }
+
+    @Test
+    void m3_print_many_validation() {
+        countOnly(variantA, 2);
+        TagStockService.Session s = tagStock.start(owner);
+        assertCode(() -> tagStock.printMany(s.id(), List.of(new TagStockService.PrintLine(variantA, 3)), "m3a", owner), "TOO_MANY_LABELS");
+        assertCode(() -> tagStock.printMany(s.id(), List.of(new TagStockService.PrintLine(variantA, 1),
+            new TagStockService.PrintLine(variantA, 1)), "m3b", owner), "INVALID_COUNT");
+        assertCode(() -> tagStock.printMany(s.id(), List.of(new TagStockService.PrintLine(variantA, 0)), "m3c", owner), "INVALID_COUNT");
+        assertCode(() -> tagStock.printMany(s.id(), List.of(), "m3d", owner), "INVALID_COUNT");
+        assertThat(count("SELECT count(*) FROM label_codes WHERE tenant_id = ?", tenant)).isZero();
+    }
+
+    @Test
+    void m4_scanning_binds_by_the_codes_own_product_with_no_product_picked() {
+        countOnly(variantA, 1);
+        countOnly(variantB, 1);
+        TagStockService.Session s = tagStock.start(owner);
+        TagStockService.PrintMany r = tagStock.printMany(s.id(),
+            List.of(new TagStockService.PrintLine(variantA, 1), new TagStockService.PrintLine(variantB, 1)), "m4", owner);
+        String b = jdbc.queryForObject("SELECT code FROM label_codes WHERE id = ?", String.class, r.groups().get(1).codeIds().get(0));
+        String a = jdbc.queryForObject("SELECT code FROM label_codes WHERE id = ?", String.class, r.groups().get(0).codeIds().get(0));
+        assertThat(tagStock.scan(s.id(), b, owner, false).variant().variantId()).isEqualTo(variantB);
+        assertThat(tagStock.scan(s.id(), a, owner, false).variant().variantId()).isEqualTo(variantA);
+        assertThat(untagged(variantA)).isZero();
+        assertThat(untagged(variantB)).isZero();
+
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenant);
+        try {
+            assertThatThrownBy(() -> tagStock.printMany(s.id(), List.of(new TagStockService.PrintLine(variantA, 1)), "m4b", owner))
+                .hasMessageContaining("404");
+        } finally {
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenant);
+        }
+    }
+
     // ── flag, roles, RLS ──────────────────────────────────────────────────────
 
     @Test

@@ -3711,6 +3711,24 @@ export interface TagVariantStock {
   untagged: number; labeled: number; unusedLabels: number
   /** Tag labels printed in the caller's open session and not used yet — reprinted before new ones. */
   unusedThisSession?: number
+  /** Unused tag / replacement labels of the product (no order refs) — a print reprints these before issuing new ones. */
+  reusableLabels?: number
+}
+/** One product of a multi-product Tag stock print: reprinted codes first, then new ones. */
+export interface TagPrintGroup {
+  variantId: string; productTitle: string; variantTitle: string; sku: string | null; codeIds: string[]; reprints: number
+}
+export interface TagPrintMany { labels: number; reprints: number; issued: number; groups: TagPrintGroup[] }
+export function printTagMany(sessionId: string, lines: { variantId: string; count: number }[], idempotencyKey: string) {
+  return requestReadable<TagPrintMany>(`/tag-stock/sessions/${sessionId}/print-many`, {
+    method: 'POST', body: JSON.stringify({ lines, idempotencyKey }),
+  })
+}
+/** ONE PDF for a multi-product print, a product header before each product's labels. */
+export async function openTagGroupsPdf(sessionId: string, groups: TagPrintGroup[]) {
+  await openPdfResponse(await authFetch(`/tag-stock/sessions/${sessionId}/pdf`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups }),
+  }))
 }
 /** Labels left unused by ENDED Tag stock sessions, per product: reprint or void them. */
 export interface TagLeftover {
@@ -3832,6 +3850,12 @@ export interface PackLabelSummary {
 
 export function previewPackLabels(req: PackLabelRequest) {
   return requestReadable<PackLabelSummary>('/pack-labels/preview', { method: 'POST', body: JSON.stringify(req) })
+}
+
+/** "Print for packing": waybill + label counts for one scope + sort (switch on). lastBatchId: the newest waybill print. */
+export interface PackPrintPlan { waybills: number; lastBatchId: string | null; labels: PackLabelSummary }
+export function getPackPrintPlan(req: { scope: PackLabelScope; sort: PrintSort }) {
+  return requestReadable<PackPrintPlan>('/pack-labels/plan', { method: 'POST', body: JSON.stringify(req) })
 }
 
 /** Issues what's missing (a line's unused labels are reprinted, never issued twice); answers the parts to open. */

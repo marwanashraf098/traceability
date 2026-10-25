@@ -32,7 +32,6 @@ import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
-import TagStock from './pages/TagStock'
 import TagStockScan from './pages/TagStockScan'
 import TagStockSummary from './pages/TagStockSummary'
 import ScanProbe from './pages/ScanProbe'
@@ -349,17 +348,9 @@ export default function App() {
             </RequireAuth>
           }
         />
-        {/* Flexible labeling — Tag stock: list + summary in the shell, the scan loop full-screen. */}
-        <Route
-          path="/tag-stock"
-          element={
-            <RequireAuth>
-              <OwnerOnlyRoute>
-                <Layout><TagStock /></Layout>
-              </OwnerOnlyRoute>
-            </RequireAuth>
-          }
-        />
+        {/* Flexible labeling — Tag stock lives in Inventory → Untagged (UI pass 2026-10-25); the old list URL
+            redirects there. The scan loop (full-screen) and the session summary keep their routes. */}
+        <Route path="/tag-stock" element={<Navigate to="/inventory?tab=untagged" replace />} />
         <Route
           path="/tag-stock/:id/scan"
           element={

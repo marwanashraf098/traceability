@@ -8,6 +8,7 @@ import {
 import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
 import Layout from '../components/Layout'
 import PrintWaybillsDialog from './fulfill/PrintWaybillsDialog'
+import PrintForPackingDialog from './fulfill/PrintForPackingDialog'
 import {
   LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
   scanRejectionText, usePackLineHighlight,
@@ -736,14 +737,14 @@ function QueueView({
           )}
         </div>
         <div className="flex items-center gap-3">
-          {printable.length > 0 && (
+          {/* Switch on: ONE "Print" (waybills + piece labels). Switch off: "Print waybills" exactly as before. */}
+          {flexibleLabeling ? (pickQueue.length > 0 || printable.length > 0) && (
+            <Button size="sm" iconStart={Printer} onClick={() => setShowPrint(true)}>
+              {t('fulfill.print.button')}
+            </Button>
+          ) : printable.length > 0 && (
             <Button size="sm" iconStart={Printer} onClick={() => setShowPrint(true)}>
               {t('fulfill.printBatch.button')}
-            </Button>
-          )}
-          {flexibleLabeling && pickQueue.length > 0 && (
-            <Button size="sm" variant="secondary" iconStart={Tag} onClick={() => setLabelsFor({})}>
-              {t('fulfill.labels.button')}
             </Button>
           )}
           <Button variant="secondary" size="sm" iconStart={Layers} onClick={() => navigate('/fulfill/gather')}>
@@ -867,7 +868,10 @@ function QueueView({
         <PrintLabelsDialog orderId={labelsFor.orderId} orderNumber={labelsFor.number} onClose={() => setLabelsFor(null)} />
       )}
 
-      {showPrint && (
+      {showPrint && flexibleLabeling && (
+        <PrintForPackingDialog onClose={printed => { setShowPrint(false); if (printed) loadQueue() }} />
+      )}
+      {showPrint && !flexibleLabeling && (
         <PrintWaybillsDialog
           newCount={printable.length - printedCount}
           allCount={printable.length}
