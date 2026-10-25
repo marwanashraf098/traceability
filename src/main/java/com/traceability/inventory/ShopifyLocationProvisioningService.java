@@ -194,7 +194,7 @@ public class ShopifyLocationProvisioningService {
 
     private void fillExistingAddress(UUID tenantId, ShopifyLocationGateway.LocationAddress address) {
         try {
-            MainLocationAddressService.Result r = addressService.apply(tenantId, address, false, false);
+            MainLocationAddressService.Result r = addressService.apply(tenantId, address, false);
             log.info("Traced Main Warehouse address on reuse: tenant={} outcome={}", tenantId, r.outcome());
         } catch (Exception e) {
             log.warn("Traced Main Warehouse address check failed on reuse: tenant={} error={}", tenantId,

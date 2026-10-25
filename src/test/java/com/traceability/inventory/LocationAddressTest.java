@@ -62,10 +62,11 @@ import static org.mockito.Mockito.*;
  *        empty "Traced Main Warehouse" fills it; a merchant-set one is left alone
  *   la12 LocationController (fulfillment location) creates with the address
  *   la13 setMainLocationAddressAfterCommit: rollback → no job; commit → one job, which applies it
- *   la14 backfill: eligible list, dry run default, not_traced_main left alone, final outcomes
+ *   la14 backfill: eligible list, dry run default, a RENAMED Traced location still filled (by GID), final outcomes
  *        not re-listed, failed → run throws
  *   la15 trigger: off → nothing; dry-run default; write mode → write job id
  *   la16 app_user + RLS: the service works under RLS for its own tenant and can't touch another's
+ *   la17 the Shopify name never matters: renamed → still handled by the fill rule alone
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -148,7 +149,7 @@ class LocationAddressTest {
     }
 
     private MainLocationAddressService.Result run(LocationAddress desired, boolean dryRun) {
-        return TenantContext.runAs(tenantId, () -> service.apply(tenantId, desired, dryRun, false));
+        return TenantContext.runAs(tenantId, () -> service.apply(tenantId, desired, dryRun));
     }
 
     private Map<String, Object> row() {
@@ -406,46 +407,71 @@ class LocationAddressTest {
 
     @Test
     void la14_backfill_dryRunThenWrite_scopeAndEligibility() {
-        // Tenant 2: merchant-addressed; tenant 3: Shopify location not named "Traced Main Warehouse";
-        // tenant 4: disconnected store (never listed).
+        // Tenant 2: merchant-addressed; tenant 3: Traced's location RENAMED in Shopify by the merchant
+        // (still Traced's — identified by the linked GID, never by name); tenant 4: disconnected store
+        // (never listed); tenant 5: connected but its main location isn't linked → not_linked.
         UUID t2 = UUID.randomUUID(), s2 = UUID.randomUUID(), l2 = UUID.randomUUID();
         tenant(t2, s2, "la2-" + t2.toString().substring(0, 6) + ".myshopify.com", "write_locations");
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, shopify_location_id, " +
             "shopify_sync_status) VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true, 'gid://shopify/Location/t2', 'linked')", l2, t2);
         UUID t3 = UUID.randomUUID(), s3 = UUID.randomUUID(), l3 = UUID.randomUUID();
-        tenant(t3, s3, "la3-" + t3.toString().substring(0, 6) + ".myshopify.com", "write_locations");
+        String shop3 = "la3-" + t3.toString().substring(0, 6) + ".myshopify.com";
+        tenant(t3, s3, shop3, "write_locations");
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, shopify_location_id, " +
             "shopify_sync_status) VALUES (?, ?, 'Shop floor', 'warehouse', true, true, 'gid://shopify/Location/t3', 'linked')", l3, t3);
         UUID t4 = UUID.randomUUID(), s4 = UUID.randomUUID();
         tenant(t4, s4, "la4-" + t4.toString().substring(0, 6) + ".myshopify.com", "write_locations");
         jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", s4);
+        UUID t5 = UUID.randomUUID(), s5 = UUID.randomUUID(), l5 = UUID.randomUUID();
+        tenant(t5, s5, "la5-" + t5.toString().substring(0, 6) + ".myshopify.com", "write_locations");
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true)", l5, t5);
 
         shopifyHas(gid, EMPTY_EG, false);
         shopifyHas("gid://shopify/Location/t2", MERCHANT, false);
         when(gateway.readLocationAddress(anyString(), anyString(), eq("gid://shopify/Location/t3")))
-            .thenReturn(Optional.of(new LocationAddressState("Shop floor", EMPTY_EG, false)));
+            .thenReturn(Optional.of(new LocationAddressState("Cairo Pop-up (renamed)", EMPTY_EG, false)));
 
         var dry = backfill.runOnce(true);
-        assertThat(dry.tenants()).isEqualTo(3);
-        assertThat(dry.counts()).containsEntry(Outcome.filled, 1).containsEntry(Outcome.has_address, 1)
-            .containsEntry(Outcome.not_traced_main, 1);
+        assertThat(dry.tenants()).isEqualTo(4);
+        assertThat(dry.counts()).containsEntry(Outcome.filled, 2).containsEntry(Outcome.has_address, 1)
+            .containsEntry(Outcome.not_linked, 1);
         verify(gateway, never()).editLocationAddress(any(), any(), any(), any());
-        assertThat(jdbc.queryForObject("SELECT shopify_address_outcome FROM locations WHERE id = ?", String.class, l3)).isNull();
+        assertThat(jdbc.queryForObject("SELECT shopify_address_outcome FROM locations WHERE id = ?", String.class, l3))
+            .as("the renamed Traced location is handled like any other").isEqualTo("filled");
 
         var write = backfill.runOnce(false);
-        assertThat(write.tenants()).isEqualTo(3);   // dry-run outcomes are not final
-        verify(gateway, times(1)).editLocationAddress(any(), any(), any(), any());
+        assertThat(write.tenants()).isEqualTo(4);   // dry-run outcomes are not final
+        verify(gateway, times(2)).editLocationAddress(any(), any(), any(), any());
         verify(gateway).editLocationAddress(shop, "test-token", gid, GENERIC);
+        verify(gateway).editLocationAddress(shop3, "test-token", "gid://shopify/Location/t3", GENERIC);
 
-        // Final write-mode outcomes (filled / has_address) are not listed again; not_traced_main stays listed.
+        // Final write-mode outcomes (filled / has_address) are not listed again; not_linked stays listed.
         var again = backfill.runOnce(false);
         assertThat(again.tenants()).isEqualTo(1);
-        assertThat(again.counts()).containsOnlyKeys(Outcome.not_traced_main);
+        assertThat(again.counts()).containsOnlyKeys(Outcome.not_linked);
 
         // A failure → run() throws (JobRunr retries).
-        when(gateway.readLocationAddress(anyString(), anyString(), eq("gid://shopify/Location/t3")))
+        jdbc.update("UPDATE locations SET shopify_location_id = 'gid://shopify/Location/t5', shopify_sync_status = 'linked' WHERE id = ?", l5);
+        when(gateway.readLocationAddress(anyString(), anyString(), eq("gid://shopify/Location/t5")))
             .thenThrow(new ShopifyException("timeout"));
         assertThatThrownBy(() -> backfill.run(false)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void la17_renamedTracedLocation_nameNeverMatters() throws Exception {
+        // The merchant renamed Traced's location in Shopify: still filled (found by its linked GID) …
+        when(gateway.readLocationAddress(anyString(), anyString(), eq(gid)))
+            .thenReturn(Optional.of(new LocationAddressState("My Shop", EMPTY_EG, false)));
+        assertThat(run(GENERIC, false).outcome()).isEqualTo(Outcome.filled);
+        verify(gateway).editLocationAddress(shop, "test-token", gid, GENERIC);
+        assertThat(written()).isEqualTo(GENERIC);
+        // … and a location still named "Traced Main Warehouse" with a merchant address is left alone:
+        // the fill rule decides, the name never does.
+        when(gateway.readLocationAddress(anyString(), anyString(), eq(gid)))
+            .thenReturn(Optional.of(new LocationAddressState("Traced Main Warehouse", MERCHANT, false)));
+        assertThat(run(GENERIC, false).outcome()).isEqualTo(Outcome.has_address);
+        verify(gateway, times(1)).editLocationAddress(any(), any(), any(), any());
     }
 
     @Test
@@ -481,7 +507,7 @@ class LocationAddressTest {
         shopifyHas(gid, EMPTY_EG, false);
 
         // Tenant B's context: B has no main location → not_linked; A's row is invisible and untouched.
-        var rB = TenantContext.runAs(tB, () -> appService.apply(tB, GENERIC, false, false));
+        var rB = TenantContext.runAs(tB, () -> appService.apply(tB, GENERIC, false));
         assertThat(rB.outcome()).isEqualTo(Outcome.not_linked);
         Integer touched = TenantContext.runAs(tB, () -> new TransactionTemplate(appTxm).execute(s -> appJdbc.update(
             "UPDATE locations SET shopify_address_outcome = 'failed' WHERE id = ?", locationId)));
@@ -490,10 +516,10 @@ class LocationAddressTest {
         verifyNoInteractions(gateway);
 
         // No tenant context at all → refused before any read.
-        assertThatThrownBy(() -> appService.apply(tenantId, GENERIC, false, false)).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> appService.apply(tenantId, GENERIC, false)).isInstanceOf(RuntimeException.class);
 
         // Positive control under RLS: A's own context works end to end.
-        var rA = TenantContext.runAs(tenantId, () -> appService.apply(tenantId, GENERIC, false, false));
+        var rA = TenantContext.runAs(tenantId, () -> appService.apply(tenantId, GENERIC, false));
         assertThat(rA.outcome()).isEqualTo(Outcome.filled);
         assertThat(row().get("outcome")).isEqualTo("filled");
     }

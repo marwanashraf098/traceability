@@ -26,7 +26,7 @@ public class MainLocationAddressJob {
                       String provinceCode, String zip, String countryCode) {
         LocationAddress address = new LocationAddress(address1, address2, city, provinceCode, zip, countryCode);
         MainLocationAddressService.Result r = TenantContext.runAs(tenantId,
-            () -> service.apply(tenantId, address, false, false));
+            () -> service.apply(tenantId, address, false));
         if (r.outcome() == MainLocationAddressService.Outcome.failed) {
             throw new IllegalStateException("Main location address not set for tenant " + tenantId + ": "
                 + r.detail() + " — JobRunr will retry");

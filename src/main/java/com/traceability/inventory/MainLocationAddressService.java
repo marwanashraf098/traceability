@@ -52,12 +52,8 @@ public class MainLocationAddressService {
     public static final LocationAddress GENERIC =
         new LocationAddress("Main warehouse", null, "Cairo", "C", "11511", "EG");
 
-    /** Lower-case names = the stored values (V184 CHECK), except NOT_TRACED_MAIN which is never stored. */
-    public enum Outcome {
-        filled, has_address, missing_scope, not_linked, failed, local_pickup_on,
-        /** Backfill only: the linked Shopify location isn't named "Traced Main Warehouse" — left alone, not recorded. */
-        not_traced_main
-    }
+    /** Lower-case names = the stored values (V184 CHECK). */
+    public enum Outcome { filled, has_address, missing_scope, not_linked, failed, local_pickup_on }
 
     /** {@code wrote} = a locationEdit was sent and accepted in this call. */
     public record Result(Outcome outcome, boolean wrote, boolean dryRun, String detail) {}
@@ -118,12 +114,13 @@ public class MainLocationAddressService {
      * Applies the fill rule to the tenant's main location once. Caller sets the tenant context
      * (TenantContext.runAs) and must hold no open transaction around it.
      *
-     * @param desired           the address to write
-     * @param dryRun            decide and record the outcome, but never call locationEdit
-     * @param requireTracedName skip (not recorded) a location whose Shopify name isn't
-     *                          "Traced Main Warehouse" — the backfill's scope rule
+     * Traced's main location is identified ONLY by the linked GID (the is_fulfillment row's
+     * shopify_location_id) — never by its Shopify name, which the merchant may change.
+     *
+     * @param desired the address to write
+     * @param dryRun  decide and record the outcome, but never call locationEdit
      */
-    public Result apply(UUID tenantId, LocationAddress desired, boolean dryRun, boolean requireTracedName) {
+    public Result apply(UUID tenantId, LocationAddress desired, boolean dryRun) {
         UUID ctx = TenantContext.require();
         if (!ctx.equals(tenantId)) throw new IllegalStateException("tenant context mismatch");
 
@@ -159,12 +156,6 @@ public class MainLocationAddressService {
         if (state == null || state.isEmpty()) {
             return record(locationId, tenantId, Outcome.failed, dryRun, null, "location not found in Shopify");
         }
-        if (requireTracedName && !ShopifyLocationProvisioningService.SHOPIFY_LOCATION_NAME.equals(state.get().name())) {
-            log.info("Location address: tenant {} main location is named '{}' in Shopify, not '{}' — left alone",
-                tenantId, state.get().name(), ShopifyLocationProvisioningService.SHOPIFY_LOCATION_NAME);
-            return new Result(Outcome.not_traced_main, false, dryRun, state.get().name());
-        }
-
         LocationAddress current = state.get().address();
         if (current.equals(desired)) {
             // Already showing what we want: ours if we wrote it, else the merchant typed the same thing.

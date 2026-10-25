@@ -26,9 +26,9 @@ import java.util.UUID;
  * {@link MainLocationAddressService#apply} — the ONE fill rule — with the GENERIC address, no DB
  * transaction open during the Shopify read / edit.
  *
- * <p>Scope: the tenant's is_fulfillment location only, and only when Shopify names it
- * "Traced Main Warehouse" (any other name → left alone, not recorded, counted as
- * not_traced_main). <b>Dry run is the default</b> (traced.location-address-backfill.mode): it reads
+ * <p>Scope: Traced's main location only — identified by the linked Shopify location id (the
+ * tenant's is_fulfillment row's shopify_location_id), never by its Shopify name (the merchant may
+ * rename it); no linked id → not_linked. <b>Dry run is the default</b> (traced.location-address-backfill.mode): it reads
  * every location and records the outcome it WOULD have ({@code shopify_address_dry_run = true}),
  * but never calls locationEdit.
  *
@@ -84,7 +84,7 @@ public class LocationAddressBackfillJob {
             MainLocationAddressService.Outcome outcome;
             try {
                 outcome = TenantContext.runAs(tenantId,
-                    () -> service.apply(tenantId, MainLocationAddressService.GENERIC, dryRun, true)).outcome();
+                    () -> service.apply(tenantId, MainLocationAddressService.GENERIC, dryRun)).outcome();
             } catch (Exception e) {
                 outcome = MainLocationAddressService.Outcome.failed;
                 log.warn("Location address backfill: tenant {} errored: {}", tenantId,
