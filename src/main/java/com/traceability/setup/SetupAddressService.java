@@ -4,7 +4,6 @@ import com.traceability.account.AuditService;
 import com.traceability.geo.EgyptProvinces;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,11 +18,14 @@ import java.util.*;
  *
  * Save: the address goes onto the tenant's main warehouse row (is_fulfillment) first; when Shopify
  * was already connected (the sticky tenants.shopify_connected_at) the gate is done
- * (tenants.setup_completed_at). The Shopify push runs after commit through
- * {@link MainLocationAddressPushJob} — a failure there never undoes the save or blocks the merchant.
+ * (tenants.setup_completed_at). A tenant with no main warehouse gets one created by the save. The
+ * address reaches Shopify after commit through {@link MainLocationAddressPushJob} (feature A's fill rule)
+ * — a failure there never undoes the save or blocks the merchant.
  */
 @Service
 public class SetupAddressService {
+
+    static final String MAIN_WAREHOUSE_NAME = "Main Warehouse";
 
     static final int CITY_MAX = 100, STREET_MIN = 3, STREET_MAX = 200, PART_MAX = 50;
 
@@ -94,18 +96,10 @@ public class SetupAddressService {
         UUID tenantId = TenantContext.require();
         WarehouseAddress a = validate(req);
 
-        UUID locationId = jdbc.query(
-            "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment FOR UPDATE",
-            rs -> rs.next() ? (UUID) rs.getObject(1) : null, tenantId);
-        if (locationId == null) {
-            throw new SetupException("NO_MAIN_WAREHOUSE",
-                "This store has no main warehouse. Contact support.",
-                "لا يوجد مخزن رئيسي لهذا المتجر. تواصل مع الدعم.", HttpStatus.CONFLICT);
-        }
+        UUID locationId = mainWarehouseCreatingIfMissing(tenantId);
         jdbc.update(
             "UPDATE locations SET address_province_code = ?, address_city = ?, address_street = ?, " +
-            "       address_building = ?, address_floor = ?, address_updated_at = clock_timestamp(), " +
-            "       address_shopify_push_status = 'pending', address_shopify_push_error = NULL " +
+            "       address_building = ?, address_floor = ? " +
             "WHERE id = ? AND tenant_id = ?",
             a.provinceCode(), a.city(), a.street(), a.building(), a.floor(), locationId, tenantId);
         jdbc.update(
@@ -116,15 +110,45 @@ public class SetupAddressService {
         audit.record(actorUserId, "warehouse_address_set", "location", locationId.toString(),
             Map.of("provinceCode", a.provinceCode()));
 
-        enqueuePushAfterCommit(tenantId, locationId);
+        enqueuePushAfterCommit(tenantId);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("setupStep", SetupStatus.step(jdbc, tenantId));
         return out;
     }
 
-    private void enqueuePushAfterCommit(UUID tenantId, UUID locationId) {
-        Runnable enqueue = () -> jobScheduler.<MainLocationAddressPushJob>enqueue(j -> j.push(tenantId, locationId));
+    /**
+     * The tenant's main warehouse (is_fulfillment), locked for the save. A tenant without one gets it
+     * created here (approved 2026-10-25 — no 409): same row as signup's seed (AuthRepository) and the
+     * Shopify provisioning's (ensureInternalLocation), so the next Shopify import links it to Shopify;
+     * until then the push job's outcome is not_linked and it retries. A same-named row that isn't
+     * flagged is promoted, like provisioning does — the tenant ends with exactly one.
+     */
+    private UUID mainWarehouseCreatingIfMissing(UUID tenantId) {
+        UUID id = lockMainWarehouse(tenantId);
+        if (id != null) return id;
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (gen_random_uuid(), ?, ?, 'warehouse', " +
+            "        NOT EXISTS (SELECT 1 FROM locations WHERE tenant_id = ? AND is_default), true) " +
+            "ON CONFLICT (tenant_id, lower(trim(name))) DO NOTHING",
+            tenantId, MAIN_WAREHOUSE_NAME, tenantId);
+        id = lockMainWarehouse(tenantId);
+        if (id != null) return id;
+        jdbc.update(
+            "UPDATE locations SET is_fulfillment = true WHERE tenant_id = ? AND lower(trim(name)) = lower(trim(?))",
+            tenantId, MAIN_WAREHOUSE_NAME);
+        return lockMainWarehouse(tenantId);
+    }
+
+    private UUID lockMainWarehouse(UUID tenantId) {
+        return jdbc.query(
+            "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment FOR UPDATE",
+            rs -> rs.next() ? (UUID) rs.getObject(1) : null, tenantId);
+    }
+
+    private void enqueuePushAfterCommit(UUID tenantId) {
+        Runnable enqueue = () -> jobScheduler.<MainLocationAddressPushJob>enqueue(j -> j.push(tenantId));
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCommit() { enqueue.run(); }

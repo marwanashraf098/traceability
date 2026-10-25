@@ -127,7 +127,7 @@ public class EmbeddedController {
     // ── GET /api/v1/embedded/setup ───────────────────────────────────────────
 
     /**
-     * Onboarding gate (V185): {setupStep: 'shopify' | 'address' | null} — the same SetupStatus rule
+     * Onboarding gate (V186): {setupStep: 'shopify' | 'address' | null} — the same SetupStatus rule
      * as GET /me. The embedded app shows "Finish setup in Traced" while it is not null; it never
      * collects the address itself.
      */

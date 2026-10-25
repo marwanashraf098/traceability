@@ -3,7 +3,7 @@ import { getAccessToken } from './auth'
 import { request, type SetupStep } from './api'
 
 /**
- * Onboarding gate (V185) — the tenant's setupStep from GET /me ('shopify' | 'address' | null; the backend's
+ * Onboarding gate (V186) — the tenant's setupStep from GET /me ('shopify' | 'address' | null; the backend's
  * SetupStatus is the one rule, demo and review tenants are null there). One /me request per access token,
  * shared by every gated route; {@link refreshSetupStep} forgets it after a step is done. A failed /me reads
  * as "not gated" — the gate never locks anyone out on an error.

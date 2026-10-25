@@ -265,7 +265,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             onConfirmed={() => getMe().then(setMe).catch(err => console.error('Failed to reload /me', err))}
           />
         )}
-        {/* Onboarding gate (V185) — grandfathered owners without a warehouse address; never on scan loops */}
+        {/* Onboarding gate (V186) — grandfathered owners without a warehouse address; never on scan loops */}
         {!hidesUpgradeNotice(pathname) && <WarehouseAddressBanner me={me} />}
 
         {/* Page content */}

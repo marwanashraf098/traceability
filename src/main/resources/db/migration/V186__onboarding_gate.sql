@@ -1,13 +1,12 @@
 -- ============================================================
--- V185 — Onboarding gate: connect Shopify + main warehouse address before entering the app.
+-- V186 — Onboarding gate: connect Shopify + main warehouse address before entering the app.
 --
 -- 1. locations.address_* — the main warehouse's street address (Egypt): governorate as the
 --    Shopify / ISO-3166-2 province code (C, GZ, ALX …), city / area, street, optional
 --    building and floor. Plain text; the setup screen is the writer (SetupAddressService).
---    address_shopify_push_* — the after-commit push of that address to the "Traced Main
---    Warehouse" Shopify location (MainLocationAddressPusher): NULL = nothing to push yet,
---    'pending' | 'pushed' | 'failed'. A failure never blocks the merchant; it raises the LOW
---    alert warehouse_address_push_failed and the job retries.
+--    Getting it onto the "Traced Main Warehouse" Shopify location is V184's fill rule
+--    (MainLocationAddressService.apply, run by MainLocationAddressPushJob after the save commits);
+--    its outcome is recorded ONLY in V184's locations.shopify_address_* columns — no push state here.
 -- 2. tenants.shopify_connected_at — STICKY "this tenant has connected Shopify" stamp. Set the
 --    first time any of its stores rows is written with a status other than 'disconnected'
 --    (trigger below — every connect path writes stores), never cleared. Live store status
@@ -28,14 +27,7 @@ ALTER TABLE locations
     ADD COLUMN address_city                text,
     ADD COLUMN address_street              text,
     ADD COLUMN address_building            text,
-    ADD COLUMN address_floor               text,
-    ADD COLUMN address_updated_at          timestamptz,
-    ADD COLUMN address_shopify_push_status text,
-    ADD COLUMN address_shopify_push_error  text,
-    ADD COLUMN address_shopify_push_at     timestamptz,
-    ADD CONSTRAINT locations_address_push_status_check
-        CHECK (address_shopify_push_status IS NULL
-               OR address_shopify_push_status IN ('pending', 'pushed', 'failed'));
+    ADD COLUMN address_floor               text;
 
 ALTER TABLE tenants
     ADD COLUMN shopify_connected_at timestamptz,
@@ -69,4 +61,4 @@ COMMENT ON COLUMN tenants.shopify_connected_at IS
     'Sticky: first time a stores row of this tenant had a status other than disconnected (trigger '
     'stores_stamp_tenant_shopify_connected). Never cleared. Onboarding gate step 1.';
 COMMENT ON COLUMN tenants.setup_completed_at IS
-    'Onboarding gate done (V185). Backfilled for tenants connected at migration time.';
+    'Onboarding gate done (V186). Backfilled for tenants connected at migration time.';

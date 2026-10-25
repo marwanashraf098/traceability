@@ -4,8 +4,33 @@
 
 ## Current state
 
+**B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main a240e08; NOT merged, NOT deployed).
+V186.** An owner / manager of a real tenant must connect Shopify (step 1) and enter the main warehouse address (step 2)
+before using the app; `SetupStatus` is the one rule (`/me.setupStep` 'shopify' | 'address' | null, `warehouseAddressNeeded`
+for the soft banner); demo (is_demo) and review (simulated courier) tenants are never gated; workers never. V186:
+`locations.address_province_code / _city / _street / _building / _floor` (written only by `SetupAddressService`),
+`tenants.shopify_connected_at` (sticky, INVOKER trigger `stores_stamp_tenant_shopify_connected` — not a hatch) and
+`tenants.setup_completed_at`; tenants with a non-disconnected store at migration time are grandfathered (both stamps, banner
+only). **No push state of its own (Marawan 2026-10-25):** the address reaches Shopify through A's fill rule, recorded only
+in V184's `shopify_address_*`. `MainLocationAddressPushJob.push(tenantId)` (JobRunr, enqueued after the save commits,
+retries 8) reads the saved address and calls `MainLocationAddressService.apply` synchronously in write mode: filled /
+has_address (/ local_pickup_on, never for a real address) → done; failed / not_linked / missing_scope → throws (retry) and
+the LOW condition-only alert `warehouse_address_push_failed` (main warehouse with a saved address whose last write-mode
+outcome is one of those three). `MerchantWarehouseAddressSource` (@Primary `MainLocationAddressSource`) feeds every A path —
+provisioning, the LocationController fulfillment create, the push job AND the V184 backfill (it now writes the merchant's
+address when one is saved, never the generic one over it; revert-checked by OnboardingGateTest g11). Mapping (approved):
+governorate → provinceCode, city / area → city, street → address1, "building, floor" → address2, EG, **no zip** (only the
+generic address sends 11511). The step-2 save creates a missing main warehouse (no 409; the next Shopify import links it).
+Gated routes include `/fulfill/gather`. The Overview checklist's "location" step is gone (backend + card;
+ConnectionsOnboardingTest o1/o3 and overview.test ov13/ov14 edited — approved); `OnboardingService` still accepts the key so
+an old stored manual flag never 400s. **Migration fix carried on this branch:** main had two V184s (A's, applied in prod
+2026-10-25 19:47, and flexible labeling's `tenants_receiving_default_mode`) — the labeling one is V185 (same rename another
+session had staged in the main checkout, uncommitted); B is V186, C1 moves to V187. Tests: OnboardingGateTest 11,
+OnboardingGateMigrationTest 1, vitest onboardingGate 19 (og19: App.tsx gates /fulfill/gather), browser onboardingGateLayout 32.
+
 **A — Egyptian address on Traced's Shopify location (2026-10-25, branch `feat/location-address` off origin/main f0b3074,
-commits 6e27d3a + cf18ef0; merged to main 2026-10-25, NOT deployed). V184.** Every location Traced created carried only
+commits 6e27d3a + cf18ef0; merged to main 2026-10-25, deployed 2026-10-25 — prod dry run: 19 filled, Dolt.eg has_address,
+testfulfill failed (its location was deleted in Shopify)). V184.** Every location Traced created carried only
 `address {countryCode: EG}`. Gateway: `LocationInput` gains address2 / provinceCode / zip; `readLocationAddress` (name,
 address, `localPickupSettingsV2`) and `editLocationAddress` (`locationEdit` input `{ address }` only — never name /
 fulfillsOnlineOrders, no inventory). **Traced's main location is identified ONLY by its linked Shopify location id (the
@@ -28,14 +53,9 @@ read-only): 21 connected stores, all with write_locations and the main location 
 the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome, shopify_address_dry_run, count(*)
 FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
 RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
-- **Next (staged, STOP after each):** Marawan deploys A alone and reads the dry-run counts → B rebases on A (drop B's 4
-  push-state columns — A's `shopify_address_*` is the single record; B's retryable job calls A's fill rule
-  SYNCHRONOUSLY; filled / has_address → done, failed / not_linked / missing_scope → LOW alert + retry; A's address
-  source reads B's V185 columns; province → provinceCode, city → city, street → address1, building + floor → address2,
-  real addresses send NO zip; gate /fulfill/gather too; step-2 save creates a missing main warehouse; drop the Overview
-  "location" step, editing ConnectionsOnboardingTest o1/o3 + overview.test ov13/ov14 — approved) → C1 rebases on A + B
-  ("Not sold" gets a short confirm; no reason codes; shared "Sold (Off-book)" label OK; CLAUDE.md → seven named
-  decrements, pushPieceSold approved 2026-10-25, in C1's merge commit).
+- **Next (staged, STOP after each):** B: Marawan reviews → merge + deploy. Then C1 rebases on A + B (V187; "Not sold" gets a
+  short confirm; no reason codes; shared "Sold (Off-book)" label OK; CLAUDE.md → seven named decrements, pushPieceSold
+  approved 2026-10-25, in C1's merge commit).
 - **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
   the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
   decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are

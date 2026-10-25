@@ -1,5 +1,5 @@
 /**
- * Local EN/AR copy for the embedded "Finish setup in Traced" card (onboarding gate, V185) — like
+ * Local EN/AR copy for the embedded "Finish setup in Traced" card (onboarding gate, V186) — like
  * disconnectedCopy.ts, no dependency on the shared i18next tree. The address is never collected here.
  */
 export interface SetupCopy {

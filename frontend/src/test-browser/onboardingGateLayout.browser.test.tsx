@@ -14,7 +14,7 @@ import { StationProvider } from '../components/StationProvider'
 import { ToastProvider } from '../components/ui'
 import WarehouseAddressBanner from '../components/WarehouseAddressBanner'
 
-// Onboarding gate (V185) — in a real browser with the app's CSS (Chromium + WebKit), EN/LTR and AR/RTL, at
+// Onboarding gate (V186) — in a real browser with the app's CSS (Chromium + WebKit), EN/LTR and AR/RTL, at
 // desktop 1280×800 and phone 390×844: step 1 (connect Shopify), step 2 (main warehouse address), the manager's
 // waiting screen and the soft banner — no sideways page scroll, every control inside the viewport.
 // SCREENSHOT_DIR (env, optional) also saves a PNG of each.

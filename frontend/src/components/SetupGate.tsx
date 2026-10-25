@@ -15,7 +15,7 @@ function GateSpinner() {
 }
 
 /**
- * Onboarding gate (V185) — frontend only. Wraps an owner / manager screen OUTSIDE its Layout: while
+ * Onboarding gate (V186) — frontend only. Wraps an owner / manager screen OUTSIDE its Layout: while
  * GET /me's setupStep is not null the full-screen gate renders instead of the screen. Workers and a
  * station device (StationGate already ran in RequireAuth) are never gated; a failed /me reads as not
  * gated. The server decides who is gated (SetupStatus: demo / review tenants never are).

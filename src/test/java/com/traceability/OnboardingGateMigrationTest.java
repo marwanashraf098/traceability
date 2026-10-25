@@ -13,7 +13,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * V185 grandfathering backfill (onboarding gate). Migrates to V183, seeds every tenant shape, then
+ * V186 grandfathering backfill (onboarding gate). Migrates to V185, seeds every tenant shape, then
  * migrates to latest:
  *   m1 a tenant with a store in 'connected' / 'needs_reauth' / 'error' (anything but 'disconnected') gets
  *      shopify_connected_at AND setup_completed_at — never gated, not even on the address;
@@ -35,7 +35,7 @@ class OnboardingGateMigrationTest {
     void backfill() {
         FlywayTestSupport.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-            .locations("classpath:db/migration").target("183").load().migrate();
+            .locations("classpath:db/migration").target("185").load().migrate();
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 

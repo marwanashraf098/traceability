@@ -188,7 +188,7 @@ public class ExceptionService {
         // Pick & Pack S4 — waybill mode (rules in PackListRules, shared with the page lists).
         all.addAll(detectPackSetAside(tenantId));
         all.addAll(detectPackCancelledAfterPrint(tenantId));
-        // Onboarding gate (V185) — the main warehouse address didn't reach Shopify yet (job retries).
+        // Onboarding gate (V186) — the main warehouse address didn't reach Shopify yet (job retries).
         all.addAll(detectWarehouseAddressPushFailed(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
@@ -1194,16 +1194,20 @@ public class ExceptionService {
     }
 
     /**
-     * LOW — Onboarding gate (V185): the main warehouse address saved in Traced has not reached the Traced
-     * Main Warehouse location in Shopify (MainLocationAddressPushJob recorded 'failed'; JobRunr retries).
-     * Condition-only: clears when a later push succeeds (or a new save is pending). Never blocks anything.
+     * LOW — Onboarding gate (V186): the main warehouse address saved in Traced has not reached the Traced
+     * Main Warehouse location in Shopify. Read from feature A's record only (V184 shopify_address_*): the
+     * last write-mode outcome of the fill rule is failed / not_linked / missing_scope (MainLocationAddressPushJob
+     * retries). Condition-only: clears once the fill rule records filled / has_address. Never blocks anything.
      */
     private List<Map<String, Object>> detectWarehouseAddressPushFailed(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'warehouse_address_push_failed' AS type, 'LOW' AS severity, 'location' AS subject_type, " +
-            "       l.id AS location_id, l.name AS location_name, l.address_shopify_push_at AS occurred_at, " +
+            "       l.id AS location_id, l.name AS location_name, l.shopify_address_checked_at AS occurred_at, " +
+            "       l.shopify_address_outcome AS reason, " +
             "       'warehouse_address_push_failed:' || l.id AS subject_key " +
-            "FROM locations l WHERE l.tenant_id = ? AND l.address_shopify_push_status = 'failed'",
+            "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment AND l.address_province_code IS NOT NULL " +
+            "  AND l.shopify_address_dry_run = false " +
+            "  AND l.shopify_address_outcome IN ('failed', 'not_linked', 'missing_scope')",
             tid);
     }
 

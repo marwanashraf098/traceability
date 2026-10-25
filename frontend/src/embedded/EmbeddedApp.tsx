@@ -562,7 +562,7 @@ export function Disconnected({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
   )
 }
 
-// ── Finish setup (onboarding gate, V185) ─────────────────────────────────
+// ── Finish setup (onboarding gate, V186) ─────────────────────────────────
 
 type SetupStep = 'shopify' | 'address' | null
 

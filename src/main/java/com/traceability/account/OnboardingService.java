@@ -23,7 +23,8 @@ import java.util.UUID;
 @Service
 public class OnboardingService {
 
-    // Must match OnboardingController.status()'s step set exactly.
+    // OnboardingController.status()'s step set, plus "location" — no longer shown (the onboarding
+    // gate, V186, replaced it) but still accepted so a stored manual flag or an old client never 400s.
     private static final Set<String> VALID_STEPS = Set.of(
         "connect_shopify", "connect_bosta", "location", "test_label", "first_receiving");
 

@@ -3,8 +3,14 @@ package com.traceability;
 import com.traceability.identity.JwtService;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyException;
+import com.traceability.integrations.shopify.ShopifyLocationGateway;
+import com.traceability.integrations.shopify.ShopifyLocationGateway.LocationAddress;
+import com.traceability.integrations.shopify.ShopifyLocationGateway.LocationAddressState;
+import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.inventory.LocationAddressBackfillJob;
+import com.traceability.inventory.MainLocationAddressService;
 import com.traceability.setup.MainLocationAddressPushJob;
-import com.traceability.setup.MainLocationAddressPusher;
 import org.jobrunr.jobs.lambdas.IocJobLambda;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
@@ -23,20 +29,21 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Onboarding gate (V185): GET /me's setupStep / warehouseAddressNeeded, the sticky Shopify stamp, the
- * address endpoints and the after-commit Shopify push. The app runs as app_user (RLS on, like production);
+ * Onboarding gate (V186): GET /me's setupStep / warehouseAddressNeeded, the sticky Shopify stamp, the
+ * address endpoints and the after-commit Shopify push through feature A's fill rule (V184). The app runs as app_user (RLS on, like production);
  * every step is read through the real GET /me (JWT filter → MeController → the service's transaction).
  *
  *   g1 a never-connected tenant → 'shopify' for owner and manager; a worker → null; no banner
@@ -44,18 +51,25 @@ import static org.mockito.Mockito.*;
  *   g3 sticky stamp: a store written 'connected' → 'address'; then needs_reauth / error / disconnected → still
  *      'address' (live status never re-locks); a tenant whose only store was written 'disconnected' → 'shopify'
  *   g4 PUT /setup/address: manager / worker → 403 (nothing saved); bad governorate / legacy SU / missing street
- *      → 400 with its code; the owner's save → setupStep null, row saved, setup_completed_at stamped, push
- *      'pending', exactly one job enqueued; GET returns it plus the 27 governorates
+ *      → 400 with its code; the owner's save → setupStep null, row saved, setup_completed_at stamped,
+ *      exactly one job enqueued; GET returns it plus the 27 governorates
  *   g5 grandfathered (setup_completed_at backfilled, no address) → setupStep null + warehouseAddressNeeded;
  *      saving the address clears the banner
  *   g6 address saved before connecting → still 'shopify'; once a store connects → null (address present)
  *   g7 tenant isolation as app_user: A's save leaves B's main warehouse untouched (A's own row is the positive
  *      control); with no tenant set app_user sees no location; the trigger stamps under app_user + RLS
- *   g8 push job: pusher throws → 'failed' + the class name, rethrown, LOW alert warehouse_address_push_failed
- *      listed; PUSHED → 'pushed', alert gone; NOT_LINKED → status cleared; a push for a superseded save
- *      writes nothing
+ *   g8 push job = A's fill rule, synchronously, recorded only in A's shopify_address_* columns: Shopify read
+ *      fails → 'failed', the job throws (retry), LOW alert warehouse_address_push_failed; an empty Shopify
+ *      address → filled with the mapped address (street → address1, "building, floor" → address2, NO zip),
+ *      alert gone; not_linked and missing_scope → alert + throw; the merchant's own Shopify address →
+ *      has_address, no edit, no throw
  *   g9 GET /api/v1/embedded/setup (Shopify session token): the same rule — 'address' for a connected tenant
  *      without an address, null once grandfathered
+ *   g10 a tenant with no main warehouse: the save creates it (no 409) with the address; the other
+ *      location is untouched
+ *   g11 A's address-source hook reads the saved address: the V184 backfill fills the merchant's address
+ *      (never replaces it with the generic one); without a saved address it still writes the generic one
+ *      with zip 11511
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -98,7 +112,9 @@ class OnboardingGateTest {
     @MockBean  ShopifyGateway   shopify;
     @MockBean  BostaGateway     bosta;
     @MockBean  JobScheduler     jobScheduler;
-    @MockBean  MainLocationAddressPusher pusher;
+    @MockBean  ShopifyLocationGateway locations;
+    @MockBean  ShopifyTokenProvider   tokens;
+    @Autowired LocationAddressBackfillJob backfill;
     @Value("${shopify.client-id}")     String clientId;
     @Value("${shopify.client-secret}") String clientSecret;
 
@@ -116,7 +132,8 @@ class OnboardingGateTest {
 
     @BeforeEach
     void resetMocks() {
-        reset(jobScheduler, pusher);
+        reset(jobScheduler, locations, tokens);
+        when(tokens.getValidToken(any())).thenReturn("test-token");
     }
 
     // ── g1 ───────────────────────────────────────────────────────────────────
@@ -192,7 +209,7 @@ class OnboardingGateTest {
         Map<String, Object> row = address(t);
         assertThat(row).containsEntry("address_province_code", "C").containsEntry("address_city", "Nasr City")
             .containsEntry("address_street", "12 Abbas El Akkad St").containsEntry("address_building", "4")
-            .containsEntry("address_floor", "2").containsEntry("address_shopify_push_status", "pending");
+            .containsEntry("address_floor", "2");
         assertThat(owner.queryForObject("SELECT setup_completed_at IS NOT NULL FROM tenants WHERE id = ?",
             Boolean.class, t.id())).isTrue();
         verify(jobScheduler, times(1)).enqueue(any(IocJobLambda.class));
@@ -274,41 +291,56 @@ class OnboardingGateTest {
 
     // ── g8 ───────────────────────────────────────────────────────────────────
 
+    static final LocationAddress MAPPED =
+        new LocationAddress("12 Abbas El Akkad St", "4, 2", "Nasr City", "C", null, "EG");
+    static final LocationAddress EMPTY = new LocationAddress(null, null, null, null, null, "EG");
+
     @Test @Order(8)
-    void g8_pushJob_failureAlertRetryAndSuccess() throws Exception {
+    void g8_pushJob_runsTheFillRule() {
         Tenant t = tenant("push");
-        store(t, "connected");
+        UUID s = store(t, "connected");
+        String gid = link(t, s, "read_products,write_locations");
         assertThat(put(t, "owner", GOOD).getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        when(pusher.push(any(), any(), any())).thenThrow(new IOException("boom"));
-        assertThatThrownBy(() -> pushJob.push(t.id(), t.location())).hasRootCauseInstanceOf(IOException.class);
-        assertThat(address(t)).containsEntry("address_shopify_push_status", "failed")
-                              .containsEntry("address_shopify_push_error", "IOException");
+        // Shopify read fails → failed, retry, LOW alert.
+        when(locations.readLocationAddress(anyString(), anyString(), eq(gid))).thenThrow(new ShopifyException("down"));
+        assertThatThrownBy(() -> pushJob.push(t.id())).isInstanceOf(IllegalStateException.class);
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "failed").containsEntry("shopify_address_dry_run", false);
+        assertThat(alertTypes(t)).contains("warehouse_address_push_failed");
+        verify(locations, never()).editLocationAddress(any(), any(), any(), any());
+
+        // Empty in Shopify → filled with the mapped merchant address; alert gone.
+        reset(locations);
+        when(locations.readLocationAddress(anyString(), anyString(), eq(gid)))
+            .thenReturn(Optional.of(new LocationAddressState("Traced Main Warehouse", EMPTY, false)));
+        pushJob.push(t.id());
+        verify(locations).editLocationAddress(anyString(), eq("test-token"), eq(gid), eq(MAPPED));
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "filled");
+        assertThat(owner.queryForObject("SELECT shopify_address_written->>'zip' IS NULL FROM locations WHERE id = ?",
+            Boolean.class, t.location())).as("a real address sends no zip").isTrue();
+        assertThat(alertTypes(t)).doesNotContain("warehouse_address_push_failed");
+
+        // The merchant typed their own address in Shopify → has_address, never overwritten, done.
+        reset(locations);
+        LocationAddress theirs = new LocationAddress("1 Other St", null, "Giza", "GZ", "12511", "EG");
+        when(locations.readLocationAddress(anyString(), anyString(), eq(gid)))
+            .thenReturn(Optional.of(new LocationAddressState("Traced Main Warehouse", theirs, false)));
+        pushJob.push(t.id());
+        verify(locations, never()).editLocationAddress(any(), any(), any(), any());
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "has_address");
+
+        // missing_scope → alert + retry.
+        owner.update("UPDATE stores SET access_token_scopes = 'read_products' WHERE id = ?", s);
+        assertThatThrownBy(() -> pushJob.push(t.id())).isInstanceOf(IllegalStateException.class);
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "missing_scope");
         assertThat(alertTypes(t)).contains("warehouse_address_push_failed");
 
-        reset(pusher);
-        when(pusher.push(any(), any(), any())).thenReturn(MainLocationAddressPusher.Outcome.PUSHED);
-        pushJob.push(t.id(), t.location());
-        assertThat(address(t)).containsEntry("address_shopify_push_status", "pushed")
-                              .containsEntry("address_shopify_push_error", null);
-        assertThat(alertTypes(t)).doesNotContain("warehouse_address_push_failed");
-        verify(pusher).push(eq(t.id()), eq(t.location()), argThat(a ->
-            "C".equals(a.provinceCode()) && "Nasr City".equals(a.city()) && "12 Abbas El Akkad St".equals(a.street())));
-
-        reset(pusher);
-        when(pusher.push(any(), any(), any())).thenReturn(MainLocationAddressPusher.Outcome.NOT_LINKED);
-        pushJob.push(t.id(), t.location());
-        assertThat(address(t)).containsEntry("address_shopify_push_status", null);
-
-        // A push whose save was superseded mid-flight records nothing (the newer save has its own job).
-        reset(pusher);
-        when(pusher.push(any(), any(), any())).thenAnswer(inv -> {
-            owner.update("UPDATE locations SET address_updated_at = clock_timestamp(), " +
-                         "address_shopify_push_status = 'pending' WHERE id = ?", t.location());
-            throw new IOException("late");
-        });
-        assertThatThrownBy(() -> pushJob.push(t.id(), t.location())).isInstanceOf(RuntimeException.class);
-        assertThat(address(t)).containsEntry("address_shopify_push_status", "pending");
+        // not_linked → alert + retry.
+        owner.update("UPDATE locations SET shopify_location_id = NULL WHERE id = ?", t.location());
+        assertThatThrownBy(() -> pushJob.push(t.id())).isInstanceOf(IllegalStateException.class);
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "not_linked");
+        assertThat(alertTypes(t)).contains("warehouse_address_push_failed");
+        verify(locations, never()).editLocationAddress(any(), any(), any(), any());
     }
 
     // ── g9 ───────────────────────────────────────────────────────────────────
@@ -327,6 +359,53 @@ class OnboardingGateTest {
         owner.update("UPDATE tenants SET setup_completed_at = now() WHERE id = ?", t.id());
         r = rest.exchange(url("/api/v1/embedded/setup"), HttpMethod.GET, new HttpEntity<>(h), Map.class);
         assertThat(r.getBody()).containsEntry("setupStep", null);
+    }
+
+    // ── g10 ──────────────────────────────────────────────────────────────────
+
+    @Test @Order(10)
+    void g10_noMainWarehouse_saveCreatesIt() {
+        Tenant t = tenant("no-main");
+        store(t, "connected");
+        owner.update("DELETE FROM locations WHERE id = ?", t.location());
+        assertThat(put(t, "owner", GOOD).getStatusCode()).isEqualTo(HttpStatus.OK);
+        Map<String, Object> main = owner.queryForMap(
+            "SELECT name, address_street, is_default FROM locations WHERE tenant_id = ? AND is_fulfillment", t.id());
+        assertThat(main).containsEntry("name", "Main Warehouse").containsEntry("address_street", "12 Abbas El Akkad St")
+            .as("the other location was not the default").containsEntry("is_default", true);
+        assertThat(owner.queryForObject("SELECT count(*) FROM locations WHERE tenant_id = ? AND name = 'Shop' " +
+            "AND address_street IS NULL AND NOT is_fulfillment", Integer.class, t.id())).isEqualTo(1);
+        assertMe(t, "owner", null, false);
+    }
+
+    // ── g11 ──────────────────────────────────────────────────────────────────
+
+    @Test @Order(11)
+    void g11_backfillUsesTheMerchantAddress() {
+        // Merchant address saved; Shopify still shows the generic one Traced wrote (A's earlier fill).
+        Tenant t = tenant("backfill");
+        UUID s = store(t, "connected");
+        String gid = link(t, s, "write_locations");
+        assertThat(put(t, "owner", GOOD).getStatusCode()).isEqualTo(HttpStatus.OK);
+        owner.update("UPDATE locations SET shopify_address_written = '{\"address1\":\"Main warehouse\",\"city\":\"Cairo\"," +
+            "\"provinceCode\":\"C\",\"zip\":\"11511\",\"countryCode\":\"EG\"}'::jsonb, " +
+            "shopify_address_outcome = 'failed', shopify_address_dry_run = false WHERE id = ?", t.location());
+        when(locations.readLocationAddress(anyString(), anyString(), eq(gid)))
+            .thenReturn(Optional.of(new LocationAddressState("Traced Main Warehouse", MainLocationAddressService.GENERIC, false)));
+
+        // Control: a tenant with no saved address still gets the generic address (with 11511).
+        Tenant g = tenant("backfill-generic");
+        UUID gs = store(g, "connected");
+        String ggid = link(g, gs, "write_locations");
+        when(locations.readLocationAddress(anyString(), anyString(), eq(ggid)))
+            .thenReturn(Optional.of(new LocationAddressState("Traced Main Warehouse", EMPTY, false)));
+
+        try { backfill.run(false); } catch (IllegalStateException otherTenantsFailed) { /* other test tenants */ }
+
+        verify(locations).editLocationAddress(anyString(), anyString(), eq(gid), eq(MAPPED));
+        verify(locations, never()).editLocationAddress(anyString(), anyString(), eq(gid), eq(MainLocationAddressService.GENERIC));
+        verify(locations).editLocationAddress(anyString(), anyString(), eq(ggid), eq(MainLocationAddressService.GENERIC));
+        assertThat(address(t)).containsEntry("shopify_address_outcome", "filled");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -390,6 +469,15 @@ class OnboardingGateTest {
         // A second, non-main location — never written by the address save.
         owner.update("INSERT INTO locations (tenant_id, name, type) VALUES (?, 'Shop', 'warehouse')", id);
         return new Tenant(id, loc, user(id, "owner", tag), user(id, "manager", tag), user(id, "worker", tag));
+    }
+
+    /** Links the tenant's main warehouse to a Shopify location and gives the store its scopes. */
+    private String link(Tenant t, UUID store, String scopes) {
+        String gid = "gid://shopify/Location/" + Math.abs(UUID.randomUUID().getMostSignificantBits());
+        owner.update("UPDATE locations SET shopify_location_id = ?, shopify_sync_status = 'linked' WHERE id = ?",
+            gid, t.location());
+        owner.update("UPDATE stores SET access_token_scopes = ? WHERE id = ?", scopes, store);
+        return gid;
     }
 
     private UUID store(Tenant t, String status) {

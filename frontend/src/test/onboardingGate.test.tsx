@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { test, expect, describe, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -19,7 +21,7 @@ import { FinishSetupCard } from '../embedded/EmbeddedApp'
 import type { Me } from '../api'
 
 /**
- * Onboarding gate (V185) — frontend.
+ * Onboarding gate (V186) — frontend.
  *   og1  owner, setupStep 'shopify' → the full-screen gate (step 1, the store finder, its own Log out), never the screen
  *   og2  a failed connect lands on /settings?tab=connections&shopify_error=… (behind the gate) → the gate shows it
  *   og3  a previously connected tenant → the linked shop is named and prefilled
@@ -347,5 +349,14 @@ describe('embedded', () => {
     cleanup()
     render(<PolarisProvider i18n={polarisEn}><FinishSetupCard step="shopify" lang="ar" /></PolarisProvider>)
     expect(screen.getByTestId('embedded-finish-setup')).toHaveTextContent('أكمل الإعداد في Traced')
+  })
+})
+
+describe('gated routes', () => {
+  // Source guard (App.tsx's own route table; the tests above use their own router): the Gather list is gated
+  // like /fulfill (approved 2026-10-25).
+  test('og19 /fulfill/gather is wrapped in SetupGate', () => {
+    const app = readFileSync(resolve(__dirname, '../App.tsx'), 'utf8')
+    expect(app).toMatch(/path="\/fulfill\/gather"[\s\S]{0,200}?<SetupGate><GatherList \/><\/SetupGate>/)
   })
 })

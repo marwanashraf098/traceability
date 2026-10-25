@@ -220,7 +220,7 @@ export function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   if (getRoleFromToken() === 'worker') {
     return <Navigate to="/worker-home" replace />
   }
-  // Onboarding gate (V185): after the worker redirect, outside the screen's Layout.
+  // Onboarding gate (V186): after the worker redirect, outside the screen's Layout.
   return <SetupGate>{children}</SetupGate>
 }
 
@@ -336,7 +336,7 @@ export default function App() {
           path="/fulfill/gather"
           element={
             <RequireAuth>
-              <GatherList />
+              <SetupGate><GatherList /></SetupGate>
             </RequireAuth>
           }
         />
@@ -545,7 +545,7 @@ export default function App() {
         <Route path="/connections" element={<Navigate to="/settings?tab=connections" replace />} />
         <Route path="/users"       element={<Navigate to="/settings?tab=users" replace />} />
         <Route path="/locations"   element={<Navigate to="/settings?tab=locations" replace />} />
-        {/* Onboarding gate (V185): the gate itself while setup isn't done (OwnerOnlyRoute's SetupGate);
+        {/* Onboarding gate (V186): the gate itself while setup isn't done (OwnerOnlyRoute's SetupGate);
             afterwards the warehouse-address form for the soft banner, else Overview. */}
         <Route path="/onboarding" element={<RequireAuth><OwnerOnlyRoute><OnboardingRoute /></OwnerOnlyRoute></RequireAuth>} />
         {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}

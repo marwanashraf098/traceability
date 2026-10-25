@@ -7,14 +7,14 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Onboarding gate (V185) — "what does this tenant still have to set up before using Traced", asked in
+ * Onboarding gate (V186) — "what does this tenant still have to set up before using Traced", asked in
  * ONE place. Runs on the caller's JdbcTemplate inside its transaction with TenantContext = tenantId
  * (RLS: a tenant reads only its own tenants / locations rows).
  *
  * {@link #step}:
  *   null       — not gated: the public demo (is_demo) or the review tenant (simulated courier) —
  *                ReviewCapabilities.scanHelpers is exactly that set —, a tenant whose setup is done
- *                (tenants.setup_completed_at, backfilled for every tenant connected at V185), or one
+ *                (tenants.setup_completed_at, backfilled for every tenant connected at V186), or one
  *                that has connected and whose main warehouse already has an address.
  *   'shopify'  — never connected Shopify (the sticky tenants.shopify_connected_at is NULL). Live
  *                store status is never read: an expired token or needs_reauth never re-locks.

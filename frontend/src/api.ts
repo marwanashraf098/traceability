@@ -971,7 +971,7 @@ export function bostaGetSyncStatus() {
 // ── Onboarding checklist (FR-1.2) ────────────────────────────────────────────
 
 export interface OnboardingStep {
-  key: 'connect_shopify' | 'connect_bosta' | 'location' | 'test_label' | 'first_receiving'
+  key: 'connect_shopify' | 'connect_bosta' | 'test_label' | 'first_receiving'
   done: boolean
   auto: boolean
   manual: boolean
@@ -1078,7 +1078,7 @@ export interface Me {
   role: 'owner' | 'manager' | 'worker'
   /** App-wide Shopify upgrade notice (owner / manager only; always null for a worker). */
   shopifyUpgradeStage?: ShopifyUpgradeStage
-  /** Onboarding gate (V185): what the tenant must still set up before using Traced (owner / manager; null for a worker). */
+  /** Onboarding gate (V186): what the tenant must still set up before using Traced (owner / manager; null for a worker). */
   setupStep?: SetupStep
   /** Grandfathered tenants: setup done but the main warehouse has no address yet — the soft banner. */
   warehouseAddressNeeded?: boolean
@@ -3901,7 +3901,7 @@ export function printPackReplacement(orderId: string, orderItemId: string, idemp
   return openPdfFrom('/pack-labels/replacement', { orderId, orderItemId, idempotencyKey })
 }
 
-// ── Onboarding gate — main warehouse address (V185, owner only) ──────────────────────
+// ── Onboarding gate — main warehouse address (V186, owner only) ──────────────────────
 
 export interface SetupArea { nameEn: string; nameAr: string | null }
 export interface SetupGovernorate { code: string; nameEn: string; nameAr: string; areas: SetupArea[] }

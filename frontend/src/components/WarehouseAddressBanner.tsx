@@ -4,7 +4,7 @@ import { MapPin } from 'lucide-react'
 import type { Me } from '../api'
 import { Button } from './ui'
 
-// Onboarding gate (V185) — the soft banner for tenants that were connected before the gate existed
+// Onboarding gate (V186) — the soft banner for tenants that were connected before the gate existed
 // (grandfathered: never gated, not even on the address). From /me's warehouseAddressNeeded; owner only
 // (the address endpoint is owner-only). No inputs, no autofocus — it never takes focus from a scan input.
 export default function WarehouseAddressBanner({ me }: { me: Me | null }) {

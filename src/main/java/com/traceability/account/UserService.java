@@ -72,7 +72,7 @@ public class UserService {
         self.put("genericCourier", com.traceability.courier.GenericShipments.enabled(jdbc, tenantId));
         // Flexible labeling — blank labels / untagged stock (no screen reads it yet).
         self.put("flexibleLabeling", com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId));
-        // Onboarding gate (V185) — 'shopify' | 'address' | null (SetupStatus is the one rule; demo and
+        // Onboarding gate (V186) — 'shopify' | 'address' | null (SetupStatus is the one rule; demo and
         // review tenants bypass there). Tenant-level, so a manager sees it too (the screen then says
         // it waits for the owner); a worker never does. warehouseAddressNeeded = the soft banner.
         boolean worker = "worker".equals(self.get("role"));
