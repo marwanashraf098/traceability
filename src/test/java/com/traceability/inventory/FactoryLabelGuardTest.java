@@ -96,6 +96,7 @@ class FactoryLabelGuardTest {
         TenantContext.clear();
         for (String t : List.of("stock_take_scans", "stock_take_expected", "stock_take_scope_variants", "stock_take_sessions",
                 "transfer_pieces", "transfers", "return_session_items", "return_sessions", "label_codes", "label_code_batches",
+                "label_run_lines", "label_runs",
                 "tag_sessions", "piece_events", "pieces", "receipt_lines", "receipts", "piece_counters")) {
             jdbc.update("DELETE FROM " + t + " WHERE tenant_id = ?", tenant);
         }
@@ -173,14 +174,20 @@ class FactoryLabelGuardTest {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /** A factory code as a run's print will issue it (slice 6a commit 4); written directly here. */
+    /** A factory code as a run's print issues it — its run, its line (V186), its batch; written directly here. */
     private UUID factoryCode(String code) {
+        UUID run = jdbc.queryForObject(
+            "INSERT INTO label_runs (tenant_id, factory_name, created_by) VALUES (?, 'FG Factory', ?) RETURNING id",
+            UUID.class, tenant, owner);
+        UUID line = jdbc.queryForObject(
+            "INSERT INTO label_run_lines (tenant_id, run_id, line_no, variant_id, expected_qty) VALUES (?, ?, 1, ?, 1) RETURNING id",
+            UUID.class, tenant, run, variant);
         UUID batch = jdbc.queryForObject(
-            "INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by) " +
-            "VALUES (?, 'factory', 1, ?, ?) RETURNING id", UUID.class, tenant, "fg-" + code, owner);
+            "INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by, run_id) " +
+            "VALUES (?, 'factory', 1, ?, ?, ?) RETURNING id", UUID.class, tenant, "fg-" + code, owner, run);
         return jdbc.queryForObject(
-            "INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id) " +
-            "VALUES (?, ?, 'factory', ?, ?, ?) RETURNING id", UUID.class, tenant, code, batch, owner, variant);
+            "INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id, run_line_id) " +
+            "VALUES (?, ?, 'factory', ?, ?, ?, ?) RETURNING id", UUID.class, tenant, code, batch, owner, variant, line);
     }
 
     private String untaggedPiece() {
