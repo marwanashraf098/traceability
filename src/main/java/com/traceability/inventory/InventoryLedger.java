@@ -433,21 +433,22 @@ public class InventoryLedger {
      * {@code label_bound} piece event (status unchanged — tagging moves no stock and never calls Shopify).
      * The fifth piece_events writer here; pieces / piece_events stay ledger-only.
      *
-     * Errors: UNKNOWN_CODE (no such code for this tenant), CODE_VOIDED, NO_UNTAGGED_STOCK (no untagged available
+     * Errors: UNKNOWN_CODE (no such code for this tenant), FACTORY_LABEL_NOT_RECEIVED (kind factory — slice 6), CODE_VOIDED, NO_UNTAGGED_STOCK (no untagged available
      * piece of the variant at the main warehouse), NO_MAIN_WAREHOUSE. A code already bound → {@code alreadyBound}
      * with its piece, nothing written. Caller contract: TenantContext set, flag checked by the caller.
      */
-    // noRollbackFor: every refusal (UNKNOWN_CODE, CODE_VOIDED, NO_MAIN_WAREHOUSE, NO_UNTAGGED_STOCK) is thrown
+    // noRollbackFor: every refusal (UNKNOWN_CODE, FACTORY_LABEL_NOT_RECEIVED, CODE_VOIDED, NO_MAIN_WAREHOUSE, NO_UNTAGGED_STOCK) is thrown
     // before anything is written, so a caller's transaction (a scan loop) may catch it and carry on.
     @Transactional(isolation = Isolation.READ_COMMITTED, noRollbackFor = com.traceability.labels.LabelCodeException.class)
     public BindResult bindLabel(UUID codeId, UUID actorUserId, BindRef ref, String rawScan) {
         java.util.Map<String, Object> code = jdbc.query(
-            "SELECT id, code, status, piece_id, variant_id FROM label_codes " +
+            "SELECT id, code, status, piece_id, variant_id, kind FROM label_codes " +
             "WHERE id = ? AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid FOR UPDATE",
             rs -> {
                 if (!rs.next()) return null;
                 java.util.Map<String, Object> m = new java.util.HashMap<>();
                 m.put("code", rs.getString("code"));
+                m.put("kind", rs.getString("kind"));
                 m.put("status", rs.getString("status"));
                 m.put("piece_id", rs.getString("piece_id"));
                 m.put("variant_id", rs.getObject("variant_id", UUID.class));
@@ -455,6 +456,9 @@ public class InventoryLedger {
             },
             codeId);
         if (code == null) throw com.traceability.labels.LabelCodeException.unknownCode();
+        // Slice 6: a factory code is bound only by its factory run's receiving (pieces created with the code), never
+        // to an existing untagged piece — checked before anything else, whatever its status.
+        if ("factory".equals(code.get("kind"))) throw com.traceability.labels.LabelCodeException.factoryLabelNotReceived();
         String codeText = (String) code.get("code");
         UUID variantId = (UUID) code.get("variant_id");
         if ("voided".equals(code.get("status"))) throw com.traceability.labels.LabelCodeException.codeVoided();

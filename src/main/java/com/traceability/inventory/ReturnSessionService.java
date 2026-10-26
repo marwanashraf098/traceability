@@ -212,8 +212,9 @@ public class ReturnSessionService {
         }
 
         // Flexible labeling: a printed label nobody has tagged a piece with yet.
-        if (com.traceability.labels.UnusedLabels.find(jdbc, tenantId, ScanInputNormalizer.normalizePiece(cleaned)).isPresent()) {
-            throw com.traceability.labels.UnusedLabels.notUsedYet();
+        var unusedLabel = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, ScanInputNormalizer.normalizePiece(cleaned));
+        if (unusedLabel.isPresent()) {
+            throw com.traceability.labels.UnusedLabels.notUsedYet(unusedLabel.get());
         }
         // Foreign scan: nothing of ours matched. No row written, ledger untouched.
         log.warn("Foreign return scan: raw={} session={} tenant={}", rawScan, sessionId, tenantId);

@@ -1280,7 +1280,10 @@
     "labelCode": {
       "issued": "Label not used yet",
       "title": "Label not used yet — tag it in Tag stock first",
-      "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock."
+      "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock.",
+      "factoryIssued": "Factory label",
+      "factoryTitle": "Factory label not received yet — receive it in its factory run first",
+      "factoryBody": "This label was printed for a factory run. The piece becomes stock when it's scanned in Receiving with that run (Factory-labeled)."
     }
   },
   "returns": {

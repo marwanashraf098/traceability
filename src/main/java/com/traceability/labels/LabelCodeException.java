@@ -18,7 +18,9 @@ public class LabelCodeException extends RuntimeException {
         UNKNOWN_VARIANT, INVALID_ORDER_REF, UNKNOWN_CODE, CODE_VOIDED, NO_UNTAGGED_STOCK, NO_MAIN_WAREHOUSE,
         TOO_MANY_LABELS, TAG_SESSION_NOT_FOUND, TAG_SESSION_ENDED,
         // slice 4 — packing labels
-        INVALID_PRINT_REQUEST, ORDER_NOT_PACKABLE
+        INVALID_PRINT_REQUEST, ORDER_NOT_PACKABLE,
+        // slice 6 — factory runs
+        FACTORY_LABEL_NOT_RECEIVED
     }
 
     static LabelCodeException invalidPrintRequest() {
@@ -29,6 +31,13 @@ public class LabelCodeException extends RuntimeException {
     static LabelCodeException orderNotPackable() {
         return new LabelCodeException(HttpStatus.CONFLICT, Code.ORDER_NOT_PACKABLE,
             "This order isn't waiting to be packed", "هذا الطلب ليس في انتظار التجهيز");
+    }
+
+    /** Kind factory asked of the generic issue endpoint — those codes come only from a factory run's print. */
+    static LabelCodeException factoryKindOnlyFromRun() {
+        return new LabelCodeException(HttpStatus.BAD_REQUEST, Code.INVALID_KIND,
+            "Factory labels are printed from a factory run (Receiving → Factory runs)",
+            "تُطبع ملصقات المصنع من دفعة مصنع (الاستلام ← دفعات المصنع)");
     }
 
     static LabelCodeException invalidKind() {
@@ -68,6 +77,12 @@ public class LabelCodeException extends RuntimeException {
         return new LabelCodeException(HttpStatus.NOT_FOUND, Code.UNKNOWN_CODE,
             "This label isn't one of yours — check you scanned a Traced label",
             "هذا الملصق ليس من ملصقاتك — تأكد أنك مسحت ملصق Traced");
+    }
+
+    /** A factory code: it becomes a piece only when its factory run is received — never tagged or packed. */
+    public static LabelCodeException factoryLabelNotReceived() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.FACTORY_LABEL_NOT_RECEIVED,
+            UnusedLabels.FACTORY_MESSAGE_EN, UnusedLabels.FACTORY_MESSAGE_AR);
     }
 
     public static LabelCodeException codeVoided() {

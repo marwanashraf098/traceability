@@ -64,6 +64,8 @@ public class LabelCodeService {
         UUID tenantId = TenantContext.require();
         FlexibleLabeling.require(jdbc, tenantId);
         if (kind == null || !KINDS.contains(kind)) throw LabelCodeException.invalidKind();
+        // Factory codes belong to a factory run line (slice 6) and are issued only by the run's print, never here.
+        if ("factory".equals(kind)) throw LabelCodeException.factoryKindOnlyFromRun();
         List<Line> clean = validateLines(tenantId, lines);
         int total = clean.stream().mapToInt(Line::count).sum();
         String key = idempotencyKey == null ? "" : idempotencyKey.strip();

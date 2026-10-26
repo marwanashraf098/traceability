@@ -506,7 +506,13 @@ public class FulfillService {
             var unused = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup);
             if (unused.isPresent()) {
                 if (!com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
-                    return ScanResult.rejected(com.traceability.labels.UnusedLabels.CODE, com.traceability.labels.UnusedLabels.MESSAGE_EN);
+                    return ScanResult.rejected(com.traceability.labels.UnusedLabels.codeFor(unused.get()),
+                        com.traceability.labels.UnusedLabels.messageEnFor(unused.get()));
+                }
+                // A factory label becomes a piece only through its factory run's receiving — never bound at packing.
+                if (unused.get().factory()) {
+                    return ScanResult.rejectedLocalized(com.traceability.labels.UnusedLabels.FACTORY_CODE,
+                        com.traceability.labels.UnusedLabels.FACTORY_MESSAGE_EN, com.traceability.labels.UnusedLabels.FACTORY_MESSAGE_AR);
                 }
                 return scanLabel(orderId, tenantId, unused.get(), barcode, actorUserId, preferredOrderItemId);
             }

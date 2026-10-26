@@ -606,6 +606,8 @@ export interface LabelCodeLookupResult {
   type: 'label_code'
   code: string
   status: 'issued'
+  /** 'factory' (slice 6): received only through its factory run — Lookup says so instead of "tag it". */
+  kind?: 'pack' | 'tag' | 'factory' | 'replacement'
   variant: LookupVariant
   messageEn: string
   messageAr: string
