@@ -146,7 +146,9 @@ public class ReceivingService {
     @Transactional
     public int finalize(UUID sessionId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-        requireOpen(sessionId, tenantId);
+        // Locked, not just read: two finalizes of one session at the same moment both saw 'open' and both
+        // created the session's pieces. The second now waits here, then sees 'finalized' and gets the 409.
+        requireOpen(sessionId, tenantId, true);
 
         // Fetch location_id for this session (needed per-piece).
         UUID locationId = jdbc.queryForObject(
@@ -194,11 +196,16 @@ public class ReceivingService {
         // Two-INSERT atomic commit — all pieces + events or nothing.
         ledger.batchReceive(specs, actorUserId, !countOnly);
 
-        // Mark session finalized.
-        jdbc.update(
+        // Mark session finalized — conditional on 'open', so a finalize that got past the check some other way
+        // rolls back (pieces included) instead of finalizing twice.
+        int finalized = jdbc.update(
             "UPDATE receipts SET status = 'finalized', finalized_at = now() " +
-            "WHERE id = ? AND tenant_id = ?",
+            "WHERE id = ? AND tenant_id = ? AND status = 'open'",
             sessionId, tenantId);
+        if (finalized != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Session is already finalized and cannot be modified");
+        }
 
         // Build variant→qty delta map and kick off async Shopify shadow sync (Trigger 1).
         // Fired AFTER this transaction commits (a rolled-back finalize never reaches Shopify, and
@@ -325,8 +332,13 @@ public class ReceivingService {
     }
 
     private void requireOpen(UUID sessionId, UUID tenantId) {
+        requireOpen(sessionId, tenantId, false);
+    }
+
+    private void requireOpen(UUID sessionId, UUID tenantId, boolean forUpdate) {
         List<String> rows = jdbc.queryForList(
-            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'",
+            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'" +
+            (forUpdate ? " FOR UPDATE" : ""),
             String.class, sessionId, tenantId);
         if (rows.isEmpty()) throw notFound("session");
         if (!"open".equals(rows.get(0))) {
