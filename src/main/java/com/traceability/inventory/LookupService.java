@@ -121,12 +121,16 @@ public class LookupService {
             "       u.name AS actor_name, " +
             "       o.number AS order_number, " +
             "       s.tracking_number, " +
-            "       loc.name AS location_name " +
+            "       loc.name AS location_name, " +
+            "       lr.factory_name AS run_factory, lr.reference AS run_reference " +
             "FROM piece_events pe " +
             "LEFT JOIN users u     ON u.id  = pe.actor_user_id " +
             "LEFT JOIN merchant_orders o    ON o.id  = pe.order_id " +
             "LEFT JOIN shipments s ON s.id  = pe.shipment_id " +
             "LEFT JOIN locations loc ON loc.id = pe.location_id " +
+            // Flexible labeling slice 6b: a factory piece's received event names its run.
+            "LEFT JOIN label_runs lr ON pe.event_type = 'received' AND lr.tenant_id = pe.tenant_id " +
+            "      AND lr.id = (pe.metadata ->> 'label_run_id')::uuid " +
             "WHERE pe.piece_id = ? AND pe.tenant_id = ? " +
             "ORDER BY pe.occurred_at DESC, pe.id DESC",
             piece.get("id").toString(), tenantId);
@@ -149,6 +153,11 @@ public class LookupService {
                 event.put("labelCode", code.find() ? code.group(1) : null);
                 event.put("phraseKey", meta.contains("\"tag_session_id\"") ? "label_bound_tag"
                     : e.get("order_id") != null ? "label_bound_packing" : "label_bound");
+            }
+            if ("received".equals(eType) && e.get("run_factory") != null) {
+                event.put("phraseKey", "received_factory_run");
+                event.put("factoryRun", com.traceability.labels.FactoryReceivingService.runName(
+                    (String) e.get("run_factory"), (String) e.get("run_reference")));
             }
             event.put("actor",        actor != null ? actor : "System");
             event.put("isSystem",     actor == null);

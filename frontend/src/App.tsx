@@ -33,6 +33,7 @@ import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
 import TagStockScan from './pages/TagStockScan'
+import FactoryReceivingScan from './pages/receiving/FactoryReceivingScan'
 import TagStockSummary from './pages/TagStockSummary'
 import ScanProbe from './pages/ScanProbe'
 import StockTakeReview from './pages/StockTakeReview'
@@ -353,6 +354,17 @@ export default function App() {
         {/* Flexible labeling — Tag stock lives in Inventory → Untagged (UI pass 2026-10-25); the old list URL
             redirects there. The scan loop (full-screen) and the session summary keep their routes. */}
         <Route path="/tag-stock" element={<Navigate to="/inventory?tab=untagged" replace />} />
+        {/* Flexible labeling slice 6b — factory receiving's scan loop: full-screen (not Layout-wrapped). */}
+        <Route
+          path="/receiving/:id/scan"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <FactoryReceivingScan />
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
         <Route
           path="/tag-stock/:id/scan"
           element={

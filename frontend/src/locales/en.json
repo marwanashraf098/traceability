@@ -688,7 +688,12 @@
       "change": "Change",
       "back": "Back",
       "printStickBadge": "Print & stick",
-      "yourDefault": "Your default"
+      "yourDefault": "Your default",
+      "factory": {
+        "title": "Factory-labeled",
+        "body": "Pieces arrived with Traced labels from the factory. Scan each piece — only scanned pieces enter stock.",
+        "footer": "For factory runs you printed labels for."
+      }
     },
     "countOnly": {
       "badge": "Count only",
@@ -754,6 +759,36 @@
       "usingCurrent": "Using On hand (current)",
       "allRemoved": "Every row was removed — nothing to add.",
       "nothingMatched": "No product in this file has a quantity to add."
+    },
+    "factory": {
+      "badge": "Factory-labeled",
+      "mainWarehouseOnly": "Factory-labeled pieces go to the main warehouse.",
+      "pickRun": "Which factory run arrived?",
+      "noOpenRuns": "No open factory runs. Create one in Receiving → Factory runs first.",
+      "runLabel": "Factory run",
+      "openBody": "Scan each piece's factory label. Only scanned pieces enter stock when you finish.",
+      "scan": "Scan pieces",
+      "confirmBody": "This adds {{count}} scanned pieces to stock with their factory labels and locks the session.",
+      "confirmBody_one": "This adds 1 scanned piece to stock with its factory label and locks the session.",
+      "deleteBodyScans": "This session has {{count}} scanned pieces. Undo the scans first, then delete it.",
+      "printSessionLabels": "Print session labels ({{count}})",
+      "backToSession": "Back to session",
+      "doneScanning": "Done scanning",
+      "placeholder": "Scan a factory label…",
+      "scannedLabel": "Scanned in this session",
+      "progress": "Received of expected",
+      "lineSplit": "{{received}} received earlier · {{staged}} scanned now",
+      "extraCount": "+{{count}} extra",
+      "overage": "Extra piece",
+      "undo": "Undo last scan",
+      "undone": "Scan of {{code}} undone",
+      "extra": "Piece without a label",
+      "extraTitle": "Print a label for a piece without one",
+      "extraBody": "Which product is the piece? One factory label is printed for it — stick it on, then scan it.",
+      "extraPrint": "Print 1 label",
+      "extraPrinted": "Label {{code}} is ready — stick it on the piece, then scan it.",
+      "extraPrintedOverage": "Label {{code}} is ready — stick it on, then scan it. This product already has all its expected pieces, so it's counted as an extra piece.",
+      "error": "Something went wrong. Try again."
     }
   },
   "fulfill": {
@@ -1258,7 +1293,8 @@
       "unheld": "Released from hold — back to available",
       "location_corrected": "Location corrected to the main warehouse",
       "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}}",
-      "label_bound_tag": "Label {{code}} attached in Tag stock"
+      "label_bound_tag": "Label {{code}} attached in Tag stock",
+      "received_factory_run": "Received from factory run «{{run}}»"
     },
     "pieceStatus": {
       "available": "Available",
@@ -3687,7 +3723,8 @@
       "transferOut": "Transfer out · {{ref}}",
       "transferReconcile": "Transfer reconcile · {{ref}}",
       "returns": "Scan returns · {{ref}}",
-      "tagStock": "Tag stock"
+      "tagStock": "Tag stock",
+      "factoryReceiving": "Factory receiving · {{ref}}"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",

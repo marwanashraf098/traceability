@@ -15,7 +15,8 @@ import java.util.UUID;
  *
  * Two writers of piece_events — both owned by this class:
  *   transition()    – state changes on EXISTING pieces; includes race guard (WHERE status=?).
- *   batchReceive()  – piece CREATION only; two multi-row INSERTs in one ACID transaction,
+ *   batchReceive()  – piece CREATION only (and its sibling receiveFactoryLabeled() — the same creation with the
+ *                     factory label codes scanned off the pieces, slice 6b); two multi-row INSERTs in one ACID transaction,
  *                     from_status=NULL→available, one received event per piece. This is NOT
  *                     a bypass of transition(): piece creation has no prior state to race on.
  *                     Do NOT refactor batchReceive() to call transition() — that breaks the
@@ -359,6 +360,97 @@ public class InventoryLedger {
             evtParams.add(s.locationId());
         }
         jdbc.update(evtSql.toString(), evtParams.toArray());
+    }
+
+    // ---- receiveFactoryLabeled ----------------------------------------------
+
+    /**
+     * Flexible labeling slice 6b — piece CREATION for a factory receiving session (the batchReceive family; it does
+     * not touch batchReceive and never routes through transition()). Each spec carries the factory label code
+     * scanned off that piece: the piece is created WITH that code as its short_code (no counter claim — the code was
+     * claimed when the run printed it), its received event names the code and the run in its metadata, and every
+     * code goes issued → bound to its piece. The bind is conditional on 'issued' and must hit every code, else the
+     * whole call throws and the caller's transaction (finalize) rolls back — no piece without its code, no code
+     * bound twice. pieces UNIQUE (tenant_id, short_code) stays the backstop.
+     *
+     * Caller contract: TenantContext set; the codes locked and re-checked issued by the caller.
+     */
+    @Transactional
+    public void receiveFactoryLabeled(List<FactoryReceiveSpec> specs, UUID actorUserId, UUID labelRunId) {
+        if (specs.isEmpty()) return;
+        int n = specs.size();
+        for (int from = 0; from < n; from += RECEIVE_CHUNK) {
+            int to = Math.min(n, from + RECEIVE_CHUNK);
+            StringBuilder pieceSql = new StringBuilder(
+                "INSERT INTO pieces " +
+                "(id, tenant_id, variant_id, receipt_id, barcode, short_code, status, current_location_id, last_event_at, last_user_id) " +
+                "VALUES ");
+            List<Object> pieceParams = new ArrayList<>((to - from) * 8);
+            StringBuilder evtSql = new StringBuilder(
+                "INSERT INTO piece_events " +
+                "(tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status, metadata) VALUES ");
+            List<Object> evtParams = new ArrayList<>((to - from) * 4);
+            for (int i = from; i < to; i++) {
+                FactoryReceiveSpec s = specs.get(i);
+                if (i > from) { pieceSql.append(','); evtSql.append(','); }
+                pieceSql.append("(?,?,?,?,?,?,'available'::piece_status,?,now(),?)");
+                pieceParams.add(s.pieceId());
+                pieceParams.add(s.tenantId());
+                pieceParams.add(s.variantId());
+                pieceParams.add(s.receiptId());
+                pieceParams.add("PC-" + s.pieceId());
+                pieceParams.add(s.code());
+                pieceParams.add(s.locationId());
+                pieceParams.add(actorUserId);
+                evtSql.append(
+                    "(NULLIF(current_setting('app.current_tenant', true), '')::uuid," +
+                    " ?, 'received', ?, ?, NULL, 'available'::piece_status, ?::jsonb)");
+                evtParams.add(s.pieceId());
+                evtParams.add(actorUserId);
+                evtParams.add(s.locationId());
+                evtParams.add("{\"label_code_id\":\"" + s.labelCodeId() + "\",\"label_run_id\":\"" + labelRunId
+                    + "\",\"code\":\"" + s.code() + "\"}");
+            }
+            jdbc.update(pieceSql.toString(), pieceParams.toArray());
+            jdbc.update(evtSql.toString(), evtParams.toArray());
+
+            UUID[] codeIds = new UUID[to - from];
+            String[] pieceIds = new String[to - from];
+            for (int i = from; i < to; i++) {
+                codeIds[i - from] = specs.get(i).labelCodeId();
+                pieceIds[i - from] = specs.get(i).pieceId();
+            }
+            int bound = jdbc.update(
+                "UPDATE label_codes c SET status = 'bound', piece_id = v.piece_id, bound_by = ?, bound_at = now() " +
+                "FROM unnest(?::uuid[], ?::text[]) AS v(code_id, piece_id) " +
+                "WHERE c.id = v.code_id AND c.status = 'issued' " +
+                "  AND c.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
+                actorUserId, codeIds, pieceIds);
+            if (bound != to - from) {
+                throw new IllegalStateException("receiveFactoryLabeled bound " + bound + " of " + (to - from) + " codes");
+            }
+        }
+    }
+
+    /** One piece of a factory receiving: its new id, and the factory label code scanned off it. */
+    public record FactoryReceiveSpec(String pieceId, UUID tenantId, UUID variantId, UUID receiptId, UUID locationId,
+                                     UUID labelCodeId, String code) {}
+
+    /**
+     * label_reprinted events for many pieces in one statement (flexible labeling slice 6b: "Print session labels" on
+     * a factory receipt is a reprint of the codes the pieces already carry). Status unchanged; each event at the
+     * piece's current location. Returns how many events were written.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public int recordLabelsReprinted(List<String> pieceIds, UUID actorUserId, String metadata) {
+        if (pieceIds.isEmpty()) return 0;
+        return jdbc.update(
+            "INSERT INTO piece_events (tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status, metadata) " +
+            "SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid, p.id, 'label_reprinted', ?, " +
+            "       p.current_location_id, p.status, p.status, ?::jsonb " +
+            "FROM pieces p WHERE p.id = ANY(?::text[]) " +
+            "  AND p.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
+            actorUserId, metadata, pieceIds.toArray(new String[0]));
     }
 
     /**

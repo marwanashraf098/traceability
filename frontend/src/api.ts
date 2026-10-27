@@ -531,6 +531,8 @@ export interface TimelineEvent {
   occurredAt: string
   /** label_bound only: the code that went on the piece (phraseKey label_bound_packing / label_bound_tag). */
   labelCode?: string | null
+  /** received_factory_run only: "factory · reference" of the run the piece was received from. */
+  factoryRun?: string | null
 }
 
 export interface LookupVariant {
@@ -3965,4 +3967,44 @@ export function printLabelRun(id: string) {
 /** One part (≤ 2,000) of the run's unused labels, opened in a new tab — also the reprint (the same codes). */
 export async function openLabelRunPdf(id: string, part: number) {
   await openPdfResponse(await authFetch(`/label-runs/${id}/pdf?part=${part}`))
+}
+
+// ── Flexible labeling: factory receiving (slice 6b) ──────────────────────────
+
+export interface FactoryLineProgress {
+  lineId: string; lineNo: number; variantId: string; productTitle: string; variantTitle: string; sku: string | null
+  imageUrl: string | null; expected: number; received: number; staged: number
+}
+export interface FactoryProgress {
+  runId: string; factoryName: string; reference: string | null; runStatus: 'open' | 'closed'; staged: number
+  lines: FactoryLineProgress[]
+}
+/** outcome: STAGED | REJECTED:<code> (UNKNOWN_CODE, PIECE_ALREADY_IN_STOCK, NOT_FACTORY_LABEL, CODE_VOIDED, …). */
+export interface FactoryScanOutcome {
+  outcome: string; code: string; messageEn: string | null; messageAr: string | null
+  line: FactoryLineProgress | null; overage: boolean; progress: FactoryProgress; viaPhone: boolean
+}
+/** A receiving session as GET /receiving/sessions/{id} answers it (the fields the factory scan loop reads). */
+export interface ReceivingSessionView {
+  id: string; status: string; mode?: 'print_stick' | 'count_only' | 'factory'; reference: string | null
+  factory?: FactoryProgress
+}
+export function getReceivingSession(id: string) {
+  return requestReadable<ReceivingSessionView>(`/receiving/sessions/${id}`)
+}
+export function scanFactoryPiece(sessionId: string, code: string, relayEventId?: string) {
+  return requestReadable<FactoryScanOutcome>(`/receiving/sessions/${sessionId}/factory/scan`, {
+    method: 'POST', body: withRelay({ code }, relayEventId),
+  })
+}
+export function undoFactoryScan(sessionId: string) {
+  return requestReadable<{ code: string; progress: FactoryProgress }>(`/receiving/sessions/${sessionId}/factory/undo`, { method: 'POST' })
+}
+/** "Piece without a label": one factory code for the product's line of this run (overage when the line is full). */
+export function printFactoryExtraLabel(sessionId: string, variantId: string, idempotencyKey: string) {
+  return requestReadable<{ codeId: string; code: string; overage: boolean; productTitle: string; variantTitle: string }>(
+    `/receiving/sessions/${sessionId}/factory/labels`, { method: 'POST', body: JSON.stringify({ variantId, idempotencyKey }) })
+}
+export async function openFactoryExtraLabelPdf(sessionId: string, codeId: string) {
+  await openPdfResponse(await authFetch(`/receiving/sessions/${sessionId}/factory/labels/${codeId}/pdf`))
 }
