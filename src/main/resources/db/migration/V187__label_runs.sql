@@ -1,4 +1,4 @@
--- V186 — Flexible labeling slice 6a: factory runs (approved 2026-10-27).
+-- V187 — Flexible labeling slice 6a: factory runs (approved 2026-10-27).
 --
 -- A factory run is an order to a factory: per line a variant and the number of pieces expected. Its print issues
 -- one named FACTORY label code per expected piece (kind 'factory', from the same PieceCodeCounter as every other

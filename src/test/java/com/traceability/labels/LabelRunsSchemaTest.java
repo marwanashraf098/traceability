@@ -21,7 +21,7 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Flexible labeling slice 6a — V186 (factory runs): the schema rules, as app_user.
+ * Flexible labeling slice 6a — V187 (factory runs): the schema rules, as app_user.
  *
  *   s1  RLS is enabled AND forced on label_runs / label_run_lines (NULLIF policy: no tenant set → zero rows)
  *   s2  app_user, tenant A: sees its own run, line and factory code (positive control) and NONE of tenant B's;

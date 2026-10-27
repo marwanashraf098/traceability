@@ -13,7 +13,7 @@ import java.util.*;
 
 /**
  * Flexible labeling slice 6a — factory runs: an order to a factory, per line a variant and the pieces expected.
- * The run's print issues one named FACTORY label per expected piece (kind factory, V186: each code names its
+ * The run's print issues one named FACTORY label per expected piece (kind factory, V187: each code names its
  * run line); the factory sticks each label on a matching piece. Those pieces enter stock only when the run is
  * received (slice 6b) — until then every scan path refuses / explains a factory code (InventoryLedger.bindLabel,
  * UnusedLabels). Nothing here touches pieces, stock or Shopify.

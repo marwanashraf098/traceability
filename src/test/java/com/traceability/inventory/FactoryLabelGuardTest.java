@@ -174,7 +174,7 @@ class FactoryLabelGuardTest {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /** A factory code as a run's print issues it — its run, its line (V186), its batch; written directly here. */
+    /** A factory code as a run's print issues it — its run, its line (V187), its batch; written directly here. */
     private UUID factoryCode(String code) {
         UUID run = jdbc.queryForObject(
             "INSERT INTO label_runs (tenant_id, factory_name, created_by) VALUES (?, 'FG Factory', ?) RETURNING id",

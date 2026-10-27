@@ -162,7 +162,7 @@ waiting on Marawan's answers.** Key facts found:
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
 **Flexible labeling — slice 6a: factory runs + printing (2026-10-27, branch `feat/flexible-labeling-s6a` off origin/main
-5d9c521; NOT merged, NOT deployed). Migration V186.** Step 0 answers (Marawan 2026-10-27): runs receive into the main
+5d9c521; NOT merged, NOT deployed). Migration V187 (was V186; main took V186 for the onboarding gate).** Step 0 answers (Marawan 2026-10-27): runs receive into the main
 warehouse only; 20,000 pieces per run, PDFs in parts of ≤ 2,000 that never split a product group unless it alone is
 larger; overage is a flag, never a block; no 'factory' default in Settings › Labels; factory receipts may reprint
 session labels as label_reprinted (6b); received events carry label_run_id + label_code_id (6b); closed runs are not
@@ -176,7 +176,7 @@ reopened ("Still coming" keeps a run open, 6c); A4 shortfall PDF (6c).
   take, Transfers, Scan returns answer "Factory label not received yet — receive it in its factory run first";
   other kinds keep the Tag stock message. The generic issue endpoint refuses kind factory. Approved test edit:
   LabelCodesTest.i5 issues its 2,000-cap batch as kind tag instead of factory.
-- **Commit 3 — V186:** `label_runs` (factory, reference, open/closed), `label_run_lines` (line_no, variant, expected
+- **Commit 3 — V187:** `label_runs` (factory, reference, open/closed), `label_run_lines` (line_no, variant, expected
   1..20,000, close reason / time / user for 6c), `label_codes.run_line_id` (set exactly for kind factory) + `overage`
   (factory only), `label_code_batches.run_id` (set exactly for kind factory). RLS NULLIF + FORCE, lifecycle-only column
   grants (close a run, record a line reason), no DELETE. Prod had 0 factory codes / batches (checked).

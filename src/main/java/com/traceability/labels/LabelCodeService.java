@@ -112,7 +112,7 @@ public class LabelCodeService {
 
     /**
      * Flexible labeling slice 6 — ONE factory batch (1..2,000 codes) for a run: the batch names the run, every code
-     * its run line (V186 CHECKs). Codes come from the same {@link PieceCodeCounter} claim as every other code.
+     * its run line (V187 CHECKs). Codes come from the same {@link PieceCodeCounter} claim as every other code.
      * Only {@link LabelRunService} calls this, inside its own transaction with the run row locked; the generic
      * {@link #issue} refuses kind factory.
      */
