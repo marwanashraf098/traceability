@@ -26,6 +26,12 @@ import java.util.*;
  *   <li>{@link #parts} / {@link #pdf}: the run's still-ISSUED codes as named piece labels, grouped by product
  *       (one header-first separator per line: product, then variant), in parts of ≤ 2,000 labels that never
  *       split a line's group unless the group alone is larger. Reprint = the same PDF: the same codes, none new.</li>
+ *   <li>{@link #close} (slice 6c): every line with a gap (expected − received &gt; 0) needs a reason. Short-shipped /
+ *       Lost voids that line's leftover issued codes (reasons factory_run_short_shipped / factory_run_lost); Still
+ *       coming keeps them valid and the run open. The run closes only when no line is Still coming; a later close
+ *       may turn Still coming into Short-shipped / Lost (never back). No reopen. Refused while an open receiving
+ *       session of the run holds live scans.</li>
+ *   <li>{@link #report} (slice 6c): per line expected / received / gap / reason / overage — CSV and A4 PDF.</li>
  * </ul>
  * Caller contract: owner / manager (controller); 404 unless the tenant has flexible labeling.
  */
@@ -37,15 +43,21 @@ public class LabelRunService {
     static final int PART_SIZE = LabelCodeService.MAX_CODES_PER_BATCH;
 
     public record CreateLine(UUID variantId, Integer expectedQty) {}
+    /** {@code stillComing}: an open run with at least one line closed as Still coming (slice 6c). */
     public record RunSummary(UUID id, String factoryName, String reference, String status, String createdAt,
-                             int lines, int expected, int printed, int received) {}
+                             int lines, int expected, int printed, int received, boolean stillComing) {}
+    /**
+     * {@code overage}: the line's codes printed for a piece that arrived without a label once the line was full;
+     * {@code gap} = max(0, expected − received); {@code closeReason}: short_shipped | lost | still_coming | null.
+     */
     public record RunLine(UUID id, int lineNo, UUID variantId, String productTitle, String variantTitle, String sku,
-                          String imageUrl, int expected, int printed, int received, int unused, int voided, int overage) {}
+                          String imageUrl, int expected, int printed, int received, int unused, int voided, int overage,
+                          int gap, String closeReason) {}
     public record PartGroup(String productTitle, String variantTitle, String sku, int labels) {}
     public record Part(int part, int labels, List<PartGroup> groups) {}
     public record RunDetail(UUID id, String factoryName, String reference, String status, String createdAt,
                             String createdBy, int expected, int printed, int received, int toPrint,
-                            List<RunLine> lines, List<Part> parts) {}
+                            List<RunLine> lines, List<Part> parts, boolean stillComing, String closedAt, String closedBy) {}
     public record PrintResult(int issued, RunDetail run) {}
 
     private final JdbcTemplate jdbc;
@@ -72,11 +84,14 @@ public class LabelRunService {
             "       (SELECT count(*)::int FROM label_codes c JOIN label_run_lines l ON l.id = c.run_line_id " +
             "         WHERE l.run_id = r.id AND c.tenant_id = r.tenant_id AND NOT c.overage) AS printed, " +
             "       (SELECT count(*)::int FROM label_codes c JOIN label_run_lines l ON l.id = c.run_line_id " +
-            "         WHERE l.run_id = r.id AND c.tenant_id = r.tenant_id AND c.status = 'bound') AS received " +
+            "         WHERE l.run_id = r.id AND c.tenant_id = r.tenant_id AND c.status = 'bound') AS received, " +
+            "       EXISTS (SELECT 1 FROM label_run_lines l WHERE l.run_id = r.id AND l.tenant_id = r.tenant_id " +
+            "                AND l.close_reason = 'still_coming') AS still_coming " +
             "FROM label_runs r WHERE r.tenant_id = ? ORDER BY r.created_at DESC, r.id DESC LIMIT 200",
             (rs, i) -> new RunSummary(rs.getObject("id", UUID.class), rs.getString("factory_name"), rs.getString("reference"),
                 rs.getString("status"), rs.getObject("created_at", java.time.OffsetDateTime.class).toString(),
-                rs.getInt("lines"), rs.getInt("expected"), rs.getInt("printed"), rs.getInt("received")),
+                rs.getInt("lines"), rs.getInt("expected"), rs.getInt("printed"), rs.getInt("received"),
+                rs.getBoolean("still_coming")),
             tenantId);
     }
 
@@ -89,13 +104,15 @@ public class LabelRunService {
 
     private RunDetail detail(UUID tenantId, UUID runId) {
         List<Map<String, Object>> run = jdbc.queryForList(
-            "SELECT r.id, r.factory_name, r.reference, r.status, r.created_at, u.name AS created_by " +
-            "FROM label_runs r LEFT JOIN users u ON u.id = r.created_by WHERE r.id = ? AND r.tenant_id = ?", runId, tenantId);
+            "SELECT r.id, r.factory_name, r.reference, r.status, r.created_at, u.name AS created_by, " +
+            "       r.closed_at, cu.name AS closed_by " +
+            "FROM label_runs r LEFT JOIN users u ON u.id = r.created_by LEFT JOIN users cu ON cu.id = r.closed_by " +
+            "WHERE r.id = ? AND r.tenant_id = ?", runId, tenantId);
         if (run.isEmpty()) throw LabelCodeException.runNotFound();
         Map<String, Object> r = run.get(0);
         List<RunLine> lines = jdbc.query(
-            "SELECT l.id, l.line_no, l.variant_id, l.expected_qty, pr.title AS product_title, v.title AS variant_title, " +
-            "       v.sku, pr.image_url, " +
+            "SELECT l.id, l.line_no, l.variant_id, l.expected_qty, l.close_reason, pr.title AS product_title, " +
+            "       v.title AS variant_title, v.sku, pr.image_url, " +
             "       count(c.id) FILTER (WHERE NOT c.overage)::int        AS printed, " +
             "       count(c.id) FILTER (WHERE c.status = 'bound')::int    AS received, " +
             "       count(c.id) FILTER (WHERE c.status = 'issued')::int   AS unused, " +
@@ -104,12 +121,13 @@ public class LabelRunService {
             "FROM label_run_lines l JOIN variants v ON v.id = l.variant_id JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN label_codes c ON c.run_line_id = l.id AND c.tenant_id = l.tenant_id " +
             "WHERE l.run_id = ? AND l.tenant_id = ? " +
-            "GROUP BY l.id, l.line_no, l.variant_id, l.expected_qty, pr.title, v.title, v.sku, pr.image_url " +
+            "GROUP BY l.id, l.line_no, l.variant_id, l.expected_qty, l.close_reason, pr.title, v.title, v.sku, pr.image_url " +
             "ORDER BY l.line_no",
             (rs, i) -> new RunLine(rs.getObject("id", UUID.class), rs.getInt("line_no"), rs.getObject("variant_id", UUID.class),
                 rs.getString("product_title"), rs.getString("variant_title"), rs.getString("sku"), rs.getString("image_url"),
                 rs.getInt("expected_qty"), rs.getInt("printed"), rs.getInt("received"), rs.getInt("unused"),
-                rs.getInt("voided"), rs.getInt("overage")),
+                rs.getInt("voided"), rs.getInt("overage"), Math.max(0, rs.getInt("expected_qty") - rs.getInt("received")),
+                rs.getString("close_reason")),
             runId, tenantId);
         int expected = lines.stream().mapToInt(RunLine::expected).sum();
         int printed = lines.stream().mapToInt(RunLine::printed).sum();
@@ -121,7 +139,139 @@ public class LabelRunService {
             parts.add(new Part(parts.size() + 1, g.stream().mapToInt(PartGroup::labels).sum(), g));
         }
         return new RunDetail(runId, (String) r.get("factory_name"), (String) r.get("reference"), (String) r.get("status"),
-            r.get("created_at").toString(), (String) r.get("created_by"), expected, printed, received, toPrint, lines, parts);
+            r.get("created_at").toString(), (String) r.get("created_by"), expected, printed, received, toPrint, lines, parts,
+            lines.stream().anyMatch(l -> REASON_STILL_COMING.equals(l.closeReason())),
+            r.get("closed_at") == null ? null : r.get("closed_at").toString(), (String) r.get("closed_by"));
+    }
+
+    // ── close (slice 6c) ──────────────────────────────────────────────────────
+
+    public static final String REASON_SHORT_SHIPPED = "short_shipped";
+    public static final String REASON_LOST          = "lost";
+    public static final String REASON_STILL_COMING  = "still_coming";
+    private static final Set<String> REASONS = Set.of(REASON_SHORT_SHIPPED, REASON_LOST, REASON_STILL_COMING);
+
+    public record CloseLine(UUID lineId, String reason) {}
+    /** {@code voided}: leftover codes voided by this close; {@code closed}: the run is now closed. */
+    public record CloseResult(int voided, boolean closed, RunDetail run) {}
+
+    @Transactional
+    public CloseResult close(UUID runId, UUID actorUserId, List<CloseLine> reasons) {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        // The run first (finalize and the scans lock it too): nothing is received or staged while it closes.
+        List<String> status = jdbc.queryForList(
+            "SELECT status FROM label_runs WHERE id = ? AND tenant_id = ? FOR UPDATE", String.class, runId, tenantId);
+        if (status.isEmpty()) throw LabelCodeException.runNotFound();
+        if (!"open".equals(status.get(0))) throw LabelCodeException.runClosed();
+
+        List<Map<String, Object>> live = jdbc.queryForList(
+            "SELECT r.id, r.reference, r.created_at, count(*)::int AS scans FROM receipt_factory_scans s " +
+            "JOIN receipts r ON r.id = s.receipt_id AND r.tenant_id = s.tenant_id " +
+            "WHERE r.tenant_id = ? AND r.label_run_id = ? AND r.status = 'open' AND s.undone_at IS NULL " +
+            "GROUP BY r.id, r.reference, r.created_at ORDER BY r.created_at, r.id",
+            tenantId, runId);
+        if (!live.isEmpty()) {
+            List<Map<String, Object>> sessions = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            for (Map<String, Object> l : live) {
+                String name = l.get("reference") != null ? l.get("reference").toString()
+                    : l.get("created_at").toString().substring(0, 16).replace('T', ' ');
+                names.add("«" + name + "»");
+                sessions.add(Map.of("sessionId", l.get("id"), "name", name, "scans", l.get("scans")));
+            }
+            throw LabelCodeException.runHasLiveScans(String.join(", ", names), sessions);
+        }
+
+        Map<UUID, String> asked = new HashMap<>();
+        for (CloseLine c : reasons == null ? List.<CloseLine>of() : reasons) {
+            if (c == null || c.lineId() == null || c.reason() == null || !REASONS.contains(c.reason())
+                    || asked.put(c.lineId(), c.reason()) != null) {
+                throw LabelCodeException.invalidClose("Each line can have one reason: short-shipped, lost or still coming",
+                    "لكل سطر سبب واحد: شحن ناقص أو مفقود أو ما زال قادمًا", List.of());
+            }
+        }
+        RunDetail before = detail(tenantId, runId);
+        Set<UUID> known = new HashSet<>();
+        before.lines().forEach(l -> known.add(l.id()));
+        if (!known.containsAll(asked.keySet())) {
+            throw LabelCodeException.invalidClose("A line in this request isn't in this run — reload the run",
+                "سطر في هذا الطلب ليس ضمن هذه الدفعة — أعد تحميل الدفعة", List.of());
+        }
+
+        List<Map<String, Object>> missing = new ArrayList<>();
+        Map<UUID, String> apply = new LinkedHashMap<>();   // line → new reason (null = clear a Still coming)
+        for (RunLine l : before.lines()) {
+            String current = l.closeReason();
+            String given = asked.get(l.id());
+            boolean fin = REASON_SHORT_SHIPPED.equals(current) || REASON_LOST.equals(current);
+            if (fin) {
+                if (given != null && !given.equals(current)) {
+                    throw LabelCodeException.invalidClose("A short-shipped or lost line can't be changed",
+                        "لا يمكن تغيير سطر مسجل كشحن ناقص أو مفقود",
+                        List.of(Map.of("lineId", l.id(), "closeReason", current)));
+                }
+                continue;
+            }
+            if (l.gap() == 0) {
+                // Everything arrived: nothing to record; a Still coming line that has since arrived is cleared.
+                if (current != null) apply.put(l.id(), null);
+                continue;
+            }
+            String reason = given != null ? given : current;   // an untouched Still coming line stays Still coming
+            if (reason == null) {
+                missing.add(Map.of("lineId", l.id(), "gap", l.gap()));
+                continue;
+            }
+            if (!reason.equals(current)) apply.put(l.id(), reason);
+        }
+        if (!missing.isEmpty()) {
+            throw LabelCodeException.invalidClose("Choose a reason for every line with missing pieces",
+                "اختر سببًا لكل سطر به قطع ناقصة", missing);
+        }
+
+        int voided = 0;
+        for (Map.Entry<UUID, String> e : apply.entrySet()) {
+            String reason = e.getValue();
+            if (reason == null) {
+                jdbc.update("UPDATE label_run_lines SET close_reason = NULL, close_recorded_at = NULL, close_recorded_by = NULL " +
+                    "WHERE id = ? AND tenant_id = ?", e.getKey(), tenantId);
+                continue;
+            }
+            if (!REASON_STILL_COMING.equals(reason)) {
+                // The line's leftover codes stop working — all or nothing with the rest of the close.
+                voided += jdbc.update(
+                    "UPDATE label_codes SET status = 'voided', voided_at = now(), void_reason = ? " +
+                    "WHERE tenant_id = ? AND run_line_id = ? AND status = 'issued'",
+                    "factory_run_" + reason, tenantId, e.getKey());
+            }
+            jdbc.update("UPDATE label_run_lines SET close_reason = ?, close_recorded_at = now(), close_recorded_by = ? " +
+                "WHERE id = ? AND tenant_id = ?", reason, actorUserId, e.getKey(), tenantId);
+        }
+        Boolean stillComing = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM label_run_lines WHERE run_id = ? AND tenant_id = ? AND close_reason = 'still_coming')",
+            Boolean.class, runId, tenantId);
+        boolean closed = !Boolean.TRUE.equals(stillComing);
+        if (closed) {
+            jdbc.update("UPDATE label_runs SET status = 'closed', closed_at = now(), closed_by = ? " +
+                "WHERE id = ? AND tenant_id = ? AND status = 'open'", actorUserId, runId, tenantId);
+        }
+        return new CloseResult(voided, closed, detail(tenantId, runId));
+    }
+
+    // ── shortfall report (slice 6c) ───────────────────────────────────────────
+
+    /** The run's report: per line expected / received / gap / reason / overage (overage = received beyond expected). */
+    @Transactional(readOnly = true)
+    public FactoryRunReport.Report report(UUID runId) {
+        UUID tenantId = TenantContext.require();
+        FlexibleLabeling.require(jdbc, tenantId);
+        RunDetail d = detail(tenantId, runId);
+        List<FactoryRunReport.Row> rows = d.lines().stream().map(l -> new FactoryRunReport.Row(l.productTitle(),
+            l.variantTitle(), l.sku(), l.expected(), l.received(), l.gap(), l.closeReason(),
+            Math.max(0, l.received() - l.expected()))).toList();
+        return new FactoryRunReport.Report(d.factoryName(), d.reference(), d.status(), d.stillComing(), d.createdAt(),
+            d.closedAt(), rows);
     }
 
     // ── create ────────────────────────────────────────────────────────────────

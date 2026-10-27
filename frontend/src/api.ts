@@ -3934,13 +3934,17 @@ export function saveSetupAddress(address: WarehouseAddressInput) {
 
 // ── Flexible labeling: factory runs (slice 6a) ───────────────────────────────
 
+/** stillComing (slice 6c): an open run with a line closed as Still coming. */
 export interface LabelRunSummary {
   id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
-  lines: number; expected: number; printed: number; received: number
+  lines: number; expected: number; printed: number; received: number; stillComing?: boolean
 }
+export type LabelRunCloseReason = 'short_shipped' | 'lost' | 'still_coming'
+/** gap = max(0, expected − received); closeReason set by closing the run (slice 6c). */
 export interface LabelRunLine {
   id: string; lineNo: number; variantId: string; productTitle: string; variantTitle: string; sku: string | null
   imageUrl: string | null; expected: number; printed: number; received: number; unused: number; voided: number; overage: number
+  gap?: number; closeReason?: LabelRunCloseReason | null
 }
 export interface LabelRunPart {
   part: number; labels: number
@@ -3950,6 +3954,7 @@ export interface LabelRunDetail {
   id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
   createdBy: string | null; expected: number; printed: number; received: number; toPrint: number
   lines: LabelRunLine[]; parts: LabelRunPart[]
+  stillComing?: boolean; closedAt?: string | null; closedBy?: string | null
 }
 export function getLabelRuns() {
   return requestReadable<LabelRunSummary[]>('/label-runs')
@@ -3967,6 +3972,28 @@ export function printLabelRun(id: string) {
 /** One part (≤ 2,000) of the run's unused labels, opened in a new tab — also the reprint (the same codes). */
 export async function openLabelRunPdf(id: string, part: number) {
   await openPdfResponse(await authFetch(`/label-runs/${id}/pdf?part=${part}`))
+}
+/**
+ * Slice 6c: every line with a gap needs a reason. Short-shipped / Lost void that line's unused labels; Still coming
+ * keeps them and the run open. → { voided, closed, run }
+ */
+export function closeLabelRun(id: string, lines: { lineId: string; reason: LabelRunCloseReason }[]) {
+  return requestReadable<{ voided: number; closed: boolean; run: LabelRunDetail }>(`/label-runs/${id}/close`, {
+    method: 'POST', body: JSON.stringify({ lines }),
+  })
+}
+/** The shortfall report: the PDF opens in a new tab; the CSV downloads. */
+export async function openLabelRunReport(id: string, format: 'csv' | 'pdf', lang: string) {
+  const res = await authFetch(`/label-runs/${id}/report/${format}?lang=${lang.startsWith('ar') ? 'ar' : 'en'}`)
+  if (format === 'pdf') { await openPdfResponse(res); return }
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(await res.blob())
+  a.download = `factory-run-report-${id}.csv`
+  a.click()
 }
 
 // ── Flexible labeling: factory receiving (slice 6b) ──────────────────────────

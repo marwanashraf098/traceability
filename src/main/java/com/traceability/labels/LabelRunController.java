@@ -27,12 +27,16 @@ import java.util.UUID;
  *   POST /api/v1/label-runs/{id}/print         issues the codes each line still lacks (none on a second call) → run
  *   GET  /api/v1/label-runs/{id}/pdf?part=n    part n (≤ 2,000 labels) of the run's unused labels — also the reprint
  *   POST /api/v1/label-runs/import/preview     multipart file → matched rows, "On hand (new)" as expected quantity
+ *   POST /api/v1/label-runs/{id}/close         {lines: [{lineId, reason}]} → {voided, closed, run} (slice 6c)
+ *   GET  /api/v1/label-runs/{id}/report/csv?lang=   the shortfall report as CSV (slice 6c)
+ *   GET  /api/v1/label-runs/{id}/report/pdf?lang=   the shortfall report as an A4 PDF (slice 6c)
  */
 @RestController
 @RequestMapping("/api/v1/label-runs")
 public class LabelRunController {
 
     public record CreateRequest(String factoryName, String reference, List<LabelRunService.CreateLine> lines) {}
+    public record CloseRequest(List<LabelRunService.CloseLine> lines) {}
 
     private final LabelRunService service;
 
@@ -75,6 +79,31 @@ public class LabelRunController {
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"factory-run-labels-" + id + "-part-" + part + ".pdf\"")
             .body(service.pdf(id, part));
+    }
+
+    @PostMapping("/{id}/close")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public LabelRunService.CloseResult close(@PathVariable UUID id, @RequestBody(required = false) CloseRequest req,
+                                             @AuthenticationPrincipal CustomUserDetails principal) {
+        return service.close(id, principal.userId(), req == null ? null : req.lines());
+    }
+
+    @GetMapping("/{id}/report/csv")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> reportCsv(@PathVariable UUID id, @RequestParam(required = false) String lang) {
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType("text/csv; charset=utf-8"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"factory-run-report-" + id + ".csv\"")
+            .body(FactoryRunReport.csv(service.report(id), lang));
+    }
+
+    @GetMapping("/{id}/report/pdf")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> reportPdf(@PathVariable UUID id, @RequestParam(required = false) String lang) {
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_PDF)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"factory-run-report-" + id + ".pdf\"")
+            .body(FactoryRunReport.pdf(service.report(id), lang));
     }
 
     @PostMapping("/import/preview")

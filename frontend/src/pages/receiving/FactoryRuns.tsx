@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, Printer } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Printer } from 'lucide-react'
 import {
-  Alert, Badge, Button, EmptyState, Input, ProductThumb, TableSkeleton, useToast,
+  Alert, Badge, Button, EmptyState, Input, Modal, ProductThumb, TableSkeleton, useToast,
 } from '../../components/ui'
 import {
-  LabelRunDetail, LabelRunSummary, ServerMessageError, createLabelRun, getLabelRun, getLabelRuns, openLabelRunPdf,
-  printLabelRun,
+  LabelRunCloseReason, LabelRunDetail, LabelRunSummary, ServerMessageError, closeLabelRun, createLabelRun, getLabelRun,
+  getLabelRuns, openLabelRunPdf, openLabelRunReport, printLabelRun,
 } from '../../api'
 import ProductSelectionGrid from './ProductSelectionGrid'
 import { ImportFromExcelButton, ImportPanel, MatchedRow } from './ReceivingImport'
@@ -16,7 +16,8 @@ import type { Line } from '../Receiving'
  * Flexible labeling slice 6a — Receiving › Factory runs (switch on only; no sidebar entry). A run is an order to a
  * factory: per product variant the pieces expected. Print issues one named label per expected piece (grouped by
  * product, a header label before each group, parts of ≤ 2,000); reprint prints the same labels, never new ones.
- * The pieces enter stock only when the run is received (slice 6b). Server: LabelRunController.
+ * The pieces enter stock only when the run is received (slice 6b). Slice 6c: "Close run" (a reason for every line with
+ * missing pieces) and the shortfall report (CSV + PDF). Server: LabelRunController.
  */
 
 const MAX_RUN_UNITS = 20_000
@@ -24,6 +25,14 @@ const MAX_RUN_UNITS = 20_000
 function message(e: unknown, lang: string, fallback: string): string {
   if (e instanceof ServerMessageError) return e.messageFor(lang)
   return (e as Error)?.message || fallback
+}
+
+/** Open | Still coming (open, a line still coming) | Closed. */
+function RunStatus({ run }: { run: { status: 'open' | 'closed'; stillComing?: boolean } }) {
+  const { t } = useTranslation()
+  if (run.status === 'closed') return <Badge tone="neutral" label={t('labelRuns.status.closed')} />
+  if (run.stillComing) return <Badge tone="warning" label={t('labelRuns.status.stillComing')} />
+  return <Badge tone="info" label={t('labelRuns.status.open')} />
 }
 
 export default function FactoryRuns() {
@@ -74,9 +83,7 @@ function RunList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: string) =>
                     <p className="text-body font-medium text-primary"><bdi>{r.factoryName}</bdi></p>
                     {r.reference && <p className="text-caption text-muted font-mono" dir="ltr">{r.reference}</p>}
                   </td>
-                  <td className="tbl-cell">
-                    <Badge tone={r.status === 'open' ? 'info' : 'neutral'} label={t(`labelRuns.status.${r.status}`)} />
-                  </td>
+                  <td className="tbl-cell" data-testid={`run-status-${r.id}`}><RunStatus run={r} /></td>
                   <td className="tbl-cell text-primary tabular-nums">{r.expected.toLocaleString()}</td>
                   <td className="tbl-cell text-primary tabular-nums">{r.printed.toLocaleString()}</td>
                   <td className="tbl-cell text-primary tabular-nums" dir="ltr">
@@ -205,6 +212,8 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [printing, setPrinting] = useState(false)
   const [opening, setOpening] = useState<number | null>(null)
+  const [closing, setClosing] = useState(false)
+  const [report, setReport] = useState<'csv' | 'pdf' | null>(null)
 
   useEffect(() => {
     getLabelRun(id).then(setRun).catch(e => setError(message(e, i18n.language, t('common.error'))))
@@ -229,6 +238,13 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
     } finally {
       setPrinting(false)
     }
+  }
+
+  async function download(format: 'csv' | 'pdf') {
+    setReport(format); setError(null)
+    try { await openLabelRunReport(id, format, i18n.language) }
+    catch (e: unknown) { setError(message(e, i18n.language, t('common.error'))) }
+    finally { setReport(null) }
   }
 
   const back = (
@@ -257,17 +273,27 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
           <h2 className="text-h2 text-primary"><bdi>{run.factoryName}</bdi></h2>
           <p className="text-small text-muted mt-1 flex flex-wrap items-center gap-2">
             {run.reference && <span className="font-mono" dir="ltr">{run.reference}</span>}
-            <Badge tone={open_ ? 'info' : 'neutral'} label={t(`labelRuns.status.${run.status}`)} />
+            <RunStatus run={run} />
             <span>{t('labelRuns.detail.created', {
               name: run.createdBy ?? '—', date: new Date(run.createdAt).toLocaleDateString(),
             })}</span>
+            {run.closedAt && (
+              <span data-testid="run-closed-by">{t('labelRuns.close.closedBy', {
+                name: run.closedBy ?? '—', date: new Date(run.closedAt).toLocaleDateString(),
+              })}</span>
+            )}
           </p>
         </div>
-        {open_ && run.toPrint > 0 && (
-          <Button iconStart={Printer} loading={printing} onClick={print} data-testid="run-print">
-            {t('labelRuns.detail.print', { count: run.toPrint })}
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {open_ && run.toPrint > 0 && (
+            <Button iconStart={Printer} loading={printing} onClick={print} data-testid="run-print">
+              {t('labelRuns.detail.print', { count: run.toPrint })}
+            </Button>
+          )}
+          {open_ && (
+            <Button variant="secondary" onClick={() => setClosing(true)}>{t('labelRuns.close.open')}</Button>
+          )}
+        </div>
       </div>
 
       {error && <Alert tone="critical" title={error} />}
@@ -312,11 +338,23 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
         <Alert tone="info" title={t('labelRuns.detail.noneLeft')} />
       )}
 
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-h3 text-primary">{t('labelRuns.report.title')}</h2>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" iconStart={FileText} loading={report === 'pdf'} onClick={() => download('pdf')}>
+            {t('labelRuns.report.pdf')}
+          </Button>
+          <Button size="sm" variant="secondary" iconStart={Download} loading={report === 'csv'} onClick={() => download('csv')}>
+            {t('labelRuns.report.csv')}
+          </Button>
+        </div>
+      </div>
+
       <div className="card overflow-x-auto">
         <table className="min-w-full">
           <thead>
             <tr className="border-b border-line">
-              {['product', 'expected', 'printed', 'received'].map(k => (
+              {['product', 'expected', 'printed', 'received', 'gap', 'reason'].map(k => (
                 <th key={k} className="tbl-header">{t(`labelRuns.col.${k}`)}</th>
               ))}
             </tr>
@@ -338,12 +376,119 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
                 </td>
                 <td className="tbl-cell text-primary tabular-nums">{l.expected.toLocaleString()}</td>
                 <td className="tbl-cell text-primary tabular-nums">{l.printed.toLocaleString()}</td>
-                <td className="tbl-cell text-primary tabular-nums">{l.received.toLocaleString()}</td>
+                <td className="tbl-cell text-primary tabular-nums">
+                  {l.received.toLocaleString()}
+                  {l.received > l.expected && (
+                    <span className="ms-2"><Badge tone="warning" label={t('labelRuns.close.overage', { count: l.received - l.expected })} /></span>
+                  )}
+                </td>
+                <td className="tbl-cell text-primary tabular-nums">{(l.gap ?? Math.max(0, l.expected - l.received)).toLocaleString()}</td>
+                <td className="tbl-cell text-small">
+                  {l.closeReason ? <Badge tone={l.closeReason === 'still_coming' ? 'warning' : 'neutral'}
+                    label={t(`labelRuns.close.reason.${l.closeReason}`)} /> : <span className="text-muted">—</span>}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {closing && (
+        <CloseRunDialog run={run} onClose={() => setClosing(false)} onDone={(r, closed) => {
+          setRun(r); setClosing(false)
+          toast({ tone: 'success', message: t(closed ? 'labelRuns.close.closedToast' : 'labelRuns.close.stillOpenToast') })
+        }} />
+      )}
     </div>
+  )
+}
+
+// ── Close ─────────────────────────────────────────────────────────────────────
+
+const REASONS: LabelRunCloseReason[] = ['short_shipped', 'lost', 'still_coming']
+
+/**
+ * Per line expected / received / gap / overage; every line with a gap needs a reason (a Still coming line comes
+ * pre-chosen and may be changed; a Short-shipped / Lost one is final). Short-shipped and Lost void the line's unused
+ * labels; the run closes only when nothing is Still coming.
+ */
+function CloseRunDialog({ run, onClose, onDone }: {
+  run: LabelRunDetail; onClose: () => void; onDone: (run: LabelRunDetail, closed: boolean) => void
+}) {
+  const { t, i18n } = useTranslation()
+  const gapOf = (l: LabelRunDetail['lines'][number]) => l.gap ?? Math.max(0, l.expected - l.received)
+  const final = (r?: LabelRunCloseReason | null) => r === 'short_shipped' || r === 'lost'
+  const [reasons, setReasons] = useState<Record<string, LabelRunCloseReason | undefined>>(() => Object.fromEntries(
+    run.lines.filter(l => gapOf(l) > 0 && !final(l.closeReason)).map(l => [l.id, l.closeReason ?? undefined])))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const open = run.lines.filter(l => gapOf(l) > 0 && !final(l.closeReason))
+  const ready = open.every(l => reasons[l.id])
+  const staysOpen = open.some(l => reasons[l.id] === 'still_coming')
+
+  async function submit() {
+    setSaving(true); setError(null)
+    try {
+      const r = await closeLabelRun(run.id, open.map(l => ({ lineId: l.id, reason: reasons[l.id]! })))
+      onDone(r.run, r.closed)
+    } catch (e: unknown) {
+      setError(message(e, i18n.language, t('common.error')))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={t('labelRuns.close.title')} onClose={() => { if (!saving) onClose() }}>
+      <div className="space-y-4" data-testid="close-run-dialog">
+        <p className="text-small text-muted">{t('labelRuns.close.body')}</p>
+        {error && <Alert tone="critical" title={error} />}
+        <ul className="divide-y divide-line border-y border-line max-h-[50vh] overflow-y-auto">
+          {run.lines.map(l => {
+            const gap = gapOf(l)
+            return (
+              <li key={l.id} className="py-3 space-y-2" data-testid={`close-line-${l.variantId}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-body font-medium text-primary truncate"><bdi>{l.productTitle}</bdi></p>
+                    <p className="text-small text-muted truncate"><bdi>{l.variantTitle}</bdi></p>
+                  </div>
+                  <p className="text-small text-muted tabular-nums text-end flex-shrink-0">
+                    {t('labelRuns.close.counts', { received: l.received, expected: l.expected })}
+                    {gap > 0 && <span className="block text-critical-text">{t('labelRuns.close.gap', { count: gap })}</span>}
+                    {l.received > l.expected && (
+                      <span className="block">{t('labelRuns.close.overage', { count: l.received - l.expected })}</span>
+                    )}
+                  </p>
+                </div>
+                {gap === 0 ? (
+                  <p className="text-caption text-success-text">{t('labelRuns.close.complete')}</p>
+                ) : final(l.closeReason) ? (
+                  <p className="text-caption text-muted">{t(`labelRuns.close.reason.${l.closeReason}`)}</p>
+                ) : (
+                  <div role="radiogroup" aria-label={t('labelRuns.close.reasonFor', { product: `${l.productTitle} / ${l.variantTitle}` })}
+                    className="flex flex-wrap gap-2">
+                    {REASONS.map(r => (
+                      <label key={r} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-small cursor-pointer ${
+                        reasons[l.id] === r ? 'border-trace-blue bg-trace-blue/[0.06] text-primary' : 'border-line text-muted hover:bg-elevated'}`}>
+                        <input type="radio" name={`reason-${l.id}`} className="accent-trace-blue" checked={reasons[l.id] === r}
+                          onChange={() => setReasons(prev => ({ ...prev, [l.id]: r }))} />
+                        {t(`labelRuns.close.reason.${r}`)}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+        <p className="text-caption text-muted">{t('labelRuns.close.voidNote')}</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" className="flex-1" disabled={saving} onClick={onClose}>{t('common.cancel')}</Button>
+          <Button className="flex-1" loading={saving} disabled={!ready} onClick={submit}>
+            {t(staysOpen ? 'labelRuns.close.submitStillComing' : 'labelRuns.close.submit')}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }

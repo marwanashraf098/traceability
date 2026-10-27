@@ -225,6 +225,11 @@ class PortalOrderLeakTest {
                 "POST /api/v1/label-runs/{id}/print", "GET /api/v1/label-runs/{id}/pdf", "POST /api/v1/label-runs/import/preview")) {
             reg(k, skip("factory runs: runs, run lines, variants and factory label codes; no order data"));
         }
+        // Flexible labeling slice 6c — closing a run and its shortfall report: run lines and factory codes; no order data.
+        for (String k : List.of("POST /api/v1/label-runs/{id}/close", "GET /api/v1/label-runs/{id}/report/csv",
+                "GET /api/v1/label-runs/{id}/report/pdf")) {
+            reg(k, skip("factory run close / shortfall report: run lines, variants and factory label codes; no order data"));
+        }
         // Flexible labeling slice 6b — factory receiving: staged scans, factory label codes, run lines; no order data.
         for (String k : List.of("POST /api/v1/receiving/sessions/{id}/factory/scan", "POST /api/v1/receiving/sessions/{id}/factory/undo",
                 "POST /api/v1/receiving/sessions/{id}/factory/labels", "GET /api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf")) {

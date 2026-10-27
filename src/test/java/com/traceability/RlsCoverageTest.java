@@ -112,6 +112,8 @@ class RlsCoverageTest {
             "/api/v1/label-runs/{id}",
             "/api/v1/label-runs/{id}/pdf",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
+            "/api/v1/label-runs/{id}/report/csv",
+            "/api/v1/label-runs/{id}/report/pdf",
             "/api/v1/tag-stock",
             "/api/v1/tag-stock/sessions/{id}",
             // Flexible labeling slice 7 — stockTakeUntaggedCounts_crossTenantIsolated_withSameTenantPositiveControl below.
@@ -984,6 +986,42 @@ class RlsCoverageTest {
             assertThat(String.valueOf(otherPdf.getBody())).doesNotContain("P990202");
             ResponseEntity<String> mixed = get("/api/v1/receiving/sessions/" + mine[0] + "/factory/labels/" + theirs[1] + "/pdf", String.class);
             assertThat(mixed.getStatusCode()).as("another tenant's label through my session").isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM receipts           WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_codes        WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_code_batches WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_run_lines    WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_runs         WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void labelRunReport_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 6c: a run's shortfall report (CSV + PDF) is the caller's own run only.
+        UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov RR Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov RR Other', 'cov-rr-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        UUID[] mine = factorySession(tenantId, ownerUserId, "Cov RR Mine Factory", "P990301", "cov-rr-a");
+        UUID[] theirs = factorySession(otherTenant, otherUser, "Cov RR Their Factory", "P990302", "cov-rr-b");
+        UUID myRun = jdbc.queryForObject("SELECT label_run_id FROM receipts WHERE id = ?", UUID.class, mine[0]);
+        UUID theirRun = jdbc.queryForObject("SELECT label_run_id FROM receipts WHERE id = ?", UUID.class, theirs[0]);
+        try {
+            ResponseEntity<String> csv = get("/api/v1/label-runs/" + myRun + "/report/csv", String.class);
+            assertThat(csv.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(csv.getBody()).as("same-tenant positive control").contains("Cov RR Mine Factory");
+            ResponseEntity<byte[]> pdf = get("/api/v1/label-runs/" + myRun + "/report/pdf", byte[].class);
+            assertThat(pdf.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+            ResponseEntity<String> otherCsv = get("/api/v1/label-runs/" + theirRun + "/report/csv", String.class);
+            assertThat(otherCsv.getStatusCode()).as("another tenant's run").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(String.valueOf(otherCsv.getBody())).doesNotContain("Cov RR Their Factory");
+            ResponseEntity<String> otherPdf = get("/api/v1/label-runs/" + theirRun + "/report/pdf", String.class);
+            assertThat(otherPdf.getStatusCode()).as("another tenant's run").isEqualTo(HttpStatus.NOT_FOUND);
         } finally {
             jdbc.update("DELETE FROM receipts           WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM label_codes        WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
