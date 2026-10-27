@@ -1570,12 +1570,14 @@ public class ExceptionService {
                     : "damage_move".equals(triggerType) || "damage_restore".equals(triggerType)
                         || "damaged_restore_increment".equals(triggerType) ? "damage"
                     : "piece_write_off".equals(triggerType) || "piece_write_off_return".equals(triggerType) ? "adjustment"
+                    : "piece_sold".equals(triggerType) || "piece_sold_return".equals(triggerType) ? "sale"
                     : "void";
                 String labelAr = "hold_enter".equals(triggerType) || "hold_exit".equals(triggerType) ? "التعليق"
                     : "exchange_dispatch".equals(triggerType) ? "خصم قطعة الاستبدال"
                     : "damage_move".equals(triggerType) || "damage_restore".equals(triggerType)
                         || "damaged_restore_increment".equals(triggerType) ? "التلف"
                     : "piece_write_off".equals(triggerType) || "piece_write_off_return".equals(triggerType) ? "التعديل"
+                    : "piece_sold".equals(triggerType) || "piece_sold_return".equals(triggerType) ? "البيع"
                     : "الإلغاء";
                 item.put("descriptionEn", "Shopify " + label + " sync failed for piece " + b
                     + " — Traced and Shopify inventory have diverged");

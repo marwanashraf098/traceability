@@ -1258,7 +1258,9 @@
       "unheld": "Released from hold — back to available",
       "location_corrected": "Location corrected to the main warehouse",
       "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}}",
-      "label_bound_tag": "Label {{code}} attached in Tag stock"
+      "label_bound_tag": "Label {{code}} attached in Tag stock",
+      "sold_offline": "Marked sold outside Shopify",
+      "not_sold": "Not sold — piece back to available"
     },
     "pieceStatus": {
       "available": "Available",
@@ -2830,7 +2832,17 @@
       "destroyed": "Destroyed",
       "void": "Void",
       "on_hold": "On Hold"
-    }
+    },
+    "sold": "Sold",
+    "soldTitle": "Mark as sold",
+    "soldDesc": "For a piece sold outside Shopify — in person, on Instagram, at a bazar.",
+    "optional": "(optional)",
+    "soldNotePlaceholder": "e.g. Sold at the showroom",
+    "soldShopifyNote": "Shopify stock at Traced Main Warehouse goes down by 1.",
+    "soldSubmit": "Mark sold",
+    "notSold": "Not sold",
+    "notSoldConfirm": "Put this piece back to available? If the sale reached Shopify, its stock goes back up by 1.",
+    "notSoldSubmit": "Yes, not sold"
   },
   "blocklist": {
     "title": "Blocked Customers",

@@ -544,6 +544,25 @@ public interface ShopifyGateway {
                            String idempotencyKey);
 
     /**
+     * Lookup "Sold" (C1, 2026-10-25) — the SEVENTH member of the named set of sanctioned decrement
+     * methods (CLAUDE.md, FR-21 §7 extension). A piece Shopify counts at the Traced Main Warehouse is
+     * marked sold outside Shopify in Lookup (available → sold): −1 there, once, reason "correction".
+     * Same self-contained, single-HTTP-attempt shape as {@link #pushPieceWriteOff} and classified the
+     * same way; deliberately shares no code with any other decrement method (no general-purpose
+     * decrement helper — CLAUDE.md invariant). One caller: ShopifyInventoryService.pushPieceClaimNow.
+     *
+     * @param negativeDelta        must be < 0 (always -1: one piece)
+     * @param referenceDocumentUri traced://piece/{piece_id}
+     * @param idempotencyKey       deterministic from the claim (piece + sold event)
+     * @throws IllegalArgumentException if negativeDelta >= 0 — checked BEFORE any network call
+     * @throws ShopifyException          definite rejection — nothing was applied
+     * @throws ShopifyAmbiguousException no confirmed response — the caller must NOT auto-retry
+     */
+    void pushPieceSold(String shopDomain, String token, String inventoryItemGid,
+                       String locationGid, int negativeDelta, String referenceDocumentUri,
+                       String idempotencyKey);
+
+    /**
      * Back to good (2026-10-10, D11) — the reverse of {@link #moveAvailableToDamaged}: ONE unit moves
      * damaged → available at the same location (inventoryMoveQuantities; on_hand unchanged). A move,
      * not a decrement — never part of the named decrement set. Single attempt, classified like

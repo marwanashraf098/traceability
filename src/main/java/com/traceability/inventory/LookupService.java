@@ -61,6 +61,9 @@ public class LookupService {
         if ("voided".equals(eventType))            return "voided";
         if ("held".equals(eventType))              return "held";
         if ("unheld".equals(eventType))            return "unheld";
+        // C1 (2026-10-25) — Lookup "Sold" and its undo, "Not sold".
+        if ("sold_offline".equals(eventType))      return "sold_offline";
+        if ("not_sold".equals(eventType))          return "not_sold";
         // 2026-10-08 restock repair: a location fix with no status change.
         if ("location_corrected".equals(eventType)) return "location_corrected";
         if ("courier_update".equals(eventType)) {
@@ -222,6 +225,11 @@ public class LookupService {
         result.put("currentShipment", shipmentMap);
         result.put("receivingSession", sessionMap);
         result.put("timeline",        timeline);
+        // C1: "Not sold" is offered only for a Lookup sale (sold_offline) — never for a transfer's
+        // off-book sale. Present only on sold pieces; every other response is unchanged.
+        if ("sold".equals(Objects.toString(piece.get("status"), null))) {
+            result.put("canUndoSold", PieceAdjustService.isLookupSale(jdbc, tenantId, piece.get("id").toString()));
+        }
         // Flexible labeling: the variant's Available / Labeled / Untagged counts (only for tenants
         // that have it — everyone else's response is unchanged).
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {

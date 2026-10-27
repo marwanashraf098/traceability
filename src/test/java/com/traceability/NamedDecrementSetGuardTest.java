@@ -16,7 +16,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * FR-13.x / FR-21 §7 extension (CLAUDE.md, approved by Marawan 2026-08-23): Shopify decrements
  * are sanctioned ONLY through a named, closed set of dedicated single-attempt gateway methods —
  * pushStockTakeWriteOff, pushVoidCorrection, pushHoldEnter, (Step 5a, approved 2026-09-26)
- * pushExchangeDispatch, (Issue 2, 2026-10-08) pushTransferOut and (D1, 2026-10-10) pushPieceWriteOff —
+ * pushExchangeDispatch, (Issue 2, 2026-10-08) pushTransferOut, (D1, 2026-10-10) pushPieceWriteOff and
+ * (C1, 2026-10-25) pushPieceSold —
  * each called from exactly ONE approved site. Adding a fourth decrement method, or a second caller of any of these three,
  * requires the same explicit approval this set itself required.
  *
@@ -46,23 +47,25 @@ class NamedDecrementSetGuardTest {
         // Issue 2 (2026-10-08) — the fifth.
         new Rule("shopify.pushTransferOut(",        "TransferShopifySync.java"),
         // D1 (2026-10-10) — the sixth: Lookup lost / destroyed of a Shopify-counted piece.
-        new Rule("shopify.pushPieceWriteOff(",      "ShopifyInventoryService.java")
+        new Rule("shopify.pushPieceWriteOff(",      "ShopifyInventoryService.java"),
+        // C1 (2026-10-25) — the seventh: Lookup Sold of a Shopify-counted piece.
+        new Rule("shopify.pushPieceSold(",          "ShopifyInventoryService.java")
     );
 
     /** The closed set, by name — every ShopifyGateway method that takes a negative delta. */
     private static final java.util.Set<String> NAMED_DECREMENTS = java.util.Set.of(
         "pushStockTakeWriteOff", "pushVoidCorrection", "pushHoldEnter", "pushExchangeDispatch",
-        "pushTransferOut", "pushPieceWriteOff");
+        "pushTransferOut", "pushPieceWriteOff", "pushPieceSold");
 
     /**
      * D11: the Back-to-good reverse move (moveDamagedToAvailable, trigger damage_restore) is a MOVE, not
      * a decrement — it is not in the named set, takes a positive quantity, and refuses a non-positive one
-     * before any network call. The gateway's decrement surface is exactly the six named methods: every
+     * before any network call. The gateway's decrement surface is exactly the seven named methods: every
      * ShopifyGateway method named push* is one of them except the +1 (pushPieceIncrement).
      */
     @Test
-    void damageRestore_isAMove_notADecrement_andTheSetIsExactlySix() {
-        assertThat(NAMED_DECREMENTS).hasSize(6).doesNotContain("moveDamagedToAvailable");
+    void damageRestore_isAMove_notADecrement_andTheSetIsExactlySeven() {
+        assertThat(NAMED_DECREMENTS).hasSize(7).doesNotContain("moveDamagedToAvailable");
         java.util.Set<String> pushMethods = new java.util.TreeSet<>();
         for (java.lang.reflect.Method m : com.traceability.integrations.shopify.ShopifyGateway.class.getDeclaredMethods()) {
             if (m.getName().startsWith("push")) pushMethods.add(m.getName());

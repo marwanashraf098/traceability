@@ -8,7 +8,7 @@ import {
   lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, LabelCodeLookupResult, TimelineEvent,
   adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
   voidPiece, holdPiece, unholdPiece, VOID_REASONS, HOLD_REASONS, VoidReason, HoldReason,
-  restorePiece, RESTORE_REASONS, RestoreReason,
+  restorePiece, RESTORE_REASONS, RestoreReason, markPieceSold, markPieceNotSold,
   getRoleFromToken, reprintPieceLabel, ReprintLabelError,
 } from '../api'
 import { Alert, Badge, Button, Modal, Spinner } from '../components/ui'
@@ -199,7 +199,8 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           <>
             <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
 
-            <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
+            <AdjustPanel pieceId={result.id} pieceStatus={result.status} canUndoSold={result.canUndoSold === true}
+              onDone={onRefresh} />
           </>
         )}
       </div>
@@ -352,10 +353,12 @@ const ON_HOLD_TARGETS: AdjustTarget[]   = ['lost', 'damaged', 'destroyed']
 interface AdjustPanelProps {
   pieceId: string
   pieceStatus: string
+  /** Sold pieces: the sale was a Lookup "Sold" (server-computed) — only then is "Not sold" offered. */
+  canUndoSold?: boolean
   onDone: () => void
 }
 
-function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
+function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, onDone }: AdjustPanelProps) {
   const { t } = useTranslation()
   const [open,        setOpen]        = useState(false)
   const [target,      setTarget]      = useState<AdjustTarget>('lost')
@@ -366,10 +369,13 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
   const [committed,   setCommitted]   = useState<PieceCommittedError | null>(null)
   const [releasing,   setReleasing]   = useState(false)
   const [restoreOpen, setRestoreOpen] = useState(false)
+  const [soldOpen,    setSoldOpen]    = useState(false)
+  const [notSoldOpen, setNotSoldOpen] = useState(false)
 
   const isLost      = pieceStatus === 'lost'
   const isOnHold    = pieceStatus === 'on_hold'
   const isDamaged   = pieceStatus === 'damaged'
+  const isSold      = pieceStatus === 'sold'
   const targets     = isOnHold ? ON_HOLD_TARGETS : AVAILABLE_TARGETS
   const role = getRoleFromToken()
   const canAdjust = role === 'owner' || role === 'manager'
@@ -476,6 +482,51 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
     }
   }
 
+  function handleSoldOpen() {
+    setNote('')
+    setError(null)
+    setCommitted(null)
+    setSoldOpen(true)
+  }
+
+  async function handleSold(e: React.FormEvent) {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    setCommitted(null)
+    try {
+      await markPieceSold(pieceId, note.trim() || undefined)
+      setSoldOpen(false)
+      onDone()
+    } catch (err: unknown) {
+      if (err instanceof Response || (err instanceof Error && err.message.includes('409'))) {
+        try {
+          const body: PieceCommittedError = err instanceof Response
+            ? await err.json()
+            : JSON.parse(err.message.replace(/^409: /, ''))
+          if (body.error === 'PIECE_COMMITTED') { setCommitted(body); return }
+        } catch { /* fall through */ }
+      }
+      setError(err instanceof Error ? err.message : 'Error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleNotSold() {
+    setSubmitting(true)
+    setError(null)
+    try {
+      await markPieceNotSold(pieceId)
+      setNotSoldOpen(false)
+      onDone()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   async function handleRelease() {
     if (!committed) return
     setReleasing(true)
@@ -544,15 +595,62 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
         </div>
       )}
 
-      {/* ── Adjust button (available) ── */}
-      {pieceStatus === 'available' && !open && (
-        <button
-          data-testid="adjust-open-btn"
-          onClick={handleOpen}
-          className="btn-outline text-small"
-        >
-          {t('adjust.title')}
-        </button>
+      {/* ── Not sold (a Lookup sale only — never a transfer's off-book sale) — sold → available,
+          after a short confirm (no note) ── */}
+      {isSold && canUndoSold && !notSoldOpen && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            data-testid="not-sold-btn"
+            onClick={() => { setNotSoldOpen(true); setError(null) }}
+            className="btn-brand text-small inline-flex items-center gap-1.5"
+          >
+            <RotateCcw size={12} />{t('adjust.notSold')}
+          </button>
+        </div>
+      )}
+      {isSold && canUndoSold && notSoldOpen && (
+        <div data-testid="not-sold-confirm" className="space-y-3 rounded-lg border border-line p-4 bg-surface">
+          <p className="text-small text-primary">{t('adjust.notSoldConfirm')}</p>
+          {error && <p className="text-small text-danger">{error}</p>}
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              onClick={() => { setNotSoldOpen(false); setError(null) }}
+              className="btn-outline text-small"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              data-testid="not-sold-confirm-btn"
+              onClick={handleNotSold}
+              disabled={submitting}
+              className="btn-brand text-small"
+            >
+              {submitting ? <Spinner size={14} /> : t('adjust.notSoldSubmit')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sold + Adjust buttons (available) ── */}
+      {pieceStatus === 'available' && !open && !soldOpen && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            data-testid="sold-open-btn"
+            onClick={handleSoldOpen}
+            className="btn-outline text-small"
+          >
+            {t('adjust.sold')}
+          </button>
+          <button
+            data-testid="adjust-open-btn"
+            onClick={handleOpen}
+            className="btn-outline text-small"
+          >
+            {t('adjust.title')}
+          </button>
+        </div>
       )}
 
       {/* ── Committed guard — critical-tinted per mockup ── */}
@@ -719,7 +817,59 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
         </form>
       )}
 
-      {error && !open && !restoreOpen && !committed && (
+      {/* ── Mark as sold (confirm panel, mockup screen 3) ── */}
+      {soldOpen && !committed && (
+        <form
+          onSubmit={handleSold}
+          aria-label={t('adjust.soldTitle')}
+          data-testid="sold-panel"
+          className="space-y-4 rounded-lg border border-line p-4 bg-surface"
+        >
+          <div className="space-y-1">
+            <h4 className="text-h3 text-primary">{t('adjust.soldTitle')}</h4>
+            <p className="text-small text-muted">{t('adjust.soldDesc')}</p>
+          </div>
+
+          <div className="space-y-1">
+            <label htmlFor="sold-note" className="text-caption text-muted uppercase tracking-wider">
+              {t('adjust.note')} <span className="normal-case tracking-normal">{t('adjust.optional')}</span>
+            </label>
+            <input
+              id="sold-note"
+              data-testid="sold-note"
+              type="text"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder={t('adjust.soldNotePlaceholder')}
+              className="input w-full bg-elevated"
+            />
+          </div>
+
+          <Alert tone="info" title={t('adjust.soldShopifyNote')} />
+
+          {error && <p className="text-small text-danger">{error}</p>}
+
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              onClick={() => { setSoldOpen(false); setError(null) }}
+              className="btn-outline text-small"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              data-testid="sold-submit-btn"
+              className="btn-brand text-small"
+            >
+              {submitting ? <Spinner size={14} /> : t('adjust.soldSubmit')}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {error && !open && !restoreOpen && !soldOpen && !notSoldOpen && !committed && (
         <p className="text-small text-danger">{error}</p>
       )}
     </div>
