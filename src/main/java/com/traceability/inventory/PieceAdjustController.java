@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
  * POST /api/v1/pieces/{id}/hold            — enter on_hold (FR-13.x)
  * POST /api/v1/pieces/{id}/unhold          — exit on_hold back to available (FR-13.x)
  * POST /api/v1/pieces/{id}/restore         — Back to good: damaged → available (D11)
+ * POST /api/v1/pieces/{id}/sold            — Sold outside Shopify: available → sold (C1)
+ * POST /api/v1/pieces/{id}/not-sold        — Not sold: reverses a Lookup Sold (C1)
  */
 @RestController
 @RequestMapping("/api/v1/pieces")
@@ -25,6 +27,7 @@ public class PieceAdjustController {
     record HoldBody(String reason, String note) {}
     record HoldResponse(String holdEventId) {}
     record RestoreBody(String reason, String note) {}
+    record SoldBody(String note) {}
 
     private final PieceAdjustService svc;
 
@@ -78,6 +81,27 @@ public class PieceAdjustController {
             @RequestBody RestoreBody body,
             @AuthenticationPrincipal CustomUserDetails principal) {
         svc.restore(id, body.reason(), body.note(), principal.userId());
+    }
+
+    /** C1 — Sold: available → sold (a sale outside Shopify). Body: {note?}. */
+    @PostMapping("/{id}/sold")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public void sold(
+            @PathVariable String id,
+            @RequestBody(required = false) SoldBody body,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.markSold(id, body != null ? body.note() : null, principal.userId());
+    }
+
+    /** C1 — Not sold: reverses a Lookup Sold (sold → available). */
+    @PostMapping("/{id}/not-sold")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public void notSold(
+            @PathVariable String id,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.markNotSold(id, principal.userId());
     }
 
     @PostMapping("/{id}/unhold")

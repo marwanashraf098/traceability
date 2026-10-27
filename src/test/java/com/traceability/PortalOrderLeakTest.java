@@ -414,7 +414,9 @@ class PortalOrderLeakTest {
                 "POST /api/v1/transfers/{transferId}/reprint-outstanding", "POST /api/v1/transfers/{transferId}/return-scan-out",
                 "POST /api/v1/transfers/{transferId}/scan-back", "POST /api/v1/transfers/{transferId}/scan-out",
                 "POST /api/v1/pieces/{id}/adjust", "POST /api/v1/pieces/{id}/hold", "POST /api/v1/pieces/{id}/release-for-adjust",
-                "POST /api/v1/pieces/{id}/restore", "POST /api/v1/pieces/{id}/unhold", "POST /api/v1/pieces/{id}/void")) {
+                "POST /api/v1/pieces/{id}/restore", "POST /api/v1/pieces/{id}/unhold", "POST /api/v1/pieces/{id}/void",
+                // C1 (2026-10-25): Lookup Sold / Not sold — one piece by id, no order data.
+                "POST /api/v1/pieces/{id}/sold", "POST /api/v1/pieces/{id}/not-sold")) {
             reg(k, skip(R_PIECES));
         }
         reg("GET /api/v1/stock-takes/sessions",          list());

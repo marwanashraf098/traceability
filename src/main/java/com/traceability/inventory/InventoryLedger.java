@@ -136,7 +136,16 @@ public class InventoryLedger {
         // mistake, returns to available. PieceAdjustService.restore() is its only caller (manager+,
         // reason required); the Shopify side is decided by PieceShopifyRules.departureReached.
         // destroyed → available and voided → available stay refused (no such edge).
-        "damaged:available"
+        "damaged:available",
+
+        // C1 (2026-10-25): Lookup "Sold" — a piece sold outside Shopify (in person, Instagram, a
+        // bazar). PieceAdjustService.markSold() is the only caller of available:sold (event
+        // sold_offline; reserved/packed pieces are released first, through releaseForAdjust).
+        // sold:available ("Not sold") is legal ONLY through PieceAdjustService.markNotSold(), which
+        // refuses any sold piece whose sale was not a Lookup sold_offline (a transfer's off-book sale,
+        // out_on_transfer:sold, has no way back). The Shopify side is decided by PieceShopifyRules.
+        "available:sold",
+        "sold:available"
     );
 
     // ---- SQL ---------------------------------------------------------------

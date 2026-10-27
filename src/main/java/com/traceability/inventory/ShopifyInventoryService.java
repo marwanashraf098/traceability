@@ -84,7 +84,10 @@ import java.util.concurrent.CompletableFuture;
  * after commit by pushPieceClaimNow — classified like the transfer push; failed_ambiguous is never
  * re-sent; the sweep re-sends definite failures (≤ 5 attempts). Adds piece_write_off (−1,
  * pushPieceWriteOff — the sixth named decrement), piece_write_off_return (+1, Found it), and Back to
- * good: damage_restore (move damaged → available) or damaged_restore_increment (+1).
+ * good: damage_restore (move damaged → available) or damaged_restore_increment (+1). Lookup "Sold" (C1,
+ * 2026-10-25): piece_sold (−1, pushPieceSold — the seventh named decrement, keyed piece:sold_event_id,
+ * decided by countedAtMain) and piece_sold_return (+1, Not sold — only when the piece_sold −1 applied,
+ * decided by departureReached like Found it).
  *
  * LOCATION-TARGET GUARD: the Shopify locationGid used in every mutation call is read
  * directly off the SAME location row that passed the is_fulfillment=true AND
@@ -187,7 +190,8 @@ public class ShopifyInventoryService {
      * decides (and cancels the departure claim if it was never sent).
      */
     public Long claimPieceReturn(UUID tenantId, String triggerType, String pieceId, String triggerId) {
-        if (!"hold_exit".equals(triggerType) && !"piece_write_off_return".equals(triggerType)) {
+        if (!"hold_exit".equals(triggerType) && !"piece_write_off_return".equals(triggerType)
+                && !"piece_sold_return".equals(triggerType)) {
             throw new IllegalArgumentException("not a piece return trigger: " + triggerType);
         }
         PieceShopifyRules.Verdict v = PieceShopifyRules.departureReached(jdbc, tenantId, pieceId);
@@ -562,7 +566,7 @@ public class ShopifyInventoryService {
         String ref = "traced://piece/" + pieceId;
 
         boolean increment = "hold_exit".equals(triggerType) || "piece_write_off_return".equals(triggerType)
-            || "damaged_restore_increment".equals(triggerType);
+            || "damaged_restore_increment".equals(triggerType) || "piece_sold_return".equals(triggerType);
         if (increment) {
             // Lazy activation (no quantity) — if it fails, the +1 was never sent: definite.
             try {
@@ -585,9 +589,12 @@ public class ShopifyInventoryService {
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "damaged", ref, key);
                 case "piece_write_off" -> shopify.pushPieceWriteOff(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
+                // C1 (2026-10-25): Lookup Sold — the seventh named decrement; this is its one caller.
+                case "piece_sold" -> shopify.pushPieceSold(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
                 case "damage_restore" -> response = shopify.moveDamagedToAvailable(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
-                case "hold_exit", "piece_write_off_return", "damaged_restore_increment" ->
+                case "hold_exit", "piece_write_off_return", "damaged_restore_increment", "piece_sold_return" ->
                     shopify.pushPieceIncrement(p.shopDomain(), p.token(),
                         p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
                 default -> throw new IllegalArgumentException("no Shopify call for piece trigger " + triggerType);

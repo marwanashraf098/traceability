@@ -1452,6 +1452,96 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String PIECE_SOLD_MUTATION = """
+            mutation PieceSold($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * C1 (2026-10-25) — the seventh named decrement (Lookup "Sold"). Deliberately self-contained, like
+     * {@link #pushPieceWriteOff}: no executeGraphQL() (its Resilience4j retry would silently re-send a
+     * timed-out −1), exactly one HTTP attempt, classified exactly like pushPieceWriteOff / pushTransferOut.
+     * Reason "correction" (a valid inventoryAdjustQuantities reason on 2026-04 — the +1 path sends it too).
+     */
+    @Override
+    public void pushPieceSold(String shopDomain, String token, String inventoryItemGid,
+                              String locationGid, int negativeDelta, String referenceDocumentUri,
+                              String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException("pushPieceSold requires a negative delta; got " + negativeDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "correction")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", PIECE_SOLD_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Piece sold HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece sold HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException("Piece sold: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece sold: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Piece sold: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Piece sold GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Piece sold GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Piece sold: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            throw new ShopifyException("Piece sold failed: " + userErrors.get(0).path("message").asText("unknown error"));
+        }
+    }
+
     private static final String VOID_CORRECTION_MUTATION = """
             mutation VoidCorrection($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
               inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {

@@ -572,6 +572,9 @@ export interface PieceLookupResult {
   canReprint: boolean
   /** Flexible labeling tenants only: the variant's available pieces, labeled vs untagged. */
   variantStock?: { available: number; labeled: number; untagged: number }
+  /** Sold pieces only: true when the sale was a Lookup "Sold" (reversible with Not sold) — never for a
+   *  transfer's off-book sale. Server-computed; absent on every other status. */
+  canUndoSold?: boolean
   condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
@@ -1533,6 +1536,20 @@ export function restorePiece(pieceId: string, reason: RestoreReason, note?: stri
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason, note }),
   })
+}
+
+// ── Sold / Not sold (C1 — a sale outside Shopify, manager+) ───────────────────
+
+export function markPieceSold(pieceId: string, note?: string) {
+  return request<void>(`/pieces/${pieceId}/sold`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  })
+}
+
+export function markPieceNotSold(pieceId: string) {
+  return request<void>(`/pieces/${pieceId}/not-sold`, { method: 'POST' })
 }
 
 // ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────

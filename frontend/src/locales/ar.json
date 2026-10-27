@@ -1260,7 +1260,9 @@
       "unpacked": "تم فك تعبئة القطعة — الإلغاء جارٍ",
       "unreserved": "أُعيدت للمخزون (أُلغي الطلب)",
       "label_bound_packing": "أُلصق الملصق {{code}} عند التغليف · الطلب {{orderNumber}}",
-      "label_bound_tag": "أُلصق الملصق {{code}} في لصق المخزون"
+      "label_bound_tag": "أُلصق الملصق {{code}} في لصق المخزون",
+      "sold_offline": "تم تحديدها كمُباعة خارج Shopify",
+      "not_sold": "لم تُبَع — أُعيدت القطعة إلى المتاح"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -2837,7 +2839,17 @@
       "destroyed": "مُتلَفة",
       "void": "إلغاء",
       "on_hold": "تعليق"
-    }
+    },
+    "sold": "مُباعة",
+    "soldTitle": "تحديد كمُباعة",
+    "soldDesc": "لقطعة بيعت خارج Shopify — شخصيًا، أو على إنستجرام، أو في بازار.",
+    "optional": "(اختياري)",
+    "soldNotePlaceholder": "مثال: بيعت في المعرض",
+    "soldShopifyNote": "سينخفض مخزون Shopify في مستودع Traced الرئيسي بمقدار 1.",
+    "soldSubmit": "تأكيد البيع",
+    "notSold": "لم تُبَع",
+    "notSoldConfirm": "إعادة هذه القطعة إلى المتاح؟ إذا وصل البيع إلى Shopify، يرتفع مخزونه بمقدار 1.",
+    "notSoldSubmit": "نعم، لم تُبَع"
   },
   "blocklist": {
     "title": "العملاء المحظورون",

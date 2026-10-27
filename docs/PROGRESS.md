@@ -4,6 +4,8 @@
 
 ## Current state
 
+**C1 — Lookup Sold / Not sold (2026-10-28, branch `feat/lookup-sold`, rebased on main b218cca; merged to main 2026-10-28, NOT deployed). Migration V188 (built as V186; the onboarding gate took V186, factory runs (slice 6a) V187).** Lookup "Sold (Off-book)" on an available piece: `available → sold` (event `sold_offline`, reason `sold_offline` + optional note — no reason codes), owner / manager, reserved / packed → PIECE_COMMITTED (release first). Shopify −1 at the Traced Main Warehouse through `pushPieceSold` — the SEVENTH named decrement (approved 2026-10-25; CLAUDE.md updated in its own commit), claim `piece_sold` (`piece:sold_event_id`) decided by `countedAtMain`, one attempt after commit, classified like `pushPieceWriteOff`. "Not sold" (short confirm, no note) reverses only a Lookup sale (a transfer's off-book sale stays sold): `piece_sold_return` +1 only when the sale's −1 reached Shopify (`departureReached`), an unsent claim is cancelled. Rebase merge points: en.json / ar.json (both sides' keys kept), api.ts, ExceptionService ("sale" label), PortalOrderLeakTest (/sold, /not-sold classified). Gotcha: the rebase onto 6a merged CLEANLY with two V187 files and unchanged counts (both branches made the same bump) — always list the migrations after a rebase. Tests: PieceSoldTest 11, PieceSoldWireTest 11, lookupSold.test.tsx 6 (sd4 confirm before POST, sd6 Cancel), NamedDecrementSetGuardTest adds pushPieceSold; MigrationSmokeTest 187, NotTracedBackfillTest 132. Full backend 3430: only ExchangeBackfillTest red; vitest 1204/1204; tsc clean.
+
 **B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main 5d9c521; merged to main 2026-10-27, NOT deployed).
 V186.** An owner / manager of a real tenant must connect Shopify (step 1) and enter the main warehouse address (step 2)
 before using the app; `SetupStatus` is the one rule (`/me.setupStep` 'shopify' | 'address' | null, `warehouseAddressNeeded`
@@ -54,9 +56,8 @@ read-only): 21 connected stores, all with write_locations and the main location 
 the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome, shopify_address_dry_run, count(*)
 FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
 RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
-- **Next (staged, STOP after each):** B: Marawan reviews → merge + deploy. Then C1 rebases on A + B (V187; "Not sold" gets a
-  short confirm; no reason codes; shared "Sold (Off-book)" label OK; CLAUDE.md → seven named decrements, pushPieceSold
-  approved 2026-10-25, in C1's merge commit).
+- **Next:** B merged (ae26df3) and deployed 2026-10-27; C1 merged 2026-10-28 (V188; deploy is Marawan's). Then C2's
+  Step-0-light. Next free migration: V189.
 - **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
   the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
   decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are
