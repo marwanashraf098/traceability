@@ -4,7 +4,7 @@
 
 ## Current state
 
-**B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main a240e08; NOT merged, NOT deployed).
+**B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main 5d9c521; merged to main 2026-10-27, NOT deployed).
 V186.** An owner / manager of a real tenant must connect Shopify (step 1) and enter the main warehouse address (step 2)
 before using the app; `SetupStatus` is the one rule (`/me.setupStep` 'shopify' | 'address' | null, `warehouseAddressNeeded`
 for the soft banner); demo (is_demo) and review (simulated courier) tenants are never gated; workers never. V186:
@@ -23,9 +23,10 @@ governorate → provinceCode, city / area → city, street → address1, "buildi
 generic address sends 11511). The step-2 save creates a missing main warehouse (no 409; the next Shopify import links it).
 Gated routes include `/fulfill/gather`. The Overview checklist's "location" step is gone (backend + card;
 ConnectionsOnboardingTest o1/o3 and overview.test ov13/ov14 edited — approved); `OnboardingService` still accepts the key so
-an old stored manual flag never 400s. **Migration fix carried on this branch:** main had two V184s (A's, applied in prod
-2026-10-25 19:47, and flexible labeling's `tenants_receiving_default_mode`) — the labeling one is V185 (same rename another
-session had staged in the main checkout, uncommitted); B is V186, C1 moves to V187. Tests: OnboardingGateTest 11,
+an old stored manual flag never 400s. **Migrations:** main had two V184s (A's, applied in prod
+2026-10-25 19:47, and flexible labeling's `tenants_receiving_default_mode`) — the labeling one became V185 on main (5d9c521,
+with MigrationVersionGuardTest); B is V186, C1 moves to V187. Full backend 3389: only ExchangeBackfillTest red
+(ShopifyMagicLinkTest expiry failed once from Docker VM clock drift after the Mac slept — green on rerun after resync). Tests: OnboardingGateTest 11,
 OnboardingGateMigrationTest 1, vitest onboardingGate 19 (og19: App.tsx gates /fulfill/gather), browser onboardingGateLayout 32.
 
 **A — Egyptian address on Traced's Shopify location (2026-10-25, branch `feat/location-address` off origin/main f0b3074,
