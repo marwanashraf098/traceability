@@ -4610,5 +4610,60 @@
       "voidTitle_one": "Void 1 unused label?",
       "voidBody": "These labels will stop working. If any of them was already scanned, nothing is voided."
     }
+  },
+  "labelRuns": {
+    "tab": {
+      "sessions": "Receiving sessions",
+      "runs": "Factory runs"
+    },
+    "intro": "Print named labels for a factory to stick on each piece. The pieces enter stock when the run is received.",
+    "new": "New factory run",
+    "empty": "No factory runs yet. Create one to print a named label for every piece you expect from a factory.",
+    "back": "Factory runs",
+    "col": {
+      "factory": "Factory",
+      "status": "Status",
+      "expected": "Expected",
+      "printed": "Labels printed",
+      "received": "Received",
+      "created": "Created",
+      "product": "Product"
+    },
+    "status": {
+      "open": "Open",
+      "closed": "Closed"
+    },
+    "create": {
+      "title": "New factory run",
+      "factory": "Factory name",
+      "factoryPlaceholder": "e.g. Nile Textiles",
+      "reference": "Reference (optional)",
+      "submit": "Create run · {{count}} pieces",
+      "tooMany": "A factory run can have at most {{max}} pieces — split it into two runs.",
+      "nameRequired": "Enter the factory's name.",
+      "created": "Factory run created"
+    },
+    "detail": {
+      "created": "Created by {{name}} · {{date}}",
+      "expected": "Expected",
+      "printed": "Labels printed",
+      "received": "Received",
+      "print": "Print labels · {{count}}",
+      "printedToast": "{{count}} labels ready to print",
+      "labelsTitle": "Labels",
+      "reprintTitle": "Labels — all printed",
+      "howTo": "Send these to the factory: one label on each piece of the product named on it. A header label starts each product.",
+      "reprintNote": "Reprinting prints the same labels — no new ones are made.",
+      "part": "Part {{n}} · {{count}} labels",
+      "allLabels": "{{count}} labels",
+      "openPdf": "Open PDF",
+      "reprint": "Reprint",
+      "noneLeft": "Every label of this run is received or voided — nothing left to print."
+    },
+    "import": {
+      "step2": "Type how many pieces you expect from the factory in the 'On hand (new)' column.",
+      "newEmpty": "The 'On hand (new)' column is empty. Type the expected quantities in that column and upload again.",
+      "apply": "Add {{count}} pieces to the run"
+    }
   }
 }

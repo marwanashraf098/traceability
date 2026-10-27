@@ -161,6 +161,38 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slice 6a: factory runs + printing (2026-10-27, branch `feat/flexible-labeling-s6a` off origin/main
+5d9c521; NOT merged, NOT deployed). Migration V186.** Step 0 answers (Marawan 2026-10-27): runs receive into the main
+warehouse only; 20,000 pieces per run, PDFs in parts of ≤ 2,000 that never split a product group unless it alone is
+larger; overage is a flag, never a block; no 'factory' default in Settings › Labels; factory receipts may reprint
+session labels as label_reprinted (6b); received events carry label_run_id + label_code_id (6b); closed runs are not
+reopened ("Still coming" keeps a run open, 6c); A4 shortfall PDF (6c).
+- **Commit 1 — receiving double-finalize (all modes):** `finalize` locks the receipt (FOR UPDATE) and the finalize UPDATE
+  is `AND status = 'open'` (0 rows → 409, rollback). Before: two simultaneous finalizes each created the session's
+  pieces and each claimed Shopify +N. `ReceivingFinalizeRaceTest` (print_stick + count_only), revert-checked (2N).
+- **Commit 2 — factory kind guard (before any factory code can exist):** `InventoryLedger.bindLabel` refuses kind factory
+  (FACTORY_LABEL_NOT_RECEIVED) — the one guard for Tag stock and Pick & Pack; Pick & Pack also rejects before its line
+  checks. `UnusedLabels` is kind-aware (`codeFor` / `messageEnFor` / `messageArFor` / `notUsedYet(u)`): Lookup, Stock
+  take, Transfers, Scan returns answer "Factory label not received yet — receive it in its factory run first";
+  other kinds keep the Tag stock message. The generic issue endpoint refuses kind factory. Approved test edit:
+  LabelCodesTest.i5 issues its 2,000-cap batch as kind tag instead of factory.
+- **Commit 3 — V186:** `label_runs` (factory, reference, open/closed), `label_run_lines` (line_no, variant, expected
+  1..20,000, close reason / time / user for 6c), `label_codes.run_line_id` (set exactly for kind factory) + `overage`
+  (factory only), `label_code_batches.run_id` (set exactly for kind factory). RLS NULLIF + FORCE, lifecycle-only column
+  grants (close a run, record a line reason), no DELETE. Prod had 0 factory codes / batches (checked).
+- **Commit 4 — Receiving › Factory runs tab** (switch on only, no sidebar entry; owner + manager; 404 with the switch
+  off). `LabelRunService` / `LabelRunController` (`/api/v1/label-runs`): list, create (picker grid in memory via the
+  grid's new optional `onCommit`, or Excel via the import panel's new `runMode` — "On hand (new)" = expected, no "use
+  On hand (current)" fallback, > 20,000 → unmatched too_large), print (issues each line's missing codes in batches of
+  ≤ 2,000 under the run's row lock — a second or concurrent print issues none; `LabelCodeService.issueFactoryBatch`),
+  PDF parts (still-issued codes only; per line a header-first separator, products grouped in line order; reprint =
+  the same PDF). `ReceivingImportService.match` is the extracted session-independent parse + match step; receiving's
+  own endpoints and ReceivingImportTest are unchanged.
+- **Tests:** ReceivingFinalizeRaceTest 2, FactoryLabelGuardTest 4, LabelRunsSchemaTest 4 (app_user), LabelRunsTest 8;
+  vitest lookupFactoryLabel 2, flexibleS6a 5. Registries: MigrationSmokeTest 185, NotTracedBackfillTest 130,
+  RlsCoverageTest 3 COVERED (+1 test), PortalOrderLeakTest 6 SKIP.
+- **Next:** 6b (factory receiving: third step-1 card, staged scans, finalize with given codes) and 6c (close + report).
+
 **Flexible labeling — slices 5 + 8 (2026-10-25, branch `feat/flexible-labeling-s5-s8` off origin/main 470055e;
 merged to main a240e08 2026-10-25, NOT deployed). Migration V185 (built as V184 — main's location-address branch took
 V184 first; both merged as V184 by mistake and were fixed on main 2026-10-26 by renaming ours to V185, plus

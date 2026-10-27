@@ -107,6 +107,45 @@ public class LabelCodeService {
         return new Batch(batchId, kind, total, true, codes(tenantId, batchId, false));
     }
 
+    /** One run line's share of a factory batch: {@code count} codes for the line's variant. */
+    record FactoryLine(UUID runLineId, UUID variantId, int count, boolean overage) {}
+
+    /**
+     * Flexible labeling slice 6 — ONE factory batch (1..2,000 codes) for a run: the batch names the run, every code
+     * its run line (V186 CHECKs). Codes come from the same {@link PieceCodeCounter} claim as every other code.
+     * Only {@link LabelRunService} calls this, inside its own transaction with the run row locked; the generic
+     * {@link #issue} refuses kind factory.
+     */
+    List<IssuedCode> issueFactoryBatch(UUID tenantId, UUID actorUserId, UUID runId, List<FactoryLine> lines, String idempotencyKey) {
+        int total = lines.stream().mapToInt(FactoryLine::count).sum();
+        if (total < 1 || total > MAX_CODES_PER_BATCH) throw LabelCodeException.invalidCount();
+        UUID batchId = jdbc.queryForObject(
+            "INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by, run_id) " +
+            "VALUES (?, 'factory', ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, total, idempotencyKey, actorUserId, runId);
+        long next = PieceCodeCounter.claim(jdbc, tenantId, total);
+        StringBuilder sql = new StringBuilder(
+            "INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id, run_line_id, overage) VALUES ");
+        List<Object> params = new ArrayList<>(total * 7);
+        boolean first = true;
+        for (FactoryLine l : lines) {
+            for (int i = 0; i < l.count(); i++) {
+                if (!first) sql.append(',');
+                first = false;
+                sql.append("(?,?,'factory',?,?,?,?,?)");
+                params.add(tenantId);
+                params.add(PieceCodeCounter.format(next++));
+                params.add(batchId);
+                params.add(actorUserId);
+                params.add(l.variantId());
+                params.add(l.runLineId());
+                params.add(l.overage());
+            }
+        }
+        jdbc.update(sql.toString(), params.toArray());
+        return codes(tenantId, batchId, false);
+    }
+
     /**
      * 1..2,000 codes in all, each line ≥ 1, every variant this tenant's; an order line (packing) must be this
      * tenant's, belong to the given order and be of the line's variant.

@@ -20,7 +20,7 @@ public class LabelCodeException extends RuntimeException {
         // slice 4 — packing labels
         INVALID_PRINT_REQUEST, ORDER_NOT_PACKABLE,
         // slice 6 — factory runs
-        FACTORY_LABEL_NOT_RECEIVED
+        FACTORY_LABEL_NOT_RECEIVED, INVALID_RUN, RUN_TOO_LARGE, RUN_NOT_FOUND, RUN_CLOSED, INVALID_PART
     }
 
     static LabelCodeException invalidPrintRequest() {
@@ -31,6 +31,31 @@ public class LabelCodeException extends RuntimeException {
     static LabelCodeException orderNotPackable() {
         return new LabelCodeException(HttpStatus.CONFLICT, Code.ORDER_NOT_PACKABLE,
             "This order isn't waiting to be packed", "هذا الطلب ليس في انتظار التجهيز");
+    }
+
+    static LabelCodeException invalidRun(String en, String ar) {
+        return new LabelCodeException(HttpStatus.BAD_REQUEST, Code.INVALID_RUN, en, ar);
+    }
+
+    static LabelCodeException runTooLarge(int max) {
+        return new LabelCodeException(HttpStatus.BAD_REQUEST, Code.RUN_TOO_LARGE,
+            "A factory run can have at most " + max + " pieces — split it into two runs",
+            "يمكن أن تضم دفعة المصنع " + max + " قطعة كحد أقصى — قسّمها إلى دفعتين");
+    }
+
+    static LabelCodeException runNotFound() {
+        return new LabelCodeException(HttpStatus.NOT_FOUND, Code.RUN_NOT_FOUND,
+            "Factory run not found", "لم يتم العثور على دفعة المصنع");
+    }
+
+    static LabelCodeException runClosed() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.RUN_CLOSED,
+            "This factory run is closed", "دفعة المصنع هذه مغلقة");
+    }
+
+    static LabelCodeException invalidPart() {
+        return new LabelCodeException(HttpStatus.NOT_FOUND, Code.INVALID_PART,
+            "This part of the labels doesn't exist — reload the run", "هذا الجزء من الملصقات غير موجود — أعد تحميل الدفعة");
     }
 
     /** Kind factory asked of the generic issue endpoint — those codes come only from a factory run's print. */

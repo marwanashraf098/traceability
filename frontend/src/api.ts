@@ -3896,3 +3896,40 @@ export function openPackLabelsPdf(orderIds: string[]) {
 export function printPackReplacement(orderId: string, orderItemId: string, idempotencyKey: string) {
   return openPdfFrom('/pack-labels/replacement', { orderId, orderItemId, idempotencyKey })
 }
+
+// ── Flexible labeling: factory runs (slice 6a) ───────────────────────────────
+
+export interface LabelRunSummary {
+  id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
+  lines: number; expected: number; printed: number; received: number
+}
+export interface LabelRunLine {
+  id: string; lineNo: number; variantId: string; productTitle: string; variantTitle: string; sku: string | null
+  imageUrl: string | null; expected: number; printed: number; received: number; unused: number; voided: number; overage: number
+}
+export interface LabelRunPart {
+  part: number; labels: number
+  groups: { productTitle: string; variantTitle: string; sku: string | null; labels: number }[]
+}
+export interface LabelRunDetail {
+  id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
+  createdBy: string | null; expected: number; printed: number; received: number; toPrint: number
+  lines: LabelRunLine[]; parts: LabelRunPart[]
+}
+export function getLabelRuns() {
+  return requestReadable<LabelRunSummary[]>('/label-runs')
+}
+export function getLabelRun(id: string) {
+  return requestReadable<LabelRunDetail>(`/label-runs/${id}`)
+}
+export function createLabelRun(body: { factoryName: string; reference?: string; lines: { variantId: string; expectedQty: number }[] }) {
+  return requestReadable<LabelRunDetail>('/label-runs', { method: 'POST', body: JSON.stringify(body) })
+}
+/** Issues the codes each line still lacks — a second call issues none. */
+export function printLabelRun(id: string) {
+  return requestReadable<{ issued: number; run: LabelRunDetail }>(`/label-runs/${id}/print`, { method: 'POST' })
+}
+/** One part (≤ 2,000) of the run's unused labels, opened in a new tab — also the reprint (the same codes). */
+export async function openLabelRunPdf(id: string, part: number) {
+  await openPdfResponse(await authFetch(`/label-runs/${id}/pdf?part=${part}`))
+}

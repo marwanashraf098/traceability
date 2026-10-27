@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
+import { Alert, Badge, Button, EmptyState, Input, Modal, Tabs, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
 import { ImportFromExcelButton, ImportPanel } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
+import FactoryRuns from './receiving/FactoryRuns'
 import { ArrowLeft, Barcode, PackageCheck } from 'lucide-react'
 
 import { getAccessToken } from '../auth'
@@ -68,6 +69,8 @@ export default function Receiving() {
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null)
   const [locations, setLocations] = useState<Location[]>([])
   const { flexibleLabeling } = useCapabilities()
+  // Flexible labeling slice 6a: "Factory runs" lives here as a tab (no sidebar entry), only with the switch on.
+  const [tab, setTab] = useState<'sessions' | 'runs'>('sessions')
 
   useEffect(() => { loadSessions(); loadLocations() }, [])
 
@@ -109,6 +112,23 @@ export default function Receiving() {
     )
   }
 
+  const tabs = flexibleLabeling && (
+    <Tabs activeKey={tab} onChange={k => setTab(k as 'sessions' | 'runs')} tabs={[
+      { key: 'sessions', label: t('labelRuns.tab.sessions') },
+      { key: 'runs', label: t('labelRuns.tab.runs') },
+    ]} />
+  )
+
+  if (flexibleLabeling && tab === 'runs') {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-h1 text-primary">{t('receiving.title')}</h1>
+        {tabs}
+        <FactoryRuns />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -117,6 +137,7 @@ export default function Receiving() {
           + {t('receiving.new')}
         </Button>
       </div>
+      {tabs}
 
       {error && <Alert tone="critical" title={error} />}
 

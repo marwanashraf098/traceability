@@ -72,8 +72,11 @@ function Step({ n, title, children }: { n: number; title: string; children?: Rea
   )
 }
 
-export function ImportPanel({ sessionId, onClose, onApplied }: {
-  sessionId: string; onClose: () => void; onApplied: () => void
+export function ImportPanel({ sessionId, onClose, onApplied, runMode }: {
+  sessionId?: string; onClose: () => void; onApplied: () => void
+  /** Factory runs (flexible labeling slice 6a): the preview goes to the runs endpoint, "On hand (new)" is the
+   *  EXPECTED quantity (no "use On hand (current)" fallback), and applying hands the kept rows to the caller. */
+  runMode?: { onRows: (rows: MatchedRow[]) => void }
 }) {
   const { t, i18n } = useTranslation()
   const { toast } = useToast()
@@ -109,7 +112,8 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
       const fd = new FormData()
       fd.append('file', f)
       if (column === 'current') fd.append('column', 'current')
-      const res = await authFetch(`/receiving/sessions/${sessionId}/import/preview`, { method: 'POST', body: fd })
+      const res = await authFetch(runMode ? '/label-runs/import/preview' : `/receiving/sessions/${sessionId}/import/preview`,
+        { method: 'POST', body: fd })
       if (!res.ok) throw new Error(await errorMessage(res, i18n.language, t('receiving.import.failed')))
       setPreview(await res.json() as ImportPreview)
     } catch (e: unknown) {
@@ -136,6 +140,11 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
   const units = kept.reduce((s, r) => s + r.quantity, 0)
 
   async function apply() {
+    if (runMode) {
+      runMode.onRows(kept)
+      onApplied()
+      return
+    }
     setBusy('apply'); setError(null)
     try {
       const res = await authFetch(`/receiving/sessions/${sessionId}/import/apply`, {
@@ -182,7 +191,7 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
           <p className="text-caption text-muted">{t('receiving.import.shopifyExportNote')}</p>
         </Step>
 
-        <Step n={2} title={t('receiving.import.step2')} />
+        <Step n={2} title={t(runMode ? 'labelRuns.import.step2' : 'receiving.import.step2')} />
 
         <Step n={3} title={t('receiving.import.step3')}>
           <p className="flex items-start gap-1.5 text-caption text-warning-text" data-testid="import-shopify-warning">
@@ -222,11 +231,13 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
 
       {preview && newEmpty && file && (
         <div className="space-y-3" data-testid="import-new-empty">
-          <Alert tone="warning" title={t('receiving.import.newEmpty')} />
-          <Button variant="secondary" iconStart={FileUp} loading={busy === 'upload'}
-            onClick={() => runPreview(file, 'current')}>
-            {t('receiving.import.useCurrent')}
-          </Button>
+          <Alert tone="warning" title={t(runMode ? 'labelRuns.import.newEmpty' : 'receiving.import.newEmpty')} />
+          {!runMode && (
+            <Button variant="secondary" iconStart={FileUp} loading={busy === 'upload'}
+              onClick={() => runPreview(file, 'current')}>
+              {t('receiving.import.useCurrent')}
+            </Button>
+          )}
         </div>
       )}
 
@@ -251,7 +262,7 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
                       <bdi>{r.variantTitle}</bdi>
                       {r.sku && <> · <span className="font-mono" dir="ltr">{r.sku}</span></>}
                     </p>
-                    {r.sameAsShopify && (
+                    {r.sameAsShopify && !runMode && (
                       <p className="text-caption text-warning-text mt-0.5" data-testid="same-as-shopify">
                         {t('receiving.import.sameAsShopify')}
                       </p>
@@ -292,7 +303,7 @@ export function ImportPanel({ sessionId, onClose, onApplied }: {
 
           <div className="flex flex-wrap items-center gap-2">
             <Button loading={busy === 'apply'} disabled={units === 0} onClick={apply}>
-              {t('receiving.import.apply', { count: units })}
+              {t(runMode ? 'labelRuns.import.apply' : 'receiving.import.apply', { count: units })}
             </Button>
             <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
             {units === 0 && (
