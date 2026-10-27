@@ -80,6 +80,8 @@ public class UserService {
         self.put("setupStep", setupStep);
         self.put("warehouseAddressNeeded",
             !worker && com.traceability.setup.SetupStatus.addressNeeded(jdbc, tenantId, setupStep));
+        // Warehouse places S1 — zones / racks / shelves / boxes (Settings › Places).
+        self.put("places", com.traceability.places.Places.enabled(jdbc, tenantId));
         return self;
     }
 

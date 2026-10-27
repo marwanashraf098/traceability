@@ -3983,3 +3983,64 @@ export function printLabelRun(id: string) {
 export async function openLabelRunPdf(id: string, part: number) {
   await openPdfResponse(await authFetch(`/label-runs/${id}/pdf?part=${part}`))
 }
+
+// ── Warehouse places S1 — Settings › Places (owner + manager; 404 unless the tenant has places) ─────────────────
+
+export type PlaceKind = 'zone' | 'rack' | 'shelf' | 'box'
+/** One place, in tree order. label = its name inside its parent (R01, S2, BOX-07); path = its parents' labels. */
+export interface PlaceNode {
+  id: string; kind: PlaceKind; code: string; label: string; name: string | null; purpose: 'damaged' | null
+  parentId: string | null; scanCode: string; path: string[]; depth: number
+  pieces: number; totalPieces: number; archived: boolean; createdAt: string
+}
+export interface PlaceTree { locationId: string; locationName: string; nextZoneCode: string; nodes: PlaceNode[]; noPlaceYet: number }
+export interface PlaceContent { variantId: string; productTitle: string; variantTitle: string | null; sku: string | null; count: number }
+export interface PlaceHistoryEntry {
+  eventType: 'created' | 'renamed' | 'moved' | 'archived' | 'purpose_changed'; actorName: string | null; occurredAt: string
+  fromCode: string | null; toCode: string | null; fromParent: string | null; toParent: string | null; purpose: string | null
+}
+export interface PlaceDetail { node: PlaceNode; locationName: string; contents: PlaceContent[]; boxes: PlaceNode[]; history: PlaceHistoryEntry[] }
+/** zoneId unset → a new zone Zn; set → racks added to that zone (numbered from its next free R). */
+export interface PlaceBulkRequest { locationId?: string; zoneId?: string; racks: number; shelvesPerRack: number; floorBoxes: number; zoneName?: string }
+export interface PlaceBulkPlan {
+  locationId: string; zoneCode: string; newZone: boolean; racks: number; shelves: number; boxes: number; total: number
+  firstRack: string | null; lastRack: string | null; firstShelf: string | null; lastShelf: string | null
+  firstBox: string | null; lastBox: string | null; conflicts: string[]
+}
+
+export function getPlaces(locationId?: string) {
+  return requestReadable<PlaceTree>(`/places${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ''}`)
+}
+export function getPlace(id: string) {
+  return requestReadable<PlaceDetail>(`/places/${id}`)
+}
+export function createPlace(body: { locationId?: string; kind: PlaceKind; parentId?: string; code?: string; name?: string }) {
+  return requestReadable<PlaceNode>('/places', { method: 'POST', body: JSON.stringify(body) })
+}
+export function previewPlacesBulk(body: PlaceBulkRequest) {
+  return requestReadable<PlaceBulkPlan>('/places/bulk/preview', { method: 'POST', body: JSON.stringify(body) })
+}
+export function createPlacesBulk(body: PlaceBulkRequest) {
+  return requestReadable<{ zoneId: string; plan: PlaceBulkPlan; createdIds: string[] }>('/places/bulk', {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+/** name '' clears it; leave a field out to keep it. */
+export function renamePlace(id: string, body: { code?: string; name?: string }) {
+  return requestReadable<PlaceNode>(`/places/${id}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+export function movePlace(id: string, parentId: string) {
+  return requestReadable<PlaceNode>(`/places/${id}/parent`, { method: 'PUT', body: JSON.stringify({ parentId }) })
+}
+export function setPlacePurpose(id: string, purpose: 'damaged' | null) {
+  return requestReadable<PlaceNode>(`/places/${id}/purpose`, { method: 'PUT', body: JSON.stringify({ purpose }) })
+}
+export function archivePlace(id: string) {
+  return requestReadable<PlaceNode>(`/places/${id}/archive`, { method: 'POST' })
+}
+/** Stickers for the shelves and boxes in / under these places — opens the PDF. */
+export async function openPlaceStickers(placeIds: string[]) {
+  await openPdfResponse(await authFetch('/places/stickers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placeIds }),
+  }))
+}
