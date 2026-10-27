@@ -1,0 +1,349 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { ArrowLeft, Printer } from 'lucide-react'
+import {
+  Alert, Badge, Button, EmptyState, Input, ProductThumb, TableSkeleton, useToast,
+} from '../../components/ui'
+import {
+  LabelRunDetail, LabelRunSummary, ServerMessageError, createLabelRun, getLabelRun, getLabelRuns, openLabelRunPdf,
+  printLabelRun,
+} from '../../api'
+import ProductSelectionGrid from './ProductSelectionGrid'
+import { ImportFromExcelButton, ImportPanel, MatchedRow } from './ReceivingImport'
+import type { Line } from '../Receiving'
+
+/**
+ * Flexible labeling slice 6a — Receiving › Factory runs (switch on only; no sidebar entry). A run is an order to a
+ * factory: per product variant the pieces expected. Print issues one named label per expected piece (grouped by
+ * product, a header label before each group, parts of ≤ 2,000); reprint prints the same labels, never new ones.
+ * The pieces enter stock only when the run is received (slice 6b). Server: LabelRunController.
+ */
+
+const MAX_RUN_UNITS = 20_000
+
+function message(e: unknown, lang: string, fallback: string): string {
+  if (e instanceof ServerMessageError) return e.messageFor(lang)
+  return (e as Error)?.message || fallback
+}
+
+export default function FactoryRuns() {
+  const [view, setView] = useState<{ kind: 'list' } | { kind: 'create' } | { kind: 'run'; id: string }>({ kind: 'list' })
+  if (view.kind === 'create') {
+    return <CreateRun onCancel={() => setView({ kind: 'list' })} onCreated={id => setView({ kind: 'run', id })} />
+  }
+  if (view.kind === 'run') return <RunView id={view.id} onBack={() => setView({ kind: 'list' })} />
+  return <RunList onNew={() => setView({ kind: 'create' })} onOpen={id => setView({ kind: 'run', id })} />
+}
+
+// ── List ──────────────────────────────────────────────────────────────────────
+
+function RunList({ onNew, onOpen }: { onNew: () => void; onOpen: (id: string) => void }) {
+  const { t, i18n } = useTranslation()
+  const [runs, setRuns] = useState<LabelRunSummary[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getLabelRuns().then(setRuns).catch(e => { setRuns([]); setError(message(e, i18n.language, t('common.error'))) })
+  }, [i18n.language, t])
+
+  return (
+    <div className="space-y-4" data-testid="factory-runs">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-small text-muted">{t('labelRuns.intro')}</p>
+        <Button size="sm" onClick={onNew}>+ {t('labelRuns.new')}</Button>
+      </div>
+      {error && <Alert tone="critical" title={error} />}
+      {runs === null ? (
+        <div className="card overflow-hidden"><TableSkeleton rows={3} cols={5} /></div>
+      ) : runs.length === 0 ? (
+        <EmptyState message={t('labelRuns.empty')} icon="🏭" action={{ label: '+ ' + t('labelRuns.new'), onClick: onNew }} />
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b border-line">
+                {['factory', 'status', 'expected', 'printed', 'received', 'created'].map(k => (
+                  <th key={k} className="tbl-header">{t(`labelRuns.col.${k}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map(r => (
+                <tr key={r.id} className="tbl-row cursor-pointer" onClick={() => onOpen(r.id)} data-testid={`run-row-${r.id}`}>
+                  <td className="tbl-cell">
+                    <p className="text-body font-medium text-primary"><bdi>{r.factoryName}</bdi></p>
+                    {r.reference && <p className="text-caption text-muted font-mono" dir="ltr">{r.reference}</p>}
+                  </td>
+                  <td className="tbl-cell">
+                    <Badge tone={r.status === 'open' ? 'info' : 'neutral'} label={t(`labelRuns.status.${r.status}`)} />
+                  </td>
+                  <td className="tbl-cell text-primary tabular-nums">{r.expected.toLocaleString()}</td>
+                  <td className="tbl-cell text-primary tabular-nums">{r.printed.toLocaleString()}</td>
+                  <td className="tbl-cell text-primary tabular-nums" dir="ltr">
+                    {r.received.toLocaleString()} / {r.expected.toLocaleString()}
+                  </td>
+                  <td className="tbl-cell text-muted text-small">{new Date(r.createdAt).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (id: string) => void }) {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [factory, setFactory] = useState('')
+  const [reference, setReference] = useState('')
+  const [quantities, setQuantities] = useState<Map<string, number>>(() => new Map())
+  const [importing, setImporting] = useState(false)
+  const [gridKey, setGridKey] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [factoryError, setFactoryError] = useState<string | undefined>()
+
+  // The grid reads its lines in the receiving session's shape; here they live only in memory until "Create run".
+  const lines: Line[] = useMemo(() => [...quantities.entries()].map(([variantId, quantity]) => ({
+    id: variantId, variant_id: variantId, variant_title: '', sku: null, product_title: '', quantity, piece_count: 0,
+  })), [quantities])
+
+  function setQuantity(variantId: string, quantity: number) {
+    setQuantities(prev => {
+      const next = new Map(prev)
+      if (quantity > 0) next.set(variantId, quantity); else next.delete(variantId)
+      return next
+    })
+  }
+
+  function fromFile(rows: MatchedRow[]) {
+    setQuantities(prev => {
+      const next = new Map(prev)
+      for (const r of rows) next.set(r.variantId, r.quantity)
+      return next
+    })
+    setGridKey(k => k + 1)
+    setImporting(false)
+  }
+
+  async function create() {
+    setError(null)
+    if (!factory.trim()) { setFactoryError(t('labelRuns.create.nameRequired')); return }
+    setFactoryError(undefined)
+    setSaving(true)
+    try {
+      const run = await createLabelRun({
+        factoryName: factory.trim(),
+        reference: reference.trim() || undefined,
+        lines: [...quantities.entries()].map(([variantId, expectedQty]) => ({ variantId, expectedQty })),
+      })
+      toast({ tone: 'success', message: t('labelRuns.create.created') })
+      onCreated(run.id)
+    } catch (e: unknown) {
+      setError(message(e, i18n.language, t('common.error')))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4" data-testid="factory-run-create">
+      <button type="button" onClick={onCancel}
+        className="inline-flex items-center gap-1 text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
+        <ArrowLeft size={14} strokeWidth={2} className="rtl:rotate-180" /> {t('labelRuns.back')}
+      </button>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <h2 className="text-h2 text-primary">{t('labelRuns.create.title')}</h2>
+        {!importing && <ImportFromExcelButton onClick={() => setImporting(true)} />}
+      </div>
+
+      <div className="card p-5 grid gap-4 sm:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-small text-muted">{t('labelRuns.create.factory')}</span>
+          <Input value={factory} onChange={e => setFactory(e.target.value)} maxLength={120}
+            placeholder={t('labelRuns.create.factoryPlaceholder')} error={factoryError} data-testid="run-factory" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-small text-muted">{t('labelRuns.create.reference')}</span>
+          <Input value={reference} onChange={e => setReference(e.target.value)} maxLength={100}
+            placeholder="PO-123" dir="ltr" data-testid="run-reference" />
+        </label>
+      </div>
+
+      {importing && (
+        <ImportPanel onClose={() => setImporting(false)} onApplied={() => {}} runMode={{ onRows: fromFile }} />
+      )}
+
+      {error && <Alert tone="critical" title={error} />}
+
+      <ProductSelectionGrid
+        key={gridKey}
+        lines={lines}
+        onCommit={setQuantity}
+        onRefresh={() => {}}
+        onFinalizeClick={create}
+        finalizing={saving}
+        finalizeLabel={n => t('labelRuns.create.submit', { count: n })}
+        notice={n => n > MAX_RUN_UNITS
+          ? <Alert tone="warning" title={t('labelRuns.create.tooMany', { max: MAX_RUN_UNITS.toLocaleString() })} />
+          : null}
+      />
+    </div>
+  )
+}
+
+// ── One run ───────────────────────────────────────────────────────────────────
+
+function RunView({ id, onBack }: { id: string; onBack: () => void }) {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [run, setRun] = useState<LabelRunDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [printing, setPrinting] = useState(false)
+  const [opening, setOpening] = useState<number | null>(null)
+
+  useEffect(() => {
+    getLabelRun(id).then(setRun).catch(e => setError(message(e, i18n.language, t('common.error'))))
+  }, [id, i18n.language, t])
+
+  async function open(part: number) {
+    setOpening(part); setError(null)
+    try { await openLabelRunPdf(id, part) }
+    catch (e: unknown) { setError(message(e, i18n.language, t('common.error'))) }
+    finally { setOpening(null) }
+  }
+
+  async function print() {
+    setPrinting(true); setError(null)
+    try {
+      const r = await printLabelRun(id)
+      setRun(r.run)
+      toast({ tone: 'success', message: t('labelRuns.detail.printedToast', { count: r.issued }) })
+      if (r.run.parts.length === 1) await open(1)
+    } catch (e: unknown) {
+      setError(message(e, i18n.language, t('common.error')))
+    } finally {
+      setPrinting(false)
+    }
+  }
+
+  const back = (
+    <button type="button" onClick={onBack}
+      className="inline-flex items-center gap-1 text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
+      <ArrowLeft size={14} strokeWidth={2} className="rtl:rotate-180" /> {t('labelRuns.back')}
+    </button>
+  )
+  if (!run) {
+    return (
+      <div className="space-y-4">
+        {back}
+        {error ? <Alert tone="critical" title={error} /> : <div className="card overflow-hidden"><TableSkeleton rows={3} cols={4} /></div>}
+      </div>
+    )
+  }
+
+  const open_ = run.status === 'open'
+  const reprint = run.toPrint === 0 && run.parts.length > 0
+
+  return (
+    <div className="space-y-4" data-testid="factory-run">
+      {back}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h2 className="text-h2 text-primary"><bdi>{run.factoryName}</bdi></h2>
+          <p className="text-small text-muted mt-1 flex flex-wrap items-center gap-2">
+            {run.reference && <span className="font-mono" dir="ltr">{run.reference}</span>}
+            <Badge tone={open_ ? 'info' : 'neutral'} label={t(`labelRuns.status.${run.status}`)} />
+            <span>{t('labelRuns.detail.created', {
+              name: run.createdBy ?? '—', date: new Date(run.createdAt).toLocaleDateString(),
+            })}</span>
+          </p>
+        </div>
+        {open_ && run.toPrint > 0 && (
+          <Button iconStart={Printer} loading={printing} onClick={print} data-testid="run-print">
+            {t('labelRuns.detail.print', { count: run.toPrint })}
+          </Button>
+        )}
+      </div>
+
+      {error && <Alert tone="critical" title={error} />}
+
+      <div className="grid gap-3 grid-cols-3">
+        {(['expected', 'printed', 'received'] as const).map(k => (
+          <div key={k} className="card p-4">
+            <p className="text-caption text-muted">{t(`labelRuns.detail.${k}`)}</p>
+            <p className="text-h2 text-primary tabular-nums mt-1" data-testid={`run-${k}`}>{run[k].toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
+
+      {run.parts.length > 0 && (
+        <section className="card p-5 space-y-3" data-testid="run-parts">
+          <div className="space-y-1">
+            <h2 className="text-h3 text-primary">{t(reprint ? 'labelRuns.detail.reprintTitle' : 'labelRuns.detail.labelsTitle')}</h2>
+            <p className="text-small text-muted">{t('labelRuns.detail.howTo')}</p>
+            {reprint && <p className="text-small text-muted" data-testid="run-reprint-note">{t('labelRuns.detail.reprintNote')}</p>}
+          </div>
+          <ul className="divide-y divide-line border-y border-line">
+            {run.parts.map(p => (
+              <li key={p.part} className="flex items-center gap-3 py-2.5" data-testid={`run-part-${p.part}`}>
+                <div className="min-w-0 flex-1">
+                  <p className="text-body font-medium text-primary">
+                    {run.parts.length > 1 ? t('labelRuns.detail.part', { n: p.part, count: p.labels })
+                      : t('labelRuns.detail.allLabels', { count: p.labels })}
+                  </p>
+                  <p className="text-caption text-muted truncate">
+                    {p.groups.map(g => `${g.productTitle} · ${g.variantTitle}`).join(', ')}
+                  </p>
+                </div>
+                <Button size="sm" variant="secondary" iconStart={Printer} loading={opening === p.part} onClick={() => open(p.part)}>
+                  {t(reprint ? 'labelRuns.detail.reprint' : 'labelRuns.detail.openPdf')}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {run.parts.length === 0 && run.printed > 0 && (
+        <Alert tone="info" title={t('labelRuns.detail.noneLeft')} />
+      )}
+
+      <div className="card overflow-x-auto">
+        <table className="min-w-full">
+          <thead>
+            <tr className="border-b border-line">
+              {['product', 'expected', 'printed', 'received'].map(k => (
+                <th key={k} className="tbl-header">{t(`labelRuns.col.${k}`)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {run.lines.map(l => (
+              <tr key={l.id} className="tbl-row" data-testid={`run-line-${l.variantId}`}>
+                <td className="tbl-cell">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <ProductThumb src={l.imageUrl} alt={l.productTitle} size={36} />
+                    <div className="min-w-0">
+                      <p className="text-body font-medium text-primary truncate"><bdi>{l.productTitle}</bdi></p>
+                      <p className="text-small text-muted truncate">
+                        <bdi>{l.variantTitle}</bdi>
+                        {l.sku && <> · <span className="font-mono" dir="ltr">{l.sku}</span></>}
+                      </p>
+                    </div>
+                  </div>
+                </td>
+                <td className="tbl-cell text-primary tabular-nums">{l.expected.toLocaleString()}</td>
+                <td className="tbl-cell text-primary tabular-nums">{l.printed.toLocaleString()}</td>
+                <td className="tbl-cell text-primary tabular-nums">{l.received.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}

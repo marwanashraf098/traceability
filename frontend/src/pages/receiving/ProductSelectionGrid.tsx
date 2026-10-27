@@ -29,7 +29,8 @@ function groupLinesByVariant(lines: Line[]): Map<string, VariantGroup> {
 const PAGE_SIZE = 48
 
 interface Props {
-  sessionId: string
+  /** The receiving session whose lines the grid edits (POST / PUT / DELETE). Unused with {@link Props.onCommit}. */
+  sessionId?: string
   lines: Line[]
   onRefresh: () => void
   onFinalizeClick: () => void
@@ -38,10 +39,13 @@ interface Props {
    *  from the grid's live unit total. */
   finalizeLabel?: (units: number) => string
   notice?: (units: number) => ReactNode
+  /** Factory runs (flexible labeling slice 6a): the lines live in the caller's memory, not a session — each
+   *  variant's new absolute quantity is handed here instead of the session line endpoints. */
+  onCommit?: (variantId: string, quantity: number) => void
 }
 
 export default function ProductSelectionGrid({
-  sessionId, lines, onRefresh, onFinalizeClick, finalizing, finalizeLabel, notice,
+  sessionId, lines, onRefresh, onFinalizeClick, finalizing, finalizeLabel, notice, onCommit,
 }: Props) {
   const { t } = useTranslation()
   // The grid never loads the whole catalog: `results` is the current server-side
@@ -179,6 +183,14 @@ export default function ProductSelectionGrid({
     const group   = currentGroup(variantId)
     const current = group?.qty ?? 0
     if (newQty === current) return
+
+    if (onCommit) {
+      onCommit(variantId, newQty)
+      optimisticRef.current.set(variantId, { qty: newQty, lineIds: newQty > 0 ? [variantId] : [] })
+      setGridError(null)
+      onRefresh()
+      return
+    }
 
     try {
       if (!group || group.lineIds.length === 0) {

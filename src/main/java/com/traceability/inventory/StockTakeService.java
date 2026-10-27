@@ -246,8 +246,10 @@ public class StockTakeService {
         out.put("barcode", barcode);
 
         // Flexible labeling: a printed label nobody has tagged a piece with yet — not an unknown scan.
-        if (piece == null && com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup).isPresent()) {
-            throw com.traceability.labels.UnusedLabels.notUsedYet();
+        var unusedLabel = piece == null ? com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup)
+            : java.util.Optional.<com.traceability.labels.UnusedLabels.Unused>empty();
+        if (unusedLabel.isPresent()) {
+            throw com.traceability.labels.UnusedLabels.notUsedYet(unusedLabel.get());
         }
         if (piece == null) {
             jdbc.update(

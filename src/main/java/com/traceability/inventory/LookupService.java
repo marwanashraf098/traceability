@@ -245,8 +245,9 @@ public class LookupService {
         result.put("code", u.code());
         result.put("status", "issued");
         result.put("variant", variant);
-        result.put("messageEn", com.traceability.labels.UnusedLabels.MESSAGE_EN);
-        result.put("messageAr", com.traceability.labels.UnusedLabels.MESSAGE_AR);
+        result.put("kind", u.kind());
+        result.put("messageEn", com.traceability.labels.UnusedLabels.messageEnFor(u));
+        result.put("messageAr", com.traceability.labels.UnusedLabels.messageArFor(u));
         return result;
     }
 

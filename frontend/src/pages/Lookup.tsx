@@ -77,6 +77,7 @@ function MetaField({ label, children, className = '' }: { label: string; childre
 /** A label printed for a product that no piece carries yet — what it's for, and to tag it first. */
 function LabelCodeView({ result }: { result: LabelCodeLookupResult }) {
   const { t } = useTranslation()
+  const factory = result.kind === 'factory'
   return (
     <div className="card p-6 space-y-4 animate-fadeIn" data-testid="label-code-view">
       <div className="flex items-start justify-between gap-4">
@@ -90,9 +91,11 @@ function LabelCodeView({ result }: { result: LabelCodeLookupResult }) {
           </h2>
           {result.variant.sku && <p className="text-small text-muted font-mono mt-1" dir="ltr">{result.variant.sku}</p>}
         </div>
-        <Badge tone="warning" label={t('lookup.labelCode.issued')} className="flex-shrink-0 mt-1" />
+        <Badge tone="warning" label={t(factory ? 'lookup.labelCode.factoryIssued' : 'lookup.labelCode.issued')} className="flex-shrink-0 mt-1" />
       </div>
-      <Alert tone="info" title={t('lookup.labelCode.title')}>{t('lookup.labelCode.body')}</Alert>
+      <Alert tone="info" title={t(factory ? 'lookup.labelCode.factoryTitle' : 'lookup.labelCode.title')}>
+        {t(factory ? 'lookup.labelCode.factoryBody' : 'lookup.labelCode.body')}
+      </Alert>
     </div>
   )
 }
