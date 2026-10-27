@@ -4,6 +4,47 @@
 
 ## Current state
 
+**Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
+ae26df3; NOT merged, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
+"Found it (selected)" / "Mark lost" / "Apply damaged" answered a bare 404 on an OPEN session, then finalize wrote off
+5 pieces (Shopify −1 × 5, pushed). Root cause: `StockTakeReconciliationService.resolve()` had no transaction and
+`TenantAwareConnection` sets `app.current_tenant` only when a transaction begins → its first read ran with no tenant →
+RLS hid the session under app_user → 404. Prod: 0 `manager_found` scans and 0 resolve write-offs in 43 sessions ever (it
+never worked). Tests called `resolve` as postgres (BYPASSRLS), so they stayed green.
+- **Backend:** `resolve` keeps ONLY `mark_damaged` (Apply damaged on a condition_mismatch row); `found` / `lost` → 400
+  `STOCK_TAKE_ACTION_REMOVED` (EN + AR, checked before anything is read). Each item runs in its own `TransactionTemplate`
+  transaction (never one batch transaction). Dead found/lost code + helpers removed. Finalize plan adds `writeOffPieces`
+  (pieceId, shortCode, product/variant title, origin, `shopifyEffect` −1 for available→lost, 0 otherwise); totals
+  unchanged. Reconciliation rows add `shortCode`, `writtenOffHere` / `foundHere` (this session's own stock_take_missing /
+  stock_take_found events).
+- **Review page:** no per-row Found it / Mark lost, no checkboxes, no bulk action. Open session: "Found one? Scan it"
+  opens `ReviewScanOverlay` — FULL-SCREEN (portal to body), mounts useScanner + ScanShell + usePhoneScanTarget only while
+  open, calls `scanStockTakePiece` (the counting screen's own POST /scan); outcomes Counted / condition differs /
+  Already counted / "Not in this count — recorded as an unexpected find" / Unknown / the server's refusal text; the
+  review reloads after each counting scan; Done unmounts and reloads. "Back to counting" → /stock-take/:id/scan.
+  Finalize confirm lists every write-off piece above the totals (grouped by variant over 10). Finalized: read-only
+  Counted / Written off / Found lists + "Found one later? Open it in Lookup" (Lookup Found It unchanged).
+- **Errors:** stock-take commands go through `stockTakeCommand` (api.ts) → `StockTakeRequestError`; banners show the
+  server message, else readable EN/AR words per status (`stockTakeErrorText`) — never "404: ".
+- **Gotcha (new):** every `ResponseStatusException` reaches the client with an EMPTY body
+  (`ApiExceptionHandler.handleResponseStatus`), so `request()` shows only "<status>: " — any screen that shows errors must
+  map the status itself, or the backend must throw an `ApiException` with a message.
+- **Gotcha (new):** a service method without a transaction that reads tenant tables on the app_user pool sees ZERO rows —
+  TenantContext alone is not enough (GUC is set at transaction start). A read-only sweep is the next Step 0.
+- **Gotcha (new):** `Button` / `Card` in `components/ui.tsx` drop `data-testid` silently (TS accepts `data-*` on any
+  component) — query buttons by role/name, or wrap a Card in a div.
+- **Tests:** new `StockTakeReviewRlsTest` (5, app boots as app_user, real HTTP): rv1 mark_damaged on an open session — RED
+  on the old code with exactly prod's 404, GREEN after (revert-checked); rv2 found/lost → 400, nothing written; rv3 the
+  review scan counts an uncounted piece / outsider → unexpected find (green before and after — the scan path was always
+  transactional); rv4 writeOffPieces + writtenOffHere after finalize; rv5 tenant isolation. Rewritten (approved):
+  StockTakeReconciliationTest srt2–srt7 (founds by scan, write-offs by finalize; + cleanup of stock_take_shopify_syncs),
+  StockTakeFinalizeTest sft1–sft7 (finalize writes off, typed count passed), ReviewModeMuteTest (finalize with the plan's
+  count), StockTakeUntaggedCountTest u7 (found/lost → STOCK_TAKE_ACTION_REMOVED). Frontend: stocktakeReview str1/str2
+  rewritten; new stocktakeReviewScan (7); new browser test stockTakeReviewLayout (40, Chromium + WebKit, EN/AR,
+  desktop/phone). Vitest 1,198 / 1,198; tsc + vite build clean.
+- **NOT yet edited — awaiting approval:** StockTakePushAfterCommitTest (pc1–pc4, its `sessionWithOneWriteOff` helper calls
+  resolve 'lost') and StockTakeFinalizeAppliesTest c1 (resolve 'lost' to reach "writeOffs 0, no typed confirmation").
+
 **B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main 5d9c521; merged to main 2026-10-27, NOT deployed).
 V186.** An owner / manager of a real tenant must connect Shopify (step 1) and enter the main warehouse address (step 2)
 before using the app; `SetupStatus` is the one rule (`/me.setupStep` 'shopify' | 'address' | null, `warehouseAddressNeeded`

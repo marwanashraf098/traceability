@@ -30,14 +30,14 @@ import static org.assertj.core.api.Assertions.*;
  *
  * srt1  — reconciliation buckets a mixed live population correctly (on-shelf, committed,
  *         with-courier/delivered, returns bench, previously-written-off) + variant rollup.
- * srt2  — action=found writes NO piece_event (only a manager_found scan row).
- * srt3  — action=lost on free stock blocked when complete_count=false.
- * srt4  — action=lost on free stock succeeds once complete_count=true.
- * srt5  — action=lost on a piece damaged at snapshot succeeds (proves damaged:lost).
- * srt6  — action=lost on a piece committed AT SNAPSHOT TIME routes through the release guard
- *         (PieceCommittedException), no one-tap write-off.
+ * srt2  — a missed piece is counted by a normal scan (no piece_event); action=found → 400 (removed
+ *         2026-10-27).
+ * srt3  — finalize's write-off blocked when complete_count=false; action=lost → 400 (removed).
+ * srt4  — finalize writes off the uncounted free piece once complete_count=true.
+ * srt5  — finalize writes off a piece damaged at snapshot (proves damaged:lost).
+ * srt6  — a piece committed AT SNAPSHOT TIME is never written off by finalize.
  * srt7  — drift guard: piece available at snapshot, REAL pick (FulfillService.scan) before
- *         resolve -> skipped, not lost.
+ *         finalize -> skipped, not lost.
  * srt8  — action=mark_damaged applies the available->damaged condition correction.
  * srt9  — attest-complete sets complete_count=true.
  * srt10 — cancel sets status=cancelled, no piece writes, ZERO piece_events rows, and ZERO
@@ -115,6 +115,7 @@ class StockTakeReconciliationTest {
 
     @AfterEach
     void cleanState() {
+        jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE tenant_id = ?",   tenantId); // finalize's claim row
         jdbc.update("DELETE FROM stock_take_scans WHERE tenant_id = ?",           tenantId);
         jdbc.update("DELETE FROM stock_take_expected WHERE tenant_id = ?",        tenantId);
         jdbc.update("DELETE FROM stock_take_scope_variants WHERE tenant_id = ?",  tenantId);
@@ -186,47 +187,55 @@ class StockTakeReconciliationTest {
         assertThat(((Number) report.get("coveragePercent")).doubleValue()).isGreaterThan(0);
     }
 
-    // srt2: found writes NO piece_event
+    // srt2: a missed piece is counted by scanning it (the review overlay's path) — a normal scan row,
+    // NO piece_event; the removed "found" action is refused with 400 (2026-10-27)
     @Test
-    void srt2_foundAction_writesNoPieceEvent() {
+    void srt2_missedPieceScanned_countsWithNoPieceEvent_foundActionRefused() {
         String piece = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot();
 
         Integer eventsBefore = jdbc.queryForObject(
             "SELECT COUNT(*) FROM piece_events WHERE piece_id = ?", Integer.class, piece);
 
-        List<Map<String, Object>> results;
         TenantContext.set(tenantId);
         try {
-            results = reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(piece, "found")), actorId);
+            assertThatThrownBy(() -> reconciliation.resolve(sessionId,
+                List.of(new StockTakeReconciliationService.ResolveItem(piece, "found")), actorId))
+                .isInstanceOf(StockTakeActionRemovedException.class)
+                .satisfies(e -> assertThat(((StockTakeActionRemovedException) e).httpStatus())
+                    .isEqualTo(HttpStatus.BAD_REQUEST));
+            Map<String, Object> result = stockTake.scan(sessionId, "PC-" + piece, "good", actorId);
+            assertThat(result.get("classification")).isEqualTo("match");
         } finally {
             TenantContext.clear();
         }
 
-        assertThat(results.get(0).get("result")).isEqualTo("match");
-
         Integer eventsAfter = jdbc.queryForObject(
             "SELECT COUNT(*) FROM piece_events WHERE piece_id = ?", Integer.class, piece);
-        assertThat(eventsAfter).as("no piece_event written by found-it").isEqualTo(eventsBefore);
+        assertThat(eventsAfter).as("no piece_event written by counting a missed piece").isEqualTo(eventsBefore);
 
         Integer scanCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND piece_id = ? AND source = 'manager_found'",
+            "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND piece_id = ? AND source = 'scan'",
             Integer.class, sessionId, piece);
         assertThat(scanCount).isEqualTo(1);
         assertThat(pieceStatus(piece)).isEqualTo("available");
     }
 
-    // srt3: lost blocked when complete_count=false
+    // srt3: a write-off happens only at finalize, which is blocked while complete_count=false;
+    // the removed "lost" action is refused with 400 (2026-10-27)
     @Test
-    void srt3_lostBlockedWhenCompleteCountFalse() {
+    void srt3_writeOffBlockedWhenCompleteCountFalse_lostActionRefused() {
         String piece = seedPiece("available");
+        String counted = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot();
 
         TenantContext.set(tenantId);
         try {
             assertThatThrownBy(() -> reconciliation.resolve(sessionId,
                 List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId))
+                .isInstanceOf(StockTakeActionRemovedException.class);
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
+            assertThatThrownBy(() -> reconciliation.finalizeSession(sessionId, actorId, 1))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                     .isEqualTo(HttpStatus.CONFLICT));
@@ -237,37 +246,38 @@ class StockTakeReconciliationTest {
         assertThat(pieceStatus(piece)).isEqualTo("available");
     }
 
-    // srt4: lost allowed once complete_count=true
+    // srt4: once complete_count=true, finalize writes off the uncounted free piece
     @Test
-    void srt4_lostAllowedWhenCompleteCountTrue() {
+    void srt4_finalizeWritesOffUncountedWhenCompleteCountTrue() {
         String piece = seedPiece("available");
+        String counted = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot();
 
         TenantContext.set(tenantId);
         try {
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(sessionId, actorId);
-            List<Map<String, Object>> results = reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId);
-            assertThat(results.get(0).get("result")).isEqualTo("written_off");
+            reconciliation.finalizeSession(sessionId, actorId, 1);
         } finally {
             TenantContext.clear();
         }
 
         assertThat(pieceStatus(piece)).isEqualTo("lost");
+        assertThat(pieceStatus(counted)).isEqualTo("available");
     }
 
-    // srt5: damaged -> lost succeeds (proves the new damaged:lost edge)
+    // srt5: damaged at snapshot -> finalize writes it off (proves damaged:lost)
     @Test
-    void srt5_damagedAtSnapshot_lostSucceeds() {
+    void srt5_damagedAtSnapshot_finalizeWritesOff() {
         String piece = seedPiece("damaged");
+        String counted = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot();
 
         TenantContext.set(tenantId);
         try {
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(sessionId, actorId);
-            List<Map<String, Object>> results = reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId);
-            assertThat(results.get(0).get("result")).isEqualTo("written_off");
+            reconciliation.finalizeSession(sessionId, actorId, 1);
         } finally {
             TenantContext.clear();
         }
@@ -275,21 +285,20 @@ class StockTakeReconciliationTest {
         assertThat(pieceStatus(piece)).isEqualTo("lost");
     }
 
-    // srt6: committed AT SNAPSHOT TIME routes through the release guard
+    // srt6: committed AT SNAPSHOT TIME is never written off by finalize
     @Test
-    void srt6_committedAtSnapshot_routesThroughReleaseGuard() {
+    void srt6_committedAtSnapshot_neverWrittenOffByFinalize() {
         UUID orderId = createOrder();
         String piece = seedPieceForOrder("available", orderId);
         reservePieceForOrder(piece, orderId); // now 'reserved', real allocation
+        String counted = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot(); // status_at_open='reserved'
 
         TenantContext.set(tenantId);
         try {
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(sessionId, actorId);
-            assertThatThrownBy(() -> reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId))
-                .isInstanceOf(PieceCommittedException.class)
-                .satisfies(e -> assertThat(((PieceCommittedException) e).getOrderId()).isEqualTo(orderId));
+            reconciliation.finalizeSession(sessionId, actorId);
         } finally {
             TenantContext.clear();
         }
@@ -297,10 +306,11 @@ class StockTakeReconciliationTest {
         assertThat(pieceStatus(piece)).as("never written off").isEqualTo("reserved");
     }
 
-    // srt7: drift guard — real pick between snapshot and resolve -> skipped, not lost
+    // srt7: drift guard — real pick between snapshot and finalize -> skipped, not lost
     @Test
-    void srt7_driftGuard_realPickBetweenSnapshotAndResolve_skipped() {
+    void srt7_driftGuard_realPickBetweenSnapshotAndFinalize_skipped() {
         String piece = seedPiece("available"); // free stock at snapshot
+        String counted = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot(); // status_at_open='available'
 
         UUID orderId = createOrder();
@@ -311,10 +321,9 @@ class StockTakeReconciliationTest {
             assertThat(scanResult.success()).as("the real pick must actually succeed").isTrue();
             assertThat(pieceStatus(piece)).isEqualTo("reserved");
 
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(sessionId, actorId);
-            List<Map<String, Object>> results = reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId);
-            assertThat(results.get(0).get("result")).isEqualTo("skipped_changed_during_count");
+            reconciliation.finalizeSession(sessionId, actorId);
         } finally {
             TenantContext.clear();
         }
