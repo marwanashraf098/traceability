@@ -755,19 +755,18 @@ function QuickActions() {
 
 // ── Onboarding card — condensed, dismissible ────────────────────────────────
 //
-// The 5 checklist steps, in a fixed display order — key strings are the ones
-// OnboardingController.status() returns (connect_shopify/connect_bosta/location/
-// test_label/first_receiving are unchanged; "location" is the new FR-1.2 step,
-// "initial_import" was dropped). Each row shows the auto/manual-derived `done`
+// The 4 checklist steps, in a fixed display order — key strings are the ones
+// OnboardingController.status() returns (connect_shopify/connect_bosta/test_label/
+// first_receiving; "initial_import" was dropped, and "location" too — the onboarding
+// gate (V186) asks for the main warehouse address before the app opens). Each row shows the auto/manual-derived `done`
 // state plus a manual-override checkbox — checking it calls setOnboardingStep()
 // and reconciles from the next onboarding refetch (optimistic flip in between).
 
-const ONBOARDING_STEP_ORDER = ['connect_shopify', 'connect_bosta', 'location', 'test_label', 'first_receiving'] as const
+const ONBOARDING_STEP_ORDER = ['connect_shopify', 'connect_bosta', 'test_label', 'first_receiving'] as const
 
 const STEP_DEST: Record<string, string> = {
   connect_shopify: '/settings?tab=connections',
   connect_bosta:   '/settings?tab=connections',
-  location:        '/settings?tab=locations',
   test_label:      '/receiving',
   first_receiving: '/receiving',
 }

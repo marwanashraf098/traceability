@@ -505,7 +505,7 @@ describe('Overview dashboard', () => {
     renderWithProviders(<Layout><Overview /></Layout>)
 
     await screen.findByTestId('onboarding-card')
-    const row = screen.getByTestId('onboarding-step-location')
+    const row = screen.getByTestId('onboarding-step-test_label')
     const checkbox = within(row).getByRole('checkbox') as HTMLInputElement
     expect(checkbox.checked).toBe(false)
 
@@ -516,7 +516,7 @@ describe('Overview dashboard', () => {
     expect(checkbox.checked).toBe(true)
     expect(appFetch).toHaveBeenCalledWith(
       expect.stringContaining('/onboarding/steps'),
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ step: 'location', checked: true }) })
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ step: 'test_label', checked: true }) })
     )
 
     // Let the POST resolve and the refetch settle — no leftover pending/disabled state.
@@ -546,7 +546,7 @@ describe('Overview dashboard', () => {
     renderWithProviders(<Layout><Overview /></Layout>)
 
     await screen.findByTestId('onboarding-card')
-    const row = screen.getByTestId('onboarding-step-location')
+    const row = screen.getByTestId('onboarding-step-test_label')
     const checkbox = within(row).getByRole('checkbox')
     const user = userEvent.setup()
     await user.click(checkbox)

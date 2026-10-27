@@ -42,10 +42,10 @@ import static org.assertj.core.api.Assertions.*;
  *   c2  — connections: Shopify connected → shopify.connected=true
  *   c3  — connections: Bosta active → bosta.connected=true
  *   o1  — onboarding: fresh tenant → connect_shopify/connect_bosta/test_label/
- *         first_receiving pending; location already done (the @BeforeAll fixture
- *         creates one location per tenant for receipt-FK purposes — see setup())
+ *         first_receiving pending (the @BeforeAll fixture's location no longer counts
+ *         for anything — there is no location step since the onboarding gate, V186)
  *   o2  — onboarding: Shopify connected → connect_shopify done
- *   o3  — onboarding: location exists → location done (the shared fixture location)
+ *   o3  — onboarding: no "location" step (V186 onboarding gate) — exactly the four steps
  *   o4  — onboarding: label reprint exists → test_label done
  *   o5  — onboarding: finalized receipt → first_receiving done
  *   o6  — onboarding: all signals present → allDone=true
@@ -295,7 +295,7 @@ class ConnectionsOnboardingTest {
     // ── Onboarding ────────────────────────────────────────────────────────────
 
     @Test
-    void o1_freshTenant_locationDoneFromSharedFixture_restPending() {
+    void o1_freshTenant_allStepsPending() {
         Map<String, Object> result = onboardCtl.status(principal());
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> steps = (List<Map<String, Object>>) result.get("steps");
@@ -303,9 +303,6 @@ class ConnectionsOnboardingTest {
         assertThat(stepDone(steps, "connect_bosta")).isFalse();
         assertThat(stepDone(steps, "test_label")).isFalse();
         assertThat(stepDone(steps, "first_receiving")).isFalse();
-        // The @BeforeAll fixture creates one location per tenant (receipt FK requirement) —
-        // location is therefore already done for every test in this class.
-        assertThat(stepDone(steps, "location")).isTrue();
         assertThat(result.get("allDone")).isEqualTo(false);
     }
 
@@ -321,11 +318,12 @@ class ConnectionsOnboardingTest {
     }
 
     @Test
-    void o3_locationExists_locationDone() {
+    void o3_noLocationStep() {
         Map<String, Object> result = onboardCtl.status(principal());
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> steps = (List<Map<String, Object>>) result.get("steps");
-        assertThat(stepDone(steps, "location")).isTrue();
+        assertThat(steps).extracting(st -> st.get("key"))
+            .containsExactly("connect_shopify", "connect_bosta", "test_label", "first_receiving");
     }
 
     @Test
@@ -367,7 +365,6 @@ class ConnectionsOnboardingTest {
             "INSERT INTO courier_accounts (id, tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
             "VALUES (gen_random_uuid(), ?, 'bosta', ?, 'wh', 'active')",
             tenantId, encSvc.encrypt("k2"));
-        // ③ location already done via the shared @BeforeAll fixture
         // ④ label reprint
         UUID receiptId = jdbc.queryForObject(
             "INSERT INTO receipts (id, tenant_id, received_by, location_id, status, finalized_at) " +

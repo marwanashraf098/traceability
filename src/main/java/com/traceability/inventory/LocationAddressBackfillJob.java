@@ -23,7 +23,9 @@ import java.util.UUID;
  * countryCode EG). Modelled on CatalogBackfillJob: the eligible tenant list is ONE read on the
  * owner pool (approved; no new hatch), released before any Shopify call; each tenant then runs
  * inside TenantContext.runAs on the app_user pool (RLS) through
- * {@link MainLocationAddressService#apply} — the ONE fill rule — with the GENERIC address, no DB
+ * {@link MainLocationAddressService#apply} — the ONE fill rule — with the merchant's saved address
+ * ({@link MainLocationAddressSource}, the onboarding gate's) when there is one, else the GENERIC
+ * address — so a backfill never replaces a merchant address Traced wrote with the generic one. No DB
  * transaction open during the Shopify read / edit.
  *
  * <p>Scope: Traced's main location only — identified by the linked Shopify location id (the
@@ -59,10 +61,13 @@ public class LocationAddressBackfillJob {
 
     private final JdbcTemplate ownerJdbc;
     private final MainLocationAddressService service;
+    private final MainLocationAddressSource  addressSource;
 
-    public LocationAddressBackfillJob(@FlywayDataSource DataSource ownerDs, MainLocationAddressService service) {
-        this.ownerJdbc = new JdbcTemplate(ownerDs);
-        this.service   = service;
+    public LocationAddressBackfillJob(@FlywayDataSource DataSource ownerDs, MainLocationAddressService service,
+                                      MainLocationAddressSource addressSource) {
+        this.ownerJdbc     = new JdbcTemplate(ownerDs);
+        this.service       = service;
+        this.addressSource = addressSource;
     }
 
     @Job(name = "Shopify location address backfill", retries = 3)
@@ -83,8 +88,8 @@ public class LocationAddressBackfillJob {
         for (UUID tenantId : tenants) {
             MainLocationAddressService.Outcome outcome;
             try {
-                outcome = TenantContext.runAs(tenantId,
-                    () -> service.apply(tenantId, MainLocationAddressService.GENERIC, dryRun)).outcome();
+                outcome = TenantContext.runAs(tenantId, () -> service.apply(tenantId,
+                    addressSource.merchantAddress(tenantId).orElse(MainLocationAddressService.GENERIC), dryRun)).outcome();
             } catch (Exception e) {
                 outcome = MainLocationAddressService.Outcome.failed;
                 log.warn("Location address backfill: tenant {} errored: {}", tenantId,

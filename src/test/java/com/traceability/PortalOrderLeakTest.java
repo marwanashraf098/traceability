@@ -158,6 +158,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/embedded/exceptions",           embedded());
         reg("GET /api/v1/embedded/inventory/summary",    embedded());
         reg("GET /api/v1/embedded/stores/status",        embedded());
+        reg("GET /api/v1/embedded/setup",                embedded());
         reg("GET /api/v1/embedded/onboarding/prefill",   skip("tenantless onboarding principal for an UNLINKED shop — no tenant data"));
         reg("POST /api/v1/embedded/onboarding/signup",   skip(R_IDENTITY));
         reg("POST /api/v1/embedded/onboarding/pending-link", skip(R_IDENTITY));
@@ -452,6 +453,8 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/onboarding/status",             list());
         reg("POST /api/v1/onboarding/dismiss",           skip(R_CONFIG));
         reg("POST /api/v1/onboarding/steps",             skip(R_CONFIG));
+        reg("GET /api/v1/setup/address",                 list());
+        reg("PUT /api/v1/setup/address",                 skip(R_CONFIG));
         reg("GET /api/v1/health",                        list());
         reg("GET /api/v1/station/roster",                list());
         reg("GET /api/v1/station/pairings/current",      list());

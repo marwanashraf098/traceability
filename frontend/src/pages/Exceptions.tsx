@@ -79,6 +79,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // Pick & Pack S4 — waybill mode
   pack_set_aside:             { en: 'Set Aside While Packing',  ar: 'وُضع جانباً أثناء التغليف' },
   pack_cancelled_after_print: { en: 'Cancelled After Print',    ar: 'أُلغي بعد الطباعة' },
+  // Onboarding gate (V186)
+  warehouse_address_push_failed: { en: 'Warehouse Address Not In Shopify', ar: 'عنوان المخزن لم يصل إلى Shopify' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

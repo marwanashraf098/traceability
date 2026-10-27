@@ -124,6 +124,24 @@ public class EmbeddedController {
                 from, from));
     }
 
+    // ── GET /api/v1/embedded/setup ───────────────────────────────────────────
+
+    /**
+     * Onboarding gate (V186): {setupStep: 'shopify' | 'address' | null} — the same SetupStatus rule
+     * as GET /me. The embedded app shows "Finish setup in Traced" while it is not null; it never
+     * collects the address itself.
+     */
+    @GetMapping("/setup")
+    @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
+    public Map<String, Object> setup() {
+        return tx.execute(txs -> {
+            UUID tenantId = com.traceability.tenancy.TenantContext.require();
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("setupStep", com.traceability.setup.SetupStatus.step(jdbc, tenantId));
+            return out;
+        });
+    }
+
     // ── GET /api/v1/embedded/stores/status ───────────────────────────────────
 
     @GetMapping("/stores/status")

@@ -41,20 +41,10 @@ import java.util.UUID;
 public class MoneyAnalyticsService {
 
     /**
-     * Shopify Egypt province codes → Bosta city names (dropOffAddress.city.name), for orders not
-     * booked with Bosta yet. 6th of October (SU) and Helwan (HU) are under Giza / Cairo in Bosta.
+     * Shopify Egypt province codes → Bosta city names, for orders not booked with Bosta yet.
+     * The one definition lives in {@link com.traceability.geo.EgyptProvinces#TO_BOSTA_CITY}.
      */
-    static final Map<String, String> PROVINCE_TO_BOSTA_CITY = Map.ofEntries(
-        Map.entry("C", "Cairo"), Map.entry("HU", "Cairo"), Map.entry("GZ", "Giza"), Map.entry("SU", "Giza"),
-        Map.entry("ALX", "Alexandria"), Map.entry("DK", "Dakahlia"), Map.entry("KB", "El Kalioubia"),
-        Map.entry("SHR", "Sharqia"), Map.entry("GH", "Gharbia"), Map.entry("MNF", "Monufia"),
-        Map.entry("BH", "Behira"), Map.entry("DT", "Damietta"), Map.entry("PTS", "Port Said"),
-        Map.entry("SUZ", "Suez"), Map.entry("IS", "Ismailia"), Map.entry("BA", "Red Sea"),
-        Map.entry("JS", "South Sinai"), Map.entry("SIN", "North Sinai"), Map.entry("MT", "Matrouh"),
-        Map.entry("KFS", "Kafr Alsheikh"), Map.entry("FYM", "Fayoum"), Map.entry("BNS", "Bani Suif"),
-        Map.entry("MN", "Menya"), Map.entry("AST", "Assuit"), Map.entry("SHG", "Sohag"),
-        Map.entry("KN", "Qena"), Map.entry("LX", "Luxor"), Map.entry("ASN", "Aswan"),
-        Map.entry("WAD", "New Valley"));
+    static final Map<String, String> PROVINCE_TO_BOSTA_CITY = com.traceability.geo.EgyptProvinces.TO_BOSTA_CITY;
 
     // ── Response records ────────────────────────────────────────────────────
 

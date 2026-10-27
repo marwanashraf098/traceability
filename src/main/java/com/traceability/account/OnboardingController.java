@@ -54,15 +54,15 @@ public class OnboardingController {
     /**
      * GET /api/v1/onboarding/status
      *
-     * Returns each of the 5 checklist steps as {key, done, auto, manual}, where
-     * done = auto || manual.
+     * Returns each of the 4 checklist steps as {key, done, auto, manual}, where
+     * done = auto || manual. (The old "location" step is gone — the onboarding gate (V186)
+     * makes every merchant enter the main warehouse address before using the app.)
      *
      * Response shape:
      * {
      *   "steps": [
      *     { "key": "connect_shopify",  "done": bool, "auto": bool, "manual": bool },
      *     { "key": "connect_bosta",    "done": bool, "auto": bool, "manual": bool },
-     *     { "key": "location",         "done": bool, "auto": bool, "manual": bool },
      *     { "key": "test_label",       "done": bool, "auto": bool, "manual": bool },
      *     { "key": "first_receiving",  "done": bool, "auto": bool, "manual": bool }
      *   ],
@@ -89,11 +89,6 @@ public class OnboardingController {
                 Boolean.class, tenantId))
                 || CourierSimulation.isSimulated(jdbc, tenantId);
 
-            // ③ At least one location exists
-            boolean locationAuto = Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS(SELECT 1 FROM locations WHERE tenant_id = ?)",
-                Boolean.class, tenantId));
-
             // ④ Test label (explicit reprint — closest available signal)
             boolean labelAuto = Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS(SELECT 1 FROM label_reprints WHERE tenant_id = ?)",
@@ -110,7 +105,6 @@ public class OnboardingController {
             List<Map<String, Object>> steps = new ArrayList<>();
             steps.add(step("connect_shopify",  shopifyAuto,   manualSteps));
             steps.add(step("connect_bosta",    bostaAuto,     manualSteps));
-            steps.add(step("location",         locationAuto,  manualSteps));
             steps.add(step("test_label",       labelAuto,     manualSteps));
             steps.add(step("first_receiving",  receivingAuto, manualSteps));
 

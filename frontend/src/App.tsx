@@ -54,6 +54,7 @@ import Terms from './pages/Terms'
 import Refund from './pages/Refund'
 import Contact from './pages/Contact'
 import ConnectShopify from './pages/connect/ConnectShopify'
+import { SetupGate, OnboardingRoute } from './components/SetupGate'
 
 type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -219,7 +220,8 @@ export function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   if (getRoleFromToken() === 'worker') {
     return <Navigate to="/worker-home" replace />
   }
-  return <>{children}</>
+  // Onboarding gate (V186): after the worker redirect, outside the screen's Layout.
+  return <SetupGate>{children}</SetupGate>
 }
 
 /**
@@ -230,7 +232,7 @@ export function StrictOwnerRoute({ children }: { children: React.ReactNode }) {
   const role = getRoleFromToken()
   if (role === 'worker') return <Navigate to="/worker-home" replace />
   if (role !== 'owner') return <Navigate to="/overview" replace />
-  return <>{children}</>
+  return <SetupGate>{children}</SetupGate>
 }
 
 /** /worker-home is worker-only — owner/manager land on /overview instead. */
@@ -326,7 +328,7 @@ export default function App() {
           path="/fulfill"
           element={
             <RequireAuth>
-              <FulfillRoute />
+              <SetupGate><FulfillRoute /></SetupGate>
             </RequireAuth>
           }
         />
@@ -334,7 +336,7 @@ export default function App() {
           path="/fulfill/gather"
           element={
             <RequireAuth>
-              <GatherList />
+              <SetupGate><GatherList /></SetupGate>
             </RequireAuth>
           }
         />
@@ -448,7 +450,7 @@ export default function App() {
           path="/lookup"
           element={
             <RequireAuth>
-              <Layout><LookupPage /></Layout>
+              <SetupGate><Layout><LookupPage /></Layout></SetupGate>
             </RequireAuth>
           }
         />
@@ -458,7 +460,7 @@ export default function App() {
           path="/returns"
           element={
             <RequireAuth>
-              <Returns />
+              <SetupGate><Returns /></SetupGate>
             </RequireAuth>
           }
         />
@@ -497,7 +499,7 @@ export default function App() {
           path="/pickups"
           element={
             <RequireAuth>
-              <Layout><PickupSessions /></Layout>
+              <SetupGate><Layout><PickupSessions /></Layout></SetupGate>
             </RequireAuth>
           }
         />
@@ -543,8 +545,9 @@ export default function App() {
         <Route path="/connections" element={<Navigate to="/settings?tab=connections" replace />} />
         <Route path="/users"       element={<Navigate to="/settings?tab=users" replace />} />
         <Route path="/locations"   element={<Navigate to="/settings?tab=locations" replace />} />
-        {/* Folded into the Overview onboarding card — Settings consolidation. */}
-        <Route path="/onboarding" element={<Navigate to="/overview" replace />} />
+        {/* Onboarding gate (V186): the gate itself while setup isn't done (OwnerOnlyRoute's SetupGate);
+            afterwards the warehouse-address form for the soft banner, else Overview. */}
+        <Route path="/onboarding" element={<RequireAuth><OwnerOnlyRoute><OnboardingRoute /></OwnerOnlyRoute></RequireAuth>} />
         {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}
         <Route path="/shopify-inventory" element={<Navigate to="/inventory" replace />} />
         {import.meta.env.DEV && StyleGuide && (

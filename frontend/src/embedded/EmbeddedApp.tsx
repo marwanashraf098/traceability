@@ -26,6 +26,7 @@ import {
 import Onboarding, { Connected, type SignupDone } from './Onboarding'
 import { embeddedLang, applyLang } from './embeddedLocale'
 import { disconnectedCopy } from './disconnectedCopy'
+import { setupCopy } from './setupCopy'
 import { statusLabel, polarisTone, type DerivedTone } from './statusLabels'
 
 // CDN App Bridge global — injected by the <script> in embedded.html before React mounts.
@@ -561,6 +562,31 @@ export function Disconnected({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
   )
 }
 
+// ── Finish setup (onboarding gate, V186) ─────────────────────────────────
+
+type SetupStep = 'shopify' | 'address' | null
+
+/**
+ * Shown on the dashboard while the tenant's setupStep (GET /api/v1/embedded/setup — the same rule as
+ * Traced's /me) is not null: right after an OAuth connect the merchant lands here, but Traced stays
+ * locked until the main warehouse address is saved — in Traced, never in this embedded app.
+ */
+export function FinishSetupCard({ step, lang = 'en' }: { step: 'shopify' | 'address'; lang?: 'en' | 'ar' }) {
+  const copy = setupCopy[lang]
+  return (
+    <div data-testid="embedded-finish-setup">
+      <Banner tone="warning" title={copy.title}>
+        <BlockStack gap="200">
+          <Text as="p">{step === 'shopify' ? copy.bodyShopify : copy.bodyAddress}</Text>
+          <Text as="p">
+            <Link url={`${SaaS}/onboarding`} external>{copy.cta} →</Link>
+          </Text>
+        </BlockStack>
+      </Banner>
+    </div>
+  )
+}
+
 // ── Root dashboard ────────────────────────────────────────────────────────
 
 type LinkStatus = 'checking' | 'linked' | 'not_linked' | 'connected' | 'disconnected'
@@ -595,6 +621,7 @@ export default function EmbeddedApp() {
   const [funnelState, setFunnelState]     = useState<AsyncState<FunnelCounts>>(loading)
   const [ltpState,    setLtpState]        = useState<AsyncState<LateToPack>>(loading)
   const [ordersState, setOrdersState]     = useState<AsyncState<EmbeddedOrderRow[]>>(loading)
+  const [setupStep,   setSetupStep]       = useState<SetupStep>(null)
 
   // In-page tab state only — NOT App Bridge navigation (no shopify.app / NavMenu use
   // anywhere in this bundle). Selection resets to Overview on remount; not persisted.
@@ -673,6 +700,12 @@ export default function EmbeddedApp() {
       .then(r => r.ok ? r.json() as Promise<EmbeddedOrderRow[]> : Promise.reject(r.status))
       .then(d  => setOrdersState({ status: 'ok', data: d }))
       .catch(() => setOrdersState({ status: 'err' }))
+
+    // Onboarding gate: a failure just shows no card (never blocks the dashboard).
+    authFetch('/api/v1/embedded/setup')
+      .then(r => r.ok ? r.json() as Promise<{ setupStep?: unknown }> : Promise.reject(r.status))
+      .then(d  => setSetupStep(d?.setupStep === 'shopify' || d?.setupStep === 'address' ? d.setupStep : null))
+      .catch(() => setSetupStep(null))
   }, [authFetch])
 
   // 'checking': render one shared skeleton, not four independent section skeletons — avoids
@@ -716,6 +749,8 @@ export default function EmbeddedApp() {
       }}
     >
       <BlockStack gap="500">
+
+        {setupStep !== null && <FinishSetupCard step={setupStep} lang={lang} />}
 
         {/* In-page tabs (Polaris Tabs, plain React state) — NOT App Bridge navigation.
             No history/URL involvement; selecting a tab does not change the iframe route.
