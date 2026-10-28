@@ -5,7 +5,7 @@
 ## Current state
 
 **Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
-ae26df3; NOT merged, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
+ae26df3, main 26106ce merged in 2026-10-28; NOT merged to main, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
 "Found it (selected)" / "Mark lost" / "Apply damaged" answered a bare 404 on an OPEN session, then finalize wrote off
 5 pieces (Shopify −1 × 5, pushed). Root cause: `StockTakeReconciliationService.resolve()` had no transaction and
 `TenantAwareConnection` sets `app.current_tenant` only when a transaction begins → its first read ran with no tenant →
@@ -42,8 +42,81 @@ never worked). Tests called `resolve` as postgres (BYPASSRLS), so they stayed gr
   count), StockTakeUntaggedCountTest u7 (found/lost → STOCK_TAKE_ACTION_REMOVED). Frontend: stocktakeReview str1/str2
   rewritten; new stocktakeReviewScan (7); new browser test stockTakeReviewLayout (40, Chromium + WebKit, EN/AR,
   desktop/phone). Vitest 1,198 / 1,198; tsc + vite build clean.
-- **NOT yet edited — awaiting approval:** StockTakePushAfterCommitTest (pc1–pc4, its `sessionWithOneWriteOff` helper calls
-  resolve 'lost') and StockTakeFinalizeAppliesTest c1 (resolve 'lost' to reach "writeOffs 0, no typed confirmation").
+- **Approved 2026-10-28 and edited:** StockTakePushAfterCommitTest pc1–pc4 (the piece stays unscanned, finalize with typed
+  count 1 writes it off); StockTakeFinalizeAppliesTest c1 (drift: the three unscanned pieces go available → reserved through
+  `InventoryLedger.transition` before finalize → writeOffs 0, driftSkipped 3, no typed confirmation, `nothing_to_push`, no
+  enqueue); its x1 builds the service with the real constructor (the legacy 9-arg constructor is deleted);
+  OrdersTableAccessGuardTest loses the `fetchCommittedOrder` entry (no new site flagged).
+- **Merged origin/main 26106ce (V188–V192) on 2026-10-28:** only docs/PROGRESS.md conflicted (both entries kept);
+  StockTakeService / api.ts / en.json / ar.json auto-merged. No migration on this branch.
+- **Follow-up (logged, no build):** every `ResponseStatusException` reaches the browser with an EMPTY body
+  (`ApiExceptionHandler.handleResponseStatus`) → bare status-code banners on every screen that doesn't parse a body.
+  Stock-take calls now fall back to readable EN/AR status text; the app-wide fix is separate.
+
+**Warehouse places S1 — schema, departure trigger, Settings › Places, bulk create, stickers (2026-10-26, branch
+`feat/warehouse-places-s1`, rebased on main 03d3d9e 2026-10-28; merged to main 2026-10-28, NOT deployed, no tenant switched
+on).** Step 0 report + Marawan's decisions 2026-10-26 (untagged out of v1; placeable = available / on_hold / damaged;
+sticker barcode `Q` + 6+ digits, readable code beside it; zones Z1…, racks {zone}-R01…, shelves {rack}-S1…, boxes BOX-01…
+per location; archive refused with pieces or live children; Damaged = `purpose` on a zone or box; `bins.location_id`
+never changes; capability only, set by ops).
+- **Migrations — V189 / V190 / V191** (built as V188–V190; C1 Lookup Sold took V188, so renumbered to the next free
+  versions, no gap; MigrationVersionGuardTest green). MigrationSmokeTest 190 files, NotTracedBackfillTest 135 pending
+  after V56.
+  V189: `tenants.places_enabled`; `locations (id, tenant_id)` UNIQUE; `bins` (allowed parents by `parent_kind` CHECK +
+  composite FK (parent_id, parent_kind, location_id) → bins (id, kind, location_id); code unique per location
+  case-insensitive, never shaped like P/Q + 6 digits; scan_code unique per tenant; app_user: no DELETE, UPDATE only code /
+  name / parent / purpose / archived_at); `bin_events` (INSERT/SELECT only); `bin_counters`; `pieces.bin_id` + FK
+  (bin_id, current_location_id) → bins (id, location_id) NOT VALID; `piece_events.from_bin_id / to_bin_id` (NOT VALID
+  FKs, unused until S2); trigger `pieces_bin_guard`. V190: `pieces_bin_idx` CONCURRENTLY (own .conf). V191: VALIDATE the
+  three FKs.
+- **`pieces_bin_guard` (BEFORE UPDATE OF status, current_location_id, bin_id; INVOKER):** clears bin_id when the location
+  changes or the new status isn't placeable — this covers every departure, including the six raw
+  `current_location_id` UPDATEs outside the ledger. **Two rules added beyond the brief:** (1) a piece coming BACK from a
+  non-placeable status (restock, stock-take found, transfer return) arrives with no place unless that same UPDATE
+  sets one — without it a stale place survived restock / found (revert-checked: d5 / d6 go red); (2) it refuses a place
+  on a piece with no location (the composite FK is MATCH SIMPLE and would skip it). Refuses zone / rack / archived
+  places; `FOR SHARE` on the place pairs with archive's `FOR UPDATE`. Only bin_id is touched; the ledger stays the
+  only status writer. Untagged pieces are NOT refused by the trigger — the S2 writer must refuse them (v1 decision).
+- **API** `/api/v1/places` (owner + manager, 404 unless `places_enabled`): tree (tree order, rolled-up piece counts,
+  "No place yet" = tagged placeable pieces at the location with no place), detail (contents, boxes, last 20 bin_events
+  ORDER BY occurred_at DESC, id DESC), create (default codes), bulk preview / bulk (new zone, OR `zoneId` → racks
+  added to that zone from its next free R — the board's Quick add; returns `createdIds` for "Create and print
+  stickers"), rename, move (box only, zone ↔ shelf, same location), purpose, archive, stickers PDF (shelves + boxes in /
+  under the chosen places; separator page per zone when more than one sticker). `/me` → `places`. No Shopify anywhere
+  (PlacesShopifyGuardTest).
+- **Stickers:** `LabelPdfRenderer.Location(scanCode, code, path)` on the piece-label layout (50×25): barcode = scan code,
+  then the readable code, "Location · Z1 › R01", the scan code. A box's path is the one at print time; the barcode never
+  changes, so a moved box needs no new sticker.
+- **Frontend:** Settings › Places (after Locations; owner + manager; capability-gated), built to the updated board
+  "Settings › Places (visual setup)": zone cards (+ Zone Zn, Damaged badge), racks side by side with stacked shelves (pieces /
+  Empty / box chips), + Shelf, + Add rack (next free R, as many shelves as the last rack), zone floor boxes + Box, Quick
+  add (racks × shelves → range → create and print), first-zone setup when empty, selected-place panel (contents, Print
+  sticker, + Box here, Rename, Damaged on boxes, Archive, Move for boxes), "N pieces have no place yet" (plain text until
+  S2). Renaming a rack never renames its shelves' codes — the rename dialog says so for a rack ("Shelf names on this
+  rack stay the same. Rename or reprint them if you want.", EN + AR; review 2026-10-27). EN + AR (RTL). Dev screenshot harness `frontend/dev/places-shots/` (`node dev/places-shots/shoot.mjs <dir>`).
+- **Tests:** WarehousePlacesTest 16 (schema, every parent pair, codes, bulk names / next free / quick add / one
+  transaction (test trigger fails row 8) / limits, archive, move, purpose, rename, tree counts, sticker decode (ZXing) +
+  text, switch-off 404, app_user isolation of bins + bin_events with a same-tenant positive control and the trigger
+  under RLS); PlaceDepartureTriggerTest 8 (transfer send, relocate return, reconcile, return intake + restock,
+  stock-take found, pick scan, adjust lost; positive control: same status / location, hold, damaged keep the place);
+  PlacesShopifyGuardTest 2; vitest places 10 (pl9 = the rack rename note). Pre-approved additions: RlsCoverageTest (`/api/v1/places`, `/{id}` + one
+  test), PortalOrderLeakTest (10 SKIP entries), MigrationSmokeTest 190, NotTracedBackfillTest 135 (+ "V189 + V190 + V191").
+- **PasswordResetTest 404s (review 2026-10-27) — not S1:** the first full run's 9 signup / forgot-password 404s never
+  reached the app (its Tomcat on :65309 started, but DispatcherServlet was never initialized — the first request to
+  reach the app does that), so another listener on that localhost port answered (a parallel session's run). Places
+  tests → PasswordResetTest in one JVM: 11/11 on the branch and on origin/main 5d9c521. The places 404 is thrown only
+  inside PlacesService; /me only reads the boolean.
+- **Purge kits / reset scripts:** three new tenant tables — `bins`, `bin_events`, `bin_counters` — plus the columns
+  `pieces.bin_id` and `piece_events.from_bin_id / to_bin_id`. Delete order: piece_events and pieces (or set bin_id NULL)
+  → bin_events → bins (one DELETE per tenant is fine: the self-FK is checked at the end of the statement) →
+  bin_counters. review-tenant-reset.sql picks them up automatically; the hand-listed kits (Jumi / Dolt pattern, 73
+  tables) must add them.
+- **Later slices, noted:** S2's writer = a new InventoryLedger method (UPDATE bin_id WHERE status IN placeable AND
+  short_code IS NOT NULL + one piece_events row with from/to_bin_id). Suggested place = latest piece_events.to_bin_id
+  in the current location, else the bin holding most of the variant (pieces_bin_idx). Nothing in S1 makes the put-away
+  list, returns' single "Put away all restocked pieces" button, or the one-place count harder.
+
+**C1 — Lookup Sold / Not sold (2026-10-28, branch `feat/lookup-sold`, rebased on main b218cca; merged to main 2026-10-28, NOT deployed). Migration V188 (built as V186; the onboarding gate took V186, factory runs (slice 6a) V187).** Lookup "Sold (Off-book)" on an available piece: `available → sold` (event `sold_offline`, reason `sold_offline` + optional note — no reason codes), owner / manager, reserved / packed → PIECE_COMMITTED (release first). Shopify −1 at the Traced Main Warehouse through `pushPieceSold` — the SEVENTH named decrement (approved 2026-10-25; CLAUDE.md updated in its own commit), claim `piece_sold` (`piece:sold_event_id`) decided by `countedAtMain`, one attempt after commit, classified like `pushPieceWriteOff`. "Not sold" (short confirm, no note) reverses only a Lookup sale (a transfer's off-book sale stays sold): `piece_sold_return` +1 only when the sale's −1 reached Shopify (`departureReached`), an unsent claim is cancelled. Rebase merge points: en.json / ar.json (both sides' keys kept), api.ts, ExceptionService ("sale" label), PortalOrderLeakTest (/sold, /not-sold classified). Gotcha: the rebase onto 6a merged CLEANLY with two V187 files and unchanged counts (both branches made the same bump) — always list the migrations after a rebase. Tests: PieceSoldTest 11, PieceSoldWireTest 11, lookupSold.test.tsx 6 (sd4 confirm before POST, sd6 Cancel), NamedDecrementSetGuardTest adds pushPieceSold; MigrationSmokeTest 187, NotTracedBackfillTest 132. Full backend 3430: only ExchangeBackfillTest red; vitest 1204/1204; tsc clean.
 
 **B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main 5d9c521; merged to main 2026-10-27, NOT deployed).
 V186.** An owner / manager of a real tenant must connect Shopify (step 1) and enter the main warehouse address (step 2)
@@ -95,9 +168,8 @@ read-only): 21 connected stores, all with write_locations and the main location 
 the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome, shopify_address_dry_run, count(*)
 FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
 RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
-- **Next (staged, STOP after each):** B: Marawan reviews → merge + deploy. Then C1 rebases on A + B (V187; "Not sold" gets a
-  short confirm; no reason codes; shared "Sold (Off-book)" label OK; CLAUDE.md → seven named decrements, pushPieceSold
-  approved 2026-10-25, in C1's merge commit).
+- **Next:** B merged (ae26df3) and deployed 2026-10-27; C1 merged 2026-10-28 (V188; deploy is Marawan's). Then C2's
+  Step-0-light. Next free migration: V192 (places S1 took V189–V191).
 - **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
   the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
   decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are
@@ -222,6 +294,69 @@ waiting on Marawan's answers.** Key facts found:
 - `ShopifyInventoryReadGuardTest` forbids code outside `analytics/` from using `variant_shopify_levels` /
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
+
+**Flexible labeling — slices 6b + 6c: factory receiving, close run + shortfall report (2026-10-28, branch
+`feat/flexible-labeling-s6bc` off origin/main b218cca; NOT merged, NOT deployed). Migration V192 (built as V188; main took V188–V191).** Behind
+flexible_labeling_enabled; DS v1.0, EN/LTR + AR/RTL.
+- **6b (b39560e) — V192:** `receipts.mode` adds 'factory'; `receipts.label_run_id` (composite FK, CHECK factory ⇔ run);
+  `receipt_factory_scans` staging (live-scan partial UNIQUE on label_code_id WHERE undone_at IS NULL; undo columns;
+  RLS NULLIF + FORCE; app_user may UPDATE only undone_at / undone_by, no DELETE; ON DELETE CASCADE from the receipt).
+  Third step-1 card "Factory-labeled" → step 2 picks an OPEN run, location locked to the main warehouse (not a Settings
+  default). Full-screen scan loop `/receiving/:id/scan` (shared useScanner + phone target, untouched): per-line progress,
+  last scan, Undo last scan, rejections EN/AR (not a factory label / already received / other run / already scanned /
+  scanned in another session / piece already in stock …). "Piece without a label" issues ONE factory code for a run
+  variant (overage once received + live staged ≥ expected). Finalize (`FactoryReceivingService`, lock order run → receipt
+  → codes, re-checks every staged code) creates pieces with short_code = the code through
+  `InventoryLedger.receiveFactoryLabeled` (received events carry label_run_id + label_code_id; codes issued → bound,
+  count must match) + the existing Shopify +N. Lookup: "Received from factory run «factory · reference»". Delete
+  refuses while live scans exist ("Undo the scans first"; deleteSession now takes FOR UPDATE). Factory receipts: new
+  session/variant label PDFs refused; "Print session labels" = reprint of the same codes (`label_reprinted` per piece).
+- **6c (afc5495):** `POST /label-runs/{id}/close` — a reason for every line with a gap: Short-shipped / Lost void that
+  line's leftover issued codes (all-or-nothing, reasons factory_run_short_shipped / factory_run_lost); Still coming keeps
+  the codes and the run open; the run closes only when no line is Still coming; a later close may change Still coming;
+  no reopen; refused while an open factory receipt of the run has live staged scans ("Finalize or undo receiving
+  session … first"). Shortfall report CSV (BOM, formula-neutralised) + A4 PDF (PDFBox, Noto + Noto Arabic), ?lang.
+  Runs list: Open / Still coming / Closed + received / expected.
+- **Tests:** FactoryReceivingTest 14, LabelRunCloseTest 9 (revert-checked); vitest flexibleS6b 6, flexibleS6c 6.
+  Registries: MigrationSmokeTest 187, NotTracedBackfillTest 132, RlsCoverageTest +3 COVERED (+2 tests),
+  PortalOrderLeakTest +7 SKIP. Full suite: backend 3432, only ExchangeBackfillTest red (pre-existing); vitest 1210,
+  analyticsSummary r2 flaked under load (passes alone).
+- **Fix on approval (2026-10-28):** when the run becomes fully CLOSED (no line Still coming), every code of the run
+  still issued — any line, including a complete line's leftovers replaced by other codes, and unscanned overage codes —
+  is voided (reason factory_run_closed) in the same transaction as the close. LabelRunCloseTest c7 (revert-checked).
+  deleteSession's FOR UPDATE for all modes: approved.
+
+**Flexible labeling — slice 6a: factory runs + printing (2026-10-27, branch `feat/flexible-labeling-s6a` off origin/main
+5d9c521; merged to main b218cca 2026-10-28, pushed, NOT deployed). Migration V187 (was V186; main took V186 for the onboarding gate).** Step 0 answers (Marawan 2026-10-27): runs receive into the main
+warehouse only; 20,000 pieces per run, PDFs in parts of ≤ 2,000 that never split a product group unless it alone is
+larger; overage is a flag, never a block; no 'factory' default in Settings › Labels; factory receipts may reprint
+session labels as label_reprinted (6b); received events carry label_run_id + label_code_id (6b); closed runs are not
+reopened ("Still coming" keeps a run open, 6c); A4 shortfall PDF (6c).
+- **Commit 1 — receiving double-finalize (all modes):** `finalize` locks the receipt (FOR UPDATE) and the finalize UPDATE
+  is `AND status = 'open'` (0 rows → 409, rollback). Before: two simultaneous finalizes each created the session's
+  pieces and each claimed Shopify +N. `ReceivingFinalizeRaceTest` (print_stick + count_only), revert-checked (2N).
+- **Commit 2 — factory kind guard (before any factory code can exist):** `InventoryLedger.bindLabel` refuses kind factory
+  (FACTORY_LABEL_NOT_RECEIVED) — the one guard for Tag stock and Pick & Pack; Pick & Pack also rejects before its line
+  checks. `UnusedLabels` is kind-aware (`codeFor` / `messageEnFor` / `messageArFor` / `notUsedYet(u)`): Lookup, Stock
+  take, Transfers, Scan returns answer "Factory label not received yet — receive it in its factory run first";
+  other kinds keep the Tag stock message. The generic issue endpoint refuses kind factory. Approved test edit:
+  LabelCodesTest.i5 issues its 2,000-cap batch as kind tag instead of factory.
+- **Commit 3 — V187:** `label_runs` (factory, reference, open/closed), `label_run_lines` (line_no, variant, expected
+  1..20,000, close reason / time / user for 6c), `label_codes.run_line_id` (set exactly for kind factory) + `overage`
+  (factory only), `label_code_batches.run_id` (set exactly for kind factory). RLS NULLIF + FORCE, lifecycle-only column
+  grants (close a run, record a line reason), no DELETE. Prod had 0 factory codes / batches (checked).
+- **Commit 4 — Receiving › Factory runs tab** (switch on only, no sidebar entry; owner + manager; 404 with the switch
+  off). `LabelRunService` / `LabelRunController` (`/api/v1/label-runs`): list, create (picker grid in memory via the
+  grid's new optional `onCommit`, or Excel via the import panel's new `runMode` — "On hand (new)" = expected, no "use
+  On hand (current)" fallback, > 20,000 → unmatched too_large), print (issues each line's missing codes in batches of
+  ≤ 2,000 under the run's row lock — a second or concurrent print issues none; `LabelCodeService.issueFactoryBatch`),
+  PDF parts (still-issued codes only; per line a header-first separator, products grouped in line order; reprint =
+  the same PDF). `ReceivingImportService.match` is the extracted session-independent parse + match step; receiving's
+  own endpoints and ReceivingImportTest are unchanged.
+- **Tests:** ReceivingFinalizeRaceTest 2, FactoryLabelGuardTest 4, LabelRunsSchemaTest 4 (app_user), LabelRunsTest 8;
+  vitest lookupFactoryLabel 2, flexibleS6a 5. Registries: MigrationSmokeTest 185, NotTracedBackfillTest 130,
+  RlsCoverageTest 3 COVERED (+1 test), PortalOrderLeakTest 6 SKIP.
+- **Next:** 6b (factory receiving: third step-1 card, staged scans, finalize with given codes) and 6c (close + report).
 
 **Flexible labeling — slices 5 + 8 (2026-10-25, branch `feat/flexible-labeling-s5-s8` off origin/main 470055e;
 merged to main a240e08 2026-10-25, NOT deployed). Migration V185 (built as V184 — main's location-address branch took

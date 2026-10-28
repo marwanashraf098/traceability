@@ -15,9 +15,10 @@ import java.util.UUID;
  *
  *   {@link #countedAtMain} (D4) — does Shopify's Traced Main Warehouse count this available piece right
  *       now? Every departure (−1 or move) decides with it: void_correction, hold_enter, damage_move,
- *       piece_write_off.
+ *       piece_write_off, piece_sold (Lookup "Sold", C1 2026-10-25).
  *   {@link #departureReached} (D5) — did the piece's departure from sellable reach Shopify? Every
- *       return to available decides with it: hold_exit, piece_write_off_return (Found it), damage_restore /
+ *       return to available decides with it: hold_exit, piece_write_off_return (Found it), piece_sold_return
+ *       (Not sold), damage_restore /
  *       damaged_restore_increment (Back to good) — and, through {@link #reach}, stock-take found.
  *
  * Both run on the caller's JdbcTemplate inside the caller's transaction (tenant-scoped under RLS on
@@ -32,18 +33,21 @@ public final class PieceShopifyRules {
     /** Every claim the piece-sync engine sends (ShopifyInventoryService.pushPieceClaimNow). */
     public static final List<String> PIECE_TRIGGERS = List.of(
         "void_correction", "hold_enter", "hold_exit", "damage_move",
-        "piece_write_off", "piece_write_off_return", "damage_restore", "damaged_restore_increment");
+        "piece_write_off", "piece_write_off_return", "damage_restore", "damaged_restore_increment",
+        "piece_sold", "piece_sold_return");
     public static final String PIECE_TRIGGERS_SQL =
         "('void_correction', 'hold_enter', 'hold_exit', 'damage_move', " +
-        "'piece_write_off', 'piece_write_off_return', 'damage_restore', 'damaged_restore_increment')";
+        "'piece_write_off', 'piece_write_off_return', 'damage_restore', 'damaged_restore_increment', " +
+        "'piece_sold', 'piece_sold_return')";
 
     /** The claims that took a piece OUT of Shopify's sellable count (a −1, or the damage move). */
     public static final Set<String> DEPARTURE_TRIGGERS =
-        Set.of("void_correction", "hold_enter", "damage_move", "piece_write_off");
+        Set.of("void_correction", "hold_enter", "damage_move", "piece_write_off", "piece_sold");
 
     /** The claims that bring a piece BACK to available (a +1, or the reverse move). */
     public static final Set<String> RETURN_TRIGGERS =
-        Set.of("hold_exit", "piece_write_off_return", "damage_restore", "damaged_restore_increment");
+        Set.of("hold_exit", "piece_write_off_return", "damage_restore", "damaged_restore_increment",
+               "piece_sold_return");
 
     /** Definite failures are re-sent by the sweep until a claim has made this many attempts. */
     public static final int MAX_ATTEMPTS = 5;
@@ -77,8 +81,11 @@ public final class PieceShopifyRules {
     public static final Set<String> NEEDS_CHECK = Set.of(DEPARTURE_AMBIGUOUS, ARRIVAL_UNCONFIRMED);
     public static final String NEEDS_CHECK_SQL = "('" + DEPARTURE_AMBIGUOUS + "', '" + ARRIVAL_UNCONFIRMED + "')";
 
-    /** Statuses a piece leaves the sellable pool into (the "bad" side of the ledger). */
-    static final Set<String> BAD = Set.of("lost", "destroyed", "damaged", "on_hold", "voided");
+    /** Statuses a piece leaves the sellable pool into (the "bad" side of the ledger). 'sold' (C1): a
+     *  Lookup Sold (available → sold) is a departure like a write-off; the only way back is Not sold.
+     *  A transfer's off-book sale (out_on_transfer → sold) is a run that doesn't start from available —
+     *  never reached, and Not sold refuses it anyway. */
+    static final Set<String> BAD = Set.of("lost", "destroyed", "damaged", "on_hold", "voided", "sold");
 
     /**
      * One decision. write → send a claim at {@code locationId} (always the main warehouse); otherwise
@@ -232,7 +239,7 @@ public final class PieceShopifyRules {
      *  events landing on a "bad" status. */
     record Departure(long eventId, String fromStatus, String toStatus, String eventType,
                      Timestamp occurredAt, String holdEventId, String writeOffEventId,
-                     String reason, String sessionId, boolean viaDamaged) {}
+                     String reason, String sessionId, boolean viaDamaged, String soldEventId) {}
 
     /** The earliest event of the trailing run of events landing on a "bad" status; viaDamaged when
      *  that run passed through 'damaged' after its entry (e.g. available → damaged → lost). */
@@ -240,10 +247,11 @@ public final class PieceShopifyRules {
         List<Departure> events = jdbc.query(
             "SELECT id, from_status::text, to_status::text, event_type, occurred_at, " +
             "       metadata->>'hold_event_id', metadata->>'write_off_event_id', metadata->>'reason', " +
-            "       metadata->>'session_id' " +
+            "       metadata->>'session_id', metadata->>'sold_event_id' " +
             "FROM piece_events WHERE piece_id = ? AND tenant_id = ? ORDER BY occurred_at DESC, id DESC",
             (rs, i) -> new Departure(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                rs.getTimestamp(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), false),
+                rs.getTimestamp(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), false,
+                rs.getString(10)),
             pieceId, tenantId);
         Departure entry = null;
         boolean damagedLater = false;
@@ -255,7 +263,7 @@ public final class PieceShopifyRules {
         if (entry == null) return null;
         return new Departure(entry.eventId(), entry.fromStatus(), entry.toStatus(), entry.eventType(),
             entry.occurredAt(), entry.holdEventId(), entry.writeOffEventId(), entry.reason(), entry.sessionId(),
-            damagedLater);
+            damagedLater, entry.soldEventId());
     }
 
     /**
@@ -290,6 +298,7 @@ public final class PieceShopifyRules {
      *   from available → on_hold: hold_enter (piece:hold_event_id)
      *                  → damaged: damage_move (this piece's claims made at/after the departure)
      *                  → lost / destroyed by Lookup: piece_write_off (piece:write_off_event_id)
+     *                  → sold by Lookup (sold_offline): piece_sold (piece:sold_event_id)
      *                  → lost by a stock take: that session's push — 'pushed' with the variant in its
      *                    deltas, or superseded by the seed (wholly, or the variant in payload.superseded)
      *                    with the write-off at/before the seed's snapshot
@@ -327,6 +336,7 @@ public final class PieceShopifyRules {
             case "damaged" -> "damage_move";
             case "voided"  -> "void_correction";
             case "lost", "destroyed" -> !stockTake && d.writeOffEventId() != null ? "piece_write_off" : null;
+            case "sold"    -> "sold_offline".equals(d.eventType()) && d.soldEventId() != null ? "piece_sold" : null;
             default -> null;
         };
         // An open departure claim must never be sent once the piece is back — whatever else is decided.
@@ -366,6 +376,7 @@ public final class PieceShopifyRules {
     /**
      * The departure claim's state, normalised: applied | cancelled_now (was open, cancelled by this
      * call) | ambiguous | superseded_by_seed | not_reached. Claim key: hold_enter piece:hold_event_id;
+     * piece_write_off piece:write_off_event_id; piece_sold piece:sold_event_id;
      * void_correction piece; damage_move — the claims of this piece made at or after the departure.
      */
     private static String departureClaimStatus(JdbcTemplate jdbc, UUID tenantId, String pieceId,
@@ -379,6 +390,9 @@ public final class PieceShopifyRules {
         } else if ("piece_write_off".equals(claimType)) {
             keySql = "sia.trigger_id = ?";
             args.add(pieceId + ":" + d.writeOffEventId());
+        } else if ("piece_sold".equals(claimType)) {
+            keySql = "sia.trigger_id = ?";
+            args.add(pieceId + ":" + d.soldEventId());
         } else {
             keySql = "(sia.trigger_id = ? OR sia.trigger_id LIKE ?) AND sia.created_at >= ?";
             args.add(pieceId);

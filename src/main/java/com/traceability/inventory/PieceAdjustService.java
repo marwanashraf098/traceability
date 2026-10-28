@@ -501,6 +501,124 @@ public class PieceAdjustService {
         auditService.record(actorUserId, "piece_restore", "piece", pieceId, auditMeta);
     }
 
+    /** The reason recorded on a Lookup sale. The mockup has no reason picker (note only) — one code. */
+    static final String SOLD_REASON = "sold_offline";
+
+    /**
+     * C1 (2026-10-25) — Sold: a piece sold outside Shopify (in person, Instagram, a bazar), available →
+     * sold, event 'sold_offline' with {reason, note?, sold_event_id}. Owner / manager only (controller).
+     * Same guards as the other Lookup actions: untagged → refused; reserved / packed →
+     * PieceCommittedException (release it from its order first, releaseForAdjust); out_on_transfer →
+     * PieceOutOnTransferException; anything but available → 409.
+     *
+     * Shopify: −1 at the Traced Main Warehouse, once (pushPieceSold — a named decrement), decided by
+     * PieceShopifyRules.countedAtMain and claimed in THIS transaction before the transition (keyed
+     * piece:sold_event_id); a "no" is recorded as a skipped claim with its reason. Sent after commit.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void markSold(String pieceId, String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        String status = jdbc.query(FIND_PIECE_STATUS, rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);   // flexible labeling v1: tag it first
+        PieceStatus current = PieceStatus.fromDb(status);
+
+        if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
+            Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
+                rs -> rs.next()
+                    ? Map.of("orderId", rs.getObject("order_id"),
+                             "orderNumber", rs.getString("order_number"))
+                    : null,
+                pieceId, tenantId);
+            throw new PieceCommittedException(
+                order != null ? (UUID) order.get("orderId") : null,
+                order != null ? (String) order.get("orderNumber") : null);
+        }
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+        if (current != PieceStatus.AVAILABLE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Piece must be available to mark sold (current: " + current.db + ")");
+        }
+
+        String soldEventId = UUID.randomUUID().toString();
+        Long claimId = shopifyInventory.claimPieceDeparture(tenantId, "piece_sold", pieceId,
+            pieceId + ":" + soldEventId);
+
+        ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.SOLD, "sold_offline", actorUserId,
+            new TransitionContext(null, null, null, null,
+                buildMeta(SOLD_REASON, note, Map.of("sold_event_id", soldEventId))));
+        pushAfterCommit(tenantId, claimId);
+
+        Map<String, Object> auditMeta = new LinkedHashMap<>();
+        auditMeta.put("from",   "available");
+        auditMeta.put("to",     "sold");
+        auditMeta.put("reason", SOLD_REASON);
+        auditMeta.put("soldEventId", soldEventId);
+        if (note != null && !note.isBlank()) auditMeta.put("note", note);
+        auditService.record(actorUserId, "piece_sold", "piece", pieceId, auditMeta);
+    }
+
+    /** The piece's latest move INTO sold was a Lookup sale (event sold_offline) — the only sale
+     *  "Not sold" may reverse. A transfer's off-book sale (sold_offbook) is never reversible here. */
+    static boolean isLookupSale(JdbcTemplate jdbc, UUID tenantId, String pieceId) {
+        String eventType = jdbc.query(
+            "SELECT event_type FROM piece_events WHERE piece_id = ? AND tenant_id = ? " +
+            "  AND to_status = 'sold'::piece_status ORDER BY occurred_at DESC, id DESC LIMIT 1",
+            rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
+        return "sold_offline".equals(eventType);
+    }
+
+    /**
+     * C1 — Not sold: reverses a Lookup Sold (sold → available, event 'not_sold'). Owner / manager only.
+     * Refused (409) for any sold piece whose sale was not a Lookup sold_offline — a transfer's off-book
+     * sale stays sold.
+     *
+     * Shopify: +1 ONLY when the sale's −1 actually reached Shopify — PieceShopifyRules.departureReached,
+     * the same rule as Found it (the piece_sold claim applied, or the sale predates the seed); an unsent
+     * piece_sold claim is cancelled here. Claimed in this transaction before the transition (keyed
+     * piece:restore_event_id); sent after commit.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void markNotSold(String pieceId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        String status = jdbc.query(FIND_PIECE_STATUS, rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        UntaggedPieces.refuse(jdbc, tenantId, pieceId);
+        PieceStatus current = PieceStatus.fromDb(status);
+        if (current != PieceStatus.SOLD) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Piece must be sold to mark it not sold (current: " + current.db + ")");
+        }
+        if (!isLookupSale(jdbc, tenantId, pieceId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a piece marked sold in Lookup can be marked not sold");
+        }
+
+        String restoreEventId = UUID.randomUUID().toString();
+        Long claimId = shopifyInventory.claimPieceReturn(tenantId, "piece_sold_return", pieceId,
+            pieceId + ":" + restoreEventId);
+
+        ledger.transition(pieceId, PieceStatus.SOLD, PieceStatus.AVAILABLE, "not_sold", actorUserId,
+            new TransitionContext(null, null, null, null,
+                buildMeta(SOLD_REASON, null, Map.of("restore_event_id", restoreEventId))));
+        pushAfterCommit(tenantId, claimId);
+
+        auditService.record(actorUserId, "piece_not_sold", "piece", pieceId,
+            Map.of("from", "sold", "to", "available", "restoreEventId", restoreEventId));
+    }
+
     /**
      * Release a reserved/packed piece from its order so it can subsequently be adjusted.
      *

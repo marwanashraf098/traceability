@@ -688,7 +688,12 @@
       "change": "Change",
       "back": "Back",
       "printStickBadge": "Print & stick",
-      "yourDefault": "Your default"
+      "yourDefault": "Your default",
+      "factory": {
+        "title": "Factory-labeled",
+        "body": "Pieces arrived with Traced labels from the factory. Scan each piece — only scanned pieces enter stock.",
+        "footer": "For factory runs you printed labels for."
+      }
     },
     "countOnly": {
       "badge": "Count only",
@@ -754,6 +759,36 @@
       "usingCurrent": "Using On hand (current)",
       "allRemoved": "Every row was removed — nothing to add.",
       "nothingMatched": "No product in this file has a quantity to add."
+    },
+    "factory": {
+      "badge": "Factory-labeled",
+      "mainWarehouseOnly": "Factory-labeled pieces go to the main warehouse.",
+      "pickRun": "Which factory run arrived?",
+      "noOpenRuns": "No open factory runs. Create one in Receiving → Factory runs first.",
+      "runLabel": "Factory run",
+      "openBody": "Scan each piece's factory label. Only scanned pieces enter stock when you finish.",
+      "scan": "Scan pieces",
+      "confirmBody": "This adds {{count}} scanned pieces to stock with their factory labels and locks the session.",
+      "confirmBody_one": "This adds 1 scanned piece to stock with its factory label and locks the session.",
+      "deleteBodyScans": "This session has {{count}} scanned pieces. Undo the scans first, then delete it.",
+      "printSessionLabels": "Print session labels ({{count}})",
+      "backToSession": "Back to session",
+      "doneScanning": "Done scanning",
+      "placeholder": "Scan a factory label…",
+      "scannedLabel": "Scanned in this session",
+      "progress": "Received of expected",
+      "lineSplit": "{{received}} received earlier · {{staged}} scanned now",
+      "extraCount": "+{{count}} extra",
+      "overage": "Extra piece",
+      "undo": "Undo last scan",
+      "undone": "Scan of {{code}} undone",
+      "extra": "Piece without a label",
+      "extraTitle": "Print a label for a piece without one",
+      "extraBody": "Which product is the piece? One factory label is printed for it — stick it on, then scan it.",
+      "extraPrint": "Print 1 label",
+      "extraPrinted": "Label {{code}} is ready — stick it on the piece, then scan it.",
+      "extraPrintedOverage": "Label {{code}} is ready — stick it on, then scan it. This product already has all its expected pieces, so it's counted as an extra piece.",
+      "error": "Something went wrong. Try again."
     }
   },
   "fulfill": {
@@ -1258,7 +1293,10 @@
       "unheld": "Released from hold — back to available",
       "location_corrected": "Location corrected to the main warehouse",
       "label_bound_packing": "Label {{code}} attached at packing · order {{orderNumber}}",
-      "label_bound_tag": "Label {{code}} attached in Tag stock"
+      "label_bound_tag": "Label {{code}} attached in Tag stock",
+      "sold_offline": "Marked sold outside Shopify",
+      "not_sold": "Not sold — piece back to available",
+      "received_factory_run": "Received from factory run «{{run}}»"
     },
     "pieceStatus": {
       "available": "Available",
@@ -1280,7 +1318,10 @@
     "labelCode": {
       "issued": "Label not used yet",
       "title": "Label not used yet — tag it in Tag stock first",
-      "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock."
+      "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock.",
+      "factoryIssued": "Factory label",
+      "factoryTitle": "Factory label not received yet — receive it in its factory run first",
+      "factoryBody": "This label was printed for a factory run. The piece becomes stock when it's scanned in Receiving with that run (Factory-labeled)."
     }
   },
   "returns": {
@@ -2400,7 +2441,8 @@
       "portal": "Returns portal",
       "privacy": "Privacy",
       "couriers": "Couriers",
-      "labels": "Labels"
+      "labels": "Labels",
+      "places": "Places"
     },
     "sections": {
       "businessDetails": "Business details",
@@ -2827,7 +2869,17 @@
       "destroyed": "Destroyed",
       "void": "Void",
       "on_hold": "On Hold"
-    }
+    },
+    "sold": "Sold",
+    "soldTitle": "Mark as sold",
+    "soldDesc": "For a piece sold outside Shopify — in person, on Instagram, at a bazar.",
+    "optional": "(optional)",
+    "soldNotePlaceholder": "e.g. Sold at the showroom",
+    "soldShopifyNote": "Shopify stock at Traced Main Warehouse goes down by 1.",
+    "soldSubmit": "Mark sold",
+    "notSold": "Not sold",
+    "notSoldConfirm": "Put this piece back to available? If the sale reached Shopify, its stock goes back up by 1.",
+    "notSoldSubmit": "Yes, not sold"
   },
   "blocklist": {
     "title": "Blocked Customers",
@@ -3715,7 +3767,8 @@
       "transferOut": "Transfer out · {{ref}}",
       "transferReconcile": "Transfer reconcile · {{ref}}",
       "returns": "Scan returns · {{ref}}",
-      "tagStock": "Tag stock"
+      "tagStock": "Tag stock",
+      "factoryReceiving": "Factory receiving · {{ref}}"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",
@@ -4681,5 +4734,159 @@
       "body": "Shopify needs your main warehouse's address to show your products as in stock.",
       "cta": "Add address"
     }
+  },
+  "labelRuns": {
+    "tab": {
+      "sessions": "Receiving sessions",
+      "runs": "Factory runs"
+    },
+    "intro": "Print named labels for a factory to stick on each piece. The pieces enter stock when the run is received.",
+    "new": "New factory run",
+    "empty": "No factory runs yet. Create one to print a named label for every piece you expect from a factory.",
+    "back": "Factory runs",
+    "col": {
+      "factory": "Factory",
+      "status": "Status",
+      "expected": "Expected",
+      "printed": "Labels printed",
+      "received": "Received",
+      "created": "Created",
+      "product": "Product",
+      "gap": "Missing",
+      "reason": "Reason"
+    },
+    "status": {
+      "open": "Open",
+      "closed": "Closed",
+      "stillComing": "Still coming"
+    },
+    "create": {
+      "title": "New factory run",
+      "factory": "Factory name",
+      "factoryPlaceholder": "e.g. Nile Textiles",
+      "reference": "Reference (optional)",
+      "submit": "Create run · {{count}} pieces",
+      "tooMany": "A factory run can have at most {{max}} pieces — split it into two runs.",
+      "nameRequired": "Enter the factory's name.",
+      "created": "Factory run created"
+    },
+    "detail": {
+      "created": "Created by {{name}} · {{date}}",
+      "expected": "Expected",
+      "printed": "Labels printed",
+      "received": "Received",
+      "print": "Print labels · {{count}}",
+      "printedToast": "{{count}} labels ready to print",
+      "labelsTitle": "Labels",
+      "reprintTitle": "Labels — all printed",
+      "howTo": "Send these to the factory: one label on each piece of the product named on it. A header label starts each product.",
+      "reprintNote": "Reprinting prints the same labels — no new ones are made.",
+      "part": "Part {{n}} · {{count}} labels",
+      "allLabels": "{{count}} labels",
+      "openPdf": "Open PDF",
+      "reprint": "Reprint",
+      "noneLeft": "Every label of this run is received or voided — nothing left to print."
+    },
+    "import": {
+      "step2": "Type how many pieces you expect from the factory in the 'On hand (new)' column.",
+      "newEmpty": "The 'On hand (new)' column is empty. Type the expected quantities in that column and upload again.",
+      "apply": "Add {{count}} pieces to the run"
+    },
+    "report": {
+      "title": "Shortfall report",
+      "pdf": "Report (PDF)",
+      "csv": "Download CSV"
+    },
+    "close": {
+      "open": "Close run",
+      "title": "Close factory run",
+      "body": "Every product with missing pieces needs a reason.",
+      "counts": "{{received}} of {{expected}} received",
+      "gap": "{{count}} missing",
+      "overage": "+{{count}} extra",
+      "complete": "All pieces received",
+      "reason": {
+        "short_shipped": "Short-shipped",
+        "lost": "Lost",
+        "still_coming": "Still coming"
+      },
+      "reasonFor": "Reason for {{product}}",
+      "voidNote": "Short-shipped and Lost void that product's unused labels. Still coming keeps them valid and the run open — you can close it again later.",
+      "submit": "Close run",
+      "submitStillComing": "Save — keep the run open",
+      "closedToast": "Factory run closed",
+      "stillOpenToast": "Saved — the run stays open while pieces are still coming",
+      "closedBy": "Closed by {{name}} · {{date}}"
+    }
+  },
+  "places": {
+    "title": "Places in",
+    "zones": "Zones",
+    "printAll": "Print all stickers",
+    "addZone": "Add zone",
+    "nextZone": "+ Zone {{code}}",
+    "zoneSummary": "{{racks}} racks · {{shelves}} shelves · {{pieces}} pcs",
+    "zoneSummaryBoxes_one": "{{count}} box · {{pieces}} pcs",
+    "zoneSummaryBoxes_other": "{{count}} boxes · {{pieces}} pcs",
+    "damaged": "Damaged",
+    "markDamaged": "Mark as Damaged place",
+    "unmarkDamaged": "Not the Damaged place",
+    "zoneLayout": "Zone {{code}} layout",
+    "zoneTitle": "Zone {{code}}",
+    "tapShelf": "tap a shelf to see what's on it",
+    "rename": "Rename",
+    "printZone": "Print zone stickers",
+    "archiveZone": "Archive zone",
+    "archive": "Archive",
+    "pcs": "{{count}} pcs",
+    "pcsUnit": "pcs",
+    "empty": "Empty",
+    "addShelf": "+ Shelf",
+    "addBox": "+ Box",
+    "boxHere": "+ Box here",
+    "boxAria": "White box {{code}}, {{count}} pieces",
+    "floor": "On the zone floor",
+    "floorHint": "white boxes not on a shelf",
+    "floorOf": "{{code}} floor",
+    "quickAdd": "Quick add to {{code}}",
+    "racks": "Racks",
+    "shelvesEach": "Shelves in each rack",
+    "floorBoxes": "White boxes on the floor",
+    "less": "Fewer: {{what}}",
+    "more": "More: {{what}}",
+    "createsShelves_one": "Creates {{count}} shelf",
+    "createsShelves_other": "Creates {{count}} shelves",
+    "createAndPrint": "Create and print stickers",
+    "emptyTitle": "No places in {{location}} yet",
+    "emptyBody": "Set up the first zone: its racks, the shelves on each rack, and any white boxes on the floor. Every shelf and box gets a sticker to scan.",
+    "setupSummary": "Zone {{zone}} · {{racks}} racks · {{shelves}} shelves · {{boxes}} boxes",
+    "noPlaceYet_one": "{{count}} piece has no place yet",
+    "noPlaceYet_other": "{{count}} pieces have no place yet",
+    "selected": "Selected place",
+    "kind": {
+      "zone": "Zone",
+      "rack": "Rack",
+      "shelf": "Shelf",
+      "box": "White box"
+    },
+    "stickerPreview": "Sticker preview",
+    "stickerHint": "The barcode never changes — renaming or moving keeps the sticker valid.",
+    "nothingHere": "Nothing here yet.",
+    "printSticker": "Print sticker",
+    "printStickers": "Print stickers",
+    "moveBox": "Move this box",
+    "moveTo": "Move to…",
+    "renameTitle": "Rename {{code}}",
+    "renameRackNote": "Shelf names on this rack stay the same. Rename or reprint them if you want.",
+    "code": "Code",
+    "codeHint": "Latin letters, digits, '-', '_' or '.' — up to 40.",
+    "name": "Name (optional)",
+    "cancel": "Cancel",
+    "save": "Save",
+    "errors": {
+      "generic": "Something went wrong — try again",
+      "load": "Couldn't load places — refresh to try again"
+    },
+    "addRack": "Add rack"
   }
 }

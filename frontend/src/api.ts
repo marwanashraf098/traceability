@@ -531,6 +531,8 @@ export interface TimelineEvent {
   occurredAt: string
   /** label_bound only: the code that went on the piece (phraseKey label_bound_packing / label_bound_tag). */
   labelCode?: string | null
+  /** received_factory_run only: "factory · reference" of the run the piece was received from. */
+  factoryRun?: string | null
 }
 
 export interface LookupVariant {
@@ -572,6 +574,9 @@ export interface PieceLookupResult {
   canReprint: boolean
   /** Flexible labeling tenants only: the variant's available pieces, labeled vs untagged. */
   variantStock?: { available: number; labeled: number; untagged: number }
+  /** Sold pieces only: true when the sale was a Lookup "Sold" (reversible with Not sold) — never for a
+   *  transfer's off-book sale. Server-computed; absent on every other status. */
+  canUndoSold?: boolean
   condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
@@ -606,6 +611,8 @@ export interface LabelCodeLookupResult {
   type: 'label_code'
   code: string
   status: 'issued'
+  /** 'factory' (slice 6): received only through its factory run — Lookup says so instead of "tag it". */
+  kind?: 'pack' | 'tag' | 'factory' | 'replacement'
   variant: LookupVariant
   messageEn: string
   messageAr: string
@@ -1531,6 +1538,20 @@ export function restorePiece(pieceId: string, reason: RestoreReason, note?: stri
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason, note }),
   })
+}
+
+// ── Sold / Not sold (C1 — a sale outside Shopify, manager+) ───────────────────
+
+export function markPieceSold(pieceId: string, note?: string) {
+  return request<void>(`/pieces/${pieceId}/sold`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  })
+}
+
+export function markPieceNotSold(pieceId: string) {
+  return request<void>(`/pieces/${pieceId}/not-sold`, { method: 'POST' })
 }
 
 // ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────
@@ -3939,4 +3960,169 @@ export function saveSetupAddress(address: WarehouseAddressInput) {
   return requestReadable<{ setupStep: SetupStep }>('/setup/address', {
     method: 'PUT', body: JSON.stringify(address),
   })
+}
+
+// ── Flexible labeling: factory runs (slice 6a) ───────────────────────────────
+
+/** stillComing (slice 6c): an open run with a line closed as Still coming. */
+export interface LabelRunSummary {
+  id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
+  lines: number; expected: number; printed: number; received: number; stillComing?: boolean
+}
+export type LabelRunCloseReason = 'short_shipped' | 'lost' | 'still_coming'
+/** gap = max(0, expected − received); closeReason set by closing the run (slice 6c). */
+export interface LabelRunLine {
+  id: string; lineNo: number; variantId: string; productTitle: string; variantTitle: string; sku: string | null
+  imageUrl: string | null; expected: number; printed: number; received: number; unused: number; voided: number; overage: number
+  gap?: number; closeReason?: LabelRunCloseReason | null
+}
+export interface LabelRunPart {
+  part: number; labels: number
+  groups: { productTitle: string; variantTitle: string; sku: string | null; labels: number }[]
+}
+export interface LabelRunDetail {
+  id: string; factoryName: string; reference: string | null; status: 'open' | 'closed'; createdAt: string
+  createdBy: string | null; expected: number; printed: number; received: number; toPrint: number
+  lines: LabelRunLine[]; parts: LabelRunPart[]
+  stillComing?: boolean; closedAt?: string | null; closedBy?: string | null
+}
+export function getLabelRuns() {
+  return requestReadable<LabelRunSummary[]>('/label-runs')
+}
+export function getLabelRun(id: string) {
+  return requestReadable<LabelRunDetail>(`/label-runs/${id}`)
+}
+export function createLabelRun(body: { factoryName: string; reference?: string; lines: { variantId: string; expectedQty: number }[] }) {
+  return requestReadable<LabelRunDetail>('/label-runs', { method: 'POST', body: JSON.stringify(body) })
+}
+/** Issues the codes each line still lacks — a second call issues none. */
+export function printLabelRun(id: string) {
+  return requestReadable<{ issued: number; run: LabelRunDetail }>(`/label-runs/${id}/print`, { method: 'POST' })
+}
+/** One part (≤ 2,000) of the run's unused labels, opened in a new tab — also the reprint (the same codes). */
+export async function openLabelRunPdf(id: string, part: number) {
+  await openPdfResponse(await authFetch(`/label-runs/${id}/pdf?part=${part}`))
+}
+/**
+ * Slice 6c: every line with a gap needs a reason. Short-shipped / Lost void that line's unused labels; Still coming
+ * keeps them and the run open. → { voided, closed, run }
+ */
+export function closeLabelRun(id: string, lines: { lineId: string; reason: LabelRunCloseReason }[]) {
+  return requestReadable<{ voided: number; closed: boolean; run: LabelRunDetail }>(`/label-runs/${id}/close`, {
+    method: 'POST', body: JSON.stringify({ lines }),
+  })
+}
+/** The shortfall report: the PDF opens in a new tab; the CSV downloads. */
+export async function openLabelRunReport(id: string, format: 'csv' | 'pdf', lang: string) {
+  const res = await authFetch(`/label-runs/${id}/report/${format}?lang=${lang.startsWith('ar') ? 'ar' : 'en'}`)
+  if (format === 'pdf') { await openPdfResponse(res); return }
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new ServerMessageError(res.status, b?.code, b?.message_en ?? `${res.status}: ${res.statusText}`, b?.message_ar)
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(await res.blob())
+  a.download = `factory-run-report-${id}.csv`
+  a.click()
+}
+
+// ── Flexible labeling: factory receiving (slice 6b) ──────────────────────────
+
+export interface FactoryLineProgress {
+  lineId: string; lineNo: number; variantId: string; productTitle: string; variantTitle: string; sku: string | null
+  imageUrl: string | null; expected: number; received: number; staged: number
+}
+export interface FactoryProgress {
+  runId: string; factoryName: string; reference: string | null; runStatus: 'open' | 'closed'; staged: number
+  lines: FactoryLineProgress[]
+}
+/** outcome: STAGED | REJECTED:<code> (UNKNOWN_CODE, PIECE_ALREADY_IN_STOCK, NOT_FACTORY_LABEL, CODE_VOIDED, …). */
+export interface FactoryScanOutcome {
+  outcome: string; code: string; messageEn: string | null; messageAr: string | null
+  line: FactoryLineProgress | null; overage: boolean; progress: FactoryProgress; viaPhone: boolean
+}
+/** A receiving session as GET /receiving/sessions/{id} answers it (the fields the factory scan loop reads). */
+export interface ReceivingSessionView {
+  id: string; status: string; mode?: 'print_stick' | 'count_only' | 'factory'; reference: string | null
+  factory?: FactoryProgress
+}
+export function getReceivingSession(id: string) {
+  return requestReadable<ReceivingSessionView>(`/receiving/sessions/${id}`)
+}
+export function scanFactoryPiece(sessionId: string, code: string, relayEventId?: string) {
+  return requestReadable<FactoryScanOutcome>(`/receiving/sessions/${sessionId}/factory/scan`, {
+    method: 'POST', body: withRelay({ code }, relayEventId),
+  })
+}
+export function undoFactoryScan(sessionId: string) {
+  return requestReadable<{ code: string; progress: FactoryProgress }>(`/receiving/sessions/${sessionId}/factory/undo`, { method: 'POST' })
+}
+/** "Piece without a label": one factory code for the product's line of this run (overage when the line is full). */
+export function printFactoryExtraLabel(sessionId: string, variantId: string, idempotencyKey: string) {
+  return requestReadable<{ codeId: string; code: string; overage: boolean; productTitle: string; variantTitle: string }>(
+    `/receiving/sessions/${sessionId}/factory/labels`, { method: 'POST', body: JSON.stringify({ variantId, idempotencyKey }) })
+}
+export async function openFactoryExtraLabelPdf(sessionId: string, codeId: string) {
+  await openPdfResponse(await authFetch(`/receiving/sessions/${sessionId}/factory/labels/${codeId}/pdf`))
+}
+
+// ── Warehouse places S1 — Settings › Places (owner + manager; 404 unless the tenant has places) ─────────────────
+
+export type PlaceKind = 'zone' | 'rack' | 'shelf' | 'box'
+/** One place, in tree order. label = its name inside its parent (R01, S2, BOX-07); path = its parents' labels. */
+export interface PlaceNode {
+  id: string; kind: PlaceKind; code: string; label: string; name: string | null; purpose: 'damaged' | null
+  parentId: string | null; scanCode: string; path: string[]; depth: number
+  pieces: number; totalPieces: number; archived: boolean; createdAt: string
+}
+export interface PlaceTree { locationId: string; locationName: string; nextZoneCode: string; nodes: PlaceNode[]; noPlaceYet: number }
+export interface PlaceContent { variantId: string; productTitle: string; variantTitle: string | null; sku: string | null; count: number }
+export interface PlaceHistoryEntry {
+  eventType: 'created' | 'renamed' | 'moved' | 'archived' | 'purpose_changed'; actorName: string | null; occurredAt: string
+  fromCode: string | null; toCode: string | null; fromParent: string | null; toParent: string | null; purpose: string | null
+}
+export interface PlaceDetail { node: PlaceNode; locationName: string; contents: PlaceContent[]; boxes: PlaceNode[]; history: PlaceHistoryEntry[] }
+/** zoneId unset → a new zone Zn; set → racks added to that zone (numbered from its next free R). */
+export interface PlaceBulkRequest { locationId?: string; zoneId?: string; racks: number; shelvesPerRack: number; floorBoxes: number; zoneName?: string }
+export interface PlaceBulkPlan {
+  locationId: string; zoneCode: string; newZone: boolean; racks: number; shelves: number; boxes: number; total: number
+  firstRack: string | null; lastRack: string | null; firstShelf: string | null; lastShelf: string | null
+  firstBox: string | null; lastBox: string | null; conflicts: string[]
+}
+
+export function getPlaces(locationId?: string) {
+  return requestReadable<PlaceTree>(`/places${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ''}`)
+}
+export function getPlace(id: string) {
+  return requestReadable<PlaceDetail>(`/places/${id}`)
+}
+export function createPlace(body: { locationId?: string; kind: PlaceKind; parentId?: string; code?: string; name?: string }) {
+  return requestReadable<PlaceNode>('/places', { method: 'POST', body: JSON.stringify(body) })
+}
+export function previewPlacesBulk(body: PlaceBulkRequest) {
+  return requestReadable<PlaceBulkPlan>('/places/bulk/preview', { method: 'POST', body: JSON.stringify(body) })
+}
+export function createPlacesBulk(body: PlaceBulkRequest) {
+  return requestReadable<{ zoneId: string; plan: PlaceBulkPlan; createdIds: string[] }>('/places/bulk', {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+/** name '' clears it; leave a field out to keep it. */
+export function renamePlace(id: string, body: { code?: string; name?: string }) {
+  return requestReadable<PlaceNode>(`/places/${id}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+export function movePlace(id: string, parentId: string) {
+  return requestReadable<PlaceNode>(`/places/${id}/parent`, { method: 'PUT', body: JSON.stringify({ parentId }) })
+}
+export function setPlacePurpose(id: string, purpose: 'damaged' | null) {
+  return requestReadable<PlaceNode>(`/places/${id}/purpose`, { method: 'PUT', body: JSON.stringify({ purpose }) })
+}
+export function archivePlace(id: string) {
+  return requestReadable<PlaceNode>(`/places/${id}/archive`, { method: 'POST' })
+}
+/** Stickers for the shelves and boxes in / under these places — opens the PDF. */
+export async function openPlaceStickers(placeIds: string[]) {
+  await openPdfResponse(await authFetch('/places/stickers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placeIds }),
+  }))
 }

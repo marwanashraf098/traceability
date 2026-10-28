@@ -61,6 +61,9 @@ public class LookupService {
         if ("voided".equals(eventType))            return "voided";
         if ("held".equals(eventType))              return "held";
         if ("unheld".equals(eventType))            return "unheld";
+        // C1 (2026-10-25) — Lookup "Sold" and its undo, "Not sold".
+        if ("sold_offline".equals(eventType))      return "sold_offline";
+        if ("not_sold".equals(eventType))          return "not_sold";
         // 2026-10-08 restock repair: a location fix with no status change.
         if ("location_corrected".equals(eventType)) return "location_corrected";
         if ("courier_update".equals(eventType)) {
@@ -121,12 +124,16 @@ public class LookupService {
             "       u.name AS actor_name, " +
             "       o.number AS order_number, " +
             "       s.tracking_number, " +
-            "       loc.name AS location_name " +
+            "       loc.name AS location_name, " +
+            "       lr.factory_name AS run_factory, lr.reference AS run_reference " +
             "FROM piece_events pe " +
             "LEFT JOIN users u     ON u.id  = pe.actor_user_id " +
             "LEFT JOIN merchant_orders o    ON o.id  = pe.order_id " +
             "LEFT JOIN shipments s ON s.id  = pe.shipment_id " +
             "LEFT JOIN locations loc ON loc.id = pe.location_id " +
+            // Flexible labeling slice 6b: a factory piece's received event names its run.
+            "LEFT JOIN label_runs lr ON pe.event_type = 'received' AND lr.tenant_id = pe.tenant_id " +
+            "      AND lr.id = (pe.metadata ->> 'label_run_id')::uuid " +
             "WHERE pe.piece_id = ? AND pe.tenant_id = ? " +
             "ORDER BY pe.occurred_at DESC, pe.id DESC",
             piece.get("id").toString(), tenantId);
@@ -149,6 +156,11 @@ public class LookupService {
                 event.put("labelCode", code.find() ? code.group(1) : null);
                 event.put("phraseKey", meta.contains("\"tag_session_id\"") ? "label_bound_tag"
                     : e.get("order_id") != null ? "label_bound_packing" : "label_bound");
+            }
+            if ("received".equals(eType) && e.get("run_factory") != null) {
+                event.put("phraseKey", "received_factory_run");
+                event.put("factoryRun", com.traceability.labels.FactoryReceivingService.runName(
+                    (String) e.get("run_factory"), (String) e.get("run_reference")));
             }
             event.put("actor",        actor != null ? actor : "System");
             event.put("isSystem",     actor == null);
@@ -222,6 +234,11 @@ public class LookupService {
         result.put("currentShipment", shipmentMap);
         result.put("receivingSession", sessionMap);
         result.put("timeline",        timeline);
+        // C1: "Not sold" is offered only for a Lookup sale (sold_offline) — never for a transfer's
+        // off-book sale. Present only on sold pieces; every other response is unchanged.
+        if ("sold".equals(Objects.toString(piece.get("status"), null))) {
+            result.put("canUndoSold", PieceAdjustService.isLookupSale(jdbc, tenantId, piece.get("id").toString()));
+        }
         // Flexible labeling: the variant's Available / Labeled / Untagged counts (only for tenants
         // that have it — everyone else's response is unchanged).
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
@@ -245,8 +262,9 @@ public class LookupService {
         result.put("code", u.code());
         result.put("status", "issued");
         result.put("variant", variant);
-        result.put("messageEn", com.traceability.labels.UnusedLabels.MESSAGE_EN);
-        result.put("messageAr", com.traceability.labels.UnusedLabels.MESSAGE_AR);
+        result.put("kind", u.kind());
+        result.put("messageEn", com.traceability.labels.UnusedLabels.messageEnFor(u));
+        result.put("messageAr", com.traceability.labels.UnusedLabels.messageArFor(u));
         return result;
     }
 

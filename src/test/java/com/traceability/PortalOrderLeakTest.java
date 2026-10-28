@@ -218,8 +218,30 @@ class PortalOrderLeakTest {
                 "POST /api/v1/tag-stock/sessions/{id}/print-many", "POST /api/v1/tag-stock/sessions/{id}/pdf")) {
             reg(k, skip("Tag stock: variants, untagged pieces and label codes at the main warehouse; no order data"));
         }
+        // Warehouse places S1 — places (zones / racks / shelves / boxes), their piece counts and stickers; no order data.
+        for (String k : List.of("GET /api/v1/places", "GET /api/v1/places/{id}", "POST /api/v1/places",
+                "POST /api/v1/places/bulk/preview", "POST /api/v1/places/bulk", "PUT /api/v1/places/{id}",
+                "PUT /api/v1/places/{id}/parent", "PUT /api/v1/places/{id}/purpose", "POST /api/v1/places/{id}/archive",
+                "POST /api/v1/places/stickers")) {
+            reg(k, skip("warehouse places: places, piece counts per place and stickers; no order data"));
+        }
         // Flexible labeling slice 4 — packing labels (a portal order is ORDER_NOT_PACKABLE: PackLabelsTest.x2).
         reg("POST /api/v1/pack-labels/preview",     skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
+        // Flexible labeling slice 6a — factory runs: runs, run lines, variants and factory label codes; no order data.
+        for (String k : List.of("GET /api/v1/label-runs", "POST /api/v1/label-runs", "GET /api/v1/label-runs/{id}",
+                "POST /api/v1/label-runs/{id}/print", "GET /api/v1/label-runs/{id}/pdf", "POST /api/v1/label-runs/import/preview")) {
+            reg(k, skip("factory runs: runs, run lines, variants and factory label codes; no order data"));
+        }
+        // Flexible labeling slice 6c — closing a run and its shortfall report: run lines and factory codes; no order data.
+        for (String k : List.of("POST /api/v1/label-runs/{id}/close", "GET /api/v1/label-runs/{id}/report/csv",
+                "GET /api/v1/label-runs/{id}/report/pdf")) {
+            reg(k, skip("factory run close / shortfall report: run lines, variants and factory label codes; no order data"));
+        }
+        // Flexible labeling slice 6b — factory receiving: staged scans, factory label codes, run lines; no order data.
+        for (String k : List.of("POST /api/v1/receiving/sessions/{id}/factory/scan", "POST /api/v1/receiving/sessions/{id}/factory/undo",
+                "POST /api/v1/receiving/sessions/{id}/factory/labels", "GET /api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf")) {
+            reg(k, skip("factory receiving: staged scans, factory label codes and run lines; no order data"));
+        }
         reg("GET /api/v1/label-settings",           skip("tenant setting (receiving default mode) — no order data"));
         reg("PUT /api/v1/label-settings",           skip("tenant setting (receiving default mode) — no order data"));
         reg("POST /api/v1/pack-labels/plan",        skip("counts only: PackPrintBatchStore.candidates / queueOrderIds / the last batch, each read through merchant_orders"));
@@ -409,7 +431,9 @@ class PortalOrderLeakTest {
                 "POST /api/v1/transfers/{transferId}/reprint-outstanding", "POST /api/v1/transfers/{transferId}/return-scan-out",
                 "POST /api/v1/transfers/{transferId}/scan-back", "POST /api/v1/transfers/{transferId}/scan-out",
                 "POST /api/v1/pieces/{id}/adjust", "POST /api/v1/pieces/{id}/hold", "POST /api/v1/pieces/{id}/release-for-adjust",
-                "POST /api/v1/pieces/{id}/restore", "POST /api/v1/pieces/{id}/unhold", "POST /api/v1/pieces/{id}/void")) {
+                "POST /api/v1/pieces/{id}/restore", "POST /api/v1/pieces/{id}/unhold", "POST /api/v1/pieces/{id}/void",
+                // C1 (2026-10-25): Lookup Sold / Not sold — one piece by id, no order data.
+                "POST /api/v1/pieces/{id}/sold", "POST /api/v1/pieces/{id}/not-sold")) {
             reg(k, skip(R_PIECES));
         }
         reg("GET /api/v1/stock-takes/sessions",          list());

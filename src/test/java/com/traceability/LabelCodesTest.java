@@ -286,7 +286,7 @@ class LabelCodesTest {
         assertCode(() -> labels.issue(ownerA, "pack", List.of(new LabelCodeService.Line(variantA, 1500, null, null),
             new LabelCodeService.Line(variantA2, 501, null, null)), "i5d"), LabelCodeException.Code.INVALID_COUNT);  // 2,001 in all
         assertCode(() -> labels.issue(ownerA, "pack", n(1), " "), LabelCodeException.Code.INVALID_IDEMPOTENCY_KEY);
-        assertThat(labels.issue(ownerA, "factory", n(2000), "i5-max").codes()).hasSize(2000);
+        assertThat(labels.issue(ownerA, "tag", n(2000), "i5-max").codes()).hasSize(2000);
 
         ResponseEntity<Map> http = post("/api/v1/label-codes/batches", issueBody("pack", 2001, "i5-http"), ownerToken());
         assertThat(http.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);

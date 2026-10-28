@@ -29,9 +29,16 @@ public class LabelService {
     static final float DEFAULT_HEIGHT_MM = 25f;
 
     private final JdbcTemplate jdbc;
+    private final InventoryLedger ledger;
 
     public LabelService(JdbcTemplate jdbc) {
+        this(jdbc, new InventoryLedger(jdbc));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public LabelService(JdbcTemplate jdbc, InventoryLedger ledger) {
         this.jdbc = jdbc;
+        this.ledger = ledger;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -49,7 +56,11 @@ public class LabelService {
             throws IOException {
         UUID tenantId = TenantContext.require();
         refuseCountOnly(sessionId, tenantId);
+        refuseFactory(sessionId, tenantId);
+        return sessionPdf(sessionId, tenantId, labelW_mm, labelH_mm);
+    }
 
+    private byte[] sessionPdf(UUID sessionId, UUID tenantId, Float labelW_mm, Float labelH_mm) throws IOException {
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
@@ -128,18 +139,24 @@ public class LabelService {
             labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
     }
 
-    /** Logs a reprint event and returns the PDF bytes. */
+    /**
+     * Logs a reprint event and returns the PDF bytes. A factory receipt (flexible labeling slice 6b) is printed only
+     * here — "Print session labels" there reprints the codes its pieces already wear (never new codes) and logs a
+     * label_reprinted event on every piece too.
+     */
     @Transactional
     public byte[] reprint(UUID sessionId, UUID actorUserId, String note,
                           Float labelW_mm, Float labelH_mm) throws IOException {
         UUID tenantId = TenantContext.require();
-        byte[] pdf = generateSessionLabels(sessionId, labelW_mm, labelH_mm);
+        refuseCountOnly(sessionId, tenantId);
+        byte[] pdf = sessionPdf(sessionId, tenantId, labelW_mm, labelH_mm);
 
         int count = countPieces(sessionId, tenantId);
         jdbc.update(
             "INSERT INTO label_reprints (tenant_id, receipt_id, reprinted_by, piece_count, note) " +
             "VALUES (?, ?, ?, ?, ?)",
             tenantId, sessionId, actorUserId, count, note);
+        if (isFactory(sessionId, tenantId)) logFactoryReprint(sessionId, null, tenantId, actorUserId);
 
         return pdf;
     }
@@ -159,6 +176,12 @@ public class LabelService {
     public VariantPdf generateVariantLabels(UUID sessionId, UUID variantId,
                                             Float labelW_mm, Float labelH_mm) throws IOException {
         UUID tenantId = TenantContext.require();
+        refuseFactory(sessionId, tenantId);
+        return variantPdf(sessionId, variantId, tenantId, labelW_mm, labelH_mm);
+    }
+
+    private VariantPdf variantPdf(UUID sessionId, UUID variantId, UUID tenantId,
+                                  Float labelW_mm, Float labelH_mm) throws IOException {
         requireFinalized(sessionId, tenantId);
         refuseCountOnly(sessionId, tenantId);
 
@@ -191,13 +214,37 @@ public class LabelService {
     public byte[] reprintVariant(UUID sessionId, UUID variantId, UUID actorUserId, String note,
                                  Float labelW_mm, Float labelH_mm) throws IOException {
         UUID tenantId = TenantContext.require();
-        VariantPdf result = generateVariantLabels(sessionId, variantId, labelW_mm, labelH_mm);
+        VariantPdf result = variantPdf(sessionId, variantId, tenantId, labelW_mm, labelH_mm);
         int count = countVariantPieces(sessionId, variantId, tenantId);
         jdbc.update(
             "INSERT INTO label_reprints (tenant_id, receipt_id, variant_id, reprinted_by, piece_count, note) " +
             "VALUES (?, ?, ?, ?, ?, ?)",
             tenantId, sessionId, variantId, actorUserId, count, note);
+        if (isFactory(sessionId, tenantId)) logFactoryReprint(sessionId, variantId, tenantId, actorUserId);
         return result.pdf();
+    }
+
+    /**
+     * Flexible labeling slice 6b — a factory receipt's pieces already wear their labels: the plain (unlogged) print
+     * routes refuse it (409 FACTORY_REPRINT_ONLY); its labels come only from the logged reprint.
+     */
+    private void refuseFactory(UUID sessionId, UUID tenantId) {
+        if (isFactory(sessionId, tenantId)) throw com.traceability.labels.LabelCodeException.factoryReprintOnly();
+    }
+
+    private boolean isFactory(UUID sessionId, UUID tenantId) {
+        List<String> mode = jdbc.queryForList(
+            "SELECT mode FROM receipts WHERE id = ? AND tenant_id = ?", String.class, sessionId, tenantId);
+        return !mode.isEmpty() && ReceivingService.MODE_FACTORY.equals(mode.get(0));
+    }
+
+    /** One label_reprinted event per reprinted piece (the session's, or one variant's), through the ledger. */
+    private void logFactoryReprint(UUID sessionId, UUID variantId, UUID tenantId, UUID actorUserId) {
+        List<String> pieceIds = jdbc.queryForList(
+            "SELECT id FROM pieces WHERE receipt_id = ? AND tenant_id = ? AND short_code IS NOT NULL " +
+            "AND (?::uuid IS NULL OR variant_id = ?)",
+            String.class, sessionId, tenantId, variantId, variantId);
+        ledger.recordLabelsReprinted(pieceIds, actorUserId, "{\"receipt_id\":\"" + sessionId + "\",\"factory_receipt\":true}");
     }
 
     /**

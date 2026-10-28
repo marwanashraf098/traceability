@@ -29,8 +29,11 @@ public final class LabelPdfRenderer {
 
     private LabelPdfRenderer() {}
 
-    /** One page of a label PDF: a piece label, or (packing labels, flexible labeling slice 4) a separator. */
-    public sealed interface Page permits Piece, Separator {}
+    /**
+     * One page of a label PDF: a piece label, (packing labels, flexible labeling slice 4) a separator, or (warehouse
+     * places S1) a place sticker.
+     */
+    public sealed interface Page permits Piece, Separator, Location {}
 
     /** What one label shows. */
     public record Piece(String shortCode, String productTitle, String variantTitle, String sku) implements Page {}
@@ -40,6 +43,13 @@ public final class LabelPdfRenderer {
      * piece). {@code line2} null → one line only.
      */
     public record Separator(String line1, String line2) implements Page {}
+
+    /**
+     * A shelf / box sticker: the barcode holds {@code scanCode} (Q + digits, never changes); under it the readable
+     * code, the place's path and the scan code — the piece label's rows (code, title, SKU), so the same layout rules
+     * fit it.
+     */
+    public record Location(String scanCode, String code, String path) implements Page {}
 
     static final float SEPARATOR_MARGIN_MM = 2f, SEPARATOR_LINE1_PT = 14f, SEPARATOR_LINE2_PT = 11f, SEPARATOR_MIN_PT = 6f;
 
@@ -55,13 +65,20 @@ public final class LabelPdfRenderer {
                     drawSeparator(doc, fonts, sep, spec);
                     continue;
                 }
-                Piece p = (Piece) item;
-                PieceLabelLayout.Layout layout = PieceLabelLayout.layout(
-                    spec, p.shortCode(), p.productTitle(), p.variantTitle(), p.sku());
+                String barcode;
+                PieceLabelLayout.Layout layout;
+                if (item instanceof Location loc) {
+                    barcode = loc.scanCode();
+                    layout = PieceLabelLayout.layout(spec, loc.code(), loc.path(), null, loc.scanCode());
+                } else {
+                    Piece p = (Piece) item;
+                    barcode = p.shortCode();
+                    layout = PieceLabelLayout.layout(spec, p.shortCode(), p.productTitle(), p.variantTitle(), p.sku());
+                }
                 PDPage page = new PDPage(new PDRectangle(layout.pageWidth(), layout.pageHeight()));
                 doc.addPage(page);
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                    drawBarcode(cs, doc, p.shortCode(), layout.barcode());
+                    drawBarcode(cs, doc, barcode, layout.barcode());
                     for (PieceLabelLayout.TextLine line : layout.lines()) {
                         drawLine(cs, fonts, line);
                     }

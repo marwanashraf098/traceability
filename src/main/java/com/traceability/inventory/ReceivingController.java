@@ -45,7 +45,8 @@ public class ReceivingController {
         UUID sessionId = receiving.createSession(
             principal.userId(),
             req.locationId() != null ? UUID.fromString(req.locationId()) : null,
-            req.reference(), req.supplierName(), req.note(), req.mode());
+            req.reference(), req.supplierName(), req.note(), req.mode(),
+            req.labelRunId() != null ? UUID.fromString(req.labelRunId()) : null);
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(Map.of("sessionId", sessionId.toString()));
     }
@@ -197,9 +198,12 @@ public class ReceivingController {
 
     // ── Request records ───────────────────────────────────────────────────────
 
-    /** mode: "print_stick" (default when absent) | "count_only" (flexible labeling only). */
+    /**
+     * mode: "print_stick" (default when absent) | "count_only" | "factory" (flexible labeling only).
+     * labelRunId: factory only — the open factory run the session receives.
+     */
     public record CreateSessionRequest(
-        String locationId, String reference, String supplierName, String note, String mode) {}
+        String locationId, String reference, String supplierName, String note, String mode, String labelRunId) {}
 
     public record AddLineRequest(String variantId, int quantity) {}
 

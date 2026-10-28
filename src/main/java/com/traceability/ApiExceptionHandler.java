@@ -181,6 +181,13 @@ public class ApiExceptionHandler {
             .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
+    // Warehouse places S1 — same {code, message_en, message_ar, details} shape.
+    @ExceptionHandler(com.traceability.places.PlaceException.class)
+    ResponseEntity<LabelCodeErrorBody> handlePlaceException(com.traceability.places.PlaceException ex) {
+        return ResponseEntity.status(ex.status())
+            .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
+    }
+
     record FulfillmentActivationErrorBody(
             String code,
             @JsonProperty("message_en") String messageEn,

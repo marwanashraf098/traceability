@@ -15,7 +15,8 @@ import java.util.UUID;
  *
  * Two writers of piece_events — both owned by this class:
  *   transition()    – state changes on EXISTING pieces; includes race guard (WHERE status=?).
- *   batchReceive()  – piece CREATION only; two multi-row INSERTs in one ACID transaction,
+ *   batchReceive()  – piece CREATION only (and its sibling receiveFactoryLabeled() — the same creation with the
+ *                     factory label codes scanned off the pieces, slice 6b); two multi-row INSERTs in one ACID transaction,
  *                     from_status=NULL→available, one received event per piece. This is NOT
  *                     a bypass of transition(): piece creation has no prior state to race on.
  *                     Do NOT refactor batchReceive() to call transition() — that breaks the
@@ -136,7 +137,16 @@ public class InventoryLedger {
         // mistake, returns to available. PieceAdjustService.restore() is its only caller (manager+,
         // reason required); the Shopify side is decided by PieceShopifyRules.departureReached.
         // destroyed → available and voided → available stay refused (no such edge).
-        "damaged:available"
+        "damaged:available",
+
+        // C1 (2026-10-25): Lookup "Sold" — a piece sold outside Shopify (in person, Instagram, a
+        // bazar). PieceAdjustService.markSold() is the only caller of available:sold (event
+        // sold_offline; reserved/packed pieces are released first, through releaseForAdjust).
+        // sold:available ("Not sold") is legal ONLY through PieceAdjustService.markNotSold(), which
+        // refuses any sold piece whose sale was not a Lookup sold_offline (a transfer's off-book sale,
+        // out_on_transfer:sold, has no way back). The Shopify side is decided by PieceShopifyRules.
+        "available:sold",
+        "sold:available"
     );
 
     // ---- SQL ---------------------------------------------------------------
@@ -361,6 +371,97 @@ public class InventoryLedger {
         jdbc.update(evtSql.toString(), evtParams.toArray());
     }
 
+    // ---- receiveFactoryLabeled ----------------------------------------------
+
+    /**
+     * Flexible labeling slice 6b — piece CREATION for a factory receiving session (the batchReceive family; it does
+     * not touch batchReceive and never routes through transition()). Each spec carries the factory label code
+     * scanned off that piece: the piece is created WITH that code as its short_code (no counter claim — the code was
+     * claimed when the run printed it), its received event names the code and the run in its metadata, and every
+     * code goes issued → bound to its piece. The bind is conditional on 'issued' and must hit every code, else the
+     * whole call throws and the caller's transaction (finalize) rolls back — no piece without its code, no code
+     * bound twice. pieces UNIQUE (tenant_id, short_code) stays the backstop.
+     *
+     * Caller contract: TenantContext set; the codes locked and re-checked issued by the caller.
+     */
+    @Transactional
+    public void receiveFactoryLabeled(List<FactoryReceiveSpec> specs, UUID actorUserId, UUID labelRunId) {
+        if (specs.isEmpty()) return;
+        int n = specs.size();
+        for (int from = 0; from < n; from += RECEIVE_CHUNK) {
+            int to = Math.min(n, from + RECEIVE_CHUNK);
+            StringBuilder pieceSql = new StringBuilder(
+                "INSERT INTO pieces " +
+                "(id, tenant_id, variant_id, receipt_id, barcode, short_code, status, current_location_id, last_event_at, last_user_id) " +
+                "VALUES ");
+            List<Object> pieceParams = new ArrayList<>((to - from) * 8);
+            StringBuilder evtSql = new StringBuilder(
+                "INSERT INTO piece_events " +
+                "(tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status, metadata) VALUES ");
+            List<Object> evtParams = new ArrayList<>((to - from) * 4);
+            for (int i = from; i < to; i++) {
+                FactoryReceiveSpec s = specs.get(i);
+                if (i > from) { pieceSql.append(','); evtSql.append(','); }
+                pieceSql.append("(?,?,?,?,?,?,'available'::piece_status,?,now(),?)");
+                pieceParams.add(s.pieceId());
+                pieceParams.add(s.tenantId());
+                pieceParams.add(s.variantId());
+                pieceParams.add(s.receiptId());
+                pieceParams.add("PC-" + s.pieceId());
+                pieceParams.add(s.code());
+                pieceParams.add(s.locationId());
+                pieceParams.add(actorUserId);
+                evtSql.append(
+                    "(NULLIF(current_setting('app.current_tenant', true), '')::uuid," +
+                    " ?, 'received', ?, ?, NULL, 'available'::piece_status, ?::jsonb)");
+                evtParams.add(s.pieceId());
+                evtParams.add(actorUserId);
+                evtParams.add(s.locationId());
+                evtParams.add("{\"label_code_id\":\"" + s.labelCodeId() + "\",\"label_run_id\":\"" + labelRunId
+                    + "\",\"code\":\"" + s.code() + "\"}");
+            }
+            jdbc.update(pieceSql.toString(), pieceParams.toArray());
+            jdbc.update(evtSql.toString(), evtParams.toArray());
+
+            UUID[] codeIds = new UUID[to - from];
+            String[] pieceIds = new String[to - from];
+            for (int i = from; i < to; i++) {
+                codeIds[i - from] = specs.get(i).labelCodeId();
+                pieceIds[i - from] = specs.get(i).pieceId();
+            }
+            int bound = jdbc.update(
+                "UPDATE label_codes c SET status = 'bound', piece_id = v.piece_id, bound_by = ?, bound_at = now() " +
+                "FROM unnest(?::uuid[], ?::text[]) AS v(code_id, piece_id) " +
+                "WHERE c.id = v.code_id AND c.status = 'issued' " +
+                "  AND c.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
+                actorUserId, codeIds, pieceIds);
+            if (bound != to - from) {
+                throw new IllegalStateException("receiveFactoryLabeled bound " + bound + " of " + (to - from) + " codes");
+            }
+        }
+    }
+
+    /** One piece of a factory receiving: its new id, and the factory label code scanned off it. */
+    public record FactoryReceiveSpec(String pieceId, UUID tenantId, UUID variantId, UUID receiptId, UUID locationId,
+                                     UUID labelCodeId, String code) {}
+
+    /**
+     * label_reprinted events for many pieces in one statement (flexible labeling slice 6b: "Print session labels" on
+     * a factory receipt is a reprint of the codes the pieces already carry). Status unchanged; each event at the
+     * piece's current location. Returns how many events were written.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public int recordLabelsReprinted(List<String> pieceIds, UUID actorUserId, String metadata) {
+        if (pieceIds.isEmpty()) return 0;
+        return jdbc.update(
+            "INSERT INTO piece_events (tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status, metadata) " +
+            "SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid, p.id, 'label_reprinted', ?, " +
+            "       p.current_location_id, p.status, p.status, ?::jsonb " +
+            "FROM pieces p WHERE p.id = ANY(?::text[]) " +
+            "  AND p.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
+            actorUserId, metadata, pieceIds.toArray(new String[0]));
+    }
+
     /**
      * Records a return_received event for a piece that is ALREADY at
      * return_pending_inspection (state-46 webhook fired before intake scan).
@@ -433,21 +534,22 @@ public class InventoryLedger {
      * {@code label_bound} piece event (status unchanged — tagging moves no stock and never calls Shopify).
      * The fifth piece_events writer here; pieces / piece_events stay ledger-only.
      *
-     * Errors: UNKNOWN_CODE (no such code for this tenant), CODE_VOIDED, NO_UNTAGGED_STOCK (no untagged available
+     * Errors: UNKNOWN_CODE (no such code for this tenant), FACTORY_LABEL_NOT_RECEIVED (kind factory — slice 6), CODE_VOIDED, NO_UNTAGGED_STOCK (no untagged available
      * piece of the variant at the main warehouse), NO_MAIN_WAREHOUSE. A code already bound → {@code alreadyBound}
      * with its piece, nothing written. Caller contract: TenantContext set, flag checked by the caller.
      */
-    // noRollbackFor: every refusal (UNKNOWN_CODE, CODE_VOIDED, NO_MAIN_WAREHOUSE, NO_UNTAGGED_STOCK) is thrown
+    // noRollbackFor: every refusal (UNKNOWN_CODE, FACTORY_LABEL_NOT_RECEIVED, CODE_VOIDED, NO_MAIN_WAREHOUSE, NO_UNTAGGED_STOCK) is thrown
     // before anything is written, so a caller's transaction (a scan loop) may catch it and carry on.
     @Transactional(isolation = Isolation.READ_COMMITTED, noRollbackFor = com.traceability.labels.LabelCodeException.class)
     public BindResult bindLabel(UUID codeId, UUID actorUserId, BindRef ref, String rawScan) {
         java.util.Map<String, Object> code = jdbc.query(
-            "SELECT id, code, status, piece_id, variant_id FROM label_codes " +
+            "SELECT id, code, status, piece_id, variant_id, kind FROM label_codes " +
             "WHERE id = ? AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid FOR UPDATE",
             rs -> {
                 if (!rs.next()) return null;
                 java.util.Map<String, Object> m = new java.util.HashMap<>();
                 m.put("code", rs.getString("code"));
+                m.put("kind", rs.getString("kind"));
                 m.put("status", rs.getString("status"));
                 m.put("piece_id", rs.getString("piece_id"));
                 m.put("variant_id", rs.getObject("variant_id", UUID.class));
@@ -455,6 +557,9 @@ public class InventoryLedger {
             },
             codeId);
         if (code == null) throw com.traceability.labels.LabelCodeException.unknownCode();
+        // Slice 6: a factory code is bound only by its factory run's receiving (pieces created with the code), never
+        // to an existing untagged piece — checked before anything else, whatever its status.
+        if ("factory".equals(code.get("kind"))) throw com.traceability.labels.LabelCodeException.factoryLabelNotReceived();
         String codeText = (String) code.get("code");
         UUID variantId = (UUID) code.get("variant_id");
         if ("voided".equals(code.get("status"))) throw com.traceability.labels.LabelCodeException.codeVoided();

@@ -85,8 +85,18 @@ public class ReceivingImportService {
         UUID tenantId = TenantContext.require();
         boolean current = COLUMN_CURRENT.equals(column);
         if (column != null && !current && !COLUMN_NEW.equals(column)) throw ImportException.badColumn();
-        String quantityHeader = current ? ShopifyInventoryFile.ON_HAND_CURRENT : ShopifyInventoryFile.ON_HAND_NEW;
         requireImportable(sessionId, tenantId);
+        return match(tenantId, filename, bytes, current);
+    }
+
+    /**
+     * The session-independent step — parse the file and match its rows to the tenant's catalog, writing NOTHING.
+     * Shared by receiving's {@link #preview} and factory runs (flexible labeling slice 6a, expected quantities read
+     * from "On hand (new)"). Caller contract: TenantContext set, the caller's own checks done.
+     */
+    @Transactional(readOnly = true)
+    public Preview match(UUID tenantId, String filename, byte[] bytes, boolean current) {
+        String quantityHeader = current ? ShopifyInventoryFile.ON_HAND_CURRENT : ShopifyInventoryFile.ON_HAND_NEW;
         List<ShopifyInventoryFile.FileRow> rows = ShopifyInventoryFile.parse(filename, bytes);
 
         Set<String> locations = rows.stream().map(r -> r.get(ShopifyInventoryFile.LOCATION))
@@ -207,6 +217,10 @@ public class ReceivingImportService {
         }
         if (ReceivingService.MODE_COUNT_ONLY.equals(rows.get(0).get("mode")) && !FlexibleLabeling.enabled(jdbc, tenantId)) {
             throw UntaggedException.countOnlyUnavailable();
+        }
+        // Factory receiving (slice 6b) takes scans, never lines.
+        if (ReceivingService.MODE_FACTORY.equals(rows.get(0).get("mode"))) {
+            throw com.traceability.labels.LabelCodeException.factorySessionNoLines();
         }
     }
 
