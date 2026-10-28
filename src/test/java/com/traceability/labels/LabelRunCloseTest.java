@@ -221,6 +221,35 @@ class LabelRunCloseTest {
         assertThat(o.messageEn()).startsWith("This label was voided");
     }
 
+    // ── c7 ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void c7_the_final_close_voids_every_code_still_issued_including_complete_lines() {
+        UUID run = printedRun(shirtS, 2, mug, 1);
+        String leftover = codes(run, shirtS).get(1);
+        UUID s = session(run);
+        assertThat(factory.scan(s, codes(run, shirtS).get(0), owner, false).outcome()).isEqualTo("STAGED");
+        FactoryReceivingService.ExtraLabel replacement = factory.extraLabel(s, shirtS, "c7-1", owner);
+        assertThat(factory.scan(s, replacement.code(), owner, false).outcome()).isEqualTo("STAGED");
+        assertThat(factory.scan(s, codes(run, mug).get(0), owner, false).outcome()).isEqualTo("STAGED");
+        FactoryReceivingService.ExtraLabel unusedOverage = factory.extraLabel(s, mug, "c7-2", owner);
+        assertThat(unusedOverage.overage()).isTrue();
+        receiving.finalize(s, owner);
+
+        LabelRunService.CloseResult r = runs.close(run, owner, List.of());   // no gaps → no reasons needed
+        assertThat(r.closed()).isTrue();
+        assertThat(r.voided()).isEqualTo(2);
+        assertThat(statuses(run, shirtS)).containsExactlyInAnyOrder("bound", "bound", "voided:factory_run_closed");
+        assertThat(statuses(run, mug)).containsExactlyInAnyOrder("bound", "voided:factory_run_closed");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM label_codes c JOIN label_run_lines l ON l.id = c.run_line_id " +
+            "WHERE l.run_id = ? AND c.status = 'issued'", Integer.class, run)).isZero();
+
+        // refused at scan, in a session of another (open) run
+        UUID other = printedRun(shirtM, 1);
+        FactoryReceivingService.ScanOutcome o = factory.scan(session(other), leftover, owner, false);
+        assertThat(o.outcome()).isEqualTo("REJECTED:CODE_VOIDED");
+    }
+
     // ── c6 ────────────────────────────────────────────────────────────────────
 
     @Test

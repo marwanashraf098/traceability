@@ -204,12 +204,14 @@ flexible_labeling_enabled; DS v1.0, EN/LTR + AR/RTL.
   no reopen; refused while an open factory receipt of the run has live staged scans ("Finalize or undo receiving
   session … first"). Shortfall report CSV (BOM, formula-neutralised) + A4 PDF (PDFBox, Noto + Noto Arabic), ?lang.
   Runs list: Open / Still coming / Closed + received / expected.
-- **Tests:** FactoryReceivingTest 14, LabelRunCloseTest 8 (revert-checked); vitest flexibleS6b 6, flexibleS6c 6.
+- **Tests:** FactoryReceivingTest 14, LabelRunCloseTest 9 (revert-checked); vitest flexibleS6b 6, flexibleS6c 6.
   Registries: MigrationSmokeTest 187, NotTracedBackfillTest 132, RlsCoverageTest +3 COVERED (+2 tests),
   PortalOrderLeakTest +7 SKIP. Full suite: backend 3432, only ExchangeBackfillTest red (pre-existing); vitest 1210,
   analyticsSummary r2 flaked under load (passes alone).
-- Edge (by spec): a complete line can keep issued non-overage codes after close when overage codes were received in
-  their place — they are not voided.
+- **Fix on approval (2026-10-28):** when the run becomes fully CLOSED (no line Still coming), every code of the run
+  still issued — any line, including a complete line's leftovers replaced by other codes, and unscanned overage codes —
+  is voided (reason factory_run_closed) in the same transaction as the close. LabelRunCloseTest c7 (revert-checked).
+  deleteSession's FOR UPDATE for all modes: approved.
 
 **Flexible labeling — slice 6a: factory runs + printing (2026-10-27, branch `feat/flexible-labeling-s6a` off origin/main
 5d9c521; merged to main b218cca 2026-10-28, pushed, NOT deployed). Migration V187 (was V186; main took V186 for the onboarding gate).** Step 0 answers (Marawan 2026-10-27): runs receive into the main

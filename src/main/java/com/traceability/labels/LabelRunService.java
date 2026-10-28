@@ -28,7 +28,8 @@ import java.util.*;
  *       split a line's group unless the group alone is larger. Reprint = the same PDF: the same codes, none new.</li>
  *   <li>{@link #close} (slice 6c): every line with a gap (expected − received &gt; 0) needs a reason. Short-shipped /
  *       Lost voids that line's leftover issued codes (reasons factory_run_short_shipped / factory_run_lost); Still
- *       coming keeps them valid and the run open. The run closes only when no line is Still coming; a later close
+ *       coming keeps them valid and the run open. The run closes only when no line is Still coming — then every
+ *       code of the run still issued is voided (factory_run_closed), in the same transaction; a later close
  *       may turn Still coming into Short-shipped / Lost (never back). No reopen. Refused while an open receiving
  *       session of the run holds live scans.</li>
  *   <li>{@link #report} (slice 6c): per line expected / received / gap / reason / overage — CSV and A4 PDF.</li>
@@ -149,6 +150,8 @@ public class LabelRunService {
     public static final String REASON_SHORT_SHIPPED = "short_shipped";
     public static final String REASON_LOST          = "lost";
     public static final String REASON_STILL_COMING  = "still_coming";
+    /** void_reason of the codes still issued when the run closes. */
+    public static final String REASON_RUN_CLOSED   = "factory_run_closed";
     private static final Set<String> REASONS = Set.of(REASON_SHORT_SHIPPED, REASON_LOST, REASON_STILL_COMING);
 
     public record CloseLine(UUID lineId, String reason) {}
@@ -255,6 +258,13 @@ public class LabelRunService {
         if (closed) {
             jdbc.update("UPDATE label_runs SET status = 'closed', closed_at = now(), closed_by = ? " +
                 "WHERE id = ? AND tenant_id = ? AND status = 'open'", actorUserId, runId, tenantId);
+            // A closed run has no live labels: every code still issued — any line, including a complete line whose
+            // leftovers were replaced by overage codes, and unscanned overage codes — is voided in the same transaction.
+            voided += jdbc.update(
+                "UPDATE label_codes c SET status = 'voided', voided_at = now(), void_reason = ? " +
+                "FROM label_run_lines l WHERE l.id = c.run_line_id AND l.run_id = ? AND l.tenant_id = ? " +
+                "AND c.tenant_id = ? AND c.status = 'issued'",
+                REASON_RUN_CLOSED, runId, tenantId, tenantId);
         }
         return new CloseResult(voided, closed, detail(tenantId, runId));
     }
