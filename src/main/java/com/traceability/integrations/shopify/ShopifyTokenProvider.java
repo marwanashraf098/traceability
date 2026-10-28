@@ -364,8 +364,20 @@ public class ShopifyTokenProvider {
 
     // ---- private: OAuth lock + refresh + write-back ---------------------
 
+    /**
+     * Refreshes the OAuth token under a row lock.
+     *
+     * A permanent rejection (no / expired refresh token, or Shopify's 4xx — 401, invalid_grant) must COMMIT
+     * status = 'needs_reauth' AND propagate. Writing it inside the lambda and then throwing rolled the write back
+     * with the transaction (bug, 2026-10-27, testreciving: every refresh 401'd, the store stayed 'connected' and
+     * no warning was shown). Same shape as reExchangeWithLock: the lambda only records the outcome; the flag is
+     * written in its own committed transaction after the locked one ends.
+     */
     private String refreshWithLock(UUID storeId, String shopDomain) {
-        return tx.execute(s -> {
+        final ShopifyStoreNeedsReauthException[] reauthEx = {null};
+        final boolean[] markReauth = {false};
+
+        String token = tx.execute(s -> {
             // Acquire row lock — blocks concurrent refreshers on the same store.
             StoreTokenRow row = jdbc.query(SELECT_FOR_UPDATE,
                 rs -> rs.next() ? mapRow(rs) : null, storeId);
@@ -394,30 +406,32 @@ public class ShopifyTokenProvider {
                     "Store was disconnected under lock — merchant must reconnect to resume sync");
             }
             if (row.refreshTokenEncrypted() == null) {
-                jdbc.update(SET_NEEDS_REAUTH, storeId);
-                throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                markReauth[0] = true;
+                reauthEx[0] = new ShopifyStoreNeedsReauthException(row.shopDomain(),
                     "No refresh token available under lock");
+                return null;
             }
             if (row.refreshTokenExpiresAt() != null && row.refreshTokenExpiresAt().isBefore(Instant.now())) {
-                jdbc.update(SET_NEEDS_REAUTH, storeId);
-                throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                markReauth[0] = true;
+                reauthEx[0] = new ShopifyStoreNeedsReauthException(row.shopDomain(),
                     "Refresh token expired under lock");
+                return null;
             }
 
             String rawRefreshToken = encryptionService.decrypt(row.refreshTokenEncrypted());
 
             // Call Shopify refresh API while holding the row lock.
             // Bounded to 10 s by tokenRestClient in ShopifyHttpGateway.
-            // ShopifyTransientException propagates without touching store status.
-            // ShopifyStoreNeedsReauthException: mark needs_reauth then propagate.
+            // ShopifyTransientException (5xx / timeout) propagates without touching store status.
             ShopifyGateway.TokenResponse newTokens;
             try {
                 newTokens = shopifyGateway.refreshAccessToken(row.shopDomain(), rawRefreshToken);
             } catch (ShopifyStoreNeedsReauthException e) {
-                jdbc.update(SET_NEEDS_REAUTH, storeId);
-                throw e;
+                // 4xx — the refresh token was rejected (401 / invalid_grant). Flag after this tx.
+                markReauth[0] = true;
+                reauthEx[0] = e;
+                return null;
             }
-            // ShopifyTransientException: do NOT mark needs_reauth, propagate as-is.
 
             Timestamp newAccessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(newTokens.expiresIn()));
             Timestamp newRefreshExpiresAt = Timestamp.from(Instant.now().plusSeconds(newTokens.refreshTokenExpiresIn()));
@@ -439,6 +453,17 @@ public class ShopifyTokenProvider {
             log.info("Shopify token refreshed for store {} ({})", storeId, row.shopDomain());
             return newTokens.accessToken();
         });
+
+        // After the locked tx ended: commit the flag, then propagate.
+        if (markReauth[0]) {
+            markNeedsReauth(storeId);
+            log.warn("Shopify refresh rejected for store {} ({}) — marked needs_reauth: {}",
+                storeId, shopDomain, reauthEx[0].getMessage());
+        }
+        if (reauthEx[0] != null) {
+            throw reauthEx[0];
+        }
+        return token;
     }
 
     // ---- private: helpers -----------------------------------------------

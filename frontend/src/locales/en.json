@@ -3454,7 +3454,8 @@
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
       "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta.",
-      "WAREHOUSE_ADDRESS_PUSHED": "Clears when the address reaches Shopify — Traced keeps retrying. If it stays, save the address again."
+      "WAREHOUSE_ADDRESS_PUSHED": "Clears when the address reaches Shopify — Traced keeps retrying. If it stays, save the address again.",
+      "SHOPIFY_RECONNECTED": "Clears when you reconnect Shopify in Settings › Connections (Go →). Stock updates made meanwhile are sent then."
     },
     "returnToReceive": {
       "markedBy": "Marked received by {{name}} in session {{session}}",

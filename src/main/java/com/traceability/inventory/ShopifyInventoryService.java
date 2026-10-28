@@ -525,6 +525,15 @@ public class ShopifyInventoryService {
      *   again, by the sweep or by hand). Legacy claims (before piece_sync_cutoff()) are never sent.
      */
     public void pushPieceClaimNow(UUID tenantId, long claimId, boolean manual) {
+        // Shopify rejected the token refresh: send nothing and spend no attempt — the claim stays queued / failed
+        // and the sweep sends it once the merchant reconnects. A person's re-send is told why.
+        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
+            if (manual) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH.fixEn);
+            }
+            return;
+        }
         Map<String, Object> c = tx.execute(st -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "UPDATE shopify_inventory_adjustments sia SET status = 'pending', send_started_at = now(), " +

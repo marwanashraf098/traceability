@@ -81,6 +81,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   pack_cancelled_after_print: { en: 'Cancelled After Print',    ar: 'أُلغي بعد الطباعة' },
   // Onboarding gate (V186)
   warehouse_address_push_failed: { en: 'Warehouse Address Not In Shopify', ar: 'عنوان المخزن لم يصل إلى Shopify' },
+  // Shopify rejected the token refresh (stores.status needs_reauth)
+  shopify_connection_lost: { en: 'Shopify Connection Lost', ar: 'انقطع الاتصال بشوبيفاي' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
