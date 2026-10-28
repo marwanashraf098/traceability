@@ -136,7 +136,7 @@ class StockTakePushAfterCommitTest {
     void pc1_finalizeCommitted_jobSeesCommittedClaim() throws Exception {
         UUID session = sessionWithOneWriteOff();
 
-        late(() -> reconciliation.finalizeSession(session, actorId));
+        late(() -> reconciliation.finalizeSession(session, actorId, 1));
 
         assertThat(claimSeenAtEnqueue).as("enqueued once, after the claim committed").containsExactly("pending");
         enqueued.get(0).run();
@@ -168,7 +168,7 @@ class StockTakePushAfterCommitTest {
     void pc4_finalizeRolledBack_noJob_noClaim() {
         UUID session = sessionWithOneWriteOff();
 
-        rolledBack(() -> reconciliation.finalizeSession(session, actorId));
+        rolledBack(() -> reconciliation.finalizeSession(session, actorId, 1));
 
         verify(jobScheduler, never()).enqueue(any(JobLambda.class));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM stock_take_shopify_syncs WHERE session_id = ?",
@@ -179,7 +179,7 @@ class StockTakePushAfterCommitTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────────
 
-    /** An open session over one available piece, attested complete and written off as lost. */
+    /** An open session over one available piece, attested complete and left unscanned — finalize writes it off. */
     private UUID sessionWithOneWriteOff() {
         String piece = UlidGenerator.generate();
         jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
@@ -195,14 +195,13 @@ class StockTakePushAfterCommitTest {
                 counted, tenantId, variantId, "PC-" + counted, counted, locationId);
             stockTake.scan(session, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(session, actorId);
-            reconciliation.resolve(session, List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId);
             return session;
         });
     }
 
     private UUID finalizedWithFailedClaim() {
         UUID session = sessionWithOneWriteOff();
-        TenantContext.runAs(tenantId, () -> reconciliation.finalizeSession(session, actorId));
+        TenantContext.runAs(tenantId, () -> reconciliation.finalizeSession(session, actorId, 1));
         jdbc.update("UPDATE stock_take_shopify_syncs SET status = 'failed' WHERE session_id = ?", session);
         reset(jobScheduler);
         stubs();

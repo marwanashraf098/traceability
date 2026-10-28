@@ -81,8 +81,6 @@ class OrdersTableAccessGuardTest {
           "order of a replacement piece's allocation; a portal order has no allocations"),
         e("inventory/StockTakeReconciliationService.java#field:EXPECTED_QUERY", SAFE_BY_ID,
           "LEFT JOIN from pieces.current_order_id; a portal order has no pieces"),
-        e("inventory/StockTakeReconciliationService.java#fetchCommittedOrder", SAFE_BY_ID,
-          "order of a piece's active allocation; a portal order has no allocations"),
         e("inventory/ShipmentLinkService.java#clearReconcileFlag", SAFE_BY_ID,
           "clears the reconcile flag on the order a shipment was just linked to"),
         // ── MUST_INCLUDE

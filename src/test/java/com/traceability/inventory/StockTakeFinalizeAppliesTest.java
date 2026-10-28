@@ -108,6 +108,7 @@ class StockTakeFinalizeAppliesTest {
     @Autowired AuditService                   auditService;
     @Autowired PieceAdjustService             pieceAdjust;
     @Autowired ExceptionService               exceptions;
+    @Autowired InventoryLedger                ledger;
 
     record T(UUID tenant, UUID store, String shop, UUID location, String traced, UUID user) {}
     record V(UUID id, String item) {}
@@ -447,7 +448,7 @@ class StockTakeFinalizeAppliesTest {
         StockTakeReconciliationService appReconciliation = new StockTakeReconciliationService(appJdbc,
             new StockTakeService(appJdbc, mapper), appLedger,
             new PieceAdjustService(appJdbc, appLedger, appAudit, mapper, shopifyInventory),
-            appAudit, mapper, jobScheduler, pushJob, shopifyInventory);
+            appAudit, mapper, jobScheduler, pushJob, shopifyInventory, appTxm);
 
         TenantContext.runAs(a.tenant(), () -> new TransactionTemplate(appTxm).execute(st ->
             appReconciliation.finalizeSession(sa, a.user(), null)));
@@ -646,15 +647,35 @@ class StockTakeFinalizeAppliesTest {
         UUID s = open(t);
         for (int i = 0; i < 7; i++) scan(t, s, ps.get(i), "good");   // 70% < 80%
         attest(t, s);
-        TenantContext.runAs(t.tenant(), () -> reconciliation.resolve(s, List.of(
-            new StockTakeReconciliationService.ResolveItem(ps.get(7), "lost"),
-            new StockTakeReconciliationService.ResolveItem(ps.get(8), "lost"),
-            new StockTakeReconciliationService.ResolveItem(ps.get(9), "lost")), t.user()));
-        assertThat(finalizePlan(t, s)).containsEntry("writeOffs", 0).containsEntry("requiresTypedConfirmation", false);
+        // Drift: the three unscanned pieces are picked for an order mid-count (the ledger's own edge).
+        UUID order = order(t, a);
+        TenantContext.runAs(t.tenant(), () -> {
+            for (int i = 7; i < 10; i++) {
+                ledger.transition(ps.get(i), PieceStatus.AVAILABLE, PieceStatus.RESERVED, "scan", t.user(),
+                    TransitionContext.forOrder(order, order));
+            }
+        });
+        assertThat(finalizePlan(t, s)).containsEntry("writeOffs", 0).containsEntry("driftSkipped", 3)
+            .containsEntry("shopifyDecrement", 0).containsEntry("requiresTypedConfirmation", false);
 
         Map<String, Object> result = finalize(t, s, null);
 
-        assertThat(result).containsEntry("status", "finalized");
+        assertThat(result).containsEntry("status", "finalized").containsEntry("driftSkipped", 3);
+        assertThat(ps.subList(7, 10)).allSatisfy(p -> assertThat(status(p)).isEqualTo("reserved"));
+        assertThat(claim(s)).containsEntry("status", "nothing_to_push");
+        verify(jobScheduler, never()).enqueue(any(JobLambda.class));
+        verify(shopifyGateway, never()).pushStockTakeWriteOff(any(), any(), any(), any(), any(), any());
+    }
+
+    private UUID order(T t, V v) {
+        UUID orderId = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, payment_method, placed_at) " +
+            "VALUES (?, ?, gen_random_uuid()::text, '#C1-' || floor(random()*99999), " +
+            "    'ready_to_pick'::order_status, 'cod', now()) RETURNING id",
+            UUID.class, t.tenant(), t.store());
+        jdbc.update("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 3)",
+            t.tenant(), orderId, v.id());
+        return orderId;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

@@ -94,18 +94,6 @@ public class StockTakeReconciliationService {
     private final ShopifyInventoryService shopifyInventory;
     private final TransactionTemplate tx;
 
-    /** For a hand-built instance (tests): transactions on the JdbcTemplate's own DataSource. */
-    public StockTakeReconciliationService(JdbcTemplate jdbc, StockTakeService stockTake,
-                                          InventoryLedger ledger, PieceAdjustService pieceAdjustService,
-                                          com.traceability.account.AuditService auditService,
-                                          ObjectMapper mapper, JobScheduler jobScheduler,
-                                          StockTakeShopifyPushJob pushJob,
-                                          ShopifyInventoryService shopifyInventory) {
-        this(jdbc, stockTake, ledger, pieceAdjustService, auditService, mapper, jobScheduler, pushJob, shopifyInventory,
-            new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getDataSource()));
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
     public StockTakeReconciliationService(JdbcTemplate jdbc, StockTakeService stockTake,
                                           InventoryLedger ledger, PieceAdjustService pieceAdjustService,
                                           com.traceability.account.AuditService auditService,
