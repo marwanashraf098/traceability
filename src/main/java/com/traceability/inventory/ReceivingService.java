@@ -1,9 +1,12 @@
 package com.traceability.inventory;
 
+import com.traceability.labels.FactoryReceivingService;
 import com.traceability.labels.FlexibleLabeling;
+import com.traceability.labels.LabelCodeException;
 import com.traceability.labels.UntaggedException;
 
 import com.traceability.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -18,12 +21,21 @@ public class ReceivingService {
     private final JdbcTemplate           jdbc;
     private final InventoryLedger        ledger;
     private final ShopifyInventoryService shopifyInventory;
+    /** Flexible labeling slice 6b — factory-labeled sessions (null: no factory mode, e.g. tests' hand-built service). */
+    private final FactoryReceivingService factoryReceiving;
 
     public ReceivingService(JdbcTemplate jdbc, InventoryLedger ledger,
                             ShopifyInventoryService shopifyInventory) {
+        this(jdbc, ledger, shopifyInventory, null);
+    }
+
+    @Autowired
+    public ReceivingService(JdbcTemplate jdbc, InventoryLedger ledger,
+                            ShopifyInventoryService shopifyInventory, FactoryReceivingService factoryReceiving) {
         this.jdbc             = jdbc;
         this.ledger           = ledger;
         this.shopifyInventory = shopifyInventory;
+        this.factoryReceiving = factoryReceiving;
     }
 
     // ── Create ──────────────────────────────────────────────────────────────
@@ -38,6 +50,8 @@ public class ReceivingService {
     public static final String MODE_PRINT_STICK = "print_stick";
     /** Flexible labeling slice 2: no labels now — the pieces go in untagged (short_code NULL). */
     public static final String MODE_COUNT_ONLY  = "count_only";
+    /** Flexible labeling slice 6b: the pieces arrived wearing a factory run's labels — scanned in, never picked. */
+    public static final String MODE_FACTORY     = "factory";
 
     /**
      * {@code mode} null → print_stick. count_only only for a tenant with flexible labeling, and only
@@ -46,20 +60,44 @@ public class ReceivingService {
     @Transactional
     public UUID createSession(UUID actorUserId, UUID locationId,
                               String reference, String supplierName, String note, String mode) {
+        return createSession(actorUserId, locationId, reference, supplierName, note, mode, null);
+    }
+
+    /**
+     * {@code labelRunId}: factory mode only (and required there) — an OPEN factory run of this tenant. A factory
+     * session receives into the main warehouse only; its supplier / reference default to the run's factory and
+     * reference.
+     */
+    @Transactional
+    public UUID createSession(UUID actorUserId, UUID locationId,
+                              String reference, String supplierName, String note, String mode, UUID labelRunId) {
         UUID tenantId = TenantContext.require();
         String m = mode == null ? MODE_PRINT_STICK : mode;
-        if (!MODE_PRINT_STICK.equals(m) && !MODE_COUNT_ONLY.equals(m)) {
+        if (!MODE_PRINT_STICK.equals(m) && !MODE_COUNT_ONLY.equals(m) && !MODE_FACTORY.equals(m)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown receiving mode");
+        }
+        if (!MODE_FACTORY.equals(m) && labelRunId != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only a factory-labeled session names a factory run");
         }
         if (MODE_COUNT_ONLY.equals(m)) {
             if (!FlexibleLabeling.enabled(jdbc, tenantId)) throw UntaggedException.countOnlyUnavailable();
             if (!isMainWarehouse(locationId, tenantId)) throw UntaggedException.countOnlyMainWarehouse();
         }
+        if (MODE_FACTORY.equals(m)) {
+            if (factoryReceiving == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+            if (labelRunId == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A factory-labeled session needs a factory run");
+            }
+            Map<String, Object> run = factoryReceiving.requireOpenRun(tenantId, labelRunId);
+            if (!isMainWarehouse(locationId, tenantId)) throw LabelCodeException.factoryMainWarehouseOnly();
+            if (supplierName == null || supplierName.isBlank()) supplierName = (String) run.get("factory_name");
+            if (reference == null || reference.isBlank()) reference = (String) run.get("reference");
+        }
         UUID id = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, location_id, note, status, mode) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
-            id, tenantId, reference, supplierName, actorUserId, locationId, note, m);
+            "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, location_id, note, status, mode, label_run_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            id, tenantId, reference, supplierName, actorUserId, locationId, note, m, labelRunId);
         return id;
     }
 
@@ -75,7 +113,7 @@ public class ReceivingService {
     @Transactional
     public UUID addLine(UUID sessionId, UUID variantId, int quantity) {
         UUID tenantId = TenantContext.require();
-        requireOpen(sessionId, tenantId);
+        requireOpenWithLines(sessionId, tenantId);
         UUID id = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO receipt_lines (id, tenant_id, receipt_id, variant_id, quantity) VALUES (?, ?, ?, ?, ?)",
@@ -86,7 +124,7 @@ public class ReceivingService {
     @Transactional
     public void updateLine(UUID sessionId, UUID lineId, int quantity) {
         UUID tenantId = TenantContext.require();
-        requireOpen(sessionId, tenantId);
+        requireOpenWithLines(sessionId, tenantId);
         int rows = jdbc.update(
             "UPDATE receipt_lines SET quantity = ? " +
             "WHERE id = ? AND receipt_id = ? AND tenant_id = ?",
@@ -97,7 +135,7 @@ public class ReceivingService {
     @Transactional
     public void deleteLine(UUID sessionId, UUID lineId) {
         UUID tenantId = TenantContext.require();
-        requireOpen(sessionId, tenantId);
+        requireOpenWithLines(sessionId, tenantId);
         jdbc.update(
             "DELETE FROM receipt_lines WHERE id = ? AND receipt_id = ? AND tenant_id = ?",
             lineId, sessionId, tenantId);
@@ -117,13 +155,18 @@ public class ReceivingService {
     @Transactional
     public void deleteSession(UUID sessionId) {
         UUID tenantId = TenantContext.require();
-        List<String> rows = jdbc.queryForList(
-            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'",
-            String.class, sessionId, tenantId);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT status, mode FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound' FOR UPDATE",
+            sessionId, tenantId);
         if (rows.isEmpty()) throw notFound("session");
-        if (!"open".equals(rows.get(0))) {
+        if (!"open".equals(rows.get(0).get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Session is already finalized and cannot be deleted");
+        }
+        // Factory receiving (slice 6b): a staged scan is a record — undo them first; undone ones go with the session.
+        if (MODE_FACTORY.equals(rows.get(0).get("mode")) && factoryReceiving != null) {
+            int live = factoryReceiving.liveScans(tenantId, sessionId);
+            if (live > 0) throw LabelCodeException.undoScansFirst(live);
         }
         jdbc.update("DELETE FROM receipt_lines WHERE receipt_id = ? AND tenant_id = ?",
             sessionId, tenantId);
@@ -146,6 +189,11 @@ public class ReceivingService {
     @Transactional
     public int finalize(UUID sessionId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        // Factory receiving (slice 6b) has its own finalize — dispatched BEFORE any lock here, because it locks the
+        // run first and then the receipt (the order every factory path uses).
+        if (factoryReceiving != null && MODE_FACTORY.equals(modeOf(sessionId, tenantId))) {
+            return factoryReceiving.finalize(sessionId, actorUserId);
+        }
         // Locked, not just read: two finalizes of one session at the same moment both saw 'open' and both
         // created the session's pieces. The second now waits here, then sees 'finalized' and gets the 409.
         requireOpen(sessionId, tenantId, true);
@@ -232,7 +280,7 @@ public class ReceivingService {
     public Map<String, Object> getSession(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.note, " +
+            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.note, r.label_run_id, " +
             "       r.location_id, l.name AS location_name, " +
             "       r.received_by, r.created_at, r.finalized_at, " +
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
@@ -245,6 +293,9 @@ public class ReceivingService {
         session.put("lines", getLines(sessionId, tenantId));
         if (MODE_COUNT_ONLY.equals(session.get("mode")) && "finalized".equals(session.get("status"))) {
             session.put("shopify", shopifySync(sessionId, tenantId));
+        }
+        if (MODE_FACTORY.equals(session.get("mode")) && factoryReceiving != null) {
+            session.put("factory", factoryReceiving.progress(tenantId, sessionId, (UUID) session.get("label_run_id")));
         }
         return session;
     }
@@ -274,9 +325,12 @@ public class ReceivingService {
     public List<Map<String, Object>> listSessions() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
-            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.created_at, r.finalized_at, " +
+            "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.created_at, r.finalized_at, r.label_run_id, " +
             "       l.name AS location_name, " +
-            "       COALESCE((SELECT SUM(rl.quantity) FROM receipt_lines rl WHERE rl.receipt_id = r.id), 0) AS line_units, " +
+            // An open factory session has no lines yet: its units are its live scans.
+            "       CASE WHEN r.mode = 'factory' AND r.status = 'open' " +
+            "            THEN (SELECT count(*) FROM receipt_factory_scans s WHERE s.receipt_id = r.id AND s.undone_at IS NULL) " +
+            "            ELSE COALESCE((SELECT SUM(rl.quantity) FROM receipt_lines rl WHERE rl.receipt_id = r.id), 0) END AS line_units, " +
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
             "FROM receipts r " +
             "LEFT JOIN locations l ON l.id = r.location_id " +
@@ -333,6 +387,18 @@ public class ReceivingService {
 
     private void requireOpen(UUID sessionId, UUID tenantId) {
         requireOpen(sessionId, tenantId, false);
+    }
+
+    /** Open, and not a factory session — factory receiving takes scans, never lines. */
+    private void requireOpenWithLines(UUID sessionId, UUID tenantId) {
+        requireOpen(sessionId, tenantId, false);
+        if (MODE_FACTORY.equals(modeOf(sessionId, tenantId))) throw LabelCodeException.factorySessionNoLines();
+    }
+
+    private String modeOf(UUID sessionId, UUID tenantId) {
+        List<String> mode = jdbc.queryForList(
+            "SELECT mode FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'", String.class, sessionId, tenantId);
+        return mode.isEmpty() ? null : mode.get(0);
     }
 
     private void requireOpen(UUID sessionId, UUID tenantId, boolean forUpdate) {

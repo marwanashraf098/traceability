@@ -115,6 +115,9 @@ class RlsCoverageTest {
             // in WarehousePlacesTest.x1.
             "/api/v1/places",
             "/api/v1/places/{id}",
+            "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
+            "/api/v1/label-runs/{id}/report/csv",
+            "/api/v1/label-runs/{id}/report/pdf",
             "/api/v1/tag-stock",
             "/api/v1/tag-stock/sessions/{id}",
             // Flexible labeling slice 7 — stockTakeUntaggedCounts_crossTenantIsolated_withSameTenantPositiveControl below.
@@ -960,6 +963,95 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
+    }
+
+    @Test
+    void factoryReceiving_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 6b: a factory session's progress and its "piece without a label" PDF are the caller's own.
+        UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov FR Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov FR Other', 'cov-fr-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        UUID[] mine = factorySession(tenantId, ownerUserId, "Cov FR Mine Factory", "P990201", "cov-fr-a");
+        UUID[] theirs = factorySession(otherTenant, otherUser, "Cov FR Their Factory", "P990202", "cov-fr-b");
+        try {
+            ResponseEntity<String> session = get("/api/v1/receiving/sessions/" + mine[0], String.class);
+            assertThat(session.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(session.getBody()).as("same-tenant positive control").contains("Cov FR Mine Factory");
+            ResponseEntity<byte[]> pdf = get("/api/v1/receiving/sessions/" + mine[0] + "/factory/labels/" + mine[1] + "/pdf", byte[].class);
+            assertThat(pdf.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+            ResponseEntity<String> other = get("/api/v1/receiving/sessions/" + theirs[0], String.class);
+            assertThat(other.getStatusCode()).as("another tenant's session").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(String.valueOf(other.getBody())).doesNotContain("Cov FR Their Factory");
+            ResponseEntity<String> otherPdf = get("/api/v1/receiving/sessions/" + theirs[0] + "/factory/labels/" + theirs[1] + "/pdf", String.class);
+            assertThat(otherPdf.getStatusCode()).as("another tenant's label").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(String.valueOf(otherPdf.getBody())).doesNotContain("P990202");
+            ResponseEntity<String> mixed = get("/api/v1/receiving/sessions/" + mine[0] + "/factory/labels/" + theirs[1] + "/pdf", String.class);
+            assertThat(mixed.getStatusCode()).as("another tenant's label through my session").isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM receipts           WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_codes        WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_code_batches WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_run_lines    WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_runs         WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void labelRunReport_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Flexible labeling slice 6c: a run's shortfall report (CSV + PDF) is the caller's own run only.
+        UUID otherTenant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, flexible_labeling_enabled) VALUES (?, 'Cov RR Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Cov RR Other', 'cov-rr-other@test.com', 'hash', 'owner')", otherUser, otherTenant);
+        jdbc.update("UPDATE tenants SET flexible_labeling_enabled = true WHERE id = ?", tenantId);
+        UUID[] mine = factorySession(tenantId, ownerUserId, "Cov RR Mine Factory", "P990301", "cov-rr-a");
+        UUID[] theirs = factorySession(otherTenant, otherUser, "Cov RR Their Factory", "P990302", "cov-rr-b");
+        UUID myRun = jdbc.queryForObject("SELECT label_run_id FROM receipts WHERE id = ?", UUID.class, mine[0]);
+        UUID theirRun = jdbc.queryForObject("SELECT label_run_id FROM receipts WHERE id = ?", UUID.class, theirs[0]);
+        try {
+            ResponseEntity<String> csv = get("/api/v1/label-runs/" + myRun + "/report/csv", String.class);
+            assertThat(csv.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(csv.getBody()).as("same-tenant positive control").contains("Cov RR Mine Factory");
+            ResponseEntity<byte[]> pdf = get("/api/v1/label-runs/" + myRun + "/report/pdf", byte[].class);
+            assertThat(pdf.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+            ResponseEntity<String> otherCsv = get("/api/v1/label-runs/" + theirRun + "/report/csv", String.class);
+            assertThat(otherCsv.getStatusCode()).as("another tenant's run").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(String.valueOf(otherCsv.getBody())).doesNotContain("Cov RR Their Factory");
+            ResponseEntity<String> otherPdf = get("/api/v1/label-runs/" + theirRun + "/report/pdf", String.class);
+            assertThat(otherPdf.getStatusCode()).as("another tenant's run").isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM receipts           WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_codes        WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_code_batches WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_run_lines    WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM label_runs         WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM users   WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    /** An open factory receiving session of a one-line run with one issued factory code: {session id, code id}. */
+    private UUID[] factorySession(UUID tenant, UUID user, String factory, String code, String key) {
+        // The other tenant's line borrows this tenant's variant id only to satisfy the FK — its rows are never read.
+        UUID run = jdbc.queryForObject("INSERT INTO label_runs (tenant_id, factory_name, created_by) VALUES (?, ?, ?) RETURNING id",
+            UUID.class, tenant, factory, user);
+        UUID line = jdbc.queryForObject("INSERT INTO label_run_lines (tenant_id, run_id, line_no, variant_id, expected_qty) " +
+            "VALUES (?, ?, 1, ?, 1) RETURNING id", UUID.class, tenant, run, variantId);
+        UUID batch = jdbc.queryForObject("INSERT INTO label_code_batches (tenant_id, kind, count, idempotency_key, created_by, run_id) " +
+            "VALUES (?, 'factory', 1, ?, ?, ?) RETURNING id", UUID.class, tenant, key, user, run);
+        UUID codeId = jdbc.queryForObject("INSERT INTO label_codes (tenant_id, code, kind, batch_id, issued_by, variant_id, run_line_id) " +
+            "VALUES (?, ?, 'factory', ?, ?, ?, ?) RETURNING id", UUID.class, tenant, code, batch, user, variantId, line);
+        UUID session = jdbc.queryForObject("INSERT INTO receipts (tenant_id, reference, status, mode, label_run_id) " +
+            "VALUES (?, 'COV-FR', 'open', 'factory', ?) RETURNING id", UUID.class, tenant, run);
+        return new UUID[] { session, codeId };
     }
 
     @Test

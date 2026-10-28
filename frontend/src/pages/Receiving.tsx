@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, Tabs, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
 import { ImportFromExcelButton, ImportPanel } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
 import FactoryRuns from './receiving/FactoryRuns'
-import { ArrowLeft, Barcode, PackageCheck } from 'lucide-react'
+import { FactoryLines } from './receiving/FactoryReceivingScan'
+import { ArrowLeft, Barcode, Factory, PackageCheck } from 'lucide-react'
 
 import { getAccessToken } from '../auth'
-import { authFetch, getRoleFromToken, getLabelSettings } from '../api'
+import { authFetch, getRoleFromToken, getLabelSettings, getLabelRuns } from '../api'
+import type { FactoryProgress, LabelRunSummary } from '../api'
 
 function authHeaders() {
   const t = getAccessToken()
@@ -37,8 +40,11 @@ export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json()
 }
 
-/** print_stick = today's flow (a label per piece); count_only = flexible labeling, pieces go in untagged. */
-type ReceivingMode = 'print_stick' | 'count_only'
+/**
+ * print_stick = today's flow (a label per piece); count_only = flexible labeling, pieces go in untagged;
+ * factory = flexible labeling slice 6b, the pieces arrived wearing a factory run's labels and are scanned in.
+ */
+type ReceivingMode = 'print_stick' | 'count_only' | 'factory'
 interface Session {
   id: string; status: string; reference: string | null; supplier_name: string | null
   location_name: string | null; created_at: string; finalized_at: string | null
@@ -50,7 +56,7 @@ export interface Line {
 }
 /** Count-only finished sessions: units of this session's Shopify +N by outcome. */
 interface ShopifySync { applied: number; pending: number; failed: number; skipped: number }
-interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync }
+interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync; factory?: FactoryProgress }
 interface Location { id: string; name: string; is_fulfillment?: boolean }
 
 // open → warning, finalized → success, unknown → neutral
@@ -72,7 +78,14 @@ export default function Receiving() {
   // Flexible labeling slice 6a: "Factory runs" lives here as a tab (no sidebar entry), only with the switch on.
   const [tab, setTab] = useState<'sessions' | 'runs'>('sessions')
 
-  useEffect(() => { loadSessions(); loadLocations() }, [])
+  // The factory scan loop (full-screen route) comes back here with ?session=<id> — reopen that session.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    loadSessions(); loadLocations()
+    const back = searchParams.get('session')
+    if (back) { openSession(back); setSearchParams({}, { replace: true }) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function loadSessions() {
     try { setSessions(await api<Session[]>('/receiving/sessions')) }
@@ -170,6 +183,9 @@ export default function Receiving() {
                     {s.mode === 'count_only' && (
                       <span className="ms-2 font-sans"><Badge tone="neutral" label={t('receiving.countOnly.badge')} /></span>
                     )}
+                    {s.mode === 'factory' && (
+                      <span className="ms-2 font-sans"><Badge tone="neutral" label={t('receiving.factory.badge')} /></span>
+                    )}
                   </td>
                   <td className="tbl-cell text-muted">{s.location_name ?? '—'}</td>
                   <td className="tbl-cell text-primary">{s.line_units}</td>
@@ -192,7 +208,8 @@ export default function Receiving() {
 
 // ── Create Session Form ───────────────────────────────────────────────────────
 
-const MODES: ReceivingMode[] = ['print_stick', 'count_only']
+const MODES: ReceivingMode[] = ['print_stick', 'count_only', 'factory']
+const MODE_ICON = { print_stick: Barcode, count_only: PackageCheck, factory: Factory } as const
 
 /**
  * Switch ON: two steps — "How do you want to receive this delivery?" (two cards; a click picks the mode and goes
@@ -220,10 +237,25 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
       .catch(() => { /* print & stick stays pre-selected */ })
     return () => { cancelled = true }
   }, [flexibleLabeling])
-  // Count only receives into the main warehouse (packing labels untagged pieces there) — server-enforced too.
+  // Count only and factory receive into the main warehouse only — server-enforced too.
   const mainWarehouse = locations.find(l => l.is_fulfillment)
   const countOnly = flexibleLabeling && mode === 'count_only'
-  const effectiveLocationId = countOnly ? (mainWarehouse?.id ?? '') : locationId
+  const factory = flexibleLabeling && mode === 'factory'
+  const mainOnly = countOnly || factory
+  const effectiveLocationId = mainOnly ? (mainWarehouse?.id ?? '') : locationId
+  // Factory: pick one of the OPEN factory runs (slice 6b).
+  const [runs, setRuns] = useState<LabelRunSummary[] | null>(null)
+  const [runId, setRunId] = useState<string>('')
+  useEffect(() => {
+    if (!factory || runs !== null) return
+    getLabelRuns()
+      .then(rs => {
+        const open = rs.filter(r => r.status === 'open')
+        setRuns(open)
+        if (open.length === 1) setRunId(open[0].id)
+      })
+      .catch(() => setRuns([]))
+  }, [factory, runs])
   const [reference, setReference]   = useState('')
   const [supplier, setSupplier]     = useState('')
   const [note, setNote]             = useState('')
@@ -240,6 +272,7 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
           locationId: effectiveLocationId || null, reference: reference || null, supplierName: supplier || null, note: note || null,
           // Sent only when the chooser is shown — every other tenant's request is exactly today's.
           ...(flexibleLabeling ? { mode } : {}),
+          ...(factory ? { labelRunId: runId } : {}),
         }),
       })
       onCreated(res.sessionId)
@@ -254,9 +287,9 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
           ← {t('receiving.back')}
         </button>
         <h1 className="text-h1 text-primary">{t('receiving.mode.title')}</h1>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {MODES.map(m => {
-            const Icon = m === 'print_stick' ? Barcode : PackageCheck
+            const Icon = MODE_ICON[m]
             return (
               <button
                 key={m}
@@ -308,12 +341,14 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
         )}
         <div className="space-y-1.5">
           <label className="text-small text-muted">{t('receiving.location')}</label>
-          {countOnly ? (
+          {mainOnly ? (
             <>
               <p className="input w-full bg-elevated text-primary" data-testid="count-only-location">
                 {mainWarehouse?.name ?? '—'}
               </p>
-              <p className="text-caption text-muted">{t('receiving.mode.mainWarehouseOnly')}</p>
+              <p className="text-caption text-muted">
+                {t(factory ? 'receiving.factory.mainWarehouseOnly' : 'receiving.mode.mainWarehouseOnly')}
+              </p>
             </>
           ) : locations.length > 0 ? (
             <select value={locationId} onChange={e => setLocationId(e.target.value)} className="input w-full">
@@ -324,11 +359,14 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
               placeholder="Location UUID" />
           )}
         </div>
+        {factory && <RunPicker runs={runs} runId={runId} onChange={setRunId} />}
         <FormField label={t('receiving.reference')} value={reference} onChange={setReference} placeholder="PO-123" />
-        <FormField label={t('receiving.supplier')}  value={supplier}  onChange={setSupplier}  placeholder="Supplier name" />
+        {!factory && (
+          <FormField label={t('receiving.supplier')}  value={supplier}  onChange={setSupplier}  placeholder="Supplier name" />
+        )}
         <FormField label={t('receiving.note')}      value={note}      onChange={setNote}      placeholder="Optional note" />
         <div className="flex gap-3 pt-1">
-          <Button type="submit" loading={saving} disabled={countOnly && !mainWarehouse}>
+          <Button type="submit" loading={saving} disabled={(mainOnly && !mainWarehouse) || (factory && !runId)}>
             {t('receiving.create')}
           </Button>
           <Button type="button" variant="secondary" onClick={onCancel}>
@@ -356,11 +394,14 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
   const [deleteError, setDeleteError]   = useState<string | null>(null)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [importOpen, setImportOpen]     = useState(false)
+  const navigate = useNavigate()
   const isOpen = session.status === 'open'
   const countOnly = session.mode === 'count_only'
+  const factory = session.mode === 'factory'
   const role = getRoleFromToken()
   const canDelete = isOpen && (role === 'owner' || role === 'manager')
-  const totalUnits = session.lines.reduce((s, l) => s + l.quantity, 0)
+  // A factory session has no lines until it's finished: its units are its scanned pieces.
+  const totalUnits = factory && isOpen ? (session.factory?.staged ?? 0) : session.lines.reduce((s, l) => s + l.quantity, 0)
 
   async function deleteSession() {
     setDeleting(true); setDeleteError(null)
@@ -409,9 +450,12 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
     setPrintError(null)
     setPrintingVariant(variantId)
     try {
+      // A factory receipt's pieces already wear their labels: its prints are logged reprints of the same codes.
       const res = await authFetch(
-        `/receiving/sessions/${session.id}/variants/${variantId}/labels`,
-        { headers: authHeaders() }
+        `/receiving/sessions/${session.id}/variants/${variantId}/${factory ? 'reprint' : 'labels'}`,
+        factory
+          ? { method: 'POST', headers: authHeaders(), body: JSON.stringify({ note: 'factory reprint' }) }
+          : { headers: authHeaders() }
       )
       if (!res.ok) throw new Error(res.statusText)
       window.open(URL.createObjectURL(await res.blob()), '_blank')
@@ -435,12 +479,13 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
             {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
             {flexibleLabeling && (
               <span data-testid="receiving-session-mode">
-                <Badge tone="neutral" label={t(countOnly ? 'receiving.countOnly.badge' : 'receiving.mode.printStickBadge')} />
+                <Badge tone="neutral" label={t(countOnly ? 'receiving.countOnly.badge'
+                  : factory ? 'receiving.factory.badge' : 'receiving.mode.printStickBadge')} />
               </span>
             )}
           </p>
         </div>
-        {session.status === 'finalized' && !countOnly && (
+        {session.status === 'finalized' && !countOnly && !factory && (
           <div className="flex gap-2">
             <Button size="sm" onClick={printLabels}>
               {t('receiving.printLabels')} ({session.piece_count})
@@ -450,10 +495,16 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
             </Button>
           </div>
         )}
+        {/* Factory: "Print session labels" reprints the codes the pieces already wear (logged) — never new codes. */}
+        {session.status === 'finalized' && factory && (
+          <Button size="sm" variant="secondary" onClick={reprintLabels}>
+            {t('receiving.factory.printSessionLabels', { count: session.piece_count })}
+          </Button>
+        )}
         {(isOpen || canDelete) && (
           <div className="flex flex-wrap gap-2">
-            {/* Import a Shopify inventory export into this session (both modes; the server gates count only). */}
-            {isOpen && <ImportFromExcelButton onClick={() => setImportOpen(true)} />}
+            {/* Import a Shopify inventory export into this session (print & stick and count only; factory is scanned). */}
+            {isOpen && !factory && <ImportFromExcelButton onClick={() => setImportOpen(true)} />}
             {canDelete && (
               <Button size="sm" variant="destructive" onClick={() => setShowDeleteModal(true)}>
                 {t('receiving.deleteSession')}
@@ -473,7 +524,14 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
           onApplied={() => { setImportOpen(false); onRefresh() }} />
       )}
 
-      {isOpen && (
+      {/* Factory, open: the run's progress; scanning happens on the full-screen loop. */}
+      {isOpen && factory && session.factory && (
+        <FactoryOpenPanel progress={session.factory}
+          onScan={() => navigate(`/receiving/${session.id}/scan`)}
+          onFinish={() => setShowFinalizeModal(true)} finishing={finalizing} />
+      )}
+
+      {isOpen && !factory && (
         <ProductSelectionGrid
           sessionId={session.id}
           lines={session.lines}
@@ -578,6 +636,8 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
             <p className="text-body text-muted">
               {countOnly
                 ? t('receiving.countOnly.confirmBody', { count: totalUnits })
+                : factory
+                ? t('receiving.factory.confirmBody', { count: totalUnits })
                 : t('receiving.finalizeModalBody', {
                     count: session.lines.reduce((s, l) => s + l.quantity, 0),
                   })}
@@ -592,7 +652,7 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
                 {t('common.cancel')}
               </Button>
               <Button className="flex-1" loading={finalizing} onClick={finalize}>
-                {countOnly ? t('receiving.countOnly.finish', { count: totalUnits }) : t('receiving.finalizeModalConfirm')}
+                {countOnly || factory ? t('receiving.countOnly.finish', { count: totalUnits }) : t('receiving.finalizeModalConfirm')}
               </Button>
             </div>
           </div>
@@ -607,7 +667,9 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
           <div className="space-y-4">
             {deleteError && <Alert tone="critical" title={deleteError} />}
             <p className="text-body text-muted">
-              {session.lines.length > 0
+              {factory && totalUnits > 0
+                ? t('receiving.factory.deleteBodyScans', { count: totalUnits })
+                : session.lines.length > 0
                 ? t('receiving.deleteModalBodyWithLines', { lines: session.lines.length, units: totalUnits })
                 : t('receiving.deleteModalBodyEmpty')}
             </p>
@@ -626,6 +688,66 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
             </div>
           </div>
         </Modal>
+      )}
+    </div>
+  )
+}
+
+// ── Factory: open session ─────────────────────────────────────────────────────
+
+/** The run being received, its per-product progress, and the two actions: scan (full-screen loop) and finish. */
+function FactoryOpenPanel({ progress, onScan, onFinish, finishing }: {
+  progress: FactoryProgress; onScan: () => void; onFinish: () => void; finishing: boolean
+}) {
+  const { t } = useTranslation()
+  const run = progress.reference ? `${progress.factoryName} · ${progress.reference}` : progress.factoryName
+  return (
+    <div className="card p-5 space-y-4" data-testid="factory-session">
+      <div>
+        <p className="text-caption text-muted">{t('receiving.factory.runLabel')}</p>
+        <h2 className="text-h2 text-primary"><bdi>{run}</bdi></h2>
+        <p className="text-small text-muted mt-0.5">{t('receiving.factory.openBody')}</p>
+      </div>
+      <FactoryLines progress={progress} />
+      <div className="flex flex-wrap gap-2 border-t border-line pt-4">
+        <Button onClick={onScan}>{t('receiving.factory.scan')}</Button>
+        <Button variant="secondary" loading={finishing} disabled={progress.staged === 0} onClick={onFinish}>
+          {t('receiving.countOnly.finish', { count: progress.staged })}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Step 2 of a factory session: the OPEN run it receives (factory · reference · received / expected). */
+function RunPicker({ runs, runId, onChange }: {
+  runs: LabelRunSummary[] | null; runId: string; onChange: (id: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1.5" data-testid="factory-run-picker">
+      <p className="text-small text-muted">{t('receiving.factory.pickRun')}</p>
+      {runs === null ? (
+        <p className="text-small text-muted">{t('common.loading')}</p>
+      ) : runs.length === 0 ? (
+        <Alert tone="info" title={t('receiving.factory.noOpenRuns')} />
+      ) : (
+        <div className="space-y-2 max-h-72 overflow-y-auto">
+          {runs.map(r => (
+            <label key={r.id} data-testid={`factory-run-option-${r.id}`}
+              className={`flex items-center gap-3 rounded-xl border p-3 cursor-pointer ${
+                runId === r.id ? 'border-trace-blue bg-trace-blue/[0.06]' : 'border-line hover:bg-elevated'}`}>
+              <input type="radio" name="factory-run" className="accent-trace-blue" checked={runId === r.id}
+                onChange={() => onChange(r.id)} />
+              <span className="flex-1 min-w-0">
+                <span className="block text-body text-primary truncate">
+                  <bdi>{r.factoryName}</bdi>{r.reference && <> · <bdi>{r.reference}</bdi></>}
+                </span>
+              </span>
+              <span className="font-mono text-small text-muted tabular-nums" dir="ltr">{r.received} / {r.expected}</span>
+            </label>
+          ))}
+        </div>
       )}
     </div>
   )

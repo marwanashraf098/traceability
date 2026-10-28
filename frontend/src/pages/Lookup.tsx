@@ -41,6 +41,7 @@ function TimelinePhrase({ event }: { event: TimelineEvent }) {
         location:     event.locationName ?? '',
         toStatus:     event.toStatus     ?? '',
         code:         event.labelCode    ?? '',
+        run:          event.factoryRun   ?? '',
         defaultValue: event.phraseKey.replace(/_/g, ' '),
       })}
     </span>

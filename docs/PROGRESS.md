@@ -246,8 +246,39 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Flexible labeling — slices 6b + 6c: factory receiving, close run + shortfall report (2026-10-28, branch
+`feat/flexible-labeling-s6bc` off origin/main b218cca; NOT merged, NOT deployed). Migration V192 (built as V188; main took V188–V191).** Behind
+flexible_labeling_enabled; DS v1.0, EN/LTR + AR/RTL.
+- **6b (b39560e) — V192:** `receipts.mode` adds 'factory'; `receipts.label_run_id` (composite FK, CHECK factory ⇔ run);
+  `receipt_factory_scans` staging (live-scan partial UNIQUE on label_code_id WHERE undone_at IS NULL; undo columns;
+  RLS NULLIF + FORCE; app_user may UPDATE only undone_at / undone_by, no DELETE; ON DELETE CASCADE from the receipt).
+  Third step-1 card "Factory-labeled" → step 2 picks an OPEN run, location locked to the main warehouse (not a Settings
+  default). Full-screen scan loop `/receiving/:id/scan` (shared useScanner + phone target, untouched): per-line progress,
+  last scan, Undo last scan, rejections EN/AR (not a factory label / already received / other run / already scanned /
+  scanned in another session / piece already in stock …). "Piece without a label" issues ONE factory code for a run
+  variant (overage once received + live staged ≥ expected). Finalize (`FactoryReceivingService`, lock order run → receipt
+  → codes, re-checks every staged code) creates pieces with short_code = the code through
+  `InventoryLedger.receiveFactoryLabeled` (received events carry label_run_id + label_code_id; codes issued → bound,
+  count must match) + the existing Shopify +N. Lookup: "Received from factory run «factory · reference»". Delete
+  refuses while live scans exist ("Undo the scans first"; deleteSession now takes FOR UPDATE). Factory receipts: new
+  session/variant label PDFs refused; "Print session labels" = reprint of the same codes (`label_reprinted` per piece).
+- **6c (afc5495):** `POST /label-runs/{id}/close` — a reason for every line with a gap: Short-shipped / Lost void that
+  line's leftover issued codes (all-or-nothing, reasons factory_run_short_shipped / factory_run_lost); Still coming keeps
+  the codes and the run open; the run closes only when no line is Still coming; a later close may change Still coming;
+  no reopen; refused while an open factory receipt of the run has live staged scans ("Finalize or undo receiving
+  session … first"). Shortfall report CSV (BOM, formula-neutralised) + A4 PDF (PDFBox, Noto + Noto Arabic), ?lang.
+  Runs list: Open / Still coming / Closed + received / expected.
+- **Tests:** FactoryReceivingTest 14, LabelRunCloseTest 9 (revert-checked); vitest flexibleS6b 6, flexibleS6c 6.
+  Registries: MigrationSmokeTest 187, NotTracedBackfillTest 132, RlsCoverageTest +3 COVERED (+2 tests),
+  PortalOrderLeakTest +7 SKIP. Full suite: backend 3432, only ExchangeBackfillTest red (pre-existing); vitest 1210,
+  analyticsSummary r2 flaked under load (passes alone).
+- **Fix on approval (2026-10-28):** when the run becomes fully CLOSED (no line Still coming), every code of the run
+  still issued — any line, including a complete line's leftovers replaced by other codes, and unscanned overage codes —
+  is voided (reason factory_run_closed) in the same transaction as the close. LabelRunCloseTest c7 (revert-checked).
+  deleteSession's FOR UPDATE for all modes: approved.
+
 **Flexible labeling — slice 6a: factory runs + printing (2026-10-27, branch `feat/flexible-labeling-s6a` off origin/main
-5d9c521; NOT merged, NOT deployed). Migration V187 (was V186; main took V186 for the onboarding gate).** Step 0 answers (Marawan 2026-10-27): runs receive into the main
+5d9c521; merged to main b218cca 2026-10-28, pushed, NOT deployed). Migration V187 (was V186; main took V186 for the onboarding gate).** Step 0 answers (Marawan 2026-10-27): runs receive into the main
 warehouse only; 20,000 pieces per run, PDFs in parts of ≤ 2,000 that never split a product group unless it alone is
 larger; overage is a flag, never a block; no 'factory' default in Settings › Labels; factory receipts may reprint
 session labels as label_reprinted (6b); received events carry label_run_id + label_code_id (6b); closed runs are not

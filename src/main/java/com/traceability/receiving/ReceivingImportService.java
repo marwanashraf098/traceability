@@ -218,6 +218,10 @@ public class ReceivingImportService {
         if (ReceivingService.MODE_COUNT_ONLY.equals(rows.get(0).get("mode")) && !FlexibleLabeling.enabled(jdbc, tenantId)) {
             throw UntaggedException.countOnlyUnavailable();
         }
+        // Factory receiving (slice 6b) takes scans, never lines.
+        if (ReceivingService.MODE_FACTORY.equals(rows.get(0).get("mode"))) {
+            throw com.traceability.labels.LabelCodeException.factorySessionNoLines();
+        }
     }
 
     // ── catalog + matching ───────────────────────────────────────────────────

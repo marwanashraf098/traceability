@@ -20,7 +20,124 @@ public class LabelCodeException extends RuntimeException {
         // slice 4 — packing labels
         INVALID_PRINT_REQUEST, ORDER_NOT_PACKABLE,
         // slice 6 — factory runs
-        FACTORY_LABEL_NOT_RECEIVED, INVALID_RUN, RUN_TOO_LARGE, RUN_NOT_FOUND, RUN_CLOSED, INVALID_PART
+        FACTORY_LABEL_NOT_RECEIVED, INVALID_RUN, RUN_TOO_LARGE, RUN_NOT_FOUND, RUN_CLOSED, INVALID_PART,
+        // slice 6b — factory receiving (scan rejections, then session / finalize refusals)
+        PIECE_ALREADY_IN_STOCK, NOT_FACTORY_LABEL, ALREADY_RECEIVED, OTHER_RUN, ALREADY_SCANNED, SCANNED_IN_OTHER_SESSION,
+        NOT_FACTORY_SESSION, FACTORY_SESSION_NO_LINES, NO_FACTORY_SCANS, NOTHING_TO_UNDO, UNDO_SCANS_FIRST,
+        FACTORY_CODES_CHANGED, FACTORY_REPRINT_ONLY, FACTORY_MAIN_WAREHOUSE_ONLY,
+        // slice 6c — closing a run
+        INVALID_CLOSE, RUN_HAS_LIVE_SCANS
+    }
+
+    // ── slice 6b: factory receiving ─────────────────────────────────────────
+
+    /** A piece's own short code (an old Traced label) — not a label code at all. */
+    public static LabelCodeException pieceAlreadyInStock() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.PIECE_ALREADY_IN_STOCK,
+            "This piece is already in stock — it isn't a new factory piece",
+            "هذه القطعة موجودة في المخزون بالفعل — ليست قطعة جديدة من المصنع");
+    }
+
+    /** A pack / tag / replacement label scanned in factory receiving. */
+    public static LabelCodeException notFactoryLabel(String kind) {
+        String en = switch (kind) {
+            case "pack" -> "This is a packing label, not a factory label";
+            case "replacement" -> "This is a replacement label, not a factory label";
+            default -> "This is a Tag stock label, not a factory label";
+        };
+        String ar = switch (kind) {
+            case "pack" -> "هذا ملصق تغليف، وليس ملصق مصنع";
+            case "replacement" -> "هذا ملصق بديل، وليس ملصق مصنع";
+            default -> "هذا ملصق من لصق المخزون، وليس ملصق مصنع";
+        };
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.NOT_FACTORY_LABEL, en, ar);
+    }
+
+    public static LabelCodeException alreadyReceived() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.ALREADY_RECEIVED,
+            "Already received — this piece is in stock", "تم استلامها بالفعل — هذه القطعة في المخزون");
+    }
+
+    /** {@code run}: "factory · reference" of the run the label belongs to. */
+    public static LabelCodeException otherRun(String run) {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.OTHER_RUN,
+            "This label belongs to factory run «" + run + "»", "هذا الملصق يخص دفعة المصنع «" + run + "»");
+    }
+
+    public static LabelCodeException alreadyScanned() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.ALREADY_SCANNED,
+            "Already scanned in this session", "تم مسحها بالفعل في هذه الجلسة");
+    }
+
+    /** {@code session}: the other session's reference, or its start date. */
+    public static LabelCodeException scannedInOtherSession(String session) {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.SCANNED_IN_OTHER_SESSION,
+            "Already scanned in another receiving session (" + session + ")",
+            "تم مسحها بالفعل في جلسة استلام أخرى (" + session + ")");
+    }
+
+    public static LabelCodeException notFactorySession() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.NOT_FACTORY_SESSION,
+            "This isn't a factory-labeled receiving session", "هذه ليست جلسة استلام بملصقات المصنع");
+    }
+
+    public static LabelCodeException factorySessionNoLines() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.FACTORY_SESSION_NO_LINES,
+            "Factory-labeled receiving takes scans — scan each piece instead of adding products",
+            "الاستلام بملصقات المصنع يتم بالمسح — امسح كل قطعة بدلًا من إضافة منتجات");
+    }
+
+    public static LabelCodeException noFactoryScans() {
+        return new LabelCodeException(HttpStatus.UNPROCESSABLE_ENTITY, Code.NO_FACTORY_SCANS,
+            "Scan at least one piece before finishing", "امسح قطعة واحدة على الأقل قبل الإنهاء");
+    }
+
+    public static LabelCodeException nothingToUndo() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.NOTHING_TO_UNDO,
+            "Nothing to undo — no piece is scanned in this session", "لا شيء للتراجع عنه — لم تُمسح أي قطعة في هذه الجلسة");
+    }
+
+    public static LabelCodeException undoScansFirst(int scans) {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.UNDO_SCANS_FIRST,
+            "Undo the scans first — " + scans + " pieces are scanned in this session",
+            "تراجع عن المسح أولًا — توجد " + scans + " قطعة ممسوحة في هذه الجلسة");
+    }
+
+    /** Finalize found scanned codes that are no longer issued (voided or received since) — nothing was received. */
+    public static LabelCodeException factoryCodesChanged(List<Map<String, Object>> codes) {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.FACTORY_CODES_CHANGED,
+            "Some scanned labels changed since they were scanned (voided or received elsewhere) — nothing was received. "
+                + "Undo those scans, then finish again",
+            "تغيّرت بعض الملصقات الممسوحة منذ مسحها (أُلغيت أو استُلمت في مكان آخر) — لم يُستلم شيء. "
+                + "تراجع عن مسحها ثم أنهِ مرة أخرى",
+            codes);
+    }
+
+    /** A factory receipt's pieces already wear their labels: only the logged reprint prints them. */
+    public static LabelCodeException factoryReprintOnly() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.FACTORY_REPRINT_ONLY,
+            "These pieces already carry their factory labels — use Print session labels to reprint them",
+            "هذه القطع تحمل ملصقات المصنع بالفعل — استخدم طباعة ملصقات الجلسة لإعادة طباعتها");
+    }
+
+    public static LabelCodeException factoryMainWarehouseOnly() {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.FACTORY_MAIN_WAREHOUSE_ONLY,
+            "Factory-labeled pieces are received into the main warehouse only",
+            "تُستلم القطع بملصقات المصنع في المخزن الرئيسي فقط");
+    }
+
+    // ── slice 6c: closing a run ─────────────────────────────────────────────
+
+    static LabelCodeException invalidClose(String en, String ar, List<Map<String, Object>> details) {
+        return new LabelCodeException(HttpStatus.BAD_REQUEST, Code.INVALID_CLOSE, en, ar, details);
+    }
+
+    /** {@code sessions}: each open receiving session of the run that still holds scans. */
+    static LabelCodeException runHasLiveScans(String sessionNames, List<Map<String, Object>> sessions) {
+        return new LabelCodeException(HttpStatus.CONFLICT, Code.RUN_HAS_LIVE_SCANS,
+            "Finalize or undo receiving session " + sessionNames + " first",
+            "أنهِ جلسة الاستلام " + sessionNames + " أو تراجع عن مسحها أولًا",
+            sessions);
     }
 
     static LabelCodeException invalidPrintRequest() {
@@ -43,12 +160,12 @@ public class LabelCodeException extends RuntimeException {
             "يمكن أن تضم دفعة المصنع " + max + " قطعة كحد أقصى — قسّمها إلى دفعتين");
     }
 
-    static LabelCodeException runNotFound() {
+    public static LabelCodeException runNotFound() {
         return new LabelCodeException(HttpStatus.NOT_FOUND, Code.RUN_NOT_FOUND,
             "Factory run not found", "لم يتم العثور على دفعة المصنع");
     }
 
-    static LabelCodeException runClosed() {
+    public static LabelCodeException runClosed() {
         return new LabelCodeException(HttpStatus.CONFLICT, Code.RUN_CLOSED,
             "This factory run is closed", "دفعة المصنع هذه مغلقة");
     }
