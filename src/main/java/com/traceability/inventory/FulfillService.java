@@ -1111,6 +1111,12 @@ public class FulfillService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order is already in terminal status: " + status);
         }
+        // C2 (approved 2026-10-28): a Lookup exchange's replacement order is cancelled only through that exchange's
+        // Cancel exchange — cancelling it here would free the piece but leave the request open.
+        String lookupExchange = com.traceability.portal.LookupExchangeService.openReferenceFor(jdbc, tenantId, orderId);
+        if (lookupExchange != null) {
+            throw com.traceability.portal.LookupExchangeException.cancelOrderRefused(lookupExchange);
+        }
         if (isPhysicallyWithCourier(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order has been handed to courier — contact Bosta to arrange cancellation. " +

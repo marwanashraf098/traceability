@@ -77,6 +77,15 @@ public class LookupExchangeException extends ApiException {
             HttpStatus.CONFLICT);
     }
 
+    public static LookupExchangeException cancelOrderRefused(String reference) {
+        return new LookupExchangeException("LOOKUP_EXCHANGE_ORDER",
+            "This is the replacement order of exchange " + reference + ". Use Cancel exchange in that return request to "
+                + "cancel it — the piece goes back to available and the request is closed.",
+            "هذا طلب البديل للاستبدال " + reference + ". استخدم إلغاء الاستبدال في طلب الإرجاع هذا لإلغائه — تعود القطعة "
+                + "متاحة ويُغلق الطلب.",
+            HttpStatus.CONFLICT);
+    }
+
     public static LookupExchangeException reservedToExchange(String reference) {
         return new LookupExchangeException("RESERVED_TO_LOOKUP_EXCHANGE",
             "This piece is reserved for exchange " + reference + ". Use Cancel exchange in that return request to free it.",

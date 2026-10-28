@@ -1665,9 +1665,19 @@ export function updateOrderCod(orderId: string, amount: number) {
 // backed by FulfillService.CancelResult). Was previously pointed at the non-existent
 // /orders/{id}/cancel — never called from any UI until now, so the wrong path went
 // unnoticed; fixed here as part of wiring up the drawer's Cancel button.
-export function cancelOrder(orderId: string) {
-  return request<{ status: string; message: string; remainingPacked: number }>(
-    `/fulfill/${orderId}/cancel`, { method: 'POST' })
+// C2: a refusal that carries {code, message_en, message_ar} (e.g. LOOKUP_EXCHANGE_ORDER — the replacement order of a
+// Lookup exchange) throws ServerMessageError so the drawer shows it; a bare 409 / other error keeps the old
+// `${status}: ${statusText}` Error.
+export async function cancelOrder(orderId: string) {
+  const res = await authFetch(`/fulfill/${orderId}/cancel`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    if (b?.code && b.message_en) throw new ServerMessageError(res.status, b.code, b.message_en, b.message_ar)
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  return res.json() as Promise<{ status: string; message: string; remainingPacked: number }>
 }
 
 // ── Variant search (Receiving's autocomplete, reused by stock-take) ────────

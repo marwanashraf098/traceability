@@ -87,6 +87,20 @@ public class LookupExchangeService {
             "  AND rr.origin = 'lookup' LIMIT 1", pieceId, tenantId).stream().findFirst().orElse(null);
     }
 
+    /**
+     * The reference of the Lookup exchange whose replacement this order is, while the replacement hasn't left and the
+     * exchange isn't cancelled — else null (FulfillService.cancelOrder's refusal; every other order: null).
+     */
+    public static String openReferenceFor(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
+        String reference = jdbc.queryForList(
+            "SELECT rr.reference FROM return_requests rr JOIN merchant_orders o ON o.id = rr.replacement_order_id " +
+            "  AND o.tenant_id = rr.tenant_id WHERE rr.replacement_order_id = ? AND rr.tenant_id = ? " +
+            "  AND rr.origin = 'lookup' AND o.status <> 'cancelled'", String.class, orderId, tenantId)
+            .stream().findFirst().orElse(null);
+        if (reference == null || replacementLeft(jdbc, tenantId, orderId)) return null;
+        return reference;
+    }
+
     /** Is this order a Lookup exchange's replacement? (FulfillService's NOT_PICKABLE refusal.) */
     public static boolean isLookupReplacementOrder(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(

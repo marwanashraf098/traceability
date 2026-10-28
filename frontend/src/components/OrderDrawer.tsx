@@ -4,7 +4,7 @@ import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
 import {
   getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder,
-  getOrderNotes, addOrderNote,
+  getOrderNotes, addOrderNote, ServerMessageError,
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
@@ -51,7 +51,7 @@ export default function OrderDrawer({
   orderId: string | null
   onClose: () => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<DrawerTab>('overview')
@@ -106,6 +106,8 @@ export default function OrderDrawer({
       // not a re-derivation — the drawer already prevents this by disabling the button while
       // physicallyWithCourier is true; this only covers a race (another actor/webhook flips
       // it between render and click).
+      // C2: a refusal with its own server copy (a Lookup exchange's order — use Cancel exchange) is shown as sent.
+      if (err instanceof ServerMessageError && err.code) { setCancelErr(err.messageFor(i18n.language)); return }
       const msg = err instanceof Error ? err.message : ''
       setCancelErr(msg.startsWith('409') ? t('orderDetail.courierGatedReason') : t('orderDetail.cancelError'))
     } finally {

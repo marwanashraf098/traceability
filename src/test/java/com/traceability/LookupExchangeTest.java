@@ -50,6 +50,7 @@ import static org.mockito.Mockito.*;
  *   le8  untracked unit coming back: listed one row per unit; Arrived → exchanged; outbound tracking still accepted
  *        after 'exchanged' (Lookup only) — a portal exchange in 'exchanged' is refused as before
  *   le9  order search leaves internal orders out; the drawer's lookupExchange block
+ *   le10 Orders' Cancel order refuses a Lookup exchange order (names the request); a normal order still cancels
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -453,6 +454,46 @@ class LookupExchangeTest {
             .containsEntry("customerName", "Mona Adel");
         assertThat(byNumber.get(0).get("deliveredAt")).isNotNull();
         assertThat(o2).isNotNull();
+    }
+
+    // ── le10 ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void le10_ordersCancelOrder_refusedOnALookupExchangeOrder_normalOrderStillCancels() {
+        T t = tenant();
+        O o = delivered(t, "#9114");
+        String spare = stock(t, t.l(), t.location());
+        UUID rr = createdId(create(t, spare, body(o, pieceId(o.piece()), null)));
+        UUID replacement = (UUID) row(rr).get("replacement_order_id");
+        String reference = jdbc.queryForObject("SELECT reference FROM return_requests WHERE id = ?", String.class, rr);
+
+        ResponseEntity<Object> refused = post(t.ownerToken(), "/api/v1/fulfill/" + replacement + "/cancel", null);
+        assertThat(refused.getStatusCode().value()).isEqualTo(409);
+        assertThat(String.valueOf(refused.getBody())).contains("LOOKUP_EXCHANGE_ORDER").contains(reference)
+            .contains("Cancel exchange").contains("إلغاء الاستبدال");
+        assertThat(pieceStatus(spare)).isEqualTo("reserved");
+        assertThat(jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ?", String.class, replacement)).isEqualTo("confirmed");
+        assertThat(row(rr)).containsEntry("status", "approved");
+
+        // control: a normal order with a reserved piece still cancels and frees it
+        UUID normal = order(t, "#9115", "new");
+        UUID item = jdbc.queryForObject("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1) RETURNING id",
+            UUID.class, t.id(), normal, t.m());
+        String held = stock(t, t.m(), t.location());
+        jdbc.update("UPDATE pieces SET status = 'reserved', current_order_id = ? WHERE id = ?", normal, pieceId(held));
+        jdbc.update("INSERT INTO allocations (tenant_id, order_item_id, piece_id, status) VALUES (?, ?, ?, 'active'::allocation_status)",
+            t.id(), item, pieceId(held));
+        ResponseEntity<Object> ok = post(t.ownerToken(), "/api/v1/fulfill/" + normal + "/cancel", null);
+        assertThat(ok.getStatusCode().value()).as(String.valueOf(ok.getBody())).isEqualTo(200);
+        assertThat(jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ?", String.class, normal)).isEqualTo("cancelled");
+        assertThat(pieceStatus(held)).isEqualTo("available");
+
+        // once the exchange is cancelled its own way, the order is cancelled and Orders answers as for any cancelled order
+        assertThat(post(t.ownerToken(), "/api/v1/return-requests/" + rr + "/cancel-exchange", null).getStatusCode().value())
+            .isEqualTo(204);
+        ResponseEntity<Object> after = post(t.ownerToken(), "/api/v1/fulfill/" + replacement + "/cancel", null);
+        assertThat(after.getStatusCode().value()).isEqualTo(409);
+        assertThat(String.valueOf(after.getBody())).doesNotContain("LOOKUP_EXCHANGE_ORDER");
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────────
