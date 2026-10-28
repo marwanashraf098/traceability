@@ -42,10 +42,13 @@ interface Props {
   /** Factory runs (flexible labeling slice 6a): the lines live in the caller's memory, not a session — each
    *  variant's new absolute quantity is handed here instead of the session line endpoints. */
   onCommit?: (variantId: string, quantity: number) => void
+  /** Factory runs: keep the button pressable with no units so the caller can say what's missing (default: disabled
+   *  while the total is 0, as receiving has it). */
+  allowEmptyFinalize?: boolean
 }
 
 export default function ProductSelectionGrid({
-  sessionId, lines, onRefresh, onFinalizeClick, finalizing, finalizeLabel, notice, onCommit,
+  sessionId, lines, onRefresh, onFinalizeClick, finalizing, finalizeLabel, notice, onCommit, allowEmptyFinalize,
 }: Props) {
   const { t } = useTranslation()
   // The grid never loads the whole catalog: `results` is the current server-side
@@ -422,7 +425,7 @@ export default function ProductSelectionGrid({
             products: productCountWithQty, variants: totals.variants, units: totals.units,
           })}
         </span>
-        <Button loading={finalizing} disabled={totals.units === 0} onClick={onFinalizeClick}>
+        <Button loading={finalizing} disabled={!allowEmptyFinalize && totals.units === 0} onClick={onFinalizeClick}>
           {finalizeLabel ? finalizeLabel(totals.units) : t('receiving.finalize')}
         </Button>
       </div>

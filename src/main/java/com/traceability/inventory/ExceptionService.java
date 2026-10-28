@@ -190,6 +190,8 @@ public class ExceptionService {
         all.addAll(detectPackCancelledAfterPrint(tenantId));
         // Onboarding gate (V186) — the main warehouse address didn't reach Shopify yet (job retries).
         all.addAll(detectWarehouseAddressPushFailed(tenantId));
+        // Shopify rejected the token refresh (stores.status = 'needs_reauth') — nothing reaches Shopify until reconnect.
+        all.addAll(detectShopifyConnectionLost(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -257,7 +259,8 @@ public class ExceptionService {
         "guided_unpack",           "ORDER_UNPACKED",
         "exchange_needs_mapping",  "EXCHANGE_MAPPED",
         "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED",
-        "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED");
+        "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED",
+        "shopify_connection_lost",       "SHOPIFY_RECONNECTED");
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -1212,6 +1215,23 @@ public class ExceptionService {
     }
 
     /**
+     * HIGH — Shopify rejected the store's token refresh (401 / invalid_grant), so ShopifyTokenProvider marked it
+     * needs_reauth: every Shopify call (stock sync, imports) stops until the merchant reconnects. Clears by itself
+     * on reconnect (status back to 'connected'). One alert per loss: the subject key carries the expiry of the last
+     * token that worked — a reconnect always writes a new one, so a later loss is a new subject and the immediate
+     * email (at most once per subject) goes out again. occurred_at ≈ that expiry, when the refresh was due.
+     */
+    private List<Map<String, Object>> detectShopifyConnectionLost(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_connection_lost' AS type, 'HIGH' AS severity, 'store' AS subject_type, " +
+            "       s.id AS store_id, s.shop_domain, s.access_token_expires_at AS occurred_at, " +
+            "       'shopify_connection_lost:' || s.id || ':' || " +
+            "       COALESCE(floor(extract(epoch FROM s.access_token_expires_at))::bigint::text, '0') AS subject_key " +
+            "FROM stores s WHERE s.tenant_id = ? AND s.status = 'needs_reauth'",
+            tid);
+    }
+
+    /**
      * LOW — Non-Bosta couriers G3: Shopify reported a generic parcel delivered that Traced never scanned out at
      * Pickups. Two cases, one alert type (subject = the shipment):
      *   inferred   — the order was packed: Traced recorded the handover as INFERRED (history source
@@ -2034,6 +2054,15 @@ public class ExceptionService {
                     " بانتظار الاسترداد منذ " + days + " يوم");
                 item.put("suggestedAction", "record_refund");
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
+            case "shopify_connection_lost" -> {
+                String shop = str(item, "shop_domain");
+                item.put("descriptionEn", "Shopify connection lost — reconnect to keep stock in sync. Shopify stopped "
+                    + "accepting Traced's access to " + shop + "; stock updates wait and are sent once you reconnect.");
+                item.put("descriptionAr", "انقطع الاتصال بشوبيفاي — أعد الربط للحفاظ على تزامن المخزون. توقف شوبيفاي عن "
+                    + "قبول وصول Traced إلى " + shop + "؛ تحديثات المخزون تنتظر وتُرسل بعد إعادة الربط.");
+                item.put("suggestedAction", "reconnect_shopify");
+                item.put("actionUrl", "/settings?tab=connections");
             }
             case "warehouse_address_push_failed" -> {
                 item.put("descriptionEn", "Traced couldn't add your warehouse address to the \"Traced Main Warehouse\" "

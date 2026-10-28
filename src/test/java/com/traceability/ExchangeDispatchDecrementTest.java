@@ -52,7 +52,8 @@ import static org.mockito.Mockito.*;
  * (type-30 forward leg through ExchangeStateInterpreter, via the real ingest pipeline).
  *
  * E1–E5 exactly once; N1–N6 never fires; R1–R2 reversal; F1 failure + re-push; G1 the
- * positive-only guard; X1 cross-tenant on a real app_user connection.
+ * positive-only guard; X1 cross-tenant on a real app_user connection; H1 held while the store needs a
+ * reconnect (no attempt, no call), sent exactly once after reconnect.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -422,6 +423,33 @@ class ExchangeDispatchDecrementTest {
         Integer visibleToB = TenantContext.runAs(tenantB, () -> new org.springframework.transaction.support.TransactionTemplate(appTxm)
             .execute(s -> appJdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE trigger_type = 'exchange_dispatch'", Integer.class)));
         assertThat(visibleToB).as("tenant B sees none of A's rows").isZero();
+    }
+
+    // ── H: held while the store needs a reconnect ──────────────────────────────
+
+    @Test
+    void h1_needsReauth_heldQueued_noCall_thenSentExactlyOnceAfterReconnect() throws Exception {
+        jdbc.update("UPDATE stores SET status = 'needs_reauth' WHERE id = ?", storeId);
+        try {
+            Fixture f = exchangeOrder("packed", fulfillmentLoc);
+            shopifyInventory.onExchangeReplacementDispatched(tenantId, f.piece()).get(5, TimeUnit.SECONDS);
+
+            assertThat(row(f.piece())).containsEntry("status", "queued").containsEntry("delta", -1);
+            assertThat(TenantContext.runAs(tenantId, () -> shopifyInventory.resumeHeldExchangeDispatches(tenantId)))
+                .as("still disconnected: nothing sent").isZero();
+            verify(shopifyGateway, never()).pushExchangeDispatch(anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), anyString());
+            assertThat((List<?>) TenantContext.runAs(tenantId, () -> exceptions.listExceptions("void_hold_sync_failed", null, 0, 50))
+                .get("items")).as("held is not a failure").isEmpty();
+
+            jdbc.update("UPDATE stores SET status = 'connected' WHERE id = ?", storeId);
+            assertThat(TenantContext.runAs(tenantId, () -> shopifyInventory.resumeHeldExchangeDispatches(tenantId))).isEqualTo(1);
+            assertThat(TenantContext.runAs(tenantId, () -> shopifyInventory.resumeHeldExchangeDispatches(tenantId)))
+                .as("a second pass sends nothing").isZero();
+            assertDecrementedOnce(f.piece());
+        } finally {
+            jdbc.update("UPDATE stores SET status = 'connected' WHERE id = ?", storeId);
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

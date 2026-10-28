@@ -59,9 +59,26 @@ public class StockTakeShopifyPushJob {
         this.itemIds       = new InventoryItemIdService(jdbc, txm, shopify);
     }
 
+    /** The held push's error text (shown with the session's sync status). */
+    static final String HELD_ERROR = "Held — Shopify needs to be reconnected; sent automatically after reconnect";
+
     @Job(name = "Stock-take Shopify push — session %0")
     public void push(UUID sessionId, UUID tenantId) {
         TenantContext.runAs(tenantId, () -> {
+            // Shopify rejected the token refresh (store needs_reauth): hold the push before it is claimed for
+            // sending — 'failed' (nothing sent) + payload.heldForReconnect, and NO rethrow, so JobRunr spends no
+            // retry. ShopifyReconnectResumeJob releases it once the store is connected again (releaseHeld).
+            if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
+                Integer held = tx.execute(s -> jdbc.update(
+                    "UPDATE stock_take_shopify_syncs SET status = 'failed', error = ?, send_started_at = NULL, " +
+                    "    payload = COALESCE(payload, '{}'::jsonb) || '{\"heldForReconnect\": true}'::jsonb " +
+                    "WHERE session_id = ? AND tenant_id = ? AND status IN ('pending', 'failed')",
+                    HELD_ERROR, sessionId, tenantId));
+                if (held != null && held > 0) {
+                    log.info("stock-take push held until Shopify is reconnected session={} tenant={}", sessionId, tenantId);
+                }
+                return;
+            }
             // ── committed claim #1: take the row for sending ─────────────────
             // Atomically 'pending' + send_started_at, only from pending / failed, and read the payload
             // this attempt will send. From here the seed treats the push as possibly sent and never
@@ -125,6 +142,21 @@ public class StockTakeShopifyPushJob {
                 throw e; // definitive — safe for JobRunr to retry.
             }
         });
+    }
+
+    /**
+     * Once the store is connected again: clears the held flag of this tenant's held pushes and returns their
+     * sessions, for the caller to enqueue {@link #push} once each. The conditional UPDATE is the one-release guard —
+     * two overlapping sweeps never release (and so never enqueue) the same push twice. The push itself then claims
+     * 'failed' → 'pending' as any retry does.
+     */
+    public List<UUID> releaseHeld(UUID tenantId) {
+        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return List.of();
+        List<UUID> released = tx.execute(s -> jdbc.queryForList(
+            "UPDATE stock_take_shopify_syncs SET payload = payload - 'heldForReconnect' " +
+            "WHERE tenant_id = ? AND status = 'failed' AND jsonb_exists(payload, 'heldForReconnect') RETURNING session_id",
+            UUID.class, tenantId));
+        return released == null ? List.of() : released;
     }
 
     // ── committed reads ───────────────────────────────────────────────────────

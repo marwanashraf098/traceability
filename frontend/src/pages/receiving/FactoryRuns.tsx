@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, Download, FileText, Printer } from 'lucide-react'
 import {
@@ -113,6 +113,22 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [factoryError, setFactoryError] = useState<string | undefined>()
+  const [linesError, setLinesError] = useState<string | undefined>()
+  // Create run sits under the product grid, far below the name field: every refusal is shown where it applies and
+  // scrolled into view (and the name field focused), never silently off-screen.
+  const [reveal, setReveal] = useState<{ target: 'factory' | 'lines' | 'error'; n: number } | null>(null)
+  const factoryRef = useRef<HTMLDivElement>(null)
+  const linesRef = useRef<HTMLDivElement>(null)
+  const errorRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!reveal) return
+    const el = { factory: factoryRef, lines: linesRef, error: errorRef }[reveal.target].current
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    if (reveal.target === 'factory') el?.querySelector('input')?.focus()
+  }, [reveal])
+
+  const totalUnits = useMemo(() => [...quantities.values()].reduce((a, b) => a + b, 0), [quantities])
 
   // The grid reads its lines in the receiving session's shape; here they live only in memory until "Create run".
   const lines: Line[] = useMemo(() => [...quantities.entries()].map(([variantId, quantity]) => ({
@@ -120,6 +136,7 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   })), [quantities])
 
   function setQuantity(variantId: string, quantity: number) {
+    setLinesError(undefined)
     setQuantities(prev => {
       const next = new Map(prev)
       if (quantity > 0) next.set(variantId, quantity); else next.delete(variantId)
@@ -128,6 +145,7 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   }
 
   function fromFile(rows: MatchedRow[]) {
+    setLinesError(undefined)
     setQuantities(prev => {
       const next = new Map(prev)
       for (const r of rows) next.set(r.variantId, r.quantity)
@@ -139,8 +157,16 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
 
   async function create() {
     setError(null)
-    if (!factory.trim()) { setFactoryError(t('labelRuns.create.nameRequired')); return }
-    setFactoryError(undefined)
+    const nameError = factory.trim() ? undefined : t('labelRuns.create.nameRequired')
+    const lineError = totalUnits === 0 ? t('labelRuns.create.linesRequired')
+      : totalUnits > MAX_RUN_UNITS ? t('labelRuns.create.tooMany', { max: MAX_RUN_UNITS.toLocaleString() })
+      : undefined
+    setFactoryError(nameError)
+    setLinesError(lineError)
+    if (nameError || lineError) {
+      setReveal(r => ({ target: nameError ? 'factory' : 'lines', n: (r?.n ?? 0) + 1 }))
+      return
+    }
     setSaving(true)
     try {
       const run = await createLabelRun({
@@ -151,7 +177,11 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
       toast({ tone: 'success', message: t('labelRuns.create.created') })
       onCreated(run.id)
     } catch (e: unknown) {
-      setError(message(e, i18n.language, t('common.error')))
+      // A refusal the server explains (a 4xx with its own message) is shown as it is; anything else — a 5xx, a body-less
+      // answer, no network — gets one readable sentence instead of "500: Internal Server Error".
+      const explained = e instanceof ServerMessageError && e.status < 500 && !/^\d{3}: /.test(e.messageEn)
+      setError(explained ? e.messageFor(i18n.language) : t('labelRuns.create.failed'))
+      setReveal(r => ({ target: 'error', n: (r?.n ?? 0) + 1 }))
     } finally {
       setSaving(false)
     }
@@ -169,11 +199,17 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
       </div>
 
       <div className="card p-5 grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="text-small text-muted">{t('labelRuns.create.factory')}</span>
-          <Input value={factory} onChange={e => setFactory(e.target.value)} maxLength={120}
-            placeholder={t('labelRuns.create.factoryPlaceholder')} error={factoryError} data-testid="run-factory" />
-        </label>
+        <div ref={factoryRef}>
+          <label className="block space-y-1.5">
+            <span className="text-small text-muted">
+              {t('labelRuns.create.factory')}
+              <span className="text-danger ms-1" aria-hidden="true">*</span>
+            </span>
+            <Input value={factory} onChange={e => { setFactory(e.target.value); if (factoryError) setFactoryError(undefined) }}
+              maxLength={120} autoFocus required aria-required="true" aria-invalid={factoryError ? true : undefined}
+              placeholder={t('labelRuns.create.factoryPlaceholder')} error={factoryError} data-testid="run-factory" />
+          </label>
+        </div>
         <label className="space-y-1.5">
           <span className="text-small text-muted">{t('labelRuns.create.reference')}</span>
           <Input value={reference} onChange={e => setReference(e.target.value)} maxLength={100}
@@ -185,8 +221,6 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
         <ImportPanel onClose={() => setImporting(false)} onApplied={() => {}} runMode={{ onRows: fromFile }} />
       )}
 
-      {error && <Alert tone="critical" title={error} />}
-
       <ProductSelectionGrid
         key={gridKey}
         lines={lines}
@@ -194,10 +228,24 @@ function CreateRun({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
         onRefresh={() => {}}
         onFinalizeClick={create}
         finalizing={saving}
+        allowEmptyFinalize
         finalizeLabel={n => t('labelRuns.create.submit', { count: n })}
-        notice={n => n > MAX_RUN_UNITS
-          ? <Alert tone="warning" title={t('labelRuns.create.tooMany', { max: MAX_RUN_UNITS.toLocaleString() })} />
-          : null}
+        notice={n => (
+          <>
+            <div ref={linesRef}>
+              {linesError
+                ? <p className="text-small text-critical" role="alert" data-testid="run-lines-error">{linesError}</p>
+                : n > MAX_RUN_UNITS
+                  ? <Alert tone="warning" title={t('labelRuns.create.tooMany', { max: MAX_RUN_UNITS.toLocaleString() })} />
+                  : null}
+            </div>
+            {error && (
+              <div ref={errorRef} role="alert" data-testid="run-create-error">
+                <Alert tone="critical" title={error} />
+              </div>
+            )}
+          </>
+        )}
       />
     </div>
   )

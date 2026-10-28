@@ -295,8 +295,32 @@ waiting on Marawan's answers.** Key facts found:
   `stock_available_shopify_traced` / the reader → the check needs its own read method in the gateway (or an approved
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
+**Two live-test fixes (2026-10-28, branch `fix/factory-create-and-shopify-reauth` off origin/main 26106ce; NOT merged,
+NOT deployed; no migration).**
+- **Factory runs › Create run never silent (bb39fe5).** Cause: the empty-name error rendered at the top of the form while
+  Create run sits under the product grid — off-screen, so nothing seemed to happen (no request was sent). Factory name is
+  marked required (*, aria-required), first and auto-focused; every refusal shows where it applies and scrolls into
+  view — empty name (inline under the field, focused: "Enter the factory name"), no products and > 20,000 pieces
+  (inline by the button; the button now stays pressable with 0 pieces — `ProductSelectionGrid.allowEmptyFinalize`,
+  receiving unchanged); a server refusal shows its message in a banner, a 5xx / body-less answer "Couldn't create the
+  factory run — try again." Tests: vitest factoryRunCreate rc1–rc5 (revert-checked); flexibleS6a fr3 text follows the copy.
+- **Shopify silent disconnect (b5568b0).** Cause: `ShopifyTokenProvider.refreshWithLock` (OAuth) wrote
+  `status = 'needs_reauth'` inside the transaction it then rolled back by throwing — a refresh rejected with 401 /
+  invalid_grant left the store 'connected' (prod testreciving, 2026-10-27 → reconnected 2026-10-28 ~14:46 +03). Now
+  committed after the locked tx (the CC path's shape). `IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH` (retries wait,
+  no attempt spent) + `connectionLost()` (piece-sync and transfer sends leave claims untouched; a manual re-send → 409
+  "Reconnect Shopify"). New alert `shopify_connection_lost` (HIGH, condition-only "SHOPIFY_RECONNECTED", one subject per
+  loss via the last good token's expiry) → the immediate sweep emails owners/managers. Reconnect = status 'connected'
+  (existing OAuth writes); due claims then go out once. Tests: ShopifyConnectionLostTest n1–n4 (real token provider;
+  revert-checked).
+- Gotcha (new): never write a flag inside a TransactionTemplate lambda that then throws — the rollback erases it. Carry
+  the outcome out and write it in its own transaction.
+- Not covered: stock-take write-off push and exchange-dispatch claims are not paused by connectionLost (unchanged).
+- Full suites: backend 3486 — ExchangeBackfillTest red (pre-existing), BostaPollJobTest p6 flaked under load (21/21 alone,
+  twice); vitest 1231/1231; tsc clean.
+
 **Flexible labeling — slices 6b + 6c: factory receiving, close run + shortfall report (2026-10-28, branch
-`feat/flexible-labeling-s6bc` off origin/main b218cca; NOT merged, NOT deployed). Migration V192 (built as V188; main took V188–V191).** Behind
+`feat/flexible-labeling-s6bc` off origin/main b218cca; merged to main 26106ce 2026-10-28, pushed, NOT deployed). Migration V192 (built as V188; main took V188–V191).** Behind
 flexible_labeling_enabled; DS v1.0, EN/LTR + AR/RTL.
 - **6b (b39560e) — V192:** `receipts.mode` adds 'factory'; `receipts.label_run_id` (composite FK, CHECK factory ⇔ run);
   `receipt_factory_scans` staging (live-scan partial UNIQUE on label_code_id WHERE undone_at IS NULL; undo columns;

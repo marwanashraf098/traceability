@@ -200,6 +200,8 @@ public class TransferShopifySync {
 
     /** queued/failed → pending (the one-sender guard), ONE pushTransferOut attempt, then the outcome. */
     void pushNow(UUID tenantId, UUID syncId) {
+        // Shopify rejected the token refresh: leave the claim as it is (no attempt spent) — sent after reconnect.
+        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return;
         Map<String, Object> claim = tx.execute(s -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "UPDATE transfer_shopify_syncs SET status = 'pending', send_started_at = now(), " +
