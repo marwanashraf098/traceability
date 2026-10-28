@@ -259,6 +259,8 @@ describe('Drawer — an exchange made in Lookup', () => {
     expect(within(drawer).getByTestId('lookup-exchange-reserved')).toHaveTextContent('Reserved for this exchange — no waybill yet')
     expect(within(drawer).getByTestId('lookup-exchange')).toHaveTextContent('EXC-RR-7K3F9M · P1048327')
     expect(within(drawer).getByTestId('manual-courier-form')).toHaveTextContent('handed to the courier at once')
+    expect(within(drawer).queryByTestId('exchange-step-packing')).toBeNull()
+    expect(within(drawer).getByTestId('exchange-step-booked')).toBeInTheDocument()
 
     await user.click(within(drawer).getByTestId('lookup-exchange-cancel'))
     const confirm = within(drawer).getByTestId('lookup-exchange-cancel-confirm')

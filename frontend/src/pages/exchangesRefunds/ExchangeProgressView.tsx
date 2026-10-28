@@ -69,6 +69,8 @@ export default function ExchangeProgressView({
     ['scanned', scanned, when(item?.arrivedAt)],
     ['exchanged', exchanged, when(eventAt('exchanged'))],
   ]
+  // C2: an exchange made in Lookup is never packed — its reserved piece goes to the courier when the waybill is entered.
+  if (detail.otherCourier?.replacement?.lookupExchange) flags.splice(flags.findIndex(f => f[0] === 'packing'), 1)
   const firstTodo = open ? flags.findIndex(f => !f[1]) : -1
   const steps: Step[] = flags.map(([key, done, meta], i) => ({
     key,
