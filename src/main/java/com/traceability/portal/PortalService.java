@@ -570,9 +570,6 @@ public class PortalService {
     public record SubmitResult(SubmitOutcome outcome, Map<String, Object> body) {}
 
     static final int NOTE_MAX = 300;
-    private static final String REFERENCE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // no 0/O/1/I
-    private static final int REFERENCE_LENGTH = 6;
-    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
     private static final java.util.regex.Pattern EMAIL =
         java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
     private static final String ACTIVE_PIECE_INDEX = "return_request_items_one_active_per_piece";
@@ -908,20 +905,9 @@ public class PortalService {
         }
     }
 
-    /** RR- + 6 characters from an unambiguous alphabet, unused within this tenant. */
+    /** RR- + 6 characters from an unambiguous alphabet, unused within this tenant (ReturnReferences). */
     private String newReference(UUID tenantId) {
-        for (int attempt = 0; attempt < 10; attempt++) {
-            StringBuilder sb = new StringBuilder("RR-");
-            for (int i = 0; i < REFERENCE_LENGTH; i++) {
-                sb.append(REFERENCE_ALPHABET.charAt(RANDOM.nextInt(REFERENCE_ALPHABET.length())));
-            }
-            String ref = sb.toString();
-            Boolean taken = jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM return_requests WHERE tenant_id = ? AND reference = ?)",
-                Boolean.class, tenantId, ref);
-            if (!Boolean.TRUE.equals(taken)) return ref;
-        }
-        throw new IllegalStateException("Could not generate a unique return reference");
+        return ReturnReferences.newReference(jdbc, tenantId);
     }
 
     private void recordAttempt(UUID tenantId, String orderKey, boolean success, String ipHash, String ondemandOutcome) {

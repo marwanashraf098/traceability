@@ -637,6 +637,13 @@ public class PieceAdjustService {
                 "Piece has no active or packed allocation — nothing to release");
         }
 
+        // C2 (approved 2026-10-28): a piece reserved to a Lookup exchange is freed only by that exchange's Cancel
+        // exchange — releasing it here would leave the request and its replacement order holding nothing.
+        Map<String, Object> exchange = com.traceability.portal.LookupExchangeService.reservedTo(jdbc, tenantId, pieceId);
+        if (exchange != null) {
+            throw com.traceability.portal.LookupExchangeException.reservedToExchange((String) exchange.get("reference"));
+        }
+
         Map<String, Object> alloc = rows.get(0);
         UUID   allocId     = (UUID) alloc.get("id");
         UUID   orderId     = (UUID) alloc.get("order_id");

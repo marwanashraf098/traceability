@@ -239,6 +239,18 @@ public class LookupService {
         if ("sold".equals(Objects.toString(piece.get("status"), null))) {
             result.put("canUndoSold", PieceAdjustService.isLookupSale(jdbc, tenantId, piece.get("id").toString()));
         }
+        // C2: Lookup's Exchange — offered on an available piece to an owner / manager of a store that ships with its own
+        // courier (LookupExchangeService.gateOpen); a piece reserved to a Lookup exchange names it. Both keys exist only
+        // in those cases — every other response is unchanged.
+        String status = Objects.toString(piece.get("status"), null);
+        if (!isWorker && "available".equals(status)
+                && com.traceability.portal.LookupExchangeService.gateOpen(jdbc, tenantId)) {
+            result.put("canExchange", true);
+        }
+        if (!isWorker && ("reserved".equals(status) || "packed".equals(status))) {
+            Map<String, Object> ex = com.traceability.portal.LookupExchangeService.reservedTo(jdbc, tenantId, piece.get("id").toString());
+            if (ex != null) result.put("lookupExchange", ex);
+        }
         // Flexible labeling: the variant's Available / Labeled / Untagged counts (only for tenants
         // that have it — everyone else's response is unchanged).
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {

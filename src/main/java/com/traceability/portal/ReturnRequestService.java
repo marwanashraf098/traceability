@@ -579,7 +579,16 @@ public class ReturnRequestService {
             "LEFT JOIN LATERAL (SELECT tracking_number, internal_state FROM shipments WHERE order_id = o.id " +
             "    AND tenant_id = rr.tenant_id AND shipment_leg = 'forward' ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
             "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId).stream().findFirst().orElse(null);
-        if (rep != null) m.put("replacement", rep);
+        if (rep != null) {
+            // C2: a Lookup exchange — its reserved piece, whether it left, and whether it can still be cancelled.
+            // The key exists only for an origin 'lookup' request; every other drawer is unchanged.
+            Map<String, Object> lookup = LookupExchangeService.drawerBlock(jdbc, tenantId, requestId);
+            if (lookup != null) {
+                rep = new LinkedHashMap<>(rep);
+                rep.put("lookupExchange", lookup);
+            }
+            m.put("replacement", rep);
+        }
         return m;
     }
 
@@ -611,7 +620,7 @@ public class ReturnRequestService {
         UUID tenantId = TenantContext.require();
         Map<String, Object> rr = jdbc.queryForList(
             "SELECT status::text AS status, booking_status, order_id, return_shipment_id, manual_carrier_name, type, " +
-            "       replacement_order_id " +
+            "       replacement_order_id, origin " +
             "FROM return_requests WHERE id = ? AND tenant_id = ? FOR UPDATE", id, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
@@ -622,7 +631,13 @@ public class ReturnRequestService {
         String outbound = outboundRaw == null || outboundRaw.isBlank() ? null : outboundRaw.strip();
         if (outbound != null && !exchange) throw GenericReturnException.notAnExchange();
         String status = (String) rr.get("status");
-        if (exchange ? !("approved".equals(status) || "pickup_booked".equals(status))
+        // C2 (approved 2026-10-28): a LOOKUP exchange whose old item already came back ('exchanged') can still get
+        // the replacement's outbound waybill while the replacement hasn't left — only that, nothing else. Portal
+        // requests are unchanged.
+        boolean lookup = LookupExchangeService.ORIGIN_LOOKUP.equals(rr.get("origin"));
+        boolean lateOutbound = lookup && exchange && "exchanged".equals(status) && outbound != null
+            && (trackingRaw == null || trackingRaw.isBlank());
+        if (exchange ? !("approved".equals(status) || "pickup_booked".equals(status) || lateOutbound)
                      : (!"approved".equals(status) || rr.get("return_shipment_id") != null)) {
             throw GenericReturnException.alreadyBooked();
         }
@@ -673,8 +688,18 @@ public class ReturnRequestService {
                 "WHERE id = ? AND tenant_id = ?", carrier, id, tenantId);
             requests.event(tenantId, id, "replacement_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
                 "shipment_id", fwd.shipmentId().toString(), "tracking_number", outboundTn, "carrier", carrier));
-            requests.event(tenantId, id, "pickup_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
-                "tracking_number", outboundTn, "carrier", carrier));
+            if (!lateOutbound) {
+                requests.event(tenantId, id, "pickup_booked", actorUserId, ReturnRequestLifecycle.meta("source", "merchant_entered",
+                    "tracking_number", outboundTn, "carrier", carrier));
+            }
+            // C2: a Lookup exchange's replacement is in the merchant's hand — with the courier now (one transaction:
+            // a replacement that isn't reserved any more rolls the waybill back).
+            if (lookup) {
+                List<String> left = legs.dispatchLookupReplacement(tenantId, fwd.shipmentId(), actorUserId);
+                if (left.isEmpty()) throw LookupExchangeException.replacementNotReserved();
+                requests.event(tenantId, id, "replacement_dispatched", actorUserId, ReturnRequestLifecycle.meta(
+                    "source", "lookup", "shipment_id", fwd.shipmentId().toString(), "pieces", left.size()));
+            }
         }
 
         if (tracking == null) {

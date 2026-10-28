@@ -45,6 +45,8 @@ public class GenericLegTransitions {
     public static final String SOURCE_SHOPIFY           = "shopify";
     public static final String SOURCE_MANUAL            = "manual";
     public static final String SOURCE_RETURN_SCAN       = "return_scan";
+    /** C2 (V193): a Lookup exchange's replacement — tracking entered, handed to the courier at once. */
+    public static final String SOURCE_LOOKUP_DISPATCH   = "lookup_dispatch";
 
     private final JdbcTemplate jdbc;
     private final InventoryLedger ledger;
@@ -260,6 +262,56 @@ public class GenericLegTransitions {
         if (n != 1) return new ForwardLeg(ForwardLegOutcome.KEY_TAKEN, null, null);
         log.info("Generic replacement leg {} created for order {} — carrier '{}'", id, orderId, carrierName);
         return new ForwardLeg(ForwardLegOutcome.CREATED, id, tracking);
+    }
+
+    /**
+     * C2 Lookup Exchange (approved 2026-10-28) — the outbound tracking number of a LOOKUP exchange's replacement was
+     * entered: the merchant already has the piece in hand, so the parcel is with the courier now (no pick, pack or
+     * Pickups). The leg goes 'created' → 'with_courier' (handed_over_at, history source lookup_dispatch) and the
+     * reserved piece goes reserved → packed (event pack) → with_courier (event handed_to_courier) through the two
+     * existing ledger edges, its allocation active → packed, the order → with_courier. Once this commits, the
+     * Step-5a decrement runs for each piece that left (ShopifyInventoryService.onExchangeReplacementDispatched —
+     * unchanged; once per piece by its own claim).
+     *
+     * Only a generic forward leg in 'created' on an order a {@code origin = 'lookup'} request names as its
+     * replacement — a portal (G4b) exchange or any other order never matches, and a repeat finds nothing to move.
+     *
+     * @return the pieces handed to the courier now (empty: not eligible, or nothing was reserved — the caller refuses)
+     */
+    public List<String> dispatchLookupReplacement(UUID tenantId, UUID shipmentId, UUID actorUserId) {
+        List<UUID> orders = jdbc.queryForList(
+            "UPDATE shipments s SET internal_state = 'with_courier', handed_over_at = COALESCE(handed_over_at, now()), " +
+            "    last_synced_at = now() " +
+            "WHERE s.id = ? AND s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state = 'created' " +
+            "  AND EXISTS (SELECT 1 FROM return_requests rr WHERE rr.replacement_order_id = s.order_id " +
+            "              AND rr.tenant_id = s.tenant_id AND rr.origin = 'lookup' AND rr.type = 'exchange') " +
+            "RETURNING s.order_id", UUID.class, shipmentId, tenantId);
+        if (orders.isEmpty()) return List.of();
+        UUID orderId = orders.get(0);
+        history(tenantId, shipmentId, "with_courier", SOURCE_LOOKUP_DISPATCH);
+
+        movePieces(orderId, shipmentId, List.of(PieceStatus.RESERVED), PieceStatus.PACKED, "pack", actorUserId,
+            "{\"event\":\"lookup_exchange_dispatch\"}");
+        jdbc.update(
+            "UPDATE allocations SET status = 'packed' " +
+            "WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ? AND tenant_id = ?) AND status = 'active'",
+            orderId, tenantId);
+        List<Moved> left = movePieces(orderId, shipmentId, List.of(PieceStatus.PACKED), PieceStatus.WITH_COURIER,
+            "handed_to_courier", actorUserId, "{\"event\":\"lookup_exchange_dispatch\"}");
+        jdbc.update("UPDATE merchant_orders SET status = 'with_courier'::order_status WHERE id = ? AND tenant_id = ?",
+            orderId, tenantId);
+        List<String> pieces = new java.util.ArrayList<>();
+        for (Moved m : left) {
+            pieces.add(m.pieceId());
+            if (shopifyInventory != null && com.traceability.inventory.ShopifyInventoryService.leavesCustody(m.from(), PieceStatus.WITH_COURIER)) {
+                String pieceId = m.pieceId();
+                com.traceability.inventory.ShopifyInventoryService.afterCommit(() ->
+                    shopifyInventory.onExchangeReplacementDispatched(tenantId, pieceId));
+            }
+        }
+        log.info("Lookup exchange leg {} (order {}) handed to the courier — {} piece(s)", shipmentId, orderId, pieces.size());
+        return pieces;
     }
 
     /**
