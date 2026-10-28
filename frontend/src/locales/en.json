@@ -4736,7 +4736,9 @@
       "reference": "Reference (optional)",
       "submit": "Create run · {{count}} pieces",
       "tooMany": "A factory run can have at most {{max}} pieces — split it into two runs.",
-      "nameRequired": "Enter the factory's name.",
+      "nameRequired": "Enter the factory name",
+      "linesRequired": "Add at least one product with the number of pieces you expect",
+      "failed": "Couldn't create the factory run — try again.",
       "created": "Factory run created"
     },
     "detail": {

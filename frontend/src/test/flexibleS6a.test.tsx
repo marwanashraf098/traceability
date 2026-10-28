@@ -143,7 +143,7 @@ describe('Slice 6a — Factory runs tab', () => {
 
     const submit = await screen.findByRole('button', { name: 'Create run · 40 pieces' })
     await user.click(submit)
-    expect(await screen.findByText("Enter the factory's name.")).toBeTruthy()
+    expect(await screen.findByText('Enter the factory name')).toBeTruthy()
     expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/label-runs'))).toBe(false)
 
     await user.type(screen.getByTestId('run-factory'), 'Nile Textiles')
