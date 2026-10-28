@@ -4,6 +4,69 @@
 
 ## Current state
 
+**Warehouse places S1 — schema, departure trigger, Settings › Places, bulk create, stickers (2026-10-26, branch
+`feat/warehouse-places-s1`, rebased on main 03d3d9e 2026-10-28; merged to main 2026-10-28, NOT deployed, no tenant switched
+on).** Step 0 report + Marawan's decisions 2026-10-26 (untagged out of v1; placeable = available / on_hold / damaged;
+sticker barcode `Q` + 6+ digits, readable code beside it; zones Z1…, racks {zone}-R01…, shelves {rack}-S1…, boxes BOX-01…
+per location; archive refused with pieces or live children; Damaged = `purpose` on a zone or box; `bins.location_id`
+never changes; capability only, set by ops).
+- **Migrations — V189 / V190 / V191** (built as V188–V190; C1 Lookup Sold took V188, so renumbered to the next free
+  versions, no gap; MigrationVersionGuardTest green). MigrationSmokeTest 190 files, NotTracedBackfillTest 135 pending
+  after V56.
+  V189: `tenants.places_enabled`; `locations (id, tenant_id)` UNIQUE; `bins` (allowed parents by `parent_kind` CHECK +
+  composite FK (parent_id, parent_kind, location_id) → bins (id, kind, location_id); code unique per location
+  case-insensitive, never shaped like P/Q + 6 digits; scan_code unique per tenant; app_user: no DELETE, UPDATE only code /
+  name / parent / purpose / archived_at); `bin_events` (INSERT/SELECT only); `bin_counters`; `pieces.bin_id` + FK
+  (bin_id, current_location_id) → bins (id, location_id) NOT VALID; `piece_events.from_bin_id / to_bin_id` (NOT VALID
+  FKs, unused until S2); trigger `pieces_bin_guard`. V190: `pieces_bin_idx` CONCURRENTLY (own .conf). V191: VALIDATE the
+  three FKs.
+- **`pieces_bin_guard` (BEFORE UPDATE OF status, current_location_id, bin_id; INVOKER):** clears bin_id when the location
+  changes or the new status isn't placeable — this covers every departure, including the six raw
+  `current_location_id` UPDATEs outside the ledger. **Two rules added beyond the brief:** (1) a piece coming BACK from a
+  non-placeable status (restock, stock-take found, transfer return) arrives with no place unless that same UPDATE
+  sets one — without it a stale place survived restock / found (revert-checked: d5 / d6 go red); (2) it refuses a place
+  on a piece with no location (the composite FK is MATCH SIMPLE and would skip it). Refuses zone / rack / archived
+  places; `FOR SHARE` on the place pairs with archive's `FOR UPDATE`. Only bin_id is touched; the ledger stays the
+  only status writer. Untagged pieces are NOT refused by the trigger — the S2 writer must refuse them (v1 decision).
+- **API** `/api/v1/places` (owner + manager, 404 unless `places_enabled`): tree (tree order, rolled-up piece counts,
+  "No place yet" = tagged placeable pieces at the location with no place), detail (contents, boxes, last 20 bin_events
+  ORDER BY occurred_at DESC, id DESC), create (default codes), bulk preview / bulk (new zone, OR `zoneId` → racks
+  added to that zone from its next free R — the board's Quick add; returns `createdIds` for "Create and print
+  stickers"), rename, move (box only, zone ↔ shelf, same location), purpose, archive, stickers PDF (shelves + boxes in /
+  under the chosen places; separator page per zone when more than one sticker). `/me` → `places`. No Shopify anywhere
+  (PlacesShopifyGuardTest).
+- **Stickers:** `LabelPdfRenderer.Location(scanCode, code, path)` on the piece-label layout (50×25): barcode = scan code,
+  then the readable code, "Location · Z1 › R01", the scan code. A box's path is the one at print time; the barcode never
+  changes, so a moved box needs no new sticker.
+- **Frontend:** Settings › Places (after Locations; owner + manager; capability-gated), built to the updated board
+  "Settings › Places (visual setup)": zone cards (+ Zone Zn, Damaged badge), racks side by side with stacked shelves (pieces /
+  Empty / box chips), + Shelf, + Add rack (next free R, as many shelves as the last rack), zone floor boxes + Box, Quick
+  add (racks × shelves → range → create and print), first-zone setup when empty, selected-place panel (contents, Print
+  sticker, + Box here, Rename, Damaged on boxes, Archive, Move for boxes), "N pieces have no place yet" (plain text until
+  S2). Renaming a rack never renames its shelves' codes — the rename dialog says so for a rack ("Shelf names on this
+  rack stay the same. Rename or reprint them if you want.", EN + AR; review 2026-10-27). EN + AR (RTL). Dev screenshot harness `frontend/dev/places-shots/` (`node dev/places-shots/shoot.mjs <dir>`).
+- **Tests:** WarehousePlacesTest 16 (schema, every parent pair, codes, bulk names / next free / quick add / one
+  transaction (test trigger fails row 8) / limits, archive, move, purpose, rename, tree counts, sticker decode (ZXing) +
+  text, switch-off 404, app_user isolation of bins + bin_events with a same-tenant positive control and the trigger
+  under RLS); PlaceDepartureTriggerTest 8 (transfer send, relocate return, reconcile, return intake + restock,
+  stock-take found, pick scan, adjust lost; positive control: same status / location, hold, damaged keep the place);
+  PlacesShopifyGuardTest 2; vitest places 10 (pl9 = the rack rename note). Pre-approved additions: RlsCoverageTest (`/api/v1/places`, `/{id}` + one
+  test), PortalOrderLeakTest (10 SKIP entries), MigrationSmokeTest 190, NotTracedBackfillTest 135 (+ "V189 + V190 + V191").
+- **PasswordResetTest 404s (review 2026-10-27) — not S1:** the first full run's 9 signup / forgot-password 404s never
+  reached the app (its Tomcat on :65309 started, but DispatcherServlet was never initialized — the first request to
+  reach the app does that), so another listener on that localhost port answered (a parallel session's run). Places
+  tests → PasswordResetTest in one JVM: 11/11 on the branch and on origin/main 5d9c521. The places 404 is thrown only
+  inside PlacesService; /me only reads the boolean.
+- **Purge kits / reset scripts:** three new tenant tables — `bins`, `bin_events`, `bin_counters` — plus the columns
+  `pieces.bin_id` and `piece_events.from_bin_id / to_bin_id`. Delete order: piece_events and pieces (or set bin_id NULL)
+  → bin_events → bins (one DELETE per tenant is fine: the self-FK is checked at the end of the statement) →
+  bin_counters. review-tenant-reset.sql picks them up automatically; the hand-listed kits (Jumi / Dolt pattern, 73
+  tables) must add them.
+- **Later slices, noted:** S2's writer = a new InventoryLedger method (UPDATE bin_id WHERE status IN placeable AND
+  short_code IS NOT NULL + one piece_events row with from/to_bin_id). Suggested place = latest piece_events.to_bin_id
+  in the current location, else the bin holding most of the variant (pieces_bin_idx). Nothing in S1 makes the put-away
+  list, returns' single "Put away all restocked pieces" button, or the one-place count harder.
+
 **C1 — Lookup Sold / Not sold (2026-10-28, branch `feat/lookup-sold`, rebased on main b218cca; merged to main 2026-10-28, NOT deployed). Migration V188 (built as V186; the onboarding gate took V186, factory runs (slice 6a) V187).** Lookup "Sold (Off-book)" on an available piece: `available → sold` (event `sold_offline`, reason `sold_offline` + optional note — no reason codes), owner / manager, reserved / packed → PIECE_COMMITTED (release first). Shopify −1 at the Traced Main Warehouse through `pushPieceSold` — the SEVENTH named decrement (approved 2026-10-25; CLAUDE.md updated in its own commit), claim `piece_sold` (`piece:sold_event_id`) decided by `countedAtMain`, one attempt after commit, classified like `pushPieceWriteOff`. "Not sold" (short confirm, no note) reverses only a Lookup sale (a transfer's off-book sale stays sold): `piece_sold_return` +1 only when the sale's −1 reached Shopify (`departureReached`), an unsent claim is cancelled. Rebase merge points: en.json / ar.json (both sides' keys kept), api.ts, ExceptionService ("sale" label), PortalOrderLeakTest (/sold, /not-sold classified). Gotcha: the rebase onto 6a merged CLEANLY with two V187 files and unchanged counts (both branches made the same bump) — always list the migrations after a rebase. Tests: PieceSoldTest 11, PieceSoldWireTest 11, lookupSold.test.tsx 6 (sd4 confirm before POST, sd6 Cancel), NamedDecrementSetGuardTest adds pushPieceSold; MigrationSmokeTest 187, NotTracedBackfillTest 132. Full backend 3430: only ExchangeBackfillTest red; vitest 1204/1204; tsc clean.
 
 **B — Onboarding gate (2026-10-26, branch `feat/onboarding-gate`, rebased on main 5d9c521; merged to main 2026-10-27, NOT deployed).
@@ -57,7 +120,7 @@ the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome
 FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
 RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
 - **Next:** B merged (ae26df3) and deployed 2026-10-27; C1 merged 2026-10-28 (V188; deploy is Marawan's). Then C2's
-  Step-0-light. Next free migration: V189.
+  Step-0-light. Next free migration: V192 (places S1 took V189–V191).
 - **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
   the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
   decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are

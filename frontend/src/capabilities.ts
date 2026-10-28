@@ -17,9 +17,11 @@ export interface Capabilities {
   genericCourier: boolean
   /** Flexible labeling — blank labels / untagged stock (backend FlexibleLabeling; no screen reads it yet). */
   flexibleLabeling: boolean
+  /** Warehouse places — zones / racks / shelves / boxes (backend Places; Settings › Places). */
+  places: boolean
 }
 
-const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false }
+const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false, places: false }
 
 let cache: { token: string; promise: Promise<Capabilities> } | null = null
 
@@ -28,10 +30,11 @@ export function loadCapabilities(): Promise<Capabilities> {
   if (!token) return Promise.resolve(NONE)
   if (cache?.token !== token) {
     const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown;
-                              flexibleLabeling?: unknown } | null>('/me')
+                              flexibleLabeling?: unknown; places?: unknown } | null>('/me')
       .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true,
                      genericCourier: me?.genericCourier === true,
-                     flexibleLabeling: me?.flexibleLabeling === true }))
+                     flexibleLabeling: me?.flexibleLabeling === true,
+                     places: me?.places === true }))
       .catch(() => NONE)
     cache = { token, promise }
   }

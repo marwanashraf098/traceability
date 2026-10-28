@@ -111,6 +111,10 @@ class RlsCoverageTest {
             "/api/v1/label-runs",
             "/api/v1/label-runs/{id}",
             "/api/v1/label-runs/{id}/pdf",
+            // Warehouse places S1 — places_crossTenantIsolated_withSameTenantPositiveControl below; app_user isolation
+            // in WarehousePlacesTest.x1.
+            "/api/v1/places",
+            "/api/v1/places/{id}",
             "/api/v1/tag-stock",
             "/api/v1/tag-stock/sessions/{id}",
             // Flexible labeling slice 7 — stockTakeUntaggedCounts_crossTenantIsolated_withSameTenantPositiveControl below.
@@ -972,6 +976,43 @@ class RlsCoverageTest {
             assertThat(mine.getBody()).as("never another tenant's row").doesNotContain("print_stick");
         } finally {
             jdbc.update("UPDATE tenants SET flexible_labeling_enabled = false, receiving_default_mode = 'print_stick' WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void places_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Warehouse places S1: the tree and a place's detail are the caller's own places only.
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherZone = UUID.randomUUID();
+        UUID myZone = UUID.randomUUID(), myShelf = UUID.randomUUID(), myRack = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov Places Other', true)", otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov Places Other WH', true)",
+                    otherLoc, otherTenant);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'ZOTHER', 'Q900001')",
+                    otherZone, otherTenant, otherLoc);
+        jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'ZMINE', 'Q900002')",
+                    myZone, tenantId, locationId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'ZMINE-R01', 'Q900003')", myRack, tenantId, locationId, myZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'ZMINE-R01-S1', 'Q900004')", myShelf, tenantId, locationId, myRack);
+        try {
+            ResponseEntity<String> tree = get("/api/v1/places", String.class);
+            assertThat(tree.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(tree.getBody()).as("same-tenant positive control").contains("ZMINE-R01-S1");
+            assertThat(tree.getBody()).as("never another tenant's places").doesNotContain("ZOTHER");
+            assertThat(get("/api/v1/places?locationId=" + otherLoc, String.class).getStatusCode())
+                .as("another tenant's location").isEqualTo(HttpStatus.NOT_FOUND);
+            ResponseEntity<String> mine = get("/api/v1/places/" + myShelf, String.class);
+            assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(mine.getBody()).contains("ZMINE-R01-S1");
+            assertThat(get("/api/v1/places/" + otherZone, String.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", myShelf, myRack, myZone);
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM bins WHERE id = ?", otherZone);
+            jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

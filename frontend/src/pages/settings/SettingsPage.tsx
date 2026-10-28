@@ -11,9 +11,10 @@ import PickPackTab from './PickPackTab'
 import PrivacyTab from './PrivacyTab'
 import CouriersTab from './CouriersTab'
 import LabelsTab from './LabelsTab'
+import PlacesTab from './PlacesTab'
 import { useCapabilities } from '../../capabilities'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'labels' | 'couriers' | 'portal' | 'privacy'
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'places' | 'pickpack' | 'labels' | 'couriers' | 'portal' | 'privacy'
 const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'couriers', 'portal']
 
 /**
@@ -46,17 +47,21 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  *
  * Flexible labeling slice 8 adds "Labels" (?tab=labels) — the default receiving mode. Owner and manager edit; shown
  * only while the tenant has flexible labeling (the switch itself is admin-only and not here).
+ *
+ * Warehouse places S1 adds "Places" (?tab=places, after Locations) — zones / racks / shelves / boxes and their
+ * stickers. Owner and manager; shown only while the tenant has places (set by ops, no merchant switch).
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
   const role = getRoleFromToken()
   const isOwner = role === 'owner'
   const isWorker = role === 'worker'
-  const { flexibleLabeling } = useCapabilities()
+  const { flexibleLabeling, places } = useCapabilities()
 
-  const base: TabKey[] = flexibleLabeling
-    ? ALL_TABS.flatMap(k => (k === 'pickpack' ? ['pickpack', 'labels'] as TabKey[] : [k]))
-    : ALL_TABS
+  const base: TabKey[] = ALL_TABS.flatMap(k =>
+    k === 'pickpack' && flexibleLabeling ? ['pickpack', 'labels'] as TabKey[]
+      : k === 'locations' && places ? ['locations', 'places'] as TabKey[]
+      : [k])
   const visibleTabs: TabKey[] = isWorker ? [] : isOwner ? [...base, 'privacy'] : base
 
   const [searchParams, setSearchParams] = useSearchParams()
@@ -87,6 +92,7 @@ export default function SettingsPage() {
         {activeTab === 'connections' && <ConnectionsTab readOnly={!isOwner} />}
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'locations' && <LocationsTab />}
+        {activeTab === 'places' && <PlacesTab />}
         {activeTab === 'pickpack' && <PickPackTab isOwner={isOwner} />}
         {activeTab === 'labels' && <LabelsTab />}
         {activeTab === 'couriers' && <CouriersTab isOwner={isOwner} />}
