@@ -1,4 +1,4 @@
--- V188 — Flexible labeling slice 6b: factory receiving (approved 2026-10-27).
+-- V192 (built as V188; main took V188–V191) — Flexible labeling slice 6b: factory receiving (approved 2026-10-27).
 --
 -- A FACTORY receiving session receives one factory run (V187): the pieces arrived wearing the run's printed factory
 -- labels; the worker scans each one, and only scanned pieces enter stock. A scan is STAGED here first; finalize

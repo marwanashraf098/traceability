@@ -183,9 +183,9 @@ waiting on Marawan's answers.** Key facts found:
   guard change). JobRunr has 8 workers (not 10). Next free migration after slice 2: V179 (origin/main at V176).
 
 **Flexible labeling — slices 6b + 6c: factory receiving, close run + shortfall report (2026-10-28, branch
-`feat/flexible-labeling-s6bc` off origin/main b218cca; NOT merged, NOT deployed). Migration V188.** Behind
+`feat/flexible-labeling-s6bc` off origin/main b218cca; NOT merged, NOT deployed). Migration V192 (built as V188; main took V188–V191).** Behind
 flexible_labeling_enabled; DS v1.0, EN/LTR + AR/RTL.
-- **6b (b39560e) — V188:** `receipts.mode` adds 'factory'; `receipts.label_run_id` (composite FK, CHECK factory ⇔ run);
+- **6b (b39560e) — V192:** `receipts.mode` adds 'factory'; `receipts.label_run_id` (composite FK, CHECK factory ⇔ run);
   `receipt_factory_scans` staging (live-scan partial UNIQUE on label_code_id WHERE undone_at IS NULL; undo columns;
   RLS NULLIF + FORCE; app_user may UPDATE only undone_at / undone_by, no DELETE; ON DELETE CASCADE from the receipt).
   Third step-1 card "Factory-labeled" → step 2 picks an OPEN run, location locked to the main warehouse (not a Settings

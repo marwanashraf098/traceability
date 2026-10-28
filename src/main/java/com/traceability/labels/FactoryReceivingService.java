@@ -14,7 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.*;
 
 /**
- * Flexible labeling slice 6b — FACTORY receiving: a receiving session (receipts.mode 'factory', V188) that receives
+ * Flexible labeling slice 6b — FACTORY receiving: a receiving session (receipts.mode 'factory', V192) that receives
  * one factory run. The pieces arrived wearing the run's printed factory labels; each scan is STAGED
  * (receipt_factory_scans — at most one live row per code across every session), and only scanned pieces enter stock,
  * at finalize, with exactly the scanned codes.
