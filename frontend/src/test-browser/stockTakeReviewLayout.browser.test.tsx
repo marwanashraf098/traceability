@@ -35,12 +35,21 @@ const buckets = (over: Record<string, Row[]> = {}) => ({ on_shelf_counted: [], o
   with_courier_or_delivered: [], returns_bench: [], damaged: [], previously_written_off: [], unexpected_finds: [], ...over })
 const wo = (i: number, over: Row = {}): Row => ({ pieceId: 'w' + i, shortCode: 'P000' + (140 + i), productTitle: 'Linen overshirt with a long product name',
   variantTitle: 'Sand / Large', variantId: 'v1', origin: 'available', shopifyEffect: -1, ...over })
-const plan = (pieces: Row[]) => ({ scans: 60, expectedFree: 65, scannedFree: 60, coveragePercent: 92.3, writeOffs: pieces.length,
-  writeOffPieces: pieces, damageCorrections: 0, founds: 0, foundIncrements: 0, driftSkipped: 0, alreadyWrittenOff: 0,
-  shopifyDecrement: pieces.filter(p => p.shopifyEffect === -1).length,
-  byVariant: [{ variantId: 'v1', variantTitle: 'Sand / Large', sku: 'LIN-SND-L', available: pieces.length, damaged: 0, onHold: 0,
-    alreadyWrittenOff: 0, driftSkipped: 0, shopifyDecrement: pieces.length }],
-  requiresTypedConfirmation: false, minCoveragePercent: 80, maxWriteOffPercent: 20, blockedReason: null })
+// Built like the server's plan: byVariant from the same pieces, and the top-level shopifyDecrement = the sum of
+// the variant lines (StockTakeReconciliationService.FinalizePlan.toResponse).
+function plan(pieces: Row[]) {
+  const byVariant = [...new Set(pieces.map(p => p.variantId as string))].map(variantId => {
+    const of = pieces.filter(p => p.variantId === variantId)
+    return { variantId, variantTitle: of[0].variantTitle, sku: 'SKU-' + variantId,
+      available: of.filter(p => p.origin === 'available').length, damaged: of.filter(p => p.origin === 'damaged').length,
+      onHold: of.filter(p => p.origin === 'on_hold').length, alreadyWrittenOff: 0, driftSkipped: 0,
+      shopifyDecrement: of.filter(p => p.shopifyEffect === -1).length }
+  })
+  return { scans: 60, expectedFree: 65, scannedFree: 60, coveragePercent: 92.3, writeOffs: pieces.length,
+    writeOffPieces: pieces, damageCorrections: 0, founds: 0, foundIncrements: 0, driftSkipped: 0, alreadyWrittenOff: 0,
+    shopifyDecrement: byVariant.reduce((n, v) => n + v.shopifyDecrement, 0), byVariant,
+    requiresTypedConfirmation: false, minCoveragePercent: 80, maxWriteOffPercent: 20, blockedReason: null }
+}
 
 function backend(kind: 'open' | 'finalized', pieces: Row[] = [wo(1), wo(2), wo(3, { origin: 'damaged', shopifyEffect: 0 })]) {
   const uncounted = [row('p1', 'P000147'), row('p2', 'P000151'), row('p3', 'P000300', { flag: 'condition_mismatch' })]
@@ -160,6 +169,15 @@ describe('stock-take review layout', () => {
           mount(lng)
           await userEvent.click(await screen.findByRole('button', { name: T(lng).finalizeButton }))
           await screen.findByTestId('finalize-pieces')
+          // The "goes down by N" sentence and the per-variant "Shopify −N" lines agree.
+          const expected = pieces.filter(p => p.shopifyEffect === -1).length
+          const sentence = screen.getByTestId('finalize-summary').textContent ?? ''
+          const lines = Array.from(screen.getByTestId('finalize-variants').querySelectorAll('.font-mono'))
+            .map(el => Number(/Shopify\s*[−-](\d+)/.exec(el.textContent ?? '')?.[1] ?? NaN))
+          expect(lines.every(Number.isFinite), 'every variant line names its Shopify change').toBe(true)
+          expect(lines.reduce((a, b) => a + b, 0)).toBe(expected)
+          const said = (lng === 'en' ? /goes down by (\d+)/ : /بمقدار (\d+)/).exec(sentence)?.[1]
+          expect(Number(said), 'the sentence names the same total').toBe(expected)
           checkLayout(w)
           await shot(`${name}-${lng}-${size}`)
         })
