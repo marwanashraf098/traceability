@@ -14,6 +14,7 @@ import {
 import { Alert, Badge, Button, Modal, Spinner } from '../components/ui'
 import { UntaggedSplit } from '../components/UntaggedSplit'
 import OrderDrawer from '../components/OrderDrawer'
+import LookupExchangeDialog from '../components/LookupExchangeDialog'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 
@@ -201,6 +202,9 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
 
             <AdjustPanel pieceId={result.id} pieceStatus={result.status} canUndoSold={result.canUndoSold === true}
+              canExchange={result.canExchange === true} lookupExchange={result.lookupExchange ?? null}
+              piece={{ id: result.id, shortCode: result.shortCode, productTitle: result.variant.productTitle,
+                variantTitle: result.variant.title }}
               onDone={onRefresh} />
           </>
         )}
@@ -356,10 +360,16 @@ interface AdjustPanelProps {
   pieceStatus: string
   /** Sold pieces: the sale was a Lookup "Sold" (server-computed) — only then is "Not sold" offered. */
   canUndoSold?: boolean
+  /** C2: available piece on a store that ships with its own courier — Lookup's Exchange is offered (server-computed). */
+  canExchange?: boolean
+  /** C2: the piece is reserved to this Lookup exchange. */
+  lookupExchange?: { requestId: string; reference: string } | null
+  piece?: { id: string; shortCode: string | null; productTitle: string; variantTitle: string }
   onDone: () => void
 }
 
-function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, onDone }: AdjustPanelProps) {
+function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, canExchange = false, lookupExchange = null, piece,
+                       onDone }: AdjustPanelProps) {
   const { t } = useTranslation()
   const [open,        setOpen]        = useState(false)
   const [target,      setTarget]      = useState<AdjustTarget>('lost')
@@ -372,6 +382,7 @@ function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, onDone }: Adju
   const [restoreOpen, setRestoreOpen] = useState(false)
   const [soldOpen,    setSoldOpen]    = useState(false)
   const [notSoldOpen, setNotSoldOpen] = useState(false)
+  const [exchangeOpen, setExchangeOpen] = useState(false)
 
   const isLost      = pieceStatus === 'lost'
   const isOnHold    = pieceStatus === 'on_hold'
@@ -644,6 +655,15 @@ function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, onDone }: Adju
           >
             {t('adjust.sold')}
           </button>
+          {canExchange && piece && (
+            <button
+              data-testid="exchange-open-btn"
+              onClick={() => { setExchangeOpen(true); setError(null) }}
+              className="btn-outline text-small"
+            >
+              {t('lookupExchange.button')}
+            </button>
+          )}
           <button
             data-testid="adjust-open-btn"
             onClick={handleOpen}
@@ -651,6 +671,23 @@ function AdjustPanel({ pieceId, pieceStatus, canUndoSold = false, onDone }: Adju
           >
             {t('adjust.title')}
           </button>
+        </div>
+      )}
+      {exchangeOpen && piece && (
+        <LookupExchangeDialog piece={piece} onClose={() => setExchangeOpen(false)}
+          onCreated={() => { setExchangeOpen(false); onDone() }} />
+      )}
+
+      {/* ── C2: reserved to a Lookup exchange — freed only by that exchange's Cancel exchange ── */}
+      {lookupExchange && (
+        <div data-testid="lookup-exchange-note">
+          <Alert tone="info" title={t('lookupExchange.reservedTitle', { reference: lookupExchange.reference })}>
+            {t('lookupExchange.reservedBody')}{' '}
+            <Link to={`/exchanges?tab=requests&request=${lookupExchange.requestId}`}
+              className="text-trace-blue hover:text-trace-blue-hover font-medium">
+              {t('lookupExchange.openRequest', { reference: lookupExchange.reference })}
+            </Link>
+          </Alert>
         </div>
       )}
 

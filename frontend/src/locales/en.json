@@ -1772,7 +1772,10 @@
           "savedOutbound": "Replacement booked with {{carrier}} — it is in Pick & Pack.",
           "outboundWith": "Replacement with {{carrier}} ·",
           "returnWith": "Old item back with {{carrier}} ·",
-          "noReturnWaybill": "No return waybill — scan the old item's piece when it arrives."
+          "noReturnWaybill": "No return waybill — scan the old item's piece when it arrives.",
+          "helpExchangeLookup": "Traced doesn't book this courier. Book the delivery with them, then enter its waybill here — the reserved piece is handed to the courier at once and Shopify goes down by 1. The return waybill for the old item is optional; without it, scan the old item when it arrives.",
+          "saveOutboundLookup": "Save and hand to the courier",
+          "savedOutboundLookup": "Replacement handed to {{carrier}}."
         }
       },
       "attention": "Attention",
@@ -4891,5 +4894,46 @@
       "load": "Couldn't load places — refresh to try again"
     },
     "addRack": "Add rack"
+  },
+  "lookupExchange": {
+    "button": "Exchange",
+    "reservedTitle": "Reserved for exchange {{reference}}",
+    "reservedBody": "This piece goes out as the replacement when its tracking number is entered. To free it, cancel the exchange.",
+    "openRequest": "Open {{reference}}",
+    "dialog": {
+      "title": "Exchange this piece",
+      "goingOut": "Going out:",
+      "step1": "1. Find the original order",
+      "searchPlaceholder": "Order number, customer name or phone",
+      "noOrders": "No delivered order with something to bring back matches that.",
+      "change": "Change",
+      "delivered": "Delivered {{date}}",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items",
+      "step2": "2. Which item is coming back?",
+      "nothingToReturn": "Nothing on this order can come back — every item is already in a return.",
+      "unit": "unit {{n}}",
+      "reason": "Reason",
+      "pickReturning": "Choose the item that's coming back.",
+      "step3": "3. Courier and tracking number (optional — add it later)",
+      "outbound": "Tracking number (going out)",
+      "summaryLater": "Traced creates an exchange order and reserves this piece. Enter the tracking number when the courier has it — the piece leaves then and Shopify goes down by 1. The item coming back shows in Returns, waiting for a scan.",
+      "summaryNow": "Traced creates an exchange order and hands this piece to the courier now — Shopify goes down by 1. The item coming back shows in Returns, waiting for a scan.",
+      "submit": "Create exchange",
+      "failed": "Couldn't create the exchange. Try again."
+    },
+    "drawer": {
+      "label": "Exchange from Lookup",
+      "order": "Exchange order",
+      "reservedTitle": "Reserved for this exchange — no waybill yet",
+      "reservedBody": "Piece {{code}} is set aside. Enter the replacement's tracking number to hand it to the courier.",
+      "left": "Piece {{code}} left with the courier. This exchange can't be cancelled.",
+      "wasCancelled": "Exchange cancelled — the piece is back in stock.",
+      "cancel": "Cancel exchange",
+      "cancelConfirm": "Cancel this exchange? Piece {{code}} goes back to available and the request is closed. Nothing changes in Shopify.",
+      "cancelSubmit": "Yes, cancel exchange",
+      "cancelled": "Exchange cancelled",
+      "cancelFailed": "Couldn't cancel the exchange. Try again."
+    }
   }
 }

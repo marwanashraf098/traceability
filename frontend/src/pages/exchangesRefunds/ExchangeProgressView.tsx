@@ -9,6 +9,7 @@ import { CloseDialog, UntrackedArrivedControls } from './RequestLifecycle'
 import { BookingState } from './ReturnRequestDrawer'
 import CustomerRefundChoice from './CustomerRefundChoice'
 import ManualCourierPanel from './ManualCourierPanel'
+import LookupExchangePanel from './LookupExchangePanel'
 
 /**
  * Step 5c (mockup X5) — an approved exchange request: what goes out, the Bosta exchange trip,
@@ -162,7 +163,9 @@ export default function ExchangeProgressView({
         )}
 
         {generic && detail.bookingStatus === 'manual' && (
-          <dl className="grid grid-cols-2 gap-x-4" data-testid="exchange-manual">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3" data-testid="exchange-manual">
+            {/* C2: an exchange made in Lookup — the reserved piece, its warning and Cancel exchange */}
+            {detail.otherCourier?.replacement?.lookupExchange && <LookupExchangePanel detail={detail} onChanged={onReload} />}
             <ManualCourierPanel detail={detail} onChanged={onReload} />
           </dl>
         )}
