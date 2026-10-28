@@ -42,6 +42,9 @@ import static org.mockito.Mockito.*;
  *        their claims alone (a person's re-send is told to reconnect)
  *   n3 — refresh 5xx / timeout: the store stays 'connected', no alert, and the retry pass sends the update
  *   n4 — reconnect (new tokens, status 'connected'): the alert clears, the waiting update is applied exactly once
+ *   n5 — stock-take write-off push while needs_reauth: held ('failed' + heldForReconnect, no rethrow → no JobRunr
+ *        retry, no Shopify call); released once after reconnect and pushed exactly once
+ *   (exchange_dispatch held / resumed: ExchangeDispatchDecrementTest.h1)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -74,6 +77,7 @@ class ShopifyConnectionLostTest {
     @Autowired TransferShopifySync transfers;
     @Autowired ExceptionService exceptions;
     @Autowired EncryptionService encryption;
+    @Autowired StockTakeShopifyPushJob stockTakePush;
     @MockBean ShopifyGateway shopifyGateway;
 
     record T(UUID tenant, UUID store, String shop, UUID location) {}
@@ -176,6 +180,44 @@ class ShopifyConnectionLostTest {
             eq(2), any(), any());
         assertThat(claim(t, session, v)).containsEntry("status", "applied").containsEntry("attempt_count", 2);
         assertThat(increment(t)).isNull();
+    }
+
+    @Test
+    void n5_stockTakePush_heldWhileNeedsReauth_pushedOnceAfterReconnect() {
+        T t = tenant("n5"); V v = variant(t, "n5");
+        UUID owner = UUID.randomUUID(), session = UUID.randomUUID();
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, 'O', ?, 'h', 'owner')",
+            owner, t.tenant(), "o-" + owner + "@n5.test");
+        jdbc.update("INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by) " +
+            "VALUES (?, ?, 'finalized', 'all', ?, ?)", session, t.tenant(), t.location(), owner);
+        jdbc.update("INSERT INTO stock_take_shopify_syncs (tenant_id, session_id, status, payload) VALUES (?, ?, 'pending', ?::jsonb)",
+            t.tenant(), session, "{\"locationId\": \"" + t.location() + "\", \"deltas\": {\"" + v.id() + "\": -2}}");
+        jdbc.update("UPDATE stores SET status = 'needs_reauth' WHERE id = ?", t.store());
+
+        stockTakePush.push(session, t.tenant());   // no exception: JobRunr spends no retry
+
+        Map<String, Object> held = jdbc.queryForMap("SELECT status, error, send_started_at, " +
+            "jsonb_exists(payload, 'heldForReconnect') AS held FROM stock_take_shopify_syncs WHERE session_id = ?", session);
+        assertThat(held).containsEntry("status", "failed").containsEntry("held", true).containsEntry("send_started_at", null);
+        assertThat((String) held.get("error")).startsWith("Held");
+        assertThat(TenantContext.runAs(t.tenant(), () -> stockTakePush.releaseHeld(t.tenant()))).as("still disconnected").isEmpty();
+        verifyNoInteractions(shopifyGateway);
+
+        // Reconnect: fresh tokens, status 'connected'.
+        jdbc.update("UPDATE stores SET access_token_encrypted = ?, access_token_expires_at = ?, " +
+                "refresh_token_encrypted = ?, refresh_token_expires_at = ?, status = 'connected' WHERE id = ?",
+            encryption.encrypt("shpat_back"), Timestamp.from(Instant.now().plusSeconds(3600)),
+            encryption.encrypt("shprt_back"), Timestamp.from(Instant.now().plusSeconds(7_776_000)), t.store());
+        assertThat(TenantContext.runAs(t.tenant(), () -> stockTakePush.releaseHeld(t.tenant()))).containsExactly(session);
+        assertThat(TenantContext.runAs(t.tenant(), () -> stockTakePush.releaseHeld(t.tenant())))
+            .as("released once — never enqueued twice").isEmpty();
+
+        stockTakePush.push(session, t.tenant());
+        stockTakePush.push(session, t.tenant());   // a duplicate run finds it pushed: no second call
+
+        assertThat(jdbc.queryForObject("SELECT status FROM stock_take_shopify_syncs WHERE session_id = ?", String.class, session))
+            .isEqualTo("pushed");
+        verify(shopifyGateway, times(1)).pushStockTakeWriteOff(eq(t.shop()), eq("shpat_back"), any(), any(), any(), any());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

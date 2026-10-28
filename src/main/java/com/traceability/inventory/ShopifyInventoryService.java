@@ -454,14 +454,62 @@ public class ShopifyInventoryService {
         }
 
         ObjectNode initialPayload = mapper.createObjectNode().put("reason", "exchange_dispatch").put("delta", -1);
+
+        // Shopify rejected the token refresh: hold the decrement — a 'queued' claim, nothing sent, no attempt
+        // used. ShopifyReconnectResumeJob sends it once after the merchant reconnects (resumeHeldExchangeDispatches).
+        // A person's re-push is told to reconnect first.
+        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
+            if (storedLocationId != null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH.fixEn);
+            }
+            if (isReviewFixtureVariant(tenantId, row.variantId(), "exchange_dispatch", pieceId)) return;
+            tx.execute(st -> jdbc.update(
+                "INSERT INTO shopify_inventory_adjustments " +
+                "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status) " +
+                "VALUES (?, ?, ?, ?, -1, 'exchange_dispatch', ?, ?::jsonb, 'queued') " +
+                "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
+                tenantId, batchId, row.variantId(), locationId, pieceId, initialPayload.toString()));
+            log.info("Shopify inventory: exchange_dispatch held until Shopify is reconnected piece={}", pieceId);
+            return;
+        }
+
         if (!claim(tenantId, batchId, row.variantId(), locationId, -1, "exchange_dispatch", pieceId, initialPayload)) {
             log.debug("Shopify inventory: exchange_dispatch already claimed, skipping duplicate call piece={}", pieceId);
             return;
         }
+        sendExchangeDispatch(tenantId, pieceId, row.variantId(), locationId);
+    }
 
-        Preconditions p = resolvePreconditions(tenantId, row.variantId(), locationId, "exchange_dispatch", pieceId);
+    /**
+     * Sends exchange_dispatch claims held while the store needed a reconnect ('queued'), once it is connected again:
+     * each goes queued → pending through a conditional UPDATE (the one-sender guard — a claim is sent exactly once,
+     * even by two overlapping sweeps), then the same single attempt as a live dispatch.
+     */
+    public int resumeHeldExchangeDispatches(UUID tenantId) {
+        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return 0;
+        List<Map<String, Object>> held = tx.execute(st -> jdbc.queryForList(
+            "SELECT id, trigger_id, variant_id, location_id FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'exchange_dispatch' AND status = 'queued' " +
+            "ORDER BY created_at, id LIMIT 50", tenantId));
+        int sent = 0;
+        for (Map<String, Object> h : held == null ? List.<Map<String, Object>>of() : held) {
+            long id = ((Number) h.get("id")).longValue();
+            Integer taken = tx.execute(st -> jdbc.update(
+                "UPDATE shopify_inventory_adjustments SET status = 'pending' WHERE id = ? AND tenant_id = ? AND status = 'queued'",
+                id, tenantId));
+            if (taken == null || taken == 0) continue;
+            sendExchangeDispatch(tenantId, (String) h.get("trigger_id"), (UUID) h.get("variant_id"), (UUID) h.get("location_id"));
+            sent++;
+        }
+        return sent;
+    }
+
+    /** The claimed ('pending') exchange_dispatch claim's one attempt: preconditions, the −1, the outcome. */
+    private void sendExchangeDispatch(UUID tenantId, String pieceId, UUID variantId, UUID locationId) {
+        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "exchange_dispatch", pieceId);
         if (p.error() != null) {
-            markResult(tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId,
+            markResult(tenantId, "exchange_dispatch", pieceId, variantId, locationId,
                        p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
             return;
         }
@@ -470,7 +518,7 @@ public class ShopifyInventoryService {
         String error = null;
         try {
             String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId);
+                tenantId, "exchange_dispatch", pieceId, variantId, locationId);
             shopify.pushExchangeDispatch(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
                                           p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
             status = "applied";
@@ -478,10 +526,10 @@ public class ShopifyInventoryService {
             status = "failed";
             error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             log.warn("Shopify inventory exchange dispatch failed: piece={} variant={} error={}",
-                     pieceId, row.variantId(), error);
+                     pieceId, variantId, error);
         }
 
-        markResult(tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId,
+        markResult(tenantId, "exchange_dispatch", pieceId, variantId, locationId,
                    p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
     }
 
