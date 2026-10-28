@@ -312,11 +312,15 @@ class StockTakeUntaggedCountTest {
         scan(t, s, labeled.get(0));
         attest(t, s);
 
-        for (String action : List.of("found", "lost", "mark_damaged")) {
+        // found / lost were removed (2026-10-27) — refused before any piece is looked at.
+        for (String action : List.of("found", "lost")) {
             assertCodeIs(() -> TenantContext.runAs(t.tenant(), () -> reconciliation.resolve(s,
                 List.of(new StockTakeReconciliationService.ResolveItem(untagged.get(0), action)), t.user())),
-                "UNTAGGED_COUNTED_PER_PRODUCT");
+                "STOCK_TAKE_ACTION_REMOVED");
         }
+        assertCodeIs(() -> TenantContext.runAs(t.tenant(), () -> reconciliation.resolve(s,
+            List.of(new StockTakeReconciliationService.ResolveItem(untagged.get(0), "mark_damaged")), t.user())),
+            "UNTAGGED_COUNTED_PER_PRODUCT");
         untagged.forEach(p -> assertThat(status(p)).isEqualTo("available"));
 
         Map<String, Object> rec = TenantContext.runAs(t.tenant(), () -> reconciliation.reconciliation(s));

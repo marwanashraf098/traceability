@@ -2,20 +2,37 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ViaPhoneTag } from '../phone/ViaPhoneTag'
-import { Lock, ClipboardCheck, Smartphone } from 'lucide-react'
+import type { TFunction } from 'i18next'
+import { ClipboardCheck, Smartphone, ScanLine, ArrowLeft, Search } from 'lucide-react'
 import {
   Badge, Button, Card, Spinner, Alert, Modal, EmptyState, Checkbox, Input,
 } from '../components/ui'
 import {
   getStockTakeReconciliation, getStockTakeSession, resolveStockTake,
-  attestStockTakeComplete, finalizeStockTake, releasePieceForAdjust,
+  attestStockTakeComplete, finalizeStockTake,
   markStockTakeSyncResolved, repushStockTakeSync,
-  StockTakeCommittedError, StockTakeReconciliation, StockTakeSessionDetail,
-  StockTakePieceRow, PieceCommittedError, StockTakeFinalizePlan,
+  StockTakeRequestError, StockTakeReconciliation, StockTakeSessionDetail,
+  StockTakePieceRow, StockTakeFinalizePlan, StockTakeWriteOffPiece,
 } from '../api'
 import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
+import { ReviewScanOverlay } from './stocktake/ReviewScanOverlay'
 
 // FR-21 Step 6.3, screen 4 + 5 — reconciliation/disposition + sync panel.
+// 2026-10-27: no per-row Found it / Mark lost. A missed piece is counted by scanning it ("Found one?
+// Scan it" — a full-screen overlay on the counting screen's own scan request); finalize writes off what
+// is still uncounted, and its confirm lists every piece. Finalized: read-only lists + a Lookup pointer.
+
+/** The text an error banner shows: the server's own message, else readable words for the status —
+ *  never a bare "404: ". */
+export function stockTakeErrorText(e: unknown, t: TFunction, lang: string): string {
+  if (e instanceof StockTakeRequestError) {
+    const own = e.serverMessage(lang)
+    if (own) return own
+    const known = [400, 403, 404, 409].includes(e.status)
+    return t(known ? `stocktake.review.error.${e.status}` : 'stocktake.review.error.generic')
+  }
+  return t('stocktake.review.error.generic')
+}
 
 const BUCKET_ORDER = [
   'on_shelf_counted', 'on_shelf_uncounted', 'committed_to_orders',
@@ -27,8 +44,10 @@ type BucketKey = typeof BUCKET_ORDER[number]
 
 export default function StockTakeReview() {
   const { id } = useParams<{ id: string }>()
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
+  const errorText = (e: unknown) => stockTakeErrorText(e, t, i18n.language)
+  const [scanOpen, setScanOpen] = useState(false)
 
   const [reconciliation, setReconciliation] = useState<StockTakeReconciliation | null>(null)
   const [session, setSession] = useState<StockTakeSessionDetail | null>(null)
@@ -52,11 +71,11 @@ export default function StockTakeReview() {
       setReconciliation(rec)
       setSession(sess)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(stockTakeErrorText(e, t, i18n.language))
     } finally {
       setLoading(false)
     }
-  }, [id])
+  }, [id, t, i18n.language])
 
   useEffect(() => { load() }, [load])
 
@@ -67,7 +86,7 @@ export default function StockTakeReview() {
       await attestStockTakeComplete(id)
       await load()
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorText(e))
     } finally {
       setAttesting(false)
     }
@@ -86,7 +105,7 @@ export default function StockTakeReview() {
       setShowFinalizeConfirm(false)
       await load()
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorText(e))
     } finally {
       setFinalizing(false)
     }
@@ -105,6 +124,7 @@ export default function StockTakeReview() {
   const totalVariance = rollup.reduce((s, r) => s + r.variance, 0)
   const isOpen = session.status === 'open'
   const isFinalized = session.status === 'finalized'
+  const sessionName = session.note || id.slice(0, 8)
 
   return (
     <div className="space-y-4">
@@ -132,6 +152,18 @@ export default function StockTakeReview() {
           <p className="text-h2 font-mono" data-testid="variance-headline">{totalVariance}</p>
         </div>
       </div>
+
+      {/* Open session: count a missed piece by scanning it, or go back to the counting screen. */}
+      {isOpen && (
+        <div className="flex flex-wrap gap-2" data-testid="review-open-actions">
+          <Button iconStart={ScanLine} onClick={() => setScanOpen(true)}>
+            {t('stocktake.review.scan.openButton')}
+          </Button>
+          <Button variant="secondary" iconStart={ArrowLeft} onClick={() => navigate(`/stock-take/${id}/scan`)}>
+            {t('stocktake.review.backToCounting')}
+          </Button>
+        </div>
+      )}
 
       {/* Per-variant rollup */}
       {rollup.length > 0 && (
@@ -172,20 +204,23 @@ export default function StockTakeReview() {
         <UntaggedCountsPanel sessionId={id} rows={reconciliation.untagged} editable={isOpen} onSaved={load} />
       )}
 
-      {/* Disposition buckets */}
-      <div className="space-y-3">
-        {BUCKET_ORDER.map(key => (
-          <DispositionBucket
-            key={key}
-            bucketKey={key}
-            rows={reconciliation.buckets[key] ?? []}
-            completeCount={session.completeCount}
-            sessionOpen={isOpen}
-            onChanged={load}
-            sessionId={id}
-          />
-        ))}
-      </div>
+      {/* Finalized: what this count did, read-only. Otherwise the disposition buckets. */}
+      {isFinalized ? (
+        <FinalizedLists reconciliation={reconciliation} />
+      ) : (
+        <div className="space-y-3">
+          {BUCKET_ORDER.map(key => (
+            <DispositionBucket
+              key={key}
+              bucketKey={key}
+              rows={reconciliation.buckets[key] ?? []}
+              sessionOpen={isOpen}
+              onChanged={load}
+              sessionId={id}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Attest-complete / finalize */}
       {isOpen && (
@@ -231,7 +266,77 @@ export default function StockTakeReview() {
       {isFinalized && (
         <CloseSummaryCard session={session} totalCounted={totalCounted} totalVariance={totalVariance} />
       )}
+
+      {scanOpen && (
+        <ReviewScanOverlay
+          sessionId={id}
+          sessionName={sessionName}
+          uncounted={reconciliation.buckets.on_shelf_uncounted ?? []}
+          onScanned={load}
+          onClose={() => { setScanOpen(false); load() }}
+        />
+      )}
     </div>
+  )
+}
+
+// ── Finalized session — read-only lists ──────────────────────────────────────
+
+function FinalizedLists({ reconciliation }: { reconciliation: StockTakeReconciliation }) {
+  const { t } = useTranslation()
+  const rows = BUCKET_ORDER.flatMap(k => reconciliation.buckets[k] ?? [])
+  const writtenOff = rows.filter(r => r.writtenOffHere)
+  const found = rows.filter(r => r.foundHere)
+  const counted = [...(reconciliation.buckets.on_shelf_counted ?? []), ...(reconciliation.buckets.damaged ?? [])]
+    .filter(r => !r.foundHere)
+
+  return (
+    <div className="space-y-3" data-testid="finalized-lists">
+      <PieceListCard title={t('stocktake.review.finalized.counted', { count: counted.length })} rows={counted} testId="finalized-counted" />
+      <PieceListCard title={t('stocktake.review.finalized.writtenOff', { count: writtenOff.length })} rows={writtenOff}
+        testId="finalized-written-off" tone="danger" />
+      <PieceListCard title={t('stocktake.review.finalized.found', { count: found.length })} rows={found} testId="finalized-found" />
+      <div data-testid="finalized-lookup-hint"><Card className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-small text-muted">{t('stocktake.review.finalized.lookupHint')}</p>
+        <Link to="/lookup" className="btn-outline btn text-small inline-flex items-center gap-1.5">
+          <Search size={14} strokeWidth={2} />
+          {t('stocktake.review.finalized.openLookup')}
+        </Link>
+      </Card></div>
+    </div>
+  )
+}
+
+function PieceListCard({ title, rows, testId, tone }: {
+  title: string; rows: StockTakePieceRow[]; testId: string; tone?: 'danger'
+}) {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(rows.length > 0 && rows.length <= 20)
+  return (
+    <div data-testid={testId}><Card className="space-y-3">
+      <button type="button" className="w-full flex items-center justify-between text-start" onClick={() => setExpanded(x => !x)}>
+        <span className={`text-body font-semibold ${tone === 'danger' && rows.length > 0 ? 'text-danger' : 'text-primary'}`}>{title}</span>
+        <span className="text-muted text-small">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (rows.length === 0 ? <EmptyState message={t('stocktake.review.bucketEmpty')} /> : (
+        <ul className="space-y-1.5">
+          {rows.map(r => <PieceLine key={r.pieceId} row={r} />)}
+        </ul>
+      ))}
+    </Card></div>
+  )
+}
+
+function PieceLine({ row }: { row: StockTakePieceRow }) {
+  return (
+    <li className="flex items-center gap-3 flex-wrap rounded-lg border border-line px-3 py-2 text-small">
+      {row.shortCode && <span className="font-mono text-primary" dir="ltr">{row.shortCode}</span>}
+      <Link to={`/lookup?q=${encodeURIComponent(row.pieceId)}`} className="text-trace-blue hover:underline">
+        {row.productTitle} · {row.variantTitle}
+      </Link>
+      {row.sku && <span className="font-mono text-caption text-muted" dir="ltr">{row.sku}</span>}
+      {row.scanDevice === 'phone' && <ViaPhoneTag />}
+    </li>
   )
 }
 
@@ -312,6 +417,7 @@ function FinalizeModal({
         )}
         {plan && !blocked && (
           <>
+            {(plan.writeOffPieces?.length ?? 0) > 0 && <WriteOffPieceList pieces={plan.writeOffPieces ?? []} />}
             <p className="text-body text-primary" data-testid="finalize-summary">
               {t('stocktake.review.finalize.summary', { count: plan.writeOffs + untaggedWriteOffs, shopify: plan.shopifyDecrement })}
             </p>
@@ -396,6 +502,62 @@ function FinalizeModal({
   )
 }
 
+/** Every labeled piece finalize writes off, with its Shopify effect — above the totals. More than
+ *  GROUP_OVER pieces → grouped by product / variant (codes listed per group). */
+const GROUP_OVER = 10
+
+function WriteOffPieceList({ pieces }: { pieces: StockTakeWriteOffPiece[] }) {
+  const { t } = useTranslation()
+  const effect = (p: StockTakeWriteOffPiece) => p.shopifyEffect < 0
+    ? t('stocktake.review.writeOffList.shopifyMinus', { count: -p.shopifyEffect })
+    : t('stocktake.review.writeOffList.tracedOnly')
+
+  if (pieces.length <= GROUP_OVER) {
+    return (
+      <div className="space-y-1.5" data-testid="finalize-pieces">
+        <p className="text-small font-semibold text-primary">{t('stocktake.review.writeOffList.title', { count: pieces.length })}</p>
+        <ul className="rounded-lg border border-line bg-elevated divide-y divide-line max-h-64 overflow-y-auto">
+          {pieces.map(p => (
+            <li key={p.pieceId} className="flex items-center gap-3 px-3 py-2 text-small" data-testid="finalize-piece">
+              <span className="font-mono text-primary" dir="ltr">{p.shortCode ?? p.pieceId.slice(-8)}</span>
+              <span className="text-muted flex-1 min-w-0 truncate" dir="auto">{p.productTitle} · {p.variantTitle}</span>
+              <span className={`font-mono whitespace-nowrap ${p.shopifyEffect < 0 ? 'text-danger' : 'text-muted'}`}>{effect(p)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+
+  const groups = new Map<string, StockTakeWriteOffPiece[]>()
+  for (const p of pieces) groups.set(p.variantId, [...(groups.get(p.variantId) ?? []), p])
+  return (
+    <div className="space-y-1.5" data-testid="finalize-pieces">
+      <p className="text-small font-semibold text-primary">{t('stocktake.review.writeOffList.title', { count: pieces.length })}</p>
+      <div className="rounded-lg border border-line bg-elevated divide-y divide-line max-h-72 overflow-y-auto">
+        {[...groups.values()].map(g => {
+          const minus = g.reduce((n, p) => n - p.shopifyEffect, 0)
+          return (
+            <div key={g[0].variantId} className="px-3 py-2 space-y-1" data-testid="finalize-piece-group">
+              <div className="flex items-center justify-between gap-3 text-small">
+                <span className="text-primary font-medium min-w-0 truncate" dir="auto">
+                  {g[0].productTitle} · {g[0].variantTitle} <span className="text-muted">({g.length})</span>
+                </span>
+                <span className={`font-mono whitespace-nowrap ${minus > 0 ? 'text-danger' : 'text-muted'}`}>
+                  {minus > 0 ? t('stocktake.review.writeOffList.shopifyMinus', { count: minus }) : t('stocktake.review.writeOffList.tracedOnly')}
+                </span>
+              </div>
+              <p className="font-mono text-caption text-muted break-words" dir="ltr">
+                {g.map(p => p.shortCode ?? p.pieceId.slice(-8)).join(' · ')}
+              </p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function formatDuration(openedAt: string, finalizedAt: string): string {
   const ms = new Date(finalizedAt).getTime() - new Date(openedAt).getTime()
   const totalMinutes = Math.max(0, Math.round(ms / 60000))
@@ -466,75 +628,33 @@ function SummaryStat({ value, label, tone = 'primary' }: { value: number; label:
 // ── Disposition bucket ───────────────────────────────────────────────────────
 
 function DispositionBucket({
-  bucketKey, rows, completeCount, sessionOpen, onChanged, sessionId,
+  bucketKey, rows, sessionOpen, onChanged, sessionId,
 }: {
   bucketKey: BucketKey
   rows: StockTakePieceRow[]
-  completeCount: boolean
   sessionOpen: boolean
   onChanged: () => void
   sessionId: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [expanded, setExpanded] = useState(true)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
-  const [committedErrors, setCommittedErrors] = useState<Record<string, PieceCommittedError>>({})
-  const [releasing, setReleasing] = useState<string | null>(null)
   const [rowError, setRowError] = useState<Record<string, string>>({})
 
   const isFreeUncounted = bucketKey === 'on_shelf_uncounted'
-  const isCommitted = bucketKey === 'committed_to_orders'
 
-  function toggleSelect(pieceId: string) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(pieceId)) next.delete(pieceId); else next.add(pieceId)
-      return next
-    })
-  }
-
-  async function runResolve(pieceId: string, action: 'found' | 'lost' | 'mark_damaged') {
+  // The one row action left: Apply damaged on a scanned-damaged / recorded-available row.
+  async function applyDamaged(pieceId: string) {
     if (!sessionOpen) return
     setBusy(pieceId)
     setRowError(prev => ({ ...prev, [pieceId]: '' }))
     try {
-      await resolveStockTake(sessionId, [{ pieceId, action }])
+      await resolveStockTake(sessionId, [{ pieceId, action: 'mark_damaged' }])
       onChanged()
     } catch (e: unknown) {
-      if (e instanceof StockTakeCommittedError) {
-        setCommittedErrors(prev => ({ ...prev, [pieceId]: e.body }))
-      } else {
-        setRowError(prev => ({ ...prev, [pieceId]: e instanceof Error ? e.message : String(e) }))
-      }
+      setRowError(prev => ({ ...prev, [pieceId]: stockTakeErrorText(e, t, i18n.language) }))
     } finally {
       setBusy(null)
-    }
-  }
-
-  async function handleBulkFound() {
-    if (selected.size === 0) return
-    setBusy('__bulk__')
-    try {
-      await resolveStockTake(sessionId, Array.from(selected).map(pieceId => ({ pieceId, action: 'found' as const })))
-      setSelected(new Set())
-      onChanged()
-    } catch (e: unknown) {
-      setRowError(prev => ({ ...prev, __bulk__: e instanceof Error ? e.message : String(e) }))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function handleRelease(pieceId: string) {
-    setReleasing(pieceId)
-    try {
-      await releasePieceForAdjust(pieceId)
-      setCommittedErrors(prev => { const next = { ...prev }; delete next[pieceId]; return next })
-    } catch (e: unknown) {
-      setRowError(prev => ({ ...prev, [pieceId]: e instanceof Error ? e.message : String(e) }))
-    } finally {
-      setReleasing(null)
     }
   }
 
@@ -557,35 +677,20 @@ function DispositionBucket({
           <EmptyState message={t('stocktake.review.bucketEmpty')} />
         ) : (
           <div className="space-y-2">
-            {isFreeUncounted && selected.size > 0 && (
-              <div className="flex items-center justify-between bg-elevated rounded-lg px-3 py-2">
-                <span className="text-small text-muted">{t('stocktake.review.selectedCount', { count: selected.size })}</span>
-                <Button size="sm" loading={busy === '__bulk__'} onClick={handleBulkFound}>
-                  {t('stocktake.review.foundSelected')}
-                </Button>
-              </div>
+            {isFreeUncounted && sessionOpen && (
+              <p className="text-small text-muted" data-testid="uncounted-hint">{t('stocktake.review.uncountedHint')}</p>
             )}
-            {rowError.__bulk__ && <Alert tone="critical" title={rowError.__bulk__} />}
 
             {rows.map(row => (
-              <div key={row.pieceId} className="rounded-lg border border-line p-3 space-y-2">
+              <div key={row.pieceId} className="rounded-lg border border-line p-3 space-y-2" data-testid={`row-${row.pieceId}`}>
                 <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    {isFreeUncounted && (
-                      <input
-                        type="checkbox"
-                        checked={selected.has(row.pieceId)}
-                        onChange={() => toggleSelect(row.pieceId)}
-                        aria-label={t('stocktake.review.selectRow')}
-                      />
-                    )}
-                    <div>
-                      <Link to={`/lookup?q=${encodeURIComponent(row.pieceId)}`} className="text-trace-blue hover:underline text-body font-medium">
-                        {row.productTitle} · {row.variantTitle}
-                      </Link>
-                      {row.sku && <span className="font-mono text-caption text-muted ms-2">{row.sku}</span>}
-                      {row.scanDevice === 'phone' && <span className="ms-2"><ViaPhoneTag /></span>}
-                    </div>
+                  <div>
+                    {row.shortCode && <span className="font-mono text-small text-primary me-2" dir="ltr">{row.shortCode}</span>}
+                    <Link to={`/lookup?q=${encodeURIComponent(row.pieceId)}`} className="text-trace-blue hover:underline text-body font-medium">
+                      {row.productTitle} · {row.variantTitle}
+                    </Link>
+                    {row.sku && <span className="font-mono text-caption text-muted ms-2" dir="ltr">{row.sku}</span>}
+                    {row.scanDevice === 'phone' && <span className="ms-2"><ViaPhoneTag /></span>}
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
@@ -595,76 +700,24 @@ function DispositionBucket({
                       </Link>
                     )}
                     {row.trackingNumber && (
-                      <span className="font-mono text-caption text-muted">{row.trackingNumber}</span>
+                      <span className="font-mono text-caption text-muted" dir="ltr">{row.trackingNumber}</span>
                     )}
 
-                    {isFreeUncounted && (
-                      <>
-                        <Button size="sm" variant="secondary" loading={busy === row.pieceId}
-                          onClick={() => runResolve(row.pieceId, 'found')}>
-                          {t('stocktake.review.foundIt')}
-                        </Button>
-                        <span title={!completeCount ? t('stocktake.review.markLostGatedTooltip') : undefined}>
-                          <Button size="sm" variant="destructive" loading={busy === row.pieceId}
-                            disabled={!completeCount}
-                            iconStart={!completeCount ? Lock : undefined}
-                            onClick={() => runResolve(row.pieceId, 'lost')}>
-                            {t('stocktake.review.markLost')}
-                          </Button>
-                        </span>
-                        {row.flag === 'condition_mismatch' && row.liveStatus === 'available' && (
-                          <Button size="sm" variant="secondary" loading={busy === row.pieceId}
-                            onClick={() => runResolve(row.pieceId, 'mark_damaged')}>
-                            {t('stocktake.review.applyDamaged')}
-                          </Button>
-                        )}
-                        {row.flag === 'condition_mismatch' && row.liveStatus === 'damaged' && (
-                          <span className="text-caption text-muted" title={t('stocktake.review.terminalTooltip')}>
-                            {t('stocktake.review.terminalFlag')}
-                          </span>
-                        )}
-                      </>
-                    )}
-
-                    {isCommitted && (
-                      <Button size="sm" variant="destructive" loading={busy === row.pieceId}
-                        onClick={() => runResolve(row.pieceId, 'lost')}>
-                        {t('stocktake.review.markLost')}
+                    {isFreeUncounted && row.flag === 'condition_mismatch' && row.liveStatus === 'available' && sessionOpen && (
+                      <Button size="sm" variant="secondary" loading={busy === row.pieceId}
+                        onClick={() => applyDamaged(row.pieceId)}>
+                        {t('stocktake.review.applyDamaged')}
                       </Button>
+                    )}
+                    {isFreeUncounted && row.flag === 'condition_mismatch' && row.liveStatus === 'damaged' && (
+                      <span className="text-caption text-muted" title={t('stocktake.review.terminalTooltip')}>
+                        {t('stocktake.review.terminalFlag')}
+                      </span>
                     )}
                   </div>
                 </div>
 
                 {rowError[row.pieceId] && <Alert tone="critical" title={rowError[row.pieceId]} />}
-
-                {/* Reused from Lookup.tsx's AdjustPanel — inline warning card, NOT a Modal */}
-                {committedErrors[row.pieceId] && (
-                  <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
-                    <p className="text-body font-semibold text-warning">{t('adjust.committedTitle')}</p>
-                    <p className="text-small text-muted">
-                      {t('adjust.committedBody', {
-                        status: row.liveStatus,
-                        orderNumber: committedErrors[row.pieceId].orderNumber,
-                      })}
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        data-testid={`release-btn-${row.pieceId}`}
-                        onClick={() => handleRelease(row.pieceId)}
-                        disabled={releasing === row.pieceId}
-                        className="btn-brand text-small"
-                      >
-                        {releasing === row.pieceId ? <Spinner size={14} /> : t('adjust.releaseBtn')}
-                      </button>
-                      <Link
-                        to={`/orders/${committedErrors[row.pieceId].orderId}`}
-                        className="btn-outline text-small font-mono"
-                      >
-                        #{committedErrors[row.pieceId].orderNumber}
-                      </Link>
-                    </div>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -681,21 +734,21 @@ function SyncPanel({ sessionId, shopifySync, onChanged }: {
   shopifySync: StockTakeSessionDetail['shopifySync']
   onChanged: () => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function handleMarkResolved() {
     setBusy(true); setError(null)
     try { await markStockTakeSyncResolved(sessionId); await onChanged() }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
+    catch (e: unknown) { setError(stockTakeErrorText(e, t, i18n.language)) }
     finally { setBusy(false) }
   }
 
   async function handleRepush() {
     setBusy(true); setError(null)
     try { await repushStockTakeSync(sessionId); await onChanged() }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
+    catch (e: unknown) { setError(stockTakeErrorText(e, t, i18n.language)) }
     finally { setBusy(false) }
   }
 

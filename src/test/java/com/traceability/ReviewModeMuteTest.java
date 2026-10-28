@@ -230,8 +230,10 @@ class ReviewModeMuteTest {
             String counted = t.piece(variant, "available");
             stockTake.scan(session, "PC-" + counted, "good", t.owner);
             reconciliation.attestComplete(session, t.owner);
-            reconciliation.resolve(session, List.of(new StockTakeReconciliationService.ResolveItem(missing, "lost")), t.owner);
-            reconciliation.finalizeSession(session, t.owner);
+            // Finalize writes off the unscanned piece (Mark lost was removed 2026-10-27); typed count = the plan's.
+            @SuppressWarnings("unchecked")
+            Map<String, Object> plan = (Map<String, Object>) reconciliation.reconciliation(session).get("finalizePlan");
+            reconciliation.finalizeSession(session, t.owner, (Integer) plan.get("writeOffs"));
             return jdbc.queryForObject("SELECT status FROM stock_take_shopify_syncs WHERE session_id = ?", String.class, session);
         });
     }

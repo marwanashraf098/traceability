@@ -6,9 +6,8 @@ import * as api from '../api'
 import StockTakeReview from '../pages/StockTakeReview'
 
 // ── Mock ─────────────────────────────────────────────────────────────────────
-// StockTakeCommittedError is kept from `actual` (via the ...actual spread) so
-// `e instanceof StockTakeCommittedError` inside the component still works —
-// same pattern adjust.test.tsx uses for the real api.ts error/type exports.
+// The real api.ts error/type exports are kept from `actual` (via the ...actual spread) —
+// same pattern adjust.test.tsx uses.
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -19,7 +18,6 @@ vi.mock('../api', async (importOriginal) => {
     resolveStockTake:           vi.fn(),
     attestStockTakeComplete:    vi.fn(),
     finalizeStockTake:          vi.fn(),
-    releasePieceForAdjust:      vi.fn(),
     markStockTakeSyncResolved:  vi.fn(),
     repushStockTakeSync:        vi.fn(),
   }
@@ -107,8 +105,9 @@ describe('FR-21 Step 6.3 — Stock Take Review screen', () => {
     vi.clearAllMocks()
   })
 
-  // str1: Mark lost is disabled pre-attest, enabled after attest-complete
-  test('str1 — Mark lost disabled pre-attest, enabled post-attest', async () => {
+  // str1 (2026-10-27): uncounted rows are read-only — no Found it / Mark lost / row checkboxes / bulk
+  // action; attest-complete still works
+  test('str1 — uncounted rows have no Found it / Mark lost; attest still works', async () => {
     vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(
       makeReconciliation({ buckets: { ...makeReconciliation().buckets, on_shelf_uncounted: [freePieceRow()] } })
     )
@@ -117,30 +116,20 @@ describe('FR-21 Step 6.3 — Stock Take Review screen', () => {
 
     renderReview()
 
-    const markLostBtns = await screen.findAllByText('Mark lost')
-    expect(markLostBtns[0]).toBeDisabled()
+    expect(await screen.findByText('Widget · Variant A')).toBeInTheDocument()
+    expect(screen.queryByText('Found it')).toBeNull()
+    expect(screen.queryByText('Mark lost')).toBeNull()
+    expect(screen.queryByText('Found it (selected)')).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
 
-    // After attest-complete, re-fetch returns completeCount=true.
     vi.mocked(api.getStockTakeSession).mockResolvedValue(makeSession({ completeCount: true }))
-    vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(
-      makeReconciliation({
-        completeCount: true,
-        buckets: { ...makeReconciliation().buckets, on_shelf_uncounted: [freePieceRow()] },
-      })
-    )
-
-    const attestBtn = await screen.findByText('Attest Complete')
-    await userEvent.click(attestBtn)
-
+    await userEvent.click(await screen.findByText('Attest Complete'))
     await waitFor(() => expect(api.attestStockTakeComplete).toHaveBeenCalledWith(SESSION_ID))
-    await waitFor(async () => {
-      const btns = await screen.findAllByText('Mark lost')
-      expect(btns[0]).not.toBeDisabled()
-    })
+    expect(api.resolveStockTake).not.toHaveBeenCalled()
   })
 
-  // str2: committed Mark-lost renders the AdjustPanel-style release card on 409
-  test('str2 — committed Mark-lost renders the inline release card', async () => {
+  // str2 (2026-10-27): a committed row links to its order and offers no write-off
+  test('str2 — committed rows link to the order, no Mark lost', async () => {
     vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(
       makeReconciliation({
         completeCount: true,
@@ -148,20 +137,15 @@ describe('FR-21 Step 6.3 — Stock Take Review screen', () => {
       })
     )
     vi.mocked(api.getStockTakeSession).mockResolvedValue(makeSession({ completeCount: true }))
-    vi.mocked(api.resolveStockTake).mockRejectedValue(
-      new api.StockTakeCommittedError({ error: 'PIECE_COMMITTED', orderId: 'order-1', orderNumber: '1001' })
-    )
 
     renderReview()
 
-    const markLostBtn = await screen.findByText('Mark lost')
-    await userEvent.click(markLostBtn)
-
-    expect(await screen.findByText('Piece is committed to an order')).toBeInTheDocument()
-    expect(screen.getByText('Release from order')).toBeInTheDocument()
+    expect(await screen.findByText('Gadget · Variant B')).toBeInTheDocument()
     expect(
       screen.getAllByText((_content, el) => el?.textContent === '#1001').length
     ).toBeGreaterThan(0)
+    expect(screen.queryByText('Mark lost')).toBeNull()
+    expect(screen.queryByText('Release from order')).toBeNull()
   })
 
   // str3: finalize shows a confirmation modal before calling POST /finalize, AND the

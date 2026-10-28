@@ -171,24 +171,22 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId, List.of(
-                new StockTakeReconciliationService.ResolveItem(lost1, "lost"),
-                new StockTakeReconciliationService.ResolveItem(lost2, "lost")), actorId);
         } finally {
             TenantContext.clear();
         }
-        assertThat(pieceStatus(lost1)).isEqualTo("lost");
-        assertThat(pieceStatus(lost2)).isEqualTo("lost");
-        assertThat(pieceStatus(committed)).as("committed piece untouched by write-off").isEqualTo("reserved");
 
+        // Write-offs happen at finalize (Mark lost was removed 2026-10-27): the two unscanned free pieces.
         Map<String, Object> result;
         TenantContext.set(tenantId);
         try {
-            result = reconciliation.finalizeSession(sessionId, actorId);
+            result = reconciliation.finalizeSession(sessionId, actorId, 2);
         } finally {
             TenantContext.clear();
         }
         assertThat(result.get("status")).isEqualTo("finalized");
+        assertThat(pieceStatus(lost1)).isEqualTo("lost");
+        assertThat(pieceStatus(lost2)).isEqualTo("lost");
+        assertThat(pieceStatus(committed)).as("committed piece untouched by write-off").isEqualTo("reserved");
 
         Integer deltaBefore = jdbc.queryForObject(
             "SELECT (payload->'deltas'->>?)::int FROM stock_take_shopify_syncs WHERE session_id = ?",
@@ -229,9 +227,7 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(lost, "lost")), actorId);
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 1); // writes off the unscanned piece
         } finally {
             TenantContext.clear();
         }
@@ -273,12 +269,10 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(lost, "lost")), actorId);
 
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 1); // writes off the unscanned piece
 
-            assertThatThrownBy(() -> reconciliation.finalizeSession(sessionId, actorId))
+            assertThatThrownBy(() -> reconciliation.finalizeSession(sessionId, actorId, 1))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                     .isEqualTo(HttpStatus.CONFLICT));
@@ -301,9 +295,7 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(lost, "lost")), actorId);
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 1); // writes off the unscanned piece
         } finally {
             TenantContext.clear();
         }
@@ -336,10 +328,7 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId, List.of(
-                new StockTakeReconciliationService.ResolveItem(lostA, "lost"),
-                new StockTakeReconciliationService.ResolveItem(lostB, "lost")), actorId);
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 2); // writes off both unscanned pieces
         } finally {
             TenantContext.clear();
         }
@@ -371,9 +360,7 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(lost, "lost")), actorId);
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 1); // writes off the unscanned piece
         } finally {
             TenantContext.clear();
         }
@@ -394,9 +381,7 @@ class StockTakeFinalizeTest {
         TenantContext.set(tenantId);
         try {
             reconciliation.attestComplete(sessionId, actorId);
-            reconciliation.resolve(sessionId,
-                List.of(new StockTakeReconciliationService.ResolveItem(lost, "lost")), actorId);
-            reconciliation.finalizeSession(sessionId, actorId);
+            reconciliation.finalizeSession(sessionId, actorId, 1); // writes off the unscanned piece
         } finally {
             TenantContext.clear();
         }

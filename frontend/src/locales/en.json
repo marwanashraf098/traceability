@@ -3158,12 +3158,6 @@
         "unexpected_finds": "Unexpected finds"
       },
       "bucketEmpty": "Nothing in this bucket",
-      "selectRow": "Select row",
-      "selectedCount": "{{count}} selected",
-      "foundSelected": "Found it (selected)",
-      "foundIt": "Found it",
-      "markLost": "Mark lost",
-      "markLostGatedTooltip": "Locked until the count is attested complete",
       "applyDamaged": "Apply — mark damaged",
       "terminalFlag": "Scanned good, recorded damaged",
       "terminalTooltip": "Reinstating a damaged piece requires manager review out of band",
@@ -3207,6 +3201,43 @@
         "syncAmbiguous": "Needs verification",
         "syncNothingToPush": "Nothing to send",
         "syncSuperseded": "Covered by stock seed"
+      },
+      "backToCounting": "Back to counting",
+      "uncountedHint": "Missed one? Use \"Found one? Scan it\" to count it. Anything still uncounted here is written off as lost when you finalize.",
+      "scan": {
+        "openButton": "Found one? Scan it",
+        "title": "Found one? Scan it",
+        "intro": "Scan a piece you missed. It is counted exactly as on the counting screen.",
+        "done": "Done",
+        "stillUncounted": "Still not counted ({{count}})",
+        "allCounted": "Every expected piece is counted.",
+        "outcome": {
+          "counted": "Counted",
+          "countedMismatch": "Counted — condition differs from Traced",
+          "alreadyCounted": "Already counted",
+          "notInCount": "Not in this count — recorded as an unexpected find",
+          "unknown": "Unknown barcode",
+          "refused": "Not counted"
+        }
+      },
+      "writeOffList": {
+        "title": "These {{count}} piece(s) will be written off as lost:",
+        "shopifyMinus": "Shopify −{{count}}",
+        "tracedOnly": "Traced only"
+      },
+      "finalized": {
+        "counted": "Counted in this count ({{count}})",
+        "writtenOff": "Written off by this count ({{count}})",
+        "found": "Found by this count ({{count}})",
+        "lookupHint": "Found one later? Open it in Lookup and use Found It — it goes back into stock.",
+        "openLookup": "Open Lookup"
+      },
+      "error": {
+        "400": "That request wasn't accepted — reload the page and try again.",
+        "403": "You don't have permission to do this.",
+        "404": "This count wasn't found — reload the page.",
+        "409": "This count changed meanwhile — reload the page and try again.",
+        "generic": "Something went wrong — try again."
       }
     },
     "sync": {

@@ -1639,7 +1639,8 @@ export type StockTakeScopeType = 'all' | 'variant_subset'
 export type StockTakeCondition = 'good' | 'damaged'
 export type StockTakeClassification =
   | 'match' | 'condition_mismatch' | 'unexpected_resurfaced' | 'out_of_scope' | 'unknown'
-export type StockTakeResolveAction = 'found' | 'lost' | 'mark_damaged'
+/** found / lost were removed 2026-10-27 (a missed piece is scanned; finalize writes off the rest). */
+export type StockTakeResolveAction = 'mark_damaged'
 export type StockTakeSyncStatus =
   'pending' | 'pushed' | 'failed' | 'failed_ambiguous' | 'nothing_to_push' | 'superseded_by_seed'
 
@@ -1824,6 +1825,10 @@ export interface StockTakePieceRow {
   reason?: string
   /** Q1b: the scan's device; null when the piece wasn't scanned. */
   scanDevice?: ScanDevice | null
+  shortCode?: string | null
+  /** This session's finalize wrote the piece off / brought it back (the finalized review's lists). */
+  writtenOffHere?: boolean
+  foundHere?: boolean
 }
 
 export interface StockTakeVariantRollup {
@@ -1853,6 +1858,17 @@ export interface StockTakeFinalizeVariant {
   shopifyDecrement: number
 }
 
+/** One labeled piece finalize will write off. shopifyEffect: −1 for available → lost, 0 otherwise. */
+export interface StockTakeWriteOffPiece {
+  pieceId: string
+  shortCode: string | null
+  productTitle: string
+  variantTitle: string
+  variantId: string
+  origin: 'available' | 'damaged' | 'on_hold'
+  shopifyEffect: number
+}
+
 /** What finalize will do right now — computed by the same backend method finalize runs. */
 export interface StockTakeFinalizePlan {
   scans: number
@@ -1860,6 +1876,8 @@ export interface StockTakeFinalizePlan {
   scannedFree: number
   coveragePercent: number
   writeOffs: number
+  /** Every labeled piece in writeOffs (untagged write-offs are the per-variant untagged lines). */
+  writeOffPieces?: StockTakeWriteOffPiece[]
   damageCorrections: number
   founds: number
   foundIncrements: number
@@ -1912,51 +1930,47 @@ export interface StockTakeResolveResult {
 }
 
 /**
- * POST /resolve — batch. On a `lost` action against a committed piece the backend
- * throws PieceCommittedException (409, same body shape as the existing FR-13 one).
- *
- * Does its own fetch rather than going through the shared request() helper: request()
- * only preserves `${status}: ${statusText}` on a non-2xx response, never the JSON body —
- * which is also why PieceCommittedError parsing in Lookup.tsx's AdjustPanel
- * (JSON.parse(err.message.replace(/^409: /, ''))) can never actually succeed over a
- * real network call today; it only "works" in adjust.test.tsx because that test mocks
- * adjustPiece() directly and never exercises request() at all. Widening request()'s
- * error contract for every caller in the app is a bigger change than this endpoint
- * needs — this function parses its own 409 body instead, scoped to stock-take alone.
+ * A stock-take command that failed. The server's own message when it sent one (an ApiException body —
+ * code, message_en, message_ar), else just the status, which the screen turns into readable text
+ * (stockTakeErrorText) — never a bare "404: ".
  */
+export class StockTakeRequestError extends Error {
+  constructor(public status: number, public code?: string, public messageEn?: string, public messageAr?: string) {
+    super(messageEn || `HTTP ${status}`)
+  }
+  serverMessage(lang: string): string | undefined {
+    return (lang.startsWith('ar') ? this.messageAr : undefined) || this.messageEn || undefined
+  }
+}
+
+async function stockTakeCommand<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await authFetch(path, {
+    ...init,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
+  })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    throw new StockTakeRequestError(res.status, b?.code, b?.message_en, b?.message_ar)
+  }
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null as T
+  const ct = res.headers.get('content-type') ?? ''
+  return (ct.includes('application/json') ? await res.json() : null) as T
+}
+
+/** POST /resolve — batch; mark_damaged only (Apply damaged on a condition_mismatch row). */
 export async function resolveStockTake(
   sessionId: string,
   items: StockTakeResolveItem[],
 ): Promise<StockTakeResolveResult[]> {
-  const token = getAccessToken()
-  const res = await fetch(`${BASE}/stock-takes/sessions/${sessionId}/resolve`, {
+  return (await stockTakeCommand<StockTakeResolveResult[]>(`/stock-takes/sessions/${sessionId}/resolve`, {
     method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
     body: JSON.stringify(items),
-  })
-  if (res.status === 409) {
-    const body: PieceCommittedError = await res.json()
-    throw new StockTakeCommittedError(body)
-  }
-  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
-  if (res.status === 204 || res.headers.get('content-length') === '0') return []
-  return res.json()
-}
-
-export class StockTakeCommittedError extends Error {
-  body: PieceCommittedError
-  constructor(body: PieceCommittedError) {
-    super('PIECE_COMMITTED')
-    this.body = body
-  }
+  })) ?? []
 }
 
 export function attestStockTakeComplete(sessionId: string) {
-  return request<{ sessionId: string; completeCount: boolean }>(
+  return stockTakeCommand<{ sessionId: string; completeCount: boolean }>(
     `/stock-takes/sessions/${sessionId}/attest-complete`, { method: 'POST' })
 }
 
@@ -1969,10 +1983,10 @@ export interface FinalizeStockTakeResult {
 /** confirmWriteOffs: the write-off count the user typed, when the finalize plan requires it. */
 export function finalizeStockTake(sessionId: string, confirmWriteOffs?: number) {
   if (confirmWriteOffs === undefined) {
-    return request<FinalizeStockTakeResult>(
+    return stockTakeCommand<FinalizeStockTakeResult>(
       `/stock-takes/sessions/${sessionId}/finalize`, { method: 'POST' })
   }
-  return request<FinalizeStockTakeResult>(
+  return stockTakeCommand<FinalizeStockTakeResult>(
     `/stock-takes/sessions/${sessionId}/finalize`,
     { method: 'POST', body: JSON.stringify({ confirmWriteOffs }) })
 }
@@ -1982,12 +1996,12 @@ export function cancelStockTake(sessionId: string) {
 }
 
 export function markStockTakeSyncResolved(sessionId: string) {
-  return request<{ sessionId: string; status: string }>(
+  return stockTakeCommand<{ sessionId: string; status: string }>(
     `/stock-takes/sessions/${sessionId}/sync/mark-resolved`, { method: 'POST' })
 }
 
 export function repushStockTakeSync(sessionId: string) {
-  return request<{ sessionId: string; status: string }>(
+  return stockTakeCommand<{ sessionId: string; status: string }>(
     `/stock-takes/sessions/${sessionId}/sync/repush`, { method: 'POST' })
 }
 
@@ -1999,10 +2013,9 @@ export function repushStockTakeSync(sessionId: string) {
 //    2xx JSON endpoint; success:false is a normal, non-throwing outcome.
 //  - "command" family (create/begin-reconcile/classify/close): thrown server-side as
 //    TransferException, mapped to a real HTTP status + {code, message_en, message_ar}
-//    body. request() only preserves "<status>: <statusText>" on non-2xx (same
-//    limitation noted above resolveStockTake), so these go through their own fetch
-//    that parses the body and throws TransferCommandError — one shared helper here
-//    since (unlike stock-take's single call site) there are four.
+//    body. request() only preserves "<status>: <statusText>" on non-2xx (the same
+//    limitation stockTakeCommand works around), so these go through their own fetch
+//    that parses the body and throws TransferCommandError — one shared helper here.
 //
 // The frontend must render message_en/message_ar AS-IS, never re-derive text from
 // `code` — one source of truth, no double-localization (explicit build requirement).

@@ -7,7 +7,9 @@ import org.jobrunr.scheduling.JobScheduler;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
@@ -20,9 +22,9 @@ import java.util.UUID;
 /**
  * FR-21 Step 4: disposition report (reconciliation) + resolutions.
  *
- * Resolution actions in this build: found, lost (free stock, gated on complete_count),
- * lost (committed -> routes through the existing FR-13.2 PieceCommittedException guard),
- * and mark_damaged (available -> damaged via PieceAdjustService, the existing move path).
+ * Resolution actions: mark_damaged only (available -> damaged via PieceAdjustService, the
+ * existing move path). found / lost were removed 2026-10-27 — a missed piece is scanned, and
+ * finalize writes off what wasn't counted.
  *
  * damaged -> available ("mark_available") is deliberately NOT offered here — approved
  * scope decision. A piece that's damaged in the snapshot but scanned good shows up as a
@@ -41,12 +43,21 @@ public class StockTakeReconciliationService {
         "with_courier_or_delivered", "returns_bench", "damaged",
         "previously_written_off", "unexpected_finds");
 
+    /** 2026-10-27: did THIS session's finalize write the piece off / bring it back (the finalized review lists). */
+    private static String sessionEventSql(String pieceCol, String sessionCol, String toStatus, String reason) {
+        return "EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = p.tenant_id AND pe.piece_id = " + pieceCol +
+            " AND pe.to_status = '" + toStatus + "'::piece_status AND pe.metadata->>'reason' = '" + reason + "'" +
+            " AND pe.metadata->>'session_id' = " + sessionCol + "::text)";
+    }
+
     private static final String EXPECTED_QUERY =
-        "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, " +
+        "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, p.short_code, " +
         "       se.status_at_open, p.status::text AS live_status, se.untagged_at_open, " +
         "       (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, ts.scan_device, " +
         "       o.id AS order_id, o.number AS order_number, " +
-        "       s.id AS shipment_id, s.tracking_number " +
+        "       s.id AS shipment_id, s.tracking_number, " +
+        "       " + sessionEventSql("se.piece_id", "se.session_id", "lost", "stock_take_missing") + " AS written_off_here, " +
+        "       " + sessionEventSql("se.piece_id", "se.session_id", "available", "stock_take_found") + " AS found_here " +
         "FROM stock_take_expected se " +
         "JOIN pieces p ON p.id = se.piece_id AND p.tenant_id = se.tenant_id " +
         "JOIN variants v ON v.id = se.variant_id " +
@@ -58,8 +69,10 @@ public class StockTakeReconciliationService {
         "ORDER BY pr.title, v.title, p.id";
 
     private static final String UNEXPECTED_QUERY =
-        "SELECT ts.piece_id, p.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, " +
-        "       p.status::text AS live_status, ts.scan_device " +
+        "SELECT ts.piece_id, p.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, p.short_code, " +
+        "       p.status::text AS live_status, ts.scan_device, " +
+        "       " + sessionEventSql("ts.piece_id", "ts.session_id", "lost", "stock_take_missing") + " AS written_off_here, " +
+        "       " + sessionEventSql("ts.piece_id", "ts.session_id", "available", "stock_take_found") + " AS found_here " +
         "FROM stock_take_scans ts " +
         "JOIN pieces p ON p.id = ts.piece_id AND p.tenant_id = ts.tenant_id " +
         "JOIN variants v ON v.id = p.variant_id " +
@@ -79,13 +92,15 @@ public class StockTakeReconciliationService {
     private final JobScheduler        jobScheduler;
     private final StockTakeShopifyPushJob pushJob;
     private final ShopifyInventoryService shopifyInventory;
+    private final TransactionTemplate tx;
 
     public StockTakeReconciliationService(JdbcTemplate jdbc, StockTakeService stockTake,
                                           InventoryLedger ledger, PieceAdjustService pieceAdjustService,
                                           com.traceability.account.AuditService auditService,
                                           ObjectMapper mapper, JobScheduler jobScheduler,
                                           StockTakeShopifyPushJob pushJob,
-                                          ShopifyInventoryService shopifyInventory) {
+                                          ShopifyInventoryService shopifyInventory,
+                                          PlatformTransactionManager txm) {
         this.jdbc               = jdbc;
         this.stockTake          = stockTake;
         this.ledger             = ledger;
@@ -95,6 +110,7 @@ public class StockTakeReconciliationService {
         this.jobScheduler       = jobScheduler;
         this.pushJob            = pushJob;
         this.shopifyInventory   = shopifyInventory;
+        this.tx                 = new TransactionTemplate(txm);
     }
 
     // ── Reconciliation (disposition report) ──────────────────────────────────
@@ -226,6 +242,9 @@ public class StockTakeReconciliationService {
         m.put("sku", row.get("sku"));
         m.put("productTitle", row.get("product_title"));
         m.put("liveStatus", row.get("live_status"));
+        m.put("shortCode", row.get("short_code"));
+        m.put("writtenOffHere", Boolean.TRUE.equals(row.get("written_off_here")));
+        m.put("foundHere", Boolean.TRUE.equals(row.get("found_here")));
         if (row.get("order_id") != null) {
             m.put("orderId", row.get("order_id"));
             m.put("orderNumber", row.get("order_number"));
@@ -259,133 +278,47 @@ public class StockTakeReconciliationService {
 
     public record ResolveItem(String pieceId, String action) {}
 
+    /** The only resolution left on the review screen (2026-10-27): Apply damaged on a condition_mismatch row. */
+    static final String ACTION_MARK_DAMAGED = "mark_damaged";
+
     /**
-     * Deliberately NOT @Transactional at the batch level: each item's resolution (found /
-     * lost / mark_damaged) already commits atomically on its own via ledger.transition() or
-     * PieceAdjustService's own @Transactional boundary. If this method were wrapped in one
-     * shared transaction, a StateConflictException from the drift guard on item N — even
-     * caught right here — would still mark the whole physical transaction rollback-only
-     * (REQUIRED propagation joins ledger.transition()'s transaction into this one), dooming
-     * every OTHER item in the same batch to UnexpectedRollbackException at commit time. Each
-     * resolution must stand alone so one drift-guard skip can't take the rest of the batch
-     * down with it.
+     * Batch of mark_damaged resolutions. Each item runs in its OWN transaction (TransactionTemplate),
+     * never one shared batch transaction: the tenant GUC is set only when a transaction begins
+     * (TenantAwareConnection), so a read outside one sees nothing under app_user / RLS — the cause of
+     * the 2026-10-27 bare-404 bug — and a shared transaction would let one item's failure mark the
+     * whole batch rollback-only.
+     *
+     * Found it / Mark lost were removed (2026-10-27): a missed piece is counted by scanning it (the
+     * review screen's scan overlay, the same StockTakeService.scan path), and finalize writes off what
+     * wasn't counted. Both are refused with 400 STOCK_TAKE_ACTION_REMOVED before anything is read.
      */
     public List<Map<String, Object>> resolve(UUID sessionId, List<ResolveItem> items, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-        StockTakeService.SessionRow session = stockTake.requireOpenSession(sessionId, tenantId);
-
         if (items == null || items.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "at least one resolution item is required");
         }
+        for (ResolveItem item : items) {
+            if (!ACTION_MARK_DAMAGED.equals(item.action())) throw StockTakeActionRemovedException.of(item.action());
+        }
+        StockTakeService.SessionRow session = tx.execute(st -> stockTake.requireOpenSession(sessionId, tenantId));
 
         List<Map<String, Object>> results = new ArrayList<>();
         for (ResolveItem item : items) {
-            results.add(resolveOne(session, tenantId, item.pieceId(), item.action(), actorUserId));
+            results.add(tx.execute(st -> resolveOne(session, tenantId, item.pieceId(), actorUserId)));
         }
         return results;
     }
 
     private Map<String, Object> resolveOne(StockTakeService.SessionRow session, UUID tenantId,
-                                           String pieceId, String action, UUID actorUserId) {
-        // Slice 7: an untagged piece is counted per variant — never found / written off / damaged one by one.
+                                           String pieceId, UUID actorUserId) {
+        // Slice 7: an untagged piece is counted per variant — never corrected one by one.
         if (UntaggedPieces.isUntagged(jdbc, tenantId, pieceId) || Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM stock_take_expected WHERE session_id = ? AND tenant_id = ? " +
                 "  AND piece_id = ? AND untagged_at_open)", Boolean.class, session.id(), tenantId, pieceId))) {
             throw com.traceability.labels.UntaggedException.countedPerProduct();
         }
-        return switch (action) {
-            case "found"        -> resolveFound(session, tenantId, pieceId, actorUserId);
-            case "lost"         -> resolveLost(session, tenantId, pieceId, actorUserId);
-            case "mark_damaged" -> resolveMarkDamaged(session, pieceId, actorUserId);
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "action must be one of: found, lost, mark_damaged");
-        };
-    }
-
-    /**
-     * "Found it": the piece is still physically on shelf, just missed by the scanner.
-     * Appends a manager_found scan row — NO piece_event, nothing about the piece changed.
-     * Moves the piece from on_shelf_uncounted to on_shelf_counted / damaged on the next
-     * reconciliation read.
-     */
-    private Map<String, Object> resolveFound(StockTakeService.SessionRow session, UUID tenantId,
-                                             String pieceId, UUID actorUserId) {
-        fetchStatusAtOpen(session.id(), tenantId, pieceId); // 404 if not in this session's snapshot
-        String liveStatus = fetchLiveStatus(pieceId, tenantId);
-
-        if (!"available".equals(liveStatus) && !"damaged".equals(liveStatus)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece is not currently on shelf (status=" + liveStatus + ") — cannot mark found");
-        }
-
-        String condition = "damaged".equals(liveStatus) ? "damaged" : "good";
-        int rows = jdbc.update(
-            "INSERT INTO stock_take_scans " +
-            "(id, tenant_id, session_id, piece_id, scanned_condition, source, actor_user_id) " +
-            "VALUES (gen_random_uuid(), ?, ?, ?, ?, 'manager_found', ?) " +
-            "ON CONFLICT (session_id, piece_id) WHERE piece_id IS NOT NULL DO NOTHING",
-            tenantId, session.id(), pieceId, condition, actorUserId);
-
-        if (rows == 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Piece was already scanned in this session");
-        }
-
-        return Map.of("pieceId", pieceId, "action", "found", "result", "match");
-    }
-
-    /**
-     * Write-off, routed by status_at_open (the snapshot's own classification), not live
-     * status:
-     *  - committed at snapshot time (reserved/packed/awaiting_pickup) -> reuse the exact
-     *    PieceCommittedException PieceAdjustService.adjustPiece() throws for the same
-     *    reason, pointing the caller at releaseForAdjust (FR-13.2). No one-tap write-off.
-     *  - free stock at snapshot time (available/damaged) -> gated on complete_count, then
-     *    ledger.transition(expectedStatus = status_at_open, -> LOST). The drift guard is
-     *    exactly this optimistic UPDATE: if the piece moved between snapshot and now (a
-     *    real pick, say), the WHERE clause won't match and StateConflictException fires —
-     *    caught here and surfaced as a skip, never forced through.
-     *  - anything else (with_courier/delivered/returns bench/already lost or destroyed) ->
-     *    not eligible for a stock-take write-off at all.
-     */
-    private Map<String, Object> resolveLost(StockTakeService.SessionRow session, UUID tenantId,
-                                            String pieceId, UUID actorUserId) {
-        String statusAtOpen = fetchStatusAtOpen(session.id(), tenantId, pieceId);
-
-        if (COMMITTED_STATUSES.contains(statusAtOpen)) {
-            Map<String, Object> order = fetchCommittedOrder(pieceId, tenantId);
-            if (order != null) {
-                throw new PieceCommittedException(
-                    (UUID) order.get("orderId"), (String) order.get("orderNumber"));
-            }
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece was committed to an order at snapshot time (status_at_open=" + statusAtOpen +
-                ") — release it from the order first (release-for-adjust) before writing it off");
-        }
-
-        if (!"available".equals(statusAtOpen) && !"damaged".equals(statusAtOpen)) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Piece was not free stock at snapshot time (status_at_open=" + statusAtOpen +
-                ") — cannot write off via stock take");
-        }
-
-        if (!session.completeCount()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Write-offs are locked until the count is attested complete");
-        }
-
-        PieceStatus expected = PieceStatus.fromDb(statusAtOpen);
-        String metadata = "{\"session_id\":\"" + session.id() + "\",\"reason\":\"stock_take_missing\"}";
-        try {
-            ledger.transition(pieceId, expected, PieceStatus.LOST, "adjusted", actorUserId,
-                new TransitionContext(null, null, null, null, metadata));
-        } catch (StateConflictException e) {
-            return Map.of("pieceId", pieceId, "action", "lost", "result", "skipped_changed_during_count");
-        }
-
-        auditService.record(actorUserId, "stock_take_write_off", "piece", pieceId,
-            Map.of("sessionId", session.id().toString(), "statusAtOpen", statusAtOpen));
-        return Map.of("pieceId", pieceId, "action", "lost", "result", "written_off");
+        return resolveMarkDamaged(session, pieceId, actorUserId);
     }
 
     /** Condition correction: available -> damaged, via the existing PieceAdjustService path
@@ -394,7 +327,7 @@ public class StockTakeReconciliationService {
                                                     String pieceId, UUID actorUserId) {
         pieceAdjustService.adjustPiece(pieceId, "damaged", "damaged_in_storage",
             "Condition correction during stock take " + session.id(), actorUserId);
-        return Map.of("pieceId", pieceId, "action", "mark_damaged", "result", "damaged");
+        return Map.of("pieceId", pieceId, "action", ACTION_MARK_DAMAGED, "result", "damaged");
     }
 
     // ── Attest-complete / cancel ──────────────────────────────────────────────
@@ -419,7 +352,24 @@ public class StockTakeReconciliationService {
     /** Free stock: what a count can write off when it isn't on the shelf. */
     private static final Set<String> FREE_STATUSES = Set.of("available", "damaged", "on_hold");
 
-    public record WriteOff(String pieceId, UUID variantId, String origin) {}
+    /** origin = status_at_open (available / damaged / on_hold); the display fields feed the finalize confirm. */
+    public record WriteOff(String pieceId, UUID variantId, String origin,
+                           String shortCode, String productTitle, String variantTitle) {
+        /** −1 in Shopify only for available → lost; damaged / on_hold units already left Shopify "available". */
+        public int shopifyEffect() { return "available".equals(origin) ? -1 : 0; }
+
+        Map<String, Object> toResponse() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("pieceId", pieceId);
+            m.put("shortCode", shortCode);
+            m.put("productTitle", productTitle);
+            m.put("variantTitle", variantTitle);
+            m.put("variantId", variantId);
+            m.put("origin", origin);
+            m.put("shopifyEffect", shopifyEffect());
+            return m;
+        }
+    }
     public record Found(String pieceId, UUID variantId, boolean shopifyIncrement) {}
 
     /**
@@ -477,6 +427,8 @@ public class StockTakeReconciliationService {
             m.put("scannedFree", scannedFree);
             m.put("coveragePercent", Math.round(10000.0 * coverage()) / 100.0);
             m.put("writeOffs", writeOffs.size());
+            // 2026-10-27: every labeled piece finalize writes off, for the confirm's list (totals unchanged).
+            m.put("writeOffPieces", writeOffs.stream().map(WriteOff::toResponse).toList());
             m.put("damageCorrections", damageCorrections.size());
             m.put("founds", founds.size());
             m.put("foundIncrements", founds.stream().filter(Found::shopifyIncrement).count());
@@ -502,6 +454,7 @@ public class StockTakeReconciliationService {
 
     private static final String PLAN_EXPECTED_QUERY =
         "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, se.status_at_open, " +
+        "       p.short_code, pr.title AS product_title, " +
         "       p.status::text AS live_status, (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, " +
         "       " + UntaggedPieces.untaggedSql("p") + " AS untagged, se.untagged_at_open, " +
         "       EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = se.tenant_id AND pe.piece_id = se.piece_id " +
@@ -510,6 +463,7 @@ public class StockTakeReconciliationService {
         "FROM stock_take_expected se " +
         "JOIN pieces p ON p.id = se.piece_id AND p.tenant_id = se.tenant_id " +
         "JOIN variants v ON v.id = se.variant_id " +
+        "JOIN products pr ON pr.id = v.product_id " +
         "LEFT JOIN stock_take_scans ts ON ts.session_id = se.session_id AND ts.piece_id = se.piece_id " +
         "WHERE se.session_id = ? AND se.tenant_id = ? " +
         "ORDER BY v.title, se.piece_id";
@@ -560,7 +514,8 @@ public class StockTakeReconciliationService {
                 if ("available".equals(atOpen)) v.put("shopifyDecrement", (Integer) v.get("shopifyDecrement") + 1);
                 v.put("alreadyWrittenOff", (Integer) v.get("alreadyWrittenOff") + 1);
             } else if (atOpen.equals(live)) {
-                writeOffs.add(new WriteOff(pieceId, variantId, atOpen));
+                writeOffs.add(new WriteOff(pieceId, variantId, atOpen, (String) r.get("short_code"),
+                    (String) r.get("product_title"), (String) r.get("variant_title")));
                 String key = switch (atOpen) { case "available" -> "available"; case "damaged" -> "damaged"; default -> "onHold"; };
                 v.put(key, (Integer) v.get(key) + 1);
                 if ("available".equals(atOpen)) v.put("shopifyDecrement", (Integer) v.get("shopifyDecrement") + 1);
@@ -863,42 +818,4 @@ public class StockTakeReconciliationService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private String fetchStatusAtOpen(UUID sessionId, UUID tenantId, String pieceId) {
-        String statusAtOpen = jdbc.query(
-            "SELECT status_at_open FROM stock_take_expected " +
-            "WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
-            rs -> rs.next() ? rs.getString("status_at_open") : null,
-            sessionId, pieceId, tenantId);
-        if (statusAtOpen == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Piece " + pieceId + " is not part of this stock take's snapshot");
-        }
-        return statusAtOpen;
-    }
-
-    private String fetchLiveStatus(String pieceId, UUID tenantId) {
-        String status = jdbc.query(
-            "SELECT status::text FROM pieces WHERE id = ? AND tenant_id = ?",
-            rs -> rs.next() ? rs.getString(1) : null,
-            pieceId, tenantId);
-        if (status == null) {
-            throw new PieceNotFoundException(pieceId);
-        }
-        return status;
-    }
-
-    private Map<String, Object> fetchCommittedOrder(String pieceId, UUID tenantId) {
-        return jdbc.query(
-            "SELECT o.id AS order_id, o.number AS order_number " +
-            "FROM allocations a " +
-            "JOIN order_items oi ON oi.id = a.order_item_id " +
-            "JOIN orders o ON o.id = oi.order_id " +
-            "WHERE a.piece_id = ? AND a.tenant_id = ? AND a.status IN ('active','packed') " +
-            "LIMIT 1",
-            rs -> rs.next() ? Map.of(
-                "orderId", rs.getObject("order_id", UUID.class),
-                "orderNumber", rs.getString("order_number")) : null,
-            pieceId, tenantId);
-    }
 }
