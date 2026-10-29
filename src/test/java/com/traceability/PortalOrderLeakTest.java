@@ -341,13 +341,20 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/return-requests/{id}/photos/{photoId}",  skip(R_RETURNS));
         for (String a : List.of("approve", "reject", "close", "rest-not-coming", "mark-refunded", "refunds", "link-leg",
                                 "switch-to-refund", "booking/book-now", "booking/confirm", "booking/not-booked", "booking/retry",
-                                "manual-courier")) {
+                                "manual-courier", "cancel-exchange")) {
             reg("POST /api/v1/return-requests/{id}/" + a, skip(R_RETURNS));
         }
         reg("POST /api/v1/return-requests/{id}/refunds/{refundId}/void", skip(R_RETURNS));
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived",      skip(R_RETURNS));
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived/undo", skip(R_RETURNS));
         reg("PUT /api/v1/return-requests/{id}/pickup-area", skip(R_RETURNS));
+        // C2 (2026-10-28): Lookup Exchange — the original-order search reads merchant_orders minus internal orders;
+        // what can come back is by order id; the create takes the order in its body (merchant_orders → ORDER_NOT_FOUND
+        // for a portal order — LookupExchangeTest).
+        reg("GET /api/v1/lookup-exchange/orders",        list("?q=PPCLEAK", "?q=0109999990"));
+        reg("GET /api/v1/lookup-exchange/orders/{orderId}/returnables", byOrder());
+        reg("POST /api/v1/pieces/{id}/exchange",         skip("orderId in the body, read through merchant_orders "
+            + "(LookupExchangeService.requireOriginalOrder) — a portal order is ORDER_NOT_FOUND, LookupExchangeTest"));
         reg("GET /api/v1/refunds",                       skip(R_RETURNS));
         reg("GET /api/v1/returns/pending",               skip(R_RETURNS));
         reg("GET /api/v1/returns/awaiting-scan",         skip(R_RETURNS));

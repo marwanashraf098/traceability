@@ -12,3 +12,5 @@ src/main/resources/static/
 # Vitest browser mode (npm run test:browser): failure screenshots / attachments
 frontend/.vitest-attachments/
 frontend/src/test-browser/__screenshots__/
+# Node downloaded by the Maven frontend build (frontend-maven-plugin)
+frontend/node/

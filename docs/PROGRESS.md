@@ -4,6 +4,48 @@
 
 ## Current state
 
+**C2 Lookup Exchange — a merchant exchange from Lookup on stores with their own courier (2026-10-28, branch
+`feat/lookup-exchange` off origin/main 26106ce; NOT merged, NOT deployed). V193.** Step-0-light 2026-10-28 + Marawan's
+decisions the same day (reserved → packed → with_courier via the two existing edges; main-warehouse pieces only;
+outbound tracking also on 'exchanged' for Lookup requests; releaseForAdjust refuses a Lookup exchange piece; the request
+drawer is the home — no order-page view; reason picker optional, default 'other'; no inactive-product check; untagged
+pieces refused). Full rules in CLAUDE.md "LOOKUP EXCHANGE".
+- **V193:** `return_requests.origin` ('portal' default | 'lookup'); `shipment_status_history.source` + 'lookup_dispatch'
+  (V173's CHECK re-created, V173 not edited). No RLS change. MigrationSmokeTest 192 files, NotTracedBackfillTest 137.
+- **Backend:** `LookupExchangeService` / `LookupExchangeController` (search, returnables, create, cancel — gate
+  `gateOpen`: generic on AND no active Bosta account); `GenericLegTransitions.dispatchLookupReplacement` (tracking →
+  with_courier + the Step-5a decrement once, after commit); `manualCourier` dispatches for Lookup and takes the outbound
+  waybill on 'exchanged'; `FulfillService` scan / complete `NOT_PICKABLE` for a Lookup replacement order; the
+  replacement order is 'confirmed' until it leaves; `releaseForAdjust` → `RESERVED_TO_LOOKUP_EXCHANGE`;
+  `ReturnReferences` (RR- generator extracted from PortalService); Lookup piece keys `canExchange` / `lookupExchange`
+  (only when they apply); drawer `otherCourier.replacement.lookupExchange`. processExchangeDispatch, leavesCustody and
+  the named decrement set NOT edited.
+- **Risk checked:** no stuck / overdue alert fires on a generic with_courier forward leg (`detectStuck` skips
+  `provider = 'generic'`; the generic detectors key on Shopify fulfillments / cancelled orders) — no change needed.
+- **Frontend:** Lookup "Exchange" (owner / manager, server flag) → `LookupExchangeDialog` (order search → what comes back
+  → optional reason / courier / waybills); reserved piece names its exchange with a link; exchange drawer view
+  `LookupExchangePanel` ("Reserved for this exchange — no waybill yet", Cancel exchange after a confirm, nothing once it
+  left); `ManualCourierPanel` copy for Lookup ("Save and hand to the courier"). EN + AR (RTL: logical classes, bdi,
+  dir=ltr on codes / waybills).
+- **Tests:** LookupExchangeTest 9 (le1–le9); vitest lookupExchange 13. Existing tests touched (classification only, as
+  for C1 / places): PortalOrderLeakTest (the 4 new endpoints), RlsCoverageTest (2 GET endpoints COVERED + one
+  cross-tenant test with a same-tenant positive control), MigrationSmokeTest, NotTracedBackfillTest.
+- **Suites (2026-10-28/29, on 26106ce + the branch):** backend 3,485 run, 4 skipped — red: ExchangeBackfillTest
+  (documented exception); RlsCoverageTest (the 2 new GETs, fixed in the coverage commit → 84/84 alone);
+  ReviewModeMuteTest (its context load took 2,397 s while the Mac was throttled on battery → 7/7 alone).
+  LookupExchangeTest 9/9, the 9 guard classes + MigrationSmoke + NotTraced 70/70. Vitest 1,238 + the analytics r2
+  flake under load (20/20 alone); browser 217 + 1 skipped; tsc clean.
+- **Review fixes (Marawan 2026-10-29):** Orders' Cancel order refuses a Lookup exchange order while the replacement
+  hasn't left (409 LOOKUP_EXCHANGE_ORDER names the request, points to Cancel exchange; OrderDrawer shows the server copy;
+  LookupExchangeTest.le10 + a normal-order control, orderDrawerLookupExchangeCancel EN + AR); the exchange progress
+  skips "being packed" for Lookup exchanges; screenshot harness `frontend/dev/lookup-exchange-shots/` (64 shots: 3
+  dialog steps, 8 refusals, untagged / reserved Lookup pieces, drawer reserved / cancel confirm / after dispatch; EN + AR,
+  desktop + phone). Rebased on origin/main 84ca110 (no new migrations; V193, counts 192 / 137).
+- **Final run on power (2026-10-29, after the rebase):** backend 3,504 run, 4 skipped, only ExchangeBackfillTest red.
+  Vitest 1,207 / 1,224 under load avg 18–107 (another session's Docker VM at 99% CPU): the 17 failures (12 files, mostly
+  5 s timeouts) → 184 / 185 rerun alone; the last one, analyticsSummary r2 (first App render, 1 s wait), is 3 / 3 green
+  on the branch and 3 / 3 on origin/main run alternately under the same load.
+- **Next free migration: V194.**
 **Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
 ae26df3, main 26106ce merged in 2026-10-28; NOT merged to main, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
 "Found it (selected)" / "Mark lost" / "Apply damaged" answered a bare 404 on an OPEN session, then finalize wrote off
@@ -168,9 +210,9 @@ read-only): 21 connected stores, all with write_locations and the main location 
 the other outcomes need the post-deploy dry run (`SELECT shopify_address_outcome, shopify_address_dry_run, count(*)
 FROM locations WHERE is_fulfillment GROUP BY 1,2`). Write mode NOT run. Tests: LocationAddressTest 17 (incl. app_user
 RLS, renamed location); full suite on the merge with main 470055e: 3,365 run, only ExchangeBackfillTest fails (pre-existing); revert-checked.
-- **Next:** B merged (ae26df3) and deployed 2026-10-27; C1 merged 2026-10-28 (V188; deploy is Marawan's). Then C2's
-  Step-0-light. Next free migration: V192 (places S1 took V189–V191).
-- **C2 spec decision (Marawan 2026-10-25, not built):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
+- **Next:** B merged (ae26df3) and deployed 2026-10-27; C1 merged 2026-10-28 (V188). C2 built 2026-10-28 on
+  `feat/lookup-exchange` (V193), awaiting review. Next free migration: V194.
+- **C2 spec decision (Marawan 2026-10-25; BUILT 2026-10-28, see the C2 entry at the top):** for Lookup-origin exchanges only (`origin='lookup'`), attaching
   the outbound tracking number moves the replacement piece out of custody (→ with_courier) and the existing 4th
   decrement (Step 5a, `exchange_dispatch`) fires once — no pick / pack / Pickups required. Portal (G4b) exchanges are
   unchanged. C2 gets its own Step-0-light check before build.

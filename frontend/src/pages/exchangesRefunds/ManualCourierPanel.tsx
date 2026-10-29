@@ -23,6 +23,10 @@ export default function ManualCourierPanel({ detail, onChanged }: {
   const other = detail.otherCourier!
   const exchange = detail.type === 'exchange'
   const outboundSet = other.replacement?.outboundTrackingNumber ?? null
+  // C2 — an exchange made in Lookup: the replacement is in hand, so its waybill hands it to the courier at once.
+  // Its outbound waybill can still be entered after the old item came back ('exchanged'); nothing else can then.
+  const lookup = other.replacement?.lookupExchange ?? null
+  const lateOutbound = !!lookup && detail.status === 'exchanged' && !outboundSet && !lookup.cancelled
   const returnSet = detail.returnTrackingNumber ?? null
   const current = other.carrierName ?? other.forwardCarrierName ?? ''
   const [carrier, setCarrier] = useState(current)
@@ -31,11 +35,11 @@ export default function ManualCourierPanel({ detail, onChanged }: {
   const [carriers, setCarriers] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const editable = detail.bookingStatus === 'manual' && (exchange
-    ? (detail.status === 'approved' || detail.status === 'pickup_booked') && (!outboundSet || !returnSet)
+  const editable = detail.bookingStatus === 'manual' && !lookup?.cancelled && (exchange
+    ? ((detail.status === 'approved' || detail.status === 'pickup_booked') && (!outboundSet || !returnSet)) || lateOutbound
     : detail.status === 'approved' && !detail.returnShipmentId)
   const askOutbound = exchange && !outboundSet
-  const askReturn = !returnSet
+  const askReturn = !returnSet && !lateOutbound
 
   useEffect(() => {
     if (!editable) return
@@ -58,7 +62,7 @@ export default function ManualCourierPanel({ detail, onChanged }: {
         (askOutbound && outbound.trim()) || undefined)
       toast({ tone: 'success', message: t(
         r.outcome === 'OUTBOUND_CREATED' || r.outcome === 'LEGS_CREATED'
-          ? 'exchangesRefunds.requests.drawer.manual.savedOutbound'
+          ? (lookup ? 'exchangesRefunds.requests.drawer.manual.savedOutboundLookup' : 'exchangesRefunds.requests.drawer.manual.savedOutbound')
           : r.outcome === 'LEG_CREATED'
             ? 'exchangesRefunds.requests.drawer.manual.savedWithTracking'
             : 'exchangesRefunds.requests.drawer.manual.savedCarrier', { carrier: r.carrierName }) })
@@ -77,7 +81,8 @@ export default function ManualCourierPanel({ detail, onChanged }: {
   const shownCarrier = current || t('exchangesRefunds.requests.drawer.manual.theirCourier')
   const suggestions = Array.from(new Set([other.forwardCarrierName, other.carrierName, ...carriers]
     .filter((v): v is string => !!v)))
-  const saveKey = (askOutbound && outbound.trim()) ? 'exchangesRefunds.requests.drawer.manual.saveOutbound'
+  const saveKey = (askOutbound && outbound.trim())
+    ? (lookup ? 'exchangesRefunds.requests.drawer.manual.saveOutboundLookup' : 'exchangesRefunds.requests.drawer.manual.saveOutbound')
     : (askReturn && tracking.trim()) ? 'exchangesRefunds.requests.drawer.manual.saveWithTracking'
       : 'exchangesRefunds.requests.drawer.manual.saveCarrier'
 
@@ -124,7 +129,8 @@ export default function ManualCourierPanel({ detail, onChanged }: {
       {editable && (
         <div className="rounded-md border border-line p-3 space-y-3" data-testid="manual-courier-form">
           <p className="text-small text-muted">
-            {t(exchange ? 'exchangesRefunds.requests.drawer.manual.helpExchange' : 'exchangesRefunds.requests.drawer.manual.help')}
+            {t(lookup ? 'exchangesRefunds.requests.drawer.manual.helpExchangeLookup'
+              : exchange ? 'exchangesRefunds.requests.drawer.manual.helpExchange' : 'exchangesRefunds.requests.drawer.manual.help')}
           </p>
           <div className="text-small" data-testid="manual-courier-pickup">
             <p className="text-caption text-muted">

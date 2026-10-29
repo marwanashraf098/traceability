@@ -577,6 +577,10 @@ export interface PieceLookupResult {
   /** Sold pieces only: true when the sale was a Lookup "Sold" (reversible with Not sold) — never for a
    *  transfer's off-book sale. Server-computed; absent on every other status. */
   canUndoSold?: boolean
+  /** C2 — Lookup's Exchange is offered (available piece, store ships with its own courier, no Bosta account). */
+  canExchange?: boolean
+  /** C2 — the piece is reserved to this Lookup exchange (its return request). */
+  lookupExchange?: { requestId: string; reference: string }
   condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
@@ -1554,6 +1558,58 @@ export function markPieceNotSold(pieceId: string) {
   return request<void>(`/pieces/${pieceId}/not-sold`, { method: 'POST' })
 }
 
+// ── Lookup Exchange (C2 — a merchant exchange from Lookup, stores with their own courier) ──
+
+export interface LookupExchangeOrder {
+  id: string
+  number: string
+  customerName: string | null
+  deliveredAt: string | null
+  carrierName: string | null
+  itemCount: number
+}
+
+export type LookupReturnable =
+  | { kind: 'piece'; pieceId: string; shortCode: string | null; variantId: string; productTitle: string; variantTitle: string }
+  | { kind: 'unit'; orderItemId: string; unitNo: number; variantId: string; productTitle: string; variantTitle: string }
+
+export interface LookupExchangeCreate {
+  orderId: string
+  returningPieceId?: string
+  returningOrderItemId?: string
+  returningUnitNo?: number
+  reasonCode?: string
+  carrier?: string
+  outboundTrackingNumber?: string
+  returnTrackingNumber?: string
+}
+
+export interface LookupExchangeCreated {
+  requestId: string
+  reference: string
+  replacementOrderNumber: string
+  dispatched: boolean
+}
+
+export function searchLookupExchangeOrders(q: string) {
+  return transferCommandRequest<LookupExchangeOrder[]>(`/lookup-exchange/orders?q=${encodeURIComponent(q)}`)
+}
+
+export function getLookupReturnables(orderId: string) {
+  return transferCommandRequest<LookupReturnable[]>(`/lookup-exchange/orders/${orderId}/returnables`)
+}
+
+export function createLookupExchange(pieceId: string, body: LookupExchangeCreate) {
+  return transferCommandRequest<LookupExchangeCreated>(`/pieces/${pieceId}/exchange`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+/** Cancel exchange — only before the replacement left (409 REPLACEMENT_LEFT after). */
+export function cancelLookupExchange(requestId: string) {
+  return transferCommandRequest<void>(`/return-requests/${requestId}/cancel-exchange`, { method: 'POST' })
+}
+
 // ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────
 
 export interface BlocklistEntry {
@@ -1609,9 +1665,19 @@ export function updateOrderCod(orderId: string, amount: number) {
 // backed by FulfillService.CancelResult). Was previously pointed at the non-existent
 // /orders/{id}/cancel — never called from any UI until now, so the wrong path went
 // unnoticed; fixed here as part of wiring up the drawer's Cancel button.
-export function cancelOrder(orderId: string) {
-  return request<{ status: string; message: string; remainingPacked: number }>(
-    `/fulfill/${orderId}/cancel`, { method: 'POST' })
+// C2: a refusal that carries {code, message_en, message_ar} (e.g. LOOKUP_EXCHANGE_ORDER — the replacement order of a
+// Lookup exchange) throws ServerMessageError so the drawer shows it; a bare 409 / other error keeps the old
+// `${status}: ${statusText}` Error.
+export async function cancelOrder(orderId: string) {
+  const res = await authFetch(`/fulfill/${orderId}/cancel`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null) as { code?: string; message_en?: string; message_ar?: string } | null
+    if (b?.code && b.message_en) throw new ServerMessageError(res.status, b.code, b.message_en, b.message_ar)
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  return res.json() as Promise<{ status: string; message: string; remainingPacked: number }>
 }
 
 // ── Variant search (Receiving's autocomplete, reused by stock-take) ────────
@@ -3282,7 +3348,21 @@ export interface OtherCourierReturn {
   /** Where the courier collects: the customer and the delivery address. Null fields after a privacy request. */
   pickup: { name: string | null; phone: string | null; addressLines: string[] }
   /** G4b — a generic exchange: the replacement the merchant ships (its outbound waybill once entered). */
-  replacement?: { orderId: string; orderNumber: string; outboundTrackingNumber: string | null; outboundState: string | null }
+  replacement?: {
+    orderId: string; orderNumber: string; outboundTrackingNumber: string | null; outboundState: string | null
+    /** C2 — present only for an exchange made in Lookup. */
+    lookupExchange?: LookupExchangeDrawer
+  }
+}
+
+/** C2 — the drawer's Lookup exchange block: the reserved piece, whether it left, whether it can be cancelled. */
+export interface LookupExchangeDrawer {
+  pieceId: string | null
+  pieceShortCode: string | null
+  pieceStatus: string | null
+  left: boolean
+  cancelled: boolean
+  canCancel: boolean
 }
 
 export interface ManualCourierResult {

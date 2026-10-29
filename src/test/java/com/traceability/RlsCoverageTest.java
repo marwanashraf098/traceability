@@ -115,6 +115,9 @@ class RlsCoverageTest {
             // in WarehousePlacesTest.x1.
             "/api/v1/places",
             "/api/v1/places/{id}",
+            // C2 Lookup Exchange — lookupExchange_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/lookup-exchange/orders",
+            "/api/v1/lookup-exchange/orders/{orderId}/returnables",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1105,6 +1108,44 @@ class RlsCoverageTest {
             jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM bins WHERE id = ?", otherZone);
             jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void lookupExchange_crossTenantIsolated_withSameTenantPositiveControl() {
+        // C2: the original-order search and what can come back are the caller's own orders only.
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID(), otherOrder = UUID.randomUUID();
+        UUID mine = UUID.randomUUID();
+        String myPiece = UlidGenerator.generate();
+        jdbc.update("INSERT INTO tenants (id, name, generic_courier_enabled) VALUES (?, 'Cov LX Other', true)", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-lx-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, customer_name, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-LX-O', '#CVGLX2', 'delivered', 'CovLX Theirs', now())",
+                    otherOrder, otherTenant, otherStore);
+        jdbc.update("UPDATE tenants SET generic_courier_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, customer_name, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-LX-M', '#CVGLX1', 'delivered', 'CovLX Mine', now())", mine, tenantId, storeId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id, last_event_at) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'delivered'::piece_status, ?, now())",
+                    myPiece, tenantId, variantId, "PC-" + myPiece, myPiece, mine);
+        try {
+            ResponseEntity<String> found = get("/api/v1/lookup-exchange/orders?q=CovLX", String.class);
+            assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(found.getBody()).as("same-tenant positive control").contains("#CVGLX1");
+            assertThat(found.getBody()).as("never another tenant's orders").doesNotContain("#CVGLX2");
+            ResponseEntity<String> rets = get("/api/v1/lookup-exchange/orders/" + mine + "/returnables", String.class);
+            assertThat(rets.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(rets.getBody()).contains(myPiece);
+            assertThat(get("/api/v1/lookup-exchange/orders/" + otherOrder + "/returnables", String.class).getStatusCode())
+                .as("another tenant's order").isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM pieces WHERE id = ?", myPiece);
+            jdbc.update("DELETE FROM orders WHERE id = ?", mine);
+            jdbc.update("UPDATE tenants SET generic_courier_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM orders WHERE id = ?", otherOrder);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

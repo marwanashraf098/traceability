@@ -480,6 +480,11 @@ public class FulfillService {
             return ScanResult.rejected("ALREADY_SHIPPED",
                 "This order's shipment has already left 'created' — pick/pack is no longer possible");
         }
+        // 0a. C2: a Lookup exchange's replacement is never picked — its piece is reserved when the exchange is made
+        //     and hands over when the tracking number is entered.
+        if (isUnpickableLookupReplacement(orderId, tenantId)) {
+            return ScanResult.rejected("NOT_PICKABLE", NOT_PICKABLE_MESSAGE);
+        }
 
         // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
         //     mode opened it) — refuse, in queue mode too. Queue mode never takes claims itself;
@@ -782,6 +787,9 @@ public class FulfillService {
         if (hasEverShippedPastCreated(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "This order's shipment has already left 'created' — cannot complete picking");
+        }
+        if (isUnpickableLookupReplacement(orderId, tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, NOT_PICKABLE_MESSAGE);
         }
         requireMerchantOrder(orderId, tenantId);
 
@@ -1103,6 +1111,12 @@ public class FulfillService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order is already in terminal status: " + status);
         }
+        // C2 (approved 2026-10-28): a Lookup exchange's replacement order is cancelled only through that exchange's
+        // Cancel exchange — cancelling it here would free the piece but leave the request open.
+        String lookupExchange = com.traceability.portal.LookupExchangeService.openReferenceFor(jdbc, tenantId, orderId);
+        if (lookupExchange != null) {
+            throw com.traceability.portal.LookupExchangeException.cancelOrderRefused(lookupExchange);
+        }
         if (isPhysicallyWithCourier(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order has been handed to courier — contact Bosta to arrange cancellation. " +
@@ -1262,6 +1276,22 @@ public class FulfillService {
      * Self-pickup orders never get a forward shipment, so this always returns false for
      * them — no carve-out needed.
      */
+    static final String NOT_PICKABLE_MESSAGE =
+        "This is an exchange made in Lookup — its piece is already reserved and goes out when the tracking number is entered";
+
+    /**
+     * C2 — status-based refusal for a Lookup exchange's replacement order (and only that): not in a pickable status
+     * ('confirmed' until it leaves, then 'with_courier'). PICKABLE_SHIPMENT_GATE is not touched; regular and portal
+     * orders never match.
+     */
+    private boolean isUnpickableLookupReplacement(UUID orderId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ? " +
+            "  AND o.status::text NOT IN " + com.traceability.portal.LookupExchangeService.PICKABLE_STATUSES_SQL + ") " +
+            "AND " + "EXISTS (SELECT 1 FROM return_requests rr WHERE rr.replacement_order_id = ? AND rr.tenant_id = ? " +
+            "  AND rr.origin = 'lookup')", Boolean.class, orderId, tenantId, orderId, tenantId));
+    }
+
     private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {
         Boolean exists = jdbc.queryForObject(
             "SELECT " + OrderLineFreeze.shippedPastCreatedSql("?", "?"),
