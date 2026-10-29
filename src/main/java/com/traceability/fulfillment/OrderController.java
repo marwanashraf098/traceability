@@ -30,6 +30,9 @@ public class OrderController {
     private final TransactionTemplate tx;
     private final OrderNotesService notesService;
     private final FulfillService fulfillService;
+    /** Orders "Needs attention" source. Null only when a test builds the controller without it (5-arg
+     *  constructor): needsAttention is then null and rows carry no attention reasons. */
+    private final com.traceability.inventory.ExceptionService exceptionService;
     private int badgeOverdueDays = 3;
     private int badgeLinkGraceMinutes = 60;
 
@@ -52,12 +55,46 @@ public class OrderController {
     public OrderController(JdbcTemplate jdbc, ObjectMapper mapper,
                            PlatformTransactionManager txm, OrderNotesService notesService,
                            FulfillService fulfillService) {
+        this(jdbc, mapper, txm, notesService, fulfillService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public OrderController(JdbcTemplate jdbc, ObjectMapper mapper,
+                           PlatformTransactionManager txm, OrderNotesService notesService,
+                           FulfillService fulfillService,
+                           com.traceability.inventory.ExceptionService exceptionService) {
         this.jdbc   = jdbc;
         this.mapper = mapper;
         this.tx     = new TransactionTemplate(txm);
         this.notesService = notesService;
         this.fulfillService = fulfillService;
+        this.exceptionService = exceptionService;
     }
+
+    /**
+     * The order's latest live forward leg — the row selection every Orders tab shares (the summary's tab
+     * counts and the list's deliveryState filter): alias {@code sh}, used inside a LATERAL aliased {@code s}.
+     * UUIDv4 is not time-ordered — order by created_at, never id.
+     */
+    static final String LATEST_FORWARD_LEG_SQL = """
+            FROM shipments sh
+            WHERE order_id = o.id AND tenant_id = o.tenant_id
+              AND shipment_leg = 'forward'
+              AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        """;
+
+    /** The In transit / Delivered / Returns tab predicate: the latest live forward leg's raw state. One
+     *  definition — the summary counts and the list filter both append it, so count == list. */
+    static final String DELIVERY_STATE_FILTER_SQL = " AND s.internal_state = ?::shipment_internal_state";
+
+    /** The orders list's sort. placed_at first, then import time; id only as the last tie-break so offset
+     *  pages never overlap or skip a row. */
+    static final String LIST_ORDER_SQL = " ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC, o.id DESC ";
+
+    /** Orders "Needs attention" filter — the id set from ONE ExceptionService.openAttentionOrderIds() call. */
+    static final String ATTENTION_FILTER_SQL = " AND o.id = ANY(?::uuid[])";
 
     // ── response records ─────────────────────────────────────────────────────
 
@@ -70,7 +107,10 @@ public class OrderController {
         Instant notTracedAt, boolean isExchange,
         OrderStatusDeriver.DerivedOrderStatus derivedStatus,
         // V139 (2026-10-05): derived shipping badge — see OrderShippingBadge. Null = no badge.
-        OrderShippingBadge shippingBadge) {}
+        OrderShippingBadge shippingBadge,
+        // Orders "Needs attention" (2026-10-30): the order's open alert types (distinct, sorted), from
+        // ExceptionService.openAttentionOrderIds(). Empty = no open alert.
+        List<String> attentionReasons) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -285,7 +325,10 @@ public class OrderController {
 
     // ── orders summary — all-time, 5-tile calm row (Orders list) ────────────
 
-    public record OrderSummaryCounts(long total, int processing, int withCourier, int delivered, int returned) {}
+    public record OrderSummaryCounts(long total, int processing, int withCourier, int delivered, int returned,
+                                     // Orders "Needs attention": distinct merchant orders with ≥ 1 open alert
+                                     // (ExceptionService.openAttentionOrderIds) — not the alert count.
+                                     Integer needsAttention) {}
 
     /**
      * GET /orders/summary — reuses the exact raw-row shape funnel()/list() already select,
@@ -301,9 +344,10 @@ public class OrderController {
      *                  (a shipment record exists but packing hasn't actually happened yet — see below)
      *   With courier — status.awaiting_courier, status.in_transit, status.label_created, ONLY when
      *                  OrderStatusDeriver.packedConfirmed is true
-     *   Delivered    — status.delivered
-     *   Returned     — status.returned only (terminal). status.returning (in-progress) is
-     *                  deliberately left uncounted.
+     *   Delivered    — 2026-10-30: the latest live forward leg's raw internal_state = 'delivered'
+     *                  (tabCount, the list filter's own predicate) — no longer status.delivered
+     *   Returned     — likewise raw internal_state = 'returned' (terminal); 'returning' stays uncounted
+     *   Needs attention — distinct merchant orders with ≥ 1 open alert (ExceptionService.openAttentionOrderIds)
      *
      * A shipment record existing (label_created/awaiting_courier) is NOT, by itself, proof
      * packing happened — Mode-B webhook auto-match (ShipmentLinkService.tryMatchDelivery(),
@@ -333,10 +377,11 @@ public class OrderController {
                        COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                        COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                        s.exception_code, s.is_delayed, s.sla_breached,
-                       s.max_progress_rank
+                       s.max_progress_rank,
+                       s.provider AS forward_provider
                 FROM merchant_orders o
                 LEFT JOIN LATERAL (
-                    SELECT internal_state, number_of_attempts,
+                    SELECT internal_state, number_of_attempts, provider::text AS provider,
                            exception_code, is_delayed, sla_breached,
                            -- Orders-rebuild pass (b): canonical attempt count, not the
                            -- shipments.failed_delivery_attempts stored counter (which the
@@ -370,12 +415,7 @@ public class OrderController {
                                    WHEN 'exception'     THEN 0
                                END
                            ) AS max_progress_rank
-                    FROM shipments sh
-                    WHERE order_id = o.id AND tenant_id = o.tenant_id
-                      AND shipment_leg = 'forward'
-                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
+                """ + LATEST_FORWARD_LEG_SQL + """
                 ) s ON true
                 WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                 """,
@@ -390,10 +430,11 @@ public class OrderController {
                         rs.getObject("exception_code", Integer.class),
                         rs.getObject("is_delayed", Boolean.class),
                         rs.getObject("sla_breached", Boolean.class),
-                        notTracedAt != null);
+                        notTracedAt != null,
+                        rs.getString("forward_provider"));
                 });
 
-            int processing = 0, delivered = 0, returned = 0;
+            int processing = 0;
             for (OrderStatusDeriver.DerivedOrderStatus derived : rows) {
                 String primaryKey = derived.primaryKey();
                 boolean isCourierAwbState =
@@ -408,47 +449,40 @@ public class OrderController {
                 switch (primaryKey) {
                     case "status.new", "status.confirmed", "status.ready_to_pick",
                          "status.picking", "status.packed" -> processing++;
-                    // withCourier is NOT counted here — see below. It no longer comes from
-                    // derived.primaryKey()/packedConfirmed() at all.
-                    case "status.delivered" -> delivered++;
-                    case "status.returned" -> returned++;
+                    // withCourier / delivered / returned are NOT counted here — see below. They are
+                    // the tabs' raw shipment-state counts, not derived.primaryKey().
                     default -> { /* cancelled/lost/terminated/needs_attention/delivery_failed/
-                                    self_pickup_pending/returning/with_courier bucket — see below */ }
+                                    self_pickup_pending/returning/tab buckets — see below */ }
                 }
             }
 
-            // Orders-rebuild pass (b) — In-transit convergence (review finding: the tab's
-            // count and its click-through list must use ONE predicate, never two that can
-            // silently diverge). This is the SAME raw predicate list()'s
-            // `deliveryState=with_courier` filter uses — identical WHERE/ORDER BY/LIMIT
-            // text to the LATERAL above and in list()/detail()'s fwd query, kept in sync
-            // manually (same convention already used for the max_progress_rank CASE across
-            // all four). NOT derived.primaryKey()/packedConfirmed() — that's a deliberate,
-            // documented divergence from funnel() (untouched, still today-only +
-            // packedConfirmed-gated): Orders' "In transit" tab is literal all-time raw
-            // shipment-state membership (count==list, by construction); Overview's funnel
-            // stays a stricter today-only, packing-confirmed snapshot. Two surfaces, two
-            // questions, on purpose.
-            long withCourier = jdbc.queryForObject(
-                """
-                SELECT COUNT(*)
-                FROM merchant_orders o
-                LEFT JOIN LATERAL (
-                    SELECT internal_state
-                    FROM shipments sh
-                    WHERE order_id = o.id AND tenant_id = o.tenant_id
-                      AND shipment_leg = 'forward'
-                      AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                ) s ON true
-                WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-                  AND s.internal_state = 'with_courier'
-                """,
-                Long.class);
+            // Tab counts — In transit (Orders-rebuild pass (b)), Delivered and Returns (2026-10-30): each is the
+            // literal raw state of the order's latest live forward leg, the SAME predicate list()'s deliveryState
+            // filter appends (LATEST_FORWARD_LEG_SQL + DELIVERY_STATE_FILTER_SQL), so a tab's count and its
+            // click-through list agree by construction. NOT derived.primaryKey(): that differs for a cancelled
+            // order whose leg was delivered / returned (status.cancelled) and for a self-pickup order delivered
+            // with no shipment (status.delivered). Overview's funnel stays a stricter today-only snapshot.
+            int withCourier = tabCount("with_courier");
+            int delivered   = tabCount("delivered");
+            int returned    = tabCount("returned");
 
-            return new OrderSummaryCounts(rows.size(), processing, (int) (long) withCourier, delivered, returned);
+            // Needs attention: distinct merchant orders with ≥ 1 open alert — the same set list(attention=true)
+            // filters on (ExceptionService.openAttentionOrderIds). Not the bell's alert count.
+            Integer needsAttention = exceptionService == null ? null : exceptionService.openAttentionOrderIds().size();
+
+            return new OrderSummaryCounts(rows.size(), processing, withCourier, delivered, returned, needsAttention);
         });
+    }
+
+    /** One Orders tab's count — the predicate list() filters on for deliveryState=state. Caller's transaction. */
+    private int tabCount(String state) {
+        Long n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM merchant_orders o "
+            + "LEFT JOIN LATERAL (SELECT internal_state " + LATEST_FORWARD_LEG_SQL + ") s ON true "
+            + "WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid"
+            + DELIVERY_STATE_FILTER_SQL,
+            Long.class, state);
+        return n == null ? 0 : (int) (long) n;
     }
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
@@ -485,7 +519,7 @@ public class OrderController {
     /** The list without the G3 carrier filter (every caller before G3). */
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public OrderPage list(String status, String deliveryState, String q, String tracking, int page, int size) {
-        return list(status, deliveryState, q, tracking, page, size, null);
+        return list(status, deliveryState, q, tracking, page, size, null, false);
     }
 
     @GetMapping
@@ -497,9 +531,16 @@ public class OrderController {
             @RequestParam(required = false) String tracking,
             @RequestParam(defaultValue = "0")  int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String carrier) {
+            @RequestParam(required = false) String carrier,
+            @RequestParam(defaultValue = "false") boolean attention) {
 
         size = Math.min(size, 100);
+
+        // Orders "Needs attention" (2026-10-30): ONE openAttentionOrderIds() call per request — its id set is
+        // the attention=true filter of both the COUNT and the page below, and its alert types are each row's
+        // attentionReasons. Computed before either query so the two can never see different sets.
+        final Map<UUID, List<String>> attentionByOrder =
+            exceptionService == null ? Map.of() : tx.execute(txs -> exceptionService.openAttentionOrderIds());
         int offset = page * size;
 
         // Build dynamic WHERE clauses.
@@ -522,8 +563,13 @@ public class OrderController {
         // selected via the LATERAL `s` alias below — filter on that instead of the raw
         // order pipeline column. Reuses the existing join, no new backend derivation.
         if (deliveryState != null && !deliveryState.isBlank()) {
-            where.append(" AND s.internal_state = ?::shipment_internal_state");
+            where.append(DELIVERY_STATE_FILTER_SQL);   // the summary's tab counts append the same predicate
             params.add(deliveryState);
+        }
+        if (attention) {
+            if (exceptionService == null) throw new IllegalStateException("attention filter needs ExceptionService");
+            where.append(ATTENTION_FILTER_SQL);
+            params.add(attentionByOrder.keySet().toArray(new UUID[0]));
         }
         if (q != null && !q.isBlank()) {
             where.append(" AND (o.number ILIKE ? OR o.customer_name ILIKE ? OR o.customer_phone ILIKE ?)");
@@ -583,12 +629,7 @@ public class OrderController {
                                WHEN 'exception'     THEN 0
                            END
                        ) AS max_progress_rank
-                FROM shipments sh
-                WHERE order_id = o.id AND tenant_id = o.tenant_id
-                  AND shipment_leg = 'forward'
-                  AND provider_deleted_at IS NULL   -- OrderStatusDeriver.LIVE_FORWARD_LEG_SQL
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
+            """ + LATEST_FORWARD_LEG_SQL + """
             ) s ON true
             LEFT JOIN exchanges e ON e.outbound_order_id = o.id
             """ + where;
@@ -624,8 +665,7 @@ public class OrderController {
                    s.provider AS forward_provider, s.carrier_name AS forward_carrier_name,
                    """ + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + """
                    AS bosta_link_problem
-            """ + baseJoin + """
-             ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
+            """ + baseJoin + LIST_ORDER_SQL + """
              LIMIT ? OFFSET ?
             """,
             (rs, i) -> {
@@ -666,7 +706,8 @@ public class OrderController {
                         rs.getString("shipping_carrier_name"), rs.getBoolean("bosta_link_problem"),
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         badgeNow, badgeOverdueDays, shipsWithBosta,
-                        rs.getString("forward_provider"), rs.getString("forward_carrier_name"))
+                        rs.getString("forward_provider"), rs.getString("forward_carrier_name")),
+                    attentionByOrder.getOrDefault(rs.getObject("id", UUID.class), List.of())
                 );
             },
             pageParams.toArray()));

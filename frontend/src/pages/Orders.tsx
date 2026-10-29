@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import {
   listOrders, OrderPage, listShopifyStores, syncShopifyStore,
-  getOrdersSummary, OrderSummaryCounts, getExceptionsCount,
+  getOrdersSummary, OrderSummaryCounts,
   listGenericCarriers, markGenericDelivered, type GenericCarrierCount,
 } from '../api'
 import {
@@ -19,27 +19,28 @@ const PAGE_SIZE = 20
 // Infer item type from the API's OrderPage shape
 type OrderItem = NonNullable<OrderPage['items']>[number]
 
-// Tabs. All/needsAttention aside, these filter on the SHIPMENT's own internal_state
+// Tabs. In transit / Delivered / Returns filter on the SHIPMENT's own internal_state
 // (deliveryState param) — NOT orders.status. Confirmed by grep: the app never writes
 // orders.status to 'with_courier' or 'returned' (only ShipmentLinkService's
 // 'awaiting_pickup' and FulfillService's self-pickup-only 'delivered'/'cancelled'
 // writes exist) — the real courier-pipeline signal lives solely on the shipment row.
-// Using orders.status here would make the tab's count (from /orders/summary, which
-// DOES derive off shipment state) and its click-through list silently diverge —
-// exactly the parity bug caught in review. 'needsAttention' still has no equivalent
-// column at all (derived from exception fields, not a single value) — count-only.
+// /orders/summary counts each of those tabs with the same raw-state predicate the list
+// filters on, so a tab's count and its click-through list agree by construction.
+// Needs attention (2026-10-30) = orders with ≥ 1 open alert: /orders/summary's
+// needsAttention and /orders?attention=true are the same server-side set.
 const TAB_DEFS = [
-  { key: 'all',            labelKey: 'orders.tabs.all',            filterDeliveryState: null as string | null, clickable: true },
-  { key: 'needsAttention', labelKey: 'orders.tabs.needsAttention', filterDeliveryState: null as string | null, clickable: false },
-  { key: 'inTransit',      labelKey: 'orders.tabs.inTransit',      filterDeliveryState: 'with_courier',        clickable: true },
-  { key: 'delivered',      labelKey: 'orders.tabs.delivered',      filterDeliveryState: 'delivered',           clickable: true },
-  { key: 'returns',        labelKey: 'orders.tabs.returns',        filterDeliveryState: 'returned',            clickable: true },
+  { key: 'all',            labelKey: 'orders.tabs.all',            filterDeliveryState: null as string | null, attention: false },
+  { key: 'needsAttention', labelKey: 'orders.tabs.needsAttention', filterDeliveryState: null as string | null, attention: true },
+  { key: 'inTransit',      labelKey: 'orders.tabs.inTransit',      filterDeliveryState: 'with_courier',        attention: false },
+  { key: 'delivered',      labelKey: 'orders.tabs.delivered',      filterDeliveryState: 'delivered',           attention: false },
+  { key: 'returns',        labelKey: 'orders.tabs.returns',        filterDeliveryState: 'returned',            attention: false },
 ] as const
 
 export default function Orders() {
   const { t } = useTranslation()
   const [data,     setData]     = useState<OrderPage | null>(null)
   const [deliveryStateFilter, setDeliveryStateFilter] = useState('')
+  const [attentionFilter, setAttentionFilter] = useState(false)
   const [q,        setQ]        = useState('')
   const [tracking, setTracking] = useState('')
   const [page,     setPage]     = useState(0)
@@ -48,7 +49,9 @@ export default function Orders() {
   const [syncing,  setSyncing]  = useState(false)
   const [syncMsg,  setSyncMsg]  = useState('')
   const [summary,  setSummary]  = useState<OrderSummaryCounts | null>(null)
-  const [needsAttention, setNeedsAttention] = useState<number | null>(null)
+  // Distinct orders with an open alert — from /orders/summary, the same set the tab lists.
+  // Not the shell bell's alert count (one order can have several alerts; some alerts name no order).
+  const needsAttention = summary?.needsAttention ?? null
   // Non-Bosta couriers G3 — "With <carrier>": generic orders of one carrier now with the courier, which an
   // owner / manager can select and mark delivered (the carrier has no API; Shopify may also say so).
   const { genericCourier } = useCapabilities()
@@ -78,9 +81,6 @@ export default function Orders() {
   // shared error state), and there's simply no tile row while it's unset.
   useEffect(() => {
     getOrdersSummary().then(setSummary).catch(() => {})
-    // Same source as the shell's Alerts bell (Layout's own /exceptions/count poll) — the
-    // Needs-attention tab and subheader must never show a number that could contradict it.
-    getExceptionsCount().then(c => setNeedsAttention(c.count)).catch(() => {})
   }, [])
 
   const fetchOrders = useCallback(async () => {
@@ -90,6 +90,7 @@ export default function Orders() {
       const res = await listOrders({
         deliveryState: carrierFilter != null ? 'with_courier' : deliveryStateFilter || undefined,
         carrier:  carrierFilter ?? undefined,
+        attention: carrierFilter == null && attentionFilter ? true : undefined,
         q:        q || undefined,
         tracking: tracking || undefined,
         page,
@@ -101,7 +102,7 @@ export default function Orders() {
     } finally {
       setLoading(false)
     }
-  }, [deliveryStateFilter, carrierFilter, q, tracking, page, t])
+  }, [deliveryStateFilter, attentionFilter, carrierFilter, q, tracking, page, t])
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
@@ -310,11 +311,16 @@ export default function Orders() {
   ]
 
   const activeTabKey = carrierFilter != null ? 'inTransit'
-    : TAB_DEFS.find(d => d.filterDeliveryState === (deliveryStateFilter || null))?.key ?? 'all'
+    : attentionFilter ? 'needsAttention'
+    : TAB_DEFS.find(d => !d.attention && d.filterDeliveryState === (deliveryStateFilter || null))?.key ?? 'all'
   function handleTabClick(key: string) {
     const def = TAB_DEFS.find(d => d.key === key)
-    if (!def || !def.clickable) return
-    applyFilter(() => { setCarrierFilter(null); setDeliveryStateFilter(def.filterDeliveryState ?? '') })
+    if (!def) return
+    applyFilter(() => {
+      setCarrierFilter(null)
+      setAttentionFilter(def.attention)
+      setDeliveryStateFilter(def.filterDeliveryState ?? '')
+    })
   }
   const tabCount = (key: typeof TAB_DEFS[number]['key']): number | undefined => {
     switch (key) {
@@ -350,15 +356,20 @@ export default function Orders() {
         {!!needsAttention && (
           <>
             <span className="mx-2 text-muted/50">•</span>
-            <span className="text-trace-blue font-medium">
+            <button
+              type="button"
+              data-testid="orders-subheader-attention"
+              onClick={() => handleTabClick('needsAttention')}
+              className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
+            >
               {t('orders.needAttentionSubheader', { count: needsAttention })}
-            </span>
+            </button>
           </>
         )}
       </p>
 
-      {/* Tabs — counts from /orders/summary (+ /exceptions/count for Needs attention);
-          clicking filters on the shipment's own internal_state (see TAB_DEFS comment). */}
+      {/* Tabs — every count from /orders/summary; clicking filters the list on the same
+          server-side predicate (see TAB_DEFS comment). */}
       <Tabs
         activeKey={activeTabKey}
         onChange={handleTabClick}
@@ -366,7 +377,6 @@ export default function Orders() {
           key: def.key,
           label: t(def.labelKey),
           count: tabCount(def.key),
-          disabled: !def.clickable,
         }))}
       />
 
@@ -392,7 +402,10 @@ export default function Orders() {
             data-testid="orders-carrier-filter"
             aria-label={t('orders.carrierFilter.label')}
             value={carrierFilter ?? '__all__'}
-            onChange={e => applyFilter(() => setCarrierFilter(e.target.value === '__all__' ? null : e.target.value))}
+            onChange={e => applyFilter(() => {
+              setAttentionFilter(false)
+              setCarrierFilter(e.target.value === '__all__' ? null : e.target.value)
+            })}
             className="input w-56"
           >
             <option value="__all__">{t('orders.carrierFilter.all')}</option>

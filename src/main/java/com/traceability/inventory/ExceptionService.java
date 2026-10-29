@@ -247,6 +247,99 @@ public class ExceptionService {
         return countOpenExceptionsBySeverity().total();
     }
 
+    /** How an alert reaches an order, if at all. */
+    public enum OrderLink {
+        /** The alert's own subject names the order: the order itself, its return request, its print-batch
+         *  item, its exchange row, its untracked-unit intake, its Shopify fulfillment or its restock claim. */
+        DIRECT,
+        /** The alert's subject is a shipment (forward or return leg); the order is that shipment's order_id. */
+        VIA_SHIPMENT,
+        /** Not order-scoped: a piece, variant, delivery Traced never linked, store, location or tenant. A
+         *  detector may still carry an order_id it reached through a piece (lost, unexpected_return,
+         *  return_in_transit_stuck) — that is never used: an order is never inferred from a piece. */
+        NONE
+    }
+
+    /**
+     * Orders "Needs attention" (2026-10-30): every alert type, keyed {@code type/subject_type} (one type,
+     * generic_bosta_conflict, has two subjects), and how it reaches an order. The ONE classification —
+     * {@link #openAttentionOrderIds()} reads it; an alert whose key is missing here counts as NONE, and
+     * OrdersAttentionTest fails until every detector type in this file is classified.
+     * For DIRECT and VIA_SHIPMENT the detector's {@code order_id} column is the order named above (for
+     * VIA_SHIPMENT it is the shipment's own order_id — every such detector joins the order ON s.order_id).
+     */
+    public static final Map<String, OrderLink> ORDER_LINK = Map.ofEntries(
+        Map.entry("lost/piece",                                OrderLink.NONE),
+        Map.entry("never_received/piece",                      OrderLink.VIA_SHIPMENT),   // the returned forward leg's order
+        Map.entry("unmatched_delivery/delivery",               OrderLink.NONE),
+        Map.entry("bosta_discovery_failed/delivery",           OrderLink.NONE),
+        Map.entry("fulfillment_link_problem/order",            OrderLink.DIRECT),
+        Map.entry("blocked_customer/order",                    OrderLink.DIRECT),
+        Map.entry("stuck_shipment/shipment",                   OrderLink.VIA_SHIPMENT),
+        Map.entry("unexpected_return/piece",                   OrderLink.NONE),
+        Map.entry("delivery_limbo/shipment",                   OrderLink.VIA_SHIPMENT),
+        Map.entry("ndr_failed/shipment",                       OrderLink.VIA_SHIPMENT),
+        Map.entry("guided_unpack/order",                       OrderLink.DIRECT),
+        Map.entry("missing_awb/shipment",                      OrderLink.VIA_SHIPMENT),
+        Map.entry("shopify_cancel_vs_inflight/order",          OrderLink.DIRECT),
+        Map.entry("cancelled_live_shipment/order",             OrderLink.DIRECT),
+        Map.entry("cancelled_but_delivered/order",             OrderLink.DIRECT),
+        Map.entry("waybill_deleted_in_bosta/shipment",         OrderLink.VIA_SHIPMENT),
+        Map.entry("missing_provider_id/shipment",              OrderLink.VIA_SHIPMENT),
+        Map.entry("high_attempts/shipment",                    OrderLink.VIA_SHIPMENT),
+        Map.entry("shopify_edit_conflict/order",               OrderLink.DIRECT),
+        Map.entry("return_in_transit_stuck/piece",             OrderLink.NONE),
+        Map.entry("return_mismatch/piece",                     OrderLink.NONE),
+        Map.entry("exchange_needs_mapping/exchange",           OrderLink.NONE),           // carries no order
+        Map.entry("exchange_unmapped_state/exchange",          OrderLink.DIRECT),         // exchanges.outbound_order_id
+        Map.entry("void_hold_sync_failed/piece",               OrderLink.NONE),
+        Map.entry("void_hold_sync_failed/transfer",            OrderLink.NONE),
+        Map.entry("inventory_increment_sync_failed/tenant",    OrderLink.NONE),
+        Map.entry("restocked_twice/order",                     OrderLink.DIRECT),         // the restock claims' source_order_id
+        Map.entry("return_leg_unscanned/shipment",             OrderLink.VIA_SHIPMENT),
+        Map.entry("return_to_receive/shipment",                OrderLink.VIA_SHIPMENT),
+        Map.entry("return_to_receive/untracked_unit",          OrderLink.DIRECT),         // untracked_unit_intakes.order_id
+        Map.entry("request_item_to_receive/return_request_item", OrderLink.DIRECT),       // its request's order_id
+        Map.entry("pickup_booking_problem/return_request",     OrderLink.DIRECT),
+        Map.entry("return_link_ambiguous/shipment",            OrderLink.VIA_SHIPMENT),
+        Map.entry("refund_pending_overdue/return_request",     OrderLink.DIRECT),
+        Map.entry("return_items_overdue/return_request",       OrderLink.DIRECT),
+        Map.entry("pack_set_aside/order",                      OrderLink.DIRECT),
+        Map.entry("pack_cancelled_after_print/shipment",       OrderLink.DIRECT),         // the print-batch item's order_id
+        Map.entry("warehouse_address_push_failed/location",    OrderLink.NONE),
+        Map.entry("shopify_connection_lost/store",             OrderLink.NONE),
+        Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
+        Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
+        Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
+        Map.entry("generic_fulfillment_cancelled/order",       OrderLink.DIRECT),
+        Map.entry("generic_cancelled_live_shipment/order",     OrderLink.DIRECT),
+        Map.entry("generic_delivered_without_pickup/shipment", OrderLink.VIA_SHIPMENT));
+
+    /**
+     * Orders "Needs attention": the merchant orders with at least one open alert, each with its alert types
+     * (distinct, sorted). Built from ONE {@link #detectAllOpen()} run — the same open set the bell counts —
+     * through {@link #ORDER_LINK}; only ids present in merchant_orders (portal pre-connect rows never appear).
+     * The Orders summary's needsAttention, the attention=true list filter and each row's attentionReasons all
+     * read one call of this.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, List<String>> openAttentionOrderIds() {
+        UUID tenantId = TenantContext.require();
+        Map<UUID, SortedSet<String>> byOrder = new HashMap<>();
+        for (Map<String, Object> alert : detectAllOpen()) {
+            OrderLink link = ORDER_LINK.getOrDefault(alert.get("type") + "/" + alert.get("subject_type"), OrderLink.NONE);
+            if (link == OrderLink.NONE || !(alert.get("order_id") instanceof UUID orderId)) continue;
+            byOrder.computeIfAbsent(orderId, k -> new TreeSet<>()).add((String) alert.get("type"));
+        }
+        if (byOrder.isEmpty()) return Map.of();
+        Set<UUID> merchant = new HashSet<>(jdbc.queryForList(
+            "SELECT id FROM merchant_orders WHERE tenant_id = ? AND id = ANY(?::uuid[])",
+            UUID.class, tenantId, byOrder.keySet().toArray(new UUID[0])));
+        Map<UUID, List<String>> out = new HashMap<>();
+        byOrder.forEach((id, types) -> { if (merchant.contains(id)) out.put(id, List.copyOf(types)); });
+        return out;
+    }
+
     /**
      * Alerts that only clear themselves: their detectors read live state and never look at
      * exception_resolutions, so Resolve would write a row that hides nothing. Each carries a
