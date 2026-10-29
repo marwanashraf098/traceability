@@ -4,6 +4,21 @@
 
 ## Current state
 
+**Flexible labeling for everyone (2026-10-29, branch `feat/flexible-labeling-rollout` off origin/main 84ca110; merged to
+main, NOT deployed). Migration V193.** `tenants.flexible_labeling_enabled` DEFAULT true + every existing tenant set true;
+it stays a per-tenant, admin-only kill switch (no API writes it — ops turns a tenant off with a direct UPDATE).
+- Tests: vitest flexibleRollout ro1–ro5 — a switched-on tenant with NO untagged stock sees today's flows (Receiving step
+  1 "Print & stick" pre-selected → print_stick session; Pick & Pack's one Print with waybills ticked and piece labels 0,
+  disabled with its reason; Inventory "Untagged (0)"; Settings › Labels with Print & stick; stock take unchanged).
+  FlexibleLabelingRolloutTest (a new signup is on, /me true; ops can still turn one off) and
+  FlexibleLabelingRolloutMigrationTest (migrate to V192 → a tenant off + one on → latest: both on, new default true;
+  uses FlywayTestSupport — a bare Flyway.configure() hangs on V190's CONCURRENTLY index). Both revert-checked
+  (UPDATE / DEFAULT removed → red). MigrationSmokeTest 192 files, NotTracedBackfillTest 137.
+- Approved test edits (expectations follow the rollout, verified additions-only): PackLineImageTest's exact line keys
+  + labelsUnused, untaggedStock; golden g2-bosta-isolation.json re-recorded — 18 additions only (labelsUnused /
+  untaggedStock = 0 on pack lines, labels {printed 0, used 0} on the order), nothing removed or changed.
+- Started by another session in worktree traceability-fl-rollout (migration, registries, ro1–ro5); finished here.
+
 **Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
 ae26df3, main 26106ce merged in 2026-10-28; NOT merged to main, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
 "Found it (selected)" / "Mark lost" / "Apply damaged" answered a bare 404 on an OPEN session, then finalize wrote off

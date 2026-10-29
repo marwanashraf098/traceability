@@ -20,12 +20,18 @@
       } ],
       "id" : "<v1>",
       "imageUrl" : null,
+      "labelsUnused" : 0,
       "product_title" : "Shirt",
       "quantity" : 1,
       "sku" : "SH-<tenant>",
+      "untaggedStock" : 0,
       "variant_id" : "<v2>",
       "variant_title" : "M"
     } ],
+    "labels" : {
+      "printed" : 0,
+      "used" : 0
+    },
     "locked_at" : null,
     "locked_by" : null,
     "number" : "#2010",
@@ -51,12 +57,18 @@
       "allocatedPieces" : [ ],
       "id" : "<v1>",
       "imageUrl" : null,
+      "labelsUnused" : 0,
       "product_title" : "Shirt",
       "quantity" : 1,
       "sku" : "SH-<tenant>",
+      "untaggedStock" : 0,
       "variant_id" : "<v2>",
       "variant_title" : "M"
     } ],
+    "labels" : {
+      "printed" : 0,
+      "used" : 0
+    },
     "locked_at" : null,
     "locked_by" : null,
     "number" : "#2010",
@@ -135,12 +147,18 @@
         "allocatedPieces" : [ ],
         "id" : "<v6>",
         "imageUrl" : null,
+        "labelsUnused" : 0,
         "product_title" : "Shirt",
         "quantity" : 2,
         "sku" : "SH-<tenant>",
+        "untaggedStock" : 0,
         "variant_id" : "<v2>",
         "variant_title" : "M"
       } ],
+      "labels" : {
+        "printed" : 0,
+        "used" : 0
+      },
       "locked_at" : "<v31>",
       "locked_by" : "<v7>",
       "number" : "#2001",
@@ -198,12 +216,18 @@
         } ],
         "id" : "<v6>",
         "imageUrl" : null,
+        "labelsUnused" : 0,
         "product_title" : "Shirt",
         "quantity" : 2,
         "sku" : "SH-<tenant>",
+        "untaggedStock" : 0,
         "variant_id" : "<v2>",
         "variant_title" : "M"
       } ],
+      "labels" : {
+        "printed" : 0,
+        "used" : 0
+      },
       "locked_at" : "<v33>",
       "locked_by" : "<v7>",
       "number" : "#2001",
@@ -303,12 +327,18 @@
         } ],
         "id" : "<v6>",
         "imageUrl" : null,
+        "labelsUnused" : 0,
         "product_title" : "Shirt",
         "quantity" : 2,
         "sku" : "SH-<tenant>",
+        "untaggedStock" : 0,
         "variant_id" : "<v2>",
         "variant_title" : "M"
       } ],
+      "labels" : {
+        "printed" : 0,
+        "used" : 0
+      },
       "locked_at" : "<v33>",
       "locked_by" : "<v7>",
       "number" : "#2001",
@@ -361,12 +391,18 @@
         } ],
         "id" : "<v6>",
         "imageUrl" : null,
+        "labelsUnused" : 0,
         "product_title" : "Shirt",
         "quantity" : 2,
         "sku" : "SH-<tenant>",
+        "untaggedStock" : 0,
         "variant_id" : "<v2>",
         "variant_title" : "M"
       } ],
+      "labels" : {
+        "printed" : 0,
+        "used" : 0
+      },
       "locked_at" : "<v33>",
       "locked_by" : "<v7>",
       "number" : "#2001",
