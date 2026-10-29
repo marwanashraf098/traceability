@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Test fixtures: exact day / hour counts on N × 24 h (2026-10-30, branch `fix/test-fixtures-dst-hours` off main
+b5af792; NOT merged). Follow-up to the G3 DST fix.** 84 test files use `interval 'N days'`. (1) Run right after Egypt's
+fall-back (every 'N days' crossing it): 83 classes / 824 tests green — nothing else asserts exact hours. (2) Spring-forward
+(N × 24 − 1 h) breaks only exact day counts that production floors from real elapsed time (`floor(epoch/86400)`, used
+by refund-overdue days and the cases page's overdueDays): ReturnRefundsTest `late` (refundOverdueDays = 6, "6 days")
+and ReturnCasesTest "A items overdue" (≥ 12), "A refund overdue" (≥ 7), "C returned, unscanned too long" (≥ 5, via
+the leg helper) now use N × interval '24 hours'. Every overdue threshold keeps ≥ 1 day of margin, so only the counts
+change; a POSIX test zone whose clocks went forward 2 days ago gives 4/5/6/11 (old) vs 5/6/7/12 (new) for 5/6/7/12.
+- Left as they are ("roughly N days"): threshold-only ages (ReturnRefundsTest fresh / items-overdue rows, ReturnCasesTest
+  agreement rows); GenericCourierG2Test's catch-up fixture (production's window uses the same calendar
+  `? * interval '1 day'` in the same session — switching only the fixture would break that match); Java
+  `Duration.ofDays` fixtures (AnalyticsMoneyTest etc.) are absolute already.
+
 **Two red analytics tests — test clocks, not production (2026-10-30, branch `fix/analytics-dst-clock` off origin/main
 8a1c96b; NOT merged, NOT deployed; no migration, no golden file changed).**
 - **GenericG3IsolationGoldenTest** (avgHoursOrderToHanded 108.3 vs 108.0 from the night Egypt's summer time ended):
