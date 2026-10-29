@@ -35,9 +35,16 @@ pieces refused). Full rules in CLAUDE.md "LOOKUP EXCHANGE".
   ReviewModeMuteTest (its context load took 2,397 s while the Mac was throttled on battery → 7/7 alone).
   LookupExchangeTest 9/9, the 9 guard classes + MigrationSmoke + NotTraced 70/70. Vitest 1,238 + the analytics r2
   flake under load (20/20 alone); browser 217 + 1 skipped; tsc clean.
-- **Open (not built):** Orders' Cancel order (FulfillService.cancelOrder) on the internal replacement order is not
-  refused — it would release the piece but leave the request open; same class of hole as releaseForAdjust, needs a
-  decision. The dialog was not viewed in a real browser (no screenshot harness for it).
+- **Review fixes (Marawan 2026-10-29):** Orders' Cancel order refuses a Lookup exchange order while the replacement
+  hasn't left (409 LOOKUP_EXCHANGE_ORDER names the request, points to Cancel exchange; OrderDrawer shows the server copy;
+  LookupExchangeTest.le10 + a normal-order control, orderDrawerLookupExchangeCancel EN + AR); the exchange progress
+  skips "being packed" for Lookup exchanges; screenshot harness `frontend/dev/lookup-exchange-shots/` (64 shots: 3
+  dialog steps, 8 refusals, untagged / reserved Lookup pieces, drawer reserved / cancel confirm / after dispatch; EN + AR,
+  desktop + phone). Rebased on origin/main 84ca110 (no new migrations; V193, counts 192 / 137).
+- **Final run on power (2026-10-29, after the rebase):** backend 3,504 run, 4 skipped, only ExchangeBackfillTest red.
+  Vitest 1,207 / 1,224 under load avg 18–107 (another session's Docker VM at 99% CPU): the 17 failures (12 files, mostly
+  5 s timeouts) → 184 / 185 rerun alone; the last one, analyticsSummary r2 (first App render, 1 s wait), is 3 / 3 green
+  on the branch and 3 / 3 on origin/main run alternately under the same load.
 - **Next free migration: V194.**
 **Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
 ae26df3, main 26106ce merged in 2026-10-28; NOT merged to main, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
