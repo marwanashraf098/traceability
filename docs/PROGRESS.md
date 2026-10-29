@@ -4,6 +4,21 @@
 
 ## Current state
 
+**Two red analytics tests — test clocks, not production (2026-10-30, branch `fix/analytics-dst-clock` off origin/main
+8a1c96b; NOT merged, NOT deployed; no migration, no golden file changed).**
+- **GenericG3IsolationGoldenTest** (avgHoursOrderToHanded 108.3 vs 108.0 from the night Egypt's summer time ended):
+  the fixture wrote `now() - N * interval '1 day'`; on a timestamptz Postgres adds a day as a CALENDAR day in the
+  session time zone (the JVM's, Africa/Cairo), so "5 days ago" was 121 real hours (proved: Cairo session 121, UTC
+  120) while the production metric correctly measures instants (`Duration.between` on timestamptz, Cairo days via
+  ZoneId) — one of three orders gained an hour. Fixture offsets are now N × 24 hours (identical outside a DST
+  change); passes on the DST night with the golden unchanged.
+- **AnalyticsB1Test.payoutLag** (`expected: 0L`): not DST — the pre-floor tenant's floor was `now − 5 days` while its
+  orders sit at Cairo noon on wed − 4, so every Thursday 00:00–12:00 Cairo the order was after the floor. Floor now
+  anchored to `cairoNoon(wed − 1)`; a replay of the fixture's date logic over 336 hours: old floor wrong 26 h (all
+  Thursday mornings), new 0. Production lag = Cairo-date difference (DST-safe).
+- Gotcha (new): in SQL fixtures, `interval 'N days'` on a timestamptz is DST-dependent in a Cairo session — use
+  N × interval '24 hours' for elapsed time.
+
 **Flexible labeling for everyone (2026-10-29, branch `feat/flexible-labeling-rollout` off origin/main 84ca110; merged to
 main 2026-10-30, NOT deployed). Migration V194 (built as V193; main took V193 for Lookup exchange).** `tenants.flexible_labeling_enabled` DEFAULT true + every existing tenant set true;
 it stays a per-tenant, admin-only kill switch (no API writes it — ops turns a tenant off with a direct UPDATE).
