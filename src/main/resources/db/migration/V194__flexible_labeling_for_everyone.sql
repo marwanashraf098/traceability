@@ -1,4 +1,4 @@
--- Flexible labeling rollout (2026-10-29): on for every tenant, existing and new. New tenants get it from the
+-- V194 (built as V193; main took V193 for Lookup exchange) — Flexible labeling rollout (2026-10-29): on for every tenant, existing and new. New tenants get it from the
 -- column default (signup, embedded onboarding and ops inserts never name the column). The switch stays a
 -- per-tenant, admin-only kill switch — no API path writes it; ops turns a tenant off with a direct UPDATE.
 -- A tenant with no untagged stock sees today's flows: "Print & stick" pre-selected, piece labels at 0.

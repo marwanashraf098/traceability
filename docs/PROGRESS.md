@@ -5,7 +5,7 @@
 ## Current state
 
 **Flexible labeling for everyone (2026-10-29, branch `feat/flexible-labeling-rollout` off origin/main 84ca110; merged to
-main, NOT deployed). Migration V193.** `tenants.flexible_labeling_enabled` DEFAULT true + every existing tenant set true;
+main, NOT deployed). Migration V194 (built as V193; main took V193 for Lookup exchange).** `tenants.flexible_labeling_enabled` DEFAULT true + every existing tenant set true;
 it stays a per-tenant, admin-only kill switch (no API writes it — ops turns a tenant off with a direct UPDATE).
 - Tests: vitest flexibleRollout ro1–ro5 — a switched-on tenant with NO untagged stock sees today's flows (Receiving step
   1 "Print & stick" pre-selected → print_stick session; Pick & Pack's one Print with waybills ticked and piece labels 0,

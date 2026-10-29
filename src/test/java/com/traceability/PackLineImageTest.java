@@ -95,7 +95,7 @@ class PackLineImageTest {
         assertThat(items).hasSize(1);
         assertThat(items.get(0).get("imageUrl")).isEqualTo(IMAGE);
         // Shape: only imageUrl added — every pre-S1 key still there, nothing else new. Flexible labeling (on for
-        // every tenant since V193) adds labelsUnused + untaggedStock to each line.
+        // every tenant since V194) adds labelsUnused + untaggedStock to each line.
         assertThat(items.get(0).keySet()).containsExactlyInAnyOrder(
             "id", "variant_id", "sku", "variant_title", "product_title", "quantity",
             "imageUrl", "allocated", "allocatedPieces", "labelsUnused", "untaggedStock");

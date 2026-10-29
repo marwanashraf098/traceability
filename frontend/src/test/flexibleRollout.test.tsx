@@ -12,7 +12,7 @@ import SettingsPage from '../pages/settings/SettingsPage'
 import StockTakeScan from '../pages/StockTakeScan'
 
 /**
- * Flexible labeling for everyone (V193, 2026-10-29): a tenant with the switch ON and NO untagged stock sees
+ * Flexible labeling for everyone (V194, 2026-10-29): a tenant with the switch ON and NO untagged stock sees
  * today's flows.
  *   ro1  Receiving step 1: "Print & stick" pre-selected ("Your default"); picking it goes on to today's form and the
  *        session is created as print_stick

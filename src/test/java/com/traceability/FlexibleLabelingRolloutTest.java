@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Flexible labeling for everyone (V193, 2026-10-29) — new tenants.
+ * Flexible labeling for everyone (V194, 2026-10-29) — new tenants.
  *   n1 — the column default is true: a new signup's tenant has the switch on, and /me says flexibleLabeling: true
  *   n2 — the switch stays an admin-only kill switch: ops can still turn one tenant off (direct UPDATE) and /me
  *        follows it; no API writes the column (LabelSettingsController's own doc; nothing in src/main updates it)

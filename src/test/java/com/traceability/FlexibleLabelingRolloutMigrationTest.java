@@ -13,7 +13,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Flexible labeling for everyone (V193, 2026-10-29) — existing tenants. Migrate to V192, add a tenant with the switch
+ * Flexible labeling for everyone (V194, 2026-10-29) — existing tenants. Migrate to V193, add a tenant with the switch
  * off and one already on, migrate to latest: both are on, and a tenant inserted afterwards without naming the column
  * is on too (the new default). The V176 default was false; nothing else changes on the row.
  */
@@ -32,7 +32,7 @@ class FlexibleLabelingRolloutMigrationTest {
         FlywayTestSupport.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
-            .target("192")
+            .target("193")
             .load()
             .migrate();
 
