@@ -155,7 +155,7 @@ class GenericG3IsolationGoldenTest {
         Ord ending   = order(c, "#3002", "packed", 3, b + 2, "created", null);  piece(c, ending, "packed", "packed");
         Ord unpacked = order(c, "#3003", "new", 4, b + 3, "created", null);     piece(c, unpacked, "reserved", "active");
         // Returns orders
-        Ord crp      = order(c, "#3004", "delivered", 9, b + 40, "delivered", "now() - interval '6 days'");
+        Ord crp      = order(c, "#3004", "delivered", 9, b + 40, "delivered", "now() - 6 * interval '24 hours'");
         String pCrp  = piece(c, crp, "delivered", "packed");
         leg(c, crp, "return", "returned", b + 4, null);
         Ord rto      = order(c, "#3005", "cancelled", 10, b + 5, "returned", null);
@@ -170,9 +170,9 @@ class GenericG3IsolationGoldenTest {
         Ord moving   = order(c, "#3007", "with_courier", 12, b + 7, "with_courier", null);
         history(moving.shipment(), "with_courier", 24);
         String pMoving = piece(c, moving, "with_courier", "packed");
-        Ord old      = order(c, "#3008", "delivered", 60, b + 8, "delivered", "now() - interval '50 days'");
+        Ord old      = order(c, "#3008", "delivered", 60, b + 8, "delivered", "now() - 50 * interval '24 hours'");
         String pOld  = piece(c, old, "delivered", "packed");
-        Ord recent   = order(c, "#3009", "delivered", 5, b + 9, "delivered", "now() - interval '3 days'");
+        Ord recent   = order(c, "#3009", "delivered", 5, b + 9, "delivered", "now() - 3 * interval '24 hours'");
         history(recent.shipment(), "with_courier", 24);
         history(recent.shipment(), "delivered", 45);
         piece(c, recent, "delivered", "packed");
@@ -258,6 +258,10 @@ class GenericG3IsolationGoldenTest {
         // calendar weeks over fixtures placed "now() - N days", so which week an order falls in depends on today's
         // weekday — each trend is folded into its totals (weeks, delivered, failed), the same every day. A fixed Clock
         // can't do this alone: the fixtures and the shipping badge (Instant.now()) follow the real clock.
+        // DST-proof (2026-10-30): every fixture offset is N × 24 HOURS, never N days. On a timestamptz, Postgres adds a
+        // 'day' as a calendar day in the session time zone (the JVM's — Africa/Cairo here), so "5 days ago" is 121 h
+        // across the night Egypt's summer time ends while the code under test measures real instants — the average
+        // order → handed hours read 108.3 instead of 108.0. Outside a DST change both forms are the same instants.
         String range = "from=" + today.minusDays(29) + "&to=" + today;
         out.put("analyticsDelivery", weeklyTrendTotals(get(token, "/api/v1/analytics/delivery/summary?" + range)));
         out.put("analyticsOrders",   get(token, "/api/v1/analytics/orders?size=200&" + range));
@@ -294,7 +298,7 @@ class GenericG3IsolationGoldenTest {
             "INSERT INTO orders (tenant_id, store_id, external_id, number, status, customer_name, customer_phone, cod_amount, " +
             "    payment_method, placed_at, created_at) " +
             "VALUES (?, ?, ?, ?, ?::order_status, 'Youssef Adel', ?, 1250.00, 'cod', " +
-            "    now() - (? * interval '1 day'), now() - (? * interval '1 day')) RETURNING id",
+            "    now() - (? * interval '24 hours'), now() - (? * interval '24 hours')) RETURNING id",
             UUID.class, c.tenant(), c.store(), "gid://shopify/Order/" + c.tenant() + number, number, status,
             "0101111" + number.substring(1), daysAgo, daysAgo);
         UUID item = jdbc.queryForObject("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1) RETURNING id",
@@ -308,13 +312,13 @@ class GenericG3IsolationGoldenTest {
             "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg, cod_amount, " +
             "    raw, delivered_at, created_at) " +
             "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, ?, 1250.00, '{\"type\": {\"code\": 10, \"value\": \"Send\"}}'::jsonb, " +
-            (deliveredAtSql == null ? "NULL" : deliveredAtSql) + ", now() - interval '20 days') RETURNING id",
+            (deliveredAtSql == null ? "NULL" : deliveredAtSql) + ", now() - 20 * interval '24 hours') RETURNING id",
             UUID.class, c.tenant(), o.id(), String.valueOf(tn), state, leg);
     }
 
     private void history(UUID shipment, String state, int providerState) {
         jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state, occurred_at) " +
-            "SELECT tenant_id, id, ?, ?, now() - interval '4 days' FROM shipments WHERE id = ?", state, providerState, shipment);
+            "SELECT tenant_id, id, ?, ?, now() - 4 * interval '24 hours' FROM shipments WHERE id = ?", state, providerState, shipment);
     }
 
     /** A tracked piece on the order's line in {@code status} with an allocation in {@code allocStatus}; its short code. */

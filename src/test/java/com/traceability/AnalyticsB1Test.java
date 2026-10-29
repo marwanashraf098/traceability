@@ -360,8 +360,10 @@ class AnalyticsB1Test {
         assertThat(dec(method, "medianLagDays")).isEqualByComparingTo("4.0");
         assertThat(n(method, "lagSample")).isEqualTo(3);
 
-        // Pre-floor orders are never measured, in either.
-        T late = new T("B1-LagFloor", Instant.now().minus(Duration.ofDays(5)));
+        // Pre-floor orders are never measured, in either. The floor is anchored to the same Wednesday as the legs
+        // (their orders are placed at Cairo noon on wed − 4 and prevWed − 6): a floor of "now − 5 days" put the
+        // wed − 4 order AFTER the floor on Thursday mornings (Cairo), so the check failed by weekday (2026-10-29).
+        T late = new T("B1-LagFloor", cairoNoon(wed.minusDays(1)));
         paidLeg(late, wed.minusDays(2), wed, "forward");
         paidLeg(late, prevWed.minusDays(4), prevWed, "forward");
         assertThat(n(ok(late, "/api/v1/analytics/money/fees?" + last(30)), "payoutLagShipments")).isZero();
