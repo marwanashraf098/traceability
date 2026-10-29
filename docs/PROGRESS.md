@@ -4,6 +4,21 @@
 
 ## Current state
 
+**Flexible labeling for everyone (2026-10-29, branch `feat/flexible-labeling-rollout` off origin/main 84ca110; merged to
+main 2026-10-30, NOT deployed). Migration V194 (built as V193; main took V193 for Lookup exchange).** `tenants.flexible_labeling_enabled` DEFAULT true + every existing tenant set true;
+it stays a per-tenant, admin-only kill switch (no API writes it — ops turns a tenant off with a direct UPDATE).
+- Tests: vitest flexibleRollout ro1–ro5 — a switched-on tenant with NO untagged stock sees today's flows (Receiving step
+  1 "Print & stick" pre-selected → print_stick session; Pick & Pack's one Print with waybills ticked and piece labels 0,
+  disabled with its reason; Inventory "Untagged (0)"; Settings › Labels with Print & stick; stock take unchanged).
+  FlexibleLabelingRolloutTest (a new signup is on, /me true; ops can still turn one off) and
+  FlexibleLabelingRolloutMigrationTest (migrate to V192 → a tenant off + one on → latest: both on, new default true;
+  uses FlywayTestSupport — a bare Flyway.configure() hangs on V190's CONCURRENTLY index). Both revert-checked
+  (UPDATE / DEFAULT removed → red). MigrationSmokeTest 193 files, NotTracedBackfillTest 138.
+- Approved test edits (expectations follow the rollout, verified additions-only): PackLineImageTest's exact line keys
+  + labelsUnused, untaggedStock; golden g2-bosta-isolation.json re-recorded — 18 additions only (labelsUnused /
+  untaggedStock = 0 on pack lines, labels {printed 0, used 0} on the order), nothing removed or changed.
+- Started by another session in worktree traceability-fl-rollout (migration, registries, ro1–ro5); finished here.
+
 **C2 Lookup Exchange — a merchant exchange from Lookup on stores with their own courier (2026-10-28, branch
 `feat/lookup-exchange` off origin/main 26106ce; NOT merged, NOT deployed). V193.** Step-0-light 2026-10-28 + Marawan's
 decisions the same day (reserved → packed → with_courier via the two existing edges; main-warehouse pieces only;
@@ -11,7 +26,7 @@ outbound tracking also on 'exchanged' for Lookup requests; releaseForAdjust refu
 drawer is the home — no order-page view; reason picker optional, default 'other'; no inactive-product check; untagged
 pieces refused). Full rules in CLAUDE.md "LOOKUP EXCHANGE".
 - **V193:** `return_requests.origin` ('portal' default | 'lookup'); `shipment_status_history.source` + 'lookup_dispatch'
-  (V173's CHECK re-created, V173 not edited). No RLS change. MigrationSmokeTest 192 files, NotTracedBackfillTest 137.
+  (V173's CHECK re-created, V173 not edited). No RLS change. MigrationSmokeTest 193 files, NotTracedBackfillTest 138.
 - **Backend:** `LookupExchangeService` / `LookupExchangeController` (search, returnables, create, cancel — gate
   `gateOpen`: generic on AND no active Bosta account); `GenericLegTransitions.dispatchLookupReplacement` (tracking →
   with_courier + the Step-5a decrement once, after commit); `manualCourier` dispatches for Lookup and takes the outbound
