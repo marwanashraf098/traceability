@@ -4,6 +4,50 @@
 
 ## Current state
 
+**Warehouse places S2 — Put away (2026-10-28, branch `feat/warehouse-places-s2` from main 26106ce; rebased on main
+b5af792 and merged to main 2026-10-30, NOT deployed, no tenant switched on).** Migration **V195__put_away_sessions.sql**
+(built as V193; main took V193 for Lookup exchange and V194 for flexible labeling; MigrationSmokeTest 194 files,
+NotTracedBackfillTest 139 pending after V56).
+- **Ledger:** `InventoryLedger.recordPlaceChange(pieceId, toBinId|null, actor, PlaceRef, rawScan)` — the ONE writer of
+  `pieces.bin_id`: piece row FOR UPDATE, bin FOR SHARE, one conditional UPDATE + one piece event (`put_away` /
+  `place_moved` / `place_cleared`, from = to status, from/to_bin_id, metadata {source put_away|lookup, session_id?,
+  via_phone?}). Refusals before any write (`PlaceChangeException`, noRollbackFor): PIECE_NOT_FOUND, UNTAGGED,
+  NO_LOCATION, STATUS_NOT_PLACEABLE, PLACE_NOT_FOUND, NOT_A_SHELF_OR_BOX, PLACE_ARCHIVED, OTHER_LOCATION. Same place
+  again / clearing no place → ALREADY_HERE, nothing written.
+- **Scans:** `ScanInputNormalizer.normalizePlace` — `Q`+6 digits, q, invisibles, Arabic-Indic / Persian digits, and ONE
+  leading Q-key glyph: ض U+0636 (Q, Arabic 101 / macOS) or the fatha U+064E (Shift+Q, Arabic 101) — approved
+  2026-10-28 as narrow as the P key (exactly one leading glyph + 6+ digits; vectors: fatha in a product name / Arabic
+  search, ض alone, ض / fatha + 5 digits, trailing / inner fatha, two glyphs; plus a sweep of U+0600–06FF). Still to
+  verify on the warehouse scanner, as was done for P. Vectors `shared/place-code-vectors.json` (PlaceCodeVectorsTest;
+  piece / tracking read unchanged); scan-normalization-vectors.json untouched. Lookup: a place
+  sticker of a places tenant → `type: "place"` (LookupController, before tracking); everyone else unchanged.
+- **Sessions:** `put_away_sessions` / `put_away_session_pieces` (RLS, no DELETE, column UPDATE grants; one open manual
+  session per person per location). S2 opens `manual` only. Server-side current place; outcomes PLACE_SET, PLACED,
+  MOVED, ALREADY_HERE, SCAN_PLACE_FIRST, SCAN_SHELF_OR_BOX, UNKNOWN_STICKER, PLACE_OTHER_LOCATION, PLACE_ARCHIVED,
+  NOT_AT_THIS_LOCATION, CANNOT_PLACE, UNTAGGED. A session is its opener's only — Start (and the waiting list's
+  "Resume put away · N placed") resumes it. Ends: 'finished' (opener), 'closed_by_manager' (owner / manager, from the
+  Put away page's "Open sessions"; a worker gets 404 for someone else's), 'idle' (`PutAwayIdleCloseJob`, hourly at :20,
+  no scan / resume for 12 h — elapsed time on timestamptz, Cairo / DST-safe; tenant ids read on the owner pool, the
+  close under RLS). Closing records `summary` jsonb (placed, placesUsed, per place) and never moves a piece. The scan
+  screen says so when its session was closed elsewhere.
+- **Waiting list / suggestions:** `PutAwayService.WAITING_SQL` (source from the latest event that isn't label / hold /
+  put-away / in-warehouse damage or hold) and `SUGGEST_LAST_PLACE` → `SUGGEST_MOST_OF_VARIANT` (2 batch queries).
+  Badge = waiting at every location that has a live shelf / box. Rows capped at 500 (counts are complete).
+- **Endpoints** `/api/v1/put-away/**`, every role, 404 without places; Settings › Places stays owner + manager.
+- **Lookup:** Place + path (col-span-2), Move beside Reprint for every role (own scan input, pick list, No place),
+  timeline put_away / place_moved / place_cleared + box_moved (the current box's bin_events 'moved' since the piece
+  went in), EN + AR.
+- **Frontend:** sidebar Put away (owner stock + worker, capability, badge), WorkerHome tile, /put-away list,
+  /put-away/:id/scan (full-screen, shared useScanner queue, new handler marked SAFETY-CRITICAL; no existing
+  SAFETY-CRITICAL block edited), Settings › Places "no place yet" → Put away. Screenshot harness dev/putaway-shots.
+- places.test pl3 updated to expect the link (approved 2026-10-28). Next: S4 — scoped sessions (receipt / return
+  session / transfer) reuse these tables.
+- **Follow-ups (logged 2026-10-29/30):** `AnalyticsB1Test.payoutLag_medianDeliveredToPaid_feesAndForecastAgree`
+  failed once in the S2 full suite (expected 0, got 1) and passed 8/8 alone — RESOLVED on main by `fix/analytics-dst-clock`
+  (b5af792, entry below; the same DST night also broke GenericG3IsolationGoldenTest, avgHoursOrderToHanded 108.3 vs 108.0).
+  OPEN: `printJobs.test.tsx` progress text ("Preparing waybills… 98 of 245" not found) failed once in a full vitest run and
+  passed alone 3× — a timing flake, seen in an earlier session too; make the wait explicit (findByText / waitFor).
+
 **Two red analytics tests — test clocks, not production (2026-10-30, branch `fix/analytics-dst-clock` off origin/main
 8a1c96b; NOT merged, NOT deployed; no migration, no golden file changed).**
 - **GenericG3IsolationGoldenTest** (avgHoursOrderToHanded 108.3 vs 108.0 from the night Egypt's summer time ended):

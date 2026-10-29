@@ -42,7 +42,8 @@
     "collapse": "طي الشريط الجانبي",
     "expand": "توسيع الشريط الجانبي",
     "openMenu": "فتح القائمة",
-    "closeMenu": "إغلاق القائمة"
+    "closeMenu": "إغلاق القائمة",
+    "putAway": "الترتيب"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -1298,7 +1299,11 @@
       "label_bound_tag": "أُلصق الملصق {{code}} في لصق المخزون",
       "sold_offline": "تم تحديدها كمُباعة خارج Shopify",
       "not_sold": "لم تُبَع — أُعيدت القطعة إلى المتاح",
-      "received_factory_run": "تم الاستلام من دفعة المصنع «{{run}}»"
+      "received_factory_run": "تم الاستلام من دفعة المصنع «{{run}}»",
+      "put_away": "وُضعت في {{toPlace}}",
+      "place_moved": "نُقلت من {{fromPlace}} إلى {{toPlace}}",
+      "place_cleared": "أُزيل المكان (كانت في {{fromPlace}})",
+      "box_moved": "نُقل الصندوق {{box}} من {{fromPlace}} إلى {{toPlace}}"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -1324,6 +1329,37 @@
       "factoryIssued": "ملصق مصنع",
       "factoryTitle": "ملصق المصنع لم يُستلم بعد — استلمه في دفعة المصنع الخاصة به أولًا",
       "factoryBody": "طُبع هذا الملصق لدفعة مصنع. تصبح القطعة مخزونًا عند مسحها في الاستلام مع تلك الدفعة (ملصقات المصنع)."
+    },
+    "place": "المكان",
+    "noPlace": "لا مكان بعد",
+    "placeSticker": {
+      "title": "هذا ملصق مكان",
+      "archived": "مؤرشف",
+      "kind": {
+        "zone": "منطقة",
+        "rack": "وحدة رفوف",
+        "shelf": "رف",
+        "box": "صندوق"
+      },
+      "pieces_zero": "لا توجد قطع هنا",
+      "pieces_one": "قطعة واحدة هنا",
+      "pieces_two": "قطعتان هنا",
+      "pieces_few": "{{count}} قطع هنا",
+      "pieces_many": "{{count}} قطعة هنا",
+      "pieces_other": "{{count}} قطعة هنا"
+    },
+    "move": {
+      "button": "نقل",
+      "title": "النقل إلى مكان آخر",
+      "nowIn": "الآن في {{code}}",
+      "nowNone": "لا مكان بعد",
+      "scanPlaceholder": "امسح ملصق رف أو صندوق",
+      "orPick": "أو اختر مكانًا",
+      "noPlaces": "لا توجد رفوف أو صناديق في هذا الموقع بعد.",
+      "noPlace": "بلا مكان",
+      "done": "نُقلت إلى {{code}}",
+      "cleared": "أُزيل المكان",
+      "error": "تعذر النقل. حاول مرة أخرى."
     }
   },
   "returns": {
@@ -3525,6 +3561,16 @@
         "title": "بحث",
         "desc": "ابحث عن طلب بالباركود أو رقم الشحنة"
       }
+    },
+    "putAway": {
+      "desc": "امسح رفًا أو صندوقًا، ثم القطع التي توضع فيه.",
+      "start": "ابدأ",
+      "title_zero": "لا توجد قطع في انتظار الترتيب",
+      "title_one": "قطعة واحدة في انتظار الترتيب",
+      "title_two": "قطعتان في انتظار الترتيب",
+      "title_few": "{{count}} قطع في انتظار الترتيب",
+      "title_many": "{{count}} قطعة في انتظار الترتيب",
+      "title_other": "{{count}} قطعة في انتظار الترتيب"
     }
   },
   "returnsExchanges": {
@@ -3799,7 +3845,8 @@
       "transferReconcile": "مطابقة نقل · {{ref}}",
       "returns": "مسح المرتجعات · {{ref}}",
       "tagStock": "لصق المخزون",
-      "factoryReceiving": "استلام المصنع · {{ref}}"
+      "factoryReceiving": "استلام المصنع · {{ref}}",
+      "putAway": "الترتيب"
     },
     "viaPhone": "عبر الهاتف",
     "counted": "تم العدّ · {{label}}",
@@ -5046,7 +5093,8 @@
       "generic": "حدث خطأ ما — حاول مرة أخرى",
       "load": "تعذّر تحميل الأماكن — حدّث الصفحة للمحاولة مرة أخرى"
     },
-    "addRack": "إضافة وحدة رفوف"
+    "addRack": "إضافة وحدة رفوف",
+    "putAwayLink": "الترتيب"
   },
   "lookupExchange": {
     "button": "استبدال",
@@ -5091,6 +5139,172 @@
       "cancelSubmit": "نعم، ألغِ الاستبدال",
       "cancelled": "تم إلغاء الاستبدال",
       "cancelFailed": "تعذّر إلغاء الاستبدال. حاول مرة أخرى."
+    }
+  },
+  "putAway": {
+    "title": "الترتيب",
+    "subtitle": "قطع في المخزن ليس لها رف أو صندوق بعد.",
+    "start": "ابدأ الترتيب",
+    "error": "حدث خطأ. حاول مرة أخرى.",
+    "filter": "التصفية حسب مصدر القطع",
+    "filterAll": "الكل",
+    "lastPlace": "المكان السابق",
+    "noSuggestion": "لا يوجد اقتراح",
+    "countWaiting": "في انتظار الترتيب",
+    "emptyTitle": "كل القطع هنا لها مكان",
+    "suggestionNote": "المكان المقترح = آخر مكان كانت فيه القطعة، أو المكان الذي توجد فيه معظم قطع نفس المنتج. يمكنك دائمًا مسح مكان آخر.",
+    "noPlacesTitle": "لا توجد رفوف أو صناديق هنا بعد",
+    "noPlacesBody": "جهّز الأماكن في الإعدادات › الأماكن، واطبع ملصقاتها، ثم رتّب القطع.",
+    "source": {
+      "receiving": "الاستلام",
+      "returns": "المرتجعات",
+      "transfers": "التحويلات",
+      "stock_take": "الجرد",
+      "other": "أخرى"
+    },
+    "col": {
+      "piece": "القطعة",
+      "product": "المنتج",
+      "from": "المصدر",
+      "waiting": "مدة الانتظار",
+      "suggested": "المكان المقترح"
+    },
+    "countFrom": {
+      "receiving": "من الاستلام",
+      "returns": "من المرتجعات",
+      "rest": "من التحويلات / الجرد / غير ذلك"
+    },
+    "path": {
+      "boxOn": "{{box}} على {{parent}}",
+      "boxIn": "{{box}} في {{parent}}"
+    },
+    "truncated_zero": "لا توجد قطع",
+    "truncated_one": "عرض أحدث قطعة",
+    "truncated_two": "عرض أحدث قطعتين",
+    "truncated_few": "عرض أحدث {{count}} قطع",
+    "truncated_many": "عرض أحدث {{count}} قطعة",
+    "truncated_other": "عرض أحدث {{count}} قطعة",
+    "waitingMinutes_zero": "أقل من دقيقة",
+    "waitingMinutes_one": "دقيقة",
+    "waitingMinutes_two": "دقيقتان",
+    "waitingMinutes_few": "{{count}} دقائق",
+    "waitingMinutes_many": "{{count}} دقيقة",
+    "waitingMinutes_other": "{{count}} دقيقة",
+    "waitingHours_zero": "أقل من ساعة",
+    "waitingHours_one": "ساعة",
+    "waitingHours_two": "ساعتان",
+    "waitingHours_few": "{{count}} ساعات",
+    "waitingHours_many": "{{count}} ساعة",
+    "waitingHours_other": "{{count}} ساعة",
+    "waitingDays_zero": "اليوم",
+    "waitingDays_one": "يوم",
+    "waitingDays_two": "يومان",
+    "waitingDays_few": "{{count}} أيام",
+    "waitingDays_many": "{{count}} يومًا",
+    "waitingDays_other": "{{count}} يومًا",
+    "scan": {
+      "switched": {
+        "shelf": "تم التبديل إلى الرف {{code}}",
+        "box": "تم التبديل إلى الصندوق {{code}}"
+      },
+      "was": "كان {{code}}",
+      "addedTo": "{{piece}} · أُضيفت إلى {{place}}",
+      "movedFrom": "{{piece}} · نُقلت من {{from}}",
+      "alreadyHere": "{{piece}} · موجودة بالفعل في {{place}}",
+      "placeFirst": "امسح رفًا أو صندوقًا أولًا",
+      "notPlaced": "لم توضع {{piece}} في مكان",
+      "notHolding": {
+        "zone": "{{code}} منطقة — توضع القطع على رف أو في صندوق",
+        "rack": "{{code}} وحدة رفوف — توضع القطع على رف أو في صندوق"
+      },
+      "scanShelfOrBox": "امسح ملصق رف أو صندوق",
+      "placeElsewhere": "{{code}} في {{location}}",
+      "scanPlaceHere": "امسح مكانًا في {{location}}",
+      "archived": "{{code}} مؤرشف",
+      "notHere": "ليست في هذا الموقع",
+      "pieceIsAt": "{{piece}} في {{location}}",
+      "pieceNowhere": "{{piece}} ليست في أي موقع",
+      "cannotPlace": "لا يمكن وضعها في مكان",
+      "pieceIs": "حالة {{piece}}: {{status}}",
+      "untagged": "هذه القطعة ليس عليها ملصق بعد",
+      "tagFirst": "ألصق ملصقها أولًا، ثم رتّبها.",
+      "unknown": "ملصق غير معروف",
+      "unknownBody": "لم يتغير شيء. تحقق من الملصق وامسحه مرة أخرى.",
+      "back": "العودة إلى الترتيب",
+      "currentPlace": "المكان الحالي",
+      "puttingInto": {
+        "shelf": "الوضع في · رف",
+        "box": "الوضع في · صندوق"
+      },
+      "putHereNow": "وُضعت هنا الآن",
+      "onThis": {
+        "shelf": "على هذا الرف",
+        "box": "في هذا الصندوق"
+      },
+      "startTitle": "امسح ملصق رف أو صندوق",
+      "startBody": "القطع التي تمسحها بعد ذلك توضع في هذا المكان.",
+      "scanPiece": "امسح قطعة",
+      "scanPieceHint": "أو امسح ملصق رف أو صندوق آخر لتغيير المكان",
+      "scanPlace": "امسح رفًا أو صندوقًا",
+      "scanPlaceHint": "الملصق على حافة الرف أو على الصندوق",
+      "placeholder": "امسح…",
+      "thisSession": "هذه الجلسة",
+      "placed": "قطعة وُضعت",
+      "placesUsed": "أماكن مستخدمة",
+      "stillWaiting": "ما زالت في الانتظار",
+      "lastScans": "آخر عمليات المسح",
+      "noScans": "لم يُمسح شيء بعد.",
+      "footer": "كل عملية وضع تُحفظ في سجل القطعة.",
+      "finish": "إنهاء",
+      "closedElsewhere": "أُغلقت هذه الجلسة — عمليات المسح الجديدة لا تُحفظ. ابدأ الترتيب من جديد للمتابعة."
+    },
+    "done": {
+      "title": "انتهى الترتيب",
+      "back": "العودة إلى الترتيب",
+      "body_zero": "لم توضع أي قطعة.",
+      "body_one": "وُضعت قطعة واحدة في {{places}} أماكن.",
+      "body_two": "وُضعت قطعتان في {{places}} أماكن.",
+      "body_few": "وُضعت {{count}} قطع في {{places}} أماكن.",
+      "body_many": "وُضعت {{count}} قطعة في {{places}} أماكن.",
+      "body_other": "وُضعت {{count}} قطعة في {{places}} أماكن.",
+      "pieces_zero": "لا قطع",
+      "pieces_one": "قطعة واحدة",
+      "pieces_two": "قطعتان",
+      "pieces_few": "{{count}} قطع",
+      "pieces_many": "{{count}} قطعة",
+      "pieces_other": "{{count}} قطعة",
+      "stillWaiting_zero": "لا توجد قطع بدون مكان",
+      "stillWaiting_one": "قطعة واحدة هنا ما زالت بلا مكان",
+      "stillWaiting_two": "قطعتان هنا ما زالتا بلا مكان",
+      "stillWaiting_few": "{{count}} قطع هنا ما زالت بلا مكان",
+      "stillWaiting_many": "{{count}} قطعة هنا ما زالت بلا مكان",
+      "stillWaiting_other": "{{count}} قطعة هنا ما زالت بلا مكان"
+    },
+    "resume_zero": "استأنف الترتيب",
+    "resume_one": "استأنف الترتيب · {{count}} قطعة وُضعت",
+    "resume_two": "استأنف الترتيب · {{count}} قطعة وُضعت",
+    "resume_few": "استأنف الترتيب · {{count}} قطعة وُضعت",
+    "resume_many": "استأنف الترتيب · {{count}} قطعة وُضعت",
+    "resume_other": "استأنف الترتيب · {{count}} قطعة وُضعت",
+    "open": {
+      "title": "الجلسات المفتوحة",
+      "note": "الجلسة التي لا يُمسح فيها شيء لمدة {{hours}} ساعة تُغلق تلقائيًا. إغلاق جلسة لا ينقل أي قطعة.",
+      "someone": "شخص ما",
+      "close": "إغلاق",
+      "closed": "أُغلقت جلسة {{name}}",
+      "confirmTitle": "إغلاق هذه الجلسة؟",
+      "meta_zero": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_zero": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها.",
+      "meta_one": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_one": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها.",
+      "meta_two": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_two": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها.",
+      "meta_few": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_few": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها.",
+      "meta_many": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_many": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها.",
+      "meta_other": "وُضعت {{count}} · بدأت منذ {{since}} · آخر مسح منذ {{last}}",
+      "confirmBody_other": "تنتهي جلسة {{name}} الآن. القطع التي وضعتها ({{count}}) تبقى في أماكنها."
     }
   }
 }

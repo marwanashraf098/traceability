@@ -42,7 +42,8 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
-    "closeMenu": "Close menu"
+    "closeMenu": "Close menu",
+    "putAway": "Put away"
   },
   "overview": {
     "title": "Overview",
@@ -1296,7 +1297,11 @@
       "label_bound_tag": "Label {{code}} attached in Tag stock",
       "sold_offline": "Marked sold outside Shopify",
       "not_sold": "Not sold — piece back to available",
-      "received_factory_run": "Received from factory run «{{run}}»"
+      "received_factory_run": "Received from factory run «{{run}}»",
+      "put_away": "Put away in {{toPlace}}",
+      "place_moved": "Moved from {{fromPlace}} to {{toPlace}}",
+      "place_cleared": "Place cleared (was {{fromPlace}})",
+      "box_moved": "Box {{box}} moved from {{fromPlace}} to {{toPlace}}"
     },
     "pieceStatus": {
       "available": "Available",
@@ -1322,6 +1327,33 @@
       "factoryIssued": "Factory label",
       "factoryTitle": "Factory label not received yet — receive it in its factory run first",
       "factoryBody": "This label was printed for a factory run. The piece becomes stock when it's scanned in Receiving with that run (Factory-labeled)."
+    },
+    "place": "Place",
+    "noPlace": "No place yet",
+    "placeSticker": {
+      "title": "That's a place sticker",
+      "archived": "Archived",
+      "kind": {
+        "zone": "Zone",
+        "rack": "Rack",
+        "shelf": "Shelf",
+        "box": "Box"
+      },
+      "pieces_one": "{{count}} piece here",
+      "pieces_other": "{{count}} pieces here"
+    },
+    "move": {
+      "button": "Move",
+      "title": "Move to another place",
+      "nowIn": "Now in {{code}}",
+      "nowNone": "No place yet",
+      "scanPlaceholder": "Scan a shelf or box sticker",
+      "orPick": "Or pick a place",
+      "noPlaces": "No shelves or boxes at this location yet.",
+      "noPlace": "No place",
+      "done": "Moved to {{code}}",
+      "cleared": "Place cleared",
+      "error": "Couldn't move it. Try again."
     }
   },
   "returns": {
@@ -3518,6 +3550,12 @@
         "title": "Look up",
         "desc": "Find an order by barcode or AWB"
       }
+    },
+    "putAway": {
+      "desc": "Scan a shelf or box, then the pieces that go there.",
+      "start": "Start",
+      "title_one": "{{count}} piece waiting to be put away",
+      "title_other": "{{count}} pieces waiting to be put away"
     }
   },
   "returnsExchanges": {
@@ -3772,7 +3810,8 @@
       "transferReconcile": "Transfer reconcile · {{ref}}",
       "returns": "Scan returns · {{ref}}",
       "tagStock": "Tag stock",
-      "factoryReceiving": "Factory receiving · {{ref}}"
+      "factoryReceiving": "Factory receiving · {{ref}}",
+      "putAway": "Put away"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",
@@ -4893,7 +4932,8 @@
       "generic": "Something went wrong — try again",
       "load": "Couldn't load places — refresh to try again"
     },
-    "addRack": "Add rack"
+    "addRack": "Add rack",
+    "putAwayLink": "Put away"
   },
   "lookupExchange": {
     "button": "Exchange",
@@ -4934,6 +4974,132 @@
       "cancelSubmit": "Yes, cancel exchange",
       "cancelled": "Exchange cancelled",
       "cancelFailed": "Couldn't cancel the exchange. Try again."
+    }
+  },
+  "putAway": {
+    "title": "Put away",
+    "subtitle": "Pieces in the warehouse that don't have a shelf or box yet.",
+    "start": "Start put away",
+    "error": "Something went wrong. Try again.",
+    "filter": "Filter by where pieces came from",
+    "filterAll": "All",
+    "lastPlace": "last place",
+    "noSuggestion": "No suggestion",
+    "countWaiting": "waiting to be put away",
+    "emptyTitle": "Every piece here has a place",
+    "suggestionNote": "Suggested place = where the piece was last, or where most pieces of the same product sit. You can always scan a different place.",
+    "noPlacesTitle": "No shelves or boxes here yet",
+    "noPlacesBody": "Set up places in Settings › Places, print their stickers, then put pieces away.",
+    "source": {
+      "receiving": "Receiving",
+      "returns": "Returns",
+      "transfers": "Transfers",
+      "stock_take": "Stock take",
+      "other": "Other"
+    },
+    "col": {
+      "piece": "Piece",
+      "product": "Product",
+      "from": "Came from",
+      "waiting": "Waiting",
+      "suggested": "Suggested place"
+    },
+    "countFrom": {
+      "receiving": "from Receiving",
+      "returns": "from Returns",
+      "rest": "from Transfers / stock take / other"
+    },
+    "path": {
+      "boxOn": "{{box}} on {{parent}}",
+      "boxIn": "{{box}} in {{parent}}"
+    },
+    "truncated_one": "Showing the newest {{count}} piece",
+    "truncated_other": "Showing the newest {{count}} pieces",
+    "waitingMinutes_one": "{{count}} min",
+    "waitingMinutes_other": "{{count}} min",
+    "waitingHours_one": "{{count}} h",
+    "waitingHours_other": "{{count}} h",
+    "waitingDays_one": "{{count}} day",
+    "waitingDays_other": "{{count}} days",
+    "scan": {
+      "switched": {
+        "shelf": "Switched to shelf {{code}}",
+        "box": "Switched to box {{code}}"
+      },
+      "was": "was {{code}}",
+      "addedTo": "{{piece}} · added to {{place}}",
+      "movedFrom": "{{piece}} · moved from {{from}}",
+      "alreadyHere": "{{piece}} · already in {{place}}",
+      "placeFirst": "Scan a shelf or box first",
+      "notPlaced": "{{piece}} wasn't placed",
+      "notHolding": {
+        "zone": "{{code}} is a zone — pieces go on a shelf or in a box",
+        "rack": "{{code}} is a rack — pieces go on a shelf or in a box"
+      },
+      "scanShelfOrBox": "Scan a shelf or box sticker",
+      "placeElsewhere": "{{code}} is in {{location}}",
+      "scanPlaceHere": "Scan a place in {{location}}",
+      "archived": "{{code}} is archived",
+      "notHere": "Not at this location",
+      "pieceIsAt": "{{piece}} is at {{location}}",
+      "pieceNowhere": "{{piece}} isn't at any location",
+      "cannotPlace": "Can't be placed",
+      "pieceIs": "{{piece}} is {{status}}",
+      "untagged": "This piece has no label yet",
+      "tagFirst": "Tag it first, then put it away.",
+      "unknown": "Unknown sticker",
+      "unknownBody": "Nothing changed. Check the sticker and scan again.",
+      "back": "Back to Put away",
+      "currentPlace": "Current place",
+      "puttingInto": {
+        "shelf": "Putting into · Shelf",
+        "box": "Putting into · Box"
+      },
+      "putHereNow": "put here now",
+      "onThis": {
+        "shelf": "on this shelf",
+        "box": "in this box"
+      },
+      "startTitle": "Scan a shelf or box sticker",
+      "startBody": "Pieces you scan next go into that place.",
+      "scanPiece": "Scan a piece",
+      "scanPieceHint": "or scan another shelf or box sticker to switch place",
+      "scanPlace": "Scan a shelf or box",
+      "scanPlaceHint": "the sticker on the shelf edge or the box",
+      "placeholder": "Scan…",
+      "thisSession": "This session",
+      "placed": "pieces placed",
+      "placesUsed": "places used",
+      "stillWaiting": "still waiting",
+      "lastScans": "Last scans",
+      "noScans": "Nothing scanned yet.",
+      "footer": "Every placement is saved in the piece's history.",
+      "finish": "Finish",
+      "closedElsewhere": "This session was closed — new scans aren’t saved. Start put away again to continue."
+    },
+    "done": {
+      "title": "Put away finished",
+      "back": "Back to Put away",
+      "body_one": "{{count}} piece placed in {{places}} places.",
+      "body_other": "{{count}} pieces placed in {{places}} places.",
+      "pieces_one": "{{count}} piece",
+      "pieces_other": "{{count}} pieces",
+      "stillWaiting_one": "{{count}} piece here still has no place",
+      "stillWaiting_other": "{{count}} pieces here still have no place"
+    },
+    "resume_one": "Resume put away · {{count}} placed",
+    "resume_other": "Resume put away · {{count}} placed",
+    "open": {
+      "title": "Open sessions",
+      "note": "A session with no scan for {{hours}} h closes by itself. Closing one never moves a piece.",
+      "someone": "Someone",
+      "close": "Close",
+      "closed": "{{name}}'s session is closed",
+      "confirmTitle": "Close this session?",
+      "meta_one": "{{count}} placed · started {{since}} ago · last scan {{last}} ago",
+      "meta_other": "{{count}} placed · started {{since}} ago · last scan {{last}} ago",
+      "confirmBody_one": "{{name}}'s session ends now. The {{count}} piece it placed stays where it is.",
+      "confirmBody_other": "{{name}}'s session ends now. The {{count}} pieces it placed stay where they are."
     }
   }
 }

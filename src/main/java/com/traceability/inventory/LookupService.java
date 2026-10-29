@@ -66,6 +66,11 @@ public class LookupService {
         if ("not_sold".equals(eventType))          return "not_sold";
         // 2026-10-08 restock repair: a location fix with no status change.
         if ("location_corrected".equals(eventType)) return "location_corrected";
+        // Warehouse places S2 — a piece put on a shelf / in a box, moved between places, or its place cleared
+        // (status unchanged; the event carries from_bin_id / to_bin_id → fromPlace / toPlace).
+        if ("put_away".equals(eventType))          return "put_away";
+        if ("place_moved".equals(eventType))       return "place_moved";
+        if ("place_cleared".equals(eventType))     return "place_cleared";
         if ("courier_update".equals(eventType)) {
             if ("delivered".equals(toStatus))                       return "courier_delivered";
             if ("with_courier".equals(toStatus))                    return "courier_picked_up";
@@ -125,7 +130,8 @@ public class LookupService {
             "       o.number AS order_number, " +
             "       s.tracking_number, " +
             "       loc.name AS location_name, " +
-            "       lr.factory_name AS run_factory, lr.reference AS run_reference " +
+            "       lr.factory_name AS run_factory, lr.reference AS run_reference, " +
+            "       fb.code AS from_place, tb.code AS to_place " +
             "FROM piece_events pe " +
             "LEFT JOIN users u     ON u.id  = pe.actor_user_id " +
             "LEFT JOIN merchant_orders o    ON o.id  = pe.order_id " +
@@ -134,6 +140,9 @@ public class LookupService {
             // Flexible labeling slice 6b: a factory piece's received event names its run.
             "LEFT JOIN label_runs lr ON pe.event_type = 'received' AND lr.tenant_id = pe.tenant_id " +
             "      AND lr.id = (pe.metadata ->> 'label_run_id')::uuid " +
+            // Warehouse places S2: the places a place event names.
+            "LEFT JOIN bins fb ON fb.id = pe.from_bin_id " +
+            "LEFT JOIN bins tb ON tb.id = pe.to_bin_id " +
             "WHERE pe.piece_id = ? AND pe.tenant_id = ? " +
             "ORDER BY pe.occurred_at DESC, pe.id DESC",
             piece.get("id").toString(), tenantId);
@@ -161,6 +170,10 @@ public class LookupService {
                 event.put("phraseKey", "received_factory_run");
                 event.put("factoryRun", com.traceability.labels.FactoryReceivingService.runName(
                     (String) e.get("run_factory"), (String) e.get("run_reference")));
+            }
+            if (PLACE_EVENTS.contains(eType)) {
+                event.put("fromPlace", e.get("from_place"));
+                event.put("toPlace",   e.get("to_place"));
             }
             event.put("actor",        actor != null ? actor : "System");
             event.put("isSystem",     actor == null);
@@ -256,6 +269,93 @@ public class LookupService {
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
             result.put("variantStock", UntaggedPieces.availableCounts(jdbc, tenantId, (UUID) piece.get("variant_id")));
         }
+        // Warehouse places S2: the piece's place (with its path) and whether Move applies — only for tenants
+        // that have places (everyone else's response is unchanged). A box's moves since the piece went into it
+        // join the timeline.
+        if (com.traceability.places.Places.enabled(jdbc, tenantId)) {
+            UUID binId = jdbc.queryForObject("SELECT bin_id FROM pieces WHERE id = ?", UUID.class, piece.get("id").toString());
+            var place = com.traceability.places.PlacePaths.describe(jdbc, tenantId, binId);
+            result.put("place", place == null ? null : placeMap(place));
+            result.put("canPlace", piece.get("short_code") != null && piece.get("location_id") != null
+                && com.traceability.places.Places.PLACEABLE_STATUSES.contains(Objects.toString(piece.get("status"), "")));
+            if (place != null && "box".equals(place.kind())) addBoxMoves(tenantId, piece.get("id").toString(), place, timeline);
+        }
+        return result;
+    }
+
+    private static final java.util.Set<String> PLACE_EVENTS = java.util.Set.of("put_away", "place_moved", "place_cleared");
+
+    static Map<String, Object> placeMap(com.traceability.places.PlacePaths.Place p) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", p.id().toString());
+        m.put("kind", p.kind());
+        m.put("code", p.code());
+        m.put("trail", p.trail());
+        m.put("parentCode", p.parentCode());
+        m.put("parentKind", p.parentKind());
+        return m;
+    }
+
+    /**
+     * The box the piece is in now: its moves (bin_events 'moved') since the piece went into it, as timeline entries
+     * ("Box BOX-07 moved from Z1 to Z1-R01-S2"), merged newest first.
+     */
+    private void addBoxMoves(UUID tenantId, String pieceId, com.traceability.places.PlacePaths.Place box,
+                             List<Map<String, Object>> timeline) {
+        List<Map<String, Object>> moves = jdbc.queryForList(
+            "SELECT be.id, be.occurred_at, u.name AS actor_name, fp.code AS from_place, tp.code AS to_place " +
+            "FROM bin_events be LEFT JOIN users u ON u.id = be.actor_user_id " +
+            "LEFT JOIN bins fp ON fp.id = be.from_parent_id LEFT JOIN bins tp ON tp.id = be.to_parent_id " +
+            "WHERE be.tenant_id = ? AND be.bin_id = ? AND be.event_type = 'moved' " +
+            "  AND be.occurred_at >= (SELECT max(pe.occurred_at) FROM piece_events pe WHERE pe.piece_id = ? " +
+            "                         AND pe.tenant_id = ? AND pe.to_bin_id = ?) " +
+            "ORDER BY be.occurred_at DESC, be.id DESC",
+            tenantId, box.id(), pieceId, tenantId, box.id());
+        if (moves.isEmpty()) return;
+        for (Map<String, Object> m : moves) {
+            Map<String, Object> event = new LinkedHashMap<>();
+            String actor = (String) m.get("actor_name");
+            event.put("id",           "bin-" + m.get("id"));
+            event.put("eventType",    "box_moved");
+            event.put("phraseKey",    "box_moved");
+            event.put("box",          box.code());
+            event.put("fromPlace",    m.get("from_place"));
+            event.put("toPlace",      m.get("to_place"));
+            event.put("actor",        actor != null ? actor : "System");
+            event.put("isSystem",     actor == null);
+            event.put("fromStatus",   null);
+            event.put("toStatus",     null);
+            event.put("orderNumber",  null);
+            event.put("orderId",      null);
+            event.put("trackingNumber", null);
+            event.put("locationName", null);
+            event.put("metadata",     null);
+            event.put("occurredAt",   m.get("occurred_at"));
+            timeline.add(event);
+        }
+        timeline.sort((a, b) -> ((java.util.Date) b.get("occurredAt")).compareTo((java.util.Date) a.get("occurredAt")));
+    }
+
+    /**
+     * Warehouse places S2 — a scanned place sticker in Lookup: {type: "place", code, kind, trail, parentCode,
+     * parentKind, locationName, pieces, archived}. Null (the caller carries on as before) unless the tenant has
+     * places and the sticker is one of its places.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> lookupPlaceSticker(String scanCode) {
+        UUID tenantId = TenantContext.require();
+        if (!com.traceability.places.Places.enabled(jdbc, tenantId)) return null;
+        List<UUID> bin = jdbc.queryForList("SELECT id FROM bins WHERE tenant_id = ? AND scan_code = ?",
+            UUID.class, tenantId, scanCode);
+        if (bin.isEmpty()) return null;
+        var place = com.traceability.places.PlacePaths.describe(jdbc, tenantId, bin.get(0));
+        Map<String, Object> result = new LinkedHashMap<>(placeMap(place));
+        result.put("type", "place");
+        result.put("scanCode", place.scanCode());
+        result.put("archived", place.archived());
+        result.put("locationName", jdbc.queryForObject("SELECT name FROM locations WHERE id = ?", String.class, place.locationId()));
+        result.put("pieces", jdbc.queryForObject("SELECT count(*)::int FROM pieces WHERE tenant_id = ? AND bin_id = ?",
+            Integer.class, tenantId, place.id()));
         return result;
     }
 

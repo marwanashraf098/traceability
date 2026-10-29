@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  ScanLine, SearchX, ChevronDown, Lock, RotateCcw, Search, Printer,
+  ScanLine, SearchX, ChevronDown, Lock, RotateCcw, Search, Printer, MapPin,
 } from 'lucide-react'
 import {
   lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, LabelCodeLookupResult, TimelineEvent,
@@ -10,8 +10,10 @@ import {
   voidPiece, holdPiece, unholdPiece, VOID_REASONS, HOLD_REASONS, VoidReason, HoldReason,
   restorePiece, RESTORE_REASONS, RestoreReason, markPieceSold, markPieceNotSold,
   getRoleFromToken, reprintPieceLabel, ReprintLabelError,
+  movePiecePlace, getPutAwayPlaces, PlaceRef, PlaceStickerLookupResult, ServerMessageError,
 } from '../api'
-import { Alert, Badge, Button, Modal, Spinner } from '../components/ui'
+import { Alert, Badge, Button, Modal, Spinner, cn, useToast } from '../components/ui'
+import { placePath } from './putaway/placePath'
 import { UntaggedSplit } from '../components/UntaggedSplit'
 import OrderDrawer from '../components/OrderDrawer'
 import LookupExchangeDialog from '../components/LookupExchangeDialog'
@@ -33,6 +35,9 @@ function formatDateTime(iso: string) {
 
 // ── Timeline phrase ───────────────────────────────────────────────────────────
 
+/** Warehouse places: a place change is not a status change — no status pill. */
+const PLACE_PHRASES = new Set(['put_away', 'place_moved', 'place_cleared', 'box_moved'])
+
 function TimelinePhrase({ event }: { event: TimelineEvent }) {
   const { t } = useTranslation()
   return (
@@ -43,6 +48,9 @@ function TimelinePhrase({ event }: { event: TimelineEvent }) {
         toStatus:     event.toStatus     ?? '',
         code:         event.labelCode    ?? '',
         run:          event.factoryRun   ?? '',
+        fromPlace:    event.fromPlace    ?? '',
+        toPlace:      event.toPlace      ?? '',
+        box:          event.box          ?? '',
         defaultValue: event.phraseKey.replace(/_/g, ' '),
       })}
     </span>
@@ -102,6 +110,128 @@ function LabelCodeView({ result }: { result: LabelCodeLookupResult }) {
   )
 }
 
+// ── Place sticker (warehouse places) ──────────────────────────────────────────
+
+/** A scanned place sticker: which place it is, where, and how many pieces are on it. */
+function PlaceStickerView({ result }: { result: PlaceStickerLookupResult }) {
+  const { t } = useTranslation()
+  return (
+    <div className="card p-6 space-y-4 animate-fadeIn" data-testid="place-sticker-view">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-caption text-muted uppercase tracking-widest mb-1">{t('lookup.placeSticker.title')}</p>
+          <h2 className="text-h2 text-primary leading-tight font-mono" dir="ltr">{result.code}</h2>
+          <p className="text-small text-muted mt-1">{placePath(result, t)} · {result.locationName}</p>
+        </div>
+        <Badge tone={result.archived ? 'neutral' : 'info'} className="flex-shrink-0 mt-1"
+          label={result.archived ? t('lookup.placeSticker.archived') : t(`lookup.placeSticker.kind.${result.kind}`)} />
+      </div>
+      <p className="text-body text-primary" data-testid="place-sticker-pieces">
+        {t('lookup.placeSticker.pieces', { count: result.pieces })}
+      </p>
+    </div>
+  )
+}
+
+// ── Move a piece to another place (warehouse places) ──────────────────────────
+// Every role. The dialog has its OWN scan input (a place sticker) and the location's shelves and boxes to pick
+// from, plus "No place". The server is the one writer (recordPlaceChange) and decides what's allowed.
+
+function MovePlaceButton({ piece, onDone }: { piece: PieceLookupResult; onDone: () => void }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button data-testid="move-place-btn" onClick={() => setOpen(true)}
+        className="btn-outline text-small inline-flex items-center gap-1.5">
+        <MapPin size={12} />{t('lookup.move.button')}
+      </button>
+      {open && <MovePlaceDialog piece={piece} onClose={() => setOpen(false)} onMoved={() => { setOpen(false); onDone() }} />}
+    </>
+  )
+}
+
+function MovePlaceDialog({ piece, onClose, onMoved }: { piece: PieceLookupResult; onClose: () => void; onMoved: () => void }) {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [places, setPlaces] = useState<PlaceRef[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const current = piece.place ?? null
+
+  useEffect(() => {
+    getPutAwayPlaces(piece.currentLocation?.id).then(setPlaces).catch(() => setPlaces([]))
+  }, [piece.currentLocation?.id])
+
+  async function apply(body: { placeId?: string; scan?: string }) {
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await movePiecePlace(piece.id, body)
+      toast({ tone: 'success', message: r.to ? t('lookup.move.done', { code: r.to.code }) : t('lookup.move.cleared') })
+      onMoved()
+    } catch (e: unknown) {
+      setError(e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('lookup.move.error'))
+      setBusy(false)
+      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+    }
+  }
+
+  return (
+    <Modal title={t('lookup.move.title')} onClose={() => { if (!busy) onClose() }}>
+      <div className="space-y-4" data-testid="move-place-dialog">
+        <p className="text-small text-muted">
+          {current ? t('lookup.move.nowIn', { code: current.code }) : t('lookup.move.nowNone')}
+        </p>
+        <input
+          ref={inputRef}
+          type="text"
+          className="input-scan w-full"
+          placeholder={t('lookup.move.scanPlaceholder')}
+          aria-label={t('lookup.move.scanPlaceholder')}
+          disabled={busy}
+          data-testid="move-place-scan"
+          onKeyDown={e => {
+            if (e.key !== 'Enter') return
+            // Every scan input strips ALL whitespace before it's sent.
+            const code = (e.target as HTMLInputElement).value.replace(/\s+/g, '')
+            if (code) apply({ scan: code })
+          }}
+          autoFocus
+        />
+        {error && <p className="text-small text-danger" role="alert" data-testid="move-place-error">{error}</p>}
+        <div>
+          <p className="text-caption text-muted uppercase tracking-wider mb-2">{t('lookup.move.orPick')}</p>
+          {places === null ? <Spinner size={18} /> : places.length === 0 ? (
+            <p className="text-small text-muted">{t('lookup.move.noPlaces')}</p>
+          ) : (
+            <ul className="max-h-64 overflow-y-auto border border-line rounded-lg divide-y divide-line">
+              {places.map(p => (
+                <li key={p.id}>
+                  <button type="button" disabled={busy || p.id === current?.id} onClick={() => apply({ placeId: p.id })}
+                    data-testid={`move-place-option-${p.code}`}
+                    className={cn('w-full flex items-center justify-between gap-3 px-3 py-2.5 text-start hover:bg-elevated disabled:opacity-50',
+                      p.id === current?.id && 'bg-trace-blue/[0.06]')}>
+                    <span className="font-mono text-small font-semibold text-primary" dir="ltr">{p.code}</span>
+                    <span className="text-small text-muted truncate">{placePath(p, t)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex gap-2 justify-end">
+          <Button variant="secondary" disabled={busy} onClick={onClose}>{t('common.cancel')}</Button>
+          {current && (
+            <Button variant="secondary" disabled={busy} onClick={() => apply({})}>{t('lookup.move.noPlace')}</Button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ── Piece lookup view ─────────────────────────────────────────────────────────
 
 function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh: () => void }) {
@@ -145,6 +275,19 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           <MetaField label={t('lookup.location')}>
             {result.currentLocation?.name ?? <span className="text-muted font-normal">{t('common.na')}</span>}
           </MetaField>
+          {/* Warehouse places tenants only: the piece's shelf / box and its path. */}
+          {result.place !== undefined && (
+            <MetaField label={t('lookup.place')} className="col-span-2">
+              {result.place ? (
+                <span data-testid="piece-place">
+                  <span className="font-mono" dir="ltr">{result.place.code}</span>
+                  <span className="block text-caption text-muted font-normal mt-0.5">{placePath(result.place, t)}</span>
+                </span>
+              ) : (
+                <span className="text-warning-text font-normal" data-testid="piece-no-place">{t('lookup.noPlace')}</span>
+              )}
+            </MetaField>
+          )}
           <MetaField label={t('lookup.order')}>
             {result.currentOrder ? (
               <span className="font-mono text-trace-blue">
@@ -199,7 +342,9 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           </div>
         ) : (
           <>
-            <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh} />
+            <ReprintLabelButton pieceId={result.id} canReprint={result.canReprint} onDone={onRefresh}>
+              {result.canPlace && <MovePlaceButton piece={result} onDone={onRefresh} />}
+            </ReprintLabelButton>
 
             <AdjustPanel pieceId={result.id} pieceStatus={result.status} canUndoSold={result.canUndoSold === true}
               canExchange={result.canExchange === true} lookupExchange={result.lookupExchange ?? null}
@@ -243,7 +388,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
                       <span className={`text-small ${event.isSystem ? 'italic text-muted' : 'text-muted'}`}>
                         {event.isSystem ? t('lookup.system') : event.actor}
                       </span>
-                      {(event.fromStatus || event.toStatus) && (
+                      {(event.fromStatus || event.toStatus) && !PLACE_PHRASES.has(event.phraseKey) && (
                         <TransitionPill from={event.fromStatus} to={event.toStatus} />
                       )}
                       {event.locationName && (
@@ -273,10 +418,12 @@ function cnPad(isLast: boolean) {
 // hidden for workers like AdjustPanel; the server enforces the role too. Which statuses
 // qualify is decided server-side (canReprint) — this component never lists them.
 
-function ReprintLabelButton({ pieceId, canReprint, onDone }: {
+function ReprintLabelButton({ pieceId, canReprint, onDone, children }: {
   pieceId: string
   canReprint: boolean
   onDone: () => void
+  /** Actions shown beside Reprint (warehouse places: Move) — also for a worker, who has no Reprint. */
+  children?: React.ReactNode
 }) {
   const { t } = useTranslation()
   const [confirming, setConfirming] = useState(false)
@@ -284,7 +431,9 @@ function ReprintLabelButton({ pieceId, canReprint, onDone }: {
   const [error,      setError]      = useState<string | null>(null)
 
   const role = getRoleFromToken()
-  if (role !== 'owner' && role !== 'manager') return null
+  if (role !== 'owner' && role !== 'manager') {
+    return children ? <div className="mt-4 pt-4 border-t border-line flex flex-wrap items-center gap-2">{children}</div> : null
+  }
 
   async function handlePrint() {
     setPrinting(true)
@@ -305,16 +454,19 @@ function ReprintLabelButton({ pieceId, canReprint, onDone }: {
 
   return (
     <div className="mt-4 pt-4 border-t border-line space-y-2">
-      <span title={canReprint ? undefined : t('lookup.reprint.disabledTooltip')} className="inline-flex">
-        <button
-          data-testid="reprint-label-btn"
-          onClick={() => { setError(null); setConfirming(true) }}
-          disabled={!canReprint}
-          className="btn-outline text-small inline-flex items-center gap-1.5"
-        >
-          <Printer size={12} />{t('lookup.reprint.button')}
-        </button>
-      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span title={canReprint ? undefined : t('lookup.reprint.disabledTooltip')} className="inline-flex">
+          <button
+            data-testid="reprint-label-btn"
+            onClick={() => { setError(null); setConfirming(true) }}
+            disabled={!canReprint}
+            className="btn-outline text-small inline-flex items-center gap-1.5"
+          >
+            <Printer size={12} />{t('lookup.reprint.button')}
+          </button>
+        </span>
+        {children}
+      </div>
 
       {error && <p data-testid="reprint-label-error" className="text-small text-danger">{error}</p>}
 
@@ -1122,6 +1274,9 @@ export default function LookupPage() {
       )}
       {result && !loading && result.type === 'label_code' && (
         <LabelCodeView result={result as LabelCodeLookupResult} />
+      )}
+      {result && !loading && result.type === 'place' && (
+        <PlaceStickerView result={result as PlaceStickerLookupResult} />
       )}
       {result && !loading && result.type === 'tracking' && (
         <TrackingView result={result as TrackingLookupResult} />

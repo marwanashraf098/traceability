@@ -30,6 +30,13 @@ public class LookupController {
         if (isPieceQuery(piece)) {
             return service.lookupPiece(piece, isWorker);
         }
+        // Warehouse places S2: a place sticker (Q + 6 digits) of a tenant with places answers "that's a place";
+        // anything else carries on exactly as before (no tracking number or order is shaped like one).
+        String placeSticker = ScanInputNormalizer.normalizePlace(trimmed);
+        if (placeSticker != null) {
+            Map<String, Object> place = service.lookupPlaceSticker(placeSticker);
+            if (place != null) return place;
+        }
         // '#'-prefixed is unambiguously an order query — no tracking-number format uses '#'.
         if (trimmed.startsWith("#")) {
             return service.lookupOrder(trimmed);

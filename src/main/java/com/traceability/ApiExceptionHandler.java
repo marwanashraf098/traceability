@@ -188,6 +188,13 @@ public class ApiExceptionHandler {
             .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
+    // Warehouse places S2 — a refused place change (InventoryLedger.recordPlaceChange), same shape.
+    @ExceptionHandler(com.traceability.inventory.PlaceChangeException.class)
+    ResponseEntity<LabelCodeErrorBody> handlePlaceChangeException(com.traceability.inventory.PlaceChangeException ex) {
+        return ResponseEntity.status(ex.status())
+            .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), List.of()));
+    }
+
     record FulfillmentActivationErrorBody(
             String code,
             @JsonProperty("message_en") String messageEn,

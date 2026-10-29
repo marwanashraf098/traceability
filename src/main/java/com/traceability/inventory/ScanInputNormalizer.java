@@ -51,6 +51,36 @@ public final class ScanInputNormalizer {
     private static final Pattern DIGITS_6 = Pattern.compile("[0-9]{6,}");
     private static final Pattern INVISIBLE = Pattern.compile("[\\p{Cf}\\p{Cc}&&[^\t\n\r]]");
 
+    /**
+     * Warehouse places S2 — the glyphs the physical Q key produces on the Arabic layouts above (same tables as
+     * {@link #P_KEY_GLYPHS}): {@code ض} U+0636 ARABIC LETTER DAD — Q without Shift on Windows Arabic 101, macOS
+     * Arabic and Arabic - PC (a scanner compensating for Caps Lock, or a lowercase scan); {@code َ} U+064E ARABIC
+     * FATHA — Shift+Q on Windows Arabic 101 / macOS Arabic - PC (an uppercase Q from a scanner typing with Shift).
+     * No piece code, waybill or other sticker starts with either.
+     */
+    static final Set<Integer> Q_KEY_GLYPHS = Set.of(0x0636, 0x064E);
+
+    private static final Pattern PLACE_SHAPE = Pattern.compile("[Qq][0-9]{6,}");
+
+    /**
+     * A place sticker's barcode ({@code Q} + 6 or more digits, PlaceCodes) in canonical form, or null when the scan
+     * isn't one. Same rules as {@link #normalizePiece}: invisibles / whitespace stripped, Arabic-Indic / Persian
+     * digits folded, lower-case {@code q} upper-cased, and one narrow layout recovery — exactly one leading
+     * {@link #Q_KEY_GLYPHS} glyph followed by 6 or more digits. Nothing else is guessed. Shared vectors:
+     * {@code shared/place-code-vectors.json}.
+     */
+    public static String normalizePlace(String raw) {
+        if (raw == null) return null;
+        String s = foldDigits(stripInvisible(raw));
+        if (PLACE_SHAPE.matcher(s).matches()) return "Q" + s.substring(1);
+        if (!s.isEmpty()) {
+            int first = s.codePointAt(0);
+            String rest = s.substring(Character.charCount(first));
+            if (Q_KEY_GLYPHS.contains(first) && DIGITS_6.matcher(rest).matches()) return "Q" + rest;
+        }
+        return null;
+    }
+
     /** The value to bind in a piece lookup ({@code barcode = ? OR id = ? OR short_code = ?}). */
     public static String normalizePiece(String raw) {
         if (raw == null) return null;

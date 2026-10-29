@@ -148,7 +148,7 @@ describe('Settings › Places', () => {
     expect(screen.getByTestId('places-next-zone').textContent).toBe('+ Zone Z2')
     expect(within(layout).getByTestId('places-add-rack').textContent).toBe('Add rackR03')
     expect(screen.getByTestId('places-no-place').textContent).toContain('45 pieces have no place yet')
-    expect(within(screen.getByTestId('places-no-place')).queryByRole('link')).toBeNull()   // plain text until S2
+    expect(within(screen.getByTestId('places-no-place')).getByRole('link')).toHaveAttribute('href', '/put-away')   // S2: links to Put away
   })
 
   test('pl4 — tap a shelf: its contents, Print sticker, + Box here', async () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 import { Box, Minus, Plus, Printer } from 'lucide-react'
 import {
   archivePlace, createPlace, createPlacesBulk, getPlace, getPlaces, listLocations, movePlace, openPlaceStickers,
@@ -11,7 +12,7 @@ import { Button, Input, Modal, Select, Skeleton, cn, useToast } from '../../comp
 // Warehouse places S1 — Settings › Places (owner + manager; shown only when the tenant has places). The visual setup:
 // zone cards; the selected zone drawn as racks side by side with their shelves stacked inside, white boxes as chips;
 // the zone floor's boxes underneath; Quick add (racks × shelves) and the selected place on the side. No piece is
-// placed here — "No place yet" is a count until Put away (S2).
+// placed here — "No place yet" links to Put away (S2).
 
 const MAX_SHELVES = 20
 const MAX_RACKS = 99
@@ -220,6 +221,12 @@ export default function PlacesTab() {
               <span className="text-body text-warning-text">
                 {t('places.noPlaceYet', { count: tree.noPlaceYet })}
               </span>
+              {tree.noPlaceYet > 0 && (
+                <Link to="/put-away" data-testid="places-put-away-link"
+                  className="text-body font-semibold text-trace-blue hover:text-trace-blue-hover whitespace-nowrap">
+                  {t('places.putAwayLink')} <span aria-hidden className="inline-block rtl:rotate-180">›</span>
+                </Link>
+              )}
             </div>
           </aside>
         </div>

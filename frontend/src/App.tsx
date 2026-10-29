@@ -42,6 +42,8 @@ import TransferScanOut from './pages/TransferScanOut'
 import TransferDetail from './pages/TransferDetail'
 import TransferReconcile from './pages/TransferReconcile'
 import LookupPage from './pages/Lookup'
+import PutAway from './pages/putaway/PutAway'
+import PutAwayScan from './pages/putaway/PutAwayScan'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
 import ExchangeMapping from './pages/exchanges/ExchangeMapping'
@@ -463,6 +465,24 @@ export default function App() {
           element={
             <RequireAuth>
               <SetupGate><Layout><LookupPage /></Layout></SetupGate>
+            </RequireAuth>
+          }
+        />
+        {/* Warehouse places S2 — Put away, every role (the API answers 404 without places; the page then leaves).
+            The waiting list is in-shell; the scan loop is full-screen (not Layout-wrapped). */}
+        <Route
+          path="/put-away"
+          element={
+            <RequireAuth>
+              <SetupGate><Layout><PutAway /></Layout></SetupGate>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/put-away/:id/scan"
+          element={
+            <RequireAuth>
+              <SetupGate><PutAwayScan /></SetupGate>
             </RequireAuth>
           }
         />

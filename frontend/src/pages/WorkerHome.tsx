@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { PackageCheck, Undo2, Truck, Search, ChevronRight, type LucideIcon } from 'lucide-react'
+import { PackageCheck, PackagePlus, Undo2, Truck, Search, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useMe } from '../components/ui'
+import { usePutAwayWaiting } from './putaway/usePutAwayWaiting'
 
 interface Tile {
   to: string
@@ -40,6 +41,8 @@ export default function WorkerHome() {
   const navigate = useNavigate()
   const me = useMe()
   const firstName = me?.name?.trim().split(/\s+/)[0] ?? ''
+  // Warehouse places S2: null for a tenant without places (no request is made), so the tile never shows there.
+  const waiting = usePutAwayWaiting()
 
   return (
     <div className="space-y-6" data-testid="worker-home">
@@ -49,6 +52,27 @@ export default function WorkerHome() {
         </h1>
         <p className="text-body text-muted mt-1">{t('workerHome.subtitle')}</p>
       </div>
+
+      {waiting != null && waiting > 0 && (
+        <button
+          type="button"
+          onClick={() => navigate('/put-away')}
+          className="group w-full flex items-center gap-4 rounded-xl border border-warning/40 bg-warning/[0.08] p-5 text-start transition-colors hover:border-warning/70"
+          data-testid="worker-home-put-away"
+        >
+          <span className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 bg-warning/15">
+            <PackagePlus size={22} strokeWidth={1.75} className="text-warning-text" />
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="block text-body-lg font-semibold text-primary">{t('workerHome.putAway.title', { count: waiting })}</span>
+            <span className="block text-small text-muted mt-0.5">{t('workerHome.putAway.desc')}</span>
+          </span>
+          <span className="inline-flex items-center gap-1 text-body font-semibold text-warning-text shrink-0">
+            {t('workerHome.putAway.start')}
+            <ChevronRight size={18} strokeWidth={2} className="rtl:rotate-180" />
+          </span>
+        </button>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {TILES.map(tile => (

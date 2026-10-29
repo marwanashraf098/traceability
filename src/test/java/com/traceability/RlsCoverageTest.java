@@ -118,6 +118,13 @@ class RlsCoverageTest {
             // C2 Lookup Exchange — lookupExchange_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/lookup-exchange/orders",
             "/api/v1/lookup-exchange/orders/{orderId}/returnables",
+            // Warehouse places S2 — putAway_crossTenantIsolated_withSameTenantPositiveControl below; app_user isolation
+            // in PutAwayTest.x1.
+            "/api/v1/put-away/summary",
+            "/api/v1/put-away/waiting",
+            "/api/v1/put-away/places",
+            "/api/v1/put-away/sessions",
+            "/api/v1/put-away/sessions/{id}",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1146,6 +1153,84 @@ class RlsCoverageTest {
             jdbc.update("UPDATE tenants SET generic_courier_enabled = false WHERE id = ?", tenantId);
             jdbc.update("DELETE FROM orders WHERE id = ?", otherOrder);
             jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void putAway_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Warehouse places S2: the waiting list, the places list, the badge count and a session are the caller's own.
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherZone = UUID.randomUUID();
+        UUID otherRack = UUID.randomUUID(), otherShelf = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        UUID otherStore = UUID.randomUUID(), otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID();
+        UUID myZone = UUID.randomUUID(), myRack = UUID.randomUUID(), myShelf = UUID.randomUUID();
+        UUID mySession = UUID.randomUUID(), otherSession = UUID.randomUUID();
+        String myPiece = "01COVPAW00000000000000MINE", otherPiece = "01COVPAW0000000000000OTHER";
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov PutAway Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Other', 'cov-paw-other@test.com', 'h', 'owner')", otherUser, otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov PutAway Other WH', true)",
+                    otherLoc, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-paw-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'COV-PAW-P', 'Their Tee', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'COV-PAW-V', 'M', 'COV-PAW-THEIRS')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'PZOTHER', 'Q910001')",
+                    otherZone, otherTenant, otherLoc);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'PZOTHER-R01', 'Q910002')", otherRack, otherTenant, otherLoc, otherZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'PZOTHER-R01-S1', 'Q910003')", otherShelf, otherTenant, otherLoc, otherRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P910001', ?)", otherPiece, otherTenant, otherVariant, "PC-" + otherPiece, otherLoc);
+        jdbc.update("INSERT INTO put_away_sessions (id, tenant_id, location_id, source, opened_by) VALUES (?, ?, ?, 'manual', ?)",
+                    otherSession, otherTenant, otherLoc, otherUser);
+
+        jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'PZMINE', 'Q910004')",
+                    myZone, tenantId, locationId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'PZMINE-R01', 'Q910005')", myRack, tenantId, locationId, myZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'PZMINE-R01-S1', 'Q910006')", myShelf, tenantId, locationId, myRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P910002', ?)", myPiece, tenantId, variantId, "PC-" + myPiece, locationId);
+        jdbc.update("INSERT INTO put_away_sessions (id, tenant_id, location_id, source, opened_by) VALUES (?, ?, ?, 'manual', ?)",
+                    mySession, tenantId, locationId, ownerUserId);
+        try {
+            ResponseEntity<String> summary = get("/api/v1/put-away/summary", String.class);
+            assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(summary.getBody()).doesNotContain("Cov PutAway Other WH");
+            ResponseEntity<String> waiting = get("/api/v1/put-away/waiting", String.class);
+            assertThat(waiting.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(waiting.getBody()).as("same-tenant positive control").contains("P910002");
+            assertThat(waiting.getBody()).as("never another tenant's pieces").doesNotContain("P910001").doesNotContain("THEIRS");
+            assertThat(get("/api/v1/put-away/waiting?locationId=" + otherLoc, String.class).getStatusCode())
+                .as("another tenant's location").isEqualTo(HttpStatus.NOT_FOUND);
+            ResponseEntity<String> places = get("/api/v1/put-away/places", String.class);
+            assertThat(places.getBody()).as("same-tenant positive control").contains("PZMINE-R01-S1").doesNotContain("PZOTHER");
+            assertThat(get("/api/v1/put-away/places?locationId=" + otherLoc, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(get("/api/v1/put-away/sessions/" + mySession, String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+            ResponseEntity<String> open = get("/api/v1/put-away/sessions", String.class);
+            assertThat(open.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(open.getBody()).as("same-tenant positive control").contains(mySession.toString())
+                .doesNotContain(otherSession.toString());
+            assertThat(get("/api/v1/put-away/sessions/" + otherSession, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM put_away_sessions WHERE id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM pieces WHERE id IN (?, ?)", myPiece, otherPiece);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", myShelf, myRack, myZone);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", otherShelf, otherRack, otherZone);
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

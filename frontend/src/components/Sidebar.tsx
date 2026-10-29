@@ -8,20 +8,22 @@ import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, X,
   BarChart3, Workflow, PanelLeftClose, PanelLeftOpen,
-  Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt,
+  Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt, PackagePlus,
 } from 'lucide-react'
 import type { Me } from '../api'
 import { Logo } from './Logo'
 import { cn } from './ui'
 import { analyticsEnabled, isReadyPage, type AnalyticsPageId } from '../analytics/flag'
 import { sharedSearch } from '../analytics/period'
+import { usePutAwayWaiting } from '../pages/putaway/usePutAwayWaiting'
 
 // ── Nav config ──────────────────────────────────────────────────────────────────
 // Owner/manager nav, in display order. A section with no visible items renders no header.
 // The worker nav is separate and fixed (Home + the three worker screens).
 
-/** capability: shown only when /me grants it (a /me capability flag, e.g. flexibleLabeling). */
-type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' }
+/** capability: shown only when /me grants it (a /me capability flag, e.g. flexibleLabeling).
+ *  badge: a count shown beside the label ('putAway' = pieces waiting to be put away). */
+type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' | 'places'; badge?: 'putAway' }
 type NavSection = { id: string; headerKey?: string; items: NavItem[] }
 
 const OWNER_SECTIONS: NavSection[] = [
@@ -37,6 +39,7 @@ const OWNER_SECTIONS: NavSection[] = [
   { id: 'stock', headerKey: 'nav.sections.stock', items: [
     { to: '/inventory',  icon: Warehouse,     labelKey: 'nav.catalog' },
     { to: '/receiving',  icon: Inbox,         labelKey: 'nav.receiving' },
+    { to: '/put-away',   icon: PackagePlus,   labelKey: 'nav.putAway', capability: 'places', badge: 'putAway' },
     { to: '/transfers',  icon: Repeat,        labelKey: 'nav.transfers' },
     { to: '/stock-take', icon: ClipboardList, labelKey: 'nav.stocktake' },
   ] },
@@ -51,6 +54,7 @@ const WORKER_ITEMS: NavItem[] = [
   { to: '/fulfill',     icon: PackageCheck, labelKey: 'nav.fulfill' },
   { to: '/returns',     icon: Undo2,        labelKey: 'nav.returns' },
   { to: '/pickups',     icon: Truck,        labelKey: 'nav.pickups' },
+  { to: '/put-away',    icon: PackagePlus,  labelKey: 'nav.putAway', capability: 'places', badge: 'putAway' },
 ]
 
 const ANALYTICS_ICONS: Record<AnalyticsPageId, LucideIcon> = {
@@ -212,16 +216,29 @@ function useRailTip(collapsed: boolean) {
 
 // ── Nav link ────────────────────────────────────────────────────────────────────
 
-function SideNavLink({ to, icon: Icon, label, collapsed, tipProps }: {
+function SideNavLink({ to, icon: Icon, label, collapsed, tipProps, badge }: {
   to: string; icon: LucideIcon; label: string; collapsed: boolean
   tipProps?: Record<string, unknown>
+  /** A count beside the label (hidden when 0 / unknown); a dot on the collapsed rail. */
+  badge?: number | null
 }) {
+  const showBadge = badge != null && badge > 0
   return (
-    <NavLink to={to} {...tipProps} className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active')}>
+    <NavLink to={to} {...tipProps} className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active', showBadge && 'relative')}>
       {({ isActive }) => (
         <>
           <Icon size={18} strokeWidth={1.75} className={cn('flex-shrink-0', isActive && 'text-trace-blue')} />
           <span className={cn('truncate', collapsed && 'min-[900px]:sr-only')}>{label}</span>
+          {showBadge && (
+            <>
+              <span data-testid={`nav-badge-${to.slice(1)}`}
+                className={cn('ms-auto rounded-full bg-warning/15 text-warning-text text-[11px] font-semibold px-2 py-0.5 tabular-nums',
+                  collapsed && 'min-[900px]:hidden')}>
+                {badge}
+              </span>
+              {collapsed && <span aria-hidden className="hidden min-[900px]:block absolute top-1.5 end-2.5 h-2 w-2 rounded-full bg-warning" />}
+            </>
+          )}
         </>
       )}
     </NavLink>
@@ -368,9 +385,13 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
   const toggleLabel = collapsed ? t('nav.expand') : t('nav.collapse')
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose
 
+  const putAwayWaiting = usePutAwayWaiting()
+  const visible = (i: NavItem) => !i.capability || caps[i.capability]
+
   function link(item: NavItem) {
     const label = t(item.labelKey)
-    return <SideNavLink key={item.to} to={item.to} icon={item.icon} label={label} collapsed={collapsed} tipProps={bind(label)} />
+    return <SideNavLink key={item.to} to={item.to} icon={item.icon} label={label} collapsed={collapsed} tipProps={bind(label)}
+      badge={item.badge === 'putAway' ? putAwayWaiting : undefined} />
   }
 
   return (
@@ -415,7 +436,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
       <nav id="app-nav-list"
         {...(hasSwitch ? { role: 'tabpanel', 'aria-labelledby': `mode-tab-${mode}` } : {})}
         className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-0.5">
-        {isWorker ? WORKER_ITEMS.map(link) : mode === 'analytics' ? (
+        {isWorker ? WORKER_ITEMS.filter(visible).map(link) : mode === 'analytics' ? (
           <div data-testid="nav-analytics" className="flex flex-col gap-0.5">
             {ANALYTICS_SECTIONS.map(s => ({ ...s, pages: s.pages.filter(isReadyPage) }))
               .filter(s => s.pages.length > 0)
@@ -432,7 +453,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
           OWNER_SECTIONS.filter(s => s.items.length > 0).map(s => (
             <div key={s.id} className="flex flex-col gap-0.5">
               {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
-              {s.items.filter(i => !i.capability || caps[i.capability]).map(link)}
+              {s.items.filter(visible).map(link)}
             </div>
           ))
         )}

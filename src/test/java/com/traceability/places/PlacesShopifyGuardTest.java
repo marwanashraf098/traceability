@@ -28,13 +28,21 @@ class PlacesShopifyGuardTest {
         "integrations.shopify", "ShopifyGateway", "ShopifyInventoryService", "ShopifyHttpGateway",
         "TransferShopifySync", "PieceShopifyRules", "ShopifyTokenProvider");
 
+    /** S2 — the put-away writer and its refusal live outside the package; they're scanned too. */
+    private static final List<Path> OUTSIDE = List.of(
+        Paths.get("src/main/java/com/traceability/inventory/PlaceChangeException.java"));
+
     @Test
     void placesPackage_namesNoShopifyCode() throws IOException {
         List<Path> files;
         try (Stream<Path> paths = Files.walk(PLACES)) {
-            files = paths.filter(p -> p.toString().endsWith(".java")).toList();
+            files = new ArrayList<>(paths.filter(p -> p.toString().endsWith(".java")).toList());
         }
         assertThat(files).as("the places package exists where this scan looks").isNotEmpty();
+        assertThat(files.stream().map(f -> f.getFileName().toString()))
+            .as("S2's put-away code is in the scan").contains("PutAwayService.java", "PutAwayController.java", "PlacePaths.java");
+        for (Path f : OUTSIDE) assertThat(Files.exists(f)).as(f.toString()).isTrue();
+        files.addAll(OUTSIDE);
         List<String> hits = new ArrayList<>();
         for (Path f : files) {
             String src = Files.readString(f);
@@ -43,9 +51,28 @@ class PlacesShopifyGuardTest {
         assertThat(hits).as("places code must never reach Shopify").isEmpty();
     }
 
+    /**
+     * S2 — InventoryLedger.recordPlaceChange (the one place writer) names no Shopify code either: the method's own
+     * source text, cut from the ledger file (the ledger as a whole has no Shopify dependency — checked below).
+     */
+    @Test
+    void recordPlaceChange_namesNoShopifyCode() throws IOException {
+        String src = Files.readString(Paths.get("src/main/java/com/traceability/inventory/InventoryLedger.java"));
+        int start = src.indexOf("// ---- recordPlaceChange");
+        int end = src.indexOf("/** Specification for one piece to be created via batchReceive. */");
+        assertThat(start).as("recordPlaceChange section found").isPositive();
+        assertThat(end).isGreaterThan(start);
+        String method = src.substring(start, end);
+        assertThat(method).contains("public PlaceChange recordPlaceChange(");
+        for (String token : FORBIDDEN) assertThat(method).as("recordPlaceChange: " + token).doesNotContain(token);
+        for (Constructor<?> ctor : com.traceability.inventory.InventoryLedger.class.getDeclaredConstructors()) {
+            for (Class<?> p : ctor.getParameterTypes()) assertThat(p.getName()).doesNotContain("hopify");
+        }
+    }
+
     @Test
     void placesBeans_takeNoShopifyDependency() {
-        for (Class<?> c : List.of(PlacesService.class, PlacesController.class)) {
+        for (Class<?> c : List.of(PlacesService.class, PlacesController.class, PutAwayService.class, PutAwayController.class)) {
             for (Constructor<?> ctor : c.getDeclaredConstructors()) {
                 for (Class<?> p : ctor.getParameterTypes()) {
                     assertThat(p.getName()).as(c.getSimpleName() + " constructor").doesNotContain("shopify").doesNotContain("Shopify");

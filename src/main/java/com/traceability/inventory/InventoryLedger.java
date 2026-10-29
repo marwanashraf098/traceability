@@ -605,6 +605,110 @@ public class InventoryLedger {
         return new BindResult(false, pieceId, variantId, codeText);
     }
 
+    // ---- recordPlaceChange -----------------------------------------------------
+
+    /** Where a place change came from, for the event's metadata: a put-away session scan or Lookup's Move. */
+    public record PlaceRef(String source, UUID sessionId, boolean viaPhone) {
+        public static PlaceRef putAway(UUID sessionId, boolean viaPhone) { return new PlaceRef("put_away", sessionId, viaPhone); }
+        public static PlaceRef lookup() { return new PlaceRef("lookup", null, false); }
+    }
+
+    /** PUT_AWAY (no place → a place), MOVED (A → B), CLEARED (→ no place), ALREADY_HERE (nothing written). */
+    public enum PlaceChangeKind { PUT_AWAY, MOVED, CLEARED, ALREADY_HERE }
+
+    public record PlaceChange(PlaceChangeKind kind, String pieceId, UUID fromBinId, UUID toBinId, String status,
+                              UUID locationId) {}
+
+    private static final List<String> PLACEABLE = List.of("available", "on_hold", "damaged");
+
+    /**
+     * Warehouse places S2 — puts a piece on a shelf / in a box, moves it to another one, or clears its place
+     * ({@code toBinId} null): ONE conditional UPDATE of pieces.bin_id and ONE piece_events row, from_status =
+     * to_status (a place is not a status), event_type put_away / place_moved / place_cleared, from_bin_id /
+     * to_bin_id set, metadata {source, session_id?, via_phone?}. Never touches Shopify, status or location. The
+     * sixth piece_events writer here; pieces / piece_events stay ledger-only (pieces_bin_guard, V189, only ever
+     * clears bin_id on a departure).
+     *
+     * Refused before anything is written (PlaceChangeException): PIECE_NOT_FOUND, UNTAGGED (short_code NULL —
+     * the trigger doesn't stop these, so this writer must), NO_LOCATION, STATUS_NOT_PLACEABLE (not available /
+     * on_hold / damaged), PLACE_NOT_FOUND, NOT_A_SHELF_OR_BOX, PLACE_ARCHIVED, OTHER_LOCATION (the place isn't in
+     * the piece's location). The same place again (or clearing a piece with no place) → ALREADY_HERE, no event.
+     * Caller contract: TenantContext set, capability checked by the caller.
+     */
+    // noRollbackFor: every refusal is thrown before anything is written, so a scan loop's transaction carries on.
+    @Transactional(isolation = Isolation.READ_COMMITTED, noRollbackFor = PlaceChangeException.class)
+    public PlaceChange recordPlaceChange(String pieceId, UUID toBinId, UUID actorUserId, PlaceRef ref, String rawScan) {
+        java.util.Map<String, Object> p = jdbc.query(
+            "SELECT status::text AS status, short_code, current_location_id, bin_id FROM pieces " +
+            "WHERE id = ? AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid FOR UPDATE",
+            rs -> {
+                if (!rs.next()) return null;
+                java.util.Map<String, Object> m = new java.util.HashMap<>();
+                m.put("status", rs.getString("status"));
+                m.put("short_code", rs.getString("short_code"));
+                m.put("location", rs.getObject("current_location_id", UUID.class));
+                m.put("bin", rs.getObject("bin_id", UUID.class));
+                return m;
+            },
+            pieceId);
+        if (p == null) throw PlaceChangeException.pieceNotFound();
+        String status = (String) p.get("status");
+        UUID locationId = (UUID) p.get("location");
+        UUID fromBinId = (UUID) p.get("bin");
+        if (p.get("short_code") == null) throw PlaceChangeException.untagged();
+        if (locationId == null) throw PlaceChangeException.noLocation();
+        if (!PLACEABLE.contains(status)) throw PlaceChangeException.statusNotPlaceable(status);
+
+        if (toBinId != null) {
+            // FOR SHARE: an archive of this place (FOR UPDATE on the same row) waits for this transaction.
+            java.util.Map<String, Object> b = jdbc.query(
+                "SELECT kind, location_id, archived_at FROM bins " +
+                "WHERE id = ? AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid FOR SHARE",
+                rs -> {
+                    if (!rs.next()) return null;
+                    java.util.Map<String, Object> m = new java.util.HashMap<>();
+                    m.put("kind", rs.getString("kind"));
+                    m.put("location", rs.getObject("location_id", UUID.class));
+                    m.put("archived", rs.getTimestamp("archived_at") != null);
+                    return m;
+                },
+                toBinId);
+            if (b == null) throw PlaceChangeException.placeNotFound();
+            if (!"shelf".equals(b.get("kind")) && !"box".equals(b.get("kind"))) throw PlaceChangeException.notAShelfOrBox();
+            if (Boolean.TRUE.equals(b.get("archived"))) throw PlaceChangeException.placeArchived();
+            if (!locationId.equals(b.get("location"))) throw PlaceChangeException.otherLocation();
+        }
+
+        if (java.util.Objects.equals(fromBinId, toBinId)) {
+            return new PlaceChange(PlaceChangeKind.ALREADY_HERE, pieceId, fromBinId, toBinId, status, locationId);
+        }
+
+        int rows = jdbc.update(
+            "UPDATE pieces SET bin_id = ?, last_event_at = now(), last_user_id = ? " +
+            "WHERE id = ? AND status = ?::piece_status AND current_location_id = ? AND bin_id IS NOT DISTINCT FROM ?",
+            toBinId, actorUserId, pieceId, status, locationId, fromBinId);
+        if (rows != 1) throw new IllegalStateException("recordPlaceChange lost its lock on " + pieceId);
+
+        PlaceChangeKind kind = toBinId == null ? PlaceChangeKind.CLEARED
+            : fromBinId == null ? PlaceChangeKind.PUT_AWAY : PlaceChangeKind.MOVED;
+        String eventType = switch (kind) {
+            case PUT_AWAY -> "put_away";
+            case MOVED -> "place_moved";
+            default -> "place_cleared";
+        };
+        StringBuilder meta = new StringBuilder("{\"source\":\"").append(ref == null ? "lookup" : ref.source()).append('"');
+        if (ref != null && ref.sessionId() != null) meta.append(",\"session_id\":\"").append(ref.sessionId()).append('"');
+        if (ref != null && ref.viaPhone()) meta.append(",\"via_phone\":true");
+        meta.append('}');
+        jdbc.update(
+            "INSERT INTO piece_events (tenant_id, piece_id, event_type, actor_user_id, location_id, " +
+            "                          from_status, to_status, from_bin_id, to_bin_id, metadata, raw_scan) " +
+            "VALUES (NULLIF(current_setting('app.current_tenant', true), '')::uuid, ?, ?, ?, ?, " +
+            "        ?::piece_status, ?::piece_status, ?, ?, ?::jsonb, ?)",
+            pieceId, eventType, actorUserId, locationId, status, status, fromBinId, toBinId, meta.toString(), rawScan);
+        return new PlaceChange(kind, pieceId, fromBinId, toBinId, status, locationId);
+    }
+
     /** Specification for one piece to be created via batchReceive. */
     public record ReceiveSpec(
             String pieceId,
