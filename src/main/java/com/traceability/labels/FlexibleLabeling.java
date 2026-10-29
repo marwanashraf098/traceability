@@ -9,7 +9,7 @@ import java.util.UUID;
 
 /**
  * Flexible labeling — the ONE answer to "is it on for this tenant": {@code tenants.flexible_labeling_enabled}
- * (V176, default false, set by ops while the feature is built). Read on the caller's connection and
+ * (V176; default true and on for every tenant since V193 — an admin-only kill switch). Read on the caller's connection and
  * tenant context, like GenericShipments.enabled; /me exposes it as {@code flexibleLabeling}.
  */
 public final class FlexibleLabeling {
