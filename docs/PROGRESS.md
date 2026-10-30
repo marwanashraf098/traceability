@@ -5,7 +5,7 @@
 ## Current state
 
 **Warehouse places S3 — Pick & Pack places, display only (2026-10-30, branch `feat/warehouse-places-s3` from main
-05c8e7c; reviewed + committed, NOT merged, NOT deployed; no migration).**
+05c8e7c, rebased onto 43a98ff; merged to main 2026-10-30, NOT deployed; no migration).**
 - **Rules:** display only — PICKABLE_ORDERS_FILTER untouched, pick scan unchanged (no place check, pieces assigned only when
   scanned), getOrder / PackSessionStore.orderCard / GatherRow byte-identical (PackLineImageTest, G2 goldens, GatherListTest
   untouched), no SAFETY-CRITICAL block edited. Places off → every new endpoint 404 and the screens render exactly as before
@@ -35,6 +35,16 @@
 - **Arabic plurals (separate i18n-only commit on this branch):** the Pick & Pack waybill strings had only _one/_other in
   ar.json, so counts ≥ 2 fell back to English ("more 5", "4 packed · 11 left", "3 waybills"); every plural key under
   `fulfill.waybill` now has all six Arabic forms.
+- **Follow-up (i18n, OPEN, logged 2026-10-30):** 35 other plural keys in ar.json still lack Arabic forms (so some counts
+  fall back to English or to the wrong form). Missing all but _other: `exchangesRefunds.drawer.exchange.itemsCount`,
+  `exchangesRefunds.requests.{awaitingRefundBadge, drawer.unexpectedTitle, exchange.inStock, history.itemsDecided,
+  link.bostaNote, link.items, newBadge, refund.restockWarning}`, `returns.landing.awaitingScanTitle`,
+  `returns.openSession.{footer.itemsScanned, footer.parcels, parcel.allIn, parcel.collapsedItems, parcel.progress}`,
+  `settings.portal.products.showMore`. Missing zero/two/few/many: `fulfill.labels.dialog.{done, fromLabeled, print,
+  reused}`, `fulfill.printBatch.{everythingHint, excludedTitle, intro, moreReady, printN, printed, remaining,
+  skippedDeleted, skippedRejected, skippedRetry}`, `returns.openSession.bostaSays`, `scanner.waiting`,
+  `settings.couriers.catchUp`. Missing zero only: `fulfill.awaitingWaybill`. `receiving.factory.confirmBody` has _one
+  only (no _other). Fix as one i18n-only commit, same method as the waybill strings (check 0/1/2/5/11/100).
 
 **Returned pieces stay on their order (2026-10-30, branch `fix/returned-pieces-on-order` off origin/main 3d314f3;
 NOT merged, NOT deployed; no migration).** Step 0 same day: after Scan returns graded a piece **restock**,
