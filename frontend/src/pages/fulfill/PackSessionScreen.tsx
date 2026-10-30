@@ -20,6 +20,7 @@ import {
   usePackLineHighlight,
 } from './packLabels'
 import { PhoneScanButton } from '../../phone/PhoneScanButton'
+import { LinePlaceChips, useOrderPickPlaces } from './PickPlaces'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
 // SessionScanning, Rejected, SetAside). Full-screen immersive — no <Layout>. Built on the shared
@@ -447,6 +448,8 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
   const total = packItems.reduce((n, i) => n + i.quantity, 0)
   const done = packItems.reduce((n, i) => n + Math.min(i.allocated, i.quantity), 0)
   const cod = order.payment_method === 'cod' && order.cod_amount != null
+  // Warehouse places S3: place chips per line — fetched after the card, in the background, never awaited here.
+  const placesByLine = useOrderPickPlaces(order.id, done)
 
   return (
     <div className="flex flex-col lg:flex-row gap-4" data-testid="session-scanning">
@@ -536,6 +539,7 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
                   )}
                   {item.sku && <p className="text-caption text-muted font-mono break-words">{item.sku}</p>}
                   <LineLabelStatus line={item} />
+                  <LinePlaceChips places={placesByLine?.get(item.id)} needed={left} />
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className={cn('text-h4 font-mono', complete ? 'text-success-text' : 'text-primary')}>

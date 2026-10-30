@@ -1215,6 +1215,17 @@
       "openLabelsPart": "Open labels part {{part}} of {{of}} (50×25) · {{count}}",
       "noLabelsNow": "No piece labels were needed.",
       "noLabelsUseAll": "No untagged pieces in these orders — choose 'Everything ready to pack' to include all orders in the queue."
+    },
+    "places": {
+      "noPlace": "No place yet",
+      "zone": "Zone {{zone}}",
+      "boxOnShelf": "Box on shelf {{shelf}}",
+      "onFloor": "On the {{zone}} floor",
+      "partOf": "{{index}} of {{of}} places",
+      "colPlace": "Place",
+      "colTake": "Take",
+      "pieces_one": "{{count}} piece",
+      "pieces_other": "{{count}} pieces"
     }
   },
   "lookup": {

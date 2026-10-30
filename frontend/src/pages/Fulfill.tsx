@@ -17,6 +17,7 @@ import type { PackOrderLabels } from '../api'
 import { getAccessToken } from '../auth'
 import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
+import { LinePlaceChips, useOrderPickPlaces } from './fulfill/PickPlaces'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
@@ -1007,6 +1008,10 @@ function PickScreen({
   // Flexible labeling slice 4: the highlighted line (first unfilled, auto-advancing) — display only.
   const lineHighlight = usePackLineHighlight(order ? order.items.filter(i => i.quantity > 0) : [])
 
+  // Warehouse places S3: place chips per line — fetched after the order, in the background, never awaited here.
+  const placesByLine = useOrderPickPlaces(order ? orderId : null,
+    order ? order.items.reduce((n, i) => n + i.allocated, 0) : 0)
+
   // S2 — a waybill already printed in a print batch counts as printed: Complete doesn't ask
   // for a reprint. Only ever turns the flag on.
   useEffect(() => { if (order?.awbPrinted) setAwbPrintedOnce(true) }, [order?.awbPrinted])
@@ -1277,6 +1282,7 @@ function PickScreen({
                   {/* SKU — font-mono per spec */}
                   {item.sku && <p className="text-caption text-muted font-mono break-words">{item.sku}</p>}
                   <LineLabelStatus line={item} />
+                  <LinePlaceChips places={placesByLine?.get(item.id)} needed={item.quantity - item.allocated} />
                 </div>
                 <span className={`text-body font-mono font-semibold flex-shrink-0 ${
                   complete ? 'text-success-text' : 'text-muted'

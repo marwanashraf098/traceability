@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Printer, ArrowLeft, ArrowRight } from 'lucide-react'
-import { getGatherList, GatherListResponse } from '../api'
+import { getGatherList, getVariantPickPlaces, GatherListResponse, VariantPickPlaces } from '../api'
 import { Button, EmptyState, TableSkeleton } from '../components/ui'
+import { useCapabilities } from '../capabilities'
+import GatherPlacesTable from './fulfill/GatherPlaces'
 
 export default function GatherList() {
   const { t, i18n } = useTranslation()
@@ -31,6 +33,23 @@ export default function GatherList() {
   }, [t, batchId])
 
   useEffect(() => { load() }, [load])
+
+  // Warehouse places S3: places for every variant on the list, one request after the list loads. Places off, or
+  // the request fails → today's table, unchanged.
+  const { places: placesOn } = useCapabilities()
+  const [places, setPlaces] = useState<{ rows: GatherListResponse['rows']; byVariant: Map<string, VariantPickPlaces> } | null>(null)
+  useEffect(() => {
+    const listRows = data?.rows ?? []
+    if (!placesOn || listRows.length === 0) return
+    let cancelled = false
+    getVariantPickPlaces(listRows.map(r => r.variantId))
+      .then(r => {
+        if (cancelled || !r || !Array.isArray(r.variants)) return
+        setPlaces({ rows: listRows, byVariant: new Map(r.variants.map(v => [v.variantId, v])) })
+      })
+      .catch(() => { /* today's table */ })
+    return () => { cancelled = true }
+  }, [placesOn, data])
 
   const rows = data?.rows ?? []
 
@@ -124,6 +143,8 @@ export default function GatherList() {
         <TableSkeleton rows={5} cols={4} />
       ) : rows.length === 0 ? (
         <EmptyState message={t('fulfill.gather.empty')} icon="📦" />
+      ) : places && places.rows === rows ? (
+        <GatherPlacesTable rows={rows} places={places.byVariant} />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full">
