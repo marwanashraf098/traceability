@@ -502,7 +502,8 @@
     "returnState": {
       "pending_inspection": "Returned · pending inspection",
       "restocked": "Returned · restocked",
-      "damaged": "Returned · damaged"
+      "damaged": "Returned · damaged",
+      "back_to_good": "Returned · back to good"
     },
     "deliveryHistory": "Delivery history",
     "noDeliveryHistory": "No history recorded yet — transitions will appear here as they occur.",
