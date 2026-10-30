@@ -26,7 +26,8 @@ damaged→available edge before the piece joins another order; untracked units i
 - **Tests:** OrdersFiltersTest f1–f8 (exclusive tabs, count == list for every tab × filter, Cairo 23:59 / 00:01,
   list == drawer return state incl. back_to_good and a shelf-damaged restocked piece, ≤ 1 alert check per request,
   reason map coverage, app_user isolation). Approved edits: G3 golden (additive-only, proved), PortalOrderLeakTest
-  (+ /orders/counts), ReturnedPiecesOnOrderTest t5 (returnedUnits) and t6 (back_to_good). Only frontend touch: the
+  (+ /orders/counts), RlsCoverageTest (/orders/counts COVERED + ordersCounts_countOwnTenantOnly: tenant A all == 1,
+  toShip == 1, tenant B's order not counted), ReturnedPiecesOnOrderTest t5 (returnedUnits) and t6 (back_to_good). Only frontend touch: the
   `back_to_good` copy (EN + AR) + tone so the drawer never shows a raw key.
 - **Known gap (out of scope):** generic-courier orders are never tagged Not traced (only Bosta paths run the tagger).
 
