@@ -83,6 +83,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   warehouse_address_push_failed: { en: 'Warehouse Address Not In Shopify', ar: 'عنوان المخزن لم يصل إلى Shopify' },
   // Shopify rejected the token refresh (stores.status needs_reauth)
   shopify_connection_lost: { en: 'Shopify Connection Lost', ar: 'انقطع الاتصال بشوبيفاي' },
+  // A transfer's pieces still counted at the main warehouse in Shopify
+  transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

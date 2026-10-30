@@ -279,6 +279,17 @@ public class ShopifyInventoryService {
         return id;
     }
 
+    /**
+     * A stock-take write-off left out of the session's push because its arrival hadn't reached Shopify (drift fix,
+     * 2026-10-30): its own piece_write_off claim, 'skipped' with that reason, keyed piece:stock_take:session — in the
+     * finalize transaction. ArrivalRevisit flips it to 'queued' once the arrival applies (pushPieceWriteOff then).
+     */
+    public void claimStockTakeWriteOffSkip(UUID tenantId, String pieceId, UUID sessionId, PieceShopifyRules.Verdict arrival) {
+        if (arrival.write()) throw new IllegalArgumentException("only a skipped arrival is claimed here");
+        insertPieceClaim(tenantId, pieceId, arrival, -1, "piece_write_off",
+            PieceShopifyRules.stockTakeWriteOffKey(pieceId, sessionId));
+    }
+
     /** Sends one piece claim after its transaction committed (registered via {@link #afterCommit}). */
     @Async
     public CompletableFuture<Void> pushPieceClaim(UUID tenantId, long claimId) {
@@ -454,6 +465,29 @@ public class ShopifyInventoryService {
         }
 
         ObjectNode initialPayload = mapper.createObjectNode().put("reason", "exchange_dispatch").put("delta", -1);
+
+        // Drift fix (2026-10-30): the same arrival rule as every piece departure — a replacement whose receiving +N
+        // has not reached Shopify is not counted there, so a −1 now would push Shopify below the true count. Skipped
+        // as arrival_unconfirmed / arrival_not_counted; ArrivalRevisit flips it to 'queued' once that +N applies.
+        if (storedLocationId == null) {
+            String arrivalSkip = tx.execute(st -> {
+                PieceShopifyRules.Setup s = PieceShopifyRules.setup(jdbc, tenantId);
+                if (s.skipReason() != null || !s.mainId().equals(locationId)) return null;
+                PieceShopifyRules.Verdict v = PieceShopifyRules.arrival(jdbc, tenantId, pieceId, s);
+                return v.write() ? null : v.skipReason();
+            });
+            if (arrivalSkip != null) {
+                if (isReviewFixtureVariant(tenantId, row.variantId(), "exchange_dispatch", pieceId)) return;
+                tx.execute(st -> jdbc.update(
+                    "INSERT INTO shopify_inventory_adjustments " +
+                    "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, skip_reason) " +
+                    "VALUES (?, ?, ?, ?, -1, 'exchange_dispatch', ?, ?::jsonb, 'skipped', ?) " +
+                    "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
+                    tenantId, batchId, row.variantId(), locationId, pieceId, initialPayload.toString(), arrivalSkip));
+                log.info("Shopify inventory: exchange_dispatch skipped ({}) piece={}", arrivalSkip, pieceId);
+                return;
+            }
+        }
 
         // Shopify rejected the token refresh: hold the decrement — a 'queued' claim, nothing sent, no attempt
         // used. ShopifyReconnectResumeJob sends it once after the merchant reconnects (resumeHeldExchangeDispatches).
@@ -709,6 +743,10 @@ public class ShopifyInventoryService {
      * failures while attempts remain. Legacy claims (before piece_sync_cutoff()) are never touched.
      */
     public int sweepPieceClaims(UUID tenantId) {
+        // Drift fix backstop (2026-10-30): skipped departures whose arrival has applied since (a crash right after the
+        // +N committed, or an arrival applied by any other path) — flipped to 'queued' here, sent below / by the resume.
+        List<ArrivalRevisit.Flipped> revisited = tx.execute(st -> ArrivalRevisit.backstop(jdbc, tenantId));
+        if (revisited != null) sendRevisited(tenantId, revisited);
         tx.execute(st -> jdbc.update(
             "UPDATE shopify_inventory_adjustments sia SET status = 'failed_ambiguous', failure_class = 'ambiguous', " +
             "    error = 'Send started but never confirmed — verify in Shopify' " +
@@ -1403,6 +1441,7 @@ public class ShopifyInventoryService {
                                      ShopifyAdjustFailedException.FailureClass failureClass,
                                      Integer sentBaseline, String sentKey) {
         boolean failed = "failed".equals(status);
+        List<ArrivalRevisit.Flipped> revisited = new java.util.ArrayList<>();
         Boolean recorded = tx.execute(txStatus -> {
             // The seed may have superseded this claim while its attempt was in flight (it was 'pending').
             // A late failure never brings it back to 'failed' (that would re-arm a retry the seed made
@@ -1424,7 +1463,7 @@ public class ShopifyInventoryService {
                          "for variant {} (trigger={} triggerId={} location={})",
                          current.get("delta"), variantId, triggerType, triggerId, locationId);
             }
-            return jdbc.update(
+            boolean updated = jdbc.update(
                 "UPDATE shopify_inventory_adjustments SET " +
                 "  status = ?, error = ?, " +
                 "  shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
@@ -1445,12 +1484,37 @@ public class ShopifyInventoryService {
                 failed && failureClass != null ? failureClass.db() : null,
                 sentKey, sentBaseline, sentKey, sentKey, sentKey, status,
                 tenantId, triggerType, triggerId, variantId, locationId) > 0;
+            // Drift fix (2026-10-30): this receipt's units are in Shopify's count now — the departures skipped while
+            // they weren't (and still away) are owed. Flipped to 'queued' in THIS transaction (ArrivalRevisit).
+            if (updated && "applied".equals(status) && "receiving_session".equals(triggerType)) {
+                revisited.addAll(ArrivalRevisit.afterArrival(jdbc, tenantId, triggerId, variantId));
+            }
+            return updated;
         });
+        sendRevisited(tenantId, revisited);
 
         if (failed && Boolean.TRUE.equals(recorded)) {
             log.warn("Shopify inventory adjustment recorded as failed: trigger={} triggerId={} variant={} class={} error={}",
                      triggerType, triggerId, variantId, failureClass == null ? null : failureClass.db(), error);
         }
+    }
+
+    /** Sends what an arrival revisit flipped to 'queued' (after its transaction committed) through each trigger's own
+     *  sender — the same one-sender guards as the sweep, so an overlap with it sends nothing twice. */
+    private void sendRevisited(UUID tenantId, List<ArrivalRevisit.Flipped> revisited) {
+        if (revisited.isEmpty()) return;
+        log.info("Shopify inventory: {} skipped departure(s) owed now that their arrival applied tenant={}",
+            revisited.size(), tenantId);
+        boolean exchange = false;
+        for (ArrivalRevisit.Flipped f : revisited) {
+            if ("exchange_dispatch".equals(f.triggerType())) { exchange = true; continue; }
+            try {
+                pushPieceClaimNow(tenantId, f.id(), false);
+            } catch (Exception e) {
+                log.warn("Shopify inventory: revisited claim {} not sent now — the sweep sends it: {}", f.id(), e.getMessage());
+            }
+        }
+        if (exchange) resumeHeldExchangeDispatches(tenantId);
     }
 
     /** Follow-up write after the Shopify call (or after a precondition failure) — a plain

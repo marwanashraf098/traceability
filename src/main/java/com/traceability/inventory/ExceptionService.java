@@ -192,6 +192,8 @@ public class ExceptionService {
         all.addAll(detectWarehouseAddressPushFailed(tenantId));
         // Shopify rejected the token refresh (stores.status = 'needs_reauth') — nothing reaches Shopify until reconnect.
         all.addAll(detectShopifyConnectionLost(tenantId));
+        // A transfer left out pieces whose arrival hadn't reached Shopify; it has since — Shopify counts them at main.
+        all.addAll(detectTransferStockNotRemoved(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -308,6 +310,7 @@ public class ExceptionService {
         Map.entry("pack_cancelled_after_print/shipment",       OrderLink.DIRECT),         // the print-batch item's order_id
         Map.entry("warehouse_address_push_failed/location",    OrderLink.NONE),
         Map.entry("shopify_connection_lost/store",             OrderLink.NONE),
+        Map.entry("transfer_stock_not_removed/transfer",       OrderLink.NONE),
         Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
         Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
         Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
@@ -1325,6 +1328,37 @@ public class ExceptionService {
     }
 
     /**
+     * HIGH — drift fix (2026-10-30): a transfer that left the main warehouse left pieces out of its Shopify decrement
+     * because their arrival had not reached Shopify (payload.excluded, arrival_unconfirmed / arrival_not_counted). That
+     * arrival has applied since, and the pieces are still away from the main warehouse — so Shopify counts them there.
+     * Transfers are never re-sent automatically: this names the transfer and the pieces for a person to correct in
+     * Shopify, then resolve. One alert per transfer.
+     */
+    private List<Map<String, Object>> detectTransferStockNotRemoved(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'transfer_stock_not_removed' AS type, 'HIGH' AS severity, 'transfer' AS subject_type, " +
+            "       y.transfer_id, dl.name AS destination_name, " +
+            "       string_agg(pc.barcode, ', ' ORDER BY pc.barcode) AS barcodes, COUNT(*) AS piece_count, " +
+            "       MIN(y.created_at) AS occurred_at, 'transfer_stock_not_removed:' || y.transfer_id AS subject_key " +
+            "FROM transfer_shopify_syncs y " +
+            "JOIN transfers t ON t.id = y.transfer_id AND t.tenant_id = y.tenant_id " +
+            "JOIN locations dl ON dl.id = t.destination_location_id " +
+            "CROSS JOIN LATERAL jsonb_array_elements(COALESCE(y.payload->'excluded', '[]'::jsonb)) x " +
+            "JOIN pieces pc ON pc.id = x->>'piece_id' AND pc.tenant_id = y.tenant_id " +
+            "WHERE y.tenant_id = ? AND x->>'reason' IN " + ArrivalRevisit.REVISIT_REASONS_SQL +
+            "  AND pc.current_location_id IS DISTINCT FROM y.location_id " +
+            "  AND pc.status::text NOT IN ('voided') " +
+            "  AND EXISTS (SELECT 1 FROM shopify_inventory_adjustments r WHERE r.tenant_id = pc.tenant_id " +
+            "        AND r.trigger_type = 'receiving_session' AND r.status = 'applied' AND r.location_id = y.location_id " +
+            "        AND r.trigger_id = pc.receipt_id::text AND r.variant_id = pc.variant_id) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
+            "        AND er.exception_type = 'transfer_stock_not_removed' " +
+            "        AND er.subject_key = 'transfer_stock_not_removed:' || y.transfer_id) " +
+            "GROUP BY y.transfer_id, dl.name",
+            tid);
+    }
+
+    /**
      * LOW — Non-Bosta couriers G3: Shopify reported a generic parcel delivered that Traced never scanned out at
      * Pickups. Two cases, one alert type (subject = the shipment):
      *   inferred   — the order was packed: Traced recorded the handover as INFERRED (history source
@@ -2156,6 +2190,19 @@ public class ExceptionService {
                     + "قبول وصول Traced إلى " + shop + "؛ تحديثات المخزون تنتظر وتُرسل بعد إعادة الربط.");
                 item.put("suggestedAction", "reconnect_shopify");
                 item.put("actionUrl", "/settings?tab=connections");
+            }
+            case "transfer_stock_not_removed" -> {
+                String dest = str(item, "destination_name");
+                String barcodes = str(item, "barcodes");
+                Object n = item.get("piece_count");
+                item.put("descriptionEn", "Transfer to " + dest + ": Shopify still counts " + n + " piece(s) at the main "
+                    + "warehouse that are away (" + barcodes + ") — their arrival reached Shopify after the transfer was "
+                    + "sent. Lower them in Shopify by hand, then resolve.");
+                item.put("descriptionAr", "النقل إلى " + dest + ": لا يزال شوبيفاي يحتسب " + n + " قطعة في المستودع الرئيسي "
+                    + "وهي خارجه (" + barcodes + ") — وصل استلامها إلى شوبيفاي بعد إرسال النقل. اخفضها يدوياً في "
+                    + "شوبيفاي ثم أغلق التنبيه.");
+                item.put("suggestedAction", "verify_shopify_inventory");
+                item.put("actionUrl", "/transfers/" + item.get("transfer_id"));
             }
             case "warehouse_address_push_failed" -> {
                 item.put("descriptionEn", "Traced couldn't add your warehouse address to the \"Traced Main Warehouse\" "

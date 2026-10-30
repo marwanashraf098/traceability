@@ -76,6 +76,16 @@ public final class PieceShopifyRules {
     /** Set on such a departure claim when the piece came back: it is closed, never re-sent. Its
      *  failure_class and Shopify's error stay as recorded — it was sent, so it is never "cancelled". */
     public static final String NOT_RESENT_PIECE_RETURNED = "not_resent_piece_returned";
+    /** Set on a departure claim skipped as arrival_unconfirmed / arrival_not_counted when the piece came back
+     *  before its arrival reached Shopify (2026-10-30): nothing was ever sent, nothing is owed — it is closed so
+     *  the arrival revisit (ArrivalRevisit) never sends it. The return writes nothing (departure_not_reached). */
+    public static final String NOT_SENT_PIECE_RETURNED = "not_sent_piece_returned";
+
+    /** The per-piece claim of a stock-take write-off whose arrival had not reached Shopify (2026-10-30): a
+     *  piece_write_off claim keyed piece:stock_take:session, left out of the session's push. */
+    public static String stockTakeWriteOffKey(String pieceId, Object sessionId) {
+        return pieceId + ":stock_take:" + sessionId;
+    }
 
     /** Skips nobody can resolve without looking at Shopify — surfaced by the alert. */
     public static final Set<String> NEEDS_CHECK = Set.of(DEPARTURE_AMBIGUOUS, ARRIVAL_UNCONFIRMED);
@@ -233,6 +243,44 @@ public final class PieceShopifyRules {
         return Verdict.skip(s.mainId(), unconfirmed ? ARRIVAL_UNCONFIRMED : ARRIVAL_NOT_COUNTED);
     }
 
+    // ── Arrival revisit: is the piece still away? ──────────────────────────────
+
+    /**
+     * For ArrivalRevisit: is the departure this skipped claim was made for still the piece's current one — so the
+     * decrement is owed now that its arrival reached Shopify? The piece's trailing "bad" run ({@link #departure})
+     * must have started from available with this claim's event: hold_enter piece:hold_event_id, piece_write_off
+     * piece:write_off_event_id (or piece:stock_take:session for a stock-take write-off), piece_sold
+     * piece:sold_event_id, void_correction voided, damage_move damaged (the claim made at / after the departure).
+     * A piece back in available (or gone through it since) → false.
+     * exchange_dispatch: the replacement has not come back to sellable — or it has and its restock +1 applied
+     * after the dispatch (the +1 then counted it a second time, so the −1 is owed all the same).
+     */
+    static boolean stillAway(JdbcTemplate jdbc, UUID tenantId, String pieceId, String triggerType, String triggerId,
+                             Timestamp claimCreatedAt) {
+        if ("exchange_dispatch".equals(triggerType)) {
+            return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT p.status::text NOT IN ('available', 'reserved', 'packed', 'awaiting_pickup') " +
+                "    OR EXISTS (SELECT 1 FROM shopify_inventory_adjustments r WHERE r.tenant_id = p.tenant_id " +
+                "        AND r.trigger_type = 'return_inspection' AND r.status = 'applied' " +
+                "        AND (r.trigger_id = p.id OR r.trigger_id LIKE p.id || ':%') AND r.created_at >= ?) " +
+                "FROM pieces p WHERE p.id = ? AND p.tenant_id = ?",
+                Boolean.class, claimCreatedAt, pieceId, tenantId));
+        }
+        Departure d = departure(jdbc, tenantId, pieceId);
+        if (d == null || !"available".equals(d.fromStatus())) return false;
+        return switch (triggerType) {
+            case "hold_enter" -> "on_hold".equals(d.toStatus()) && triggerId.equals(pieceId + ":" + d.holdEventId());
+            case "piece_write_off" -> triggerId.equals(stockTakeWriteOffKey(pieceId, d.sessionId()))
+                ? "lost".equals(d.toStatus()) && "stock_take_missing".equals(d.reason())
+                : ("lost".equals(d.toStatus()) || "destroyed".equals(d.toStatus()))
+                    && triggerId.equals(pieceId + ":" + d.writeOffEventId());
+            case "piece_sold" -> "sold".equals(d.toStatus()) && triggerId.equals(pieceId + ":" + d.soldEventId());
+            case "void_correction" -> "voided".equals(d.toStatus());
+            case "damage_move" -> "damaged".equals(d.toStatus()) && !claimCreatedAt.before(d.occurredAt());
+            default -> false;
+        };
+    }
+
     // ── D5: departure reached Shopify ──────────────────────────────────────────
 
     /** The event that took the piece out of the sellable pool: the earliest of the trailing run of
@@ -331,6 +379,12 @@ public final class PieceShopifyRules {
         }
 
         boolean stockTake = "lost".equals(d.toStatus()) && "stock_take_missing".equals(d.reason());
+        if (stockTake) {
+            // A write-off left out of the session's push (its arrival hadn't reached Shopify) has its own claim.
+            String own = departureClaimStatus(jdbc, tenantId, "piece_write_off", "sia.trigger_id = ?",
+                List.of(stockTakeWriteOffKey(pieceId, d.sessionId())), cancelOpen);
+            if (!"none".equals(own)) return claimReach(own, "piece_write_off", false);
+        }
         String claimType = switch (d.toStatus()) {
             case "on_hold" -> "hold_enter";
             case "damaged" -> "damage_move";
@@ -348,6 +402,10 @@ public final class PieceShopifyRules {
         boolean atMain = s.mainId() != null && s.mainId().equals(p.locationId());
         if (s.seededAt() != null && atMain && d.occurredAt().before(s.seededAt())) return Reach.yes("seed");
         if (claimStatus == null) return Reach.no(DEPARTURE_NOT_REACHED);
+        return claimReach(claimStatus, claimType, atMain);
+    }
+
+    private static Reach claimReach(String claimStatus, String claimType, boolean atMain) {
         return switch (claimStatus) {
             case "applied"       -> Reach.yes(claimType);
             case "cancelled_now" -> Reach.no(DEPARTURE_CANCELLED);
@@ -381,24 +439,43 @@ public final class PieceShopifyRules {
      */
     private static String departureClaimStatus(JdbcTemplate jdbc, UUID tenantId, String pieceId,
                                                Departure d, String claimType, boolean cancelOpen) {
-        List<Object> args = new ArrayList<>(List.of(tenantId, claimType));
         String keySql;
+        List<Object> keyArgs = new ArrayList<>();
         if ("hold_enter".equals(claimType)) {
             if (d.holdEventId() == null) return "not_reached";
             keySql = "sia.trigger_id = ?";
-            args.add(pieceId + ":" + d.holdEventId());
+            keyArgs.add(pieceId + ":" + d.holdEventId());
         } else if ("piece_write_off".equals(claimType)) {
             keySql = "sia.trigger_id = ?";
-            args.add(pieceId + ":" + d.writeOffEventId());
+            keyArgs.add(pieceId + ":" + d.writeOffEventId());
         } else if ("piece_sold".equals(claimType)) {
             keySql = "sia.trigger_id = ?";
-            args.add(pieceId + ":" + d.soldEventId());
+            keyArgs.add(pieceId + ":" + d.soldEventId());
         } else {
             keySql = "(sia.trigger_id = ? OR sia.trigger_id LIKE ?) AND sia.created_at >= ?";
-            args.add(pieceId);
-            args.add(pieceId + ":%");
-            args.add(d.occurredAt());
+            keyArgs.add(pieceId);
+            keyArgs.add(pieceId + ":%");
+            keyArgs.add(d.occurredAt());
         }
+        String st = departureClaimStatus(jdbc, tenantId, claimType, keySql, keyArgs, cancelOpen);
+        return "none".equals(st) ? "not_reached" : st;
+    }
+
+    /** {@link #departureClaimStatus(JdbcTemplate, UUID, String, Departure, String, boolean)} for an explicit key;
+     *  "none" when no claim matches it. */
+    private static String departureClaimStatus(JdbcTemplate jdbc, UUID tenantId, String claimType,
+                                               String keySql, List<Object> keyArgs, boolean cancelOpen) {
+        List<Object> args = new ArrayList<>(List.of(tenantId, claimType));
+        args.addAll(keyArgs);
+        // Skipped because its arrival hadn't reached Shopify, and the piece is back before that arrival applied:
+        // nothing was sent and nothing is owed — close it, so the arrival revisit (ArrivalRevisit) never sends it.
+        // Runs FIRST and on the claim row: a revisit that flipped it to 'queued' already is caught by the cancel
+        // below; one in flight waits on this row and then finds it closed.
+        int closedArrival = !cancelOpen ? 0 : jdbc.update(
+            "UPDATE shopify_inventory_adjustments sia SET skip_reason = '" + NOT_SENT_PIECE_RETURNED + "' " +
+            "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND " + keySql + " AND " + LIVE_SQL +
+            "  AND sia.status = 'skipped' AND sia.skip_reason IN " + ArrivalRevisit.REVISIT_REASONS_SQL,
+            args.toArray());
         // Only a claim that was NEVER SENT may be cancelled: queued with no send_started_at (a crash
         // before the after-commit push). Locks the row — a concurrent push either already took it to
         // pending (→ ambiguous below) or waits and then finds it cancelled.
@@ -427,9 +504,11 @@ public final class PieceShopifyRules {
                      || ("skipped".equals(st) && NEEDS_CHECK.contains((String) r.get("skip_reason")))) ambiguous = true;
             else if (ShopifyInventoryService.SUPERSEDED_BY_SEED.equals(st)) superseded = true;
         }
+        if (rows.isEmpty()) return "none";
         if (applied) return "applied";
         if (ambiguous) return "ambiguous";
         if (cancelled > 0) return "cancelled_now";
+        if (closedArrival > 0) return "not_reached";   // never sent: the departure never reached Shopify
         if (closed > 0) return "rejected_now";
         if (superseded) return ShopifyInventoryService.SUPERSEDED_BY_SEED;
         return "not_reached";

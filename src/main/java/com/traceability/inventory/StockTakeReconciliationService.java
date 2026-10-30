@@ -687,8 +687,8 @@ public class StockTakeReconciliationService {
         // Per-variant delta = this session's write-offs FROM 'available' (finalize's and the per-row
         // resolve's alike) — a damaged unit is not in Shopify "available", an on_hold one already
         // left it at hold-enter. Never expected-minus-counted.
-        List<Map<String, Object>> deltaRows = jdbc.queryForList(
-            "SELECT p.variant_id AS variant_id, COUNT(*) AS qty " +
+        List<Map<String, Object>> writeOffRows = jdbc.queryForList(
+            "SELECT p.id AS piece_id, p.variant_id AS variant_id " +
             "FROM piece_events pe " +
             "JOIN pieces p ON p.id = pe.piece_id AND p.tenant_id = pe.tenant_id " +
             "WHERE pe.tenant_id = ? AND pe.event_type = 'adjusted' AND pe.to_status = 'lost'::piece_status " +
@@ -699,16 +699,43 @@ public class StockTakeReconciliationService {
             "  AND NOT (EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = pe.tenant_id) " +
             "           AND EXISTS (SELECT 1 FROM variants v WHERE v.id = p.variant_id AND v.tenant_id = p.tenant_id " +
             "                         AND v.external_id NOT LIKE 'gid://shopify/%')) " +
-            "GROUP BY p.variant_id",
+            "ORDER BY p.variant_id, p.id",
             tenantId, sessionId.toString());
 
-        ObjectNode deltasNode = mapper.createObjectNode();
-        for (Map<String, Object> row : deltaRows) {
-            deltasNode.put(row.get("variant_id").toString(), ((Number) row.get("qty")).intValue());
+        // Drift fix (2026-10-30): the same arrival rule as every piece departure. A piece whose receiving +N has not
+        // reached Shopify is not in its count — taking it out now would push Shopify below the true count. It is left
+        // out of the session's push (payload.excluded) and gets its own skipped piece_write_off claim
+        // (piece:stock_take:session), which ArrivalRevisit flips to 'queued' once that +N applies (sent by the piece
+        // sweep through pushPieceWriteOff). Only for a count at the main warehouse while Shopify counts there.
+        PieceShopifyRules.Setup setup = PieceShopifyRules.setup(jdbc, tenantId);
+        boolean arrivalRule = setup.skipReason() == null && setup.mainId().equals(session.locationId());
+        Map<String, Integer> deltaByVariant = new LinkedHashMap<>();
+        ObjectNode excludedNode = mapper.createObjectNode();
+        for (Map<String, Object> row : writeOffRows) {
+            String pieceId = (String) row.get("piece_id");
+            if (arrivalRule) {
+                PieceShopifyRules.Verdict arrival = PieceShopifyRules.arrival(jdbc, tenantId, pieceId, setup);
+                if (!arrival.write()) {
+                    excludedNode.put(pieceId, arrival.skipReason());
+                    shopifyInventory.claimStockTakeWriteOffSkip(tenantId, pieceId, sessionId, arrival);
+                    continue;
+                }
+            }
+            deltaByVariant.merge(row.get("variant_id").toString(), 1, Integer::sum);
         }
+        List<Map<String, Object>> deltaRows = new ArrayList<>();
+        ObjectNode deltasNode = mapper.createObjectNode();
+        deltaByVariant.forEach((variantId, qty) -> {
+            deltasNode.put(variantId, qty);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("variant_id", UUID.fromString(variantId));
+            m.put("qty", (long) qty);
+            deltaRows.add(m);
+        });
         ObjectNode payload = mapper.createObjectNode();
         payload.put("locationId", session.locationId() != null ? session.locationId().toString() : null);
         payload.set("deltas", deltasNode);
+        if (!excludedNode.isEmpty()) payload.set("excluded", excludedNode);
 
         String claimStatus = deltaRows.isEmpty() ? "nothing_to_push" : "pending";
         // Double-finalize guard #2: UNIQUE(session_id) referee (the row lock above is #1).
