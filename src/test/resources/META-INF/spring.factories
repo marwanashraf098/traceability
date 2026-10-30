@@ -1,0 +1,2 @@
+# Close each test class's context while its container is still up (see the class).
+org.springframework.test.context.TestExecutionListener=com.traceability.CloseContextAfterClassListener

@@ -22,7 +22,7 @@ class FlexibleLabelingRolloutMigrationTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability")
                     .withUsername("postgres")
                     .withPassword("postgres");

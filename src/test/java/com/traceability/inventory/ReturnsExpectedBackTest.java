@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.traceability.identity.JwtService;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.portal.PortalService;
@@ -58,7 +59,7 @@ class ReturnsExpectedBackTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

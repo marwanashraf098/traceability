@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.TestPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.inventory.ShopifyCatalogActivationService;
@@ -53,7 +54,7 @@ class ActivationPolicyTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

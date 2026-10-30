@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.traceability.FlywayTestSupport;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
@@ -26,7 +27,7 @@ class IncrementLegacyMigrationTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

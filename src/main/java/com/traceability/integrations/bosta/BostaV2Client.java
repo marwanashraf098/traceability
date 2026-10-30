@@ -138,6 +138,14 @@ public class BostaV2Client {
         if (limiter != null) this.limiter = limiter;
     }
 
+    // How long a 429 on the create call blocks the key in the shared limiter.
+    private long createRateLimitBlockSeconds = 60;
+
+    @Value("${bosta.create-rate-limit-block-seconds:60}")
+    public void setCreateRateLimitBlockSeconds(long seconds) {
+        this.createRateLimitBlockSeconds = seconds;
+    }
+
     public BostaV2Client(ObjectMapper mapper, String baseUrl) {
         this(mapper, baseUrl, Duration.ofSeconds(20));
     }
@@ -202,7 +210,7 @@ public class BostaV2Client {
                 "Bosta rate limit for this account — nothing was sent, try again shortly");
         }
         CreateResult r = postCreateOnce(apiKey, json);
-        if (r.httpStatus() == 429) limiter.onRateLimited(apiKey, 60, "v2 create");
+        if (r.httpStatus() == 429) limiter.onRateLimited(apiKey, createRateLimitBlockSeconds, "v2 create");
         return r;
     }
 

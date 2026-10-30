@@ -30,7 +30,7 @@ class MigrationSmokeTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
@@ -256,7 +256,7 @@ class MigrationSmokeTest {
      */
     @Test
     void v59Backfill_setsIsFulfillmentForDefaultLocationsOnly() throws Exception {
-        try (PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
+        try (PostgreSQLContainer<?> pg = TestPostgres.newContainer()
                 .withDatabaseName("traceability_backfill_test")
                 .withUsername("postgres")
                 .withPassword("postgres")) {

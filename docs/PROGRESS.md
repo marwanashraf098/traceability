@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Test-suite speed T1b + T2 (2026-10-31, same branch `perf/test-suite-t1`, on top of 59b5187; merged to main 2026-10-31; test code +
+pom only, no production change).** Full suite **18:54 / 19:12** with 3 forks (was 32.5 after T1, 40.5 baseline). Both
+runs: 3,588 tests / 1 failure (ExchangeBackfillTest only) / 4 skipped, 428 classes, 324 contexts, no other red, no
+flake. Peak 4 test Postgres containers, Docker ~0.5 GiB, test JVMs ~1.7 GiB RSS, ≥ 2.7 GiB free on the Mac.
+- **Shutdown wait fixed:** `CloseContextAfterClassListener` (src/test, registered in
+  `src/test/resources/META-INF/spring.factories`) closes each class's context in `afterTestClass` — while its
+  container is still up: Testcontainers (1.20.4) stops `@Container` fields when the class's JUnit store closes, after
+  every afterAll. Every Spring test class has its own context (324 = 324), so closing per class adds no context starts.
+  JobRunr + Hikari shutdown ~15 s → ~5 ms; ConditionOnlyAlertsTest 21 s (T1) → 8–9 s under 3 forks.
+- **Parallel:** `pom.xml` Surefire `forkCount=${surefire.forkCount}` (property, default 3; `-Dsurefire.forkCount=N`),
+  `reuseForks=true`. Collision check, nothing to fix: every stub HTTP server binds port 0; no fixed server /
+  management port (`localhost:8080` / `:5173` are URL strings only); files written are per class (golden `.actual`,
+  Day8Test's `/tmp/day8-*`; scripts copied to `/tmp` inside each class's own container); no fixed container names,
+  reuse or networks. Per-class times run ~1.4× slower under 3 forks (CPU shared); forkCount=2 not needed.
+- **GenericG3IsolationGoldenTest DST flake — NOT fixed, blocked:** #3001's handover is stamped by Postgres `now()`
+  (`PickupSessionService.closeSession`), and the golden pins both avgHoursOrderToHanded 108.0 (48 h for #3001) and the
+  `2_days` bucket; from 23:00–24:00 Cairo just after the Oct DST end no placed-at satisfies both (Cairo-calendar
+  placing → 49 h → 108.3; a frozen clock can't reach Postgres `now()` from the test). **Decision (Marawan,
+  2026-10-31): leave it** — no libfaketime DB, no dropped key. GenericG3IsolationGoldenTest can fail between 23:00
+  and midnight Cairo in the first days after the October clock change — 48 real hours = 1 calendar day then.
+  Test-timing quirk, not a product bug. If it fails in that hour, rerun after midnight; a failure outside that hour is
+  real.
+  Other tests that offset from now() and hit Cairo-day code (text match, unverified): AnalyticsB1Test,
+  overview/OverviewTrendsTest, GenericG4aIsolationGoldenTest, PortalOrderLeakTest, AnalyticsFinancesTest,
+  GenericCourierG3Test, EmbeddedIntegrationTest, VoidHoldTest, SettlementRefreshProcessingTest, RlsCoverageTest,
+  AnalyticsStockTest, AnalyticsOrderSortTest, AnalyticsMoneyTest, AnalyticsCustomersTest, PrelaunchFixesTest,
+  OrderShippingCarrierTest, AnalyticsTripPiecesTest, AnalyticsInventorySyncTest.
+
+**Test-suite speed T1 (2026-10-30, branch `perf/test-suite-t1` off origin/main 43a98ff; merged to main 2026-10-31; test infra + two
+main-code properties whose defaults equal the old hardcoded values — production behaviour unchanged; no migration).**
+Full suite 40.5 min → **32.5 / 32.2 min** (two runs, AC power, no sleep, nothing overlapping). Counts unchanged: 3,588
+tests, 428 classes, 4 skipped, ExchangeBackfillTest the one documented red; Spring contexts 324 (= baseline).
+- **1. `TestPostgres.newContainer()`** (src/test): postgres:16-alpine, data dir on tmpfs, `fsync / synchronous_commit /
+  full_page_writes = off`. 346 call sites in 345 classes switched mechanically, still one container per class; only
+  ExchangeBackfillTest excluded. Flyway 371 s → 275 s, context starts 972 s → 732 s. **Gotcha (corrects Step 0):**
+  Testcontainers' PostgreSQLContainer already runs `-c fsync=off` by default — the gain is tmpfs + the other two.
+- **2. Leaks:** the 22 classes that started a static container without `@Container` now have it (stopped after the
+  class). `src/test/resources/spring.properties` → `spring.test.context.cache.maxSize=1` (no @Nested, no test class
+  hierarchies, no @ContextConfiguration/@ContextHierarchy: every class already had its own context). **Cost found:**
+  evicting a context whose JobRunr BackgroundJobServer is on happens after its container stopped → ~15 s shutdown
+  wait (JobRunr 10 s + Hikari 4 s), paid by the NEXT class (9 classes, ~+130 s per run; e.g. ConditionOnlyAlertsTest
+  6 s → 21 s after PoolAndJobRunrConfigTest). Follow-up, not done: close those contexts before their container stops.
+- **3. Real-clock waits:** `traced.piece-sync.queued-min-age-seconds` (default 60, `ShopifyInventoryService` sweep;
+  the SQL interval is now a parameter) — PieceSyncAppUserTest sets 2 → class 66 s → 8 s.
+  `bosta.create-rate-limit-block-seconds` (default 60, `BostaV2Client.postCreate`'s 429 block only; the search probe's
+  60 is unchanged) — ReturnPickupBookingTest sets 1 → 107.5 s → 48 s. Bite-checked: sweep ignoring 'queued' → RED;
+  min-age setter a no-op → RED; 429 not detected → RED; block setter a no-op → GREEN but 60 s (the property is what
+  shortens it). Left as is (no property-only shortening): OAuthUpgradeTest (6 s = one JobRunr poll, 5 s is the
+  minimum), ShopifyWebhookEnqueueDeadlineTest (8 s sleep is inside a mock; test takes 2 s),
+  BostaGatewayTimeoutTest (10 s is the stub server's; test takes 2.9 s).
+- **Flake found (not T1, not fixed):** `GenericG3IsolationGoldenTest` g1/g2 fail when run between 23:00 and 24:00
+  Cairo in the days after the Oct DST end: "placed" = now − 48 h lands just past midnight under the +03:00 offset, so
+  the Cairo calendar-day gap is 1, not 2 (fulfillmentSpeed bucket `1_day` vs `2_days`). Same on main. Left as is by decision (see T1b + T2). Also: a sleeping Mac (lid closed on battery) makes JobRunr-await tests fail — run on AC.
+- **Next (T2 candidates from Step 0):** parallel forks; shared container + template DB.
+
 **Warehouse places S3 — Pick & Pack places, display only (2026-10-30, branch `feat/warehouse-places-s3` from main
 05c8e7c, rebased onto 43a98ff; merged to main 2026-10-30, NOT deployed; no migration).**
 - **Rules:** display only — PICKABLE_ORDERS_FILTER untouched, pick scan unchanged (no place check, pieces assigned only when
@@ -1747,6 +1802,9 @@ Step 0 (merged-PDF workstream) approved: background print job, ceiling 490; slic
 - **Follow-up (not fixed): `BostaPollJobTest.p6_pollAndDiscovery_alreadyLinkedDelivery_discoveryCheaplySkipsIt` is a
   pre-existing intermittent flake** — `verify(never()).fetchDelivery(...)` sometimes sees one call; 1/2 red on the S1
   branch, 1/3 red with S1 reverted, so not S1.
+- **Known flake (2026-10-31, left as is by decision):** GenericG3IsolationGoldenTest can fail between 23:00 and midnight
+  Cairo in the first days after the October clock change — 48 real hours = 1 calendar day then. Test-timing quirk, not a
+  product bug. If it fails in that hour, rerun after midnight; a failure outside that hour is real.
 - **Follow-up (no fix yet):** the AWB link step input (`Fulfill.tsx` AwbLinkDialog) is `disabled={linking}` and bypasses
   useScanner, so keystrokes scanned while a link is in flight are dropped.
 - Next: S2 (code-based keydown capture at useScanner) on `fix/scan-key-capture`.

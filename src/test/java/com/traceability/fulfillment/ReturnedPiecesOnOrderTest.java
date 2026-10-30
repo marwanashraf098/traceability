@@ -1,5 +1,6 @@
 package com.traceability.fulfillment;
 
+import com.traceability.TestPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController.AllocatedPiece;
 import com.traceability.fulfillment.OrderController.OrderDetail;
@@ -52,7 +53,7 @@ class ReturnedPiecesOnOrderTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

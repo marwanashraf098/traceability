@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OpsPreConnectCleanupScriptTest {
 
     @Container
-    final PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
+    final PostgreSQLContainer<?> pg = TestPostgres.newContainer()
             .withDatabaseName("traceability_test").withUsername("postgres").withPassword("postgres");
 
     static final String BROEK  = "d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d";

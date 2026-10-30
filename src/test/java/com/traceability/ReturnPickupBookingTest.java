@@ -73,7 +73,7 @@ class ReturnPickupBookingTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
@@ -177,6 +177,7 @@ class ReturnPickupBookingTest {
         r.add("spring.flyway.password",     POSTGRES::getPassword);
         r.add("bosta.base-url", () -> "http://127.0.0.1:" + BOSTA.getAddress().getPort());
         r.add("bosta.create-read-timeout", () -> "1s");
+        r.add("bosta.create-rate-limit-block-seconds", () -> "1");   // prod 60 — the retry after the 429 waits it out
     }
 
     static final String CAIRO = "FceDyHXwpSYYF9zGW", NASR = "Iy7-lFD0BE0", GONE = "GoneDistrict1";
