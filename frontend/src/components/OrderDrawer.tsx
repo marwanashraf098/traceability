@@ -8,7 +8,7 @@ import {
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
-import { Badge, Button, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
+import { Button, OrderPieceBadge, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
 
 // ── Relative time — same pattern as Overview.tsx/StockTake.tsx/Transfers.tsx (each
 // page owns a small local formatter); reuses the existing generic overview.time.*
@@ -454,7 +454,7 @@ export default function OrderDrawer({
                                 className="flex items-center gap-1.5 border border-line rounded-md px-2 py-0.5 bg-elevated"
                               >
                                 <span className="font-mono text-caption text-muted">{p.barcode}</span>
-                                <Badge status={p.status} />
+                                <OrderPieceBadge status={p.status} returnState={p.returnState} />
                               </div>
                             ))}
                           </div>

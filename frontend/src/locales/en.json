@@ -499,6 +499,11 @@
     "awb": "AWB",
     "pieces": "Allocated pieces",
     "noPieces": "No pieces allocated yet",
+    "returnState": {
+      "pending_inspection": "Returned · pending inspection",
+      "restocked": "Returned · restocked",
+      "damaged": "Returned · damaged"
+    },
     "deliveryHistory": "Delivery history",
     "noDeliveryHistory": "No history recorded yet — transitions will appear here as they occur.",
     "historyToggleShow": "Show full history",

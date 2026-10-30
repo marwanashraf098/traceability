@@ -114,7 +114,12 @@ public class OrderController {
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
-    public record AllocatedPiece(String pieceId, String barcode, String status) {}
+    // Returned pieces (2026-10-30): returnState is pending_inspection | restocked | damaged for a piece of THIS
+    // order that came back (ORDER_PIECES_SQL); absent (not null) for every other piece.
+    public record AllocatedPiece(String pieceId, String barcode, String status,
+                                 @com.fasterxml.jackson.annotation.JsonInclude(
+                                     com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                                 String returnState) {}
 
     public record OrderItem(
         String id, String productTitle, String variantTitle,
@@ -1332,6 +1337,56 @@ public class OrderController {
         return "https://" + shopDomain + "/admin/orders/" + numericId;
     }
 
+    /**
+     * The order's pieces, every line at once (binds the order id). A piece is listed while its allocation is live
+     * (active / packed) — and, once it came back, also after restock released that allocation: a released
+     * allocation whose piece has a return_received event for THIS order stays on the order (returned pieces,
+     * 2026-10-30 — before, a restocked piece vanished and the line read "No pieces allocated yet").
+     *
+     * return_state, from piece_events only (nothing is rewritten): the FIRST restocked / damaged event on the
+     * piece after its latest return_received for this order → 'restocked' / 'damaged'; none yet and the piece is
+     * at return_pending_inspection → 'pending_inspection' (also a live piece adopted from a Bosta state 46 with no
+     * scan event); otherwise NULL (a piece that never came back). A released allocation without a return state —
+     * unscanned, unreserved, cancelled — is not listed, as before. One row per piece: a live allocation wins over a
+     * released one, then the newest. Lookups ride piece_events_piece_time (piece_id, occurred_at).
+     */
+    static final String ORDER_PIECES_SQL = """
+        SELECT order_item_id, piece_id, barcode, status, return_state
+        FROM (
+            SELECT DISTINCT ON (pc.id)
+                   a.order_item_id, pc.id AS piece_id, pc.barcode, pc.status::text AS status,
+                   (a.status IN ('active', 'packed')) AS live,
+                   CASE WHEN disp.event_type = 'restocked' THEN 'restocked'
+                        WHEN disp.event_type = 'damaged'   THEN 'damaged'
+                        WHEN pc.status = 'return_pending_inspection' THEN 'pending_inspection'
+                   END AS return_state
+            FROM order_items oi
+            JOIN allocations a ON a.order_item_id = oi.id
+            JOIN pieces pc     ON pc.id = a.piece_id
+            LEFT JOIN LATERAL (
+                SELECT e.occurred_at, e.id
+                FROM piece_events e
+                WHERE e.piece_id = a.piece_id AND e.order_id = oi.order_id AND e.event_type = 'return_received'
+                ORDER BY e.occurred_at DESC, e.id DESC
+                LIMIT 1
+            ) rr ON true
+            LEFT JOIN LATERAL (
+                SELECT d.event_type
+                FROM piece_events d
+                WHERE d.piece_id = a.piece_id AND d.event_type IN ('restocked', 'damaged')
+                  AND (d.occurred_at, d.id) > (rr.occurred_at, rr.id)
+                ORDER BY d.occurred_at, d.id
+                LIMIT 1
+            ) disp ON rr.id IS NOT NULL
+            WHERE oi.order_id = ?
+              AND oi.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+              AND (a.status IN ('active', 'packed') OR rr.id IS NOT NULL)
+            ORDER BY pc.id, (a.status IN ('active', 'packed')) DESC, a.allocated_at DESC
+        ) x
+        WHERE live OR return_state IS NOT NULL
+        ORDER BY piece_id
+        """;
+
     private List<OrderItem> fetchItems(UUID orderId) {
         // Fetch items — tenant filter on oi is defense-in-depth.
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -1350,25 +1405,21 @@ public class OrderController {
             ORDER BY oi.id
             """, orderId);
 
-        List<OrderItem> items = new ArrayList<>();
-        for (Map<String, Object> row : rows) {
-            UUID itemId    = (UUID) row.get("item_id");
-            UUID variantId = (UUID) row.get("variant_id");
-
-            // Allocated pieces for this item
-            List<AllocatedPiece> pieces = jdbc.query(
-                """
-                SELECT pc.id AS piece_id, pc.barcode, pc.status
-                FROM allocations a
-                JOIN pieces pc ON pc.id = a.piece_id
-                WHERE a.order_item_id = ? AND a.status IN ('active','packed')
-                ORDER BY pc.id
-                """,
-                (rs, i) -> new AllocatedPiece(
+        // Every line's pieces in one read, grouped by line.
+        Map<UUID, List<AllocatedPiece>> piecesByItem = new HashMap<>();
+        jdbc.query(ORDER_PIECES_SQL, (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+            piecesByItem.computeIfAbsent(rs.getObject("order_item_id", UUID.class), k -> new ArrayList<>())
+                .add(new AllocatedPiece(
                     rs.getString("piece_id"),
                     rs.getString("barcode"),
-                    rs.getString("status")
-                ), itemId);
+                    rs.getString("status"),
+                    rs.getString("return_state"))),
+            orderId);
+
+        List<OrderItem> items = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            UUID itemId = (UUID) row.get("item_id");
+            List<AllocatedPiece> pieces = piecesByItem.getOrDefault(itemId, List.of());
 
             items.add(new OrderItem(
                 itemId.toString(),
