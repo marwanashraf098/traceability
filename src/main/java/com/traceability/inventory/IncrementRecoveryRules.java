@@ -73,7 +73,13 @@ public final class IncrementRecoveryRules {
          *  merchant reconnects — retries wait without spending an attempt, then run on their own after reconnect. */
         NEEDS_REAUTH("Reconnect Shopify — the connection was lost", "أعد ربط Shopify — انقطع الاتصال"),
         MISSING_SCOPE("Reconnect Shopify to grant inventory access", "أعد ربط Shopify لمنح صلاحية المخزون"),
-        LOCATION_NOT_LINKED("Link your warehouse to a Shopify location", "اربط مستودعك بموقع في Shopify");
+        LOCATION_NOT_LINKED("Link your warehouse to a Shopify location", "اربط مستودعك بموقع في Shopify"),
+        /** The Traced location was deactivated in Shopify (locations.shopify_location_state, V196): held like
+         *  NEEDS_REAUTH — nothing is sent, no attempt is spent — until it is reactivated. */
+        LOCATION_INACTIVE("Reactivate the Traced location in Shopify", "أعد تفعيل موقع Traced في Shopify"),
+        /** Shopify has no location with the linked id any more: held until the location is recreated. */
+        LOCATION_DELETED("The Traced location was deleted in Shopify — reconnect Shopify or contact Traced support to recreate it",
+                         "تم حذف موقع Traced في Shopify — أعد ربط Shopify أو تواصل مع دعم Traced لإعادة إنشائه");
 
         public final String fixEn;
         public final String fixAr;
@@ -100,7 +106,35 @@ public final class IncrementRecoveryRules {
             "  AND shopify_sync_status = 'linked' AND shopify_location_id IS NOT NULL",
             Integer.class, tenantId);
         if (linked == null || linked == 0) return SetupProblem.LOCATION_NOT_LINKED;
-        return null;
+        return locationProblem(jdbc, tenantId);
+    }
+
+    /** The main warehouse's state in Shopify (V196): LOCATION_INACTIVE / LOCATION_DELETED, or null while active. */
+    private static SetupProblem locationProblem(JdbcTemplate jdbc, UUID tenantId) {
+        List<String> state = jdbc.queryForList(
+            "SELECT shopify_location_state FROM locations WHERE tenant_id = ? AND is_fulfillment = true " +
+            "  AND shopify_sync_status = 'linked'", String.class, tenantId);
+        if (state.isEmpty()) return null;
+        return switch (state.get(0)) {
+            case "inactive" -> SetupProblem.LOCATION_INACTIVE;
+            case "deleted"  -> SetupProblem.LOCATION_DELETED;
+            default -> null;
+        };
+    }
+
+    /**
+     * Why every Shopify stock update is HELD right now, or null: the store needs a reconnect (NEEDS_REAUTH), or the
+     * Traced location is deactivated / deleted in Shopify (LOCATION_INACTIVE / LOCATION_DELETED). Every sender checks
+     * it before sending anything: a held claim waits — 'queued' or 'failed' with its attempts intact — and goes out
+     * once the cause is gone. THE hold rule; never check one cause alone.
+     */
+    public static SetupProblem holdReason(JdbcTemplate jdbc, UUID tenantId) {
+        if (connectionLost(jdbc, tenantId)) return SetupProblem.NEEDS_REAUTH;
+        return locationProblem(jdbc, tenantId);
+    }
+
+    public static boolean held(JdbcTemplate jdbc, UUID tenantId) {
+        return holdReason(jdbc, tenantId) != null;
     }
 
     /** The tenant's active store (same pick as StoreRepository.findActiveStoreByTenant): status + scopes. */

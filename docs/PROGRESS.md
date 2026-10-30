@@ -4,6 +4,33 @@
 
 ## Current state
 
+**Shopify sync — skipped decrements revisited + deactivated Traced location (2026-10-30, branch
+`fix/shopify-sync-drift-and-location` off origin/main 3d314f3; NOT merged, NOT deployed; migration V196).** Two commits.
+- **Fix 1 (drift, testreciving claims 2551 / 2552):** `ArrivalRevisit` — when a `receiving_session` claim turns
+  'applied' (in `markIncrementResult`'s transaction), that receipt + variant's departures skipped `arrival_unconfirmed` /
+  `arrival_not_counted` whose piece is still away (`PieceShopifyRules.stillAway`) flip the SAME row skipped → queued
+  (guarded UPDATE, once) and go out through their own method; backstop in `sweepPieceClaims`. Never after a later seed,
+  never legacy. A return of the piece first closes the skip (`not_sent_piece_returned`; the return skips
+  `departure_not_reached`). Stock-take finalize and exchange dispatch now use the same arrival rule (left out →
+  per-piece skipped claim: stock take = `piece_write_off` keyed `piece:stock_take:session`, sent by `pushPieceWriteOff`;
+  exchange = skipped `exchange_dispatch`). Transfers: alert only (HIGH `transfer_stock_not_removed`). Prod (read-only):
+  0 past stock-take / exchange cases; on deploy the backstop sends exactly ONE −1 — testreciving claim 2552.
+- **Fix 2 (BROEK deactivated "Traced Main Warehouse"):** V196 `locations.shopify_location_state` (active / inactive /
+  deleted, `ShopifyLocationState` the one writer: a failed write naming the location, or `ShopifyLocationCheckJob` —
+  10 min for held tenants, hourly for all). `IncrementRecoveryRules.holdReason` = needs_reauth OR location not active —
+  every sender holds on it (no attempt, nothing sent). HIGH condition-only `shopify_location_inactive` (EN / AR, →
+  Connections). Reactivation (only the check sets 'active') releases held updates once. Owner-only
+  `POST /shopify/location/resend-failed` re-sends exhausted never_sent location failures through the normal path (Fix 1
+  then sends the owed −1s); `POST /shopify/location/check` (owner / manager). Connections card: warning + check now +
+  owner "Re-send failed updates".
+- **BROEK report (read-only, nothing sent):** 436 failed +N claims (3,898 units, 334 variants, 2026-10-18 → 10-30; 384
+  exhausted / 52 still retrying) + 94 skipped voids owed. After reactivation + re-send + owed −1s, 360 of 382 variants
+  equal Traced's count; 14 differ by Shopify orders (6 units) / transfer pieces left out (8 → alert) / two claims the
+  re-send won't cover (#2935 +18 stuck 'pending' since 10:56 today, #1581 +2 exhausted on "conflicting request" — use
+  the Exceptions repush); 8 within ±1 (in-flight transfers, one 2026-10-12 not_seeded void).
+- Tests: ArrivalRevisitTest a1–a7, ShopifyLocationStateTest l1–l6, shopifyLocationState.test ls1–ls5; revert-checked.
+  Registry: MigrationSmokeTest 195, NotTracedBackfillTest 140, PortalOrderLeakTest +2 SKIP.
+
 **Orders tabs fix — Needs attention works; tab counts == lists (2026-10-30, branch `fix/orders-attention-tabs` off
 origin/main b5af792; NOT merged, NOT deployed; no migration).** Step 0 same day: the Needs attention tab was disabled
 by design and its "62" was the bell's alert count (`/exceptions/count`: every open alert, several per order, many not

@@ -16,13 +16,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Shopify reconnect (2026-10-28) — every 5 minutes, sends what was held while a tenant's store needed a reconnect
- * (Shopify rejected the token refresh; IncrementRecoveryRules.connectionLost), once the store is connected again:
+ * Shopify reconnect (2026-10-28) — every 5 minutes, sends what was held while a tenant's updates were held
+ * (IncrementRecoveryRules.holdReason: the store needed a reconnect, or — since 2026-10-30 — the Traced location was
+ * inactive / deleted in Shopify), once the hold is gone:
  *   - stock-take write-off pushes held as 'failed' + payload.heldForReconnect → released and enqueued once each
  *     (StockTakeShopifyPushJob.releaseHeld, then the normal push);
  *   - exchange_dispatch claims held as 'queued' → sent once each (ShopifyInventoryService.resumeHeldExchangeDispatches).
- * Increment retries, piece claims and transfers need nothing here: their own sweeps already wait on connectionLost
- * and pick the claims up after reconnect. A tenant still disconnected is skipped (both calls check it themselves).
+ * Increment retries, piece claims and transfers need nothing here: their own sweeps already wait on the hold
+ * and pick the claims up after it. A tenant still disconnected is skipped (both calls check it themselves).
  * The tenant list is a cross-tenant read of tenant ids only, on the owner pool (PieceShopifySweepJob's pattern);
  * every per-tenant read and write runs in TenantContext.runAs under RLS.
  */

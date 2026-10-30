@@ -8,7 +8,7 @@ import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
-  needsFulfillmentActivation,
+  needsFulfillmentActivation, checkShopifyLocation, resendShopifyLocationFailures, getRoleFromToken,
   ConnectionsStatus, LocationRow,
 } from '../../../api'
 
@@ -55,6 +55,101 @@ function ShopifyLogo() {
 function connectErrorMessage(err: unknown, isAr: boolean, fallback: string): string {
   if (err instanceof TransferCommandError) return isAr ? err.messageAr : err.messageEn
   return fallback
+}
+
+// ── The Traced location in Shopify (V196, 2026-10-30) ──────────────────────────
+// Deactivated / deleted in Shopify → every stock update waits (backend hold). The notice says so with a
+// "check now" (the periodic check runs every 10 min anyway); once it is active again the owner can re-send
+// the updates that used up their attempts meanwhile.
+
+function LocationStateNotice({ shopify, reload }: {
+  shopify: ConnectionsStatus['shopify']
+  reload: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const isOwner = getRoleFromToken() === 'owner'
+  const [busy, setBusy] = useState<'check' | 'resend' | null>(null)
+  const [message, setMessage] = useState<{ tone: 'danger' | 'muted' | 'success'; text: string } | null>(null)
+  const state = shopify.locationState ?? null
+  const resendable = shopify.resendableFailed ?? 0
+
+  async function handleCheck() {
+    setBusy('check'); setMessage(null)
+    try {
+      const r = await checkShopifyLocation()
+      if (r.locationState === 'active') await reload()
+      else setMessage({ tone: 'muted', text: t('connections.shopify.location.stillInactive') })
+    } catch {
+      setMessage({ tone: 'danger', text: t('connections.shopify.location.checkFailed') })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleResend() {
+    setBusy('resend'); setMessage(null)
+    try {
+      const r = await resendShopifyLocationFailures()
+      setMessage({ tone: 'success', text: t('connections.shopify.location.resendDone',
+        { applied: r.applied, total: r.increments + r.pieceUpdates }) })
+      await reload()
+    } catch {
+      setMessage({ tone: 'danger', text: t('connections.shopify.location.resendFailed') })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const note = message && (
+    <p role={message.tone === 'danger' ? 'alert' : 'status'}
+       className={cn('text-small', message.tone === 'danger' ? 'text-danger'
+         : message.tone === 'success' ? 'text-success-text' : 'text-muted')}>
+      {message.text}
+    </p>
+  )
+
+  if (state === 'inactive' || state === 'deleted') {
+    return (
+      <div role="alert" data-testid="shopify-location-notice"
+           className="rounded-xl border border-warning/25 bg-warning/10 p-4 space-y-3">
+        <div className="flex items-start gap-3">
+          <AlertTriangle size={18} className="text-warning flex-shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="text-body font-semibold text-primary">
+              {t(state === 'deleted' ? 'connections.shopify.location.deletedTitle' : 'connections.shopify.location.inactiveTitle')}
+            </h4>
+            <p className="text-small text-muted">
+              {t(state === 'deleted' ? 'connections.shopify.location.deletedBody' : 'connections.shopify.location.inactiveBody')}
+            </p>
+          </div>
+        </div>
+        {state === 'inactive' && (
+          <Button variant="secondary" size="sm" onClick={handleCheck} disabled={busy !== null}>
+            {busy === 'check' ? t('connections.shopify.location.checking') : t('connections.shopify.location.checkCta')}
+          </Button>
+        )}
+        {note}
+      </div>
+    )
+  }
+
+  if (state === 'active' && resendable > 0 && isOwner) {
+    return (
+      <div data-testid="shopify-location-resend" className="rounded-xl border border-line bg-elevated p-4 space-y-3">
+        <div className="space-y-1">
+          <h4 className="text-body font-semibold text-primary">
+            {t('connections.shopify.location.resendTitle', { count: resendable })}
+          </h4>
+          <p className="text-small text-muted">{t('connections.shopify.location.resendBody')}</p>
+        </div>
+        <Button variant="primary" size="sm" onClick={handleResend} disabled={busy !== null}>
+          {busy === 'resend' ? t('connections.shopify.location.resending') : t('connections.shopify.location.resendCta')}
+        </Button>
+        {note}
+      </div>
+    )
+  }
+  return note
 }
 
 // ── Fulfillment activation checklist item (FR-17 v2) ───────────────────────────
@@ -586,6 +681,8 @@ export default function ShopifyConnectionCard({
               </div>
             )}
           </div>
+
+          <LocationStateNotice shopify={shopify} reload={reload} />
 
           <FulfillmentActivationItem
             shopifyConnected={shopify.connected}

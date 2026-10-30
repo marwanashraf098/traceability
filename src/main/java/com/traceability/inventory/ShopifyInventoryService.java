@@ -489,13 +489,13 @@ public class ShopifyInventoryService {
             }
         }
 
-        // Shopify rejected the token refresh: hold the decrement — a 'queued' claim, nothing sent, no attempt
-        // used. ShopifyReconnectResumeJob sends it once after the merchant reconnects (resumeHeldExchangeDispatches).
-        // A person's re-push is told to reconnect first.
-        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
+        // Updates are held (the store needs a reconnect, or the Traced location is inactive in Shopify): hold the
+        // decrement — a 'queued' claim, nothing sent, no attempt used. ShopifyReconnectResumeJob sends it once the
+        // hold is gone (resumeHeldExchangeDispatches). A person's re-push is told the fix first.
+        IncrementRecoveryRules.SetupProblem hold = tx.execute(st -> IncrementRecoveryRules.holdReason(jdbc, tenantId));
+        if (hold != null) {
             if (storedLocationId != null) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH.fixEn);
+                throw new ResponseStatusException(HttpStatus.CONFLICT, hold.fixEn);
             }
             if (isReviewFixtureVariant(tenantId, row.variantId(), "exchange_dispatch", pieceId)) return;
             tx.execute(st -> jdbc.update(
@@ -504,7 +504,7 @@ public class ShopifyInventoryService {
                 "VALUES (?, ?, ?, ?, -1, 'exchange_dispatch', ?, ?::jsonb, 'queued') " +
                 "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
                 tenantId, batchId, row.variantId(), locationId, pieceId, initialPayload.toString()));
-            log.info("Shopify inventory: exchange_dispatch held until Shopify is reconnected piece={}", pieceId);
+            log.info("Shopify inventory: exchange_dispatch held ({}) piece={}", hold, pieceId);
             return;
         }
 
@@ -521,7 +521,7 @@ public class ShopifyInventoryService {
      * even by two overlapping sweeps), then the same single attempt as a live dispatch.
      */
     public int resumeHeldExchangeDispatches(UUID tenantId) {
-        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return 0;
+        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.held(jdbc, tenantId)))) return 0;
         List<Map<String, Object>> held = tx.execute(st -> jdbc.queryForList(
             "SELECT id, trigger_id, variant_id, location_id FROM shopify_inventory_adjustments " +
             "WHERE tenant_id = ? AND trigger_type = 'exchange_dispatch' AND status = 'queued' " +
@@ -607,13 +607,12 @@ public class ShopifyInventoryService {
      *   again, by the sweep or by hand). Legacy claims (before piece_sync_cutoff()) are never sent.
      */
     public void pushPieceClaimNow(UUID tenantId, long claimId, boolean manual) {
-        // Shopify rejected the token refresh: send nothing and spend no attempt — the claim stays queued / failed
-        // and the sweep sends it once the merchant reconnects. A person's re-send is told why.
-        if (Boolean.TRUE.equals(tx.execute(st -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
-            if (manual) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH.fixEn);
-            }
+        // Updates are held (the store needs a reconnect, or the Traced location is inactive in Shopify): send nothing
+        // and spend no attempt — the claim stays queued / failed and the sweep sends it once the hold is gone. A
+        // person's re-send is told why.
+        IncrementRecoveryRules.SetupProblem hold = tx.execute(st -> IncrementRecoveryRules.holdReason(jdbc, tenantId));
+        if (hold != null) {
+            if (manual) throw new ResponseStatusException(HttpStatus.CONFLICT, hold.fixEn);
             return;
         }
         Map<String, Object> c = tx.execute(st -> {
@@ -721,6 +720,11 @@ public class ShopifyInventoryService {
      *  superseded the claim mid-flight); a success is always recorded — it is the truth. */
     private void markPieceResult(UUID tenantId, long claimId, String status, String error, String failureClass,
                                  String shopifyInventoryItemId, String shopifyLocationId) {
+        if (!"applied".equals(status) && ShopifyLocationState.fromError(error) != null) {
+            tx.execute(st -> ShopifyLocationState.noteFailure(jdbc, tenantId, jdbc.queryForObject(
+                "SELECT location_id FROM shopify_inventory_adjustments WHERE id = ? AND tenant_id = ?",
+                UUID.class, claimId, tenantId), error));
+        }
         Integer n = tx.execute(st -> jdbc.update(
             "UPDATE shopify_inventory_adjustments SET status = ?, error = ?, failure_class = ?, " +
             "    shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
@@ -965,11 +969,12 @@ public class ShopifyInventoryService {
         try {
             Map<String, Object> locRow = tx.execute(status ->
                 jdbc.query(
-                    "SELECT shopify_location_id, shopify_sync_status " +
+                    "SELECT shopify_location_id, shopify_sync_status, shopify_location_state " +
                     "FROM locations WHERE id = ? AND tenant_id = ?",
                     rs -> rs.next() ?
                         Map.of("shopify_location_id", rs.getString(1) != null ? rs.getString(1) : "",
-                               "shopify_sync_status",  rs.getString(2) != null ? rs.getString(2) : "") :
+                               "shopify_sync_status",  rs.getString(2) != null ? rs.getString(2) : "",
+                               "shopify_location_state", rs.getString(3) != null ? rs.getString(3) : "") :
                         null,
                     locationId, tenantId));
 
@@ -977,6 +982,9 @@ public class ShopifyInventoryService {
                 locationError = "Location not found: " + locationId;
             } else if (!"linked".equals(locRow.get("shopify_sync_status"))) {
                 locationError = "Location not linked to Shopify (status=" + locRow.get("shopify_sync_status") + ")";
+            } else if (!ShopifyLocationState.ACTIVE.equals(locRow.get("shopify_location_state"))) {
+                // Held (V196): the Traced location is inactive / deleted in Shopify — nothing is sent.
+                locationError = "Held — the Traced location is " + locRow.get("shopify_location_state") + " in Shopify";
             } else {
                 shopifyLocationId = (String) locRow.get("shopify_location_id");
             }
@@ -1339,6 +1347,107 @@ public class ShopifyInventoryService {
         }
     }
 
+    // ── The Traced location in Shopify (V196, 2026-10-30) ───────────────────────
+
+    /** An increment that failed because of the Traced location: Shopify's activation answer while it was
+     *  deactivated / deleted, or Traced's own hold while it was flagged (alias sia). */
+    public static final String LOCATION_FAILURE_SQL =
+        "(sia.error ILIKE '%because the location was deactivated%' OR sia.error ILIKE '%because the location wasn''t found%' " +
+        " OR sia.error ILIKE '%because the location was not found%' OR sia.error LIKE 'Held — the Traced location%')";
+
+    /** Exhausted live claims (attempts used up, nothing ever sent) that failed because of the location (alias sia). */
+    static final String LOCATION_EXHAUSTED_SQL =
+        "sia.status = 'failed' AND sia.failure_class = 'never_sent' AND " + LOCATION_FAILURE_SQL +
+        " AND ((" + IncrementRecoveryRules.FAILED_LIVE_SQL + " AND sia.attempt_count >= " + IncrementRecoveryRules.MAX_ATTEMPTS + ") " +
+        "   OR (sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL + " AND " + PieceShopifyRules.LIVE_SQL +
+        "       AND sia.attempt_count >= " + PieceShopifyRules.MAX_ATTEMPTS + "))";
+
+    /**
+     * The Traced location is active again (ShopifyLocationCheckService): every failed live increment that still has
+     * attempts is made due now, so the next retry pass sends each once through its claim (failed → pending). Piece
+     * claims, transfers, held stock-take pushes and exchange dispatches are picked up by their own senders, which
+     * waited on the hold. Returns how many increments were released.
+     */
+    public int releaseHeldIncrements(UUID tenantId) {
+        Integer n = tx.execute(st -> jdbc.update(
+            "UPDATE shopify_inventory_adjustments sia SET next_attempt_at = now() " +
+            "WHERE sia.tenant_id = ? AND " + IncrementRecoveryRules.FAILED_LIVE_SQL +
+            "  AND sia.attempt_count BETWEEN 1 AND " + (IncrementRecoveryRules.MAX_ATTEMPTS - 1), tenantId));
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * The hold is gone: sends this tenant's queued piece claims now, whatever their age (the sweep leaves claims under a
+     * minute old to their own after-commit push — a held claim's push already returned). pushPieceClaimNow's conditional
+     * UPDATE is the one-sender guard, so an overlap with that push or the sweep sends nothing twice.
+     */
+    public int releaseHeldPieceClaims(UUID tenantId) {
+        List<Long> queued = tx.execute(st -> jdbc.queryForList(
+            "SELECT sia.id FROM shopify_inventory_adjustments sia WHERE sia.tenant_id = ? AND sia.status = 'queued' " +
+            "  AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL + " AND " + PieceShopifyRules.LIVE_SQL +
+            " ORDER BY sia.created_at, sia.id LIMIT 200", Long.class, tenantId));
+        if (queued == null) return 0;
+        for (Long id : queued) pushPieceClaimNow(tenantId, id, false);
+        return queued.size();
+    }
+
+    public record ResendResult(int increments, int pieces, int applied) {}
+
+    /**
+     * Owner's "Re-send failed updates" (Settings › Connections): the claims that used up their attempts while the
+     * Traced location was inactive / deleted — nothing of them ever reached Shopify (never_sent), so each goes out
+     * once more through the NORMAL path: increments through retryClaim (the same claim key), piece claims through
+     * pushPieceClaimNow. A re-sent +N that applies triggers the arrival revisit (ArrivalRevisit), so the decrements
+     * owed for its units are sent too. Refused (409) while updates are still held.
+     */
+    public ResendResult resendLocationFailures() {
+        UUID tenantId = TenantContext.require();
+        IncrementRecoveryRules.SetupProblem hold = tx.execute(st -> IncrementRecoveryRules.holdReason(jdbc, tenantId));
+        if (hold != null) throw new ResponseStatusException(HttpStatus.CONFLICT, hold.fixEn);
+        IncrementRecoveryRules.SetupProblem blocked = tx.execute(st -> IncrementRecoveryRules.setupProblem(jdbc, tenantId));
+        if (blocked != null) throw new ResponseStatusException(HttpStatus.CONFLICT, blocked.fixEn);
+
+        List<FailedClaim> increments = tx.execute(st -> jdbc.query(
+            FAILED_CLAIM_COLUMNS + "WHERE sia.tenant_id = ? AND " + LOCATION_EXHAUSTED_SQL +
+            "  AND sia.trigger_type IN " + IncrementRecoveryRules.INCREMENT_TRIGGERS_SQL +
+            " ORDER BY sia.created_at, sia.id", (rs, i) -> failedClaim(rs), tenantId));
+        int applied = 0;
+        for (FailedClaim c : increments == null ? List.<FailedClaim>of() : increments) {
+            if (retryClaim(tenantId, c, true) && "applied".equals(claimStatus(tenantId, c))) applied++;
+        }
+        List<Long> pieces = tx.execute(st -> jdbc.queryForList(
+            "SELECT sia.id FROM shopify_inventory_adjustments sia WHERE sia.tenant_id = ? AND " + LOCATION_EXHAUSTED_SQL +
+            "  AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL + " ORDER BY sia.created_at, sia.id",
+            Long.class, tenantId));
+        for (Long id : pieces == null ? List.<Long>of() : pieces) {
+            pushPieceClaimNow(tenantId, id, true);
+            if ("applied".equals(tx.execute(st -> jdbc.queryForObject(
+                    "SELECT status FROM shopify_inventory_adjustments WHERE id = ? AND tenant_id = ?", String.class, id, tenantId)))) {
+                applied++;
+            }
+        }
+        int incrementCount = increments == null ? 0 : increments.size();
+        int pieceCount = pieces == null ? 0 : pieces.size();
+        log.info("Shopify inventory: re-sent {} increment(s) and {} piece update(s) that failed on the Traced location " +
+            "tenant={} applied={}", incrementCount, pieceCount, tenantId, applied);
+        return new ResendResult(incrementCount, pieceCount, applied);
+    }
+
+    /** How many claims {@link #resendLocationFailures} would re-send now (Connections card). */
+    public int countLocationFailures(UUID tenantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments sia WHERE sia.tenant_id = ? AND " + LOCATION_EXHAUSTED_SQL,
+            Integer.class, tenantId);
+        return n == null ? 0 : n;
+    }
+
+    private String claimStatus(UUID tenantId, FailedClaim c) {
+        return tx.execute(st -> jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? AND variant_id = ? AND location_id = ?",
+            String.class, tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId()));
+    }
+
     // ── Shared guards / persistence ──────────────────────────────────────────
 
     /** Only is_fulfillment=true locations ever reach a Shopify call — any other location
@@ -1463,6 +1572,7 @@ public class ShopifyInventoryService {
                          "for variant {} (trigger={} triggerId={} location={})",
                          current.get("delta"), variantId, triggerType, triggerId, locationId);
             }
+            if (failed) ShopifyLocationState.noteFailure(jdbc, tenantId, locationId, error);
             boolean updated = jdbc.update(
                 "UPDATE shopify_inventory_adjustments SET " +
                 "  status = ?, error = ?, " +
@@ -1526,6 +1636,7 @@ public class ShopifyInventoryService {
                             String shopifyInventoryItemId, String shopifyLocationId,
                             String status, String error) {
         tx.execute(txStatus -> {
+            if ("failed".equals(status)) ShopifyLocationState.noteFailure(jdbc, tenantId, locationId, error);
             jdbc.update(
                 "UPDATE shopify_inventory_adjustments SET " +
                 "  status = ?, error = ?, " +

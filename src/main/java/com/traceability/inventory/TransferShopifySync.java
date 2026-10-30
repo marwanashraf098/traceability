@@ -200,8 +200,9 @@ public class TransferShopifySync {
 
     /** queued/failed → pending (the one-sender guard), ONE pushTransferOut attempt, then the outcome. */
     void pushNow(UUID tenantId, UUID syncId) {
-        // Shopify rejected the token refresh: leave the claim as it is (no attempt spent) — sent after reconnect.
-        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return;
+        // Updates are held (the store needs a reconnect, or the Traced location is inactive in Shopify): leave the
+        // claim as it is (no attempt spent) — sent once the hold is gone.
+        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.held(jdbc, tenantId)))) return;
         Map<String, Object> claim = tx.execute(s -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "UPDATE transfer_shopify_syncs SET status = 'pending', send_started_at = now(), " +
@@ -231,6 +232,7 @@ public class TransferShopifySync {
             log.error("Transfer Shopify push AMBIGUOUS transfer={} — verify in Shopify, NOT re-sending: {}",
                 transferId, e.getMessage());
         } catch (ShopifyException e) {
+            tx.execute(s -> ShopifyLocationState.noteFailure(jdbc, tenantId, (UUID) claim.get("location_id"), e.getMessage()));
             // Definite rejection (HTTP 4xx / userErrors — ShopifyHttpGateway.pushTransferOut's only two):
             // nothing applied, the sweep may re-send.
             mark(tenantId, syncId, "failed", e.getMessage());

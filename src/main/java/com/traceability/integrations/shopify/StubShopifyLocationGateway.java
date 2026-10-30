@@ -36,6 +36,11 @@ class StubShopifyLocationGateway implements ShopifyLocationGateway {
     }
 
     @Override
+    public Optional<Boolean> readLocationActive(String shopDomain, String token, String shopifyLocationGid) {
+        throw new ShopifyException(MSG);
+    }
+
+    @Override
     public void editLocationAddress(String shopDomain, String token, String shopifyLocationGid, LocationAddress address) {
         throw new ShopifyException(MSG);
     }

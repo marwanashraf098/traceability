@@ -2298,6 +2298,22 @@
           "cta": "Upgrade to the official app"
         }
       },
+      "location": {
+        "inactiveTitle": "Your Traced location in Shopify is deactivated",
+        "inactiveBody": "Reactivate \"Traced Main Warehouse\" in Shopify (Settings › Locations) to keep stock in sync. Stock updates are waiting and are sent once it is active again.",
+        "deletedTitle": "Your Traced location in Shopify was deleted",
+        "deletedBody": "Stock updates are on hold. Reconnect Shopify, or contact Traced support to recreate the location.",
+        "checkCta": "I reactivated it — check now",
+        "checking": "Checking…",
+        "stillInactive": "Shopify still shows the location as not active.",
+        "checkFailed": "Couldn't reach Shopify to check — try again shortly.",
+        "resendTitle": "{{count}} stock updates failed while the location was off",
+        "resendBody": "They never reached Shopify. Re-send them now — any stock that left Traced since is taken out too.",
+        "resendCta": "Re-send failed updates",
+        "resending": "Sending…",
+        "resendDone": "Sent {{applied}} of {{total}} updates to Shopify.",
+        "resendFailed": "Couldn't re-send the updates — try again."
+      },
       "attention": {
         "title": "Reconnect your store",
         "body": "Shopify access expired, so syncing has paused. Reconnect to pick up where it left off.",
@@ -3521,7 +3537,8 @@
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
       "BOSTA_STATE_RECOGNISED": "Clears when Bosta sends an update Traced recognises for this exchange — nothing to do in Traced. If it looks stuck, check the exchange in Bosta.",
       "WAREHOUSE_ADDRESS_PUSHED": "Clears when the address reaches Shopify — Traced keeps retrying. If it stays, save the address again.",
-      "SHOPIFY_RECONNECTED": "Clears when you reconnect Shopify in Settings › Connections (Go →). Stock updates made meanwhile are sent then."
+      "SHOPIFY_RECONNECTED": "Clears when you reconnect Shopify in Settings › Connections (Go →). Stock updates made meanwhile are sent then.",
+      "SHOPIFY_LOCATION_ACTIVE": "Clears when the Traced location is active in Shopify again (checked every 10 minutes, or check now in Settings › Connections — Go →). Stock updates made meanwhile are sent then."
     },
     "returnToReceive": {
       "markedBy": "Marked received by {{name}} in session {{session}}",

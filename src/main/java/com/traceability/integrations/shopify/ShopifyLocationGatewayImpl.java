@@ -166,6 +166,24 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
         return Optional.of(new LocationAddressState(loc.path("name").asText(""), address, localPickup));
     }
 
+    private static final String LOCATION_ACTIVE_QUERY = """
+            query LocationActive($id: ID!) {
+              location(id: $id) {
+                id
+                isActive
+              }
+            }
+            """;
+
+    @Override
+    public Optional<Boolean> readLocationActive(String shopDomain, String token, String shopifyLocationGid) {
+        ObjectNode vars = mapper.createObjectNode().put("id", shopifyLocationGid);
+        JsonNode loc = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_ACTIVE_QUERY, vars).path("location");
+        if (loc.isMissingNode() || loc.isNull()) return Optional.empty();
+        if (!loc.path("isActive").isBoolean()) throw new ShopifyException("location isActive missing from Shopify's answer");
+        return Optional.of(loc.path("isActive").asBoolean());
+    }
+
     @Override
     public void editLocationAddress(String shopDomain, String token, String shopifyLocationGid, LocationAddress address) {
         JsonNode edit = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_EDIT_ADDRESS_MUTATION,

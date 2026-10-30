@@ -831,6 +831,11 @@ export interface ConnectionsStatus {
     status: ShopifyStoreStatus
     importStatus: string | null
     lastSyncAt: string | null
+    /** The Traced location in Shopify (V196): null without a linked main warehouse. While it is not 'active',
+     *  every stock update waits. */
+    locationState?: 'active' | 'inactive' | 'deleted' | null
+    /** Updates that used up their attempts while the location wasn't active — the owner's "Re-send failed updates". */
+    resendableFailed?: number
   }
   bosta: {
     connected: boolean
@@ -963,6 +968,19 @@ export function shopifyInitiate(shop: string) {
 
 export function shopifyDisconnect(storeId: string) {
   return request<void>(`/shopify/stores/${storeId}/disconnect`, { method: 'POST' })
+}
+
+// ── The Traced location in Shopify (2026-10-30) ───────────────────────────────
+
+/** Owner / manager: check the Traced location in Shopify now; a reactivation sends the held updates. */
+export function checkShopifyLocation() {
+  return request<{ locationState: 'active' | 'inactive' | 'deleted' }>('/shopify/location/check', { method: 'POST' })
+}
+
+/** Owner only: re-send the updates that used up their attempts while the Traced location wasn't active. */
+export function resendShopifyLocationFailures() {
+  return request<{ increments: number; pieceUpdates: number; applied: number }>(
+    '/shopify/location/resend-failed', { method: 'POST' })
 }
 
 // ── Bosta connect ─────────────────────────────────────────────────────────────

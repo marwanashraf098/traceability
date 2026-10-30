@@ -308,6 +308,8 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/exceptions/resolve",           skip("resolves by (type, subject key) — no order lookup"));
         reg("POST /api/v1/exceptions/increment-sync/repush", skip(R_OPS));
         reg("POST /api/v1/exceptions/void-hold-sync/repush", skip(R_OPS));
+        reg("POST /api/v1/shopify/location/check",       skip(R_OPS));
+        reg("POST /api/v1/shopify/location/resend-failed", skip(R_OPS));
 
         // ── Bosta forward side ─────────────────────────────────────────────
         reg("GET /api/v1/shipments/unlinked",            list());

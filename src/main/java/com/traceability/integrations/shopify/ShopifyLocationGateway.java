@@ -99,6 +99,15 @@ public interface ShopifyLocationGateway {
     Optional<LocationAddressState> readLocationAddress(String shopDomain, String token, String shopifyLocationGid);
 
     /**
+     * Is this location active in Shopify (read only, 2026-10-30)? true = active, false = deactivated, empty = Shopify
+     * has no location with that id (deleted). Used by the periodic check of the Traced location
+     * (ShopifyLocationCheckService).
+     *
+     * @throws ShopifyException on a Shopify / transport failure (the state is then unknown — nothing changes)
+     */
+    Optional<Boolean> readLocationActive(String shopDomain, String token, String shopifyLocationGid);
+
+    /**
      * Edits ONLY the address of one location (locationEdit with input { address } — never name,
      * never fulfillsOnlineOrders, never metafields; an address edit touches no inventory quantity).
      * Callers write only to the Traced Main Warehouse GID. Safe to repeat: the same address sent

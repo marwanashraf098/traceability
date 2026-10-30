@@ -83,6 +83,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   warehouse_address_push_failed: { en: 'Warehouse Address Not In Shopify', ar: 'عنوان المخزن لم يصل إلى Shopify' },
   // Shopify rejected the token refresh (stores.status needs_reauth)
   shopify_connection_lost: { en: 'Shopify Connection Lost', ar: 'انقطع الاتصال بشوبيفاي' },
+  // The Traced location is deactivated / deleted in Shopify (V196)
+  shopify_location_inactive: { en: 'Traced Location Inactive In Shopify', ar: 'موقع Traced غير مُفعَّل في شوبيفاي' },
   // A transfer's pieces still counted at the main warehouse in Shopify
   transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
 }

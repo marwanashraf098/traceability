@@ -61,6 +61,9 @@ public class StockTakeShopifyPushJob {
 
     /** The held push's error text (shown with the session's sync status). */
     static final String HELD_ERROR = "Held — Shopify needs to be reconnected; sent automatically after reconnect";
+    /** The same while the Traced location is inactive / deleted in Shopify (V196). */
+    static final String HELD_LOCATION_ERROR =
+        "Held — the Traced location is not active in Shopify; sent automatically once it is reactivated";
 
     @Job(name = "Stock-take Shopify push — session %0")
     public void push(UUID sessionId, UUID tenantId) {
@@ -68,14 +71,16 @@ public class StockTakeShopifyPushJob {
             // Shopify rejected the token refresh (store needs_reauth): hold the push before it is claimed for
             // sending — 'failed' (nothing sent) + payload.heldForReconnect, and NO rethrow, so JobRunr spends no
             // retry. ShopifyReconnectResumeJob releases it once the store is connected again (releaseHeld).
-            if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) {
+            IncrementRecoveryRules.SetupProblem hold = tx.execute(s -> IncrementRecoveryRules.holdReason(jdbc, tenantId));
+            if (hold != null) {
+                String heldError = hold == IncrementRecoveryRules.SetupProblem.NEEDS_REAUTH ? HELD_ERROR : HELD_LOCATION_ERROR;
                 Integer held = tx.execute(s -> jdbc.update(
                     "UPDATE stock_take_shopify_syncs SET status = 'failed', error = ?, send_started_at = NULL, " +
                     "    payload = COALESCE(payload, '{}'::jsonb) || '{\"heldForReconnect\": true}'::jsonb " +
                     "WHERE session_id = ? AND tenant_id = ? AND status IN ('pending', 'failed')",
-                    HELD_ERROR, sessionId, tenantId));
+                    heldError, sessionId, tenantId));
                 if (held != null && held > 0) {
-                    log.info("stock-take push held until Shopify is reconnected session={} tenant={}", sessionId, tenantId);
+                    log.info("stock-take push held ({}) session={} tenant={}", hold, sessionId, tenantId);
                 }
                 return;
             }
@@ -115,6 +120,7 @@ public class StockTakeShopifyPushJob {
             Preconditions p = tx.execute(s -> resolvePreconditions(tenantId, sending));
 
             if (p.error() != null) {
+                tx.execute(s -> ShopifyLocationState.noteFailure(jdbc, tenantId, sending.locationId(), p.error()));
                 markResult(sessionId, tenantId, "failed", p.error());
                 // Definitive — nothing was ever sent to Shopify. Safe to retry.
                 throw new IllegalStateException("stock-take push precondition failed: " + p.error());
@@ -138,6 +144,7 @@ public class StockTakeShopifyPushJob {
                     sessionId, referenceDocumentUri, e.getMessage());
                 // Deliberately no rethrow — see class doc.
             } catch (ShopifyException e) {
+                tx.execute(s -> ShopifyLocationState.noteFailure(jdbc, tenantId, sending.locationId(), e.getMessage()));
                 markResult(sessionId, tenantId, "failed", e.getMessage());
                 throw e; // definitive — safe for JobRunr to retry.
             }
@@ -151,7 +158,7 @@ public class StockTakeShopifyPushJob {
      * 'failed' → 'pending' as any retry does.
      */
     public List<UUID> releaseHeld(UUID tenantId) {
-        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.connectionLost(jdbc, tenantId)))) return List.of();
+        if (Boolean.TRUE.equals(tx.execute(s -> IncrementRecoveryRules.held(jdbc, tenantId)))) return List.of();
         List<UUID> released = tx.execute(s -> jdbc.queryForList(
             "UPDATE stock_take_shopify_syncs SET payload = payload - 'heldForReconnect' " +
             "WHERE tenant_id = ? AND status = 'failed' AND jsonb_exists(payload, 'heldForReconnect') RETURNING session_id",

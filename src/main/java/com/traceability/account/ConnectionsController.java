@@ -60,13 +60,16 @@ public class ConnectionsController {
     private final TransactionTemplate tx;
     private final StoreRepository    storeRepository;
     private final ShopifyUpgradeRollout upgradeRollout;
+    private final com.traceability.inventory.ShopifyInventoryService inventory;
 
     public ConnectionsController(JdbcTemplate jdbc, PlatformTransactionManager txm, StoreRepository storeRepository,
-                                 ShopifyUpgradeRollout upgradeRollout) {
+                                 ShopifyUpgradeRollout upgradeRollout,
+                                 com.traceability.inventory.ShopifyInventoryService inventory) {
         this.jdbc = jdbc;
         this.tx   = new TransactionTemplate(txm);
         this.storeRepository = storeRepository;
         this.upgradeRollout  = upgradeRollout;
+        this.inventory       = inventory;
     }
 
     /**
@@ -78,7 +81,9 @@ public class ConnectionsController {
      *   "shopify": { "connected": bool, "storeId": str|null, "shopDomain": str|null,
      *                "connectionType": "oauth"|"custom_app"|"custom_app_cc"|null,
      *                "status": "connected"|"needs_reauth"|"error"|"disconnected",
-     *                "importStatus": str|null, "lastSyncAt": str|null },
+     *                "importStatus": str|null, "lastSyncAt": str|null,
+     *                "locationState": "active"|"inactive"|"deleted"|null,   // the Traced location in Shopify (V196)
+     *                "resendableFailed": int },   // updates "Re-send failed updates" would send (owner action)
      *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null,
      *                "awbFormat": str|null, "awbLang": str|null, "simulated": bool },
      *   "customAppAvailable": bool,
@@ -147,6 +152,13 @@ public class ConnectionsController {
                 shopify.put("importStatus",   store.importStatus());
                 shopify.put("lastSyncAt",     store.lastSyncAt() != null ? Timestamp.from(store.lastSyncAt()) : null);
             }
+            // The Traced location in Shopify (2026-10-30): its state (null without a linked main warehouse) and the
+            // updates that used up their attempts on it — the card's warning and its owner "Re-send failed updates".
+            List<String> locationState = jdbc.queryForList(
+                "SELECT shopify_location_state FROM locations WHERE tenant_id = ? AND is_fulfillment = true " +
+                "  AND shopify_sync_status = 'linked'", String.class, tenantId);
+            shopify.put("locationState",    locationState.isEmpty() ? null : locationState.get(0));
+            shopify.put("resendableFailed", inventory.countLocationFailures(tenantId));
 
             // Bosta — active courier account. Review mode: a simulated tenant has no courier
             // row (V130 trigger) and reports connected + simulated, never touching Bosta.

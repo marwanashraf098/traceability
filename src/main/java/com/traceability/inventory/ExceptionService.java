@@ -192,6 +192,8 @@ public class ExceptionService {
         all.addAll(detectWarehouseAddressPushFailed(tenantId));
         // Shopify rejected the token refresh (stores.status = 'needs_reauth') — nothing reaches Shopify until reconnect.
         all.addAll(detectShopifyConnectionLost(tenantId));
+        // The Traced location is deactivated / deleted in Shopify (V196) — every stock update is held until it's back.
+        all.addAll(detectShopifyLocationInactive(tenantId));
         // A transfer left out pieces whose arrival hadn't reached Shopify; it has since — Shopify counts them at main.
         all.addAll(detectTransferStockNotRemoved(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
@@ -310,6 +312,7 @@ public class ExceptionService {
         Map.entry("pack_cancelled_after_print/shipment",       OrderLink.DIRECT),         // the print-batch item's order_id
         Map.entry("warehouse_address_push_failed/location",    OrderLink.NONE),
         Map.entry("shopify_connection_lost/store",             OrderLink.NONE),
+        Map.entry("shopify_location_inactive/location",        OrderLink.NONE),
         Map.entry("transfer_stock_not_removed/transfer",       OrderLink.NONE),
         Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
         Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
@@ -356,7 +359,8 @@ public class ExceptionService {
         "exchange_needs_mapping",  "EXCHANGE_MAPPED",
         "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED",
         "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED",
-        "shopify_connection_lost",       "SHOPIFY_RECONNECTED");
+        "shopify_connection_lost",       "SHOPIFY_RECONNECTED",
+        "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE");
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -1328,6 +1332,24 @@ public class ExceptionService {
     }
 
     /**
+     * HIGH — the Traced location is deactivated ('inactive') or deleted in Shopify (locations.shopify_location_state,
+     * V196 — set by a failed write that names it, or by the periodic check). Every stock update is held until it is
+     * active again; clears by itself then (the check sets it back). One alert per episode: the subject key carries the
+     * state and when it was recorded, so a later episode is a new subject (and a new immediate email).
+     */
+    private List<Map<String, Object>> detectShopifyLocationInactive(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_location_inactive' AS type, 'HIGH' AS severity, 'location' AS subject_type, " +
+            "       l.id AS location_id, l.name AS location_name, l.shopify_location_state AS location_state, " +
+            "       l.shopify_location_state_at AS occurred_at, " +
+            "       'shopify_location_inactive:' || l.id || ':' || l.shopify_location_state || ':' || " +
+            "       COALESCE(floor(extract(epoch FROM l.shopify_location_state_at))::bigint::text, '0') AS subject_key " +
+            "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true AND l.shopify_sync_status = 'linked' " +
+            "  AND l.shopify_location_state <> 'active'",
+            tid);
+    }
+
+    /**
      * HIGH — drift fix (2026-10-30): a transfer that left the main warehouse left pieces out of its Shopify decrement
      * because their arrival had not reached Shopify (payload.excluded, arrival_unconfirmed / arrival_not_counted). That
      * arrival has applied since, and the pieces are still away from the main warehouse — so Shopify counts them there.
@@ -2189,6 +2211,21 @@ public class ExceptionService {
                 item.put("descriptionAr", "انقطع الاتصال بشوبيفاي — أعد الربط للحفاظ على تزامن المخزون. توقف شوبيفاي عن "
                     + "قبول وصول Traced إلى " + shop + "؛ تحديثات المخزون تنتظر وتُرسل بعد إعادة الربط.");
                 item.put("suggestedAction", "reconnect_shopify");
+                item.put("actionUrl", "/settings?tab=connections");
+            }
+            case "shopify_location_inactive" -> {
+                boolean deleted = "deleted".equals(item.get("location_state"));
+                item.put("descriptionEn", deleted
+                    ? "Your Traced location in Shopify was deleted — stock updates are on hold. Reconnect Shopify "
+                        + "in Settings › Connections, or contact Traced support to recreate the location."
+                    : "Your Traced location in Shopify is deactivated — reactivate it to keep stock in sync. Stock "
+                        + "updates wait and are sent once it is active again.");
+                item.put("descriptionAr", deleted
+                    ? "تم حذف موقع Traced في شوبيفاي — تحديثات المخزون متوقفة. أعد ربط شوبيفاي من الإعدادات › "
+                        + "الاتصالات، أو تواصل مع دعم Traced لإعادة إنشاء الموقع."
+                    : "موقع Traced في شوبيفاي غير مُفعَّل — أعد تفعيله للحفاظ على تزامن المخزون. تحديثات المخزون "
+                        + "تنتظر وتُرسل بمجرد تفعيله من جديد.");
+                item.put("suggestedAction", deleted ? "recreate_shopify_location" : "reactivate_shopify_location");
                 item.put("actionUrl", "/settings?tab=connections");
             }
             case "transfer_stock_not_removed" -> {
