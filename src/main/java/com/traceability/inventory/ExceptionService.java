@@ -322,6 +322,56 @@ public class ExceptionService {
         Map.entry("generic_delivered_without_pickup/shipment", OrderLink.VIA_SHIPMENT));
 
     /**
+     * Orders "Needs attention" reason groups (2026-10-30): what the merchant has to do, in display priority — an
+     * order's row shows its highest-priority group, and the reason chips filter by group. Ids only; the copy
+     * lives in the frontend locales, keyed by group and by alert type.
+     */
+    public static final List<String> REASON_GROUPS = List.of(
+        "cant_ship", "no_courier_update", "delivery_failed", "cancelled_shipped", "return_to_handle", "other");
+
+    /**
+     * Every alert type that can reach an order (ORDER_LINK DIRECT / VIA_SHIPMENT) → its reason group. The ONE
+     * mapping; OrdersFiltersTest fails when an order-linked type has none.
+     */
+    public static final Map<String, String> REASON_GROUP = Map.ofEntries(
+        Map.entry("missing_awb",                      "cant_ship"),
+        Map.entry("fulfillment_link_problem",         "cant_ship"),
+        Map.entry("pack_set_aside",                   "cant_ship"),
+        Map.entry("pack_cancelled_after_print",       "cant_ship"),
+        Map.entry("guided_unpack",                    "cant_ship"),
+        Map.entry("waybill_deleted_in_bosta",         "cant_ship"),
+        Map.entry("missing_provider_id",              "cant_ship"),
+        Map.entry("generic_bosta_conflict",           "cant_ship"),
+        Map.entry("generic_multiple_parcels",         "cant_ship"),
+        Map.entry("generic_fulfillment_cancelled",    "cant_ship"),
+        Map.entry("stuck_shipment",                   "no_courier_update"),
+        Map.entry("delivery_limbo",                   "no_courier_update"),
+        Map.entry("exchange_unmapped_state",          "no_courier_update"),
+        Map.entry("ndr_failed",                       "delivery_failed"),
+        Map.entry("high_attempts",                    "delivery_failed"),
+        Map.entry("cancelled_live_shipment",          "cancelled_shipped"),
+        Map.entry("generic_cancelled_live_shipment",  "cancelled_shipped"),
+        Map.entry("cancelled_but_delivered",          "cancelled_shipped"),
+        Map.entry("shopify_cancel_vs_inflight",       "cancelled_shipped"),
+        Map.entry("never_received",                   "return_to_handle"),
+        Map.entry("return_leg_unscanned",             "return_to_handle"),
+        Map.entry("return_to_receive",                "return_to_handle"),
+        Map.entry("request_item_to_receive",          "return_to_handle"),
+        Map.entry("return_link_ambiguous",            "return_to_handle"),
+        Map.entry("pickup_booking_problem",           "return_to_handle"),
+        Map.entry("refund_pending_overdue",           "return_to_handle"),
+        Map.entry("return_items_overdue",             "return_to_handle"),
+        Map.entry("restocked_twice",                  "return_to_handle"),
+        Map.entry("blocked_customer",                 "other"),
+        Map.entry("shopify_edit_conflict",            "other"),
+        Map.entry("generic_delivered_without_pickup", "other"));
+
+    /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
+    public static String reasonGroupOf(String type) {
+        return REASON_GROUP.getOrDefault(type, "other");
+    }
+
+    /**
      * Orders "Needs attention": the merchant orders with at least one open alert, each with its alert types
      * (distinct, sorted). Built from ONE {@link #detectAllOpen()} run — the same open set the bell counts —
      * through {@link #ORDER_LINK}; only ids present in merchant_orders (portal pre-connect rows never appear).

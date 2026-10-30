@@ -3,6 +3,7 @@ package com.traceability.fulfillment;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.inventory.ExceptionService;
 import com.traceability.inventory.FulfillService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
@@ -110,21 +111,52 @@ public class OrderController {
         OrderShippingBadge shippingBadge,
         // Orders "Needs attention" (2026-10-30): the order's open alert types (distinct, sorted), from
         // ExceptionService.openAttentionOrderIds(). Empty = no open alert.
-        List<String> attentionReasons) {}
+        List<String> attentionReasons,
+        // Orders tabs & filters (2026-10-30): what came back and its grades (OrderReturnState) — absent when nothing
+        // did; the highest-priority Needs attention reason group (ExceptionService.REASON_GROUP) — absent with no alert.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) ReturnStateSummary returnState,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) AttentionGroup attentionGroup) {
 
-    public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
+        OrderSummary withReturnState(ReturnStateSummary r) {
+            return new OrderSummary(id, number, customerName, customerPhone, status, onHold, codAmount, placedAt,
+                trackingNumber, deliveryState, exceptionReason, bostaLinkStatus, failedDeliveryAttempts, isDelayed,
+                slaBreached, notTracedAt, isExchange, derivedStatus, shippingBadge, attentionReasons, r, attentionGroup);
+        }
+    }
 
-    // Returned pieces (2026-10-30): returnState is pending_inspection | restocked | damaged for a piece of THIS
-    // order that came back (ORDER_PIECES_SQL); absent (not null) for every other piece.
+    /** state pending (a returned piece awaits inspection) | inspected; grades: restocked / damaged / backToGood /
+     *  sellable → count, non-zero only. */
+    public record ReturnStateSummary(String state, Map<String, Integer> grades) {}
+
+    /** The row's Needs attention reason: the highest-priority group, the alert type shown, and how many more. */
+    public record AttentionGroup(String group, String reason, int extra) {}
+
+    /** Tab counts under the active filters (search ignored). attention / reasonCounts are null when the alert check
+     *  was skipped (GET /orders/counts?attention=false). */
+    public record OrderTabCounts(int all, Integer attention, int toShip, int inTransit, int delivered, int returned,
+                                 int cancelled, Map<String, Integer> reasonCounts) {}
+
+    public record OrderPage(List<OrderSummary> items, int page, int size, long total,
+                            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) OrderTabCounts counts) {
+        public OrderPage(List<OrderSummary> items, int page, int size, long total) { this(items, page, size, total, null); }
+    }
+
+    // Returned pieces (2026-10-30): returnState is pending_inspection | restocked | damaged | back_to_good for a
+    // piece of THIS order that came back (OrderReturnState); absent (not null) for every other piece. shortCode is
+    // the piece's printed short code when it has one.
     public record AllocatedPiece(String pieceId, String barcode, String status,
-                                 @com.fasterxml.jackson.annotation.JsonInclude(
-                                     com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                                 String returnState) {}
+                                 @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String returnState,
+                                 @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String shortCode) {}
+
+    /** An untracked unit of this line that came back, graded at arrival: sellable | damaged. */
+    public record ReturnedUnit(int unitNo, String grade) {}
 
     public record OrderItem(
         String id, String productTitle, String variantTitle,
         String sku, int quantity, String imageUrl, List<AllocatedPiece> allocatedPieces,
-        boolean addedAfterShipping) {}
+        boolean addedAfterShipping,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+        List<ReturnedUnit> returnedUnits) {}
 
     public record AttemptEntry(
         String attemptDate, String type, boolean succeeded,
@@ -527,6 +559,22 @@ public class OrderController {
         return list(status, deliveryState, q, tracking, page, size, null, false);
     }
 
+    /** The list without the tabs & filters (every caller before 2026-10-30). */
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public OrderPage list(String status, String deliveryState, String q, String tracking, int page, int size,
+                          String carrier, boolean attention) {
+        return list(status, deliveryState, q, tracking, page, size, carrier, attention,
+            null, null, null, null, null, null, null, false);
+    }
+
+    /**
+     * Orders tabs & filters (2026-10-30): {@code tab} (OrderListFilters.TABS), {@code traced}, {@code returns},
+     * {@code courier}, {@code payment}, {@code days} (7 | 30 | 90 | all; default 30 once {@code tab} is given — a
+     * caller without {@code tab} keeps the all-time list), {@code reason} (a reason group, tab=attention only).
+     * days is ignored while searching (q / tracking) and on tab=attention. {@code withCounts=true} adds the tab
+     * counts under the same filters (search ignored), from the SAME alert check. status / deliveryState / carrier /
+     * attention keep working unchanged.
+     */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public OrderPage list(
@@ -537,9 +585,26 @@ public class OrderController {
             @RequestParam(defaultValue = "0")  int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String carrier,
-            @RequestParam(defaultValue = "false") boolean attention) {
+            @RequestParam(defaultValue = "false") boolean attention,
+            @RequestParam(required = false) String tab,
+            @RequestParam(required = false) String traced,
+            @RequestParam(required = false) String returns,
+            @RequestParam(required = false) String courier,
+            @RequestParam(required = false) String payment,
+            @RequestParam(required = false) String days,
+            @RequestParam(required = false) String reason,
+            @RequestParam(defaultValue = "false") boolean withCounts) {
 
         size = Math.min(size, 100);
+        final String tabKey    = OrderListFilters.tab(tab);
+        final String reasonKey = OrderListFilters.reason(reason);
+        if (reasonKey != null && !"attention".equals(tabKey)) {
+            throw OrderListFilters.bad("reason is only for tab=attention");
+        }
+        final OrderListFilters.Filters filters =
+            OrderListFilters.Filters.parse(traced, returns, courier, payment, days, tabKey != null ? 30 : null);
+        final boolean searching = (q != null && !q.isBlank()) || (tracking != null && !tracking.isBlank());
+        final boolean applyDays = !searching && !"attention".equals(tabKey);
 
         // Orders "Needs attention" (2026-10-30): ONE openAttentionOrderIds() call per request — its id set is
         // the attention=true filter of both the COUNT and the page below, and its alert types are each row's
@@ -590,6 +655,23 @@ public class OrderController {
         if (carrier != null) {
             where.append(" AND s.provider = 'generic' AND lower(btrim(coalesce(s.carrier_name, ''))) = lower(btrim(?))");
             params.add(carrier);
+        }
+        // Tabs & filters (OrderListFilters / OrderReturnState) — the counts append the same predicates.
+        if (tabKey != null && OrderListFilters.SHIPPING_TABS.containsKey(tabKey)) {
+            where.append(" AND ").append(OrderListFilters.SHIPPING_TABS.get(tabKey));
+        }
+        if ("attention".equals(tabKey)) {
+            if (exceptionService == null) throw new IllegalStateException("attention tab needs ExceptionService");
+            where.append(ATTENTION_FILTER_SQL);
+            params.add(reasonKey == null
+                ? attentionByOrder.keySet().toArray(new UUID[0])
+                : idsInGroup(attentionByOrder, reasonKey));
+        }
+        filters.appendNonDate(where, params);
+        java.sql.Timestamp cutoff = filters.cutoff();
+        if (applyDays && cutoff != null) {
+            where.append(" AND o.placed_at >= ?");
+            params.add(cutoff);
         }
 
         // LATERAL picks the latest forward shipment per order (by created_at, id DESC as
@@ -712,12 +794,124 @@ public class OrderController {
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         badgeNow, badgeOverdueDays, shipsWithBosta,
                         rs.getString("forward_provider"), rs.getString("forward_carrier_name")),
-                    attentionByOrder.getOrDefault(rs.getObject("id", UUID.class), List.of())
+                    attentionByOrder.getOrDefault(rs.getObject("id", UUID.class), List.of()),
+                    null,
+                    attentionGroup(attentionByOrder.get(rs.getObject("id", UUID.class)))
                 );
             },
             pageParams.toArray()));
 
-        return new OrderPage(items, page, size, total);
+        // Return state per row — one batched read for the page (OrderReturnState.ORDER_SUMMARY_SQL).
+        Map<String, ReturnStateSummary> returnStates = tx.execute(txs -> returnStates(items));
+        List<OrderSummary> rows = items.stream().map(i -> i.withReturnState(returnStates.get(i.id()))).toList();
+
+        OrderTabCounts counts = withCounts
+            ? tx.execute(txs -> tabCounts(filters, exceptionService == null ? null : attentionByOrder))
+            : null;
+        return new OrderPage(rows, page, size, total, counts);
+    }
+
+    /**
+     * Tab counts under the filters (search ignored) — the same predicates list() appends. Needs attention ignores
+     * days (as its list does); reasonCounts = distinct orders per reason group under the same filters. Skips the
+     * alert check entirely with {@code attention=false} (attention / reasonCounts null).
+     */
+    @GetMapping("/counts")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public OrderTabCounts counts(
+            @RequestParam(required = false) String traced,
+            @RequestParam(required = false) String returns,
+            @RequestParam(required = false) String courier,
+            @RequestParam(required = false) String payment,
+            @RequestParam(required = false) String days,
+            @RequestParam(defaultValue = "true") boolean attention) {
+        OrderListFilters.Filters filters = OrderListFilters.Filters.parse(traced, returns, courier, payment, days, 30);
+        return tx.execute(txs -> tabCounts(filters,
+            attention && exceptionService != null ? exceptionService.openAttentionOrderIds() : null));
+    }
+
+    /** The counts query. {@code attentionByOrder} null = no alert check (attention / reasonCounts null). */
+    private OrderTabCounts tabCounts(OrderListFilters.Filters filters, Map<UUID, List<String>> attentionByOrder) {
+        List<Object> selectParams = new ArrayList<>();
+        StringBuilder select = new StringBuilder("SELECT COUNT(*) FILTER (WHERE in_days) AS all_n");
+        for (String t : OrderListFilters.SHIPPING_TABS.keySet()) {
+            select.append(", COUNT(*) FILTER (WHERE in_days AND tab = '").append(t).append("') AS \"").append(t).append('"');
+        }
+        if (attentionByOrder != null) {
+            select.append(", COUNT(*) FILTER (WHERE id = ANY(?::uuid[])) AS attention_n");
+            selectParams.add(attentionByOrder.keySet().toArray(new UUID[0]));
+            for (String g : ExceptionService.REASON_GROUPS) {
+                select.append(", COUNT(*) FILTER (WHERE id = ANY(?::uuid[])) AS \"r_").append(g).append('"');
+                selectParams.add(idsInGroup(attentionByOrder, g));
+            }
+        }
+        StringBuilder tabCase = new StringBuilder("CASE");
+        OrderListFilters.SHIPPING_TABS.forEach((t, pred) ->
+            tabCase.append(" WHEN ").append(pred).append(" THEN '").append(t).append('\''));
+        tabCase.append(" END");
+
+        java.sql.Timestamp cutoff = filters.cutoff();
+        List<Object> innerParams = new ArrayList<>();
+        innerParams.add(cutoff);
+        innerParams.add(cutoff);
+        StringBuilder where = new StringBuilder(
+            " WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid");
+        filters.appendNonDate(where, innerParams);
+
+        String sql = select + " FROM (SELECT o.id, (?::timestamptz IS NULL OR o.placed_at >= ?::timestamptz) AS in_days, "
+            + tabCase + " AS tab FROM merchant_orders o " + OrderListFilters.LEG_LATERAL + where + ") x";
+        List<Object> all = new ArrayList<>(selectParams);
+        all.addAll(innerParams);
+        return jdbc.query(sql, rs -> {
+            rs.next();
+            Map<String, Integer> reasons = null;
+            if (attentionByOrder != null) {
+                reasons = new LinkedHashMap<>();
+                for (String g : ExceptionService.REASON_GROUPS) reasons.put(g, rs.getInt("r_" + g));
+            }
+            return new OrderTabCounts(rs.getInt("all_n"),
+                attentionByOrder == null ? null : rs.getInt("attention_n"),
+                rs.getInt("toShip"), rs.getInt("inTransit"), rs.getInt("delivered"), rs.getInt("returned"),
+                rs.getInt("cancelled"), reasons);
+        }, all.toArray());
+    }
+
+    /** The attention orders with at least one alert type in reason group {@code group}. */
+    private static UUID[] idsInGroup(Map<UUID, List<String>> attentionByOrder, String group) {
+        return attentionByOrder.entrySet().stream()
+            .filter(e -> e.getValue().stream().anyMatch(t -> group.equals(ExceptionService.reasonGroupOf(t))))
+            .map(Map.Entry::getKey).toArray(UUID[]::new);
+    }
+
+    /** The row's reason: the first alert type of its highest-priority group; extra = the order's other types. */
+    private static AttentionGroup attentionGroup(List<String> types) {
+        if (types == null || types.isEmpty()) return null;
+        for (String g : ExceptionService.REASON_GROUPS) {
+            for (String t : types) {
+                if (g.equals(ExceptionService.reasonGroupOf(t))) return new AttentionGroup(g, t, types.size() - 1);
+            }
+        }
+        return null;
+    }
+
+    /** OrderReturnState.ORDER_SUMMARY_SQL for the page's orders → id → summary (absent when nothing came back). */
+    private Map<String, ReturnStateSummary> returnStates(List<OrderSummary> items) {
+        if (items.isEmpty()) return Map.of();
+        UUID[] ids = items.stream().map(i -> UUID.fromString(i.id())).toArray(UUID[]::new);
+        Map<String, ReturnStateSummary> out = new HashMap<>();
+        jdbc.query(OrderReturnState.ORDER_SUMMARY_SQL, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            Map<String, Integer> grades = new LinkedHashMap<>();
+            for (String[] g : new String[][] {{"restocked", "restocked"}, {"damaged", "damaged"},
+                                              {"backToGood", "back_to_good"}, {"sellable", "sellable"}}) {
+                int n = rs.getInt(g[1]);
+                if (n > 0) grades.put(g[0], n);
+            }
+            int pending = rs.getInt("pending");
+            if (pending == 0 && grades.isEmpty()) return;
+            out.put(rs.getObject("order_id", UUID.class).toString(),
+                new ReturnStateSummary(pending > 0 ? "pending" : "inspected", grades));
+        }, ids, ids);
+        return out;
     }
 
     // ── detail ────────────────────────────────────────────────────────────────
@@ -1339,48 +1533,26 @@ public class OrderController {
 
     /**
      * The order's pieces, every line at once (binds the order id). A piece is listed while its allocation is live
-     * (active / packed) — and, once it came back, also after restock released that allocation: a released
-     * allocation whose piece has a return_received event for THIS order stays on the order (returned pieces,
-     * 2026-10-30 — before, a restocked piece vanished and the line read "No pieces allocated yet").
-     *
-     * return_state, from piece_events only (nothing is rewritten): the FIRST restocked / damaged event on the
-     * piece after its latest return_received for this order → 'restocked' / 'damaged'; none yet and the piece is
-     * at return_pending_inspection → 'pending_inspection' (also a live piece adopted from a Bosta state 46 with no
-     * scan event); otherwise NULL (a piece that never came back). A released allocation without a return state —
-     * unscanned, unreserved, cancelled — is not listed, as before. One row per piece: a live allocation wins over a
-     * released one, then the newest. Lookups ride piece_events_piece_time (piece_id, occurred_at).
+     * (active / packed) — and, once it came back, also after restock released that allocation (a released
+     * allocation whose piece has a return_received event for THIS order). return_state is the shared
+     * {@link OrderReturnState} definition (the list rows and the Returns filter read the same one). A released
+     * allocation without a return state — unscanned, unreserved, cancelled — is not listed. One row per piece: a
+     * live allocation wins over a released one, then the newest.
      */
     static final String ORDER_PIECES_SQL = """
-        SELECT order_item_id, piece_id, barcode, status, return_state
+        SELECT order_item_id, piece_id, barcode, short_code, status, return_state
         FROM (
             SELECT DISTINCT ON (pc.id)
-                   a.order_item_id, pc.id AS piece_id, pc.barcode, pc.status::text AS status,
+                   a.order_item_id, pc.id AS piece_id, pc.barcode, pc.short_code, pc.status::text AS status,
                    (a.status IN ('active', 'packed')) AS live,
-                   CASE WHEN disp.event_type = 'restocked' THEN 'restocked'
-                        WHEN disp.event_type = 'damaged'   THEN 'damaged'
-                        WHEN pc.status = 'return_pending_inspection' THEN 'pending_inspection'
-                   END AS return_state
+                   rs.state AS return_state
             FROM order_items oi
             JOIN allocations a ON a.order_item_id = oi.id
             JOIN pieces pc     ON pc.id = a.piece_id
-            LEFT JOIN LATERAL (
-                SELECT e.occurred_at, e.id
-                FROM piece_events e
-                WHERE e.piece_id = a.piece_id AND e.order_id = oi.order_id AND e.event_type = 'return_received'
-                ORDER BY e.occurred_at DESC, e.id DESC
-                LIMIT 1
-            ) rr ON true
-            LEFT JOIN LATERAL (
-                SELECT d.event_type
-                FROM piece_events d
-                WHERE d.piece_id = a.piece_id AND d.event_type IN ('restocked', 'damaged')
-                  AND (d.occurred_at, d.id) > (rr.occurred_at, rr.id)
-                ORDER BY d.occurred_at, d.id
-                LIMIT 1
-            ) disp ON rr.id IS NOT NULL
+        """ + OrderReturnState.pieceStateLateral("rs", "pc.id", "pc.status", "oi.order_id") + """
             WHERE oi.order_id = ?
               AND oi.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-              AND (a.status IN ('active', 'packed') OR rr.id IS NOT NULL)
+              AND (a.status IN ('active', 'packed') OR rs.rr_id IS NOT NULL)
             ORDER BY pc.id, (a.status IN ('active', 'packed')) DESC, a.allocated_at DESC
         ) x
         WHERE live OR return_state IS NOT NULL
@@ -1413,7 +1585,16 @@ public class OrderController {
                     rs.getString("piece_id"),
                     rs.getString("barcode"),
                     rs.getString("status"),
-                    rs.getString("return_state"))),
+                    rs.getString("return_state"),
+                    rs.getString("short_code"))),
+            orderId);
+
+        // Untracked units of each line that came back (OrderReturnState.UNITS_SQL), graded at arrival.
+        Map<UUID, List<ReturnedUnit>> unitsByItem = new HashMap<>();
+        jdbc.query(OrderReturnState.UNITS_SQL + " WHERE u.order_id = ? ORDER BY u.order_item_id, u.unit_no",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+                unitsByItem.computeIfAbsent(rs.getObject("order_item_id", UUID.class), k -> new ArrayList<>())
+                    .add(new ReturnedUnit(rs.getInt("unit_no"), rs.getString("grade"))),
             orderId);
 
         List<OrderItem> items = new ArrayList<>();
@@ -1429,7 +1610,8 @@ public class OrderController {
                 ((Number) row.get("quantity")).intValue(),
                 (String) row.get("image_url"),
                 pieces,
-                Boolean.TRUE.equals(row.get("added_after_shipping"))
+                Boolean.TRUE.equals(row.get("added_after_shipping")),
+                unitsByItem.getOrDefault(itemId, List.of())
             ));
         }
         return items;
