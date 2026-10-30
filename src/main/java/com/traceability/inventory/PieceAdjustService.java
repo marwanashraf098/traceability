@@ -490,6 +490,16 @@ public class PieceAdjustService {
             new TransitionContext(null, null, null, null,
                 buildMeta(reason, note, Map.of("restore_event_id", restoreEventId))));
         jdbc.update("UPDATE pieces SET condition = 'good' WHERE id = ? AND tenant_id = ?", pieceId, tenantId);
+        // A piece graded damaged on return still holds its order's 'packed' allocation (markDamaged keeps it).
+        // Back on the shelf it must be free, exactly as ReturnService.restock() leaves a restocked piece: the
+        // ledger transition above already cleared current_order_id; release the allocation, or
+        // FulfillService.scan()'s ALREADY_RESERVED guard refuses this piece for every new order. The returned
+        // order keeps showing it (OrderController.ORDER_PIECES_SQL reads its return_received event). After the
+        // Shopify claim above, which is unchanged.
+        jdbc.update(
+            "UPDATE allocations SET status = 'released' " +
+            "WHERE piece_id = ? AND tenant_id = ? AND status IN ('active','packed')",
+            pieceId, tenantId);
         pushAfterCommit(tenantId, claimId);
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
