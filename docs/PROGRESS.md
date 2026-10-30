@@ -21,8 +21,11 @@ flake. Peak 4 test Postgres containers, Docker ~0.5 GiB, test JVMs ~1.7 GiB RSS,
 - **GenericG3IsolationGoldenTest DST flake — NOT fixed, blocked:** #3001's handover is stamped by Postgres `now()`
   (`PickupSessionService.closeSession`), and the golden pins both avgHoursOrderToHanded 108.0 (48 h for #3001) and the
   `2_days` bucket; from 23:00–24:00 Cairo just after the Oct DST end no placed-at satisfies both (Cairo-calendar
-  placing → 49 h → 108.3; a frozen clock can't reach Postgres `now()` from the test). Options for Marawan:
-  libfaketime DB for that class, approve dropping the hours key from that comparison, or leave it.
+  placing → 49 h → 108.3; a frozen clock can't reach Postgres `now()` from the test). **Decision (Marawan,
+  2026-10-31): leave it** — no libfaketime DB, no dropped key. GenericG3IsolationGoldenTest can fail between 23:00
+  and midnight Cairo in the first days after the October clock change — 48 real hours = 1 calendar day then.
+  Test-timing quirk, not a product bug. If it fails in that hour, rerun after midnight; a failure outside that hour is
+  real.
   Other tests that offset from now() and hit Cairo-day code (text match, unverified): AnalyticsB1Test,
   overview/OverviewTrendsTest, GenericG4aIsolationGoldenTest, PortalOrderLeakTest, AnalyticsFinancesTest,
   GenericCourierG3Test, EmbeddedIntegrationTest, VoidHoldTest, SettlementRefreshProcessingTest, RlsCoverageTest,
@@ -1758,6 +1761,9 @@ Step 0 (merged-PDF workstream) approved: background print job, ceiling 490; slic
 - **Follow-up (not fixed): `BostaPollJobTest.p6_pollAndDiscovery_alreadyLinkedDelivery_discoveryCheaplySkipsIt` is a
   pre-existing intermittent flake** — `verify(never()).fetchDelivery(...)` sometimes sees one call; 1/2 red on the S1
   branch, 1/3 red with S1 reverted, so not S1.
+- **Known flake (2026-10-31, left as is by decision):** GenericG3IsolationGoldenTest can fail between 23:00 and midnight
+  Cairo in the first days after the October clock change — 48 real hours = 1 calendar day then. Test-timing quirk, not a
+  product bug. If it fails in that hour, rerun after midnight; a failure outside that hour is real.
 - **Follow-up (no fix yet):** the AWB link step input (`Fulfill.tsx` AwbLinkDialog) is `disabled={linking}` and bypasses
   useScanner, so keystrokes scanned while a link is in flight are dropped.
 - Next: S2 (code-based keydown capture at useScanner) on `fix/scan-key-capture`.
