@@ -4,6 +4,32 @@
 
 ## Current state
 
+**Orders tabs & filters — backend slice (2026-10-30, branch `feat/orders-tabs-filters-api` off origin/main 43a98ff;
+NOT merged, NOT deployed; no migration; no visual change — backend + api.ts types; the UI slice follows).** Marawan's
+decisions on the Step 0: shipping tabs EXCLUSIVE in priority Cancelled → To ship → In transit (with_courier, exception,
+returning) → Delivered (incl. handed-over self-pickup) → Returned; To ship excludes no-leg + Shopify-fulfilled; days
+ignored while searching and on tab=attention; Back to good = first grade from the return, damaged, then a
+damaged→available edge before the piece joins another order; untracked units inspected sellable | damaged.
+- **One definition each:** `OrderListFilters` (tab predicates, traced / returns / courier / payment / days — Cairo day
+  boundary on placed_at, Java-computed cutoff) and `OrderReturnState` (per-piece state LATERAL + untracked units +
+  per-order summary + Returns filter id sets) — the list, the counts and the DRAWER all read them (the drawer's
+  first-grade SQL is replaced). `ExceptionService.REASON_GROUP` (+ `REASON_GROUPS` priority) next to ORDER_LINK.
+- **API:** `GET /orders` + `tab`, `traced`, `returns`, `courier`, `payment`, `days` (default 30 only when `tab` is
+  given — callers without it keep the all-time list), `reason` (tab=attention only), `withCounts` (one alert check);
+  rows + `returnState {state, grades}` and `attentionGroup {group, reason, extra}` (both JSON-absent when empty).
+  `GET /orders/counts` (same filters, search ignored, one COUNT(*) FILTER query; `attention=false` skips the alert
+  check). Drawer pieces + `shortCode`; lines + `returnedUnits`. deliveryState / attention / summary unchanged.
+- **Timing** (OrdersFiltersTest f8, 2,000 orders / 1,200 with alerts, warm, after ANALYZE): openAttentionOrderIds
+  144 ms, list(withCounts) 110 ms, counts(attention=false) 5 ms, list(returns=inspected, all time) 169 ms. No cache.
+  Without planner stats (a bulk-inserted fixture) the latest-leg LATERAL walks shipments by (tenant, created_at)
+  instead of shipments_order_idx — 0.6–2 s, pre-existing and not prod-shaped; no index added.
+- **Tests:** OrdersFiltersTest f1–f8 (exclusive tabs, count == list for every tab × filter, Cairo 23:59 / 00:01,
+  list == drawer return state incl. back_to_good and a shelf-damaged restocked piece, ≤ 1 alert check per request,
+  reason map coverage, app_user isolation). Approved edits: G3 golden (additive-only, proved), PortalOrderLeakTest
+  (+ /orders/counts), ReturnedPiecesOnOrderTest t5 (returnedUnits) and t6 (back_to_good). Only frontend touch: the
+  `back_to_good` copy (EN + AR) + tone so the drawer never shows a raw key.
+- **Known gap (out of scope):** generic-courier orders are never tagged Not traced (only Bosta paths run the tagger).
+
 **Test-suite speed T1b + T2 (2026-10-31, same branch `perf/test-suite-t1`, on top of 59b5187; merged to main 2026-10-31; test code +
 pom only, no production change).** Full suite **18:54 / 19:12** with 3 forks (was 32.5 after T1, 40.5 baseline). Both
 runs: 3,588 tests / 1 failure (ExchangeBackfillTest only) / 4 skipped, 428 classes, 324 contexts, no other red, no

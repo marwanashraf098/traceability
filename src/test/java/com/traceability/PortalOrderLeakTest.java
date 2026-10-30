@@ -147,6 +147,7 @@ class PortalOrderLeakTest {
         // ── Orders, notes, embedded app ─────────────────────────────────────
         reg("GET /api/v1/orders",                        listCtl("", "?q=PPCLEAK", "?q=0109999990", "?status=new", "?deliveryState=delivered"));
         reg("GET /api/v1/orders/summary",                list());
+        reg("GET /api/v1/orders/counts",                 list("", "?days=all"));
         reg("GET /api/v1/orders/funnel",                 list());
         reg("GET /api/v1/orders/daily-counts",           list("", "?days=7"));
         reg("GET /api/v1/orders/{orderId}",              byOrder());
