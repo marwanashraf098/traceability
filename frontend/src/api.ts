@@ -319,7 +319,8 @@ export interface OrderListParams {
   attention?: boolean
 }
 
-export function listOrders(params: OrderListParams = {}) {
+/** opts.signal: abort an in-flight list when a newer one starts (Orders search) — the caller ignores the AbortError. */
+export function listOrders(params: OrderListParams = {}, opts: { signal?: AbortSignal } = {}) {
   const q = new URLSearchParams()
   if (params.status)        q.set('status', params.status)
   if (params.deliveryState) q.set('deliveryState', params.deliveryState)
@@ -329,7 +330,7 @@ export function listOrders(params: OrderListParams = {}) {
   if (params.size != null) q.set('size', String(params.size))
   if (params.carrier != null) q.set('carrier', params.carrier)
   if (params.attention) q.set('attention', 'true')
-  return request<OrderPage>(`/orders?${q}`)
+  return request<OrderPage>(`/orders?${q}`, { signal: opts.signal })
 }
 
 export function getOrder(id: string) {

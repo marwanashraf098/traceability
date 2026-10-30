@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
@@ -15,6 +15,8 @@ import { useCapabilities } from '../capabilities'
 import OrderDrawer from '../components/OrderDrawer'
 
 const PAGE_SIZE = 20
+// Every /orders request runs the alert check (Needs attention), so typed filters wait this long before fetching.
+const SEARCH_DEBOUNCE_MS = 300
 
 // Infer item type from the API's OrderPage shape
 type OrderItem = NonNullable<OrderPage['items']>[number]
@@ -41,8 +43,13 @@ export default function Orders() {
   const [data,     setData]     = useState<OrderPage | null>(null)
   const [deliveryStateFilter, setDeliveryStateFilter] = useState('')
   const [attentionFilter, setAttentionFilter] = useState(false)
+  // q / tracking follow the inputs; the list fetches on the debounced copies (SEARCH_DEBOUNCE_MS after the last key).
   const [q,        setQ]        = useState('')
   const [tracking, setTracking] = useState('')
+  const [searchQ,        setSearchQ]        = useState('')
+  const [searchTracking, setSearchTracking] = useState('')
+  // The list request in flight — aborted when a newer one starts, so an older response never overwrites a newer one.
+  const inFlight = useRef<AbortController | null>(null)
   const [page,     setPage]     = useState(0)
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState('')
@@ -84,6 +91,9 @@ export default function Orders() {
   }, [])
 
   const fetchOrders = useCallback(async () => {
+    inFlight.current?.abort()
+    const ctrl = new AbortController()
+    inFlight.current = ctrl
     setLoading(true)
     setError('')
     try {
@@ -91,20 +101,35 @@ export default function Orders() {
         deliveryState: carrierFilter != null ? 'with_courier' : deliveryStateFilter || undefined,
         carrier:  carrierFilter ?? undefined,
         attention: carrierFilter == null && attentionFilter ? true : undefined,
-        q:        q || undefined,
-        tracking: tracking || undefined,
+        q:        searchQ || undefined,
+        tracking: searchTracking || undefined,
         page,
         size: PAGE_SIZE,
-      })
+      }, { signal: ctrl.signal })
+      if (ctrl.signal.aborted) return   // a newer request owns the table now
       setData(res)
     } catch {
+      if (ctrl.signal.aborted) return   // aborted on purpose — not an error
       setError(t('common.error'))
     } finally {
-      setLoading(false)
+      if (inFlight.current === ctrl) { inFlight.current = null; setLoading(false) }
     }
-  }, [deliveryStateFilter, attentionFilter, carrierFilter, q, tracking, page, t])
+  }, [deliveryStateFilter, attentionFilter, carrierFilter, searchQ, searchTracking, page, t])
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
+  useEffect(() => () => inFlight.current?.abort(), [])
+
+  // Debounce the typed filters: the list follows SEARCH_DEBOUNCE_MS after the last keystroke, back on page 1.
+  useEffect(() => {
+    if (q === searchQ && tracking === searchTracking) return
+    const timer = setTimeout(() => {
+      setSearchQ(q)
+      setSearchTracking(tracking)
+      setPage(0)
+      setSelected(new Set())
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [q, tracking, searchQ, searchTracking])
 
   const handleSync = useCallback(async () => {
     setSyncing(true)
@@ -386,14 +411,14 @@ export default function Orders() {
           type="text"
           placeholder={t('orders.search')}
           value={q}
-          onChange={e => applyFilter(() => setQ(e.target.value))}
+          onChange={e => setQ(e.target.value)}
           className="input w-64"
         />
         <input
           type="text"
           placeholder={t('orders.searchTracking')}
           value={tracking}
-          onChange={e => applyFilter(() => setTracking(e.target.value))}
+          onChange={e => setTracking(e.target.value)}
           className="input w-40"
         />
         {/* G3: "With <carrier>" — only for a store that ships with other couriers and has parcels out. */}

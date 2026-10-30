@@ -31,8 +31,15 @@ Marawan's decisions: Needs attention = DISTINCT merchant orders with ≥ 1 open 
   re-record (2/2 green after). Vitest 1,260 (main 1,258: +1 tabs, +2 −1 orders). tsc + vite build clean.
 - **Demo tenant (local, fresh DB + reseed):** bell 2 alerts (lost piece, blocked customer) vs Needs attention 1 order
   (#DEMO-BLOCKED). Gotcha: running locally needs `ANALYTICS_REF_SECRET` and `PORTAL_TOKEN_SECRET` (≥ 32 bytes) set.
-- **Known, out of scope:** every `/orders` list call now runs the full detector suite once (as the bell already does);
-  the phone tab row still overflows (pre-existing).
+- **A-fix (same day, frontend only):** the order search and tracking inputs fetch 300 ms after the last key
+  (`SEARCH_DEBOUNCE_MS`, back to page 1), and a newer list request aborts the one in flight (`listOrders(params,
+  { signal })`; a stale or aborted response is ignored) — one alert run per search, never an older result over a newer
+  one. ordersSearchDebounce.test.tsx: "abcde" → exactly 1 fetch at 300 ms; slow first response after a fast second →
+  the second stays (both red on main; the second also red with only the stale-response guard removed). Fake-timer
+  gotcha: Testing Library's async wrapper only advances fake timers when it sees Jest — the test stubs a `jest` global
+  pointing at `vi.advanceTimersByTime`, else `user.type` hangs. Vitest 1,262 (+2); ordersArabicSearchGuard green.
+- **Known, out of scope:** the phone tab row still overflows (pre-existing).
+
 **Test fixtures: exact day / hour counts on N × 24 h (2026-10-30, branch `fix/test-fixtures-dst-hours` off main
 b5af792; merged to main 2026-10-30, NOT deployed). Follow-up to the G3 DST fix.** 84 test files use `interval 'N days'`. (1) Run right after Egypt's
 fall-back (every 'N days' crossing it): 83 classes / 824 tests green — nothing else asserts exact hours. (2) Spring-forward
