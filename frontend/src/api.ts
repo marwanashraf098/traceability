@@ -533,6 +533,11 @@ export interface TimelineEvent {
   labelCode?: string | null
   /** received_factory_run only: "factory · reference" of the run the piece was received from. */
   factoryRun?: string | null
+  /** Warehouse places: put_away / place_moved / place_cleared / box_moved — the places' codes. */
+  fromPlace?: string | null
+  toPlace?: string | null
+  /** box_moved only: the box the piece is in. */
+  box?: string | null
 }
 
 export interface LookupVariant {
@@ -589,6 +594,9 @@ export interface PieceLookupResult {
   currentShipment: LookupShipment | null
   receivingSession: LookupSession | null
   timeline: TimelineEvent[]
+  /** Warehouse places tenants only: the piece's place (null = no place yet) and whether Move applies. */
+  place?: PlaceRef | null
+  canPlace?: boolean
 }
 
 export interface TrackingLookupResult {
@@ -622,7 +630,13 @@ export interface LabelCodeLookupResult {
   messageAr: string
 }
 
+/** Warehouse places: a scanned place sticker (a tenant with places only). */
+export interface PlaceStickerLookupResult extends PlaceRef {
+  type: 'place'; scanCode: string; archived: boolean; locationName: string; pieces: number
+}
+
 export type LookupResult = PieceLookupResult | TrackingLookupResult | OrderLookupResult | LabelCodeLookupResult
+  | PlaceStickerLookupResult
 
 export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
@@ -4205,4 +4219,86 @@ export async function openPlaceStickers(placeIds: string[]) {
   await openPdfResponse(await authFetch('/places/stickers', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placeIds }),
   }))
+}
+
+// ── Warehouse places S2 — Put away (every role; 404 unless the tenant has places) ──────────────────────────────────
+
+/** A shelf / box (or the zone / rack a refused sticker named): trail = labels from the zone down to it (Z1, R01, S2);
+ *  a box's parentCode is its shelf's or zone's full code (BOX-12 on Z1-R01-S2). */
+export interface PlaceRef {
+  id: string; kind: PlaceKind; code: string; trail: string[]; parentCode: string | null; parentKind: PlaceKind | null
+}
+export type PutAwaySource = 'receiving' | 'returns' | 'transfers' | 'stock_take' | 'other'
+export interface PutAwaySummary { waiting: number; locations: { id: string; name: string; main: boolean; waiting: number }[] }
+export interface PutAwayRow {
+  pieceId: string; code: string; variantId: string; productTitle: string; variantTitle: string | null; sku: string | null
+  status: string; source: PutAwaySource; sourceRef: string | null; waitingSince: string
+  suggestion: { place: PlaceRef; reason: 'last_place' | 'most_of_variant' } | null
+}
+export interface PutAwayWaiting {
+  locationId: string; locationName: string; hasPlaces: boolean; total: number; counts: Record<PutAwaySource, number>
+  source: PutAwaySource | 'all'; rows: PutAwayRow[]; truncated: boolean
+  /** The caller's own open session at this location — Start resumes it. */
+  mine: { id: string; placed: number; createdAt: string; lastActivityAt: string } | null
+}
+/** An open session (owner / manager list). */
+export interface PutAwayOpenSession {
+  id: string; locationId: string; locationName: string; openedBy: string; openedByName: string | null
+  createdAt: string; lastActivityAt: string; placed: number
+}
+export interface PutAwaySession {
+  id: string; locationId: string; locationName: string; status: 'open' | 'closed'
+  current: { place: PlaceRef; putHereNow: number; onThisPlace: number } | null
+  placed: number; placesUsed: number; stillWaiting: number; createdAt: string; closedAt: string | null
+  closeReason: 'finished' | 'closed_by_manager' | 'idle' | null
+}
+export type PutAwayOutcome =
+  | 'PLACE_SET' | 'PLACED' | 'MOVED' | 'ALREADY_HERE'
+  | 'SCAN_PLACE_FIRST' | 'SCAN_SHELF_OR_BOX' | 'UNKNOWN_STICKER' | 'PLACE_OTHER_LOCATION' | 'PLACE_ARCHIVED'
+  | 'NOT_AT_THIS_LOCATION' | 'CANNOT_PLACE' | 'UNTAGGED'
+export interface PutAwayScanResult {
+  outcome: PutAwayOutcome; code: string
+  piece: { id: string; code: string | null; productTitle: string; variantTitle: string | null } | null
+  place: PlaceRef | null; fromPlace: PlaceRef | null; locationName: string | null; status: string | null
+  session: PutAwaySession; viaPhone: boolean
+}
+export interface PutAwayCloseSummary { session: PutAwaySession; places: { place: PlaceRef; pieces: number }[] }
+export interface PieceMoveResult { kind: 'PUT_AWAY' | 'MOVED' | 'CLEARED' | 'ALREADY_HERE'; from: PlaceRef | null; to: PlaceRef | null }
+
+export function getPutAwaySummary() {
+  return requestReadable<PutAwaySummary>('/put-away/summary')
+}
+export function getPutAwayWaiting(locationId?: string, source?: PutAwaySource | 'all') {
+  const q = new URLSearchParams()
+  if (locationId) q.set('locationId', locationId)
+  if (source && source !== 'all') q.set('source', source)
+  const s = q.toString()
+  return requestReadable<PutAwayWaiting>(`/put-away/waiting${s ? `?${s}` : ''}`)
+}
+export function getPutAwayPlaces(locationId?: string) {
+  return requestReadable<PlaceRef[]>(`/put-away/places${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ''}`)
+}
+export function startPutAway(locationId?: string) {
+  return requestReadable<PutAwaySession>('/put-away/sessions', { method: 'POST', body: JSON.stringify({ locationId }) })
+}
+/** Every open session (owner / manager). */
+export function getOpenPutAwaySessions() {
+  return requestReadable<PutAwayOpenSession[]>('/put-away/sessions')
+}
+export function getPutAwaySession(id: string) {
+  return requestReadable<PutAwaySession>(`/put-away/sessions/${id}`)
+}
+export function scanPutAway(sessionId: string, code: string, relayEventId?: string) {
+  return requestReadable<PutAwayScanResult>(`/put-away/sessions/${sessionId}/scan`, {
+    method: 'POST', body: withRelay({ code }, relayEventId),
+  })
+}
+export function closePutAway(sessionId: string) {
+  return requestReadable<PutAwayCloseSummary>(`/put-away/sessions/${sessionId}/close`, { method: 'POST' })
+}
+/** Lookup's Move: a scanned sticker or a picked place; neither → No place. */
+export function movePiecePlace(pieceId: string, body: { placeId?: string; scan?: string }) {
+  return requestReadable<PieceMoveResult>(`/put-away/pieces/${encodeURIComponent(pieceId)}/place`, {
+    method: 'PUT', body: JSON.stringify(body),
+  })
 }

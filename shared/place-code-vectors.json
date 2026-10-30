@@ -1,0 +1,236 @@
+{
+  "_comment": "Warehouse places S2 \u2014 place-sticker scan vectors. 'place' = ScanInputNormalizer.normalizePlace(input) (null = not a place sticker). 'piece' = ScanInputNormalizer.normalizePiece(input) and 'tracking' = TrackingNumberNormalizer.normalize(input), asserted unchanged: a place sticker is never read as a piece or a waybill. The piece / tracking vectors stay in scan-normalization-vectors.json.",
+  "vectors": [
+    {
+      "name": "canonical sticker barcode",
+      "input": "Q000107",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "seven digits (a tenant past 999,999 stickers)",
+      "input": "Q1000000",
+      "place": "Q1000000",
+      "piece": "Q1000000",
+      "tracking": null
+    },
+    {
+      "name": "Caps Lock: lower-case q",
+      "input": "q000107",
+      "place": "Q000107",
+      "piece": "q000107",
+      "tracking": null
+    },
+    {
+      "name": "Arabic layout, Q key without Shift (U+0636 dad)",
+      "input": "\u0636000107",
+      "place": "Q000107",
+      "piece": "\u0636000107",
+      "tracking": null
+    },
+    {
+      "name": "Arabic 101, Shift+Q (U+064E fatha)",
+      "input": "\u064e000107",
+      "place": "Q000107",
+      "piece": "\u064e000107",
+      "tracking": null
+    },
+    {
+      "name": "dad + Arabic-Indic digits (macOS Arabic)",
+      "input": "\u0636\u0660\u0660\u0660\u0661\u0660\u0667",
+      "place": "Q000107",
+      "piece": "\u0636000107",
+      "tracking": null
+    },
+    {
+      "name": "Arabic-Indic digits after Q",
+      "input": "Q\u0660\u0660\u0660\u0661\u0660\u0667",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "Persian digits after Q",
+      "input": "Q\u06f0\u06f0\u06f0\u06f1\u06f0\u06f7",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "zero-width space inside",
+      "input": "Q000\u200b107",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "BOM before, newline after",
+      "input": "\ufeffQ000107\n",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "spaces around and inside",
+      "input": " Q 000 107 ",
+      "place": "Q000107",
+      "piece": "Q000107",
+      "tracking": null
+    },
+    {
+      "name": "too short: Q12",
+      "input": "Q12",
+      "place": null,
+      "piece": "Q12",
+      "tracking": null
+    },
+    {
+      "name": "too short: five digits",
+      "input": "Q00010",
+      "place": null,
+      "piece": "Q00010",
+      "tracking": null
+    },
+    {
+      "name": "readable box code is not the barcode (tracking 07)",
+      "input": "BOX-07",
+      "place": null,
+      "piece": "BOX-07",
+      "tracking": "07"
+    },
+    {
+      "name": "readable shelf code is not the barcode",
+      "input": "Z1-R01-S2",
+      "place": null,
+      "piece": "Z1-R01-S2",
+      "tracking": null
+    },
+    {
+      "name": "piece short code is not a place",
+      "input": "P000107",
+      "place": null,
+      "piece": "P000107",
+      "tracking": null
+    },
+    {
+      "name": "two Q-key glyphs are not recovered",
+      "input": "\u0636\u0636000107",
+      "place": null,
+      "piece": "\u0636\u0636000107",
+      "tracking": null
+    },
+    {
+      "name": "double Q",
+      "input": "QQ000107",
+      "place": null,
+      "piece": "QQ000107",
+      "tracking": null
+    },
+    {
+      "name": "letter among the digits",
+      "input": "Q00010A",
+      "place": null,
+      "piece": "Q00010A",
+      "tracking": null
+    },
+    {
+      "name": "another Arabic letter is not guessed (U+0635 sad, the W key)",
+      "input": "\u0635000107",
+      "place": null,
+      "piece": "\u0635000107",
+      "tracking": null
+    },
+    {
+      "name": "digits only (a waybill)",
+      "input": "000107",
+      "place": null,
+      "piece": "000107",
+      "tracking": "000107"
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "place": null,
+      "piece": "",
+      "tracking": null
+    },
+    {
+      "name": "fatha in a product name (Arabic search text)",
+      "input": "\u0642\u0645\u064a\u0635\u064e \u0623\u0628\u064a\u0636",
+      "place": null,
+      "piece": "\u0642\u0645\u064a\u0635\u064e\u0623\u0628\u064a\u0636",
+      "tracking": null
+    },
+    {
+      "name": "Arabic search starting with a fatha",
+      "input": "\u064e\u0642\u0645\u064a\u0635",
+      "place": null,
+      "piece": "\u064e\u0642\u0645\u064a\u0635",
+      "tracking": null
+    },
+    {
+      "name": "Arabic word starting with dad (search for \u0636\u0645\u0627\u0646)",
+      "input": "\u0636\u0645\u0627\u0646",
+      "place": null,
+      "piece": "\u0636\u0645\u0627\u0646",
+      "tracking": null
+    },
+    {
+      "name": "dad alone",
+      "input": "\u0636",
+      "place": null,
+      "piece": "\u0636",
+      "tracking": null
+    },
+    {
+      "name": "fatha alone",
+      "input": "\u064e",
+      "place": null,
+      "piece": "\u064e",
+      "tracking": null
+    },
+    {
+      "name": "dad + 5 digits (too short)",
+      "input": "\u063600010",
+      "place": null,
+      "piece": "\u063600010",
+      "tracking": null
+    },
+    {
+      "name": "fatha + 5 digits (too short)",
+      "input": "\u064e00010",
+      "place": null,
+      "piece": "\u064e00010",
+      "tracking": null
+    },
+    {
+      "name": "fatha AFTER the digits is not recovered",
+      "input": "Q000107\u064e",
+      "place": null,
+      "piece": "Q000107\u064e",
+      "tracking": null
+    },
+    {
+      "name": "fatha inside the digits is not recovered",
+      "input": "\u0636000\u064e107",
+      "place": null,
+      "piece": "\u0636000\u064e107",
+      "tracking": null
+    },
+    {
+      "name": "dad + digits + a letter",
+      "input": "\u0636000107A",
+      "place": null,
+      "piece": "\u0636000107A",
+      "tracking": null
+    },
+    {
+      "name": "dad then fatha (two glyphs) is not recovered",
+      "input": "\u0636\u064e000107",
+      "place": null,
+      "piece": "\u0636\u064e000107",
+      "tracking": null
+    }
+  ]
+}

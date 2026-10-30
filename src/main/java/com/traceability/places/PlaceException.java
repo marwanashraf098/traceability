@@ -14,7 +14,24 @@ public class PlaceException extends RuntimeException {
     public enum Code {
         LOCATION_NOT_FOUND, PLACE_NOT_FOUND, INVALID_KIND, INVALID_PARENT, INVALID_CODE, INVALID_NAME, CODE_TAKEN,
         INVALID_BULK, PLACE_ARCHIVED, PLACE_NOT_EMPTY, PLACE_HAS_CHILDREN, NOT_A_BOX, PURPOSE_NOT_ALLOWED,
-        NO_STICKERS
+        NO_STICKERS,
+        // S2 — put away
+        SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER
+    }
+
+    static PlaceException sessionNotFound() {
+        return new PlaceException(HttpStatus.NOT_FOUND, Code.SESSION_NOT_FOUND,
+            "Put-away session not found", "لم يتم العثور على جلسة الترتيب");
+    }
+
+    static PlaceException sessionClosed() {
+        return new PlaceException(HttpStatus.CONFLICT, Code.SESSION_CLOSED,
+            "This put-away session is finished", "انتهت جلسة الترتيب هذه");
+    }
+
+    static PlaceException unknownSticker() {
+        return new PlaceException(HttpStatus.NOT_FOUND, Code.UNKNOWN_STICKER,
+            "Unknown sticker — check it and scan again", "ملصق غير معروف — تحقق منه وامسحه مرة أخرى");
     }
 
     static PlaceException locationNotFound() {

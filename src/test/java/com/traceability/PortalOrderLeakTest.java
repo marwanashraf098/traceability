@@ -225,6 +225,15 @@ class PortalOrderLeakTest {
                 "POST /api/v1/places/stickers")) {
             reg(k, skip("warehouse places: places, piece counts per place and stickers; no order data"));
         }
+        // Warehouse places S2 — put away: waiting pieces, places, put-away sessions and Lookup's Move. The waiting
+        // list's "came from" names a return's order NUMBER only (via merchant_orders, so never a portal row).
+        for (String k : List.of("GET /api/v1/put-away/summary", "GET /api/v1/put-away/waiting",
+                "GET /api/v1/put-away/places", "POST /api/v1/put-away/sessions", "GET /api/v1/put-away/sessions",
+                "GET /api/v1/put-away/sessions/{id}",
+                "POST /api/v1/put-away/sessions/{id}/scan", "POST /api/v1/put-away/sessions/{id}/close",
+                "PUT /api/v1/put-away/pieces/{pieceId}/place")) {
+            reg(k, skip("warehouse places: pieces and places; a return's order number via merchant_orders only"));
+        }
         // Flexible labeling slice 4 — packing labels (a portal order is ORDER_NOT_PACKABLE: PackLabelsTest.x2).
         reg("POST /api/v1/pack-labels/preview",     skip("orders come from PackPrintBatchStore.candidates / the last batch / one order id, each read through merchant_orders"));
         // Flexible labeling slice 6a — factory runs: runs, run lines, variants and factory label codes; no order data.
