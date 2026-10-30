@@ -31,6 +31,7 @@ affected (status gate + `ALREADY_SHIPPED`).
   returnState). G3 golden re-recorded (approved): #3004 now lists its restocked piece, #3007's damaged piece gains
   returnState; the rest is `<vN>` renumbering (verified equivalent); the "on" file keeps its pre-G3 `pickup` block.
 - **Next:** run the read-only script on prod; un-tag script after approval.
+- **Applied 2026-10-30 on prod (by Marawan, directly — same pattern + exactly-6 guard; the committed script `scripts/ops/2026-10-30-untag-not-traced-false-positives.sql` was NOT run, kept as the record):** the 6 false positives (Nuvira #3146 #3149 #3245, The Snouts #2212068474 #2212031474, BROEK BRK-46507-EG) un-tagged, all 6 verified `not_traced_at` NULL.
 
 **Shopify sync — skipped decrements revisited + deactivated Traced location (2026-10-30, branch
 `fix/shopify-sync-drift-and-location` off origin/main 3d314f3; NOT merged, NOT deployed; migration V196).** Two commits.
