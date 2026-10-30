@@ -4330,3 +4330,29 @@ export function movePiecePlace(pieceId: string, body: { placeId?: string; scan?:
     method: 'PUT', body: JSON.stringify(body),
   })
 }
+
+// ── Warehouse places S3 — Pick & Pack places (display only; 404 without places) ──────────────────
+
+/** One place holding available pieces of a variant at the main warehouse. sortKey = walking order (plain string compare). */
+export interface PickPlace {
+  binId: string; code: string; kind: PlaceKind; path: string[]; zoneCode: string | null
+  parentCode: string | null; parentKind: PlaceKind | null; sortKey: string; count: number
+}
+/** places: largest first; noPlaceCount: available at the main warehouse with no place. */
+export interface VariantPickPlaces { variantId: string; places: PickPlace[]; noPlaceCount: number }
+export interface LinePickPlaces extends VariantPickPlaces { orderItemId: string; quantity: number }
+export interface OrderPickPlaces { orderId: string; lines: LinePickPlaces[] }
+
+export function getOrderPickPlaces(orderId: string) {
+  return request<OrderPickPlaces>(`/fulfill/${orderId}/places`)
+}
+/** The gather list's batch — every variant in one request (one query server-side). */
+export function getVariantPickPlaces(variantIds: string[]) {
+  return request<{ variants: VariantPickPlaces[] }>('/fulfill/places/variants',
+    { method: 'POST', body: JSON.stringify({ variantIds }) })
+}
+/** Several orders' lines (waybill mode's printed-but-not-packed list). Orders the server can't see are left out. */
+export function getOrdersPickPlaces(orderIds: string[]) {
+  return request<{ orders: OrderPickPlaces[] }>('/fulfill/places/orders',
+    { method: 'POST', body: JSON.stringify({ orderIds }) })
+}

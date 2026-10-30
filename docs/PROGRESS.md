@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Warehouse places S3 — Pick & Pack places, display only (2026-10-30, branch `feat/warehouse-places-s3` from main
+05c8e7c; reviewed + committed, NOT merged, NOT deployed; no migration).**
+- **Rules:** display only — PICKABLE_ORDERS_FILTER untouched, pick scan unchanged (no place check, pieces assigned only when
+  scanned), getOrder / PackSessionStore.orderCard / GatherRow byte-identical (PackLineImageTest, G2 goldens, GatherListTest
+  untouched), no SAFETY-CRITICAL block edited. Places off → every new endpoint 404 and the screens render exactly as before
+  (pickPlaces.test "off:" snapshots were recorded from main's original files).
+- **Backend** (`places.PickPlacesService` / `PickPlacesController`, any role): `GET /fulfill/{orderId}/places` (merchant_orders;
+  404 otherwise), `POST /fulfill/places/variants {variantIds}` (gather list), `POST /fulfill/places/orders {orderIds}`
+  (printed-but-not-packed; ids outside merchant_orders left out). Counts = AVAILABLE pieces of the variant at the MAIN
+  warehouse (is_fulfillment) per place, largest first, + noPlaceCount — all variants in ONE statement (placed branch on
+  pieces_bin_idx's predicate + unplaced branch, parents joined up to 4 levels). `PlaceSort.key` = walking order as a
+  plain-string key: digit runs padded to 10 (Z2 < Z10, S9 < S10), levels joined by a SPACE (not '/': '-' and '.' sort below
+  '/', so a sibling like S2-A would land between S2 and its boxes), floor boxes '~' after the zone's racks.
+- **Frontend:** `fulfill/placeSplit.ts` (split biggest-first → remainder "No place yet"; walking order; zones; order
+  summary), `PickPlaces.tsx` (useOrderPickPlaces — fetched after the order, never awaited, re-read in the background after
+  a scan; chips under each line in queue + waybill mode), `GatherPlaces.tsx` (gather list split per place, grouped by zone,
+  No place yet last, zone chips, today's shortage note on every row of a short variant; same component prints on A6),
+  printed-but-not-packed: place column + sorted by place. Batch pick lists are the gather list (?batch=). Not on
+  pre-printed named labels or separator labels (by decision). Screenshot harness dev/pickplaces-shots.
+- **Tests:** PickPlacesTest (c1 counts, c2 order lines / merchant_orders, q1 ONE statement on pieces for 4 variants,
+  f1 off → 404, x1 app_user isolation + same-tenant positive control), PlaceSortTest (4); pickPlaces.test (20: split,
+  walking order, gather + print snapshot, queue / waybill chips, never-answering / failing places fetch, printed-but-not-
+  packed, 4 "off" snapshots). Revert-checked: walking order instead of biggest-first → 5 red (+ the strengthened unit);
+  awaiting the places fetch in PickScreen's loadOrder → the two queue-mode scan tests red. PortalOrderLeakTest +3 entries
+  (approved). Review 2026-10-30: RlsCoverageTest `pickPlaces_crossTenantIsolated_withSameTenantPositiveControl` (approved
+  edit; COVERED, not exempt) — GET + both POST batches over HTTP (another tenant's order → the same 404 as an unknown one;
+  another tenant's / unknown variant and order ids → 200 with nothing, never an error) and the GET's read again on app_user
+  under RLS; PickPlacesHttpTest r1 (worker / manager / owner call all three) and r2 (places off → 404 for every role).
+- **Arabic plurals (separate i18n-only commit on this branch):** the Pick & Pack waybill strings had only _one/_other in
+  ar.json, so counts ≥ 2 fell back to English ("more 5", "4 packed · 11 left", "3 waybills"); every plural key under
+  `fulfill.waybill` now has all six Arabic forms.
+
 **Returned pieces stay on their order (2026-10-30, branch `fix/returned-pieces-on-order` off origin/main 3d314f3;
 NOT merged, NOT deployed; no migration).** Step 0 same day: after Scan returns graded a piece **restock**,
 `ReturnService.restock()` released its allocation (needed — else `FulfillService.scan()`'s ALREADY_RESERVED blocks the

@@ -1217,6 +1217,21 @@
       "openLabelsPart": "افتح الملصقات الجزء {{part}} من {{of}} (50×25) · {{count}}",
       "noLabelsNow": "لم تكن هناك حاجة لملصقات قطع.",
       "noLabelsUseAll": "لا توجد قطع غير مُلصقة في هذه الطلبات — اختر «كل الجاهز للتغليف» لتشمل كل الطلبات في القائمة."
+    },
+    "places": {
+      "noPlace": "بلا مكان بعد",
+      "zone": "المنطقة {{zone}}",
+      "boxOnShelf": "صندوق على الرف {{shelf}}",
+      "onFloor": "على أرضية {{zone}}",
+      "partOf": "المكان {{index}} من {{of}}",
+      "colPlace": "المكان",
+      "colTake": "خذ",
+      "pieces_zero": "لا قطع",
+      "pieces_one": "قطعة واحدة",
+      "pieces_two": "قطعتان",
+      "pieces_few": "{{count}} قطع",
+      "pieces_many": "{{count}} قطعة",
+      "pieces_other": "{{count}} قطعة"
     }
   },
   "lookup": {

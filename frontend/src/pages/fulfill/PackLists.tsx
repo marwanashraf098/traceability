@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Printer } from 'lucide-react'
 import {
-  getPrintBatchesToday, getPrintedNotPacked, getRoleFromToken, PrintJobRunningError, startPrintJob,
+  getOrdersPickPlaces, getPrintBatchesToday, getPrintedNotPacked, getRoleFromToken, PrintJobRunningError, startPrintJob,
   TransferCommandError, NotPackedRow, PrintBatchToday,
 } from '../../api'
 import { Alert, Button, Modal, Skeleton, cn } from '../../components/ui'
+import { useCapabilities } from '../../capabilities'
 import { PrintJobPanel } from './PrintJobPanel'
+import { orderPlaceSummary } from './placeSplit'
 
 // Pick & Pack S4 — the two lists on the waybill-mode page (design/pick-pack-waybill-mockup/
 // Main.html): "Print batches today" (with Reprint) and "Printed but not packed". Each loads its
@@ -166,6 +168,30 @@ export function PrintedNotPacked({ refreshKey }: { refreshKey: number }) {
     return () => { cancelled = true }
   }, [refreshKey])
 
+  // Warehouse places S3: each order's places, one request after the list loads; the list is then sorted by place
+  // (walking order, like the gather list). Places off or the request fails → today's list, unchanged.
+  const { places: placesOn } = useCapabilities()
+  const [places, setPlaces] = useState<{ rows: NotPackedRow[]; byOrder: Map<string, ReturnType<typeof orderPlaceSummary>> } | null>(null)
+  useEffect(() => {
+    if (!placesOn || !rows || rows.length === 0) return
+    let cancelled = false
+    getOrdersPickPlaces([...new Set(rows.map(r => r.orderId))])
+      .then(r => {
+        if (cancelled || !r || !Array.isArray(r.orders)) return
+        setPlaces({ rows, byOrder: new Map(r.orders.map(o => [o.orderId, orderPlaceSummary(o.lines)])) })
+      })
+      .catch(() => { /* today's list */ })
+    return () => { cancelled = true }
+  }, [placesOn, rows])
+  const placed = places && places.rows === rows ? places.byOrder : null
+  const shown = rows && placed
+    ? rows.map((r, i) => ({ r, i, key: placed.get(r.orderId)?.key ?? null }))
+        .sort((a, b) => (a.key == null || b.key == null)
+          ? ((a.key == null ? 1 : 0) - (b.key == null ? 1 : 0)) || a.i - b.i
+          : (a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i))
+        .map(x => x.r)
+    : rows
+
   function chip(r: NotPackedRow) {
     switch (r.status) {
       case 'cancelled': return t('fulfill.waybill.lists.statusCancelled')
@@ -192,8 +218,9 @@ export function PrintedNotPacked({ refreshKey }: { refreshKey: number }) {
         </p>
       ) : (
         <ul className="divide-y divide-line">
-          {rows.map(r => {
+          {(shown ?? rows).map(r => {
             const opens = canOpenException && !!r.exceptionType && !!r.subjectKey
+            const where = placed?.get(r.orderId)
             const content = (
               <>
                 <span className="min-w-0 flex-1">
@@ -206,10 +233,27 @@ export function PrintedNotPacked({ refreshKey }: { refreshKey: number }) {
                     {' · '}{t('fulfill.waybill.lists.batchNo', { no: r.batchNo })}
                   </span>
                 </span>
-                <span className={cn('text-caption font-semibold rounded-full px-2.5 py-1 flex-shrink-0', STATUS_TONE[r.status])}
-                  data-testid={`status-${r.status}`}>
-                  {chip(r)}
-                </span>
+                {where && (
+                  <span className="w-40 flex-shrink-0 text-small" data-testid="not-packed-places">
+                    <span className="block text-caption text-muted">{t('fulfill.places.colPlace')}</span>
+                    <span className="block text-primary break-words">
+                      {where.codes.length > 0 && <bdi className="font-mono">{where.codes.join(' · ')}</bdi>}
+                      {where.codes.length > 0 && where.noPlace && ' · '}
+                      {where.noPlace && <span className="text-muted">{t('fulfill.places.noPlace')}</span>}
+                      {where.codes.length === 0 && !where.noPlace && '—'}
+                    </span>
+                  </span>
+                )}
+                {(() => {
+                  const status = (
+                    <span className={cn('text-caption font-semibold rounded-full px-2.5 py-1 flex-shrink-0', STATUS_TONE[r.status])}
+                      data-testid={`status-${r.status}`}>
+                      {chip(r)}
+                    </span>
+                  )
+                  // With the place column, the status sits in a fixed slot so the column lines up row to row.
+                  return where ? <span className="w-64 flex-shrink-0 flex justify-end">{status}</span> : status
+                })()}
                 {opens && <ChevronRight size={16} className="text-muted flex-shrink-0 rtl:rotate-180" />}
               </>
             )

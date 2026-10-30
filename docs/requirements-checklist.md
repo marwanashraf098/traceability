@@ -83,6 +83,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 8.7c [C] FIFO piece suggestion (no bins until Phase 2)
 - [x] 8.8 [M] Warehouse places S1 — zones / racks / shelves / boxes per location, departure trigger, Settings › Places (visual setup, bulk / quick add), Q-code stickers; capability `places_enabled` (V189–V191; merged to main 2026-10-28, not deployed)
 - [x] 8.9 [M] Warehouse places S2 — Put away: recordPlaceChange, place stickers in scans (Q / ض), put-away sessions, waiting list + suggestions, Lookup place + Move, sidebar / WorkerHome (V195, built as V193; merged to main 2026-10-30, not deployed)
+- [x] 8.10 [M] Warehouse places S3 — Pick & Pack places, display only: per-order / per-variant / per-orders place endpoints (one query), natural walking order, gather list split per place + zones (screen + A6 print), place chips on the pack screen (queue + waybill), printed-but-not-packed place column (no migration; branch `feat/warehouse-places-s3`, committed, not merged)
 - [ ] 8.8 [M] No typed barcodes; Manager-only manual entry, flagged in event
 
 ## FR-9 Packing, AWB & Cancellation

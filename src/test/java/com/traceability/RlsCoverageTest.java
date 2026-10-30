@@ -125,6 +125,8 @@ class RlsCoverageTest {
             "/api/v1/put-away/places",
             "/api/v1/put-away/sessions",
             "/api/v1/put-away/sessions/{id}",
+            // Warehouse places S3 — pickPlaces_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
+            "/api/v1/fulfill/{orderId}/places",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1155,6 +1157,120 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
+    }
+
+    @Test
+    void pickPlaces_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Warehouse places S3: an order's / a variant's places are the caller's own. Over HTTP (GET + both POST
+        // batches), then the GET's read again on an app_user connection under RLS (no BYPASSRLS).
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        UUID otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID(), otherOrder = UUID.randomUUID();
+        UUID otherZone = UUID.randomUUID(), otherRack = UUID.randomUUID(), otherShelf = UUID.randomUUID();
+        UUID myZone = UUID.randomUUID(), myRack = UUID.randomUUID(), myShelf = UUID.randomUUID();
+        UUID myOrder = UUID.randomUUID();
+        String myPiece = "01COVPKP00000000000000MINE", otherPiece = "01COVPKP0000000000000OTHER";
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov PickPlaces Other', true)", otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov PickPlaces Other WH', true)",
+                    otherLoc, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-pkp-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'COV-PKP-P', 'Their Tee', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'COV-PKP-V', 'M', 'COV-PKP-THEIRS')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'KZOTHER', 'Q920001')",
+                    otherZone, otherTenant, otherLoc);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'KZOTHER-R01', 'Q920002')", otherRack, otherTenant, otherLoc, otherZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'KZOTHER-R01-S1', 'Q920003')", otherShelf, otherTenant, otherLoc, otherRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, bin_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P920001', ?, ?)", otherPiece, otherTenant, otherVariant, "PC-" + otherPiece,
+                    otherLoc, otherShelf);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, customer_name, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-PKP-O', '#CVGPKP2', 'new', 'CovPKP Theirs', now())", otherOrder, otherTenant, otherStore);
+        jdbc.update("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1)",
+                    otherTenant, otherOrder, otherVariant);
+
+        jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'KZMINE', 'Q920004')",
+                    myZone, tenantId, locationId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'KZMINE-R01', 'Q920005')", myRack, tenantId, locationId, myZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'KZMINE-R01-S1', 'Q920006')", myShelf, tenantId, locationId, myRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, bin_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P920002', ?, ?)", myPiece, tenantId, variantId, "PC-" + myPiece,
+                    locationId, myShelf);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, customer_name, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-PKP-M', '#CVGPKP1', 'new', 'CovPKP Mine', now())", myOrder, tenantId, storeId);
+        jdbc.update("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 2)",
+                    tenantId, myOrder, variantId);
+        try {
+            ResponseEntity<String> mine = get("/api/v1/fulfill/" + myOrder + "/places", String.class);
+            assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(mine.getBody()).as("same-tenant positive control").contains("KZMINE-R01-S1").contains(variantId.toString());
+            assertThat(get("/api/v1/fulfill/" + otherOrder + "/places", String.class).getStatusCode())
+                .as("another tenant's order: the same 404 as an unknown one").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(get("/api/v1/fulfill/" + UUID.randomUUID() + "/places", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+            ResponseEntity<String> variants = postJson("/api/v1/fulfill/places/variants",
+                Map.of("variantIds", List.of(variantId, otherVariant, UUID.randomUUID())));
+            assertThat(variants.getStatusCode()).as("unknown / another tenant's ids are no error").isEqualTo(HttpStatus.OK);
+            assertThat(variants.getBody()).as("same-tenant positive control").contains("KZMINE-R01-S1");
+            assertThat(variants.getBody()).as("never another tenant's places").doesNotContain("KZOTHER");
+            assertThat(variants.getBody()).as("their variant reads as nothing, like an unknown one")
+                .contains("{\"variantId\":\"" + otherVariant + "\",\"places\":[],\"noPlaceCount\":0}");
+
+            ResponseEntity<String> orders = postJson("/api/v1/fulfill/places/orders",
+                Map.of("orderIds", List.of(otherOrder, UUID.randomUUID(), myOrder)));
+            assertThat(orders.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(orders.getBody()).as("same-tenant positive control").contains(myOrder.toString()).contains("KZMINE-R01-S1");
+            assertThat(orders.getBody()).as("another tenant's / an unknown order is left out")
+                .doesNotContain(otherOrder.toString()).doesNotContain("KZOTHER").doesNotContain("COV-PKP");
+
+            // The same read as app_user under RLS.
+            var appDs = new com.traceability.tenancy.TenantAwareDataSource(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+            var app = new com.traceability.places.PickPlacesService(new JdbcTemplate(appDs));
+            var tx = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(appDs));
+            com.traceability.tenancy.TenantContext.set(tenantId);
+            try {
+                var own = tx.execute(s -> app.order(myOrder));
+                assertThat(own.lines()).as("same-tenant positive control (app_user)").hasSize(1);
+                assertThat(own.lines().get(0).places()).extracting(com.traceability.places.PickPlacesService.PlaceCount::code)
+                    .containsExactly("KZMINE-R01-S1");
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> app.order(otherOrder)))
+                    .as("another tenant's order is invisible to app_user")
+                    .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+                var theirs = tx.execute(s -> app.variants(List.of(otherVariant))).variants().get(0);
+                assertThat(theirs.places()).isEmpty();
+                assertThat(theirs.noPlaceCount()).isZero();
+            } finally {
+                com.traceability.tenancy.TenantContext.clear();
+            }
+        } finally {
+            jdbc.update("DELETE FROM order_items WHERE order_id IN (?, ?)", myOrder, otherOrder);
+            jdbc.update("DELETE FROM orders WHERE id IN (?, ?)", myOrder, otherOrder);
+            jdbc.update("DELETE FROM pieces WHERE id IN (?, ?)", myPiece, otherPiece);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", myShelf, myRack, myZone);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", otherShelf, otherRack, otherZone);
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    private ResponseEntity<String> postJson(String path, Object body) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(ownerToken);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return rest.exchange(base() + path, HttpMethod.POST, new HttpEntity<>(body, headers), String.class);
     }
 
     @Test
