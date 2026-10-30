@@ -62,6 +62,19 @@ public class NotTracedTagger {
                   JOIN order_items oi ON oi.id = a.order_item_id
                   WHERE oi.order_id = o.id AND a.status IN ('active', 'packed')
               )
+              -- Returned pieces (2026-10-30): a piece of this order that came back through a return scan
+              -- proves the order went through Traced, even after restock released its allocation. Without
+              -- this, the next Bosta event on the order (its return leg reaching 46) tagged it Not Traced.
+              -- An order shipped with no allocations, or picked, unscanned and then shipped, has no such
+              -- event and is still tagged. allocations → piece_events on (piece_id, occurred_at).
+              AND NOT EXISTS (
+                  SELECT 1 FROM order_items oi
+                  JOIN allocations a  ON a.order_item_id = oi.id
+                  JOIN piece_events e ON e.piece_id = a.piece_id
+                                     AND e.order_id = o.id
+                                     AND e.event_type = 'return_received'
+                  WHERE oi.order_id = o.id
+              )
               AND EXISTS (
                   SELECT 1 FROM shipments s
                   WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id
