@@ -85,6 +85,27 @@ export function Badge({
   )
 }
 
+// ── OrderPieceBadge ───────────────────────────────────────────────────────────
+
+const RETURN_STATE_TONE: Record<string, BadgeTone> = {
+  pending_inspection: 'warning',
+  restocked:          'neutral',
+  damaged:            'critical',
+}
+
+/** A piece on an order (drawer / detail): a piece that came back reads "Returned · …" — its order-side
+ *  story — instead of its current status (a restocked piece may since be on a shelf or another order). */
+export function OrderPieceBadge({ status, returnState }: { status: string; returnState?: string }) {
+  const { t } = useTranslation()
+  if (!returnState) return <Badge status={status} />
+  return (
+    <Badge
+      tone={RETURN_STATE_TONE[returnState] ?? 'warning'}
+      label={t(`orderDetail.returnState.${returnState}`)}
+    />
+  )
+}
+
 // ── ProductStatusBadge ────────────────────────────────────────────────────────
 
 const PRODUCT_STATUS_TONE: Record<string, BadgeTone> = {

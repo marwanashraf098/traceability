@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, ShippingBadge, Skeleton, cn } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderPieceBadge, OrderStatus, ShippingBadge, Skeleton, cn } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -266,7 +266,7 @@ export default function OrderDetail() {
                       <div key={p.pieceId} className="flex items-center gap-1.5 border border-line rounded-md px-2 py-1 bg-elevated">
                         {/* Piece barcode — font-mono per spec */}
                         <span className="font-mono text-caption text-muted">{p.barcode}</span>
-                        <Badge status={p.status} />
+                        <OrderPieceBadge status={p.status} returnState={p.returnState} />
                       </div>
                     ))}
                   </div>

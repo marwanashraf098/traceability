@@ -214,6 +214,8 @@ export interface AllocatedPiece {
   pieceId: string
   barcode: string
   status: string
+  /** Present only on a piece of this order that came back (returned pieces, 2026-10-30). */
+  returnState?: 'pending_inspection' | 'restocked' | 'damaged'
 }
 
 export interface OrderItem {

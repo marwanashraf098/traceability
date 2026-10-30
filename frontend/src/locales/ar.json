@@ -495,6 +495,11 @@
     "awb": "وصل الشحن",
     "pieces": "القطع المخصصة",
     "noPieces": "لا توجد قطع مخصصة بعد",
+    "returnState": {
+      "pending_inspection": "مرتجع · ينتظر الفحص",
+      "restocked": "مرتجع · أُعيد للمخزون",
+      "damaged": "مرتجع · تالف"
+    },
     "deliveryHistory": "سجل التوصيل",
     "noDeliveryHistory": "لا يوجد سجل بعد — ستظهر التحديثات هنا عند وصولها.",
     "historyToggleShow": "عرض السجل الكامل",

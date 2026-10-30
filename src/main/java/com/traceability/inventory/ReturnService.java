@@ -101,8 +101,9 @@ public class ReturnService {
         // reads allocations.status by piece_id alone, no order filter) permanently blocks
         // re-allocating this piece to any new order, even though pieces.status/current_order_id
         // both correctly show it as free. Restock is the only return verdict that frees a piece
-        // back to available for re-allocation — damaged/lost are terminal, their stale
-        // allocations are inert and intentionally left alone.
+        // back to available right away. A damaged piece keeps its allocation (see markDamaged) —
+        // not terminal since Back to good (2026-10-10): PieceAdjustService.restore() releases it
+        // the same way. The order keeps showing a released returned piece (ORDER_PIECES_SQL).
         jdbc.update(
             "UPDATE allocations SET status = 'released' " +
             "WHERE piece_id = ? AND status IN ('active','packed')",
@@ -152,6 +153,10 @@ public class ReturnService {
 
         jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?",
             pieceId, tenantId);
+
+        // The order's 'packed' allocation is left as it is: a damaged piece can't be picked, so it
+        // blocks nothing while it stays damaged. It is NOT inert for good — "Back to good"
+        // (PieceAdjustService.restore) returns the piece to available and releases it there.
 
         // See restock()'s identical call — same reasoning.
         shipmentLinkService.resolveReturnLegIfComplete(piece.orderId(), tenantId, pieceId);

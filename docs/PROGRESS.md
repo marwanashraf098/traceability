@@ -4,6 +4,34 @@
 
 ## Current state
 
+**Returned pieces stay on their order (2026-10-30, branch `fix/returned-pieces-on-order` off origin/main 3d314f3;
+NOT merged, NOT deployed; no migration).** Step 0 same day: after Scan returns graded a piece **restock**,
+`ReturnService.restock()` released its allocation (needed — else `FulfillService.scan()`'s ALREADY_RESERVED blocks the
+piece forever) and the order drawer / detail, which listed only active/packed allocations, dropped the piece ("No
+pieces allocated yet"); the next Bosta event on the order (its return leg reaching 46) then tagged it **Not Traced**
+for good (`NotTracedTagger`: no live allocation + forward leg past created). Pickability / committed stock were never
+affected (status gate + `ALREADY_SHIPPED`).
+- **F1 display:** `OrderController.ORDER_PIECES_SQL` — one read for all the order's lines: live allocations, plus a
+  released one whose piece has a `return_received` event for THIS order. `returnState` per piece
+  (`pending_inspection | restocked | damaged`; JSON-absent otherwise): the first `restocked` / `damaged` event after the
+  latest `return_received` for the order, else `return_pending_inspection` → pending. One row per piece (live wins).
+  Nothing rewritten. Drawer + OrderDetail: `OrderPieceBadge` (ui.tsx) shows "Returned · …" (EN + AR) instead of the
+  piece's current status; "No pieces allocated yet" only when the line never had a piece. `OrderStatusDeriver` untouched.
+- **F2 tagger:** `maybeTagNotTraced` skips an order with a `return_received` piece event of its own allocations' pieces
+  (allocations → piece_events). No-allocation and picked-unscanned-then-shipped orders still tagged. **Nothing
+  un-tagged:** `scripts/ops/2026-10-30-not-traced-false-positives.sql` (READ ONLY, per tenant + list) finds the wrongly
+  tagged ones; the un-tag script needs its own approval.
+- **F3 Back to good:** `PieceAdjustService.restore()` releases the piece's live allocation (a piece graded damaged on
+  return kept its `packed` one → ALREADY_RESERVED for every new order). The ledger transition already cleared
+  `current_order_id` (`InventoryLedger` always writes `currentOrderIdToSet` — Step 0 said markDamaged kept it; it
+  doesn't). Shopify claim unchanged. "Inert" comment in ReturnService fixed.
+- **Tests:** `ReturnedPiecesOnOrderTest` t1–t7 (t1/t1b/t4/t6-display/t7 red with F1 reverted, t2 red with F2 reverted,
+  t6 red with F3 reverted; t3 pickability/demand and t5 untracked-unit green both ways; t7 app_user cross-tenant + no
+  GUC = 0 rows, same-tenant positive). `orderDrawerReturnedPieces.test.tsx` (EN + AR; red when the badge ignores
+  returnState). G3 golden re-recorded (approved): #3004 now lists its restocked piece, #3007's damaged piece gains
+  returnState; the rest is `<vN>` renumbering (verified equivalent); the "on" file keeps its pre-G3 `pickup` block.
+- **Next:** run the read-only script on prod; un-tag script after approval.
+
 **Shopify sync — skipped decrements revisited + deactivated Traced location (2026-10-30, branch
 `fix/shopify-sync-drift-and-location` off origin/main 3d314f3; NOT merged, NOT deployed; migration V196).** Two commits.
 - **Fix 1 (drift, testreciving claims 2551 / 2552):** `ArrivalRevisit` — when a `receiving_session` claim turns

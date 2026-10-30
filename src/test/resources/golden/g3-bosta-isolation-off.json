@@ -35,7 +35,7 @@
     "status" : 200
   },
   "orderDetail#3004" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v52>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v4>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[],\"id\":\"<v9>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":false,\"placedAt\":\"<v52>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v10>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+40\"},{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v11>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"return\",\"slaBreached\":null,\"trackingNumber\":\"TN+4\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v52>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v4>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v31>\",\"pieceId\":\"<v37>\",\"returnState\":\"restocked\",\"status\":\"available\"}],\"id\":\"<v9>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":false,\"placedAt\":\"<v52>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v10>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+40\"},{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v11>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"return\",\"slaBreached\":null,\"trackingNumber\":\"TN+4\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
     "status" : 200
   },
   "orderDetail#3005" : {
@@ -43,11 +43,11 @@
     "status" : 200
   },
   "orderDetail#3007" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v54>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v6>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v31>\",\"pieceId\":\"<v37>\",\"status\":\"damaged\"}],\"id\":\"<v15>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v54>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v58>\",\"providerState\":24,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v16>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+7\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"with_courier\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v54>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v6>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v32>\",\"pieceId\":\"<v38>\",\"returnState\":\"damaged\",\"status\":\"damaged\"}],\"id\":\"<v15>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v54>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v58>\",\"providerState\":24,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v16>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+7\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"with_courier\"}",
     "status" : 200
   },
   "orderDetail#3009" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v51>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v3>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v32>\",\"pieceId\":\"<v38>\",\"status\":\"delivered\"}],\"id\":\"<v17>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v51>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v59>\",\"providerState\":24,\"state\":\"with_courier\"},{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v60>\",\"providerState\":45,\"state\":\"delivered\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v18>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+9\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v51>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v3>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v33>\",\"pieceId\":\"<v39>\",\"status\":\"delivered\"}],\"id\":\"<v17>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v51>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v59>\",\"providerState\":24,\"state\":\"with_courier\"},{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v60>\",\"providerState\":45,\"state\":\"delivered\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v18>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+9\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
     "status" : 200
   },
   "ordersList" : {
@@ -246,8 +246,8 @@
       "descriptionAr" : null,
       "expectedPieces" : [ {
         "awb" : "TN+4",
-        "barcode" : "<v33>",
-        "id" : "<v39>",
+        "barcode" : "<v31>",
+        "id" : "<v37>",
         "product_title" : "Linen Shirt",
         "sku" : "SH-M",
         "status" : "delivered",
@@ -257,14 +257,14 @@
       "scanType" : "awb"
     },
     "02_crpPiece" : {
-      "barcode" : "<v33>",
+      "barcode" : "<v31>",
       "damage_reason" : null,
       "disposition" : "pending",
       "disposition_at" : null,
       "id" : "<v23>",
       "on_scanned_awb" : true,
       "order_number" : "#3004",
-      "piece_id" : "<v39>",
+      "piece_id" : "<v37>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
       "scanned_at" : "<v68>",
@@ -299,14 +299,14 @@
       "via_phone" : false
     },
     "06_movingPiece" : {
-      "barcode" : "<v31>",
+      "barcode" : "<v32>",
       "damage_reason" : null,
       "disposition" : "pending",
       "disposition_at" : null,
       "id" : "<v25>",
       "on_scanned_awb" : false,
       "order_number" : "#3007",
-      "piece_id" : "<v37>",
+      "piece_id" : "<v38>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
       "scanned_at" : "<v70>",
@@ -359,14 +359,14 @@
       "expectedPieces" : [ ],
       "id" : "<v27>",
       "items" : [ {
-        "barcode" : "<v33>",
+        "barcode" : "<v31>",
         "damage_reason" : null,
         "disposition" : "pending",
         "disposition_at" : null,
         "id" : "<v23>",
         "on_scanned_awb" : true,
         "order_number" : "#3004",
-        "piece_id" : "<v39>",
+        "piece_id" : "<v37>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
         "scanned_at" : "<v68>",
@@ -395,14 +395,14 @@
         "variant_title" : "White / M",
         "via_phone" : false
       }, {
-        "barcode" : "<v31>",
+        "barcode" : "<v32>",
         "damage_reason" : null,
         "disposition" : "pending",
         "disposition_at" : null,
         "id" : "<v25>",
         "on_scanned_awb" : true,
         "order_number" : "#3007",
-        "piece_id" : "<v37>",
+        "piece_id" : "<v38>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
         "scanned_at" : "<v70>",
@@ -501,14 +501,14 @@
         "returnedAt" : null,
         "returnedToSender" : false,
         "scannedItems" : [ {
-          "barcode" : "<v31>",
+          "barcode" : "<v32>",
           "damage_reason" : null,
           "disposition" : "pending",
           "disposition_at" : null,
           "id" : "<v25>",
           "on_scanned_awb" : true,
           "order_number" : "#3007",
-          "piece_id" : "<v37>",
+          "piece_id" : "<v38>",
           "product_title" : "Linen Shirt",
           "scan_source" : "barcode",
           "scanned_at" : "<v70>",
@@ -611,14 +611,14 @@
         "returnedAt" : null,
         "returnedToSender" : false,
         "scannedItems" : [ {
-          "barcode" : "<v33>",
+          "barcode" : "<v31>",
           "damage_reason" : null,
           "disposition" : "pending",
           "disposition_at" : null,
           "id" : "<v23>",
           "on_scanned_awb" : true,
           "order_number" : "#3004",
-          "piece_id" : "<v39>",
+          "piece_id" : "<v37>",
           "product_title" : "Linen Shirt",
           "scan_source" : "barcode",
           "scanned_at" : "<v68>",
@@ -638,14 +638,14 @@
       "status" : "open"
     },
     "12_gradeCrp" : {
-      "barcode" : "<v33>",
+      "barcode" : "<v31>",
       "damage_reason" : null,
       "disposition" : "restocked",
       "disposition_at" : "<v76>",
       "id" : "<v23>",
       "on_scanned_awb" : false,
       "order_number" : null,
-      "piece_id" : "<v39>",
+      "piece_id" : "<v37>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
       "scanned_at" : "<v68>",
@@ -674,14 +674,14 @@
       "via_phone" : false
     },
     "14_gradeMoving" : {
-      "barcode" : "<v31>",
+      "barcode" : "<v32>",
       "damage_reason" : "torn",
       "disposition" : "damaged",
       "disposition_at" : "<v78>",
       "id" : "<v25>",
       "on_scanned_awb" : true,
       "order_number" : null,
-      "piece_id" : "<v37>",
+      "piece_id" : "<v38>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
       "scanned_at" : "<v70>",
