@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Test-suite speed T1b + T2 (2026-10-31, same branch `perf/test-suite-t1`, on top of 59b5187; NOT merged; test code +
+pom only, no production change).** Full suite **18:54 / 19:12** with 3 forks (was 32.5 after T1, 40.5 baseline). Both
+runs: 3,588 tests / 1 failure (ExchangeBackfillTest only) / 4 skipped, 428 classes, 324 contexts, no other red, no
+flake. Peak 4 test Postgres containers, Docker ~0.5 GiB, test JVMs ~1.7 GiB RSS, ≥ 2.7 GiB free on the Mac.
+- **Shutdown wait fixed:** `CloseContextAfterClassListener` (src/test, registered in
+  `src/test/resources/META-INF/spring.factories`) closes each class's context in `afterTestClass` — while its
+  container is still up: Testcontainers (1.20.4) stops `@Container` fields when the class's JUnit store closes, after
+  every afterAll. Every Spring test class has its own context (324 = 324), so closing per class adds no context starts.
+  JobRunr + Hikari shutdown ~15 s → ~5 ms; ConditionOnlyAlertsTest 21 s (T1) → 8–9 s under 3 forks.
+- **Parallel:** `pom.xml` Surefire `forkCount=${surefire.forkCount}` (property, default 3; `-Dsurefire.forkCount=N`),
+  `reuseForks=true`. Collision check, nothing to fix: every stub HTTP server binds port 0; no fixed server /
+  management port (`localhost:8080` / `:5173` are URL strings only); files written are per class (golden `.actual`,
+  Day8Test's `/tmp/day8-*`; scripts copied to `/tmp` inside each class's own container); no fixed container names,
+  reuse or networks. Per-class times run ~1.4× slower under 3 forks (CPU shared); forkCount=2 not needed.
+- **GenericG3IsolationGoldenTest DST flake — NOT fixed, blocked:** #3001's handover is stamped by Postgres `now()`
+  (`PickupSessionService.closeSession`), and the golden pins both avgHoursOrderToHanded 108.0 (48 h for #3001) and the
+  `2_days` bucket; from 23:00–24:00 Cairo just after the Oct DST end no placed-at satisfies both (Cairo-calendar
+  placing → 49 h → 108.3; a frozen clock can't reach Postgres `now()` from the test). Options for Marawan:
+  libfaketime DB for that class, approve dropping the hours key from that comparison, or leave it.
+  Other tests that offset from now() and hit Cairo-day code (text match, unverified): AnalyticsB1Test,
+  overview/OverviewTrendsTest, GenericG4aIsolationGoldenTest, PortalOrderLeakTest, AnalyticsFinancesTest,
+  GenericCourierG3Test, EmbeddedIntegrationTest, VoidHoldTest, SettlementRefreshProcessingTest, RlsCoverageTest,
+  AnalyticsStockTest, AnalyticsOrderSortTest, AnalyticsMoneyTest, AnalyticsCustomersTest, PrelaunchFixesTest,
+  OrderShippingCarrierTest, AnalyticsTripPiecesTest, AnalyticsInventorySyncTest.
+
 **Test-suite speed T1 (2026-10-30, branch `perf/test-suite-t1` off origin/main 43a98ff; NOT merged; test infra + two
 main-code properties whose defaults equal the old hardcoded values — production behaviour unchanged; no migration).**
 Full suite 40.5 min → **32.5 / 32.2 min** (two runs, AC power, no sleep, nothing overlapping). Counts unchanged: 3,588

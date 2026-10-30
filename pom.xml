@@ -26,6 +26,8 @@
         <testcontainers.version>1.20.4</testcontainers.version>
         <!-- Set -Dskip.frontend=true to bypass the Vite build during backend-only test runs -->
         <skip.frontend>false</skip.frontend>
+        <!-- Surefire JVMs running test classes at once -->
+        <surefire.forkCount>3</surefire.forkCount>
     </properties>
 
     <dependencies>
@@ -203,6 +205,10 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
+                    <!-- Test classes in parallel JVMs (each class still has its own container and context).
+                         Override with -Dsurefire.forkCount=N. -->
+                    <forkCount>${surefire.forkCount}</forkCount>
+                    <reuseForks>true</reuseForks>
                     <environmentVariables>
                         <!-- Docker Desktop on Mac rejects API < v1.25 with 400.
                              Force docker-java to skip low-version negotiation. -->
