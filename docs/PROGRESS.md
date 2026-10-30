@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Test fixtures: exact day / hour counts on N × 24 h (2026-10-30, branch `fix/test-fixtures-dst-hours` off main
+b5af792; merged to main 2026-10-30, NOT deployed). Follow-up to the G3 DST fix.** 84 test files use `interval 'N days'`. (1) Run right after Egypt's
+fall-back (every 'N days' crossing it): 83 classes / 824 tests green — nothing else asserts exact hours. (2) Spring-forward
+(N × 24 − 1 h) breaks only exact day counts that production floors from real elapsed time (`floor(epoch/86400)`, used
+by refund-overdue days and the cases page's overdueDays): ReturnRefundsTest `late` (refundOverdueDays = 6, "6 days")
+and ReturnCasesTest "A items overdue" (≥ 12), "A refund overdue" (≥ 7), "C returned, unscanned too long" (≥ 5, via
+the leg helper) now use N × interval '24 hours'. Every overdue threshold keeps ≥ 1 day of margin, so only the counts
+change; a POSIX test zone whose clocks went forward 2 days ago gives 4/5/6/11 (old) vs 5/6/7/12 (new) for 5/6/7/12.
+- Left as they are ("roughly N days"): threshold-only ages (ReturnRefundsTest fresh / items-overdue rows, ReturnCasesTest
+  agreement rows); GenericCourierG2Test's catch-up fixture (production's window uses the same calendar
+  `? * interval '1 day'` in the same session — switching only the fixture would break that match); Java
+  `Duration.ofDays` fixtures (AnalyticsMoneyTest etc.) are absolute already.
+
 **Warehouse places S2 — Put away (2026-10-28, branch `feat/warehouse-places-s2` from main 26106ce; rebased on main
 b5af792 and merged to main 2026-10-30, NOT deployed, no tenant switched on).** Migration **V195__put_away_sessions.sql**
 (built as V193; main took V193 for Lookup exchange and V194 for flexible labeling; MigrationSmokeTest 194 files,

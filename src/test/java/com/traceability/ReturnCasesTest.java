@@ -144,7 +144,10 @@ class ReturnCasesTest {
         ids.put("A booked", request(order("#A6"), "refund", "pickup_booked", "booked", "awaiting"));
         want.put("A booked", new String[]{"on_the_way", "in_progress", "moving", null});
         UUID overdueItems = request(order("#A7"), "refund", "pickup_booked", "booked", "awaiting");
-        jdbc.update("UPDATE return_requests SET decided_at = now() - interval '12 days', booking_attempted_at = now() - interval '12 days' WHERE id = ?", overdueItems);
+        // N × 24 h (here and for "A refund overdue" and the leg helper's returned_at): overdueDays floors real elapsed
+        // time and the expectations sit exactly on N — a calendar 'N days' is N × 24 − 1 h across the night clocks go
+        // forward (Egypt, April). Every threshold below keeps ≥ 1 day of margin, so only the exact counts change.
+        jdbc.update("UPDATE return_requests SET decided_at = now() - 12 * interval '24 hours', booking_attempted_at = now() - 12 * interval '24 hours' WHERE id = ?", overdueItems);
         ids.put("A items overdue", overdueItems);
         want.put("A items overdue", new String[]{"on_the_way", "in_progress", "problem", "12"});
         for (String bs : List.of("failed", "failed_ambiguous")) {
@@ -164,7 +167,7 @@ class ReturnCasesTest {
         ids.put("A refund pending", request(order("#A13"), "refund", "refund_pending", "booked", "done"));
         want.put("A refund pending", new String[]{"record_refund", "to_do", "action", null});
         UUID overdueRefund = request(order("#A14"), "refund", "refund_pending", "booked", "done");
-        jdbc.update("UPDATE return_requests SET refund_pending_at = now() - interval '7 days' WHERE id = ?", overdueRefund);
+        jdbc.update("UPDATE return_requests SET refund_pending_at = now() - 7 * interval '24 hours' WHERE id = ?", overdueRefund);
         ids.put("A refund overdue", overdueRefund);
         want.put("A refund overdue", new String[]{"record_refund", "to_do", "problem", "7"});
         UUID resolvedRefund = request(order("#A15"), "refund", "refund_pending", "booked", "done");
@@ -711,7 +714,7 @@ class ReturnCasesTest {
             "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg, returned_at, " +
             "    return_intake_completed_at, return_intake_outcome) " +
             "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'return', " +
-            "    CASE WHEN ? = 'returned' THEN now() - (interval '1 day' * ?) END, " + (intakeAtSql == null ? "NULL" : intakeAtSql) + ", ?) RETURNING id",
+            "    CASE WHEN ? = 'returned' THEN now() - (interval '24 hours' * ?) END, " + (intakeAtSql == null ? "NULL" : intakeAtSql) + ", ?) RETURNING id",
             UUID.class, a.id(), o.id(), tn, state, state, returnedDaysAgo, outcome);
     }
 

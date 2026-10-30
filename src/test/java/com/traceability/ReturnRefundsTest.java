@@ -376,7 +376,9 @@ class ReturnRefundsTest {
     void o1_refundPendingOverdue_firesAfterTheWindow_notBefore_andEndsWhenRefunded() {
         Req late = request("refund_pending", REST_RAW, new String[]{"done"}, shirt);
         Req fresh = request("refund_pending", REST_RAW, new String[]{"done"}, pants);
-        jdbc.update("UPDATE return_requests SET refund_pending_at = now() - interval '6 days' WHERE id = ?", late.id());
+        // 6 × 24 h, not '6 days': refundOverdueDays floors real elapsed time, and a calendar '6 days' is 143 h across the
+        // night clocks go forward (Egypt, April) — the exact "6 days" below would read 5.
+        jdbc.update("UPDATE return_requests SET refund_pending_at = now() - 6 * interval '24 hours' WHERE id = ?", late.id());
         jdbc.update("UPDATE return_requests SET refund_pending_at = now() - interval '4 days' WHERE id = ?", fresh.id());
 
         List<Map<String, Object>> ex = alerts("refund_pending_overdue");
