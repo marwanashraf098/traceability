@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.traceability.ApiException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -21,6 +22,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.*;
@@ -58,8 +60,9 @@ import static org.mockito.Mockito.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class StockTakeUntaggedCountTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.shopify.ShopifyDeliveryProfileGateway;
@@ -75,7 +76,7 @@ class LocationAddressTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

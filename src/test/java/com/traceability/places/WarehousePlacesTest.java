@@ -1,5 +1,6 @@
 package com.traceability.places;
 
+import com.traceability.TestPostgres;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
@@ -28,6 +29,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.awt.image.BufferedImage;
@@ -63,8 +65,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WarehousePlacesTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

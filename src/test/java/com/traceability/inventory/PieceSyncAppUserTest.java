@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -40,9 +41,12 @@ import static org.mockito.Mockito.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PieceSyncAppUserTest {
 
+    /** The sweep's queued-claim age for this test (prod default 60 s, traced.piece-sync.queued-min-age-seconds). */
+    static final int QUEUED_MIN_AGE_SECONDS = 2;
+
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
@@ -79,6 +83,7 @@ class PieceSyncAppUserTest {
         DataSourceTransactionManager appTxm = new DataSourceTransactionManager(appDs);
         appInventory = new ShopifyInventoryService(appJdbc, appTxm, shopifyGateway, tokenProvider, mapper,
             new StoreRepository(appJdbc, appTxm));
+        appInventory.setPieceQueuedMinAgeSeconds(QUEUED_MIN_AGE_SECONDS);   // prod default 60 — real-clock wait
     }
 
     @BeforeEach
@@ -96,12 +101,13 @@ class PieceSyncAppUserTest {
         String piece = "01APPUSERSWEEP" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
         piece(t, piece, "on_hold");
         // A claim the after-commit push never sent (a crash) — the sweep's job; queued claims are swept
-        // once a minute old, and only claims made after piece_sync_cutoff() count.
-        awaitCutoffOlderThan(62);
+        // once QUEUED_MIN_AGE_SECONDS old (prod: a minute), and only claims made after piece_sync_cutoff() count.
+        awaitCutoffOlderThan(QUEUED_MIN_AGE_SECONDS + 2);
         String triggerId = piece + ":" + UUID.randomUUID();
         jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
             "trigger_type, trigger_id, status, created_at) VALUES (?, ?, ?, ?, -1, 'hold_enter', ?, 'queued', " +
-            "now() - interval '61 seconds')", t.tenant(), UUID.randomUUID(), t.variant(), t.location(), triggerId);
+            "now() - ? * interval '1 second')", t.tenant(), UUID.randomUUID(), t.variant(), t.location(), triggerId,
+            QUEUED_MIN_AGE_SECONDS + 1);
 
         new PieceShopifySweepJob(appInventory, ownerDs).run();
 

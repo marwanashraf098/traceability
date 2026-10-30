@@ -1,5 +1,6 @@
 package com.traceability.labels;
 
+import com.traceability.TestPostgres;
 import com.traceability.identity.JwtService;
 import com.traceability.inventory.InventoryLedger;
 import com.traceability.inventory.LabelService;
@@ -26,6 +27,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Connection;
@@ -68,8 +70,9 @@ import static org.mockito.Mockito.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class FactoryReceivingTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

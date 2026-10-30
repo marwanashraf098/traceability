@@ -1,5 +1,6 @@
 package com.traceability.labels;
 
+import com.traceability.TestPostgres;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.junit.jupiter.api.*;
@@ -12,6 +13,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
@@ -37,8 +39,9 @@ import static org.assertj.core.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class LabelRunsSchemaTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

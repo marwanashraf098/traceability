@@ -1,5 +1,6 @@
 package com.traceability.integrations.bosta;
 
+import com.traceability.TestPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.security.EncryptionService;
@@ -54,7 +55,7 @@ class NotCreatedFlagRecoveryTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

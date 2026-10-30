@@ -1,5 +1,6 @@
 package com.traceability.analytics;
 
+import com.traceability.TestPostgres;
 import com.traceability.privacy.CustomerRedaction;
 import com.traceability.FlywayTestSupport;
 import org.flywaydb.core.Flyway;
@@ -27,7 +28,7 @@ class AnalyticsSqlParityTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

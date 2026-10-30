@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -111,6 +112,9 @@ public class ShopifyInventoryService {
     private final StoreRepository      storeRepository;
     private final InventoryItemIdService itemIds;
 
+    /** The sweep sends a 'queued' piece claim only once it is this old — the after-commit push had its chance. */
+    private long pieceQueuedMinAgeSeconds = 60;
+
     public ShopifyInventoryService(JdbcTemplate jdbc,
                                    PlatformTransactionManager txm,
                                    ShopifyGateway shopify,
@@ -124,6 +128,11 @@ public class ShopifyInventoryService {
         this.mapper        = mapper;
         this.storeRepository = storeRepository;
         this.itemIds       = new InventoryItemIdService(jdbc, txm, shopify);
+    }
+
+    @Value("${traced.piece-sync.queued-min-age-seconds:60}")
+    public void setPieceQueuedMinAgeSeconds(long seconds) {
+        this.pieceQueuedMinAgeSeconds = seconds;
     }
 
     // ── Trigger 1: receiving session close ───────────────────────────────────
@@ -761,9 +770,10 @@ public class ShopifyInventoryService {
             "SELECT sia.id FROM shopify_inventory_adjustments sia " +
             "WHERE sia.tenant_id = ? AND sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL +
             "  AND " + PieceShopifyRules.LIVE_SQL +
-            "  AND ((sia.status = 'queued' AND sia.created_at < now() - interval '1 minute') " +
+            "  AND ((sia.status = 'queued' AND sia.created_at < now() - ? * interval '1 second') " +
             "    OR (sia.status = 'failed' AND sia.attempt_count < ?)) " +
-            "ORDER BY sia.created_at, sia.id LIMIT 50", Long.class, tenantId, PieceShopifyRules.MAX_ATTEMPTS));
+            "ORDER BY sia.created_at, sia.id LIMIT 50", Long.class, tenantId, pieceQueuedMinAgeSeconds,
+            PieceShopifyRules.MAX_ATTEMPTS));
         if (due == null) return 0;
         for (Long id : due) pushPieceClaimNow(tenantId, id, false);
         return due.size();

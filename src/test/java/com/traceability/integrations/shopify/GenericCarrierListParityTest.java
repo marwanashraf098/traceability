@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.TestPostgres;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -23,7 +24,7 @@ class GenericCarrierListParityTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine").withDatabaseName("traceability_test")
+            TestPostgres.newContainer().withDatabaseName("traceability_test")
                 .withUsername("postgres").withPassword("postgres");
 
     @Test

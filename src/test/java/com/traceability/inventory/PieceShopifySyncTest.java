@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
@@ -55,7 +56,7 @@ class PieceShopifySyncTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

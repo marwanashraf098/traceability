@@ -1,5 +1,6 @@
 package com.traceability.labels;
 
+import com.traceability.TestPostgres;
 import com.traceability.identity.JwtService;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.Map;
@@ -32,8 +34,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class LabelSettingsTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");

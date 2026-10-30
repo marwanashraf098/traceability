@@ -4,6 +4,34 @@
 
 ## Current state
 
+**Test-suite speed T1 (2026-10-30, branch `perf/test-suite-t1` off origin/main 43a98ff; NOT merged; test infra + two
+main-code properties whose defaults equal the old hardcoded values — production behaviour unchanged; no migration).**
+Full suite 40.5 min → **32.5 / 32.2 min** (two runs, AC power, no sleep, nothing overlapping). Counts unchanged: 3,588
+tests, 428 classes, 4 skipped, ExchangeBackfillTest the one documented red; Spring contexts 324 (= baseline).
+- **1. `TestPostgres.newContainer()`** (src/test): postgres:16-alpine, data dir on tmpfs, `fsync / synchronous_commit /
+  full_page_writes = off`. 346 call sites in 345 classes switched mechanically, still one container per class; only
+  ExchangeBackfillTest excluded. Flyway 371 s → 275 s, context starts 972 s → 732 s. **Gotcha (corrects Step 0):**
+  Testcontainers' PostgreSQLContainer already runs `-c fsync=off` by default — the gain is tmpfs + the other two.
+- **2. Leaks:** the 22 classes that started a static container without `@Container` now have it (stopped after the
+  class). `src/test/resources/spring.properties` → `spring.test.context.cache.maxSize=1` (no @Nested, no test class
+  hierarchies, no @ContextConfiguration/@ContextHierarchy: every class already had its own context). **Cost found:**
+  evicting a context whose JobRunr BackgroundJobServer is on happens after its container stopped → ~15 s shutdown
+  wait (JobRunr 10 s + Hikari 4 s), paid by the NEXT class (9 classes, ~+130 s per run; e.g. ConditionOnlyAlertsTest
+  6 s → 21 s after PoolAndJobRunrConfigTest). Follow-up, not done: close those contexts before their container stops.
+- **3. Real-clock waits:** `traced.piece-sync.queued-min-age-seconds` (default 60, `ShopifyInventoryService` sweep;
+  the SQL interval is now a parameter) — PieceSyncAppUserTest sets 2 → class 66 s → 8 s.
+  `bosta.create-rate-limit-block-seconds` (default 60, `BostaV2Client.postCreate`'s 429 block only; the search probe's
+  60 is unchanged) — ReturnPickupBookingTest sets 1 → 107.5 s → 48 s. Bite-checked: sweep ignoring 'queued' → RED;
+  min-age setter a no-op → RED; 429 not detected → RED; block setter a no-op → GREEN but 60 s (the property is what
+  shortens it). Left as is (no property-only shortening): OAuthUpgradeTest (6 s = one JobRunr poll, 5 s is the
+  minimum), ShopifyWebhookEnqueueDeadlineTest (8 s sleep is inside a mock; test takes 2 s),
+  BostaGatewayTimeoutTest (10 s is the stub server's; test takes 2.9 s).
+- **Flake found (not T1, not fixed):** `GenericG3IsolationGoldenTest` g1/g2 fail when run between 23:00 and 24:00
+  Cairo in the days after the Oct DST end: "placed" = now − 48 h lands just past midnight under the +03:00 offset, so
+  the Cairo calendar-day gap is 1, not 2 (fulfillmentSpeed bucket `1_day` vs `2_days`). Same on main. Fix needs approval
+  (golden fixture). Also: a sleeping Mac (lid closed on battery) makes JobRunr-await tests fail — run on AC.
+- **Next (T2 candidates from Step 0):** parallel forks; shared container + template DB.
+
 **Returned pieces stay on their order (2026-10-30, branch `fix/returned-pieces-on-order` off origin/main 3d314f3;
 NOT merged, NOT deployed; no migration).** Step 0 same day: after Scan returns graded a piece **restock**,
 `ReturnService.restock()` released its allocation (needed — else `FulfillService.scan()`'s ALREADY_RESERVED blocks the

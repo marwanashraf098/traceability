@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.TestPostgres;
 import com.traceability.identity.JwtService;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.labels.LabelCodeException;
@@ -26,6 +27,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.io.IOException;
@@ -68,8 +70,9 @@ import static org.mockito.Mockito.*;
 @SuppressWarnings({"unchecked", "rawtypes"})
 class PackLabelsTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
