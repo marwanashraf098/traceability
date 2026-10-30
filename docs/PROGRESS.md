@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Orders tabs fix — Needs attention works; tab counts == lists (2026-10-30, branch `fix/orders-attention-tabs` off
+origin/main b5af792; NOT merged, NOT deployed; no migration).** Step 0 same day: the Needs attention tab was disabled
+by design and its "62" was the bell's alert count (`/exceptions/count`: every open alert, several per order, many not
+about an order); Delivered / Returns counted `OrderStatusDeriver` keys while their lists filtered the raw shipment state.
+Marawan's decisions: Needs attention = DISTINCT merchant orders with ≥ 1 open alert; sort placed_at, created_at, id.
+- **Backend:** `ExceptionService.ORDER_LINK` (every detector `type/subject_type` → DIRECT / VIA_SHIPMENT / NONE; an
+  order is never inferred from a piece — lost, unexpected_return, return_in_transit_stuck carry a piece-derived
+  order_id that is ignored) + `openAttentionOrderIds()` (one `detectAllOpen()`, merchant_orders only, types distinct
+  and sorted). `/orders/summary` → `needsAttention`; `/orders?attention=true` (`ATTENTION_FILTER_SQL`, the id set from
+  ONE call per request feeds the COUNT, the page and every row's new `attentionReasons`). Delivered / Returns /
+  In transit: `tabCount()` and the list share `LATEST_FORWARD_LEG_SQL` + `DELIVERY_STATE_FILTER_SQL`; summary() now
+  calls the 10-arg derive (bucket logic unchanged). `LIST_ORDER_SQL` adds `o.id DESC`. OrderController keeps its 5-arg
+  constructor for the existing tests (needsAttention null, no reasons); Spring uses the 6-arg one.
+- **Frontend:** the tab is clickable (`attention=true`), "N need attention" is a `<button>` selecting it, the page no
+  longer reads `/exceptions/count` (bell untouched); `Tabs`: a disabled tab keeps no hover style.
+- **Tests:** OrdersAttentionTest a1–a6 (X with 2 alerts / store alert / Y / portal order → 1 = list total, reasons both
+  types, portal excluded; lost piece on Z ignored; every detector type classified; app_user same-tenant positive +
+  other-tenant zero; cancelled-delivered / self-pickup Delivered + Returns + In transit count == list; 8 tied rows page
+  in id-DESC order). Revert-checked: raw alert count → a1 red (4); no merchant_orders filter → a1 red; using a piece's
+  order_id → a2 red; derived Delivered → a5 red (2 ≠ 3); no id tie-break → a6 red. Vitest: orders.test.tsx :270
+  replaced (approved) by 2 userEvent tests (tab, subheader — red on main, green after); tabsDisabled.test.tsx (red on
+  main's ui.tsx). G3 golden re-recorded (approved): one line per file, the ordersList body, `attentionReasons` added
+  to each of the 9 rows, nothing else (the "on" file's pre-G3 pickup keys kept by patching only that block).
+- **Suites:** backend 3,513 run, 4 skipped, red only ExchangeBackfillTest (documented) + the G3 golden before its
+  re-record (2/2 green after). Vitest 1,260 (main 1,258: +1 tabs, +2 −1 orders). tsc + vite build clean.
+- **Demo tenant (local, fresh DB + reseed):** bell 2 alerts (lost piece, blocked customer) vs Needs attention 1 order
+  (#DEMO-BLOCKED). Gotcha: running locally needs `ANALYTICS_REF_SECRET` and `PORTAL_TOKEN_SECRET` (≥ 32 bytes) set.
+- **A-fix (same day, frontend only):** the order search and tracking inputs fetch 300 ms after the last key
+  (`SEARCH_DEBOUNCE_MS`, back to page 1), and a newer list request aborts the one in flight (`listOrders(params,
+  { signal })`; a stale or aborted response is ignored) — one alert run per search, never an older result over a newer
+  one. ordersSearchDebounce.test.tsx: "abcde" → exactly 1 fetch at 300 ms; slow first response after a fast second →
+  the second stays (both red on main; the second also red with only the stale-response guard removed). Fake-timer
+  gotcha: Testing Library's async wrapper only advances fake timers when it sees Jest — the test stubs a `jest` global
+  pointing at `vi.advanceTimersByTime`, else `user.type` hangs. Vitest 1,262 (+2); ordersArabicSearchGuard green.
+- **Known, out of scope:** the phone tab row still overflows (pre-existing).
+
 **Test fixtures: exact day / hour counts on N × 24 h (2026-10-30, branch `fix/test-fixtures-dst-hours` off main
 b5af792; merged to main 2026-10-30, NOT deployed). Follow-up to the G3 DST fix.** 84 test files use `interval 'N days'`. (1) Run right after Egypt's
 fall-back (every 'N days' crossing it): 83 classes / 824 tests green — nothing else asserts exact hours. (2) Spring-forward

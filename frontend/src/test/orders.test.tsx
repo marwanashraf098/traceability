@@ -267,22 +267,56 @@ describe('Orders list', () => {
     expect(await screen.findByText('Showing 1–2 of 2')).toBeInTheDocument()
   })
 
-  test('the Needs attention tab is not clickable/filtering (no raw-status equivalent)', async () => {
-    const appFetch = vi.fn((url: string) => {
-      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
-      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
+  // Orders tabs fix (2026-10-30) — replaces the old "Needs attention is not clickable" test (approved).
+  // Needs attention = orders with ≥ 1 open alert: the count is /orders/summary's needsAttention and the
+  // click-through is /orders?attention=true — one server-side set. Red on main (the tab was disabled and the
+  // subheader a plain span, fed by the bell's /exceptions/count).
+  function attentionFetch() {
+    return vi.fn((url: string) => {
+      if (url.includes('/orders?')) {
+        if (url.includes('attention=true')) {
+          return jsonOk(makeOrderPage(
+            [makeOrderSummary({ id: 'a1', number: '#2001' }), makeOrderSummary({ id: 'a2', number: '#2002' }),
+             makeOrderSummary({ id: 'a3', number: '#2003' })],
+            { total: 3 },
+          ))
+        }
+        return jsonOk(makeOrderPage([makeOrderSummary()]))
+      }
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts({ needsAttention: 3 }))
       return jsonOk({})
     })
+  }
+
+  test('clicking the Needs attention tab lists exactly the orders its count names (attention=true)', async () => {
+    const appFetch = attentionFetch()
     renderOrdersList(appFetch)
     await screen.findByText('#1001')
 
-    const user = userEvent.setup()
-    appFetch.mockClear()
-    await user.click(screen.getByRole('button', { name: /Needs attention/ }))
+    const tab = screen.getByRole('button', { name: /Needs attention/ })
+    expect(await within(tab).findByText('3')).toBeInTheDocument()
 
-    // No new /orders? fetch fired — the click is a no-op, per the approved resolution.
-    await new Promise(r => setTimeout(r, 50))
-    expect(appFetch.mock.calls.some(c => typeof c[0] === 'string' && c[0].includes('/orders?'))).toBe(false)
+    const user = userEvent.setup()
+    await user.click(tab)
+
+    expect(await screen.findByText('Showing 1–3 of 3')).toBeInTheDocument()
+    expect(screen.getByText('#2001')).toBeInTheDocument()
+    const calls = appFetch.mock.calls.map(c => c[0]).filter((u): u is string => typeof u === 'string' && u.includes('/orders?'))
+    expect(calls.some(u => u.includes('attention=true'))).toBe(true)
+  })
+
+  test('the "3 need attention" subheader is a button that selects the Needs attention tab', async () => {
+    const appFetch = attentionFetch()
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+
+    const link = await screen.findByRole('button', { name: '3 need attention' })
+    const user = userEvent.setup()
+    await user.click(link)
+
+    expect(await screen.findByText('Showing 1–3 of 3')).toBeInTheDocument()
+    const calls = appFetch.mock.calls.map(c => c[0]).filter((u): u is string => typeof u === 'string' && u.includes('/orders?'))
+    expect(calls.some(u => u.includes('attention=true'))).toBe(true)
   })
 
   test('pagination — Previous disabled on page 1, Next advances to page 2', async () => {

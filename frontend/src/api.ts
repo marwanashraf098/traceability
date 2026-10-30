@@ -185,6 +185,8 @@ export interface OrderSummary {
   isExchange: boolean
   derivedStatus: DerivedOrderStatus
   shippingBadge: OrderShippingBadge | null
+  /** The order's open alert types (distinct, sorted) — ExceptionService.openAttentionOrderIds. Empty = none. */
+  attentionReasons: string[]
 }
 
 // The order's shipping badge (V139, OrderShippingBadge) — derived server-side when the order is
@@ -313,9 +315,12 @@ export interface OrderListParams {
   size?: number
   /** G3: "With <carrier>" — generic orders of one carrier ('' = a generic leg naming none). */
   carrier?: string
+  /** Needs attention: only orders with ≥ 1 open alert (the summary's needsAttention set). */
+  attention?: boolean
 }
 
-export function listOrders(params: OrderListParams = {}) {
+/** opts.signal: abort an in-flight list when a newer one starts (Orders search) — the caller ignores the AbortError. */
+export function listOrders(params: OrderListParams = {}, opts: { signal?: AbortSignal } = {}) {
   const q = new URLSearchParams()
   if (params.status)        q.set('status', params.status)
   if (params.deliveryState) q.set('deliveryState', params.deliveryState)
@@ -324,7 +329,8 @@ export function listOrders(params: OrderListParams = {}) {
   if (params.page != null) q.set('page', String(params.page))
   if (params.size != null) q.set('size', String(params.size))
   if (params.carrier != null) q.set('carrier', params.carrier)
-  return request<OrderPage>(`/orders?${q}`)
+  if (params.attention) q.set('attention', 'true')
+  return request<OrderPage>(`/orders?${q}`, { signal: opts.signal })
 }
 
 export function getOrder(id: string) {
@@ -1212,6 +1218,8 @@ export interface OrderSummaryCounts {
   withCourier: number
   delivered: number
   returned: number
+  /** Distinct orders with ≥ 1 open alert — the same set /orders?attention=true lists. Not the bell's alert count. */
+  needsAttention: number | null
 }
 
 export function getOrdersSummary() {

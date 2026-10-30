@@ -987,7 +987,9 @@ export function Tabs({
             'pb-3 text-body transition-colors border-b-2 -mb-px inline-flex items-center gap-2',
             tab.key === activeKey
               ? 'text-primary border-trace-blue'
-              : 'text-muted border-transparent hover:text-primary',
+              : 'text-muted border-transparent',
+            // A disabled tab keeps no hover affordance — it must not look clickable.
+            tab.key !== activeKey && !tab.disabled && 'hover:text-primary',
             tab.disabled && 'cursor-default'
           )}
         >
