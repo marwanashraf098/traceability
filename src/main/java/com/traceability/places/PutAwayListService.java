@@ -258,8 +258,7 @@ public class PutAwayListService {
                 ((java.sql.Timestamp) s.get("last_activity_at")).toInstant());
         }
         boolean hasPlaces = Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM bins WHERE tenant_id = ? AND location_id = ? AND kind IN ('shelf', 'box') " +
-            "AND archived_at IS NULL)", Boolean.class, tenantId, src.locationId()));
+            "SELECT " + Places.liveShelfOrBoxAt("?", "?"), Boolean.class, tenantId, src.locationId()));
         return new PutAwayList(src.source(), src.id(), src.ref(), src.locationId(), src.locationName(), hasPlaces,
             pieces.size(), placed, List.copyOf(pieces), session);
     }

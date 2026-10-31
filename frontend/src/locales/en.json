@@ -5126,7 +5126,18 @@
       "load": "Couldn't load places — refresh to try again"
     },
     "addRack": "Add rack",
-    "putAwayLink": "Put away"
+    "putAwayLink": "Put away",
+    "switch": {
+      "title": "Use places in this store",
+      "body": "Organise your warehouse into zones, racks, shelves and boxes so pickers know where every piece is.",
+      "on": "On",
+      "off": "Off",
+      "confirmTitle": "Turn off places?",
+      "confirmBody": "Places will be hidden. Your zones, shelves, boxes and piece places are kept and come back if you turn it on again.",
+      "confirmEnds": "Open put-away sessions and place counts are closed. Pieces already put away stay where they are.",
+      "keepOn": "Keep places on",
+      "turnOff": "Turn off places"
+    }
   },
   "lookupExchange": {
     "button": "Exchange",

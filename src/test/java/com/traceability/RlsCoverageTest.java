@@ -135,6 +135,8 @@ class RlsCoverageTest {
             // Warehouse places S5 — placesS5_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
             "/api/v1/place-counts/{id}",
             "/api/v1/places/where/{variantId}",
+            // Places rollout — placesSettings_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/places/settings",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -739,6 +741,54 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM order_fulfillment_tracking WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM orders  WHERE id IN (?, ?)", mine, otherOrder);
             jdbc.update("DELETE FROM stores  WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void placesSettings_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Places rollout: Settings › Places "Use places in this store" reads the caller's tenant row and its own
+        // shelves / boxes only — another tenant's switch and its set-up places never show through.
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherZone = UUID.randomUUID();
+        UUID otherRack = UUID.randomUUID(), otherShelf = UUID.randomUUID();
+        jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov Rollout Other', true)", otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov Rollout WH', true)", otherLoc, otherTenant);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'ROTHEIRS', 'Q932001')",
+                    otherZone, otherTenant, otherLoc);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'ROTHEIRS-R01', 'Q932002')", otherRack, otherTenant, otherLoc, otherZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'ROTHEIRS-R01-S1', 'Q932003')", otherShelf, otherTenant, otherLoc, otherRack);
+        try {
+            ResponseEntity<Map> off = get("/api/v1/places/settings", Map.class);
+            assertThat(off.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(off.getBody()).as("the other tenant's switch and shelf never show through")
+                .containsEntry("enabled", false).containsEntry("setUp", false);
+            jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+            assertThat(get("/api/v1/places/settings", Map.class).getBody()).as("same-tenant positive control")
+                .containsEntry("enabled", true).containsEntry("setUp", false);
+
+            var appDs = new com.traceability.tenancy.TenantAwareDataSource(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+            var appJdbc = new JdbcTemplate(appDs);
+            var tx = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(appDs));
+            Boolean otherSwitch = com.traceability.tenancy.TenantContext.runAs(tenantId,
+                () -> tx.execute(st -> com.traceability.places.Places.enabled(appJdbc, otherTenant)));
+            Boolean otherShelfSeen = com.traceability.tenancy.TenantContext.runAs(tenantId,
+                () -> tx.execute(st -> com.traceability.places.Places.setUp(appJdbc, otherTenant, otherLoc)));
+            Boolean ownShelfSeen = com.traceability.tenancy.TenantContext.runAs(otherTenant,
+                () -> tx.execute(st -> com.traceability.places.Places.setUp(appJdbc, otherTenant, otherLoc)));
+            assertThat(otherSwitch).as("app_user: another tenant's switch reads as off").isFalse();
+            assertThat(otherShelfSeen).as("app_user: another tenant's shelf is invisible").isFalse();
+            assertThat(ownShelfSeen).as("app_user: positive control — the other tenant sees its own shelf").isTrue();
+        } finally {
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM bins WHERE tenant_id = ? AND kind = 'shelf'", otherTenant);
+            jdbc.update("DELETE FROM bins WHERE tenant_id = ? AND kind = 'rack'", otherTenant);
+            jdbc.update("DELETE FROM bins WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM locations WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

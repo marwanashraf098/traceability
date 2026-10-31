@@ -53,6 +53,40 @@ again against the current line quantities. Both packing modes.
   past the lookback window gets TOO_OLD on re-scan / drops out of the queue; (5) the per-piece guided unpack endpoint
   (FulfillController `/unpack/{pieceId}`) is open to any signed-in user.
 
+**Places rollout — the merchant switch + dormant until set up (2026-11-01, branch `feat/places-rollout` from main
+5817058a; no migration; NOT deployed).** Marawan's revised spec (replaces "default on for new signups" — the V-default
+migration was dropped; `places_enabled` stays default false and merchants switch it on):
+- **Settings › Places is shown to owner / manager in EVERY store.** On top "Use places in this store" (EN + AR, one line
+  "Organise your warehouse into zones, racks, shelves and boxes so pickers know where every piece is"). Off → only the
+  switch; on → today's Places screen (quick-setup form when there's no zone — pl6 unchanged). `PUT /api/v1/places/settings`
+  {enabled} (`PlacesSettingsService`, @Transactional, owner + manager, worker 403); each change one audit_log row
+  `places_switch` (actor, from → to, and on off how much it ended). GET /places/settings {enabled, setUp}.
+- **Switching off** (confirm dialog: "Places will be hidden. Your zones, shelves, boxes and piece places are kept and come
+  back if you turn it on again.") deletes nothing: bins and pieces.bin_id stay. In the same transaction: open put-away
+  sessions closed `closed_by_manager` by the switcher (placed pieces stay), open place counts cancelled (summary reason
+  `places_off`, finished_by = switcher), open stock takes forget current_bin_id.
+- **Dormant until set up — ONE rule, `Places.setUp(tenant, location)`: places on AND a live (non-archived) shelf or box at
+  that location** (`Places.liveShelfOrBoxAt` is the SQL; put-away's existing HOLDABLE_EXISTS / hasPlaces now use it).
+  `Places.anySetUp` (any location) → /me `placesDormant` (sent only when places are on, so an off tenant's /me is
+  unchanged); `Places.mainSetUp` gates PickPlacesService (gather list, pack screen, printed-not-packed, transfer collect
+  list → 404 = today's screens; one statement, PickPlacesTest q1's count unchanged). Lookup's place row / Move: the
+  piece's location set up (no location → any); a place sticker in Lookup / the stock take: its / the session's
+  location set up. Put-away list buttons already used `hasPlaces`; the Inventory place filter renders nothing until the
+  chosen location's tree has a live shelf or box. Frontend: `useCapabilities().places` = /me places AND NOT placesDormant
+  (every feature gate), `.placesEnabled` = the switch (Settings only). Creating places in Settings forgets the cached /me
+  and put-away count, so the features appear on the next screen.
+- **Demo / reviewer:** DemoSeeder's DELETE_ORDER now includes place_count_scans, put_away_session_pieces, bin_events,
+  place_counts, put_away_sessions, bins, bin_counters (demo tenant only — the switch itself is left as it is). Before
+  this a demo visitor who used places would have broken the reseed (put_away_session_pieces / place_count_scans → pieces
+  FKs). review-tenant-reset.sql already covers new tenant tables.
+- Tests: PlacesRolloutTest (sw1 sw2 d1 d2 d3 off), PlacesRolloutDemoReviewTest (dm1 dm2 rv1 rv2), RlsCoverageTest
+  placesSettings_crossTenantIsolated_withSameTenantPositiveControl + COVERED, PortalOrderLeakTest 2 SKIPs;
+  placesRollout.test.tsx (sw1–sw4); dormant tests appended to pickPlaces / placesS5 / putAwayLists / putAway that
+  compare against the STORED S3–S5 off-snapshots (`test/storedSnapshot.ts` reads the .snap) — 13 screens + sidebar /
+  tile; pl1 edited (the tab now shows when off — the spec changed that). Revert-checks: capability ignoring
+  placesDormant → 7 dormant tests red; pick gate back to `Places.require` → d1 d2 d3 red; DemoSeeder places tables
+  removed → dm2 red. Screenshots: dev/placesrollout-shots.
+
 **Warehouse places S5 — one-place counts, place stickers in the stock take, Inventory place filter, Where is it,
 Move a box (2026-10-31, branch `feat/warehouse-places-s5` from main 3ee252a, rebased onto 9f1ecd6b; committed, NOT
 merged, NOT deployed; migration V198).** Nothing here calls Shopify, writes a piece off or changes a status

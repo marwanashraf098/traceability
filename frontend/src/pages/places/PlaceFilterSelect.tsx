@@ -9,6 +9,8 @@ export const NO_PLACE = '__no_place__'
 /**
  * A tree picker over one location's places (zone → rack → shelf / box, indented in tree order) plus "No place yet".
  * A zone or rack means everything under it; a shelf or box means only itself (the server's PlaceScope).
+ * Places rollout: nothing at all — exactly today's toolbar — until the location's places are known and it is set up
+ * (a live shelf or box).
  */
 export default function PlaceFilterSelect({ locationId, value, onChange }: {
   locationId: string
@@ -16,13 +18,18 @@ export default function PlaceFilterSelect({ locationId, value, onChange }: {
   onChange: (v: string) => void
 }) {
   const { t } = useTranslation()
-  const [nodes, setNodes] = useState<PlaceNode[]>([])
+  const [loaded, setLoaded] = useState<{ locationId: string; nodes: PlaceNode[] } | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    getPlaces(locationId).then(tree => { if (!cancelled) setNodes(tree.nodes.filter(n => !n.archived)) }).catch(() => setNodes([]))
+    getPlaces(locationId)
+      .then(tree => { if (!cancelled) setLoaded({ locationId, nodes: tree.nodes.filter(n => !n.archived) }) })
+      .catch(() => { if (!cancelled) setLoaded({ locationId, nodes: [] }) })
     return () => { cancelled = true }
   }, [locationId])
+
+  const nodes = loaded?.locationId === locationId ? loaded.nodes : []
+  if (!nodes.some(n => n.kind === 'shelf' || n.kind === 'box')) return null
 
   const options = [
     { value: '', label: t('placeFilter.all') },

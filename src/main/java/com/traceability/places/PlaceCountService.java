@@ -297,6 +297,14 @@ public class PlaceCountService {
             UUID.class, tenantId, IDLE_HOURS);
     }
 
+    /** Places switched off (PlacesSettingsService, in its transaction): every open count is cancelled — nothing changes on any piece. */
+    int cancelAllOpen(UUID tenantId, UUID actorUserId) {
+        return jdbc.update(
+            "UPDATE place_counts SET status = 'cancelled', finished_at = now(), finished_by = ?, " +
+            "summary = '{\"reason\":\"places_off\"}'::jsonb WHERE tenant_id = ? AND status = 'open'",
+            actorUserId, tenantId);
+    }
+
     // ── view ─────────────────────────────────────────────────────────────────
 
     record C(UUID id, UUID locationId, UUID binId, boolean open, Instant createdAt) {}

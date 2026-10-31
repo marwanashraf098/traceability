@@ -4367,6 +4367,12 @@ export interface PlaceBulkPlan {
   firstBox: string | null; lastBox: string | null; conflicts: string[]
 }
 
+/** Places rollout — Settings › Places "Use places in this store" (owner / manager; audit-logged server-side). */
+export interface PlacesSettings { enabled: boolean; setUp: boolean }
+export function setPlacesEnabled(enabled: boolean) {
+  return requestReadable<PlacesSettings>('/places/settings', { method: 'PUT', body: JSON.stringify({ enabled }) })
+}
+
 export function getPlaces(locationId?: string) {
   return requestReadable<PlaceTree>(`/places${locationId ? `?locationId=${encodeURIComponent(locationId)}` : ''}`)
 }

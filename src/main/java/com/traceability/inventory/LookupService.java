@@ -278,10 +278,13 @@ public class LookupService {
         if (com.traceability.labels.FlexibleLabeling.enabled(jdbc, tenantId)) {
             result.put("variantStock", UntaggedPieces.availableCounts(jdbc, tenantId, (UUID) piece.get("variant_id")));
         }
-        // Warehouse places S2: the piece's place (with its path) and whether Move applies — only for tenants
-        // that have places (everyone else's response is unchanged). A box's moves since the piece went into it
-        // join the timeline.
-        if (com.traceability.places.Places.enabled(jdbc, tenantId)) {
+        // Warehouse places S2: the piece's place (with its path) and whether Move applies — only where places are
+        // set up (rollout: the piece's location, or for a piece at no location any location; everyone else's
+        // response is unchanged). A box's moves since the piece went into it join the timeline.
+        Object pieceLocation = piece.get("location_id");
+        if (pieceLocation != null
+                ? com.traceability.places.Places.setUp(jdbc, tenantId, UUID.fromString(pieceLocation.toString()))
+                : com.traceability.places.Places.anySetUp(jdbc, tenantId)) {
             UUID binId = jdbc.queryForObject("SELECT bin_id FROM pieces WHERE id = ?", UUID.class, piece.get("id").toString());
             var place = com.traceability.places.PlacePaths.describe(jdbc, tenantId, binId);
             result.put("place", place == null ? null : placeMap(place));
@@ -354,9 +357,13 @@ public class LookupService {
     public Map<String, Object> lookupPlaceSticker(String scanCode) {
         UUID tenantId = TenantContext.require();
         if (!com.traceability.places.Places.enabled(jdbc, tenantId)) return null;
-        List<UUID> bin = jdbc.queryForList("SELECT id FROM bins WHERE tenant_id = ? AND scan_code = ?",
-            UUID.class, tenantId, scanCode);
-        if (bin.isEmpty()) return null;
+        List<Map<String, Object>> found = jdbc.queryForList(
+            "SELECT id, location_id FROM bins WHERE tenant_id = ? AND scan_code = ?", tenantId, scanCode);
+        // Rollout: a sticker of a location that isn't set up reads as an unknown scan, as with places off.
+        if (found.isEmpty() || !com.traceability.places.Places.setUp(jdbc, tenantId, (UUID) found.get(0).get("location_id"))) {
+            return null;
+        }
+        List<UUID> bin = List.of((UUID) found.get(0).get("id"));
         var place = com.traceability.places.PlacePaths.describe(jdbc, tenantId, bin.get(0));
         Map<String, Object> result = new LinkedHashMap<>(placeMap(place));
         result.put("type", "place");

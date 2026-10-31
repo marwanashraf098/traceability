@@ -142,8 +142,14 @@ public class DemoSeeder {
         "return_session_items",
         "return_session_shipments",
         "pickup_shipments",
+        // Warehouse places (rollout 2026-11-01: any store — the demo too — can switch places on): leaves first.
+        "place_count_scans",
+        "put_away_session_pieces",
+        "bin_events",
         // Tier B — parents of Tier A, still children of orders/pieces/sessions.
         "stock_take_sessions",
+        "place_counts",
+        "put_away_sessions",
         "transfer_lines",
         "exchanges",
         "return_sessions",
@@ -159,6 +165,10 @@ public class DemoSeeder {
         // Tier D.
         "shipments",
         "receipts",
+        // Places: after pieces (pieces.bin_id), stock_take_sessions, put-away sessions and place counts; a box's
+        // parent_id is in the same table (one statement — the FK is checked at its end).
+        "bins",
+        "bin_counters",
         // Tier E.
         "orders",
         "courier_accounts",

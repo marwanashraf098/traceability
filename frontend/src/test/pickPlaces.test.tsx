@@ -11,6 +11,7 @@ import FulfillRoute from '../pages/fulfill/FulfillRoute'
 import GatherList from '../pages/GatherList'
 import { PrintedNotPacked } from '../pages/fulfill/PackLists'
 import { groupByZone, orderPlaceSummary, sortByPlace, splitAcrossPlaces } from '../pages/fulfill/placeSplit'
+import { storedSnapshot } from './storedSnapshot'
 
 // Warehouse places S3 — Pick & Pack places, display only.
 //   split: biggest place first, remainder → No place yet, exact cover, shortage; walking order / zones
@@ -428,5 +429,77 @@ describe('off: places switched off', () => {
     await new Promise(r => setTimeout(r, 20))
     expect(placesCalls()).toHaveLength(0)
     expect(screen.getByTestId('printed-not-packed').outerHTML).toMatchSnapshot()
+  })
+})
+
+// ── places rollout: switched on, nothing set up ─────────────────────────────
+
+/** Places switched on, but no location has a shelf or box yet (/me placesDormant). */
+function setupDormant() {
+  setup(true)
+  stubFetchWithShellDefaults(vi.fn(backend), {
+    me: { name: 'Ahmed', role: 'owner', scanHelpers: false, demoMode: false, genericCourier: false,
+          flexibleLabeling: false, places: true, placesDormant: true } })
+}
+const OFF = (name: string) => storedSnapshot('pickPlaces.test.tsx', `off: places switched off > off: ${name} 1`)
+
+describe('rollout: places on, no shelf or box yet — exactly the off screens', () => {
+  test('dormant: gather list === the off snapshot, no places request', async () => {
+    setupDormant()
+    gatherRoutes(() => GATHER_PLACES)
+    const { container } = renderWithProviders(<GatherList />, { initialEntries: ['/fulfill/gather'] })
+    await screen.findByText('Tee - M')
+    await new Promise(r => setTimeout(r, 20))
+    expect(placesCalls()).toHaveLength(0)
+    expect(container.innerHTML.replace(/Generated at [^<]*/, 'Generated at <time>'))
+      .toBe(OFF('gather list renders exactly as before, no places request'))
+  })
+
+  test('dormant: pick screen === the off snapshot, no places request', async () => {
+    setupDormant()
+    pickRoutes(() => ORDER_PLACES)
+    await openPick()
+    await new Promise(r => setTimeout(r, 20))
+    expect(placesCalls()).toHaveLength(0)
+    expect(screen.getByTestId('fulfill-pick').outerHTML).toBe(OFF('pick screen renders exactly as before, no places request'))
+  })
+
+  test('dormant: waybill order card === the off snapshot, no places request', async () => {
+    setupDormant()
+    waybillRoutes(() => ORDER_PLACES)
+    await openWaybillOrder()
+    await new Promise(r => setTimeout(r, 20))
+    expect(placesCalls()).toHaveLength(0)
+    expect(screen.getByTestId('session-scanning').outerHTML).toBe(OFF('waybill order card renders exactly as before, no places request'))
+  })
+
+  test('dormant: printed but not packed === the off snapshot, no places request', async () => {
+    setupDormant()
+    routes = url => (url.endsWith('/fulfill/printed-not-packed') ? NOT_PACKED : {})
+    renderWithProviders(<PrintedNotPacked refreshKey={0} />)
+    await waitFor(() => expect(screen.getAllByTestId('not-packed-row')).toHaveLength(3))
+    await new Promise(r => setTimeout(r, 20))
+    expect(placesCalls()).toHaveLength(0)
+    expect(screen.getByTestId('printed-not-packed').outerHTML).toBe(OFF('printed but not packed renders exactly as before, no places request'))
+  })
+
+  test('main warehouse not set up (another location is): its places answer 404 → today\'s gather list', async () => {
+    setup(true)
+    gatherRoutes(() => ({ status: 404, reply: {} }))
+    const { container } = renderWithProviders(<GatherList />, { initialEntries: ['/fulfill/gather'] })
+    await screen.findByText('Tee - M')
+    await waitFor(() => expect(placesCalls().length).toBeGreaterThan(0))
+    await new Promise(r => setTimeout(r, 20))
+    expect(container.innerHTML.replace(/Generated at [^<]*/, 'Generated at <time>'))
+      .toBe(OFF('gather list renders exactly as before, no places request'))
+  })
+
+  test('main warehouse not set up (another location is): its places answer 404 → today\'s pick screen', async () => {
+    setup(true)
+    pickRoutes(() => ({ status: 404, reply: {} }))
+    await openPick()
+    await waitFor(() => expect(placesCalls().length).toBeGreaterThan(0))
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.getByTestId('fulfill-pick').outerHTML).toBe(OFF('pick screen renders exactly as before, no places request'))
   })
 })

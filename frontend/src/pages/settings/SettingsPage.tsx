@@ -49,18 +49,19 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  * only while the tenant has flexible labeling (the switch itself is admin-only and not here).
  *
  * Warehouse places S1 adds "Places" (?tab=places, after Locations) — zones / racks / shelves / boxes and their
- * stickers. Owner and manager; shown only while the tenant has places (set by ops, no merchant switch).
+ * stickers. Owner and manager. Places rollout: shown in every store — its "Use places in this store" switch is the
+ * merchant's (PlacesTab).
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
   const role = getRoleFromToken()
   const isOwner = role === 'owner'
   const isWorker = role === 'worker'
-  const { flexibleLabeling, places } = useCapabilities()
+  const { flexibleLabeling } = useCapabilities()
 
   const base: TabKey[] = ALL_TABS.flatMap(k =>
     k === 'pickpack' && flexibleLabeling ? ['pickpack', 'labels'] as TabKey[]
-      : k === 'locations' && places ? ['locations', 'places'] as TabKey[]
+      : k === 'locations' ? ['locations', 'places'] as TabKey[]
       : [k])
   const visibleTabs: TabKey[] = isWorker ? [] : isOwner ? [...base, 'privacy'] : base
 
