@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Warehouse places S5 — one-place counts, place stickers in the stock take, Inventory place filter, Where is it,
+Move a box (2026-10-31, branch `feat/warehouse-places-s5` from main 3ee252a, rebased onto 9f1ecd6b; committed, NOT
+merged, NOT deployed; migration V198).** Nothing here calls Shopify, writes a piece off or changes a status
+(PlacesShopifyGuardTest covers every new class). Places off → every new endpoint 404 for every role, all new UI hidden
+(placesS5.test "off:" snapshots recorded from MAIN's original StockTake / StockTakeScan / StockTab / Lookup).
+- **V198:** `place_counts` (one per place per start; partial UNIQUE one OPEN count per place, like V197; status
+  open → finished | cancelled; `last_activity_at` for the idle job; summary jsonb = what Finish applied / the cancel
+  reason) + `place_count_scans` (every scan's result: found_here / move_here / place_here / other_location /
+  not_placeable / untagged / unknown, `from_bin_id`, via_phone; a piece once per count — partial UNIQUE). RLS on
+  both; app_user no DELETE, column UPDATE grants only. `stock_take_sessions.current_bin_id` (the place a full stock
+  take is counting). Counts bumped (MigrationSmokeTest 197 files, NotTracedBackfillTest 142).
+- **One-place count (`PlaceCountService` / `PlaceCountController` /api/v1/place-counts, every role):** start by place
+  id (Settings › Places "Count this place") or sticker (Stock take › "Count one place"; zone / rack → "Scan a shelf or
+  box"); joining the place's open count. A count covers ONLY its place — a box on a shelf is its own place (its
+  sticker → COUNT_SEPARATELY, nothing recorded; the shelf's Finish never touches the box's pieces). Scans only RECORD.
+  Finish = one transaction through `recordPlaceChange` (source `place_count`): move_here / place_here → this place;
+  pieces on this place since before the count started and not scanned → place_cleared ("No place yet", NEVER lost).
+  Every piece re-read at Finish: departed (other location / non-placeable status) → skipped; moved / placed / cleared
+  since its scan → left as it is; put here during the count → not cleared; skips listed in the summary. Cancel → no
+  change. `PlaceCountIdleCancelJob` (minute 25 hourly) cancels counts idle 12 h. Screen `/place-counts/:id`
+  (full-screen, mockup "6 · Stock take · one place": protection banner, 4 counters, found / moved here / not found
+  columns, "scanned, nothing changes" list, Finish asks first → ONE summary view); new SAFETY-CRITICAL scan handler
+  (shared useScanner + phone, via phone tag). **Mockup difference (brief wins):** the mockup listed "BOX-12 contents"
+  inside the shelf count; a box is counted on its own.
+- **Full stock take:** with places, a Q sticker in the stock-take scan sets "counting place X"
+  (`StockTakePlaces.setCountingPlace`, the session's location only, shelf / box, not archived — else place_refused
+  with a reason); it is not a counted scan. Pieces scanned after it are put there (`recordPlaceChange`, source
+  `stock_take`; a refusal → NOT_PLACED, the count unaffected). No sticker → no place ever changes. Without places a
+  sticker stays an unknown scan exactly as before. Finalize / resolve / reconciliation / Shopify push untouched
+  (every existing StockTake* test green, unedited). Session detail carries `countingPlace` only once set. Screen:
+  `onScan` handles place_set / place_refused (no tally), a "Counting place" banner, the piece line says where it
+  went — ScanShell untouched.
+- **Inventory place filter:** `/inventory/stock` and `/inventory/pieces` take `placeId` or `noPlace=true` (a chosen
+  location only — else 400; places off → 404; another location's place → 404). `PlaceScope` is the one definition:
+  zone / rack → everything under it, shelf → itself only, box → itself only (`bin_id = ANY(?)`, pieces_bin_idx).
+  With a filter, products / variants with nothing there are hidden. The old 6-argument `stock(...)` stays as an
+  overload (direct callers in CatalogPaginationTest / InventoryLocationStockTest). UI: a tree `Select` once a
+  location is chosen (zone › rack › shelf / box, "No place yet").
+- **Where is it (`WhereIsItService`, GET /api/v1/places/where/{variantId}, every role):** per location (main
+  first), every place holding the variant's available / on_hold / damaged pieces with counts per status, walking
+  order (PlaceSort), "No place yet"; ONE counting statement (parents joined in). Drawer from an Inventory variant row
+  and from Lookup (piece → its variant; shown when the lookup result carries `place`).
+- **Move a box (`BoxMoveService`, POST /api/v1/put-away/box-moves[/box], every role):** Put away › "Move a box" →
+  `/put-away/move-box` (full-screen): scan a box, then a shelf (onto it) or a zone (its floor). Reuses
+  `PlacesService.move` (bins.parent_id + one bin_events 'moved', actor, from → to); pieces keep their bin_id and
+  follow. Refused: not a box, archived box / target, rack or box target (BOX_TARGET), the box itself
+  (BOX_ONTO_ITSELF), another location (OTHER_LOCATION); same target → ALREADY_THERE, no event.
+- **Tests:** PlacesS5Test (c1–c8, st1–st3, w1–w2, b1–b2, x1), PlacesS5HttpTest (r1, r2, i1, i2), RlsCoverageTest
+  `placesS5_crossTenantIsolated_withSameTenantPositiveControl` (+2 COVERED), PortalOrderLeakTest +8 skip entries,
+  PlacesShopifyGuardTest extended, placesS5.test.tsx (pc1–pc5, sc1, st1, iv1, wh1, bm1, off). Revert-checks: Finish
+  marks "not found" lost → c3 RED; apply per scan → c1 RED; both restored. Screenshot harness
+  `frontend/dev/placess5-shots/` (`node dev/placess5-shots/shoot.mjs <dir>`).
+- **Housekeeping (2026-10-31):** the stock-take review workstream (Found it / Mark lost replaced by scanning) was
+  merged to main 2026-10-29 (146e4f76); no open branch or worktree touches StockTake* — no collision with part 2.
+
 **Orders tabs & filters — UI slice (2026-10-31, branch `feat/orders-tabs-filters-ui` off origin/main 3ee252a; merged to main
 2026-10-31, NOT deployed; frontend only, no backend change).** Builds on the merged backend slice (899d657).
 - **Tabs:** All · Needs attention · To ship · In transit · Delivered · Returned · Cancelled, sent as `tab=` with

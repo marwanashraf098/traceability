@@ -85,6 +85,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 8.9 [M] Warehouse places S2 — Put away: recordPlaceChange, place stickers in scans (Q / ض), put-away sessions, waiting list + suggestions, Lookup place + Move, sidebar / WorkerHome (V195, built as V193; merged to main 2026-10-30, not deployed)
 - [x] 8.10 [M] Warehouse places S3 — Pick & Pack places, display only: per-order / per-variant / per-orders place endpoints (one query), natural walking order, gather list split per place + zones (screen + A6 print), place chips on the pack screen (queue + waybill), printed-but-not-packed place column (no migration; merged to main 2026-10-30 as 645d99e, not deployed)
 - [x] 8.11 [M] Warehouse places S4 — put-away lists after receiving (receipt + Tag stock), returns (restocked) and transfers (returned good): list per flow grouped by zone in walking order with S2 suggestions (screen + A4 / A6 print), scoped put-away sessions (progress, extra, resume, idle close), transfer send-out collect list (V197; merged to main 3ee252a, deployed 2026-10-31)
+- [ ] 8.12 [M] Warehouse places S5 — one-place count (own tables, Finish applies moves / No place yet, never a write-off), place stickers in the full stock take, Inventory place filter, Where is it, Move a box by scanning (V198; branch `feat/warehouse-places-s5`, committed, NOT merged)
 - [ ] 8.8 [M] No typed barcodes; Manager-only manual entry, flagged in event
 
 ## FR-9 Packing, AWB & Cancellation
