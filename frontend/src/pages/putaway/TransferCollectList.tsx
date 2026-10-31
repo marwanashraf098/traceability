@@ -38,7 +38,7 @@ export default function TransferCollectList({ lines, places }: { lines: Transfer
               const none = (p?.places.length ?? 0) === 0 && (p?.noPlaceCount ?? 0) === 0
               return (
                 <tr key={line.id} className="tbl-row" data-testid="transfer-collect-line">
-                  <td className="tbl-cell align-top">
+                  <td className="tbl-cell align-top w-1/2">
                     <p className="text-primary"><bdi>{line.product_title} · {line.variant_title}</bdi></p>
                     {line.sku && <p className="font-mono text-caption text-muted"><bdi>{line.sku}</bdi></p>}
                     <p className="text-caption text-muted">{t('putAway.list.collectSent', { count: line.qty_out })}</p>
@@ -47,11 +47,11 @@ export default function TransferCollectList({ lines, places }: { lines: Transfer
                     {none ? (
                       <p className="text-small text-muted">{t('putAway.list.collectNoneLeft')}</p>
                     ) : (
-                      <ul className="space-y-1">
+                      <ul className="inline-grid grid-cols-[auto_auto] gap-x-6 gap-y-1 items-baseline">
                         {p!.places.map(place => {
                           const note = placeNote(place, t)
                           return (
-                            <li key={place.binId} data-testid="transfer-collect-place" className="flex items-baseline justify-between gap-3">
+                            <li key={place.binId} data-testid="transfer-collect-place" className="contents">
                               <span>
                                 <span className="font-mono font-semibold text-primary whitespace-nowrap"><bdi>{place.code}</bdi></span>
                                 {note && <span className="block text-caption text-muted">{note}</span>}
@@ -61,7 +61,7 @@ export default function TransferCollectList({ lines, places }: { lines: Transfer
                           )
                         })}
                         {p!.noPlaceCount > 0 && (
-                          <li data-testid="transfer-collect-place" className="flex items-baseline justify-between gap-3">
+                          <li data-testid="transfer-collect-place" className="contents">
                             <span className="text-muted">{t('fulfill.places.noPlace')}</span>
                             <span className="text-small text-muted whitespace-nowrap">{t('fulfill.places.pieces', { count: p!.noPlaceCount })}</span>
                           </li>
