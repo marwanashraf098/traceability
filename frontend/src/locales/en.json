@@ -356,7 +356,10 @@
       "needsAttention": "Needs attention",
       "inTransit": "In transit",
       "delivered": "Delivered",
-      "returns": "Returns"
+      "returns": "Returns",
+      "toShip": "To ship",
+      "returned": "Returned",
+      "cancelled": "Cancelled"
     },
     "totalCount": "{{count}} orders",
     "needAttentionSubheader": "{{count}} need attention",
@@ -441,7 +444,7 @@
       "cancelled": "Cancelled"
     },
     "badge": {
-      "notTraced": "Not Traced"
+      "notTraced": "Not traced"
     },
     "empty": "No orders found",
     "prev": "Previous",
@@ -464,6 +467,103 @@
       "done": "{{count}} order(s) marked delivered.",
       "skipped": "{{count}} skipped (already delivered or not with the courier).",
       "error": "Couldn't mark them delivered. Check your connection and try again — nothing changed."
+    },
+    "reasonGroup": {
+      "cant_ship": "Can't ship yet",
+      "no_courier_update": "No courier update",
+      "delivery_failed": "Delivery failed",
+      "cancelled_shipped": "Cancelled but shipped",
+      "return_to_handle": "Return to handle",
+      "other": "Other"
+    },
+    "reasonGroupsLabel": "Filter by reason",
+    "reason": {
+      "missing_awb": "Waybill didn't print",
+      "fulfillment_link_problem": "Bosta tracking not linked",
+      "pack_set_aside": "Set aside while packing",
+      "pack_cancelled_after_print": "Cancelled after the waybill was printed",
+      "guided_unpack": "Cancelled after packing — unpack it",
+      "waybill_deleted_in_bosta": "Waybill deleted in Bosta",
+      "missing_provider_id": "Can't read this shipment from Bosta",
+      "generic_bosta_conflict": "Bosta waybill on another courier's order",
+      "generic_multiple_parcels": "More than one parcel in Shopify",
+      "generic_fulfillment_cancelled": "Shopify fulfillment cancelled after packing",
+      "stuck_shipment": "No courier update for days",
+      "delivery_limbo": "On hold at the courier's hub",
+      "exchange_unmapped_state": "Unknown courier status",
+      "ndr_failed": "Delivery attempt failed",
+      "high_attempts": "Several delivery attempts",
+      "cancelled_live_shipment": "Cancelled, shipment still active",
+      "generic_cancelled_live_shipment": "Cancelled, shipment still active",
+      "cancelled_but_delivered": "Cancelled but delivered",
+      "shopify_cancel_vs_inflight": "Cancelled in Shopify while with the courier",
+      "never_received": "Returned by courier, never scanned in",
+      "return_leg_unscanned": "Return not scanned in",
+      "return_to_receive": "Returned item to receive into stock",
+      "request_item_to_receive": "Returned item to receive into stock",
+      "return_link_ambiguous": "Return — which request?",
+      "pickup_booking_problem": "Return pickup not booked",
+      "refund_pending_overdue": "Refund overdue",
+      "return_items_overdue": "Return items late",
+      "restocked_twice": "Restocked twice (Shopify and Traced)",
+      "blocked_customer": "Customer on the blocklist",
+      "shopify_edit_conflict": "Edited in Shopify after packing",
+      "generic_delivered_without_pickup": "Delivered with no pickup scan"
+    },
+    "reasonMore": "+{{count}}",
+    "returnLine": {
+      "pending": "Pending inspection",
+      "inspected": "Inspected",
+      "restocked": "{{count}} restocked",
+      "damaged": "{{count}} damaged",
+      "backToGood": "back to good",
+      "backToGoodN": "{{count}} back to good",
+      "sellable": "sellable",
+      "sellableN": "{{count}} sellable"
+    },
+    "filters": {
+      "button": "Filters",
+      "title": "Filters",
+      "clearAll": "Clear all",
+      "close": "Close filters",
+      "show_one": "Show {{count}} order",
+      "show_other": "Show {{count}} orders",
+      "showOrders": "Show orders",
+      "notApplied": "Not applied while searching or on Needs attention",
+      "tag": "{{group}}: {{value}}",
+      "removeTag": "Remove {{label}}",
+      "activeCount": "{{count}} active",
+      "groups": {
+        "traced": "Traced",
+        "returns": "Returns",
+        "courier": "Courier",
+        "payment": "Payment",
+        "days": "Order date"
+      },
+      "hints": {
+        "traced": "Traced = every piece scanned out in Pick & Pack. Applies to Bosta orders.",
+        "returns": "Pending inspection = returned piece scanned in, not yet restocked or marked damaged."
+      },
+      "options": {
+        "all": "All",
+        "traced": "Traced",
+        "not_traced": "Not traced",
+        "pending": "Pending inspection",
+        "inspected": "Inspected",
+        "bosta": "Bosta",
+        "other": "Other couriers",
+        "cod": "Cash on delivery",
+        "prepaid": "Prepaid",
+        "d7": "Last 7 days",
+        "d30": "Last 30 days",
+        "d90": "Last 90 days",
+        "dall": "All time"
+      }
+    },
+    "daysSuffix": {
+      "d7": "last 7 days",
+      "d30": "last 30 days",
+      "d90": "last 90 days"
     }
   },
   "orderDetail": {

@@ -991,14 +991,18 @@ export function Tabs({
   tabs,
   activeKey,
   onChange,
+  scrollable = false,
 }: {
-  /** badge: a custom pill in place of the count (e.g. "2 new"); count wins if both are set. */
-  tabs: Array<{ key: string; label: string; count?: number; badge?: ReactNode; disabled?: boolean }>
+  /** badge: a custom pill in place of the count (e.g. "2 new"); count wins if both are set.
+   *  countTone 'warning': the count pill is amber while the tab is not selected (e.g. Needs attention). */
+  tabs: Array<{ key: string; label: string; count?: number; badge?: ReactNode; disabled?: boolean; countTone?: 'warning' }>
   activeKey: string
   onChange: (key: string) => void
+  /** The row scrolls sideways instead of overflowing the page (phones); tabs never wrap. */
+  scrollable?: boolean
 }) {
-  return (
-    <div className="flex border-b border-line gap-6">
+  const row = (
+    <div className={cn('flex border-b border-line gap-6', scrollable && 'w-max min-w-full')}>
       {tabs.map(tab => (
         <button
           key={tab.key}
@@ -1007,6 +1011,7 @@ export function Tabs({
           onClick={() => onChange(tab.key)}
           className={cn(
             'pb-3 text-body transition-colors border-b-2 -mb-px inline-flex items-center gap-2',
+            scrollable && 'whitespace-nowrap shrink-0',
             tab.key === activeKey
               ? 'text-primary border-trace-blue'
               : 'text-muted border-transparent',
@@ -1017,7 +1022,15 @@ export function Tabs({
         >
           {tab.label}
           {tab.count != null && (
-            <span className="text-caption font-semibold text-muted bg-elevated border border-line rounded-full px-2 py-0.5">
+            <span
+              data-tone={tab.countTone === 'warning' && tab.key !== activeKey ? 'warning' : undefined}
+              className={cn(
+                'text-caption font-semibold border rounded-full px-2 py-0.5',
+                tab.countTone === 'warning' && tab.key !== activeKey
+                  ? TONE_STYLE.warning
+                  : 'text-muted bg-elevated border-line'
+              )}
+            >
               {tab.count.toLocaleString()}
             </span>
           )}
@@ -1026,6 +1039,7 @@ export function Tabs({
       ))}
     </div>
   )
+  return scrollable ? <div className="overflow-x-auto max-w-full" data-testid="tabs-scroll">{row}</div> : row
 }
 
 // ── SegmentedControl ──────────────────────────────────────────────────────────
@@ -1066,10 +1080,13 @@ export function FilterChip({
   label,
   onRemove,
   dateRange,
+  removeLabel,
 }: {
   label?: string
   onRemove?: () => void
   dateRange?: { start: string; end: string }
+  /** Accessible name of the remove (×) button. */
+  removeLabel?: string
 }) {
   const text = dateRange ? `${dateRange.start} → ${dateRange.end}` : (label ?? '')
   return (
@@ -1079,6 +1096,7 @@ export function FilterChip({
         <button
           type="button"
           onClick={onRemove}
+          aria-label={removeLabel}
           className="text-muted hover:text-primary transition-colors ms-0.5"
         >
           <X size={12} strokeWidth={2.5} />

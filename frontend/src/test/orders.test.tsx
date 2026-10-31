@@ -213,13 +213,13 @@ describe('Orders list', () => {
     expect(screen.queryByText(/PENDING|PAID/)).toBeNull()
   })
 
-  test('clicking a tab re-fetches filtered by the shipment deliveryState, not orders.status', async () => {
-    // NOT status=delivered — orders.status is never written to 'with_courier'/'returned' by
-    // the app (confirmed by grep of FulfillService/ShipmentLinkService), and only reaches
-    // 'delivered' for self-pickup handover. The real signal is the shipment's own
-    // internal_state, joined via the LATERAL `s` alias list() already selects.
+  // Orders tabs & filters UI (2026-10-31) — replaces the deliveryState tab tests (approved): a tab is sent as
+  // tab=<key> (OrderListFilters on the server), with its counts from the same withCounts request.
+  const COUNTS = { all: 12, attention: 4, toShip: 5, inTransit: 2, delivered: 3, returned: 1, cancelled: 1, reasonCounts: null }
+
+  test('clicking a tab re-fetches with tab=<key> and withCounts, never deliveryState / status', async () => {
     const appFetch = vi.fn((url: string) => {
-      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()], { counts: COUNTS }))
       if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
@@ -231,28 +231,26 @@ describe('Orders list', () => {
 
     await waitFor(() => {
       const calls = appFetch.mock.calls.map(c => c[0]).filter((u): u is string => typeof u === 'string' && u.includes('/orders?'))
-      expect(calls.some(u => u.includes('deliveryState=delivered'))).toBe(true)
-      expect(calls.some(u => u.includes('status=delivered'))).toBe(false)
+      const last = calls[calls.length - 1]
+      expect(last).toContain('tab=delivered')
+      expect(last).toContain('withCounts=true')
+      expect(last).not.toContain('deliveryState=')
+      expect(last).not.toContain('status=')
     })
   })
 
-  test('tab count and click-through list use the SAME deliveryState predicate (parity)', async () => {
-    // Regression guard for the review finding: the tab's count (from /orders/summary)
-    // and its click-through list (from /orders?deliveryState=...) must agree on what
-    // "In transit" means. Simulates a backend that filters by internal_state and
-    // returns exactly the count summary() derived — proves the two paths share one
-    // definition (same param, same value), not two that can silently diverge.
+  test('tab count and click-through list come from the same withCounts response (parity)', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) {
-        if (url.includes('deliveryState=with_courier')) {
+        if (url.includes('tab=inTransit')) {
           return jsonOk(makeOrderPage(
             [makeOrderSummary({ id: 'a' }), makeOrderSummary({ id: 'b' })],
-            { total: 2 },
+            { total: 2, counts: COUNTS },
           ))
         }
-        return jsonOk(makeOrderPage([makeOrderSummary()]))
+        return jsonOk(makeOrderPage([makeOrderSummary()], { counts: COUNTS }))
       }
-      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts({ withCourier: 2 }))
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -345,28 +343,29 @@ describe('Orders list', () => {
     })
   })
 
-  test('subheader shows the total; tabs show the buckets from GET /orders/summary', async () => {
+  test('subheader total equals the All tab count (withCounts); every tab shows its count from withCounts', async () => {
     const appFetch = vi.fn((url: string) => {
-      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()], { counts: COUNTS }))
       if (url.includes('/orders/summary')) {
-        return jsonOk(makeOrderSummaryCounts({ total: 12, processing: 5, withCourier: 3, delivered: 3, returned: 1 }))
+        return jsonOk(makeOrderSummaryCounts({ total: 40, processing: 5, withCourier: 3, delivered: 3, returned: 1 }))
       }
       return jsonOk({})
     })
     renderOrdersList(appFetch)
     await screen.findByText('#1001')
 
-    expect(await screen.findByText('12 orders')).toBeInTheDocument()
+    // Review fix (2026-10-31): the header count is the All tab's count under the active filters, not the summary's
+    // all-time total — with the date window it applies to.
+    expect(await screen.findByTestId('orders-total')).toHaveTextContent('12 orders · last 30 days')
 
-    const allTab       = screen.getByRole('button', { name: /All/ })
-    const inTransitTab = screen.getByRole('button', { name: /In transit/ })
-    const deliveredTab = screen.getByRole('button', { name: /Delivered/ })
-    const returnsTab   = screen.getByRole('button', { name: /Returns/ })
-
-    expect(within(allTab).getByText('12')).toBeInTheDocument()
-    expect(within(inTransitTab).getByText('3')).toBeInTheDocument()
-    expect(within(deliveredTab).getByText('3')).toBeInTheDocument()
-    expect(within(returnsTab).getByText('1')).toBeInTheDocument()
+    const pill = (name: RegExp) => within(screen.getByRole('button', { name })).getByText(/^\d+$/).textContent
+    expect(pill(/^All/)).toBe('12')
+    expect(pill(/Needs attention/)).toBe('4')
+    expect(pill(/To ship/)).toBe('5')
+    expect(pill(/In transit/)).toBe('2')
+    expect(pill(/^Delivered/)).toBe('3')
+    expect(pill(/^Returned/)).toBe('1')
+    expect(pill(/^Cancelled/)).toBe('1')
   })
 
   // TRIPWIRE — proves the calm-fail is real, not assumed. Verified by temporarily changing
