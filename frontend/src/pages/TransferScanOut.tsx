@@ -6,7 +6,11 @@ import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner } from '../components/ui'
-import { getTransfer, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail } from '../api'
+import {
+  getTransfer, getTransferSentPieces, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail, TransferSentPiece,
+} from '../api'
+import { useCapabilities } from '../capabilities'
+import { placePath } from './putaway/placePath'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -72,6 +76,17 @@ export default function TransferScanOut() {
       return { success: false, label: message ?? result.code }
     }),
   }))
+
+  // Warehouse places S4 — with places: the pieces sent so far, each with the place it left from (the send cleared
+  // it), in walking order. Display only; re-read whenever the transfer reloads (after each scan), never awaited.
+  const { places } = useCapabilities()
+  const [sent, setSent] = useState<TransferSentPiece[] | null>(null)
+  useEffect(() => {
+    if (!places || !id || !transfer) return
+    let cancelled = false
+    getTransferSentPieces(id).then(r => { if (!cancelled) setSent(r) }).catch(() => { /* keep the last list */ })
+    return () => { cancelled = true }
+  }, [places, id, transfer])
 
   if (loading) {
     return (
@@ -169,6 +184,37 @@ export default function TransferScanOut() {
             </div>
           )}
         </div>
+
+        {sent && sent.length > 0 && (
+          <div className="space-y-2" data-testid="transfer-sent-pieces">
+            <h2 className="text-caption text-muted uppercase tracking-widest">{t('putAway.list.sentTitle')}</h2>
+            <div className="card overflow-hidden">
+              <table className="min-w-full">
+                <tbody>
+                  {sent.map(p => (
+                    <tr key={p.pieceId} className="tbl-row" data-testid="transfer-sent-row">
+                      <td className="tbl-cell align-top">
+                        {p.place ? (
+                          <>
+                            <span className="block font-mono font-semibold text-primary whitespace-nowrap"><bdi>{p.place.code}</bdi></span>
+                            <span className="block text-caption text-muted"><bdi>{placePath(p.place, t)}</bdi></span>
+                          </>
+                        ) : (
+                          <span className="text-muted">{t('putAway.list.noPlace')}</span>
+                        )}
+                      </td>
+                      <td className="tbl-cell align-top text-primary">
+                        <bdi>{[p.productTitle, p.variantTitle && p.variantTitle !== 'Default Title' ? p.variantTitle : null]
+                          .filter(Boolean).join(' · ')}</bdi>
+                      </td>
+                      <td className="tbl-cell align-top font-mono text-small text-muted" dir="ltr">{p.code}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('transfers.scanOut.recent')}</h2>

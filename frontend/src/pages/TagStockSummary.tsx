@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getTagSession, voidUnusedTagLabels, ServerMessageError, TagSession } from '../api'
 import { Alert, Button, ProductThumb, Spinner, useToast } from '../components/ui'
+import PutAwayListButton from './putaway/PutAwayListButton'
 
 /**
  * Flexible labeling slice 3 — Tag stock, the session SUMMARY (in the shell): per variant how many labels were
@@ -98,6 +99,8 @@ export default function TagStockSummary() {
           <Button variant="secondary" loading={voiding} onClick={voidUnused}>{t('tagStock.summary.void')}</Button>
         )}
         <Button onClick={() => navigate('/inventory?tab=untagged')}>{t('tagStock.summary.back')}</Button>
+        {/* Warehouse places S4 — renders nothing without places, or when no piece tagged here waits for a place. */}
+        {id && <PutAwayListButton source="tag_session" sourceId={id} label={t('putAway.list.putAwayNow')} size="md" />}
       </div>
     </div>
   )

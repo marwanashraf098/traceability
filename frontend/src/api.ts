@@ -4410,6 +4410,46 @@ export function movePiecePlace(pieceId: string, body: { placeId?: string; scan?:
   })
 }
 
+// ── Warehouse places S4 — put-away lists (404 without places; a transfer's list is owner / manager) ───────────────
+
+/** The flow a put-away list is for: a receipt, a Tag stock session, a return session (restocked), a transfer. */
+export type PutAwayListSource = 'receiving' | 'tag_session' | 'return_session' | 'transfer'
+/** A place on a put-away list: PlaceRef + its zone and walking-order key (plain string compare, like S3). */
+export interface PutAwayListPlace extends PlaceRef { zoneCode: string; sortKey: string }
+/** done: on a place now (place = where it is, reason 'placed'); else place = the suggestion (or null). */
+export interface PutAwayListPiece {
+  pieceId: string; code: string; variantId: string; productTitle: string; variantTitle: string | null; sku: string | null
+  status: string; done: boolean; place: PutAwayListPlace | null
+  placeReason: 'placed' | 'last_place' | 'most_of_variant' | null
+}
+export interface PutAwayList {
+  source: PutAwayListSource; sourceId: string; sourceRef: string | null
+  locationId: string; locationName: string; hasPlaces: boolean
+  total: number; placed: number; pieces: PutAwayListPiece[]
+  /** The caller's open session on this list (Start resumes it); through a session: that session. */
+  session: { id: string; status: 'open' | 'closed'; placedInSession: number; extra: number; lastActivityAt: string } | null
+}
+export interface TransferSentPiece {
+  pieceId: string; code: string | null; productTitle: string; variantTitle: string | null; sku: string | null
+  place: PutAwayListPlace | null
+}
+
+export function getPutAwayList(source: PutAwayListSource, sourceId: string) {
+  return requestReadable<PutAwayList>(`/put-away/lists/${source}/${encodeURIComponent(sourceId)}`)
+}
+/** Start a put-away session on the list, or resume the caller's open one. */
+export function startPutAwayList(source: PutAwayListSource, sourceId: string) {
+  return requestReadable<PutAwaySession>(`/put-away/lists/${source}/${encodeURIComponent(sourceId)}/sessions`, { method: 'POST' })
+}
+/** The list behind a put-away session (scoped false for a manual session). */
+export function getPutAwaySessionList(sessionId: string) {
+  return requestReadable<{ scoped: boolean; list: PutAwayList | null }>(`/put-away/sessions/${sessionId}/list`)
+}
+/** Owner / manager: the pieces scanned out on a transfer and the place each left from, in walking order. */
+export function getTransferSentPieces(transferId: string) {
+  return requestReadable<TransferSentPiece[]>(`/put-away/transfers/${encodeURIComponent(transferId)}/sent-pieces`)
+}
+
 // ── Warehouse places S3 — Pick & Pack places (display only; 404 without places) ──────────────────
 
 /** One place holding available pieces of a variant at the main warehouse. sortKey = walking order (plain string compare). */

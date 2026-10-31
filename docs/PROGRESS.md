@@ -4,6 +4,49 @@
 
 ## Current state
 
+**Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30, branch
+`feat/warehouse-places-s4` from main 645d99e; BUILT, NOT committed, NOT merged, NOT deployed; migration V197).
+TESTS WRITTEN BUT NOT RUN — another session is reworking the backend suite; only `mvn compile test-compile` and
+`tsc --noEmit` were run (both clean).** The gather list in reverse: a flow's pieces and where each should go.
+- **Flows (`PutAwayListService`, one definition):** `receiving` — a receipt's TAGGED pieces (`pieces.receipt_id`) at its
+  location (none → main; count-only/untagged never listed); `tag_session` — the pieces a Tag stock session tagged
+  (`label_bound` events, `metadata.tag_session_id`), at its location; `return_session` — RESTOCKED items only
+  (`return_session_items.disposition = 'restocked'`), main; `transfer` — `transfer_pieces.outcome = 'returned_good'`
+  (send-and-back and bring-back), main, owner / manager only. On the list = tagged, placeable status, still AT that
+  location; placed → done (place = where it is), departed → dropped. Suggestion = S2's rule, now ONE definition:
+  `PutAwayService.suggestBins` (S2's `suggest()` builds on it; behaviour unchanged). `PlacePaths.Place` gained
+  `zoneCode` + `sortKey` (S3's `PlaceSort`, from the chain it already loads — existing responses map named fields,
+  unchanged). One statement for the pieces, two for suggestions, two for places: nothing per piece.
+- **V197:** `put_away_sessions.source` gains `tag_session`; partial UNIQUE (tenant, opened_by, source, source_id) WHERE
+  open AND source <> 'manual' — one open scoped session per person per flow (Start = INSERT … ON CONFLICT … DO UPDATE
+  last_activity_at → resume + idle clock restart, on app_user's existing column grant). Both migration counts bumped
+  (MigrationSmokeTest 196 files, NotTracedBackfillTest 141).
+- **Endpoints (`PutAwayListController`, /api/v1/put-away):** GET `lists/{source}/{sourceId}`, POST `…/sessions` (start /
+  resume, pre-fills put_away_session_pieces with the waiting pieces' `suggested_bin_id`), GET `sessions/{id}/list`
+  (the caller's own session; `scoped:false` for manual), GET `transfers/{transferId}/sent-pieces` (owner / manager: the
+  place each scanned-out piece left from — its latest place event before the scan-out at the location it left, unless
+  a status change out of / into a placeless status came in between). Off → 404 for every role (the role check runs in
+  the service AFTER Places.require, so a worker's transfer list is 404, not 403, without places). Unknown / another
+  tenant's flow → 404 SOURCE_NOT_FOUND alike. Nothing calls Shopify; S2's scan / close / idle close unchanged.
+- **Frontend:** `/put-away/list/:source/:sourceId` (`PutAwayListPage`, standalone printable sheet like
+  /fulfill/gather; Print A6 / Print A4 switch the @page size; Start / Resume → `/put-away/:id/scan?list=1`);
+  `PutAwayListTable` (screen + print one component: zone chips, zone rows in walking order, place + path + reason,
+  qty placed/total, codes struck when placed, "No suggestion" last); `putAwayListRows.ts` (place × variant rows — a
+  placed piece ticks its own row). `PutAwayListButton` (renders nothing and asks nothing without places; shows only
+  while something on the list waits at a location with places). Buttons: Receiving finalized receipt (own row under
+  the header), Tag stock summary, the closed Scan returns summary (ONE button, restocked > 0; workers too; never in
+  grading / the open scan screen), TransferReconcile end screen after Close (only when pieces wait; otherwise — and
+  without places — straight to the transfer as before). TransferScanOut: "Pieces sent · by the place they came
+  from". PutAwayScan with ?list=1: "This list" card (progress, extra, compact ticking table), re-read after every
+  scan result via an effect on the session (the SAFETY-CRITICAL scan handler untouched), Finish → list progress +
+  "Back to the list"; without ?list=1 nothing is asked (S2 unchanged). EN + AR (six Arabic plural forms).
+- **Tests written (not run):** PutAwayListTest (ls1–ls4, gs1, q1, ss1, ss2, i1, sp1, r1, f1, x1), PutAwayListHttpTest
+  (r1, r2), RlsCoverageTest `putAwayLists_crossTenantIsolated_withSameTenantPositiveControl` (3 COVERED entries),
+  PortalOrderLeakTest +4 skip entries, PlacesShopifyGuardTest extended (approved), putAwayLists.test.tsx (rw1, pl1–pl5,
+  ps1–ps3, bt1, rc1, tg1, rt1, rt1b, tr1, tr2, off). TO DO before merge: record the 5 "off:" snapshots from MAIN's
+  original page files (S3 procedure), run targeted + full suites, revert-check (drop `AND i.disposition = 'restocked'`
+  → ls2 red), screenshots EN/AR.
+
 **Orders tabs & filters — backend slice (2026-10-30, branch `feat/orders-tabs-filters-api` off origin/main 43a98ff,
 rebased onto cb397c0 (test suite T1/T2); merged to main 2026-10-31, NOT deployed; no migration; no visual change — backend + api.ts types; the UI slice follows).** Marawan's
 decisions on the Step 0: shipping tabs EXCLUSIVE in priority Cancelled → To ship → In transit (with_courier, exception,

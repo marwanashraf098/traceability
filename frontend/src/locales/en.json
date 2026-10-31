@@ -5134,6 +5134,53 @@
       "meta_other": "{{count}} placed · started {{since}} ago · last scan {{last}} ago",
       "confirmBody_one": "{{name}}'s session ends now. The {{count}} piece it placed stays where it is.",
       "confirmBody_other": "{{name}}'s session ends now. The {{count}} pieces it placed stay where they are."
+    },
+    "list": {
+      "title": "Put-away list",
+      "back": "Back",
+      "refresh": "Refresh",
+      "printA6": "Print A6",
+      "printA4": "Print A4",
+      "zone": "Zone {{zone}}",
+      "placedOf": "{{placed}}/{{total}} placed",
+      "progress_one": "{{placed}} of {{count}} piece placed",
+      "progress_other": "{{placed}} of {{count}} pieces placed",
+      "colPlace": "Place",
+      "colItem": "Item",
+      "colSku": "SKU",
+      "colQty": "Qty",
+      "colPieces": "Pieces",
+      "reason": {
+        "placed": "Placed here",
+        "last_place": "Its last place",
+        "most_of_variant": "Most of this item is here"
+      },
+      "from": {
+        "receiving": "Receipt · {{ref}}",
+        "tag_session": "Tag stock session",
+        "return_session": "Scan returns · restocked pieces",
+        "transfer": "Transfer · back from {{ref}}"
+      },
+      "emptyTitle": "Nothing to put away here",
+      "emptyBody": "No piece from this is waiting at this location. Untagged pieces and pieces that have left aren't listed.",
+      "allPlaced": "Every piece on this list has a place",
+      "thisList": "This list",
+      "extra_one": "{{count}} extra (not in this list)",
+      "extra_other": "{{count}} extra (not in this list)",
+      "backToList": "Back to the list",
+      "waitingCount_one": "{{count}} waiting",
+      "waitingCount_other": "{{count}} waiting",
+      "putAwayNow": "Put away now",
+      "putAwayRestocked": "Put away all restocked pieces",
+      "putAwayReturned": "Put away returned pieces",
+      "sentTitle": "Pieces sent · by the place they came from",
+      "noPlace": "No place",
+      "transferEnd": {
+        "title": "Transfer closed",
+        "body_one": "{{count}} piece came back to the main warehouse and is waiting for a place.",
+        "body_other": "{{count}} pieces came back to the main warehouse and are waiting for a place.",
+        "goToTransfer": "Go to the transfer"
+      }
     }
   }
 }

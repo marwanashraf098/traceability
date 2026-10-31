@@ -11,6 +11,7 @@ import Layout from '../components/Layout'
 import { getAccessToken } from '../auth'
 import { authFetch, getRoleFromToken } from '../api'
 import { formatSessionStart } from './returns/sessionStart'
+import PutAwayListButton from './putaway/PutAwayListButton'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
@@ -1761,6 +1762,13 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
         <SummaryStat value={data.damagedCount} label={t('returns.openSession.damaged')} tone="critical" />
         <SummaryStat value={data.mismatchCount} label={t('returns.openSession.mismatchLabel')} tone="warning" />
       </div>
+
+      {/* Warehouse places S4 — the ONE put-away step for returns: the session's restocked pieces (never damaged).
+          Renders nothing without places, or when no restocked piece is waiting for a place. */}
+      {data.restockedCount > 0 && (
+        <PutAwayListButton source="return_session" sourceId={data.sessionId}
+          label={t('putAway.list.putAwayRestocked')} size="md" />
+      )}
 
       {variant === 'historical' && data.items && (
         <div className="w-full text-start space-y-2 mt-2" data-testid="summary-items">

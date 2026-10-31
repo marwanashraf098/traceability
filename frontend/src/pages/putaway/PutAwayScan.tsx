@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { ArrowRight, Check, Layers, X } from 'lucide-react'
@@ -10,11 +10,13 @@ import { ViaPhoneTag } from '../../phone/ViaPhoneTag'
 import { ScanShell } from '../../components/ScanShell'
 import { Alert, Button, Spinner, cn } from '../../components/ui'
 import {
-  closePutAway, getPutAwaySession, scanPutAway, PutAwayCloseSummary, PutAwayScanResult, PutAwaySession,
-  ServerMessageError,
+  closePutAway, getPutAwaySession, getPutAwaySessionList, scanPutAway, PutAwayCloseSummary, PutAwayList,
+  PutAwayScanResult, PutAwaySession, ServerMessageError,
 } from '../../api'
 import { placePath } from './placePath'
 import { resetPutAwayWaitingCache } from './usePutAwayWaiting'
+import PutAwayListTable from './PutAwayListTable'
+import { putAwayListPath } from './putAwayListPaths'
 
 /**
  * Warehouse places S2 — Put away, the SCAN LOOP: full-screen, NOT Layout-wrapped (the /tag-stock/:id/scan
@@ -80,8 +82,23 @@ export default function PutAwayScan() {
   const [done, setDone] = useState<PutAwayCloseSummary | null>(null)
   /** Closed while this screen was open (a manager, or 12 h idle): the scans stop being accepted. */
   const [closedElsewhere, setClosedElsewhere] = useState(false)
+  // S4 — opened from a put-away list (?list=1): the list behind the session, re-read after every scan result (the
+  // scan handler sets a new session) and once more after Finish. Never awaited by a scan; a failed read keeps the
+  // last list. A manual session (S2) never asks.
+  const [searchParams] = useSearchParams()
+  const fromList = searchParams.get('list') === '1'
+  const [scopeList, setScopeList] = useState<PutAwayList | null>(null)
 
   const readable = (e: unknown) => e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('putAway.error')
+
+  useEffect(() => {
+    if (!fromList || !id || !session) return
+    let cancelled = false
+    getPutAwaySessionList(id)
+      .then(r => { if (!cancelled && r.scoped && r.list) setScopeList(r.list) })
+      .catch(() => { /* keep the last list */ })
+    return () => { cancelled = true }
+  }, [fromList, id, session, done])
 
   useEffect(() => {
     if (!id) return
@@ -173,10 +190,24 @@ export default function PutAwayScan() {
               ))}
             </ul>
           )}
+          {scopeList && (
+            <p className="text-body text-primary" data-testid="put-away-done-list">
+              {t('putAway.list.progress', { placed: scopeList.placed, count: scopeList.total })}
+              {scopeList.session && scopeList.session.extra > 0 && (
+                <span className="text-muted">{' · '}{t('putAway.list.extra', { count: scopeList.session.extra })}</span>
+              )}
+            </p>
+          )}
           {done.session.stillWaiting > 0 && (
             <Alert tone="warning" title={t('putAway.done.stillWaiting', { count: done.session.stillWaiting })} />
           )}
-          <Button className="w-full" size="lg" onClick={() => navigate('/put-away')}>{t('putAway.done.back')}</Button>
+          {scopeList ? (
+            <Button className="w-full" size="lg" onClick={() => navigate(putAwayListPath(scopeList.source, scopeList.sourceId))}>
+              {t('putAway.list.backToList')}
+            </Button>
+          ) : (
+            <Button className="w-full" size="lg" onClick={() => navigate('/put-away')}>{t('putAway.done.back')}</Button>
+          )}
         </div>
       </div>
     )
@@ -252,6 +283,23 @@ export default function PutAwayScan() {
               <span><span className="text-h3 font-bold tabular-nums text-warning-text" data-testid="put-away-still-waiting">{session.stillWaiting}</span> {t('putAway.scan.stillWaiting')}</span>
             </div>
           </div>
+
+          {scopeList && (
+            <div className="card p-4 space-y-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto" data-testid="put-away-scope">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                <p className="text-caption font-semibold uppercase tracking-wider text-muted">{t('putAway.list.thisList')}</p>
+                <p className="text-body text-primary" data-testid="put-away-scope-progress">
+                  {t('putAway.list.progress', { placed: scopeList.placed, count: scopeList.total })}
+                </p>
+              </div>
+              {scopeList.session && scopeList.session.extra > 0 && (
+                <p className="text-small text-muted" data-testid="put-away-scope-extra">
+                  {t('putAway.list.extra', { count: scopeList.session.extra })}
+                </p>
+              )}
+              <PutAwayListTable pieces={scopeList.pieces} compact />
+            </div>
+          )}
         </section>
 
         <section aria-label={t('putAway.scan.lastScans')}

@@ -12,9 +12,12 @@ import java.util.*;
  */
 public final class PlacePaths {
 
-    /** {@code trail}: labels top first, the place's own last. {@code parentCode}: the parent's full code, or null. */
+    /**
+     * {@code trail}: labels top first, the place's own last. {@code parentCode}: the parent's full code, or null.
+     * {@code zoneCode}: the top of its chain (its zone). {@code sortKey}: S3's walking order ({@link PlaceSort#key}).
+     */
     public record Place(UUID id, String kind, String code, String scanCode, UUID locationId, boolean archived,
-                        List<String> trail, String parentCode, String parentKind) {}
+                        List<String> trail, String parentCode, String parentKind, String zoneCode, String sortKey) {}
 
     private PlacePaths() {}
 
@@ -51,14 +54,17 @@ public final class PlacePaths {
             List<Link> chain = chains.get(id);
             if (s == null || chain == null) continue;
             List<String> trail = new ArrayList<>(chain.size());
+            List<PlaceSort.Level> levels = new ArrayList<>(chain.size());
             String parent = null;
             for (Link l : chain) {                      // top (highest level) first
                 trail.add(PlaceCodes.shortLabel(l.code(), parent));
+                levels.add(new PlaceSort.Level(l.kind(), l.code()));
                 parent = l.code();
             }
             Link up = chain.size() > 1 ? chain.get(chain.size() - 2) : null;
             out.put(id, new Place(id, (String) s[0], (String) s[1], (String) s[2], (UUID) s[3], (Boolean) s[4],
-                List.copyOf(trail), up == null ? null : up.code(), up == null ? null : up.kind()));
+                List.copyOf(trail), up == null ? null : up.code(), up == null ? null : up.kind(),
+                chain.get(0).code(), PlaceSort.key(levels)));
         }
         return out;
     }

@@ -16,7 +16,15 @@ public class PlaceException extends RuntimeException {
         INVALID_BULK, PLACE_ARCHIVED, PLACE_NOT_EMPTY, PLACE_HAS_CHILDREN, NOT_A_BOX, PURPOSE_NOT_ALLOWED,
         NO_STICKERS,
         // S2 — put away
-        SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER
+        SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER,
+        // S4 — put-away lists
+        SOURCE_NOT_FOUND
+    }
+
+    /** An unknown list source, or a receipt / session / transfer that isn't the caller's tenant's — the same answer. */
+    static PlaceException sourceNotFound() {
+        return new PlaceException(HttpStatus.NOT_FOUND, Code.SOURCE_NOT_FOUND,
+            "Nothing to put away was found for this", "لم يتم العثور على قطع للترتيب من هذا المصدر");
     }
 
     static PlaceException sessionNotFound() {
