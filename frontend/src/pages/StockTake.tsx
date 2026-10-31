@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowRightCircle } from 'lucide-react'
+import { ArrowRightCircle, ClipboardList } from 'lucide-react'
 import { Badge, Button, EmptyState, Input, TableSkeleton, Alert, StatCard } from '../components/ui'
+import { useCapabilities } from '../capabilities'
+import CountOnePlaceDialog from './placecount/CountOnePlaceDialog'
 import {
   listStockTakeSessions, openStockTakeSession, searchVariants, getStockTakeSummary,
   StockTakeSessionSummary, StockTakeScopeType, StockTakeSummaryCounts, VariantMatch,
@@ -46,6 +48,9 @@ export default function StockTake() {
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'list' | 'create'>('list')
   const [page, setPage] = useState(0)
+  // Warehouse places S5 — "Count one place" (places only; nothing shows without).
+  const { places } = useCapabilities()
+  const [countingOne, setCountingOne] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -85,20 +90,30 @@ export default function StockTake() {
   const pageStart = page * PAGE_SIZE
   const pageRows = sessions.slice(pageStart, pageStart + PAGE_SIZE)
 
+  const headerAction = mostRecentOpen ? (
+      <Button size="sm" iconStart={ArrowRightCircle} onClick={() => navigate(`/stock-take/${mostRecentOpen.sessionId}/scan`)}>
+        {t('stocktake.list.resumeSession', { id: shortId(mostRecentOpen.sessionId) })}
+      </Button>
+    ) : (
+      <Button size="sm" onClick={() => setView('create')}>
+        + {t('stocktake.new')}
+      </Button>
+    )
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-h1 text-primary">{t('stocktake.title')}</h1>
-        {mostRecentOpen ? (
-          <Button size="sm" iconStart={ArrowRightCircle} onClick={() => navigate(`/stock-take/${mostRecentOpen.sessionId}/scan`)}>
-            {t('stocktake.list.resumeSession', { id: shortId(mostRecentOpen.sessionId) })}
-          </Button>
-        ) : (
-          <Button size="sm" onClick={() => setView('create')}>
-            + {t('stocktake.new')}
-          </Button>
-        )}
+        {places ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" iconStart={ClipboardList} onClick={() => setCountingOne(true)}>
+              {t('placeCount.oneButton')}
+            </Button>
+            {headerAction}
+          </div>
+        ) : headerAction}
       </div>
+      {countingOne && <CountOnePlaceDialog onClose={() => setCountingOne(false)} />}
 
       {mostRecentOpen && (
         <Alert

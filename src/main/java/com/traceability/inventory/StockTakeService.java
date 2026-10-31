@@ -229,6 +229,15 @@ public class StockTakeService {
                 "condition must be 'good' or 'damaged'");
         }
 
+        // Warehouse places S5: with places, a shelf / box sticker sets the place being counted — not a piece scan,
+        // nothing is recorded or counted. Without places a sticker stays an unknown scan, exactly as before.
+        boolean places = com.traceability.places.Places.enabled(jdbc, tenantId);
+        String sticker = places ? ScanInputNormalizer.normalizePlace(barcode) : null;
+        if (sticker != null) {
+            return com.traceability.places.StockTakePlaces.setCountingPlace(jdbc, tenantId, sessionId,
+                session.locationId(), sticker, barcode);
+        }
+
         // Normalized for the lookup only (ScanInputNormalizer); an unknown scan stores the raw value.
         String lookup = ScanInputNormalizer.normalizePiece(barcode);
         record PieceRow(String id, String status, boolean untagged) {}
@@ -280,6 +289,12 @@ public class StockTakeService {
         out.put("pieceId", piece.id());
         out.put("alreadyScanned", inserted == 0);
         out.put("classification", classify(sessionId, piece.id(), condition, piece.status()));
+        // S5: after a place sticker, the piece is put on that place (the count above is unaffected).
+        if (places) {
+            Map<String, Object> placed = com.traceability.places.StockTakePlaces.placeScanned(
+                jdbc, tenantId, sessionId, piece.id(), actorUserId, viaPhone, barcode);
+            if (placed != null) out.put("placed", placed);
+        }
         return out;
     }
 
@@ -468,6 +483,11 @@ public class StockTakeService {
         }
         Map<String, Object> sync = loadShopifySync(sessionId, tenantId);
         row.put("shopifySync", sync);
+        // S5: the place being counted (present only once a place sticker was scanned).
+        if (com.traceability.places.Places.enabled(jdbc, tenantId)) {
+            var counting = com.traceability.places.StockTakePlaces.countingPlace(jdbc, tenantId, sessionId);
+            if (counting != null) row.put("countingPlace", counting);
+        }
         // Close summary (2026-10-01): every write-off in Traced (any origin), and separately what
         // actually reached Shopify — damaged / on-hold write-offs never do.
         row.put("writtenOff", jdbc.queryForObject(

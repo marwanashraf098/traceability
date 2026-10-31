@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ScanLine } from 'lucide-react'
+import { Boxes, ScanLine } from 'lucide-react'
 import {
   closePutAway, getOpenPutAwaySessions, getPutAwaySummary, getPutAwayWaiting, getRoleFromToken, startPutAway,
   PutAwayOpenSession, PutAwaySource, PutAwaySummary, PutAwayWaiting, ServerMessageError,
@@ -152,6 +152,11 @@ export default function PutAway() {
               options={locations.map(l => ({ value: l.id, label: `${l.name} · ${l.waiting}` }))}
             />
           )}
+          {/* S5 — move a whole box by scanning it, then its new shelf / zone. */}
+          <Button size="lg" variant="secondary" iconStart={Boxes} disabled={!data?.hasPlaces}
+            onClick={() => navigate('/put-away/move-box')}>
+            {t('boxMove.button')}
+          </Button>
           <Button size="lg" loading={starting} disabled={!data?.hasPlaces} onClick={start}>
             <ScanLine size={18} strokeWidth={2} />
             {data?.mine ? t('putAway.resume', { count: data.mine.placed }) : t('putAway.start')}

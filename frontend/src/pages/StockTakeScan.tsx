@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
-import { CheckCircle2, AlertTriangle, RotateCcw, CircleSlash, XCircle, Undo2 } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, RotateCcw, CircleSlash, XCircle, Undo2, MapPin } from 'lucide-react'
 import { useScanner, ScanMeta } from '../hooks/useScanner'
 import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
@@ -12,8 +12,9 @@ import { Button, Spinner, Modal } from '../components/ui'
 import {
   getStockTakeSession, scanStockTakePiece, unscanStockTakePiece, cancelStockTake, ServerMessageError,
   getStockTakeUntaggedCounts,
-  StockTakeCondition, StockTakeClassification, StockTakeSessionDetail, ScanDevice,
+  StockTakeCondition, StockTakeClassification, StockTakeSessionDetail, ScanDevice, PlaceRef,
 } from '../api'
+import { placePath } from './putaway/placePath'
 import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
 
 // FR-21 Step 6.3, screen 3 — blind full-screen scan. NOT Layout-wrapped, matching
@@ -50,12 +51,24 @@ function bucketOf(cls: StockTakeClassification): keyof Tally {
   return 'unknown'
 }
 
-const FEEDBACK_STYLE: Record<keyof Tally, { icon: LucideIcon; text: string; bg: string; border: string }> = {
+type FeedbackStyle = { icon: LucideIcon; text: string; bg: string; border: string }
+
+const FEEDBACK_STYLE: Record<keyof Tally, FeedbackStyle> = {
   matched:    { icon: CheckCircle2, text: 'text-success',  bg: 'bg-success/10',  border: 'border-success/30' },
   mismatch:   { icon: AlertTriangle, text: 'text-warning', bg: 'bg-warning/10',  border: 'border-warning/30' },
   resurfaced: { icon: RotateCcw,    text: 'text-info',     bg: 'bg-info/10',     border: 'border-info/30' },
   outOfScope: { icon: CircleSlash,  text: 'text-muted',    bg: 'bg-elevated',    border: 'border-line' },
   unknown:    { icon: XCircle,      text: 'text-critical', bg: 'bg-critical/10', border: 'border-critical/30' },
+}
+
+// Warehouse places S5 — a place sticker's line (only ever seen with places): not a counted scan, no tally.
+const PLACE_SET_STYLE: FeedbackStyle = { icon: MapPin, text: 'text-trace-blue', bg: 'bg-trace-blue/10', border: 'border-trace-blue/30' }
+const PLACE_REFUSED_STYLE: FeedbackStyle = { icon: AlertTriangle, text: 'text-warning', bg: 'bg-warning/10', border: 'border-warning/30' }
+
+function styleOf(cls: StockTakeClassification | undefined): FeedbackStyle {
+  if (cls === 'place_set') return PLACE_SET_STYLE
+  if (cls === 'place_refused') return PLACE_REFUSED_STYLE
+  return FEEDBACK_STYLE[cls ? bucketOf(cls) : 'unknown']
 }
 
 export default function StockTakeScan() {
@@ -71,11 +84,13 @@ export default function StockTakeScan() {
   const [showAbandon, setShowAbandon] = useState(false)
   const [abandoning, setAbandoning] = useState(false)
   const [abandonError, setAbandonError] = useState<string | null>(null)
+  // S5 — the place being counted (a place sticker set it; pieces scanned now are put there). Places only.
+  const [countingPlace, setCountingPlace] = useState<PlaceRef | null>(null)
 
   useEffect(() => {
     if (!id) return
     getStockTakeSession(id)
-      .then(setSession)
+      .then(s => { setSession(s); setCountingPlace(s.countingPlace ?? null) })
       .catch(e => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }, [id])
@@ -107,6 +122,15 @@ export default function StockTakeScan() {
         throw e
       }
       const cls = result.classification
+      // S5 — a place sticker: sets the place being counted (or is refused); never counted, never tallied.
+      if (cls === 'place_set' || cls === 'place_refused') {
+        if (cls === 'place_set' && result.place) setCountingPlace(result.place)
+        const placeData: ScanData = { pieceId: null, classification: cls }
+        return cls === 'place_set'
+          ? { success: true, label: t('stocktake.scan.place.set', { code: result.place?.code ?? '' }), data: placeData }
+          : { success: false, label: t(`stocktake.scan.place.refused.${result.placeRefusal ?? 'UNKNOWN_STICKER'}`,
+              { code: result.place?.code ?? '' }), data: placeData }
+      }
       const success = isCounted(cls)
       const bucket = bucketOf(cls)
 
@@ -116,9 +140,12 @@ export default function StockTakeScan() {
       }
 
       const data: ScanData = { pieceId: result.pieceId, classification: cls, scanDevice: result.scanDevice }
+      const placed = result.placed
+        ? ' · ' + t(`stocktake.scan.place.${result.placed.outcome}`, { code: result.placed.place.code })
+        : ''
       return {
         success,
-        label: t(`stocktake.scan.feedback.${bucket}`),
+        label: t(`stocktake.scan.feedback.${bucket}`) + placed,
         data,
       }
     }),
@@ -224,8 +251,7 @@ export default function StockTakeScan() {
         <ScanShell scanner={scanner} placeholder={t('stocktake.scan.placeholder')} />
         {scanner.recentScans[0] && (() => {
           const data = scanner.recentScans[0].data as ScanData | undefined
-          const bucket = data ? bucketOf(data.classification) : 'unknown'
-          const style = FEEDBACK_STYLE[bucket]
+          const style = styleOf(data?.classification)
           const Icon = style.icon
           return (
             <div
@@ -239,6 +265,15 @@ export default function StockTakeScan() {
             </div>
           )
         })()}
+        {countingPlace && (
+          <div data-testid="stocktake-counting-place"
+            className="mt-2 flex items-center gap-2 rounded-lg border border-trace-blue/30 bg-trace-blue/10 px-3 py-2 text-small text-primary">
+            <MapPin size={16} strokeWidth={2} className="flex-shrink-0 text-trace-blue" />
+            <span>{t('stocktake.scan.place.counting')}</span>
+            <span className="font-mono font-semibold" dir="ltr">{countingPlace.code}</span>
+            <span className="text-muted"><bdi>{placePath(countingPlace, t)}</bdi></span>
+          </div>
+        )}
       </div>
 
       {/* Blind counted + outcomes-only tally — never expected/remaining */}
@@ -282,8 +317,7 @@ export default function StockTakeScan() {
             <div className="space-y-2">
               {scanner.recentScans.map(entry => {
                 const data = entry.data as ScanData | undefined
-                const bucket = data ? bucketOf(data.classification) : 'unknown'
-                const style = FEEDBACK_STYLE[bucket]
+                const style = styleOf(data?.classification)
                 const Icon = style.icon
                 return (
                   <div

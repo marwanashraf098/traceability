@@ -3296,7 +3296,21 @@
       "abandon": "Abandon count",
       "abandonConfirmTitle": "Abandon this count?",
       "abandonConfirmBody": "This cancels the session. Nothing scanned so far is written off or changed — pieces stay exactly as they are.",
-      "abandonConfirmButton": "Abandon count"
+      "abandonConfirmButton": "Abandon count",
+      "place": {
+        "set": "Counting place {{code}} — pieces scanned now are put there",
+        "counting": "Counting place",
+        "refused": {
+          "UNKNOWN_STICKER": "Unknown sticker — the place didn't change",
+          "PLACE_OTHER_LOCATION": "{{code}} is in another location — the place didn't change",
+          "PLACE_ARCHIVED": "{{code}} is archived — the place didn't change",
+          "SCAN_SHELF_OR_BOX": "{{code}} — scan a shelf or box"
+        },
+        "PLACED": "put on {{code}}",
+        "MOVED": "moved to {{code}}",
+        "ALREADY_HERE": "already on {{code}}",
+        "NOT_PLACED": "not put on {{code}}"
+      }
     },
     "review": {
       "back": "Back to Stock Takes",
@@ -3945,7 +3959,9 @@
       "returns": "Scan returns · {{ref}}",
       "tagStock": "Tag stock",
       "factoryReceiving": "Factory receiving · {{ref}}",
-      "putAway": "Put away"
+      "putAway": "Put away",
+      "placeCount": "Counting {{code}}",
+      "boxMove": "Moving a box"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",
@@ -5284,5 +5300,144 @@
         "goToTransfer": "Go to the transfer"
       }
     }
+  },
+  "placeCount": {
+    "title": "Stock take · One place",
+    "countThisPlace": "Count this place",
+    "oneButton": "Count one place",
+    "oneTitle": "Count one place",
+    "oneBody": "Scan the sticker of the shelf or box you want to count.",
+    "onePlaceholder": "Scan a shelf or box sticker…",
+    "oneStart": "Start counting",
+    "error": "Something went wrong — try again",
+    "back": "Back",
+    "safety": "Counting one place only fixes where pieces are. It never writes off stock and never changes Shopify.",
+    "closedElsewhere": "This count was finished or cancelled on another screen — scans are no longer recorded.",
+    "scanTitle": "Scan every piece on this place",
+    "placeholder": "Scan a piece…",
+    "cancel": "Cancel count",
+    "finish": "Finish count",
+    "keepScanning": "Keep scanning",
+    "counter": {
+      "expected": "expected here",
+      "found": "found here",
+      "movedHere": "moved here (was elsewhere)",
+      "notFound": {
+        "shelf": "not found on this shelf",
+        "box": "not found in this box"
+      }
+    },
+    "col": {
+      "found_one": "Found here · {{count}}",
+      "found_other": "Found here · {{count}}",
+      "moved_one": "Moved here · place fixed · {{count}}",
+      "moved_other": "Moved here · place fixed · {{count}}",
+      "notFound": {
+        "shelf_one": "Not found on this shelf · {{count}}",
+        "shelf_other": "Not found on this shelf · {{count}}",
+        "box_one": "Not found in this box · {{count}}",
+        "box_other": "Not found in this box · {{count}}"
+      },
+      "other_one": "Scanned, nothing changes · {{count}}",
+      "other_other": "Scanned, nothing changes · {{count}}",
+      "none": "Nothing yet",
+      "was": "was {{from}} → now {{to}}",
+      "hadNoPlace": "had no place → now {{to}}",
+      "notFoundNote": "These go to \"No place yet\". They are not written off."
+    },
+    "other": {
+      "other_location": "belongs to {{location}} — no change",
+      "not_placeable": "{{status}} — no change",
+      "untagged": "untagged — no change",
+      "unknown": "unknown code — no change"
+    },
+    "footer": {
+      "shelf": "Scan the shelf sticker, take the pieces out, scan them, put them back on the same shelf.",
+      "box": "Take the pieces out of the box, scan them, put them back in the same box."
+    },
+    "confirm": {
+      "title": "Finish counting {{place}}?",
+      "moved_one": "{{count}} piece will get this place.",
+      "moved_other": "{{count}} pieces will get this place.",
+      "cleared_one": "{{count}} piece not found goes to \"No place yet\".",
+      "cleared_other": "{{count}} pieces not found go to \"No place yet\"."
+    },
+    "done": {
+      "title": "{{place}} counted",
+      "cancelled": "Count cancelled — nothing changed",
+      "found": "Found here",
+      "moved": "Moved here from another place",
+      "placed": "Placed here (had no place)",
+      "cleared": "Not found → No place yet",
+      "clearedNote_one": "{{count}} piece now shows \"No place yet\". Nothing was written off.",
+      "clearedNote_other": "{{count}} pieces now show \"No place yet\". Nothing was written off.",
+      "skipped_one": "{{count}} piece was left as it is",
+      "skipped_other": "{{count}} pieces were left as they are"
+    },
+    "skip": {
+      "departed": "it left (sold, sent or moved to another location)",
+      "moved_since": "someone moved it to another place during the count",
+      "placed_since": "it was put here during the count",
+      "cleared_since": "its place was cleared during the count",
+      "refused": "its place couldn't be changed"
+    },
+    "scan": {
+      "foundHere": "{{piece}} · found on {{place}}",
+      "moveHere": "{{piece}} · was on {{from}} — will be moved here",
+      "placeHere": "{{piece}} · had no place — will be placed here",
+      "otherLocation": "Belongs to {{location}}",
+      "notPlaceable": "This piece is {{status}}",
+      "untagged": "Untagged piece",
+      "duplicate": "Already scanned",
+      "thisPlace": "That's {{place}} — the place you are counting",
+      "scanPieces": "Scan the pieces on it",
+      "countSeparately": "That's {{code}} — count it separately",
+      "notAPiece": "That's {{code}} — scan the pieces on this place",
+      "nothingRecorded": "Nothing recorded",
+      "unknown": "Unknown code",
+      "noChange": "{{piece}} · no change"
+    }
+  },
+  "whereIsIt": {
+    "title": "Where is it",
+    "button": "Where is it",
+    "none": "No pieces of this item are on hand",
+    "pieces_one": "{{count}} piece",
+    "pieces_other": "{{count}} pieces",
+    "noPlace": "No place yet",
+    "available_one": "{{count}} available",
+    "available_other": "{{count}} available",
+    "onHold_one": "{{count}} on hold",
+    "onHold_other": "{{count}} on hold",
+    "damaged_one": "{{count}} damaged",
+    "damaged_other": "{{count}} damaged"
+  },
+  "placeFilter": {
+    "all": "Every place",
+    "noPlace": "No place yet",
+    "label": "Place"
+  },
+  "boxMove": {
+    "button": "Move a box",
+    "title": "Move a box",
+    "error": "Something went wrong — try again",
+    "boxChosen": "{{code}} chosen",
+    "nowScanTarget": "Now scan the shelf or zone it goes to",
+    "moved": "{{box}} moved to {{to}}",
+    "alreadyThere": "{{box}} is already on {{to}}",
+    "moving": "Moving box",
+    "piecesInside_one": "{{count}} piece inside — it moves with the box",
+    "piecesInside_other": "{{count}} pieces inside — they move with the box",
+    "startTitle": "Scan the box you are moving",
+    "startBody": "Then scan the shelf it goes on, or a zone sticker to put it on that zone's floor.",
+    "scanTarget": "Scan the shelf or zone",
+    "scanBox": "Scan a box sticker",
+    "scanTargetHint": "A shelf sticker puts the box on it; a zone sticker puts it on the zone's floor.",
+    "scanBoxHint": "Only boxes move. Shelves and racks stay where they are.",
+    "placeholder": "Scan…",
+    "lastScans": "Last scans",
+    "noScans": "Nothing scanned yet.",
+    "changeBox": "Choose another box",
+    "done": "Done"
   }
 }

@@ -100,6 +100,13 @@ public class InventoryStockController {
 
     public record StockPage(List<StockProduct> items, String nextCursor) {}
 
+    /** The call shape before the S5 place filter (no place filter) — kept for direct callers. */
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public StockPage stock(String q, UUID locationId, boolean lowStockOnly, List<String> statusParam, String cursor,
+                           int size) {
+        return stock(q, locationId, lowStockOnly, statusParam, cursor, size, null, false);
+    }
+
     @GetMapping("/stock")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public StockPage stock(
@@ -108,7 +115,9 @@ public class InventoryStockController {
             @RequestParam(defaultValue = "false") boolean lowStockOnly,
             @RequestParam(name = "status", required = false) List<String> statusParam,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) UUID placeId,
+            @RequestParam(defaultValue = "false") boolean noPlace) {
 
         // Product status filter (repeat the param or comma-separate); absent = every status.
         // The Stock tab sends Active + Draft by default.
@@ -140,6 +149,8 @@ public class InventoryStockController {
             String pieceStatusPredicate = otherLocation
                 ? "status::text IN " + AT_OTHER_LOCATION_STATUSES_SQL
                 : "status = 'available'::piece_status";
+            // Warehouse places S5 — the place filter (a chosen location only): only pieces in that place.
+            PlaceFilter place = placeFilter(tenantId, locationId, placeId, noPlace);
 
             Integer threshold = jdbc.queryForObject(
                 "SELECT low_stock_threshold FROM tenants WHERE id = ?", Integer.class, tenantId);
@@ -163,6 +174,10 @@ public class InventoryStockController {
             if (locationId != null) {
                 availLocPredicate.append("AND p.current_location_id = ?");
                 params.add(locationId);
+                if (place != null) {
+                    availLocPredicate.append(" AND ").append(place.sql("p"));
+                    if (place.bins() != null) params.add(place.bins());
+                }
             } else {
                 availLocPredicate.append(
                     "AND p.current_location_id IN (SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true)");
@@ -182,6 +197,7 @@ public class InventoryStockController {
                 params.addAll(statuses);
             }
             StringBuilder lowStockPredicate = new StringBuilder();
+            if (place != null) lowStockPredicate.append("AND a.available_count > 0 ");   // in that place only
             if (lowStockOnly) {
                 lowStockPredicate.append("AND COALESCE(a.available_count, 0) < ?");
                 params.add(threshold);
@@ -252,10 +268,12 @@ public class InventoryStockController {
                         "SELECT variant_id, COUNT(*) AS on_hand FROM pieces " +
                         "WHERE tenant_id = ? AND current_location_id = ? " +
                         "  AND " + pieceStatusPredicate + " AND variant_id = ANY(?) " +
+                        (place == null ? "" : "  AND " + place.sql("pieces")) +
                         "GROUP BY variant_id");
                     ps.setObject(1, tenantId);
                     ps.setObject(2, locationId);
                     ps.setArray(3, con.createArrayOf("uuid", variantIds));
+                    if (place != null && place.bins() != null) ps.setArray(4, con.createArrayOf("uuid", place.bins()));
                     return ps;
                 }, rs -> {
                     locationOnHand.put(rs.getObject("variant_id", UUID.class), rs.getLong("on_hand"));
@@ -305,6 +323,7 @@ public class InventoryStockController {
 
                 for (Map<String, Object> vr : prVariants) {
                     UUID varId = (UUID) vr.get("id");
+                    if (place != null && locationOnHand.getOrDefault(varId, 0L) == 0L) continue;   // not in that place
                     long onHand;
                     Long committed;
                     Long available;
@@ -515,7 +534,9 @@ public class InventoryStockController {
             @RequestParam(required = false) UUID variantId,
             @RequestParam(required = false) UUID locationId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "50") int size) {
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(required = false) UUID placeId,
+            @RequestParam(defaultValue = "false") boolean noPlace) {
 
         try { PieceStatus.fromDb(status); }
         catch (IllegalArgumentException e) {
@@ -545,6 +566,12 @@ public class InventoryStockController {
                 params.add(locationId);
                 untaggedWhere.append("AND p.current_location_id = ? ");
                 untaggedParams.add(locationId);
+            }
+            PlaceFilter place = placeFilter(tenantId, locationId, placeId, noPlace);
+            if (place != null) {
+                where.append("AND ").append(place.sql("p")).append(' ');
+                untaggedWhere.append("AND ").append(place.sql("p")).append(' ');
+                if (place.bins() != null) { params.add(place.bins()); untaggedParams.add(place.bins()); }
             }
             // Flexible labeling: only labeled pieces are listed one by one.
             where.append("AND p.short_code IS NOT NULL ");
@@ -602,6 +629,28 @@ public class InventoryStockController {
 
             return new StockPiecePage(items, nextCursor, untagged);
         });
+    }
+
+    /**
+     * Warehouse places S5 — the place filter of /stock and /pieces (a chosen location only; 404 without places):
+     * {@code placeId} → pieces in that place (PlaceScope: a zone / rack rolls up everything under it), or
+     * {@code noPlace} → pieces with no place. null = no filter (every existing call, unchanged).
+     */
+    record PlaceFilter(UUID[] bins) {
+        String sql(String alias) {
+            return bins == null ? alias + ".bin_id IS NULL " : alias + ".bin_id = ANY(?) ";
+        }
+    }
+
+    private PlaceFilter placeFilter(UUID tenantId, UUID locationId, UUID placeId, boolean noPlace) {
+        if (placeId == null && !noPlace) return null;
+        com.traceability.places.PlaceScope.require(jdbc, tenantId);
+        if (noPlace) {
+            if (locationId == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a location first");
+            return new PlaceFilter(null);
+        }
+        return new PlaceFilter(com.traceability.places.PlaceScope.binIds(jdbc, tenantId, locationId, placeId)
+            .toArray(new UUID[0]));
     }
 
     // ═══════════════════════════════════════════════════════════════════════

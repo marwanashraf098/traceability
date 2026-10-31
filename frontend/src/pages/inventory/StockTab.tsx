@@ -11,6 +11,9 @@ import {
   ProductThumb, Select, Spinner, Tooltip, cn, productStatusParam,
 } from '../../components/ui'
 import VariantDrawer from './VariantDrawer'
+import { useCapabilities } from '../../capabilities'
+import PlaceFilterSelect, { NO_PLACE } from '../places/PlaceFilterSelect'
+import WhereIsItDrawer from '../places/WhereIsItDrawer'
 
 const SYNC_TONE: Record<ShopifySyncStatus, 'success' | 'warning' | 'critical' | 'neutral'> = {
   synced:  'success',
@@ -59,6 +62,11 @@ export default function StockTab() {
   const [lowStockOnly, setLowStockOnly] = useState(() => searchParams.get('lowStockOnly') === 'true')
   const [statuses, setStatuses] = useState<ProductStatusOption[]>(DEFAULT_PRODUCT_STATUSES)
   const [locations, setLocations] = useState<LocationRow[]>([])
+  // Warehouse places S5 — place filter (a chosen location only) and "Where is it". Nothing of it without places.
+  const { places } = useCapabilities()
+  const [placeId, setPlaceId] = useState('')
+  const [whereVariant, setWhereVariant] = useState<{ id: string; title: string } | null>(null)
+  useEffect(() => { setPlaceId('') }, [locationId])
 
   const [items, setItems] = useState<InventoryStockProduct[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -89,6 +97,9 @@ export default function StockTab() {
         q: qDebounced || undefined,
         locationId: locationId || undefined,
         lowStockOnly,
+        ...(places && locationId && placeId
+          ? placeId === NO_PLACE ? { noPlace: true } : { placeId }
+          : {}),
         status: productStatusParam(statuses),
         cursor,
         size: PAGE_SIZE,
@@ -110,7 +121,7 @@ export default function StockTab() {
     }
   }
 
-  useEffect(() => { load.current(true) }, [qDebounced, locationId, lowStockOnly, statuses])
+  useEffect(() => { load.current(true) }, [qDebounced, locationId, lowStockOnly, statuses, placeId])
 
   function toggleProduct(id: string) {
     setExpanded(prev => {
@@ -148,6 +159,7 @@ export default function StockTab() {
           options={locationOptions}
           className="w-52"
         />
+        {places && locationId && <PlaceFilterSelect locationId={locationId} value={placeId} onChange={setPlaceId} />}
         <button
           type="button"
           onClick={() => setLowStockOnly(v => !v)}
@@ -248,6 +260,13 @@ export default function StockTab() {
                           <td className="tbl-cell ps-[52px] text-muted">
                             {variant.title}
                             {variant.sku && <span className="text-caption font-mono ms-1.5">· {variant.sku}</span>}
+                            {places && (
+                              <button type="button" data-testid={`where-is-it-${variant.id}`}
+                                className="ms-3 text-caption font-semibold text-trace-blue hover:underline"
+                                onClick={e => { e.stopPropagation(); setWhereVariant({ id: variant.id, title: `${product.title} — ${variant.title}` }) }}>
+                                {t('whereIsIt.button')}
+                              </button>
+                            )}
                           </td>
                           <td className="tbl-cell text-end text-muted">{variant.onHand.toLocaleString()}</td>
                           <td className="tbl-cell text-end text-muted">
@@ -288,6 +307,7 @@ export default function StockTab() {
       )}
 
       <VariantDrawer variant={drawerVariant} onClose={() => setDrawerVariant(null)} />
+      {whereVariant && <WhereIsItDrawer variantId={whereVariant.id} title={whereVariant.title} onClose={() => setWhereVariant(null)} />}
     </div>
   )
 }

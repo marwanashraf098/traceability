@@ -33,7 +33,7 @@
   ordersSearchDebounce unedited, green.
 
 **Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30/31, branch
-`feat/warehouse-places-s4`, rebased onto main 899d657; approved 2026-10-31 (collect list as built); migration V197).** The gather list in reverse: a flow's pieces and where each should go.
+`feat/warehouse-places-s4`; merged to main 2026-10-31 as 3ee252a, DEPLOYED 2026-10-31; migration V197).** The gather list in reverse: a flow's pieces and where each should go.
 - **Flows (`PutAwayListService`, one definition):** `receiving` — a receipt's TAGGED pieces (`pieces.receipt_id`) at its
   location (none → main; count-only/untagged never listed); `tag_session` — the pieces a Tag stock session tagged
   (`label_bound` events, `metadata.tag_session_id`), at its location; `return_session` — RESTOCKED items only
@@ -434,7 +434,7 @@ pieces refused). Full rules in CLAUDE.md "LOOKUP EXCHANGE".
   on the branch and 3 / 3 on origin/main run alternately under the same load.
 - **Next free migration: V194.**
 **Stock-take review: scan instead of Found it / Mark lost (2026-10-27, branch `fix/stocktake-review-scan` off origin/main
-ae26df3, main 26106ce merged in 2026-10-28; NOT merged to main, NOT deployed; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
+ae26df3, main 26106ce merged in 2026-10-28; merged to main 2026-10-29 as 146e4f76; no migration).** Step 0 (same day): Nuvira session 6fffc477 — every "Found it" /
 "Found it (selected)" / "Mark lost" / "Apply damaged" answered a bare 404 on an OPEN session, then finalize wrote off
 5 pieces (Shopify −1 × 5, pushed). Root cause: `StockTakeReconciliationService.resolve()` had no transaction and
 `TenantAwareConnection` sets `app.current_tenant` only when a transaction begins → its first read ran with no tenant →

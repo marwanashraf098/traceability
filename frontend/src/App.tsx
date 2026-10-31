@@ -45,6 +45,8 @@ import LookupPage from './pages/Lookup'
 import PutAway from './pages/putaway/PutAway'
 import PutAwayScan from './pages/putaway/PutAwayScan'
 import PutAwayListPage from './pages/putaway/PutAwayListPage'
+import PlaceCountScan from './pages/placecount/PlaceCountScan'
+import MoveBoxScan from './pages/putaway/MoveBoxScan'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
 import ExchangeMapping from './pages/exchanges/ExchangeMapping'
@@ -484,6 +486,25 @@ export default function App() {
           element={
             <RequireAuth>
               <SetupGate><PutAwayScan /></SetupGate>
+            </RequireAuth>
+          }
+        />
+        {/* Warehouse places S5 — Put away › Move a box: an active scan loop, full-screen. Before /put-away/:id/scan
+            in reading order only; the paths don't overlap. */}
+        <Route
+          path="/put-away/move-box"
+          element={
+            <RequireAuth>
+              <SetupGate><MoveBoxScan /></SetupGate>
+            </RequireAuth>
+          }
+        />
+        {/* Warehouse places S5 — counting one place: an active scan loop, full-screen (not Layout-wrapped). */}
+        <Route
+          path="/place-counts/:id"
+          element={
+            <RequireAuth>
+              <SetupGate><PlaceCountScan /></SetupGate>
             </RequireAuth>
           }
         />

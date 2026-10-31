@@ -18,7 +18,48 @@ public class PlaceException extends RuntimeException {
         // S2 — put away
         SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER,
         // S4 — put-away lists
-        SOURCE_NOT_FOUND
+        SOURCE_NOT_FOUND,
+        // S5 — place counts, place filter, box moves
+        NOT_A_SHELF_OR_BOX, COUNT_NOT_FOUND, COUNT_CLOSED, BOX_ONTO_ITSELF, BOX_TARGET, OTHER_LOCATION,
+        LOCATION_REQUIRED
+    }
+
+    static PlaceException notAShelfOrBox() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.NOT_A_SHELF_OR_BOX,
+            "Scan a shelf or box", "امسح رفًا أو صندوقًا");
+    }
+
+    static PlaceException countNotFound() {
+        return new PlaceException(HttpStatus.NOT_FOUND, Code.COUNT_NOT_FOUND,
+            "Count not found", "لم يتم العثور على الجرد");
+    }
+
+    static PlaceException countClosed() {
+        return new PlaceException(HttpStatus.CONFLICT, Code.COUNT_CLOSED,
+            "This count is already finished or cancelled", "هذا الجرد انتهى أو أُلغي بالفعل");
+    }
+
+    static PlaceException boxOntoItself() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.BOX_ONTO_ITSELF,
+            "That's the box itself — scan a shelf or a zone", "هذا هو الصندوق نفسه — امسح رفًا أو منطقة");
+    }
+
+    static PlaceException boxTarget() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.BOX_TARGET,
+            "A box goes on a shelf or on a zone's floor — scan a shelf or a zone",
+            "الصندوق يوضع على رف أو على أرضية منطقة — امسح رفًا أو منطقة");
+    }
+
+    static PlaceException otherLocation(String locationName) {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.OTHER_LOCATION,
+            "That place is in " + locationName + " — a box moves inside its own location",
+            "هذا المكان في " + locationName + " — الصندوق يُنقل داخل موقعه فقط",
+            List.of(Map.of("location", locationName)));
+    }
+
+    static PlaceException locationRequired() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.LOCATION_REQUIRED,
+            "Choose a location first", "اختر موقعًا أولًا");
     }
 
     /** An unknown list source, or a receipt / session / transfer that isn't the caller's tenant's — the same answer. */

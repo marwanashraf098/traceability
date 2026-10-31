@@ -1458,9 +1458,15 @@ export function getInventoryStock(params: {
   status?: string[]
   cursor?: string
   size?: number
+  /** Warehouse places S5 — with a location only: pieces in that place (a zone / rack: everything under it). */
+  placeId?: string
+  /** S5 — with a location only: pieces with no place yet. */
+  noPlace?: boolean
 }) {
   const q = new URLSearchParams()
   if (params.q)            q.set('q', params.q)
+  if (params.placeId)      q.set('placeId', params.placeId)
+  if (params.noPlace)      q.set('noPlace', 'true')
   if (params.locationId)   q.set('locationId', params.locationId)
   if (params.lowStockOnly) q.set('lowStockOnly', 'true')
   if (params.status?.length) q.set('status', params.status.join(','))
@@ -1539,9 +1545,13 @@ export function getInventoryPieces(params: {
   locationId?: string
   cursor?: string
   size?: number
+  placeId?: string
+  noPlace?: boolean
 }) {
   const q = new URLSearchParams()
   q.set('status', params.status)
+  if (params.placeId)      q.set('placeId', params.placeId)
+  if (params.noPlace)      q.set('noPlace', 'true')
   if (params.variantId)    q.set('variantId', params.variantId)
   if (params.locationId)   q.set('locationId', params.locationId)
   if (params.cursor)       q.set('cursor', params.cursor)
@@ -1826,6 +1836,8 @@ export type StockTakeScopeType = 'all' | 'variant_subset'
 export type StockTakeCondition = 'good' | 'damaged'
 export type StockTakeClassification =
   | 'match' | 'condition_mismatch' | 'unexpected_resurfaced' | 'out_of_scope' | 'unknown'
+  /** Warehouse places S5 (places only): a place sticker — not a counted scan. */
+  | 'place_set' | 'place_refused'
 /** found / lost were removed 2026-10-27 (a missed piece is scanned; finalize writes off the rest). */
 export type StockTakeResolveAction = 'mark_damaged'
 export type StockTakeSyncStatus =
@@ -1893,6 +1905,8 @@ export interface StockTakeSessionDetail {
   pushedToShopify?: number
   /** Flexible labeling slice 7: what the counting screen counts — BLIND (no expected number); switch on only. */
   untagged?: StockTakeUntaggedCount[]
+  /** Warehouse places S5: the place being counted (present once a place sticker was scanned). */
+  countingPlace?: PlaceRef
 }
 
 /** Flexible labeling slice 7 — the counting screen's row: which product to count and what was typed. Blind. */
@@ -1958,6 +1972,11 @@ export interface StockTakeScanResult {
   alreadyScanned?: boolean
   /** Q1b: decided server-side — 'phone' only for a verified relay event (the recorded one on a re-scan). */
   scanDevice?: ScanDevice
+  /** Warehouse places S5 — place_set: the place now counted; place_refused: the sticker named (placeRefusal why). */
+  place?: PlaceRef | null
+  placeRefusal?: 'UNKNOWN_STICKER' | 'PLACE_OTHER_LOCATION' | 'PLACE_ARCHIVED' | 'SCAN_SHELF_OR_BOX'
+  /** S5 — a piece scanned while a place is counted: where it went (NOT_PLACED: the ledger's refusal). */
+  placed?: { place: PlaceRef; outcome: 'PLACED' | 'MOVED' | 'ALREADY_HERE' | 'NOT_PLACED'; reason?: string }
 }
 
 /** Q1b: which device a scan came from — decided server-side, never by the client. */
@@ -4466,4 +4485,78 @@ export function getVariantPickPlaces(variantIds: string[]) {
 export function getOrdersPickPlaces(orderIds: string[]) {
   return request<{ orders: OrderPickPlaces[] }>('/fulfill/places/orders',
     { method: 'POST', body: JSON.stringify({ orderIds }) })
+}
+
+// ── Warehouse places S5 — one-place counts, Where is it, Move a box (every role; 404 unless the tenant has places) ──
+
+export type PlaceCountResult =
+  | 'found_here' | 'move_here' | 'place_here' | 'other_location' | 'not_placeable' | 'untagged' | 'unknown'
+export interface PlaceCountPiece {
+  pieceId: string; code: string | null; variantId: string; productTitle: string; variantTitle: string | null; sku: string | null
+}
+export interface PlaceCountLine {
+  piece: PlaceCountPiece | null; raw: string; result: PlaceCountResult; fromPlace: PlaceRef | null
+  locationName: string | null; status: string | null; viaPhone: boolean; scannedAt: string
+}
+export interface PlaceCountApplied {
+  placed: number; moved: number; cleared: number; alreadyHere: number
+  skipped: { pieceId: string; code: string | null; reason: 'departed' | 'moved_since' | 'placed_since' | 'cleared_since' | 'refused' }[]
+  reason: 'cancelled' | 'idle' | null
+}
+export interface PlaceCount {
+  id: string; status: 'open' | 'finished' | 'cancelled'; place: PlaceRef; locationId: string; locationName: string
+  openedByName: string | null; createdAt: string; finishedAt: string | null
+  expected: number; found: number; movedHere: number; notFound: number
+  foundLines: PlaceCountLine[]; movedLines: PlaceCountLine[]; notFoundPieces: PlaceCountPiece[]; otherLines: PlaceCountLine[]
+  applied: PlaceCountApplied | null
+}
+export type PlaceCountOutcome =
+  | 'FOUND_HERE' | 'MOVE_HERE' | 'PLACE_HERE' | 'OTHER_LOCATION' | 'NOT_PLACEABLE' | 'UNTAGGED' | 'UNKNOWN'
+  | 'DUPLICATE' | 'THIS_PLACE' | 'COUNT_SEPARATELY'
+export interface PlaceCountScanResult {
+  outcome: PlaceCountOutcome; code: string; piece: PlaceCountPiece | null; place: PlaceRef | null; fromPlace: PlaceRef | null
+  locationName: string | null; status: string | null; viaPhone: boolean; count: PlaceCount
+}
+
+/** Start counting a place (by id, or by its sticker) — or join its open count. */
+export function startPlaceCount(body: { binId?: string; scan?: string }) {
+  return requestReadable<PlaceCount>('/place-counts', { method: 'POST', body: JSON.stringify(body) })
+}
+export function getPlaceCount(id: string) {
+  return requestReadable<PlaceCount>(`/place-counts/${id}`)
+}
+export function scanPlaceCount(id: string, code: string, relayEventId?: string) {
+  return requestReadable<PlaceCountScanResult>(`/place-counts/${id}/scan`, {
+    method: 'POST', body: withRelay({ code }, relayEventId),
+  })
+}
+export function finishPlaceCount(id: string) {
+  return requestReadable<PlaceCount>(`/place-counts/${id}/finish`, { method: 'POST' })
+}
+export function cancelPlaceCount(id: string) {
+  return requestReadable<PlaceCount>(`/place-counts/${id}/cancel`, { method: 'POST' })
+}
+
+export interface WhereStatusCounts { available: number; onHold: number; damaged: number; total: number }
+export interface WherePlace {
+  binId: string; code: string; kind: PlaceKind; path: string[]; zoneCode: string | null
+  parentCode: string | null; parentKind: PlaceKind | null; sortKey: string; counts: WhereStatusCounts
+}
+export interface WhereLocation {
+  locationId: string; locationName: string; main: boolean; total: number; places: WherePlace[]; noPlace: WhereStatusCounts
+}
+export interface WhereIsIt { variantId: string; productTitle: string; variantTitle: string | null; sku: string | null; locations: WhereLocation[] }
+
+export function getWhereIsIt(variantId: string) {
+  return requestReadable<WhereIsIt>(`/places/where/${encodeURIComponent(variantId)}`)
+}
+
+export interface BoxCheck { box: PlaceRef; locationId: string; locationName: string; pieces: number }
+export interface BoxMoveResult { outcome: 'MOVED' | 'ALREADY_THERE'; box: PlaceRef; from: PlaceRef | null; to: PlaceRef }
+
+export function checkMoveBox(box: string) {
+  return requestReadable<BoxCheck>('/put-away/box-moves/box', { method: 'POST', body: JSON.stringify({ box }) })
+}
+export function moveBox(box: string, target: string) {
+  return requestReadable<BoxMoveResult>('/put-away/box-moves', { method: 'POST', body: JSON.stringify({ box, target }) })
 }
