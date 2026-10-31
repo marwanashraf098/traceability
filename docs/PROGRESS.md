@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Orders tabs & filters — UI slice (2026-10-31, branch `feat/orders-tabs-filters-ui` off origin/main 3ee252a; NOT merged,
+NOT deployed; frontend only, no backend change).** Builds on the merged backend slice (899d657).
+- **Tabs:** All · Needs attention · To ship · In transit · Delivered · Returned · Cancelled, sent as `tab=` with
+  `withCounts=true` — ONE /orders request per change, pills from its `counts` (Needs attention falls back to
+  /orders/summary's needsAttention when a page has no counts, and also sends `attention=true` — the same server set,
+  kept so the existing attention tests stay unedited). Needs attention pill amber when not selected. `Tabs` gained
+  opt-in `scrollable` (phones: the row scrolls sideways) and per-tab `countTone: 'warning'`; other pages unchanged.
+- **Filters:** one button (light blue + count when active) → `OrderFiltersPanel` (popover ≥ 900 px, bottom sheet below):
+  Traced / Returns (with hints) / Courier / Payment / Order date (default 30; "not applied" while searching or on
+  Needs attention). Edits a pending copy; "Show N orders" previews with /orders/counts?attention=false (no number on
+  Needs attention) and applies on click. Active filters = removable `FilterChip` tags (new optional `removeLabel`).
+- **URL is the state:** tab, traced, returns, courier, payment, days, reason, q, tracking (defaults absent); filters /
+  tabs / reason push history, the debounced search replaces. The debounced q / tracking are also local state so the
+  request goes out on the render the 300 ms timer fires (waiting for the router's re-render made the debounce test
+  flaky under load). Page resets per view without an extra request. ?order= unchanged. G3 "With <carrier>" kept
+  (local state, inside In transit).
+- **Rows:** Needs attention reason line (amber, + "+N"; `orders.reason.<alert type>` EN/AR from the Step 0 table) above
+  the returnState line ("Pending inspection" amber / "Inspected · …" grey); reason chips (6 groups, counts) on that tab.
+  Not traced tag moved beside the order number (grey, `font-sans` — the number column is mono and broke the Arabic).
+  Drawer pieces show `shortCode` (full code as title), no wrap.
+- **Pre-existing, not fixed:** the Exchange tag renders in Geist Mono (number column), which splits "استبدال" in Arabic.
+- **Tests:** ordersTabsFilters.test.tsx (17); approved rewrites of orders.test.tsx's two tab tests (216–264) and the
+  Returns-tab test. ordersRtl / ordersArabicSearchGuard / phoneMenuOrderLinks / genericCourierG3 /
+  ordersSearchDebounce unedited, green.
+
 **Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30/31, branch
 `feat/warehouse-places-s4`, rebased onto main 899d657; approved 2026-10-31 (collect list as built); migration V197).** The gather list in reverse: a flow's pieces and where each should go.
 - **Flows (`PutAwayListService`, one definition):** `receiving` — a receipt's TAGGED pieces (`pieces.receipt_id`) at its

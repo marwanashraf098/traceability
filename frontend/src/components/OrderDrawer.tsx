@@ -451,9 +451,14 @@ export default function OrderDrawer({
                             {item.allocatedPieces.map(p => (
                               <div
                                 key={p.pieceId}
-                                className="flex items-center gap-1.5 border border-line rounded-md px-2 py-0.5 bg-elevated"
+                                className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border border-line rounded-md px-2 py-0.5 bg-elevated"
                               >
-                                <span className="font-mono text-caption text-muted">{p.barcode}</span>
+                                {/* The short code when the piece has one (the full code otherwise); it never wraps —
+                                    the badge drops to the next line instead. */}
+                                <span className="font-mono text-caption text-muted whitespace-nowrap" title={p.barcode}
+                                      data-testid={`drawer-piece-code-${p.pieceId}`}>
+                                  {p.shortCode ?? p.barcode}
+                                </span>
                                 <OrderPieceBadge status={p.status} returnState={p.returnState} />
                               </div>
                             ))}
