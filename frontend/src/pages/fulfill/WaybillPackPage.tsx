@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Printer, ScanLine } from 'lucide-react'
+import { ChevronRight, Layers, Printer, ScanLine } from 'lucide-react'
 import Layout from '../../components/Layout'
 import { Alert, Button, Skeleton, StatCard } from '../../components/ui'
 import {
@@ -63,6 +63,7 @@ export default function WaybillPackPage() {
 
 function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void }) {
   const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const [queue, setQueue] = useState<FulfillQueueRow[] | null>(null)
   const [packedToday, setPackedToday] = useState<number | null>(null)
   const [openSessionId, setOpenSessionId] = useState<string | null>(null)
@@ -135,6 +136,11 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
                 {t('fulfill.printBatch.button')}
               </Button>
             )}
+            {/* The same pick list as the queue page (every pickable order); a print batch's own list stays
+                on PrintWaybillsDialog (?batch=). */}
+            <Button variant="secondary" iconStart={Layers} onClick={() => navigate('/fulfill/gather')}>
+              {t('fulfill.gatherBtn')}
+            </Button>
             <Button iconStart={ScanLine} loading={starting} onClick={start}>
               {openSessionId ? t('fulfill.waybill.resumeSession') : t('fulfill.waybill.startSession')}
             </Button>
