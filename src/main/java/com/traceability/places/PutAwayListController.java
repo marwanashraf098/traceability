@@ -5,12 +5,11 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 /**
  * Warehouse places S4 — put-away lists (PutAwayListService). Every role, like S2's put away — except a transfer's
- * list and its sent pieces, which are owner / manager like every transfer screen (403 for a worker — decided in the
+ * list, which is owner / manager like every transfer screen (403 for a worker — decided in the
  * service after the places switch, so a tenant without places gets 404 for every role). An unknown flow / another
  * tenant's → 404 SOURCE_NOT_FOUND. The session's scans and close are S2's endpoints.
  *
@@ -19,8 +18,6 @@ import java.util.UUID;
  *   POST /api/v1/put-away/lists/{source}/{sourceId}/sessions   start, or resume the caller's open session on it
  *   GET  /api/v1/put-away/sessions/{id}/list                   the list behind the caller's own session (scoped: false
  *                                                              for a manual one)
- *   GET  /api/v1/put-away/transfers/{transferId}/sent-pieces   owner / manager: the pieces scanned out on a transfer
- *                                                              and the place each left from, in walking order
  */
 @RestController
 @RequestMapping("/api/v1/put-away")
@@ -49,13 +46,6 @@ public class PutAwayListController {
     public PutAwayListService.SessionList sessionList(@PathVariable UUID id,
                                                       @AuthenticationPrincipal CustomUserDetails principal) {
         return service.sessionList(id, principal.userId());
-    }
-
-    /** Owner / manager — checked in the service AFTER the places switch, so a tenant without places gets 404 for all. */
-    @GetMapping("/transfers/{transferId}/sent-pieces")
-    public List<PutAwayListService.SentPiece> sentPieces(@PathVariable UUID transferId,
-                                                         @AuthenticationPrincipal CustomUserDetails principal) {
-        return service.transferSentPieces(transferId, isManager(principal));
     }
 
     private static boolean isManager(CustomUserDetails principal) {

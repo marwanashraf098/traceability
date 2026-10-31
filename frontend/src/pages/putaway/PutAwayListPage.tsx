@@ -141,11 +141,13 @@ export default function PutAwayListPage() {
               )}
               <div className="mb-4 put-away-no-print flex flex-wrap items-center gap-3">
                 {waiting > 0 ? (
-                  <Button size="lg" loading={starting} disabled={!list.hasPlaces} onClick={start} data-testid="put-away-list-start">
-                    {list.session && list.session.status === 'open'
-                      ? t('putAway.resume', { count: list.session.placedInSession })
-                      : t('putAway.start')}
-                  </Button>
+                  <span className="contents" data-testid="put-away-list-start">
+                    <Button size="lg" loading={starting} disabled={!list.hasPlaces} onClick={start}>
+                      {list.session && list.session.status === 'open'
+                        ? t('putAway.resume', { count: list.session.placedInSession })
+                        : t('putAway.start')}
+                    </Button>
+                  </span>
                 ) : (
                   <p className="text-body text-success font-semibold" data-testid="put-away-list-all-placed">
                     {t('putAway.list.allPlaced')}

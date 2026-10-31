@@ -130,7 +130,6 @@ class RlsCoverageTest {
             // Warehouse places S4 — putAwayLists_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
             "/api/v1/put-away/lists/{source}/{sourceId}",
             "/api/v1/put-away/sessions/{id}/list",
-            "/api/v1/put-away/transfers/{transferId}/sent-pieces",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1364,12 +1363,6 @@ class RlsCoverageTest {
             assertThat(get("/api/v1/put-away/lists/transfer/" + otherTransfer, String.class).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
 
-            ResponseEntity<String> sent = get("/api/v1/put-away/transfers/" + myTransfer + "/sent-pieces", String.class);
-            assertThat(sent.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(sent.getBody()).as("same-tenant positive control").contains("P930014").doesNotContain("P930011");
-            assertThat(get("/api/v1/put-away/transfers/" + otherTransfer + "/sent-pieces", String.class).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
-
             ResponseEntity<String> sessionList = get("/api/v1/put-away/sessions/" + mySession + "/list", String.class);
             assertThat(sessionList.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(sessionList.getBody()).as("same-tenant positive control").contains("\"scoped\":true").contains("P930012");
@@ -1396,8 +1389,6 @@ class RlsCoverageTest {
                         .as("another tenant's " + source.getKey() + " is invisible to app_user")
                         .isInstanceOf(com.traceability.places.PlaceException.class);
                 }
-                org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> app.transferSentPieces(otherTransfer, true)))
-                    .isInstanceOf(com.traceability.places.PlaceException.class);
                 org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> app.sessionList(otherSession, otherUser)))
                     .isInstanceOf(com.traceability.places.PlaceException.class);
             } finally {

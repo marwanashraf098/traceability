@@ -1,5 +1,6 @@
 package com.traceability.places;
 
+import com.traceability.TestPostgres;
 import com.traceability.inventory.InventoryLedger;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -20,6 +21,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.sql.DataSource;
@@ -27,7 +29,6 @@ import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Warehouse places S4 (V197) — put-away lists after receiving, returns and transfers (PutAwayListService).
@@ -55,9 +57,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *        manual
  *   ss2  12 h idle close still closes a scoped session; the next Start opens a new one
  *   i1   V197: a second OPEN scoped session for the same person + flow is refused by the database
- *   sp1  transfer sent pieces: the place each left from, in walking order, no place last; a place lost before the
- *        scan-out (a status that holds none, a clear) reads as no place
- *   r1   roles: a transfer's list / Start / sent pieces need owner or manager (AccessDenied); receiving, returns,
+ *   sp1  transfer send-out collect list: S3's batch places (PickPlacesService.variants, unchanged) for a line's
+ *        variant = its AVAILABLE pieces still at the main warehouse, per place biggest first, the unplaced as
+ *        noPlaceCount; pieces already scanned out, at another location or reserved are not counted
+ *   r1   roles: a transfer's list / Start need owner or manager (AccessDenied); receiving, returns,
  *        tag stock don't
  *   f1   places off: every method 404 — a worker's transfer list too (404, not 403)
  *   x1   app_user: lists, Start (twice — the ON CONFLICT resume runs on app_user's grants) and sessionList under RLS;
@@ -69,8 +72,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PutAwayListTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
@@ -92,6 +96,7 @@ class PutAwayListTest {
     @Autowired JdbcTemplate       jdbc;
     @Autowired PutAwayService     putAway;
     @Autowired PutAwayListService lists;
+    @Autowired PickPlacesService  pickPlaces;
     @Autowired DataSource         dataSource;
     PutAwayIdleCloseJob idleJob;
 
@@ -381,42 +386,23 @@ class PutAwayListTest {
             .hasMessageContaining("put_away_sessions_source_check");
     }
 
-    // ── sp: a transfer's sent pieces ───────────────────────────────────────────
+    // ── sp: a transfer's collect list (S3's batch places) ──────────────────────
 
     @Test
-    void sp1_sentPieces_placeTheyLeftFrom_walkingOrder_lostPlaceReadsNone() {
+    void sp1_transferCollect_s3BatchPlaces_availableAtMain_biggestFirst_restNoPlace() {
         T t = tenant("sp1", true);
-        UUID tr = transfer(t);
-        UUID line = transferLine(t, tr, t.variant());
-        Instant out = Instant.now().minus(1, ChronoUnit.HOURS);
-        String z10 = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        String s9 = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        String never = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        String soldBetween = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        String cleared = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        String laterPlace = piece(t, t.variant(), t.other(), "out_on_transfer", null);
-        placeEvent(t, z10, "put_away", null, t.z10s1(), out.minus(3, ChronoUnit.HOURS));
-        placeEvent(t, s9, "put_away", null, t.s10(), out.minus(4, ChronoUnit.HOURS));
-        placeEvent(t, s9, "place_moved", t.s10(), t.s9(), out.minus(3, ChronoUnit.HOURS));
-        placeEvent(t, soldBetween, "put_away", null, t.s9(), out.minus(5, ChronoUnit.HOURS));
-        statusEvent(t, soldBetween, "available", "sold", out.minus(4, ChronoUnit.HOURS));
-        statusEvent(t, soldBetween, "sold", "available", out.minus(3, ChronoUnit.HOURS));
-        placeEvent(t, cleared, "put_away", null, t.s9(), out.minus(3, ChronoUnit.HOURS));
-        placeEvent(t, cleared, "place_cleared", t.s9(), null, out.minus(2, ChronoUnit.HOURS));
-        placeEvent(t, laterPlace, "put_away", null, t.s9(), out.plus(30, ChronoUnit.MINUTES));   // after it left
-        for (String p : List.of(z10, s9, never, soldBetween, cleared, laterPlace)) {
-            transferPieceFrom(t, tr, line, p, out, t.main());
-        }
+        for (int i = 0; i < 2; i++) place(piece(t, t.variant(), t.main(), "available", null), t.s9());
+        place(piece(t, t.variant(), t.main(), "available", null), t.z10s1());
+        piece(t, t.variant(), t.main(), "available", null);                     // no place yet
+        piece(t, t.variant(), t.other(), "out_on_transfer", null);              // already scanned out
+        place(piece(t, t.variant(), t.other(), "available", null), t.otherShelf());
+        piece(t, t.variant(), t.main(), "reserved", null);
 
-        var sent = as(t, () -> lists.transferSentPieces(tr, true));
-        assertThat(sent).hasSize(6);
-        assertThat(sent.subList(0, 2)).extracting(p -> p.place().code()).containsExactly("Z2-R01-S9", "Z10-R01-S1");
-        assertThat(sent.subList(0, 2)).extracting(PutAwayListService.SentPiece::pieceId).containsExactly(s9, z10);
-        assertThat(sent.subList(2, 6)).as("no place: never placed, sold in between, cleared, placed only after leaving")
-            .allSatisfy(p -> assertThat(p.place()).isNull())
-            .extracting(PutAwayListService.SentPiece::pieceId).containsExactlyInAnyOrder(never, soldBetween, cleared, laterPlace);
-        assertThatThrownBy(() -> as(t, () -> lists.transferSentPieces(UUID.randomUUID(), true)))
-            .extracting(e -> ((PlaceException) e).code()).isEqualTo(PlaceException.Code.SOURCE_NOT_FOUND);
+        var v = as(t, () -> pickPlaces.variants(List.of(t.variant()))).variants();
+        assertThat(v).hasSize(1);
+        assertThat(v.get(0).places()).extracting(PickPlacesService.PlaceCount::code, PickPlacesService.PlaceCount::count)
+            .containsExactly(tuple("Z2-R01-S9", 2), tuple("Z10-R01-S1", 1));
+        assertThat(v.get(0).noPlaceCount()).isEqualTo(1);
     }
 
     // ── r / f: roles and the switch ────────────────────────────────────────────
@@ -428,7 +414,6 @@ class PutAwayListTest {
         UUID worker = user(t, "worker");
         assertThatThrownBy(() -> as(t, () -> lists.list("transfer", tr, worker, false))).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> as(t, () -> lists.start("transfer", tr, worker, false))).isInstanceOf(AccessDeniedException.class);
-        assertThatThrownBy(() -> as(t, () -> lists.transferSentPieces(tr, false))).isInstanceOf(AccessDeniedException.class);
         assertThat(as(t, () -> lists.list("transfer", tr, t.user(), true)).source()).isEqualTo("transfer");
         assertThat(as(t, () -> lists.list("receiving", receipt(t, t.main(), "PO-W"), worker, false))).isNotNull();
         assertThat(as(t, () -> lists.start("return_session", returnSession(t), worker, false)).status()).isEqualTo("open");
@@ -447,9 +432,7 @@ class PutAwayListTest {
                 () -> lists.start("receiving", r, t.user(), true),
                 () -> lists.sessionList(session, t.user()),
                 () -> lists.list("transfer", tr, t.user(), false),
-                () -> lists.start("transfer", tr, t.user(), false),
-                () -> lists.transferSentPieces(tr, false),
-                () -> lists.transferSentPieces(tr, true))) {
+                () -> lists.start("transfer", tr, t.user(), false))) {
             assertThatThrownBy(() -> as(t, c))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode().value()).isEqualTo(404));
         }
@@ -503,8 +486,6 @@ class PutAwayListTest {
                 assertThatThrownBy(() -> tx.execute(s -> appLists.start(their.getKey(), their.getValue(), mine.user(), true)))
                     .extracting(e -> ((PlaceException) e).code()).isEqualTo(PlaceException.Code.SOURCE_NOT_FOUND);
             }
-            assertThatThrownBy(() -> tx.execute(s -> appLists.transferSentPieces(theirTransfer, true)))
-                .extracting(e -> ((PlaceException) e).code()).isEqualTo(PlaceException.Code.SOURCE_NOT_FOUND);
         } finally {
             TenantContext.clear();
         }
@@ -659,11 +640,6 @@ class PutAwayListTest {
             "VALUES (?, ?, ?, ?, ?, ?)", t.tenant(), transfer, line, pieceId, outcome, Timestamp.from(at));
     }
 
-    private void transferPieceFrom(T t, UUID transfer, UUID line, String pieceId, Instant at, UUID from) {
-        jdbc.update("INSERT INTO transfer_pieces (tenant_id, transfer_id, line_id, piece_id, created_at, from_location_id) " +
-            "VALUES (?, ?, ?, ?, ?, ?)", t.tenant(), transfer, line, pieceId, Timestamp.from(at), from);
-    }
-
     private UUID tagSession(T t, UUID location) {
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO tag_sessions (id, tenant_id, location_id, started_by, ended_at, ended_by) VALUES (?, ?, ?, ?, now(), ?)",
@@ -675,18 +651,6 @@ class PutAwayListTest {
         jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, from_status, to_status, metadata) " +
                 "VALUES (?, ?, 'label_bound', 'available', 'available', ?::jsonb)",
             t.tenant(), pieceId, "{\"tag_session_id\": \"" + tagSession + "\"}");
-    }
-
-    private void placeEvent(T t, String pieceId, String type, UUID from, UUID to, Instant at) {
-        jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, from_status, to_status, from_bin_id, to_bin_id, occurred_at) " +
-                "VALUES (?, ?, ?, 'available', 'available', ?, ?, ?)",
-            t.tenant(), pieceId, type, from, to, Timestamp.from(at));
-    }
-
-    private void statusEvent(T t, String pieceId, String from, String to, Instant at) {
-        jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, from_status, to_status, occurred_at) " +
-                "VALUES (?, ?, 'adjusted', ?::piece_status, ?::piece_status, ?)",
-            t.tenant(), pieceId, from, to, Timestamp.from(at));
     }
 
     private static DataSource counting(DataSource target, List<String> statements) {

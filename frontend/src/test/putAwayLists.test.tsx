@@ -18,6 +18,7 @@ import Returns from '../pages/Returns'
 import TransferScanOut from '../pages/TransferScanOut'
 import TransferReconcile from '../pages/TransferReconcile'
 import i18n from '../i18n'
+import { I18nextProvider } from 'react-i18next'
 
 /**
  * Warehouse places S4 — put-away lists after receiving, returns and transfers.
@@ -85,6 +86,8 @@ beforeEach(async () => { await i18n.changeLanguage('en') })
 afterEach(() => { clearAccessToken(); resetCapabilitiesCache(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 const putAwayCalls = () => calls.filter(c => c.url.includes('/put-away'))
+/** S4's own requests (lists and a session's list) — S2's landing summary (/put-away/summary) is not one. */
+const listCalls = () => calls.filter(c => c.url.includes('/put-away/lists/') || /\/put-away\/sessions\/[^/]+\/list$/.test(c.url))
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -134,12 +137,14 @@ function LocationProbe() {
   return <p data-testid="probe">{loc.pathname}{loc.search}</p>
 }
 
-function renderListPage(path = '/put-away/list/receiving/R1') {
-  return renderWithProviders(
+function renderListPage(path = '/put-away/list/receiving/R1', appI18n = false) {
+  const routes = (
     <Routes>
       <Route path="/put-away/list/:source/:sourceId" element={<PutAwayListPage />} />
       <Route path="*" element={<LocationProbe />} />
-    </Routes>, { initialEntries: [path] })
+    </Routes>)
+  // The app's own i18n instance (both languages) when a test switches language; else the test instance (English).
+  return renderWithProviders(appI18n ? <I18nextProvider i18n={i18n}>{routes}</I18nextProvider> : routes, { initialEntries: [path] })
 }
 
 // ── rows ──────────────────────────────────────────────────────────────────────
@@ -184,7 +189,7 @@ describe('Put-away list — page', () => {
     expect(codes.map(c => [c.textContent, c.getAttribute('data-done')])).toEqual([['P000002', 'false'], ['P000003', 'true']])
     expect(codes[1].className).toContain('line-through')
 
-    await userEvent.click(screen.getByTestId('put-away-list-start'))
+    await userEvent.click(within(screen.getByTestId('put-away-list-start')).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/S7/scan?list=1'))
     expect(calls.filter(c => c.method === 'POST').map(c => c.url)).toEqual([expect.stringContaining('/put-away/lists/receiving/R1/sessions')])
   })
@@ -222,8 +227,9 @@ describe('Put-away list — page', () => {
     await i18n.changeLanguage('ar')
     setup(true)
     routes = url => (url.includes('/put-away/lists/') ? list() : {})
-    renderListPage()
+    renderListPage(undefined, true)
     expect(await screen.findByTestId('put-away-list-progress')).toHaveTextContent('وُضعت 2 من 6 قطع')
+    expect(document.documentElement.dir).toBe('rtl')
     for (const [count, text] of [[0, 'لا شيء ينتظر'], [1, 'قطعة واحدة تنتظر'], [2, 'قطعتان تنتظران'],
         [5, '5 قطع تنتظر'], [11, '11 قطعة تنتظر'], [100, '100 قطعة تنتظر']] as const) {
       expect(i18n.t('putAway.list.waitingCount', { count })).toBe(text)
@@ -331,8 +337,14 @@ function receivingRoutes(mode: 'count_only' | 'print_stick', listReply: PutAwayL
 
 const RS = 'aaaaaaaa-0000-0000-0000-000000000001'
 function returnsRoutes(status: 'open' | 'closed', dispositions: string[]) {
-  return (url: string) => {
+  return (url: string, method = 'GET') => {
     if (url.includes('/returns/awaiting-scan')) return { count: 0, items: [] }
+    if (url.endsWith('/returns/sessions') && method === 'POST') return { sessionId: RS }
+    if (url.endsWith(`/returns/sessions/${RS}/close`) && method === 'POST') {
+      return { sessionId: RS, pieceCount: dispositions.length,
+        restockedCount: dispositions.filter(d => d === 'restocked').length,
+        damagedCount: dispositions.filter(d => d === 'damaged').length, mismatchCount: 0 }
+    }
     if (url.includes('/returns/sessions?')) {
       return { items: [{ id: RS, status, opened_by: 'user-1', opened_at: '2026-08-10T10:00:00Z',
         closed_at: status === 'closed' ? '2026-08-10T10:30:00Z' : null, piece_count: dispositions.length,
@@ -371,9 +383,8 @@ const transfer = (status: 'preparing' | 'reconciling') => ({
 async function closeReconcile() {
   await screen.findByTestId('reconcile-outstanding')
   await userEvent.click(screen.getByRole('button', { name: 'Close Transfer' }))
-  const dialog = await screen.findByRole('dialog')
-  const buttons = within(dialog).getAllByRole('button')
-  await userEvent.click(buttons[buttons.length - 1])
+  // The confirm is a ui Modal (no dialog role): its button by name.
+  await userEvent.click(await screen.findByRole('button', { name: 'Confirm Close' }))
 }
 
 function reconcileRender() {
@@ -392,7 +403,7 @@ describe('Put-away list — buttons', () => {
     setup(false)
     const off = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Put away now" />)
     await new Promise(r => setTimeout(r, 30))
-    expect(off.container.innerHTML).toBe('')
+    expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
     expect(putAwayCalls()).toHaveLength(0)
     off.unmount()
 
@@ -400,7 +411,7 @@ describe('Put-away list — buttons', () => {
     routes = url => (url.includes('/put-away/lists/') ? list({ total: 0, placed: 0, pieces: [] }) : {})
     const none = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Put away now" />)
     await waitFor(() => expect(putAwayCalls()).toHaveLength(1))
-    expect(none.container.innerHTML).toBe('')
+    expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
     none.unmount()
 
     setup(true)
@@ -412,7 +423,7 @@ describe('Put-away list — buttons', () => {
       </Routes>)
     const button = await screen.findByTestId('put-away-list-button-receiving')
     expect(button).toHaveTextContent('Put away now · 4 waiting')
-    await userEvent.click(button)
+    await userEvent.click(within(button).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/list/receiving/R1'))
   })
 
@@ -445,69 +456,112 @@ describe('Put-away list — buttons', () => {
       </Routes>, { initialEntries: ['/tag-stock/TS1/summary'] })
     const button = await screen.findByTestId('put-away-list-button-tag_session')
     expect(button).toHaveTextContent('Put away now · 3 waiting')
-    await userEvent.click(button)
+    await userEvent.click(within(button).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/list/tag_session/TS1'))
   })
 
-  test('rt1 Returns: one button on the closed-session summary (restocked only), a worker sees it; never on the scan screen', async () => {
+  test('rt1 Returns: one button on the closed-session summary (restocked only) — a worker after Close, a manager reopening it', async () => {
     setup(true, 'worker')
-    routes = returnsRoutes('closed', ['restocked', 'restocked', 'damaged'])
-    renderWithProviders(
+    routes = returnsRoutes('open', ['restocked', 'restocked', 'damaged'])
+    const worker = renderWithProviders(
       <Routes>
         <Route path="/returns" element={<Returns />} />
         <Route path="*" element={<LocationProbe />} />
       </Routes>, { initialEntries: ['/returns'] })
-    await userEvent.click(await screen.findByText('RT-AAAA'))
-    await screen.findByTestId('session-summary-screen')
+    await userEvent.click(await screen.findByRole('button', { name: 'Open return session' }))
+    await screen.findByTestId('open-session-screen')
+    expect(screen.queryByTestId('put-away-list-button-return_session')).toBeNull()
+    await userEvent.click(screen.getByTestId('close-session-button'))
+    await screen.findByTestId('close-summary')
     const buttons = await screen.findAllByTestId('put-away-list-button-return_session')
     expect(buttons).toHaveLength(1)
     expect(buttons[0]).toHaveTextContent('Put away all restocked pieces · 2 waiting')
     expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
-    await userEvent.click(buttons[0])
+    await userEvent.click(within(buttons[0]).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent(`/put-away/list/return_session/${RS}`))
+    worker.unmount()
+
+    setup(true, 'manager')
+    routes = returnsRoutes('closed', ['restocked', 'restocked', 'damaged'])
+    renderWithProviders(<Returns />, { initialEntries: ['/returns'] })
+    await userEvent.click(await screen.findByText('RT-AAAA'))
+    await screen.findByTestId('session-summary-screen')
+    expect(await screen.findAllByTestId('put-away-list-button-return_session')).toHaveLength(1)
   })
 
   test('rt1b Returns: nothing restocked → no button; the open scan screen never has one', async () => {
-    setup(true, 'worker')
+    setup(true, 'manager')
     routes = returnsRoutes('closed', ['damaged'])
     const closed = renderWithProviders(<Returns />, { initialEntries: ['/returns'] })
     await userEvent.click(await screen.findByText('RT-AAAA'))
     await screen.findByTestId('session-summary-screen')
+    await new Promise(r => setTimeout(r, 30))
     expect(screen.queryByTestId('put-away-list-button-return_session')).toBeNull()
-    expect(putAwayCalls()).toHaveLength(0)
+    expect(listCalls()).toHaveLength(0)
     closed.unmount()
 
     setup(true, 'worker')
     routes = returnsRoutes('open', ['restocked'])
     renderWithProviders(<Returns />, { initialEntries: ['/returns'] })
-    await userEvent.click(await screen.findByText('RT-AAAA'))
+    await userEvent.click(await screen.findByRole('button', { name: 'Open return session' }))
     await screen.findByTestId('open-session-screen')
     await new Promise(r => setTimeout(r, 30))
     expect(screen.queryByTestId('put-away-list-button-return_session')).toBeNull()
-    expect(putAwayCalls()).toHaveLength(0)
+    expect(listCalls()).toHaveLength(0)
   })
 
-  test('tr1 send-out: each piece with the place it left from, in walking order, no place last', async () => {
+  test('tr1 send-out collect list: each line where to collect it (biggest place first, rest No place yet), lines by place', async () => {
     setup(true, 'manager')
-    routes = url => {
-      if (url.endsWith('/transfers/T1')) return transfer('preparing')
-      if (url.includes('/put-away/transfers/T1/sent-pieces')) {
-        return [
-          { pieceId: 'a', code: 'P000011', productTitle: 'Black T-shirt', variantTitle: 'M', sku: null, place: Z2S9 },
-          { pieceId: 'b', code: 'P000012', productTitle: 'Black T-shirt', variantTitle: 'M', sku: null, place: Z10S1 },
-          { pieceId: 'c', code: 'P000013', productTitle: 'Cap', variantTitle: 'Red', sku: null, place: null },
-        ]
+    const line = (id: string, variant: string, product: string, title: string, qty: number) => ({
+      id, variant_id: variant, sku: null, variant_title: title, product_title: product,
+      qty_out: qty, qty_returned_good: 0, qty_condemned: 0, qty_sold: 0, qty_lost: 0 })
+    const pp = (p: PutAwayListPlace, count: number) => ({ binId: p.id, code: p.code, kind: p.kind, path: p.trail,
+      zoneCode: p.zoneCode, parentCode: p.parentCode, parentKind: p.parentKind, sortKey: p.sortKey, count })
+    const lines = [line('tl1', 'v1', 'Black T-shirt', 'M', 3), line('tl2', 'v4', 'Socks', 'Pink', 1),
+      line('tl3', 'v2', 'White Hoodie', 'L', 1), line('tl4', 'v5', 'Cap', 'Red', 1)]
+    routes = (url, method) => {
+      if (url.endsWith('/transfers/T1')) return { ...transfer('preparing'), lines }
+      if (url.endsWith('/fulfill/places/variants') && method === 'POST') {
+        return { variants: [
+          { variantId: 'v1', places: [pp(Z10S1, 4), pp(Z2S10, 1)], noPlaceCount: 2 },
+          { variantId: 'v4', places: [], noPlaceCount: 0 },
+          { variantId: 'v2', places: [], noPlaceCount: 2 },
+          { variantId: 'v5', places: [pp(Z2S9, 1)], noPlaceCount: 0 },
+        ] }
       }
       return {}
     }
     renderWithProviders(
       <Routes><Route path="/transfers/:id/scan-out" element={<TransferScanOut />} /></Routes>,
       { initialEntries: ['/transfers/T1/scan-out'] })
-    const section = await screen.findByTestId('transfer-sent-pieces')
-    const rows = within(section).getAllByTestId('transfer-sent-row')
+    const section = await screen.findByTestId('transfer-collect-list')
+    expect(calls.find(c => c.url.endsWith('/fulfill/places/variants'))?.body).toEqual({ variantIds: ['v1', 'v4', 'v2', 'v5'] })
+    const rows = within(section).getAllByTestId('transfer-collect-line')
     expect(rows.map(r => r.textContent)).toEqual([
-      expect.stringContaining('Z2-R01-S9'), expect.stringContaining('Z10-R01-S1'), expect.stringContaining('No place')])
+      expect.stringContaining('Cap · Red'), expect.stringContaining('Black T-shirt · M'),
+      expect.stringContaining('Socks · Pink'), expect.stringContaining('White Hoodie · L')])
+    expect(within(rows[1]).getAllByTestId('transfer-collect-place').map(p => p.textContent))
+      .toEqual(['Z10-R01-S14 pieces', 'Z2-R01-S101 piece', 'No place yet2 pieces'])
+    expect(rows[1]).toHaveTextContent('3 sent')
+    expect(rows[2]).toHaveTextContent('None left at the main warehouse')
+    expect(within(rows[3]).getAllByTestId('transfer-collect-place').map(p => p.textContent)).toEqual(['No place yet2 pieces'])
+    expect(screen.queryByTestId('transfer-sent-pieces')).toBeNull()
+    expect(putAwayCalls()).toHaveLength(0)
     expect(document.querySelectorAll('input')).toHaveLength(1)
+  })
+
+  test('tr1b a bring-back (relocate_return) shows no collect list and asks for no places', async () => {
+    setup(true, 'manager')
+    routes = url => (url.endsWith('/transfers/T1')
+      ? { ...transfer('preparing'), transfer_mode: 'relocate_return', source_location_id: 'loc-show', source_location_name: 'Showroom' }
+      : {})
+    renderWithProviders(
+      <Routes><Route path="/transfers/:id/scan-out" element={<TransferScanOut />} /></Routes>,
+      { initialEntries: ['/transfers/T1/scan-out'] })
+    await screen.findByTestId('transfer-scan-out')
+    await new Promise(r => setTimeout(r, 30))
+    expect(screen.queryByTestId('transfer-collect-list')).toBeNull()
+    expect(calls.some(c => c.url.includes('/fulfill/places'))).toBe(false)
   })
 
   test('tr2 reconcile Close → end screen "Put away returned pieces" when pieces wait; else the transfer opens', async () => {
@@ -522,7 +576,7 @@ describe('Put-away list — buttons', () => {
     await closeReconcile()
     const end = await screen.findByTestId('transfer-reconcile-end')
     expect(end).toHaveTextContent('3 pieces came back to the main warehouse and are waiting for a place.')
-    await userEvent.click(screen.getByTestId('transfer-put-away-returned'))
+    await userEvent.click(within(screen.getByTestId('transfer-put-away-returned')).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/list/transfer/T1'))
     first.unmount()
 
@@ -566,6 +620,7 @@ describe('Put-away list — capability off', () => {
     await new Promise(r => setTimeout(r, 30))
     expect(out.container.innerHTML).toMatchSnapshot('off: transfer send-out')
     expect(putAwayCalls()).toHaveLength(0)
+    expect(calls.some(c => c.url.includes('/fulfill/places'))).toBe(false)
     out.unmount()
 
     setup(false, 'manager')
@@ -582,7 +637,7 @@ describe('Put-away list — capability off', () => {
     expect(putAwayCalls()).toHaveLength(0)
     rec.unmount()
 
-    setup(false, 'worker')
+    setup(false, 'manager')
     routes = returnsRoutes('closed', ['restocked', 'restocked', 'damaged'])
     const ret = renderWithProviders(<Returns />, { initialEntries: ['/returns'] })
     await userEvent.click(await screen.findByText('RT-AAAA'))

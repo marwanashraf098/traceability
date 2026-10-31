@@ -4429,10 +4429,6 @@ export interface PutAwayList {
   /** The caller's open session on this list (Start resumes it); through a session: that session. */
   session: { id: string; status: 'open' | 'closed'; placedInSession: number; extra: number; lastActivityAt: string } | null
 }
-export interface TransferSentPiece {
-  pieceId: string; code: string | null; productTitle: string; variantTitle: string | null; sku: string | null
-  place: PutAwayListPlace | null
-}
 
 export function getPutAwayList(source: PutAwayListSource, sourceId: string) {
   return requestReadable<PutAwayList>(`/put-away/lists/${source}/${encodeURIComponent(sourceId)}`)
@@ -4444,10 +4440,6 @@ export function startPutAwayList(source: PutAwayListSource, sourceId: string) {
 /** The list behind a put-away session (scoped false for a manual session). */
 export function getPutAwaySessionList(sessionId: string) {
   return requestReadable<{ scoped: boolean; list: PutAwayList | null }>(`/put-away/sessions/${sessionId}/list`)
-}
-/** Owner / manager: the pieces scanned out on a transfer and the place each left from, in walking order. */
-export function getTransferSentPieces(transferId: string) {
-  return requestReadable<TransferSentPiece[]>(`/put-away/transfers/${encodeURIComponent(transferId)}/sent-pieces`)
 }
 
 // ── Warehouse places S3 — Pick & Pack places (display only; 404 without places) ──────────────────

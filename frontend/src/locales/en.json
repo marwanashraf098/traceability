@@ -5173,8 +5173,10 @@
       "putAwayNow": "Put away now",
       "putAwayRestocked": "Put away all restocked pieces",
       "putAwayReturned": "Put away returned pieces",
-      "sentTitle": "Pieces sent · by the place they came from",
-      "noPlace": "No place",
+      "collectTitle": "Where to collect · main warehouse",
+      "collectSent_one": "{{count}} sent",
+      "collectSent_other": "{{count}} sent",
+      "collectNoneLeft": "None left at the main warehouse",
       "transferEnd": {
         "title": "Transfer closed",
         "body_one": "{{count}} piece came back to the main warehouse and is waiting for a place.",

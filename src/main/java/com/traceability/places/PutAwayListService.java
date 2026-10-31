@@ -68,10 +68,6 @@ public class PutAwayListService {
     /** The list behind a put-away session: {@code scoped} false (and no list) for S2's manual sessions. */
     public record SessionList(boolean scoped, PutAwayList list) {}
 
-    /** A piece scanned out on a transfer and the place it left from (null: it had none). */
-    public record SentPiece(String pieceId, String code, String productTitle, String variantTitle, String sku,
-                            ListPlace place) {}
-
     private final JdbcTemplate jdbc;
     private final PutAwayService putAway;
 
@@ -144,65 +140,11 @@ public class PutAwayListService {
         return new SessionList(true, build(tenantId, resolve(tenantId, source, (UUID) found.get(0).get("source_id")), sessionId));
     }
 
-    /** A transfer's list (and its sent pieces) is owner / manager only, like every transfer screen. */
+    /** A transfer's list is owner / manager only, like every transfer screen. */
     private static void guardTransfer(String source, boolean manager) {
         if ("transfer".equals(source) && !manager) {
             throw new AccessDeniedException("Transfers are for owners and managers");
         }
-    }
-
-    // ── transfer send-out: where each piece came from ────────────────────────
-
-    /**
-     * The pieces scanned out on a transfer, each with the place it left from, in walking order (no place last). The
-     * departure cleared the place (V189's trigger), so it is read back from the piece's history: its latest place
-     * event before the scan-out, at the location it left from, provided nothing in between took it out of a place
-     * (a status change out of / into a status that holds none). Display only.
-     */
-    @Transactional(readOnly = true)
-    public List<SentPiece> transferSentPieces(UUID transferId, boolean manager) {
-        UUID tenantId = TenantContext.require();
-        Places.require(jdbc, tenantId);
-        guardTransfer("transfer", manager);
-        Integer exists = jdbc.queryForObject("SELECT count(*)::int FROM transfers WHERE id = ? AND tenant_id = ?",
-            Integer.class, transferId, tenantId);
-        if (exists == null || exists == 0) throw PlaceException.sourceNotFound();
-        String placeable = placeableList();
-        record Raw(String pieceId, String code, String product, String variant, String sku, UUID binId) {}
-        List<Raw> raws = jdbc.query(
-            "SELECT tp.piece_id, p.short_code, pr.title AS product_title, v.title AS variant_title, v.sku, " +
-            "       CASE WHEN lp.to_bin_id IS NOT NULL " +
-            "             AND (tp.from_location_id IS NULL OR b.location_id = tp.from_location_id) " +
-            "             AND NOT EXISTS (SELECT 1 FROM piece_events x " +
-            "                 WHERE x.tenant_id = tp.tenant_id AND x.piece_id = tp.piece_id " +
-            "                   AND x.occurred_at > lp.occurred_at AND x.occurred_at < tp.created_at " +
-            "                   AND (x.to_status::text NOT IN (" + placeable + ") " +
-            "                        OR (x.from_status IS NOT NULL AND x.from_status::text NOT IN (" + placeable + ")))) " +
-            "            THEN lp.to_bin_id END AS bin_id " +
-            "FROM transfer_pieces tp " +
-            "JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
-            "JOIN variants v ON v.id = p.variant_id JOIN products pr ON pr.id = v.product_id " +
-            "LEFT JOIN LATERAL ( " +
-            "  SELECT e.to_bin_id, e.occurred_at FROM piece_events e " +
-            "  WHERE e.tenant_id = tp.tenant_id AND e.piece_id = tp.piece_id " +
-            "    AND e.event_type IN ('put_away', 'place_moved', 'place_cleared') AND e.occurred_at <= tp.created_at " +
-            "  ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1 " +
-            ") lp ON true " +
-            "LEFT JOIN bins b ON b.id = lp.to_bin_id AND b.tenant_id = tp.tenant_id " +
-            "WHERE tp.tenant_id = ? AND tp.transfer_id = ?",
-            (rs, i) -> new Raw(rs.getString("piece_id"), rs.getString("short_code"), rs.getString("product_title"),
-                rs.getString("variant_title"), rs.getString("sku"), rs.getObject("bin_id", UUID.class)),
-            tenantId, transferId);
-        Map<UUID, PlacePaths.Place> d = PlacePaths.describe(jdbc, tenantId,
-            raws.stream().map(Raw::binId).filter(Objects::nonNull).toList());
-        List<SentPiece> out = new ArrayList<>(raws.stream().map(r -> new SentPiece(r.pieceId(), r.code(), r.product(),
-            r.variant(), r.sku(), ListPlace.of(d.get(r.binId())))).toList());
-        out.sort(Comparator.comparing((SentPiece p) -> p.place() == null ? null : p.place().sortKey(),
-                Comparator.nullsLast(Comparator.<String>naturalOrder()))
-            .thenComparing(SentPiece::productTitle, Comparator.nullsLast(Comparator.<String>naturalOrder()))
-            .thenComparing(SentPiece::variantTitle, Comparator.nullsLast(Comparator.<String>naturalOrder()))
-            .thenComparing(SentPiece::code, Comparator.nullsLast(Comparator.<String>naturalOrder())));
-        return out;
     }
 
     // ── internals ────────────────────────────────────────────────────────────

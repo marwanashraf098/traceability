@@ -155,10 +155,11 @@ export default function TransferReconcile() {
           <h1 className="text-h2 text-primary">{t('putAway.list.transferEnd.title')}</h1>
           <p className="text-body text-muted">{t('putAway.list.transferEnd.body', { count: putAwayWaiting })}</p>
           <div className="flex flex-wrap gap-2">
-            <Button iconStart={Layers} onClick={() => navigate(putAwayListPath('transfer', id))}
-              data-testid="transfer-put-away-returned">
-              {t('putAway.list.putAwayReturned')}
-            </Button>
+            <span className="contents" data-testid="transfer-put-away-returned">
+              <Button iconStart={Layers} onClick={() => navigate(putAwayListPath('transfer', id))}>
+                {t('putAway.list.putAwayReturned')}
+              </Button>
+            </span>
             <Button variant="secondary" onClick={() => navigate(`/transfers/${id}`)}>
               {t('putAway.list.transferEnd.goToTransfer')}
             </Button>

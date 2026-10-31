@@ -37,9 +37,11 @@ export default function PutAwayListButton({ source, sourceId, label, variant = '
 
   if (!places || waiting <= 0) return null
   return (
-    <Button variant={variant} size={size} iconStart={Layers} data-testid={`put-away-list-button-${source}`}
-      onClick={() => navigate(putAwayListPath(source, sourceId))}>
-      {label}{' · '}{t('putAway.list.waitingCount', { count: waiting })}
-    </Button>
+    // Button doesn't pass data-testid on — the id sits on a layout-neutral wrapper.
+    <span className="contents" data-testid={`put-away-list-button-${source}`}>
+      <Button variant={variant} size={size} iconStart={Layers} onClick={() => navigate(putAwayListPath(source, sourceId))}>
+        {label}{' · '}{t('putAway.list.waitingCount', { count: waiting })}
+      </Button>
+    </span>
   )
 }

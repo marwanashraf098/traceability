@@ -1,5 +1,6 @@
 package com.traceability.places;
 
+import com.traceability.TestPostgres;
 import com.traceability.identity.model.AccessTokenResponse;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
@@ -26,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Warehouse places S4 — put-away lists over HTTP: roles and the capability.
  *
  *   r1  every role (the worker on the station tablet included) reads and starts a receipt's, a return session's and a
- *       Tag stock session's list and reads its session's list; a transfer's list, Start and sent pieces are owner /
+ *       Tag stock session's list and reads its session's list; a transfer's list and Start are owner /
  *       manager — a worker gets 403
  *   r2  capability off → 404 for every role on every endpoint (a worker's transfer list too: 404, not 403)
  */
@@ -35,8 +37,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PutAwayListHttpTest {
 
+    @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
@@ -85,11 +88,9 @@ class PutAwayListHttpTest {
                 assertThat(sessionList.getBody()).as(role).contains("\"scoped\":true");
             }
             String transfer = "/api/v1/put-away/lists/transfer/" + on.transfer();
-            String sent = "/api/v1/put-away/transfers/" + on.transfer() + "/sent-pieces";
             HttpStatus expected = "worker".equals(role) ? HttpStatus.FORBIDDEN : HttpStatus.OK;
             assertThat(call(HttpMethod.GET, transfer, token).getStatusCode()).as(role + " transfer list").isEqualTo(expected);
             assertThat(call(HttpMethod.POST, transfer + "/sessions", token).getStatusCode()).as(role + " transfer start").isEqualTo(expected);
-            assertThat(call(HttpMethod.GET, sent, token).getStatusCode()).as(role + " sent pieces").isEqualTo(expected);
         }
     }
 
@@ -108,8 +109,6 @@ class PutAwayListHttpTest {
                     .isEqualTo(HttpStatus.NOT_FOUND);
             }
             assertThat(call(HttpMethod.GET, "/api/v1/put-away/sessions/" + anySession + "/list", token).getStatusCode())
-                .as(role).isEqualTo(HttpStatus.NOT_FOUND);
-            assertThat(call(HttpMethod.GET, "/api/v1/put-away/transfers/" + off.transfer() + "/sent-pieces", token).getStatusCode())
                 .as(role).isEqualTo(HttpStatus.NOT_FOUND);
         }
         assertThat(jdbc.queryForObject("SELECT count(*)::int FROM put_away_sessions WHERE tenant_id = ?", Integer.class, off.tenant()))
