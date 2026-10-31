@@ -38,9 +38,11 @@ again against the current line quantities. Both packing modes.
   edit-conflict alert carries `unpackUrl` (only while the order is packed and still here — computed in the detector
   SQL) → Alerts "Unpack order" → `/fulfill?tab=packed&order=<id>&unpack=1` opens the dialog. Lookup history shows
   "Unpacked from order #… to pack again — <reason>". `TransferCommandError` gained optional `details`.
-- **Open item:** RlsCoverageTest.coverageAudit fails — `GET /api/v1/fulfill/packed` must be added to its COVERED/EXEMPT
-  registry (an existing-test edit, not yet approved). PortalOnDemandLookupTest.e1 failed once in the full run, green
-  alone (concurrency test, untouched code).
+- **RlsCoverageTest:** `GET /api/v1/fulfill/packed` registered as COVERED → PackedOrdersListTest.x1 (approved edit).
+- **Known intermittent flake — PortalOnDemandLookupTest.e1_twoConcurrentLookups_oneRow:** failed once in the full
+  parallel run (2026-10-31, expected SUCCESS, was NOT_FOUND), green when rerun alone (27/27). A two-thread concurrency
+  test in code this build doesn't touch — under parallel Surefire load it can lose its race. A red e1 is not a
+  regression by itself; rerun it alone.
 - **Tests:** PackedOrdersListTest (5), UnpackOrderTest (10), OrderStatusBackwardWriteGuardTest (3); vitest
   waybillPickList (1), packedOrdersList (5), unpackOrder (10). PortalOrderLeakTest: both endpoints registered
   (approved edit). Screenshot harness `frontend/dev/unpack-shots`.

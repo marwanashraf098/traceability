@@ -95,6 +95,8 @@ class RlsCoverageTest {
             "/api/v1/pack-sessions/{id}",
             "/api/v1/pack-sessions/summary",
             "/api/v1/fulfill/print-batches/today",
+            // Unpack-order S2 — app_user isolation with a same-tenant positive control in PackedOrdersListTest.x1.
+            "/api/v1/fulfill/packed",
             // Non-Bosta couriers G2 — couriersSettings_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/settings/couriers",
             "/api/v1/settings/couriers/catch-up/preview",

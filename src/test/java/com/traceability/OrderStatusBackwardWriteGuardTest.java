@@ -39,15 +39,17 @@ class OrderStatusBackwardWriteGuardTest {
     static final Pattern PARAMETERISED = Pattern.compile(
         "(?is)UPDATE\\s+(?:merchant_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*\\?");
 
-    /** file → the method that may hold the write (null = anywhere in the file). */
+    /** Exactly three writers, each one method of one file (path under src/main/java) — never a whole class or pattern. */
     private static final Map<String, String> BACKWARD_ALLOWED = Map.of(
-        "FulfillService.java", "public UnpackOrderResult unpackOrder(",
-        // 2026-08-23 incident one-shot (#2212102474) — hardcoded tenant / order / piece, refuses anything else.
-        "PickErrorReversalService.java", "public void reverse(",
-        // C2 Lookup exchange: the replacement order created in the same method, new → confirmed.
-        "LookupExchangeService.java", "public Created create(");
+        // Unpack-order (approved 2026-10-31): packed / awaiting_pickup / self_pickup_pending → new, to repack.
+        "com/traceability/inventory/FulfillService.java", "public UnpackOrderResult unpackOrder(",
+        // 2026-08-23 incident one-shot (#2212102474): hardcoded tenant / order / piece, refuses anything else.
+        "com/traceability/inventory/PickErrorReversalService.java", "public void reverse(",
+        // C2 Lookup exchange: the replacement order it just created goes new → confirmed (never from packed).
+        "com/traceability/portal/LookupExchangeService.java", "public Created create(");
     private static final Map<String, String> PARAMETERISED_ALLOWED = Map.of(
-        "FulfillService.java", "public int complete(");
+        // complete(): reserved → packed / self_pickup_pending — forward only.
+        "com/traceability/inventory/FulfillService.java", "public int complete(");
 
     record Hit(String file, String method) {}
 
@@ -56,15 +58,16 @@ class OrderStatusBackwardWriteGuardTest {
         List<Hit> backward = scan(BACKWARD, BACKWARD_ALLOWED);
         assertThat(backward).as("every backward order-status write and the method it sits in")
             .containsExactlyInAnyOrder(
-                new Hit("FulfillService.java", "public UnpackOrderResult unpackOrder("),
-                new Hit("PickErrorReversalService.java", "public void reverse("),
-                new Hit("LookupExchangeService.java", "public Created create("));
+                new Hit("com/traceability/inventory/FulfillService.java", "public UnpackOrderResult unpackOrder("),
+                new Hit("com/traceability/inventory/PickErrorReversalService.java", "public void reverse("),
+                new Hit("com/traceability/portal/LookupExchangeService.java", "public Created create("));
+        assertThat(BACKWARD_ALLOWED).as("the allowlist itself: exactly three writers").hasSize(3);
     }
 
     @Test
     void parameterisedStatusWrites_onlyComplete() throws IOException {
         assertThat(scan(PARAMETERISED, PARAMETERISED_ALLOWED))
-            .containsExactly(new Hit("FulfillService.java", "public int complete("));
+            .containsExactly(new Hit("com/traceability/inventory/FulfillService.java", "public int complete("));
     }
 
     @Test
@@ -87,7 +90,7 @@ class OrderStatusBackwardWriteGuardTest {
             String text = join(Files.readString(f));
             Matcher m = p.matcher(text);
             while (m.find()) {
-                String name = f.getFileName().toString();
+                String name = SRC_MAIN.relativize(f).toString().replace('\\', '/');
                 String method = allowed.get(name);
                 hits.add(new Hit(name, method != null && inside(text, method, m.start()) ? method : "<outside>"));
             }
