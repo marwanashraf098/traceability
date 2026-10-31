@@ -14,6 +14,7 @@ import { useCapabilities } from '../../capabilities'
 import PackSessionScreen from './PackSessionScreen'
 import SessionSummaryScreen from './SessionSummaryScreen'
 import { PrintBatchesToday, PrintedNotPacked } from './PackLists'
+import { PackedOrdersList } from './PackedOrdersList'
 
 // Pick & Pack S3/S4 — the Pick & Pack page in waybill-scan mode (design/pick-pack-waybill-mockup/
 // Main.html: header, tiles, print batches today, printed but not packed). Three internal views:
@@ -64,6 +65,7 @@ export default function WaybillPackPage() {
 function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void }) {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [queue, setQueue] = useState<FulfillQueueRow[] | null>(null)
   const [packedToday, setPackedToday] = useState<number | null>(null)
   const [openSessionId, setOpenSessionId] = useState<string | null>(null)
@@ -181,6 +183,7 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
 
         <PrintBatchesToday refreshKey={listsKey} />
         <PrintedNotPacked refreshKey={listsKey} />
+        <PackedOrdersList refreshKey={listsKey} focusOrderId={searchParams.get('order')} />
       </div>
 
       {showPrint && flexibleLabeling && (

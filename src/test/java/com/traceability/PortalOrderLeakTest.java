@@ -181,6 +181,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/fulfill/print-batches/options", list());
         reg("GET /api/v1/fulfill/print-batches/today",   list());
         reg("GET /api/v1/fulfill/printed-not-packed",    list());
+        reg("GET /api/v1/fulfill/packed",                list());
         reg("GET /api/v1/fulfill/{orderId}",             byOrder());
         // Warehouse places S3 — display-only places (PickPlacesService, merchant_orders; 404 without places).
         reg("GET /api/v1/fulfill/{orderId}/places",      byOrder());

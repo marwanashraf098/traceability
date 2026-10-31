@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
   Lock, Layers, RefreshCw, ChevronRight, Printer, Tag,
 } from 'lucide-react'
-import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
+import { Badge, Button, Skeleton, EmptyState, ProductThumb, Tabs } from '../components/ui'
 import Layout from '../components/Layout'
 import PrintWaybillsDialog from './fulfill/PrintWaybillsDialog'
 import PrintForPackingDialog from './fulfill/PrintForPackingDialog'
+import { PackedOrdersList } from './fulfill/PackedOrdersList'
 import {
   LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
   scanRejectionText, usePackLineHighlight,
@@ -649,6 +650,8 @@ function QueueView({
   onSelect,
   onHandover,
   highlightOrderId,
+  tab,
+  onTabChange,
 }: {
   queue: QueueOrder[]
   loading: boolean
@@ -656,9 +659,15 @@ function QueueView({
   onSelect: (orderId: string) => void
   onHandover: (order: QueueOrder) => void
   highlightOrderId: string | null
+  /** Unpack-order S2: "To pack" (the queue) | "Packed" (packed, not picked up). No tabs when onTabChange is
+   *  absent (waybill mode's self-pickup view). The packed list loads only when its tab is open. */
+  tab?: 'queue' | 'packed'
+  onTabChange?: (tab: 'queue' | 'packed') => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const packedFocus = searchParams.get('order')
   const [showPrint, setShowPrint] = useState(false)
   // Flexible labeling slice 4: "Print labels" (switched-on tenants only) — the waybill set, or one order.
   const { flexibleLabeling } = useCapabilities()
@@ -761,6 +770,17 @@ function QueueView({
         </div>
       </div>
 
+      {onTabChange && (
+        <div className="mb-5">
+          <Tabs
+            tabs={[{ key: 'queue', label: t('fulfill.packed.tabToPack') }, { key: 'packed', label: t('fulfill.packed.tabPacked') }]}
+            activeKey={tab ?? 'queue'}
+            onChange={k => onTabChange(k === 'packed' ? 'packed' : 'queue')}
+          />
+        </div>
+      )}
+
+      {tab === 'packed' ? <PackedOrdersList refreshKey={0} focusOrderId={packedFocus} /> : (<>
       {/* Self-pickup pending section */}
       {handoverQueue.length > 0 && (
         <div className="mb-6 bg-warning/[0.14] border border-warning/[0.30] rounded-xl p-4 flex flex-col gap-2.5">
@@ -864,6 +884,7 @@ function QueueView({
           </div>
         </>
       )}
+      </>)}
 
       {labelsFor && (
         <PrintLabelsDialog orderId={labelsFor.orderId} orderNumber={labelsFor.number} onClose={() => setLabelsFor(null)} />
@@ -1614,6 +1635,9 @@ export default function Fulfill({ selfPickupOnly = false }: {
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [queueLoading, setQueueLoading] = useState(true)
   const [highlightOrderId, setHighlightOrderId] = useState<string | null>(null)
+  // Unpack-order S2: ?tab=packed opens the "Packed" tab (and ?order= marks a row there).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab: 'queue' | 'packed' = !selfPickupOnly && searchParams.get('tab') === 'packed' ? 'packed' : 'queue'
 
   const loadQueue = useCallback(async () => {
     setQueueLoading(true)
@@ -1687,6 +1711,8 @@ export default function Fulfill({ selfPickupOnly = false }: {
         onSelect={orderId => { setHighlightOrderId(null); setView({ type: 'pick', orderId }) }}
         onHandover={order => setView({ type: 'handover', order })}
         highlightOrderId={highlightOrderId}
+        tab={tab}
+        onTabChange={selfPickupOnly ? undefined : next => setSearchParams(next === 'packed' ? { tab: 'packed' } : {})}
       />
     </Layout>
   )

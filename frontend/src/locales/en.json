@@ -1327,6 +1327,26 @@
       "colTake": "Take",
       "pieces_one": "{{count}} piece",
       "pieces_other": "{{count}} pieces"
+    },
+    "packed": {
+      "title": "Packed, not picked up",
+      "count_one": "{{count}} order",
+      "count_other": "{{count}} orders",
+      "empty": "No packed orders are waiting for pickup.",
+      "tabToPack": "To pack",
+      "tabPacked": "Packed",
+      "pieces_one": "{{count}} piece",
+      "pieces_other": "{{count}} pieces",
+      "packedBy": "Packed by {{name}} · {{time}}",
+      "packedAt": "Packed {{time}}",
+      "statusPacked": "Packed · waybill not linked",
+      "statusAwaiting": "Waiting for courier",
+      "statusSelfPickup": "Waiting for customer",
+      "selfPickup": "Self-pickup",
+      "inPickup": "In pickup session · {{date}}",
+      "inPickupSlot": "In pickup session · {{date}} {{slot}}",
+      "edited": "Edited in Shopify",
+      "cod": "Bosta still has {{bosta}} EGP, the order is now {{order}} EGP — update the COD in Bosta."
     }
   },
   "lookup": {

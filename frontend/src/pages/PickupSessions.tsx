@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
 import { getPickupManifest, getRoleFromToken, PickupManifest, request } from '../api'
@@ -75,6 +76,13 @@ export default function PickupSessions() {
     setActiveSession(detail)
     setView('session')
   }
+
+  // Unpack-order S2: /pickups?session=<id> (Pick & Pack's "In pickup session" chip, the unpack refusal) opens it.
+  const [searchParams] = useSearchParams()
+  const linkedSession = searchParams.get('session')
+  useEffect(() => {
+    if (linkedSession) openSession(linkedSession).catch(() => { /* stays on the list */ })
+  }, [linkedSession])
 
   if (loading) return <div className="flex justify-center pt-16"><Spinner size={28} /></div>
   if (error)   return <p className="text-small text-danger">{error}</p>

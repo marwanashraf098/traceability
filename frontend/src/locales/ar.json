@@ -1389,6 +1389,32 @@
       "pieces_few": "{{count}} قطع",
       "pieces_many": "{{count}} قطعة",
       "pieces_other": "{{count}} قطعة"
+    },
+    "packed": {
+      "title": "مغلّفة ولم تُستلم",
+      "count_one": "طلب واحد",
+      "count_two": "طلبان",
+      "count_few": "{{count}} طلبات",
+      "count_many": "{{count}} طلباً",
+      "count_other": "{{count}} طلب",
+      "empty": "لا توجد طلبات مغلّفة في انتظار الاستلام.",
+      "tabToPack": "للتغليف",
+      "tabPacked": "مغلّفة",
+      "pieces_one": "قطعة واحدة",
+      "pieces_two": "قطعتان",
+      "pieces_few": "{{count}} قطع",
+      "pieces_many": "{{count}} قطعة",
+      "pieces_other": "{{count}} قطعة",
+      "packedBy": "غلّفها {{name}} · {{time}}",
+      "packedAt": "غُلّفت {{time}}",
+      "statusPacked": "مغلّف · البوليصة غير مربوطة",
+      "statusAwaiting": "في انتظار شركة الشحن",
+      "statusSelfPickup": "في انتظار العميل",
+      "selfPickup": "استلام من المتجر",
+      "inPickup": "في جلسة استلام · {{date}}",
+      "inPickupSlot": "في جلسة استلام · {{date}} {{slot}}",
+      "edited": "عُدّل في Shopify",
+      "cod": "Bosta ما زالت تسجّل {{bosta}} جنيه، والطلب الآن {{order}} جنيه — حدّث مبلغ التحصيل في Bosta."
     }
   },
   "lookup": {

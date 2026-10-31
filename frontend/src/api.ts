@@ -2529,6 +2529,36 @@ export function getPrintedNotPacked() {
   return request<NotPackedRow[]>('/fulfill/printed-not-packed')
 }
 
+/** Unpack-order S2 — a packed order still in the warehouse (PackedOrderService.IN_WAREHOUSE_SQL). */
+export interface PackedOrderRow {
+  orderId: string
+  orderNumber: string | null
+  customerName: string | null
+  status: 'packed' | 'awaiting_pickup' | 'self_pickup_pending'
+  selfPickup: boolean
+  trackingNumber: string | null
+  /** 'bosta' | 'generic' | null (no forward leg — self-pickup). */
+  courier: string | null
+  carrierName: string | null
+  packedAt: string | null
+  packedByName: string | null
+  pieces: number
+  /** The OPEN pickup session holding this order's waybill, if any. */
+  pickupSessionId: string | null
+  pickupDate: string | null
+  pickupTimeSlot: string | null
+  /** Shopify edited the order after it was packed (shopify_edit_conflict). */
+  editConflict: boolean
+  /** Bosta leg + COD order whose COD differs from Bosta's; bostaCod / orderCod set only then. */
+  codMismatch: boolean
+  bostaCod: number | null
+  orderCod: number | null
+}
+
+export function getPackedOrders() {
+  return request<PackedOrderRow[]>('/fulfill/packed')
+}
+
 /** Regenerates a batch's PDF in its stored order — no new batch. Same result shape as printing. */
 
 export function getPackSessionSummary(sessionId: string) {
