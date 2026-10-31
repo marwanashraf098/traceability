@@ -435,6 +435,20 @@ Implementation (2026-07-30, local/Testcontainers build — not yet run against p
 
 **Pick `scan()` and `complete()` (`FulfillService`) must re-verify eligibility server-side via `shipment_status_history` (`ALREADY_SHIPPED`), never trusting the queue list filter alone.** `FulfillService.PICKABLE_ORDERS_FILTER` (the `GET /fulfill/queue` predicate) is a display-time filter, not a security boundary — nothing re-checked it at any write, which is how the 2026-08-23 incident order got scanned and packed after its shipment's `internal_state` was wrongly rewound to `'created'`. Both `scan()` and `complete()` now call a private `hasEverShippedPastCreated(orderId, tenantId)` guard as their first step (right after `TenantContext.require()`, before touching pieces/allocations): `SELECT EXISTS (... FROM shipment_status_history h JOIN shipments s ON s.id = h.shipment_id WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' AND h.internal_state <> 'created')`. On a hit, `scan()` returns `ScanResult.rejected("ALREADY_SHIPPED", ...)` and `complete()` throws `ResponseStatusException(CONFLICT, ...)`. Deliberately reads history, not the live `shipments.internal_state` column, for the same circularity reason as the mapper guard above. Self-pickup orders never get a forward shipment, so the query naturally returns no rows for them — no carve-out needed. Deliberately does **not** gate on `not_traced_at` — that flag has its own known false-positive bug (a genuinely-traced order was seen carrying the chip) and is display-only until that's fixed separately; carrier-movement history is the trustworthy signal here, not the flag.
 
+## Backend test rules
+
+The suite runs ~19 min with test classes in 3 parallel Surefire JVMs (`surefire.forkCount=3` in pom.xml; `-Dsurefire.forkCount=1` to run serially). Every new or edited test class must keep to these rules:
+
+- **Postgres comes from `TestPostgres.newContainer()`** (`src/test/java/com/traceability/TestPostgres.java`: postgres:16-alpine, data dir on tmpfs, fsync / synchronous_commit / full_page_writes off) — never `new PostgreSQLContainer<>(...)` directly. Chain `withDatabaseName / withUsername / withPassword` as before. Only ExchangeBackfillTest is left on its own container, by rule — don't touch it.
+- **The static container field carries `@Container`** (with `@Testcontainers` on the class), even when the class also calls `start()` in a static block. Without it the container is never stopped and leaks for the rest of the run.
+- **Each class keeps its own DB:** one container per class, its own URL via `@DynamicPropertySource`, so no class shares a database or a Spring context with another. `CloseContextAfterClassListener` (registered in `src/test/resources/META-INF/spring.factories`) closes each class's context while its container is still up; the context cache is `maxSize=1` (`src/test/resources/spring.properties`). Don't add a shared/singleton container or a shared context.
+- **Parallel-safe, 3 JVMs at once:** no fixed ports (stub HTTP servers bind port 0; no fixed `server.port`), no files written to a shared fixed path (use a per-class temp dir), no fixed container or resource names.
+- **No real-clock waits:** don't `Thread.sleep` for a production delay. Make the delay a property / setter whose default is the old value and set it small in the test (precedent: `traced.piece-sync.queued-min-age-seconds` in PieceSyncAppUserTest, `bosta.create-rate-limit-block-seconds` in ReturnPickupBookingTest).
+- **Known flakes** (a red run here is not a regression by itself):
+  - ExchangeBackfillTest — expected red, left as it is.
+  - GenericG3IsolationGoldenTest can fail between 23:00 and midnight Cairo in the first days after the October clock change — 48 real hours = 1 calendar day then. Test-timing quirk, not a product bug. If it fails in that hour, rerun after midnight; a failure outside that hour is real.
+  - BostaPollJobTest.p6 — can flake under load (passes alone); see the follow-up note in docs/PROGRESS.md.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
