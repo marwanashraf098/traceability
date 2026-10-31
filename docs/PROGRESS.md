@@ -4,6 +4,55 @@
 
 ## Current state
 
+**Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
+deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in
+Shopify before pickup → a manager unpacks the whole order, it goes back to Pick & Pack (not cancelled), staff pack it
+again against the current line quantities. Both packing modes.
+- **S1:** Gather (pick list) button on the waybill page → the same unscoped `/fulfill/gather` as the queue page.
+- **S2 — Packed, not picked up:** `GET /api/v1/fulfill/packed` (every role). ONE definition
+  `PackedOrderService.IN_WAREHOUSE_SQL`: status packed / awaiting_pickup / self_pickup_pending, no cancel requested,
+  forward-leg history never past 'created', ≥ 1 packed allocation whose piece is packed / awaiting_pickup, none left
+  custody — never order status alone (a closed pickup leaves the order at awaiting_pickup). Row flags: open pickup
+  session (`OPEN_PICKUP_SESSION_LATERAL`; Bosta-scheduled pickup rows are 'closed' from the start and don't count),
+  edited in Shopify, Bosta COD mismatch (Bosta leg + COD order + amounts differ; never a generic leg). Waybill page: a
+  section; queue page: "To pack | Packed" tabs (Packed loads only when opened — fulfill.test.tsx's sequential mocks
+  are untouched). `/pickups?session=<id>` opens that session.
+- **S3 — `FulfillService.unpackOrder`** (`POST /fulfill/{id}/unpack-order`, owner / manager; reasons
+  customer_edited_order (default) / packed_wrong_item / other + note ≤ 200): one transaction, order row FOR UPDATE
+  first; guards (409, EN/AR, nothing changed — `UnpackOrderException`, body {code, message_en, message_ar, details}):
+  NOT_PACKED, CANCEL_REQUESTED (use guided unpack), LOOKUP_EXCHANGE (any Lookup replacement), LEFT_CUSTODY,
+  WAYBILL_ENDED (latest forward leg not 'created' or deleted in Bosta; skipped for self-pickup), IN_PICKUP_SESSION
+  (details.pickupSessionId — no auto-removal; remove the scan with the existing DELETE), HELD_BY_PACKER. Pieces
+  packed / awaiting_pickup → available through the existing ledger edges, event 'unpacked', metadata
+  {scope:'order', reason, note}; a piece in any other state is expected as PACKED so the ledger's race guard throws
+  and the whole order rolls back. Allocations released; order → 'new' (is_self_pickup kept → self-pickup queue),
+  locked_by and shopify_edit_conflict_* cleared; audit `order_unpacked` (reason, note, previousStatus, pieceIds, the
+  edit diff). No Shopify write, no Bosta call. **Approved backward order-status write — only here**
+  (`OrderStatusBackwardWriteGuardTest`, source scan; it also lists the two pre-existing writes: the 2026-08-23
+  `PickErrorReversalService` one-shot and Lookup `create`'s new → confirmed). Repack: unchanged — queue reappears;
+  waybill mode: the same waybill opens it again (resolver keys on status), print-batch stamp stays (batch item reads
+  waiting while unpacked), pickup scan of an unpacked order → NOT_PACKED. Piece history: phraseKey `unpacked_order` +
+  unpackReason / unpackNote.
+- **S4 — UI:** Unpack button on each packed row (owner / manager), `UnpackOrderDialog` (reason radios, Other note,
+  Bosta COD reminder, the server's refusal text + "Open the pickup session" link), success notice + reload; the
+  edit-conflict alert carries `unpackUrl` (only while the order is packed and still here — computed in the detector
+  SQL) → Alerts "Unpack order" → `/fulfill?tab=packed&order=<id>&unpack=1` opens the dialog. Lookup history shows
+  "Unpacked from order #… to pack again — <reason>". `TransferCommandError` gained optional `details`.
+- **RlsCoverageTest:** `GET /api/v1/fulfill/packed` registered as COVERED → PackedOrdersListTest.x1 (approved edit).
+- **Known intermittent flake — PortalOnDemandLookupTest.e1_twoConcurrentLookups_oneRow:** failed once in the full
+  parallel run (2026-10-31, expected SUCCESS, was NOT_FOUND), green when rerun alone (27/27). A two-thread concurrency
+  test in code this build doesn't touch — under parallel Surefire load it can lose its race. A red e1 is not a
+  regression by itself; rerun it alone.
+- **Tests:** PackedOrdersListTest (5), UnpackOrderTest (10), OrderStatusBackwardWriteGuardTest (3); vitest
+  waybillPickList (1), packedOrdersList (5), unpackOrder (10). PortalOrderLeakTest: both endpoints registered
+  (approved edit). Screenshot harness `frontend/dev/unpack-shots`.
+- **Follow-ups (logged, not built):** (1) shopify_edit_conflict key is one per order forever — once resolved, later
+  edits of that order never alert again; (2) warehouse places: unpacked pieces come back with no place — need a
+  put-away source; (3) Lookup "Release from order" on a piece of a packed order leaves the order packed with a piece
+  missing (and fails outright for an awaiting_pickup piece — releaseForAdjust assumes PACKED); (4) an unpacked order
+  past the lookback window gets TOO_OLD on re-scan / drops out of the queue; (5) the per-piece guided unpack endpoint
+  (FulfillController `/unpack/{pieceId}`) is open to any signed-in user.
+
 **Warehouse places S5 — one-place counts, place stickers in the stock take, Inventory place filter, Where is it,
 Move a box (2026-10-31, branch `feat/warehouse-places-s5` from main 3ee252a, rebased onto 9f1ecd6b; committed, NOT
 merged, NOT deployed; migration V198).** Nothing here calls Shopify, writes a piece off or changes a status

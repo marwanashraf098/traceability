@@ -1389,6 +1389,57 @@
       "pieces_few": "{{count}} قطع",
       "pieces_many": "{{count}} قطعة",
       "pieces_other": "{{count}} قطعة"
+    },
+    "packed": {
+      "title": "مغلّفة ولم تُستلم",
+      "count_one": "طلب واحد",
+      "count_two": "طلبان",
+      "count_few": "{{count}} طلبات",
+      "count_many": "{{count}} طلباً",
+      "count_other": "{{count}} طلب",
+      "empty": "لا توجد طلبات مغلّفة في انتظار الاستلام.",
+      "tabToPack": "للتغليف",
+      "tabPacked": "مغلّفة",
+      "pieces_one": "قطعة واحدة",
+      "pieces_two": "قطعتان",
+      "pieces_few": "{{count}} قطع",
+      "pieces_many": "{{count}} قطعة",
+      "pieces_other": "{{count}} قطعة",
+      "packedBy": "غلّفها {{name}} · {{time}}",
+      "packedAt": "غُلّفت {{time}}",
+      "statusPacked": "مغلّف · البوليصة غير مربوطة",
+      "statusAwaiting": "في انتظار شركة الشحن",
+      "statusSelfPickup": "في انتظار العميل",
+      "selfPickup": "استلام من المتجر",
+      "inPickup": "في جلسة استلام · {{date}}",
+      "inPickupSlot": "في جلسة استلام · {{date}} {{slot}}",
+      "edited": "عُدّل في Shopify",
+      "cod": "Bosta ما زالت تسجّل {{bosta}} جنيه، والطلب الآن {{order}} جنيه — حدّث مبلغ التحصيل في Bosta.",
+      "alertUnpack": "فكّ تغليف الطلب"
+    },
+    "unpack": {
+      "button": "فكّ التغليف",
+      "title": "فكّ تغليف الطلب {{number}}؟",
+      "body_one": "تعود القطعة المغلّفة إلى المخزون. لن يُلغى الطلب — يعود إلى التجهيز والتغليف ليُغلّف من جديد ببنوده الحالية.",
+      "body_two": "تعود القطعتان المغلّفتان إلى المخزون. لن يُلغى الطلب — يعود إلى التجهيز والتغليف ليُغلّف من جديد ببنوده الحالية.",
+      "body_few": "تعود القطع المغلّفة الـ{{count}} إلى المخزون. لن يُلغى الطلب — يعود إلى التجهيز والتغليف ليُغلّف من جديد ببنوده الحالية.",
+      "body_many": "تعود القطع المغلّفة الـ{{count}} إلى المخزون. لن يُلغى الطلب — يعود إلى التجهيز والتغليف ليُغلّف من جديد ببنوده الحالية.",
+      "body_other": "تعود القطع المغلّفة الـ{{count}} إلى المخزون. لن يُلغى الطلب — يعود إلى التجهيز والتغليف ليُغلّف من جديد ببنوده الحالية.",
+      "selfPickupNote": "يعود إلى طلبات الاستلام من المتجر.",
+      "waybillNote": "احتفظ بالبوليصة — نفس البوليصة تفتح الطلب مرة أخرى.",
+      "reasonLabel": "لماذا تفكّ التغليف؟",
+      "reasons": {
+        "customer_edited_order": "العميل عدّل الطلب",
+        "packed_wrong_item": "غُلّفت قطعة خاطئة",
+        "other": "سبب آخر"
+      },
+      "notePlaceholder": "ماذا حدث؟",
+      "noteCount": "{{count}}/200",
+      "confirm": "فكّ تغليف الطلب",
+      "cancel": "إبقاؤه مغلّفًا",
+      "done": "تم فكّ تغليف الطلب {{number}} — غلّفه من جديد من التجهيز والتغليف.",
+      "openPickup": "افتح جلسة الاستلام",
+      "failed": "تعذّر فكّ تغليف الطلب. حاول مرة أخرى."
     }
   },
   "lookup": {
@@ -1480,7 +1531,8 @@
       "put_away": "وُضعت في {{toPlace}}",
       "place_moved": "نُقلت من {{fromPlace}} إلى {{toPlace}}",
       "place_cleared": "أُزيل المكان (كانت في {{fromPlace}})",
-      "box_moved": "نُقل الصندوق {{box}} من {{fromPlace}} إلى {{toPlace}}"
+      "box_moved": "نُقل الصندوق {{box}} من {{fromPlace}} إلى {{toPlace}}",
+      "unpacked_order": "فُكّ من الطلب {{orderNumber}} لإعادة التغليف — {{reason}}"
     },
     "pieceStatus": {
       "available": "متاح",

@@ -168,6 +168,13 @@ public class ApiExceptionHandler {
             .body(new ReturnSessionErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
+    // Unpack-order S3 — the same {code, message_en, message_ar, details} shape (details: the open pickup session).
+    @ExceptionHandler(com.traceability.inventory.UnpackOrderException.class)
+    ResponseEntity<ReturnSessionErrorBody> handleUnpackOrderException(com.traceability.inventory.UnpackOrderException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new ReturnSessionErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
+    }
+
     record LabelCodeErrorBody(
             String code,
             @JsonProperty("message_en") String messageEn,

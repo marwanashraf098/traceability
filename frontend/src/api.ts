@@ -625,6 +625,9 @@ export interface TimelineEvent {
   toPlace?: string | null
   /** box_moved only: the box the piece is in. */
   box?: string | null
+  /** unpacked_order only (unpack-order S3): the reason code and, for 'other', the manager's note. */
+  unpackReason?: string | null
+  unpackNote?: string | null
 }
 
 export interface LookupVariant {
@@ -2230,11 +2233,16 @@ export class TransferCommandError extends Error {
   code: string
   messageEn: string
   messageAr: string
-  constructor(body: { code: string; message_en: string; message_ar: string }) {
+  /** Optional structured extras some endpoints send (e.g. unpack-order's open pickup session). */
+  details?: Record<string, unknown>
+  constructor(body: { code: string; message_en: string; message_ar: string; details?: unknown }) {
     super(body.code)
     this.code = body.code
     this.messageEn = body.message_en
     this.messageAr = body.message_ar
+    if (body.details && typeof body.details === 'object' && !Array.isArray(body.details)) {
+      this.details = body.details as Record<string, unknown>
+    }
   }
 }
 
@@ -2527,6 +2535,55 @@ export function getPrintBatchesToday() {
 
 export function getPrintedNotPacked() {
   return request<NotPackedRow[]>('/fulfill/printed-not-packed')
+}
+
+/** Unpack-order S2 — a packed order still in the warehouse (PackedOrderService.IN_WAREHOUSE_SQL). */
+export interface PackedOrderRow {
+  orderId: string
+  orderNumber: string | null
+  customerName: string | null
+  status: 'packed' | 'awaiting_pickup' | 'self_pickup_pending'
+  selfPickup: boolean
+  trackingNumber: string | null
+  /** 'bosta' | 'generic' | null (no forward leg — self-pickup). */
+  courier: string | null
+  carrierName: string | null
+  packedAt: string | null
+  packedByName: string | null
+  pieces: number
+  /** The OPEN pickup session holding this order's waybill, if any. */
+  pickupSessionId: string | null
+  pickupDate: string | null
+  pickupTimeSlot: string | null
+  /** Shopify edited the order after it was packed (shopify_edit_conflict). */
+  editConflict: boolean
+  /** Bosta leg + COD order whose COD differs from Bosta's; bostaCod / orderCod set only then. */
+  codMismatch: boolean
+  bostaCod: number | null
+  orderCod: number | null
+}
+
+export function getPackedOrders() {
+  return request<PackedOrderRow[]>('/fulfill/packed')
+}
+
+export type UnpackReason = 'customer_edited_order' | 'packed_wrong_item' | 'other'
+
+export interface UnpackOrderResult {
+  orderId: string
+  orderNumber: string | null
+  pieces: number
+  previousStatus: string
+  status: string
+  selfPickup: boolean
+}
+
+/** Unpack-order S3/S4 — owner / manager. A refusal is a TransferCommandError (code, EN / AR text, details). */
+export function unpackOrder(orderId: string, reason: UnpackReason, note?: string) {
+  return transferCommandRequest<UnpackOrderResult>(`/fulfill/${orderId}/unpack-order`, {
+    method: 'POST',
+    body: JSON.stringify(reason === 'other' ? { reason, note } : { reason }),
+  })
 }
 
 /** Regenerates a batch's PDF in its stored order — no new batch. Same result shape as printing. */

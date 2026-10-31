@@ -41,9 +41,15 @@ const PLACE_PHRASES = new Set(['put_away', 'place_moved', 'place_cleared', 'box_
 
 function TimelinePhrase({ event }: { event: TimelineEvent }) {
   const { t } = useTranslation()
+  // Unpack-order: an order unpack names its reason ("Other" shows the manager's own note).
+  const unpack = event.phraseKey !== 'unpacked_order' ? {} : {
+    reason: event.unpackReason === 'other' && event.unpackNote ? event.unpackNote
+      : t(`fulfill.unpack.reasons.${event.unpackReason ?? 'customer_edited_order'}`),
+  }
   return (
     <span>
       {t(`lookup.phrase.${event.phraseKey}`, {
+        ...unpack,
         orderNumber:  event.orderNumber  ?? '',
         location:     event.locationName ?? '',
         toStatus:     event.toStatus     ?? '',

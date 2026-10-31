@@ -199,6 +199,21 @@ public class FulfillController {
     }
 
     /** orderItemId: optional — the highlighted line (flexible labeling slice 4; used only when a label is bound). */
+    /**
+     * Unpack-order S3 (approved 2026-10-31) — unpack a whole packed order that is still in the warehouse and put it
+     * back to be packed again (not cancelled). Owner / manager only; repacking is the normal scan / complete.
+     */
+    @PostMapping("/{orderId}/unpack-order")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public FulfillService.UnpackOrderResult unpackOrder(
+            @PathVariable UUID orderId,
+            @RequestBody(required = false) UnpackOrderRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return svc.unpackOrder(orderId, principal.userId(),
+            req != null ? req.reason() : null, req != null ? req.note() : null);
+    }
+
+    public record UnpackOrderRequest(String reason, String note) {}
     public record ScanRequest(String barcode, UUID orderItemId) {}
     public record AwbLinkRequest(String trackingNumber) {}
     public record SelfPickupRequest(boolean selfPickup) {}

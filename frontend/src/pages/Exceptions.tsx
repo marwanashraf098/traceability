@@ -35,6 +35,8 @@ interface ExceptionItem {
   actionUrl: string
   releaseUrl?: string
   cancelUrl?: string
+  /** shopify_edit_conflict on an order packed and still in the warehouse: Pick & Pack's unpack (unpack-order S4). */
+  unpackUrl?: string
   diffJson?: string
   /** Condition-only alerts: what clears it (exc.clearsWhen.<code>) — no Resolve for these. */
   clearsWhen?: string
@@ -271,6 +273,11 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
         {item.actionUrl && item.type !== 'blocked_customer' && (
           <Button size="sm" onClick={() => navigate(item.actionUrl)}>
             {isAr ? 'الإجراء' : 'Go →'}
+          </Button>
+        )}
+        {item.unpackUrl && (
+          <Button size="sm" variant="secondary" onClick={() => navigate(item.unpackUrl!)}>
+            {t('fulfill.packed.alertUnpack')}
           </Button>
         )}
         {/* Condition-only alerts clear themselves — the server refuses Resolve (409 CONDITION_ONLY). */}
