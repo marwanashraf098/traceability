@@ -91,6 +91,7 @@ const RETURN_STATE_TONE: Record<string, BadgeTone> = {
   pending_inspection: 'warning',
   restocked:          'neutral',
   damaged:            'critical',
+  back_to_good:       'neutral',
 }
 
 /** A piece on an order (drawer / detail): a piece that came back reads "Returned · …" — its order-side

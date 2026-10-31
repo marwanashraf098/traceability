@@ -389,7 +389,13 @@ class ReturnedPiecesOnOrderTest {
             "AND undone_at IS NULL", Integer.class, o)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
             "WHERE oi.order_id = ?", Integer.class, o)).isZero();
-        assertThat(as(s, () -> controller.detail(o)).items()).isEqualTo(before);
+        // Orders tabs & filters (2026-10-30, approved): the line now lists the unit that came back; otherwise unchanged.
+        var after = as(s, () -> controller.detail(o)).items();
+        assertThat(after.get(0).returnedUnits()).containsExactly(new OrderController.ReturnedUnit(1, "sellable"));
+        assertThat(after.get(0).allocatedPieces()).isEqualTo(before.get(0).allocatedPieces());
+        assertThat(after.get(0).id()).isEqualTo(before.get(0).id());
+        assertThat(after.get(0).quantity()).isEqualTo(before.get(0).quantity());
+        assertThat(before.get(0).returnedUnits()).isEmpty();
         assertThat(before.get(0).allocatedPieces()).isEmpty();
     }
 
@@ -418,7 +424,8 @@ class ReturnedPiecesOnOrderTest {
         assertThat(status(p)).isEqualTo("reserved");
 
         // The returned order still shows it, as it came back.
-        assertThat(returnStates(s, d.order())).containsExactly(Map.entry(p, "damaged"));
+        // Decision 7 (2026-10-30): graded damaged, then Back to good before joining another order → back_to_good.
+        assertThat(returnStates(s, d.order())).containsExactly(Map.entry(p, "back_to_good"));
     }
 
     // ── t7: RLS on the new read ──────────────────────────────────────────────

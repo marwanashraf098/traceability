@@ -187,6 +187,10 @@ export interface OrderSummary {
   shippingBadge: OrderShippingBadge | null
   /** The order's open alert types (distinct, sorted) — ExceptionService.openAttentionOrderIds. Empty = none. */
   attentionReasons: string[]
+  /** Orders tabs & filters (2026-10-30): what came back to the warehouse and its grades — absent when nothing did. */
+  returnState?: OrderReturnState
+  /** The highest-priority Needs attention reason — absent with no open alert. */
+  attentionGroup?: OrderAttentionGroup
 }
 
 // The order's shipping badge (V139, OrderShippingBadge) — derived server-side when the order is
@@ -208,6 +212,49 @@ export interface OrderPage {
   page: number
   size: number
   total: number
+  /** Present only with withCounts=true. */
+  counts?: OrderTabCounts
+}
+
+/** pending = a returned piece awaits inspection; inspected = everything that came back has a grade. */
+export interface OrderReturnState {
+  state: 'pending' | 'inspected'
+  /** Non-zero counts only. sellable = untracked units graded sellable at arrival. */
+  grades: Partial<Record<'restocked' | 'damaged' | 'backToGood' | 'sellable', number>>
+}
+
+export type OrderReasonGroup =
+  'cant_ship' | 'no_courier_update' | 'delivery_failed' | 'cancelled_shipped' | 'return_to_handle' | 'other'
+
+export interface OrderAttentionGroup {
+  group: OrderReasonGroup
+  /** The alert type shown on the row. */
+  reason: string
+  /** How many more open alert types the order has. */
+  extra: number
+}
+
+export type OrderTab = 'all' | 'attention' | 'toShip' | 'inTransit' | 'delivered' | 'returned' | 'cancelled'
+
+/** Tab counts under the active filters (search ignored). attention / reasonCounts null when the alert check was skipped. */
+export interface OrderTabCounts {
+  all: number
+  attention: number | null
+  toShip: number
+  inTransit: number
+  delivered: number
+  returned: number
+  cancelled: number
+  reasonCounts: Record<OrderReasonGroup, number> | null
+}
+
+export interface OrderListFilters {
+  traced?: 'traced' | 'not_traced'
+  returns?: 'pending' | 'inspected'
+  courier?: 'bosta' | 'other'
+  payment?: 'cod' | 'prepaid'
+  /** Default 30 once a tab is given; ignored while searching and on the attention tab. */
+  days?: '7' | '30' | '90' | 'all'
 }
 
 export interface AllocatedPiece {
@@ -215,7 +262,9 @@ export interface AllocatedPiece {
   barcode: string
   status: string
   /** Present only on a piece of this order that came back (returned pieces, 2026-10-30). */
-  returnState?: 'pending_inspection' | 'restocked' | 'damaged'
+  returnState?: 'pending_inspection' | 'restocked' | 'damaged' | 'back_to_good'
+  /** The piece's printed short code, when it has one. */
+  shortCode?: string
 }
 
 export interface OrderItem {
@@ -228,6 +277,8 @@ export interface OrderItem {
   allocatedPieces: AllocatedPiece[]
   /** Quantity 0 because the line was added in Shopify after the order left Traced — not in the parcel. */
   addedAfterShipping?: boolean
+  /** Untracked units of this line that came back, graded at arrival. Absent when none. */
+  returnedUnits?: { unitNo: number; grade: 'sellable' | 'damaged' }[]
 }
 
 export interface DeliveryHistoryEntry {
@@ -319,6 +370,22 @@ export interface OrderListParams {
   carrier?: string
   /** Needs attention: only orders with ≥ 1 open alert (the summary's needsAttention set). */
   attention?: boolean
+  /** Orders tabs & filters (2026-10-30). */
+  tab?: OrderTab
+  filters?: OrderListFilters
+  /** A reason group — tab 'attention' only. */
+  reason?: OrderReasonGroup
+  /** Adds counts (same filters, search ignored) from the same alert check. */
+  withCounts?: boolean
+}
+
+function setOrderFilters(q: URLSearchParams, f: OrderListFilters | undefined) {
+  if (!f) return
+  if (f.traced)  q.set('traced', f.traced)
+  if (f.returns) q.set('returns', f.returns)
+  if (f.courier) q.set('courier', f.courier)
+  if (f.payment) q.set('payment', f.payment)
+  if (f.days)    q.set('days', f.days)
 }
 
 /** opts.signal: abort an in-flight list when a newer one starts (Orders search) — the caller ignores the AbortError. */
@@ -332,7 +399,19 @@ export function listOrders(params: OrderListParams = {}, opts: { signal?: AbortS
   if (params.size != null) q.set('size', String(params.size))
   if (params.carrier != null) q.set('carrier', params.carrier)
   if (params.attention) q.set('attention', 'true')
+  if (params.tab) q.set('tab', params.tab)
+  setOrderFilters(q, params.filters)
+  if (params.reason) q.set('reason', params.reason)
+  if (params.withCounts) q.set('withCounts', 'true')
   return request<OrderPage>(`/orders?${q}`, { signal: opts.signal })
+}
+
+/** GET /orders/counts — tab counts under the filters; attention=false skips the alert check. */
+export function getOrderCounts(filters: OrderListFilters = {}, opts: { attention?: boolean; signal?: AbortSignal } = {}) {
+  const q = new URLSearchParams()
+  setOrderFilters(q, filters)
+  if (opts.attention === false) q.set('attention', 'false')
+  return request<OrderTabCounts>(`/orders/counts?${q}`, { signal: opts.signal })
 }
 
 export function getOrder(id: string) {

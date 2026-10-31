@@ -1,10 +1,10 @@
 {
   "analyticsDelivery" : {
-    "body" : "{\"current\":{\"avgHoursHandedToDelivered\":24.0,\"avgHoursHandedToDeliveredCairoGiza\":null,\"avgHoursHandedToDeliveredOther\":24.0,\"avgHoursOrderToHanded\":108.0,\"delivered\":2,\"failed\":1,\"fulfillmentSpeed\":[{\"bucket\":\"same_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"1_day\",\"delivered\":1,\"failed\":0,\"orders\":1,\"successRate\":1.0},{\"bucket\":\"2_days\",\"delivered\":0,\"failed\":0,\"orders\":1,\"successRate\":null},{\"bucket\":\"3_plus_days\",\"delivered\":0,\"failed\":1,\"orders\":2,\"successRate\":0.0}],\"handedOrders\":4,\"lostSalesValue\":0.0,\"successRate\":0.6667,\"weeklyTrend\":{\"delivered\":2,\"failed\":1,\"weeks\":8}},\"previous\":{\"avgHoursHandedToDelivered\":null,\"avgHoursHandedToDeliveredCairoGiza\":null,\"avgHoursHandedToDeliveredOther\":null,\"avgHoursOrderToHanded\":null,\"delivered\":0,\"failed\":0,\"fulfillmentSpeed\":[{\"bucket\":\"same_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"1_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"2_days\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"3_plus_days\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null}],\"handedOrders\":0,\"lostSalesValue\":0.0,\"successRate\":null,\"weeklyTrend\":{\"delivered\":1,\"failed\":0,\"weeks\":8}},\"previousRange\":{\"from\":\"<v81>\",\"to\":\"<v82>\",\"tz\":\"Africa/Cairo\"},\"range\":{\"from\":\"<v83>\",\"to\":\"<v84>\",\"tz\":\"Africa/Cairo\"}}",
+    "body" : "{\"current\":{\"avgHoursHandedToDelivered\":24.0,\"avgHoursHandedToDeliveredCairoGiza\":null,\"avgHoursHandedToDeliveredOther\":24.0,\"avgHoursOrderToHanded\":108.0,\"delivered\":2,\"failed\":1,\"fulfillmentSpeed\":[{\"bucket\":\"same_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"1_day\",\"delivered\":1,\"failed\":0,\"orders\":1,\"successRate\":1.0},{\"bucket\":\"2_days\",\"delivered\":0,\"failed\":0,\"orders\":1,\"successRate\":null},{\"bucket\":\"3_plus_days\",\"delivered\":0,\"failed\":1,\"orders\":2,\"successRate\":0.0}],\"handedOrders\":4,\"lostSalesValue\":0.0,\"successRate\":0.6667,\"weeklyTrend\":{\"delivered\":2,\"failed\":1,\"weeks\":8}},\"previous\":{\"avgHoursHandedToDelivered\":null,\"avgHoursHandedToDeliveredCairoGiza\":null,\"avgHoursHandedToDeliveredOther\":null,\"avgHoursOrderToHanded\":null,\"delivered\":0,\"failed\":0,\"fulfillmentSpeed\":[{\"bucket\":\"same_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"1_day\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"2_days\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null},{\"bucket\":\"3_plus_days\",\"delivered\":0,\"failed\":0,\"orders\":0,\"successRate\":null}],\"handedOrders\":0,\"lostSalesValue\":0.0,\"successRate\":null,\"weeklyTrend\":{\"delivered\":1,\"failed\":0,\"weeks\":8}},\"previousRange\":{\"from\":\"<v82>\",\"to\":\"<v83>\",\"tz\":\"Africa/Cairo\"},\"range\":{\"from\":\"<v84>\",\"to\":\"<v85>\",\"tz\":\"Africa/Cairo\"}}",
     "status" : 200
   },
   "analyticsOrders" : {
-    "body" : "{\"asOf\":\"<v47>\",\"counts\":{\"awaiting_payout\":2,\"expected\":4,\"lost\":1,\"other_carrier\":0,\"overdue\":0,\"paid\":0,\"refunded\":0},\"orders\":[{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"With courier\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3001\",\"netToYou\":null,\"orderId\":\"<v0>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v48>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+1\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"not_shipped\",\"label\":\"Not shipped\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3002\",\"netToYou\":null,\"orderId\":\"<v1>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v49>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+2\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"Booked\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3003\",\"netToYou\":null,\"orderId\":\"<v2>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v50>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+3\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3009\",\"netToYou\":null,\"orderId\":\"<v3>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v51>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+9\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3004\",\"netToYou\":null,\"orderId\":\"<v4>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v52>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+40\",\"TN+4\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"refused\",\"label\":\"Refused, returning\"},\"feesEstimated\":false,\"financialStatus\":\"lost\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3006\",\"netToYou\":null,\"orderId\":\"<v5>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v53>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+6\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"With courier\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3007\",\"netToYou\":null,\"orderId\":\"<v6>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v54>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+7\"]}],\"page\":0,\"range\":{\"from\":\"<v83>\",\"to\":\"<v84>\",\"tz\":\"Africa/Cairo\"},\"size\":200,\"total\":7}",
+    "body" : "{\"asOf\":\"<v48>\",\"counts\":{\"awaiting_payout\":2,\"expected\":4,\"lost\":1,\"other_carrier\":0,\"overdue\":0,\"paid\":0,\"refunded\":0},\"orders\":[{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"With courier\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3001\",\"netToYou\":null,\"orderId\":\"<v0>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v49>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+1\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"not_shipped\",\"label\":\"Not shipped\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3002\",\"netToYou\":null,\"orderId\":\"<v1>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v50>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+2\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"Booked\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3003\",\"netToYou\":null,\"orderId\":\"<v2>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v51>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+3\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3009\",\"netToYou\":null,\"orderId\":\"<v3>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v52>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+9\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"delivered\",\"label\":\"Delivered\"},\"feesEstimated\":false,\"financialStatus\":\"awaiting_payout\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3004\",\"netToYou\":null,\"orderId\":\"<v4>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v53>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+40\",\"TN+4\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"refused\",\"label\":\"Refused, returning\"},\"feesEstimated\":false,\"financialStatus\":\"lost\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3006\",\"netToYou\":null,\"orderId\":\"<v5>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v54>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+6\"]},{\"bostaFees\":null,\"customer\":\"Youssef A.\",\"deliveryStatus\":{\"key\":\"in_transit\",\"label\":\"With courier\"},\"feesEstimated\":false,\"financialStatus\":\"expected\",\"governorate\":{\"key\":\"unknown\",\"label\":\"Unknown\",\"labelAr\":\"غير معروف\"},\"items\":1,\"name\":\"#3007\",\"netToYou\":null,\"orderId\":\"<v6>\",\"paymentGroup\":\"Other\",\"placedAt\":\"<v55>\",\"refundAmountUnknown\":false,\"total\":0.0,\"trackingNumbers\":[\"TN+7\"]}],\"page\":0,\"range\":{\"from\":\"<v84>\",\"to\":\"<v85>\",\"tz\":\"Africa/Cairo\"},\"size\":200,\"total\":7}",
     "status" : 200
   },
   "exceptions" : [ "return_mismatch|MEDIUM|piece", "return_to_receive|MEDIUM|untracked_unit", "stuck_shipment|HIGH|shipment", "stuck_shipment|HIGH|shipment", "stuck_shipment|HIGH|shipment", "stuck_shipment|HIGH|shipment" ],
@@ -31,27 +31,27 @@
     "type" : "tracking"
   },
   "orderDetail#3001" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v48>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113001\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v0>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v30>\",\"pieceId\":\"<v36>\",\"status\":\"with_courier\"}],\"id\":\"<v8>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3001\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v48>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v55>\",\"providerState\":null,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v7>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+1\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"packed\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v49>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113001\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v0>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v30>\",\"pieceId\":\"<v36>\",\"shortCode\":\"<v42>\",\"status\":\"with_courier\"}],\"id\":\"<v8>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3001\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v49>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v56>\",\"providerState\":null,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v7>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+1\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"packed\"}",
     "status" : 200
   },
   "orderDetail#3004" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v52>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v4>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v31>\",\"pieceId\":\"<v37>\",\"returnState\":\"restocked\",\"status\":\"available\"}],\"id\":\"<v9>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":false,\"placedAt\":\"<v52>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v10>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+40\"},{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v11>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"return\",\"slaBreached\":null,\"trackingNumber\":\"TN+4\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v53>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v4>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v31>\",\"pieceId\":\"<v37>\",\"returnState\":\"restocked\",\"shortCode\":\"<v43>\",\"status\":\"available\"}],\"id\":\"<v9>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":false,\"placedAt\":\"<v53>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v10>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+40\"},{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v11>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"return\",\"slaBreached\":null,\"trackingNumber\":\"TN+4\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
     "status" : 200
   },
   "orderDetail#3005" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v56>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113005\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.cancelled\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"NEUTRAL\"},\"holdReason\":null,\"id\":\"<v12>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[],\"id\":\"<v13>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":2,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3005\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v56>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v57>\",\"providerState\":46,\"state\":\"returned\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v14>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+5\"}],\"shippingBadge\":{\"carrier\":null,\"days\":null,\"state\":\"cancelled\"},\"shopifyOrderUrl\":null,\"status\":\"cancelled\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v57>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113005\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.cancelled\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"NEUTRAL\"},\"holdReason\":null,\"id\":\"<v12>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[],\"id\":\"<v13>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":2,\"returnedUnits\":[{\"grade\":\"sellable\",\"unitNo\":1}],\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3005\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v57>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v58>\",\"providerState\":46,\"state\":\"returned\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v14>\",\"internalState\":\"returned\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.returned\",\"tone\":\"WARN\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+5\"}],\"shippingBadge\":{\"carrier\":null,\"days\":null,\"state\":\"cancelled\"},\"shopifyOrderUrl\":null,\"status\":\"cancelled\"}",
     "status" : 200
   },
   "orderDetail#3007" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v54>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v6>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v32>\",\"pieceId\":\"<v38>\",\"returnState\":\"damaged\",\"status\":\"damaged\"}],\"id\":\"<v15>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v54>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v58>\",\"providerState\":24,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v16>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+7\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"with_courier\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v55>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"holdReason\":null,\"id\":\"<v6>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v32>\",\"pieceId\":\"<v38>\",\"returnState\":\"damaged\",\"shortCode\":\"<v44>\",\"status\":\"damaged\"}],\"id\":\"<v15>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v55>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v59>\",\"providerState\":24,\"state\":\"with_courier\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v16>\",\"internalState\":\"with_courier\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+7\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"with_courier\"}",
     "status" : 200
   },
   "orderDetail#3009" : {
-    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v51>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v3>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v33>\",\"pieceId\":\"<v39>\",\"status\":\"delivered\"}],\"id\":\"<v17>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v51>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v59>\",\"providerState\":24,\"state\":\"with_courier\"},{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v60>\",\"providerState\":45,\"state\":\"delivered\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v18>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+9\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
+    "body" : "{\"address\":null,\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"createdAt\":\"<v52>\",\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"holdReason\":null,\"id\":\"<v3>\",\"isExchange\":false,\"items\":[{\"addedAfterShipping\":false,\"allocatedPieces\":[{\"barcode\":\"<v33>\",\"pieceId\":\"<v39>\",\"shortCode\":\"<v45>\",\"status\":\"delivered\"}],\"id\":\"<v17>\",\"imageUrl\":null,\"productTitle\":\"Linen Shirt\",\"quantity\":1,\"sku\":\"SH-M\",\"variantTitle\":\"White / M\"}],\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"paymentMethod\":\"cod\",\"physicallyWithCourier\":true,\"placedAt\":\"<v52>\",\"shipments\":[{\"attempts\":[],\"awbUrl\":null,\"courierName\":null,\"courierPhone\":null,\"deliveryHistory\":[{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v60>\",\"providerState\":24,\"state\":\"with_courier\"},{\"exceptionCode\":null,\"exceptionReason\":null,\"occurredAt\":\"<v61>\",\"providerState\":45,\"state\":\"delivered\"}],\"exceptionCode\":null,\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v18>\",\"internalState\":\"delivered\",\"isDelayed\":null,\"lastFailureReason\":null,\"legStatus\":{\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"numberOfAttempts\":0,\"provider\":\"bosta\",\"scheduledAt\":null,\"shipmentLeg\":\"forward\",\"slaBreached\":null,\"trackingNumber\":\"TN+9\"}],\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"shopifyOrderUrl\":null,\"status\":\"delivered\"}",
     "status" : 200
   },
   "ordersList" : {
-    "body" : "{\"items\":[{\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113001\",\"deliveryState\":\"with_courier\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v0>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3001\",\"onHold\":false,\"placedAt\":\"<v48>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"packed\",\"trackingNumber\":\"TN+1\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113002\",\"deliveryState\":\"cancelled\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"WARN\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v1>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3002\",\"onHold\":false,\"placedAt\":\"<v49>\",\"shippingBadge\":{\"carrier\":null,\"days\":3,\"state\":\"not_booked_overdue\"},\"slaBreached\":null,\"status\":\"packed\",\"trackingNumber\":\"TN+2\"},{\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113003\",\"deliveryState\":\"created\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.new\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":false,\"primaryKey\":\"status.label_created\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v2>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3003\",\"onHold\":false,\"placedAt\":\"<v50>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"new\",\"trackingNumber\":\"TN+3\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v3>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"placedAt\":\"<v51>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+9\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v4>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"placedAt\":\"<v52>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+40\"},{\"attentionReasons\":[\"return_to_receive\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113005\",\"deliveryState\":\"returned\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.cancelled\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"NEUTRAL\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v12>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3005\",\"onHold\":false,\"placedAt\":\"<v56>\",\"shippingBadge\":{\"carrier\":null,\"days\":null,\"state\":\"cancelled\"},\"slaBreached\":null,\"status\":\"cancelled\",\"trackingNumber\":\"TN+5\"},{\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113006\",\"deliveryState\":\"returning\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.returning\",\"fulfillmentTone\":\"WARN\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.returning\",\"tone\":\"WARN\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v5>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3006\",\"onHold\":false,\"placedAt\":\"<v53>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"with_courier\",\"trackingNumber\":\"TN+6\"},{\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"deliveryState\":\"with_courier\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v6>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"placedAt\":\"<v54>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"with_courier\",\"trackingNumber\":\"TN+7\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113008\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v19>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3008\",\"onHold\":false,\"placedAt\":\"<v61>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+8\"}],\"page\":0,\"size\":50,\"total\":9}",
+    "body" : "{\"items\":[{\"attentionGroup\":{\"extra\":0,\"group\":\"no_courier_update\",\"reason\":\"stuck_shipment\"},\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113001\",\"deliveryState\":\"with_courier\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v0>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3001\",\"onHold\":false,\"placedAt\":\"<v49>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"packed\",\"trackingNumber\":\"TN+1\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113002\",\"deliveryState\":\"cancelled\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"WARN\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v1>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3002\",\"onHold\":false,\"placedAt\":\"<v50>\",\"shippingBadge\":{\"carrier\":null,\"days\":3,\"state\":\"not_booked_overdue\"},\"slaBreached\":null,\"status\":\"packed\",\"trackingNumber\":\"TN+2\"},{\"attentionGroup\":{\"extra\":0,\"group\":\"no_courier_update\",\"reason\":\"stuck_shipment\"},\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113003\",\"deliveryState\":\"created\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.new\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":false,\"primaryKey\":\"status.label_created\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v2>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3003\",\"onHold\":false,\"placedAt\":\"<v51>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"new\",\"trackingNumber\":\"TN+3\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113009\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v3>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3009\",\"onHold\":false,\"placedAt\":\"<v52>\",\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+9\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113004\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v4>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3004\",\"onHold\":false,\"placedAt\":\"<v53>\",\"returnState\":{\"grades\":{\"restocked\":1},\"state\":\"inspected\"},\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+40\"},{\"attentionGroup\":{\"extra\":0,\"group\":\"return_to_handle\",\"reason\":\"return_to_receive\"},\"attentionReasons\":[\"return_to_receive\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113005\",\"deliveryState\":\"returned\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.cancelled\",\"fulfillmentTone\":\"NEUTRAL\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.cancelled\",\"tone\":\"NEUTRAL\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v12>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3005\",\"onHold\":false,\"placedAt\":\"<v57>\",\"returnState\":{\"grades\":{\"sellable\":1},\"state\":\"inspected\"},\"shippingBadge\":{\"carrier\":null,\"days\":null,\"state\":\"cancelled\"},\"slaBreached\":null,\"status\":\"cancelled\",\"trackingNumber\":\"TN+5\"},{\"attentionGroup\":{\"extra\":0,\"group\":\"no_courier_update\",\"reason\":\"stuck_shipment\"},\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113006\",\"deliveryState\":\"returning\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.returning\",\"fulfillmentTone\":\"WARN\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.returning\",\"tone\":\"WARN\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v5>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3006\",\"onHold\":false,\"placedAt\":\"<v54>\",\"returnState\":{\"grades\":{\"restocked\":1},\"state\":\"inspected\"},\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"with_courier\",\"trackingNumber\":\"TN+6\"},{\"attentionGroup\":{\"extra\":0,\"group\":\"no_courier_update\",\"reason\":\"stuck_shipment\"},\"attentionReasons\":[\"stuck_shipment\"],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113007\",\"deliveryState\":\"with_courier\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.in_transit\",\"tone\":\"INFO\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v6>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3007\",\"onHold\":false,\"placedAt\":\"<v55>\",\"returnState\":{\"grades\":{\"damaged\":1},\"state\":\"inspected\"},\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"with_courier\",\"trackingNumber\":\"TN+7\"},{\"attentionReasons\":[],\"bostaLinkStatus\":null,\"codAmount\":1250.0,\"customerName\":\"Youssef Adel\",\"customerPhone\":\"01011113008\",\"deliveryState\":\"delivered\",\"derivedStatus\":{\"conflictKey\":null,\"fulfillmentKey\":\"status.fulfilled\",\"fulfillmentTone\":\"SUCCESS\",\"healthChips\":[],\"historicalNote\":null,\"notTraced\":false,\"packedConfirmed\":true,\"primaryKey\":\"status.delivered\",\"tone\":\"SUCCESS\"},\"exceptionReason\":null,\"failedDeliveryAttempts\":0,\"id\":\"<v19>\",\"isDelayed\":null,\"isExchange\":false,\"notTracedAt\":null,\"number\":\"#3008\",\"onHold\":false,\"placedAt\":\"<v62>\",\"returnState\":{\"grades\":{},\"state\":\"pending\"},\"shippingBadge\":{\"carrier\":\"Bosta\",\"days\":null,\"state\":\"linked\"},\"slaBreached\":null,\"status\":\"delivered\",\"trackingNumber\":\"TN+8\"}],\"page\":0,\"size\":50,\"total\":9}",
     "status" : 200
   },
   "pickup" : {
@@ -62,7 +62,7 @@
         "trackingNumber" : "TN+1",
         "orderNumber" : "#3001",
         "codAmount" : 1250.00,
-        "scannedAt" : "<v62>",
+        "scannedAt" : "<v63>",
         "scannedByName" : "Fatma"
       }
     },
@@ -77,7 +77,7 @@
         "trackingNumber" : "TN+2",
         "orderNumber" : "#3002",
         "codAmount" : 1250.00,
-        "scannedAt" : "<v63>",
+        "scannedAt" : "<v64>",
         "scannedByName" : "Fatma"
       }
     },
@@ -112,27 +112,27 @@
     "11_detailBeforeClose" : {
       "id" : "<v21>",
       "sessionStatus" : "open",
-      "scheduledDate" : "<v85>",
+      "scheduledDate" : "<v86>",
       "scheduledTimeSlot" : "10:00-13:00",
       "notes" : "g3",
       "scannedCount" : 2,
       "openedByName" : "Fatma",
       "closedByName" : null,
-      "createdAt" : "<v64>",
+      "createdAt" : "<v65>",
       "closedAt" : null,
       "scans" : [ {
         "shipmentId" : "<v20>",
         "trackingNumber" : "TN+2",
         "orderNumber" : "#3002",
         "codAmount" : 1250.00,
-        "scannedAt" : "<v63>",
+        "scannedAt" : "<v64>",
         "scannedByName" : "Fatma"
       }, {
         "shipmentId" : "<v7>",
         "trackingNumber" : "TN+1",
         "orderNumber" : "#3001",
         "codAmount" : 1250.00,
-        "scannedAt" : "<v62>",
+        "scannedAt" : "<v63>",
         "scannedByName" : "Fatma"
       } ]
     },
@@ -148,28 +148,28 @@
     },
     "13_manifest" : {
       "pickupId" : "<v21>",
-      "scheduledDate" : "<v85>",
+      "scheduledDate" : "<v86>",
       "timeSlot" : "10:00-13:00",
       "closedByName" : "Fatma",
-      "closedAt" : "<v65>",
+      "closedAt" : "<v66>",
       "packageCount" : 1,
       "shipments" : [ {
         "shipmentId" : "<v7>",
         "trackingNumber" : "TN+1",
         "orderNumber" : "#3001",
         "codAmount" : 1250.00,
-        "scannedAt" : "<v62>",
+        "scannedAt" : "<v63>",
         "scannedByName" : "Fatma"
       } ]
     },
     "14_list" : [ {
       "id" : "<v21>",
       "sessionStatus" : "closed",
-      "scheduledDate" : "<v85>",
+      "scheduledDate" : "<v86>",
       "scheduledTimeSlot" : "10:00-13:00",
       "scannedCount" : 1,
       "openedByName" : "Fatma",
-      "createdAt" : "<v64>"
+      "createdAt" : "<v65>"
     } ],
     "15_after" : [ {
       "#3001" : [ {
@@ -211,7 +211,7 @@
   },
   "portalCrp" : {
     "body" : {
-      "deliveredAt" : "<v66>",
+      "deliveredAt" : "<v67>",
       "lines" : [ ],
       "orderNumber" : "#3004",
       "pickup" : null
@@ -224,7 +224,7 @@
   },
   "portalRecent" : {
     "body" : {
-      "deliveredAt" : "<v67>",
+      "deliveredAt" : "<v68>",
       "lines" : [ {
         "deliveredQuantity" : 1,
         "imageUrl" : null,
@@ -267,7 +267,7 @@
       "piece_id" : "<v37>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v68>",
+      "scanned_at" : "<v69>",
       "sku" : "SH-M",
       "status" : "return_pending_inspection",
       "unexpected" : false,
@@ -291,7 +291,7 @@
       "piece_id" : "<v40>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v69>",
+      "scanned_at" : "<v70>",
       "sku" : "SH-M",
       "status" : "return_pending_inspection",
       "unexpected" : false,
@@ -309,7 +309,7 @@
       "piece_id" : "<v38>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v70>",
+      "scanned_at" : "<v71>",
       "sku" : "SH-M",
       "status" : "return_pending_inspection",
       "unexpected" : true,
@@ -327,7 +327,7 @@
       "piece_id" : "<v41>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v71>",
+      "scanned_at" : "<v72>",
       "sku" : "SH-M",
       "status" : "return_pending_inspection",
       "unexpected" : false,
@@ -369,7 +369,7 @@
         "piece_id" : "<v37>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v68>",
+        "scanned_at" : "<v69>",
         "short_code" : "<v43>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
@@ -387,8 +387,8 @@
         "piece_id" : "<v40>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v69>",
-        "short_code" : "<v44>",
+        "scanned_at" : "<v70>",
+        "short_code" : "<v46>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
         "unexpected" : false,
@@ -405,8 +405,8 @@
         "piece_id" : "<v38>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v70>",
-        "short_code" : "<v45>",
+        "scanned_at" : "<v71>",
+        "short_code" : "<v44>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
         "unexpected" : true,
@@ -423,8 +423,8 @@
         "piece_id" : "<v41>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v71>",
-        "short_code" : "<v46>",
+        "scanned_at" : "<v72>",
+        "short_code" : "<v47>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
         "unexpected" : false,
@@ -432,13 +432,13 @@
         "via_phone" : false
       } ],
       "lastScan" : {
-        "at" : "<v72>",
+        "at" : "<v73>",
         "code" : "TN+7",
         "kind" : "awb",
         "label" : null
       },
       "note" : null,
-      "opened_at" : "<v73>",
+      "opened_at" : "<v74>",
       "opened_by" : "<v28>",
       "otherItems" : [ {
         "barcode" : "<v34>",
@@ -451,8 +451,8 @@
         "piece_id" : "<v40>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v69>",
-        "short_code" : "<v44>",
+        "scanned_at" : "<v70>",
+        "short_code" : "<v46>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
         "unexpected" : false,
@@ -469,8 +469,8 @@
         "piece_id" : "<v41>",
         "product_title" : "Linen Shirt",
         "scan_source" : "barcode",
-        "scanned_at" : "<v71>",
-        "short_code" : "<v46>",
+        "scanned_at" : "<v72>",
+        "short_code" : "<v47>",
         "sku" : "SH-M",
         "status" : "return_pending_inspection",
         "unexpected" : false,
@@ -511,8 +511,8 @@
           "piece_id" : "<v38>",
           "product_title" : "Linen Shirt",
           "scan_source" : "barcode",
-          "scanned_at" : "<v70>",
-          "short_code" : "<v45>",
+          "scanned_at" : "<v71>",
+          "short_code" : "<v44>",
           "sku" : "SH-M",
           "status" : "return_pending_inspection",
           "unexpected" : true,
@@ -544,7 +544,7 @@
         "itemsRequestId" : null,
         "itemsRequestReference" : null,
         "leg" : "forward",
-        "markedAt" : "<v74>",
+        "markedAt" : "<v75>",
         "markedBy" : "Fatma",
         "markedInThisSession" : true,
         "orderNumber" : "#3005",
@@ -559,7 +559,7 @@
         "untrackedUnits" : [ {
           "condition" : "sellable",
           "intakeId" : "<v29>",
-          "markedAt" : "<v75>",
+          "markedAt" : "<v76>",
           "markedBy" : "Fatma",
           "markedInSession" : "<v27>",
           "orderItemId" : "<v13>",
@@ -621,7 +621,7 @@
           "piece_id" : "<v37>",
           "product_title" : "Linen Shirt",
           "scan_source" : "barcode",
-          "scanned_at" : "<v68>",
+          "scanned_at" : "<v69>",
           "short_code" : "<v43>",
           "sku" : "SH-M",
           "status" : "return_pending_inspection",
@@ -641,14 +641,14 @@
       "barcode" : "<v31>",
       "damage_reason" : null,
       "disposition" : "restocked",
-      "disposition_at" : "<v76>",
+      "disposition_at" : "<v77>",
       "id" : "<v23>",
       "on_scanned_awb" : false,
       "order_number" : null,
       "piece_id" : "<v37>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v68>",
+      "scanned_at" : "<v69>",
       "sku" : "SH-M",
       "status" : "available",
       "unexpected" : false,
@@ -659,14 +659,14 @@
       "barcode" : "<v34>",
       "damage_reason" : null,
       "disposition" : "restocked",
-      "disposition_at" : "<v77>",
+      "disposition_at" : "<v78>",
       "id" : "<v24>",
       "on_scanned_awb" : false,
       "order_number" : null,
       "piece_id" : "<v40>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v69>",
+      "scanned_at" : "<v70>",
       "sku" : "SH-M",
       "status" : "available",
       "unexpected" : false,
@@ -677,14 +677,14 @@
       "barcode" : "<v32>",
       "damage_reason" : "torn",
       "disposition" : "damaged",
-      "disposition_at" : "<v78>",
+      "disposition_at" : "<v79>",
       "id" : "<v25>",
       "on_scanned_awb" : true,
       "order_number" : null,
       "piece_id" : "<v38>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v70>",
+      "scanned_at" : "<v71>",
       "sku" : "SH-M",
       "status" : "damaged",
       "unexpected" : true,
@@ -695,14 +695,14 @@
       "barcode" : "<v35>",
       "damage_reason" : null,
       "disposition" : "mismatch",
-      "disposition_at" : "<v79>",
+      "disposition_at" : "<v80>",
       "id" : "<v26>",
       "on_scanned_awb" : false,
       "order_number" : "#3008",
       "piece_id" : "<v41>",
       "product_title" : "Linen Shirt",
       "scan_source" : "barcode",
-      "scanned_at" : "<v71>",
+      "scanned_at" : "<v72>",
       "sku" : "SH-M",
       "status" : "return_pending_inspection",
       "unexpected" : false,
@@ -710,7 +710,7 @@
       "via_phone" : false
     },
     "15_close" : {
-      "closedAt" : "<v80>",
+      "closedAt" : "<v81>",
       "damagedCount" : 1,
       "mismatchCount" : 1,
       "pieceCount" : 4,

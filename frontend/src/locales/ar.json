@@ -498,7 +498,8 @@
     "returnState": {
       "pending_inspection": "مرتجع · ينتظر الفحص",
       "restocked": "مرتجع · أُعيد للمخزون",
-      "damaged": "مرتجع · تالف"
+      "damaged": "مرتجع · تالف",
+      "back_to_good": "مرتجع · عاد سليماً"
     },
     "deliveryHistory": "سجل التوصيل",
     "noDeliveryHistory": "لا يوجد سجل بعد — ستظهر التحديثات هنا عند وصولها.",

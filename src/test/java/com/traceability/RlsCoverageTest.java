@@ -157,6 +157,7 @@ class RlsCoverageTest {
             "/api/v1/inventory/valuation",
             "/api/v1/orders/funnel",
             "/api/v1/orders/summary",
+            "/api/v1/orders/counts",
             "/api/v1/inventory/throughput",
             "/api/v1/activity/recent",
             "/api/v1/exchanges",
@@ -1823,6 +1824,36 @@ class RlsCoverageTest {
         ResponseEntity<Map> resp = get("/api/v1/orders/funnel", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(((Number) resp.getBody().get("newCount")).intValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    /** Orders tabs & filters (2026-10-30, approved): tab counts over the real RLS stack count only the caller's
+     *  tenant — tenant B's order is never counted. attention=false: no alert check. */
+    @Test
+    void ordersCounts_countOwnTenantOnly() {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, on_hold) " +
+            "VALUES (?, ?, 'EXT-CVG-COUNTS-A', '#CVG-COUNTS-A', 'new'::order_status, 'cod', now(), false)",
+            tenantId, storeId);
+        UUID otherTenant = UUID.randomUUID();
+        UUID otherStore  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-counts-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+                    "    payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, 'EXT-CVG-COUNTS-B', '#CVG-COUNTS-B', 'new'::order_status, 'cod', now(), false)",
+                    otherTenant, otherStore);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/orders/counts?days=all&attention=false", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(((Number) resp.getBody().get("all")).intValue()).isEqualTo(1);
+            assertThat(((Number) resp.getBody().get("toShip")).intValue()).isEqualTo(1);
+        } finally {
+            jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants   WHERE id = ?", otherTenant);
+        }
     }
 
     @Test
