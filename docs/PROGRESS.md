@@ -4,10 +4,9 @@
 
 ## Current state
 
-**Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30, branch
-`feat/warehouse-places-s4` from main 645d99e; BUILT, NOT committed, NOT merged, NOT deployed; migration V197).
-TESTS WRITTEN BUT NOT RUN — another session is reworking the backend suite; only `mvn compile test-compile` and
-`tsc --noEmit` were run (both clean).** The gather list in reverse: a flow's pieces and where each should go.
+**Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30/31, branch
+`feat/warehouse-places-s4`, rebased onto main cb397c0 (test-suite speed-up); committed, NOT merged, NOT deployed;
+migration V197). Review approved 2026-10-31 with one change (send-out collect list) — done, tests run (see below).** The gather list in reverse: a flow's pieces and where each should go.
 - **Flows (`PutAwayListService`, one definition):** `receiving` — a receipt's TAGGED pieces (`pieces.receipt_id`) at its
   location (none → main; count-only/untagged never listed); `tag_session` — the pieces a Tag stock session tagged
   (`label_bound` events, `metadata.tag_session_id`), at its location; `return_session` — RESTOCKED items only
@@ -23,9 +22,8 @@ TESTS WRITTEN BUT NOT RUN — another session is reworking the backend suite; on
   (MigrationSmokeTest 196 files, NotTracedBackfillTest 141).
 - **Endpoints (`PutAwayListController`, /api/v1/put-away):** GET `lists/{source}/{sourceId}`, POST `…/sessions` (start /
   resume, pre-fills put_away_session_pieces with the waiting pieces' `suggested_bin_id`), GET `sessions/{id}/list`
-  (the caller's own session; `scoped:false` for manual), GET `transfers/{transferId}/sent-pieces` (owner / manager: the
-  place each scanned-out piece left from — its latest place event before the scan-out at the location it left, unless
-  a status change out of / into a placeless status came in between). Off → 404 for every role (the role check runs in
+  (the caller's own session; `scoped:false` for manual). (The review removed the first build's
+  `transfers/{id}/sent-pieces`.) Off → 404 for every role (the role check runs in
   the service AFTER Places.require, so a worker's transfer list is 404, not 403, without places). Unknown / another
   tenant's flow → 404 SOURCE_NOT_FOUND alike. Nothing calls Shopify; S2's scan / close / idle close unchanged.
 - **Frontend:** `/put-away/list/:source/:sourceId` (`PutAwayListPage`, standalone printable sheet like
@@ -36,16 +34,28 @@ TESTS WRITTEN BUT NOT RUN — another session is reworking the backend suite; on
   while something on the list waits at a location with places). Buttons: Receiving finalized receipt (own row under
   the header), Tag stock summary, the closed Scan returns summary (ONE button, restocked > 0; workers too; never in
   grading / the open scan screen), TransferReconcile end screen after Close (only when pieces wait; otherwise — and
-  without places — straight to the transfer as before). TransferScanOut: "Pieces sent · by the place they came
-  from". PutAwayScan with ?list=1: "This list" card (progress, extra, compact ticking table), re-read after every
+  without places — straight to the transfer as before). TransferScanOut: a COLLECT list ("Where to collect · main warehouse",
+  `TransferCollectList`) — each scanned line (variant · sent so far) with where that variant's AVAILABLE pieces still
+  are at the main warehouse, from S3's `POST /fulfill/places/variants` (unchanged, main-only — a round trip / permanent
+  move always leaves from main): per place biggest first, then "No place yet"; lines in walking order by their first
+  place. A transfer has NO planned lines (the scan creates the line), so the list grows as scanning goes on. Not shown
+  for a bring-back (its pieces are transferred_out at the other location — no place). Display only; scan handler
+  untouched. PutAwayScan with ?list=1: "This list" card (progress, extra, compact ticking table), re-read after every
   scan result via an effect on the session (the SAFETY-CRITICAL scan handler untouched), Finish → list progress +
   "Back to the list"; without ?list=1 nothing is asked (S2 unchanged). EN + AR (six Arabic plural forms).
-- **Tests written (not run):** PutAwayListTest (ls1–ls4, gs1, q1, ss1, ss2, i1, sp1, r1, f1, x1), PutAwayListHttpTest
-  (r1, r2), RlsCoverageTest `putAwayLists_crossTenantIsolated_withSameTenantPositiveControl` (3 COVERED entries),
-  PortalOrderLeakTest +4 skip entries, PlacesShopifyGuardTest extended (approved), putAwayLists.test.tsx (rw1, pl1–pl5,
-  ps1–ps3, bt1, rc1, tg1, rt1, rt1b, tr1, tr2, off). TO DO before merge: record the 5 "off:" snapshots from MAIN's
-  original page files (S3 procedure), run targeted + full suites, revert-check (drop `AND i.disposition = 'restocked'`
-  → ls2 red), screenshots EN/AR.
+- **Tests:** PutAwayListTest (ls1–ls4, gs1, q1, ss1, ss2, i1, sp1 = collect data from S3's batch places, r1, f1, x1),
+  PutAwayListHttpTest (r1, r2), RlsCoverageTest `putAwayLists_crossTenantIsolated_withSameTenantPositiveControl`,
+  PortalOrderLeakTest skip entries, PlacesShopifyGuardTest, putAwayLists.test.tsx (rw1, pl1–pl5, ps1–ps3, bt1, rc1,
+  tg1, rt1, rt1b, tr1, tr1b, tr2, off — the 5 "off:" snapshots recorded from MAIN's original page files). New classes
+  use TestPostgres.newContainer() + @Container. Revert-check: removing `AND i.disposition = 'restocked'` → ls2 RED,
+  restored. Full backend suite 2026-10-31: 3,616 tests, red = ExchangeBackfillTest (baseline), BostaPollJobTest.p6
+  (known flake, red alone too) and 5 PutAwayListTest tests (test helper bug: `new InventoryLedger(jdbc)` outside a
+  transaction → no tenant GUC; fixed to the ledger bean → 13/13 green alone). Wall time 1:43 h INVALID — the Mac slept
+  on battery mid-run; RERUN the full suite on AC before merge. Vitest full: 1,292 tests, 9 timing failures in 7 other
+  files under sleep/load, all 149 green when those files ran alone; putAwayLists 18/18. tsc clean.
+- **Gotchas:** the DS `Button` drops `data-testid` (tsc doesn't catch it) — put the id on a `<span className="contents">`
+  wrapper. `ui` Modal has no dialog role. Returns' sessions list is owner/manager only — a worker reaches the closed
+  summary through Close. Screenshot harness: `frontend/dev/putawaylists-shots/` (`node dev/putawaylists-shots/shoot.mjs <dir>`).
 
 **Orders tabs & filters — backend slice (2026-10-30, branch `feat/orders-tabs-filters-api` off origin/main 43a98ff,
 rebased onto cb397c0 (test suite T1/T2); merged to main 2026-10-31, NOT deployed; no migration; no visual change — backend + api.ts types; the UI slice follows).** Marawan's

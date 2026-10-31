@@ -97,6 +97,7 @@ class PutAwayListTest {
     @Autowired PutAwayService     putAway;
     @Autowired PutAwayListService lists;
     @Autowired PickPlacesService  pickPlaces;
+    @Autowired InventoryLedger    ledger;
     @Autowired DataSource         dataSource;
     PutAwayIdleCloseJob idleJob;
 
@@ -594,7 +595,7 @@ class PutAwayListTest {
     private void place(String pieceId, UUID binId) {
         UUID tenant = jdbc.queryForObject("SELECT tenant_id FROM pieces WHERE id = ?", UUID.class, pieceId);
         UUID actor = jdbc.queryForObject("SELECT id FROM users WHERE tenant_id = ? AND role = 'owner' LIMIT 1", UUID.class, tenant);
-        TenantContext.runAs(tenant, () -> new InventoryLedger(jdbc).recordPlaceChange(pieceId, binId, actor,
+        TenantContext.runAs(tenant, () -> ledger.recordPlaceChange(pieceId, binId, actor,
             InventoryLedger.PlaceRef.lookup(), null));
     }
 
