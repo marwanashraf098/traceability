@@ -5372,7 +5372,10 @@
       "clearedNote_one": "{{count}} piece now shows \"No place yet\". Nothing was written off.",
       "clearedNote_other": "{{count}} pieces now show \"No place yet\". Nothing was written off.",
       "skipped_one": "{{count}} piece was left as it is",
-      "skipped_other": "{{count}} pieces were left as they are"
+      "skipped_other": "{{count}} pieces were left as they are",
+      "scannedBy": "Counted by {{names}}",
+      "finishedBy": "Finished by {{name}}",
+      "cancelledBy": "Cancelled by {{name}}"
     },
     "skip": {
       "departed": "it left (sold, sent or moved to another location)",
@@ -5415,7 +5418,8 @@
   "placeFilter": {
     "all": "Every place",
     "noPlace": "No place yet",
-    "label": "Place"
+    "label": "Place",
+    "shelfHint": "Boxes on this shelf aren't included"
   },
   "boxMove": {
     "button": "Move a box",

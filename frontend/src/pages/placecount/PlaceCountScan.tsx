@@ -20,7 +20,7 @@ import { placePath } from '../putaway/placePath'
  * when the count starts; every scan only records what was found — the screen shows found here / moved here / not
  * found live — and nothing changes until Finish (one transaction, server-side). All scan mechanics are the shared
  * useScanner (+ the paired phone): one auto-focusing input, a FIFO queue so fast scans are never dropped.
- * ?from=settings|stock-take → where Back goes after Finish / Cancel.
+ * ?from=settings|stock-take|put-away → where Back goes after Finish / Cancel.
  */
 
 interface ScanData { result: PlaceCountScanResult | null; error?: string }
@@ -71,7 +71,8 @@ export default function PlaceCountScan() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const backTo = searchParams.get('from') === 'stock-take' ? '/stock-take' : '/settings?tab=places'
+  const from = searchParams.get('from')
+  const backTo = from === 'stock-take' ? '/stock-take' : from === 'put-away' ? '/put-away' : '/settings?tab=places'
   const [count, setCount] = useState<PlaceCount | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -170,6 +171,14 @@ export default function PlaceCountScan() {
               {count.status === 'finished' ? t('placeCount.done.title', { place: count.place.code }) : t('placeCount.done.cancelled')}
             </h1>
             <p className="text-body text-muted"><bdi>{placePath(count.place, t)}</bdi> · {count.locationName}</p>
+            {(count.scannedBy.length > 0 || count.finishedByName) && (
+              <p className="text-small text-muted" data-testid="place-count-who">
+                {[count.scannedBy.length > 0 ? t('placeCount.done.scannedBy', { names: count.scannedBy.join(', ') }) : null,
+                  count.finishedByName
+                    ? t(count.status === 'finished' ? 'placeCount.done.finishedBy' : 'placeCount.done.cancelledBy', { name: count.finishedByName })
+                    : null].filter(Boolean).join(' · ')}
+              </p>
+            )}
           </div>
           {count.status === 'finished' && a && (
             <ul className="divide-y divide-line border border-line rounded-xl" data-testid="place-count-applied">

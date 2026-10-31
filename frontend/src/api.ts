@@ -4497,6 +4497,8 @@ export interface PlaceCountPiece {
 export interface PlaceCountLine {
   piece: PlaceCountPiece | null; raw: string; result: PlaceCountResult; fromPlace: PlaceRef | null
   locationName: string | null; status: string | null; viaPhone: boolean; scannedAt: string
+  /** Who scanned it (a place's count is shared). */
+  scannedByName: string | null
 }
 export interface PlaceCountApplied {
   placed: number; moved: number; cleared: number; alreadyHere: number
@@ -4505,7 +4507,12 @@ export interface PlaceCountApplied {
 }
 export interface PlaceCount {
   id: string; status: 'open' | 'finished' | 'cancelled'; place: PlaceRef; locationId: string; locationName: string
-  openedByName: string | null; createdAt: string; finishedAt: string | null
+  openedByName: string | null
+  /** Everyone who scanned into the count, first scan first. */
+  scannedBy: string[]
+  /** Who finished / cancelled it (null while open, or cancelled by the idle job). */
+  finishedByName: string | null
+  createdAt: string; finishedAt: string | null
   expected: number; found: number; movedHere: number; notFound: number
   foundLines: PlaceCountLine[]; movedLines: PlaceCountLine[]; notFoundPieces: PlaceCountPiece[]; otherLines: PlaceCountLine[]
   applied: PlaceCountApplied | null

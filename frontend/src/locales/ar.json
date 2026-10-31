@@ -5693,7 +5693,10 @@
       "skipped_two": "تُركت قطعتان كما هما",
       "skipped_few": "تُركت {{count}} قطع كما هي",
       "skipped_many": "تُركت {{count}} قطعة كما هي",
-      "skipped_other": "تُركت {{count}} قطعة كما هي"
+      "skipped_other": "تُركت {{count}} قطعة كما هي",
+      "scannedBy": "جرده {{names}}",
+      "finishedBy": "أنهاه {{name}}",
+      "cancelledBy": "ألغاه {{name}}"
     },
     "skip": {
       "departed": "غادرت (بيعت أو أُرسلت أو نُقلت إلى موقع آخر)",
@@ -5752,7 +5755,8 @@
   "placeFilter": {
     "all": "كل الأماكن",
     "noPlace": "بلا مكان بعد",
-    "label": "المكان"
+    "label": "المكان",
+    "shelfHint": "الصناديق الموجودة على هذا الرف غير مشمولة"
   },
   "boxMove": {
     "button": "نقل صندوق",

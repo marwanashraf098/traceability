@@ -113,7 +113,7 @@ export default function StockTake() {
           </div>
         ) : headerAction}
       </div>
-      {countingOne && <CountOnePlaceDialog onClose={() => setCountingOne(false)} />}
+      {countingOne && <CountOnePlaceDialog from="stock-take" onClose={() => setCountingOne(false)} />}
 
       {mostRecentOpen && (
         <Alert

@@ -53,6 +53,8 @@ import static org.assertj.core.api.Assertions.tuple;
  *   c7  12 h idle → cancelled by the job (nothing changes); a fresh count is open
  *   c8  Start refusals: zone / rack sticker → NOT_A_SHELF_OR_BOX, archived, unknown sticker; places off → 404 for
  *       every method
+ *   c9  a shared count: each scan row records who scanned it, the view names everyone who scanned, Finish records who
+ *       finished
  *   st1 full stock take: a place sticker sets "counting place X"; pieces after it are put there (source stock_take);
  *       the count classification is unchanged
  *   st2 no sticker → no place changes; places off → a sticker is an unknown scan, exactly as before
@@ -333,6 +335,30 @@ class PlacesS5Test {
         }
         assertThat(jdbc.queryForObject("SELECT count(*)::int FROM place_counts WHERE tenant_id = ?", Integer.class, off.tenant()))
             .isZero();
+    }
+
+    @Test
+    void c9_sharedCount_recordsWhoScannedEachPiece_andWhoFinished() {
+        T t = tenant("c9", true);
+        UUID worker = user(t, "worker");
+        String a = piece(t, t.variant(), t.main(), "available", t.s9());
+        String b = piece(t, t.variant(), t.main(), "available", t.s10());
+        var c = as(t, () -> counts.start(t.user(), t.s9(), null));
+        as(t, () -> counts.scan(c.id(), code(a), t.user(), false));
+        as(t, () -> counts.start(worker, t.s9(), null));                       // the worker joins the same count
+        as(t, () -> counts.scan(c.id(), code(b), worker, true));
+        assertThat(jdbc.queryForList("SELECT piece_id, scanned_by FROM place_count_scans WHERE count_id = ? ORDER BY scanned_at",
+                c.id()))
+            .extracting(r -> r.get("piece_id"), r -> r.get("scanned_by"))
+            .containsExactly(tuple(a, t.user()), tuple(b, worker));
+        var view = as(t, () -> counts.get(c.id()));
+        assertThat(view.scannedBy()).containsExactly("Owner", "U");
+        assertThat(view.movedLines()).extracting(PlaceCountService.CountLine::scannedByName).containsExactly("U");
+
+        var done = as(t, () -> counts.finish(c.id(), worker));
+        assertThat(jdbc.queryForObject("SELECT finished_by FROM place_counts WHERE id = ?", UUID.class, c.id())).isEqualTo(worker);
+        assertThat(done.finishedByName()).isEqualTo("U");
+        assertThat(done.scannedBy()).containsExactly("Owner", "U");
     }
 
     // ── st: the full stock take ────────────────────────────────────────────────

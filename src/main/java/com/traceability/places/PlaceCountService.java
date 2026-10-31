@@ -39,19 +39,25 @@ public class PlaceCountService {
 
     public record CountPiece(String pieceId, String code, UUID variantId, String productTitle, String variantTitle,
                              String sku) {}
-    /** One recorded scan. {@code fromPlace}: where a "move here" piece was; {@code locationName}: other location. */
+    /**
+     * One recorded scan. {@code fromPlace}: where a "move here" piece was; {@code locationName}: other location;
+     * {@code scannedByName}: who scanned it (a place's count is shared — anyone may scan into it).
+     */
     public record CountLine(CountPiece piece, String raw, String result, PutAwayService.PlaceView fromPlace,
-                            String locationName, String status, boolean viaPhone, Instant scannedAt) {}
+                            String locationName, String status, boolean viaPhone, Instant scannedAt,
+                            String scannedByName) {}
     /** Why Finish left a piece as it was: departed / moved_since / placed_since / refused. */
     public record Skip(String pieceId, String code, String reason) {}
     /** What Finish applied (null while open; {@code reason} set on a cancelled count: cancelled / idle). */
     public record Applied(int placed, int moved, int cleared, int alreadyHere, List<Skip> skipped, String reason) {}
     /**
      * {@code expected}: pieces on this place now; {@code found} scanned here; {@code movedHere} found here but placed
-     * elsewhere / nowhere; {@code notFound} on this place but not scanned (expected − found).
+     * elsewhere / nowhere; {@code notFound} on this place but not scanned (expected − found). {@code scannedBy}: everyone
+     * who scanned into the count (first scan first); {@code finishedByName}: who finished / cancelled it (null: idle).
      */
     public record Count(UUID id, String status, PutAwayService.PlaceView place, UUID locationId, String locationName,
-                        String openedByName, Instant createdAt, Instant finishedAt, int expected, int found,
+                        String openedByName, List<String> scannedBy, String finishedByName,
+                        Instant createdAt, Instant finishedAt, int expected, int found,
                         int movedHere, int notFound, List<CountLine> foundLines, List<CountLine> movedLines,
                         List<CountPiece> notFoundPieces, List<CountLine> otherLines, Applied applied) {}
     /**
@@ -316,8 +322,9 @@ public class PlaceCountService {
     private Count view(UUID tenantId, UUID countId) {
         List<Map<String, Object>> head = jdbc.queryForList(
             "SELECT c.id, c.status, c.location_id, c.bin_id, c.created_at, c.finished_at, c.summary::text AS summary, " +
-            "       l.name AS location_name, u.name AS opened_by_name " +
+            "       l.name AS location_name, u.name AS opened_by_name, f.name AS finished_by_name " +
             "FROM place_counts c JOIN locations l ON l.id = c.location_id LEFT JOIN users u ON u.id = c.opened_by " +
+            "LEFT JOIN users f ON f.id = c.finished_by " +
             "WHERE c.id = ? AND c.tenant_id = ?", countId, tenantId);
         if (head.isEmpty()) throw PlaceException.countNotFound();
         Map<String, Object> h = head.get(0);
@@ -326,12 +333,12 @@ public class PlaceCountService {
         List<CountLine> lines = new ArrayList<>();
         Set<UUID> fromBins = new HashSet<>();
         record RawLine(CountPiece piece, String raw, String result, UUID from, UUID location, String status,
-                       boolean viaPhone, Instant at) {}
+                       boolean viaPhone, Instant at, String by) {}
         List<RawLine> raws = jdbc.query(
             "SELECT s.piece_id, s.raw_scan, s.result, s.from_bin_id, s.via_phone, s.scanned_at, p.short_code, " +
             "       p.variant_id, p.current_location_id, p.status::text AS status, pr.title AS product_title, " +
-            "       v.title AS variant_title, v.sku " +
-            "FROM place_count_scans s LEFT JOIN pieces p ON p.id = s.piece_id " +
+            "       v.title AS variant_title, v.sku, su.name AS scanned_by_name " +
+            "FROM place_count_scans s LEFT JOIN pieces p ON p.id = s.piece_id LEFT JOIN users su ON su.id = s.scanned_by " +
             "LEFT JOIN variants v ON v.id = p.variant_id LEFT JOIN products pr ON pr.id = v.product_id " +
             "WHERE s.tenant_id = ? AND s.count_id = ? ORDER BY s.scanned_at DESC, s.id DESC",
             (rs, i) -> {
@@ -341,7 +348,8 @@ public class PlaceCountService {
                     rs.getString("variant_title"), rs.getString("sku"));
                 return new RawLine(p, rs.getString("raw_scan"), rs.getString("result"),
                     rs.getObject("from_bin_id", UUID.class), rs.getObject("current_location_id", UUID.class),
-                    rs.getString("status"), rs.getBoolean("via_phone"), rs.getTimestamp("scanned_at").toInstant());
+                    rs.getString("status"), rs.getBoolean("via_phone"), rs.getTimestamp("scanned_at").toInstant(),
+                    rs.getString("scanned_by_name"));
             },
             tenantId, countId);
         for (RawLine r : raws) if (r.from() != null) fromBins.add(r.from());
@@ -355,7 +363,8 @@ public class PlaceCountService {
         for (RawLine r : raws) {
             if (r.piece() != null) scanned.add(r.piece().pieceId());
             CountLine line = new CountLine(r.piece(), r.raw(), r.result(), PutAwayService.PlaceView.of(places.get(r.from())),
-                OTHER_LOCATION.equals(r.result()) ? locationNames.get(r.location()) : null, r.status(), r.viaPhone(), r.at());
+                OTHER_LOCATION.equals(r.result()) ? locationNames.get(r.location()) : null, r.status(), r.viaPhone(), r.at(),
+                r.by());
             switch (r.result()) {
                 case FOUND_HERE -> found.add(line);
                 case MOVE_HERE, PLACE_HERE -> moved.add(line);
@@ -376,8 +385,12 @@ public class PlaceCountService {
         Applied applied = open ? null : parse((String) h.get("summary"));
         int expected = open ? onPlace.size() : found.size() + (applied == null ? 0 : applied.cleared());
         int notFoundCount = open ? notFound.size() : applied == null ? 0 : applied.cleared();
+        // Scans are newest first; the scanners in the order they first scanned.
+        List<String> scannedBy = new ArrayList<>(new LinkedHashSet<>(
+            raws.reversed().stream().map(RawLine::by).filter(Objects::nonNull).toList()));
         return new Count(countId, (String) h.get("status"), PutAwayService.PlaceView.of(places.get(binId)),
             (UUID) h.get("location_id"), (String) h.get("location_name"), (String) h.get("opened_by_name"),
+            List.copyOf(scannedBy), (String) h.get("finished_by_name"),
             ((Timestamp) h.get("created_at")).toInstant(),
             h.get("finished_at") == null ? null : ((Timestamp) h.get("finished_at")).toInstant(),
             expected, found.size(), moved.size(), notFoundCount, found, moved, notFound, other, applied);

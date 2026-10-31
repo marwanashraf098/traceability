@@ -8,6 +8,7 @@ import { resetCapabilitiesCache } from '../capabilities'
 import type { PlaceCount, PlaceCountPiece, PlaceCountScanResult, PlaceKind, PlaceRef } from '../api'
 import PlaceCountScan from '../pages/placecount/PlaceCountScan'
 import MoveBoxScan from '../pages/putaway/MoveBoxScan'
+import PutAway from '../pages/putaway/PutAway'
 import StockTake from '../pages/StockTake'
 import StockTakeScan from '../pages/StockTakeScan'
 import StockTab from '../pages/inventory/StockTab'
@@ -29,6 +30,8 @@ import { I18nextProvider } from 'react-i18next'
  *   iv1  Inventory: the place filter appears once a location is chosen; a shelf → placeId, "No place yet" → noPlace
  *   wh1  Where is it: from an Inventory variant row and from Lookup; per location, places with counts, No place yet
  *   bm1  Move a box: scan the box, then a shelf → moved; a refusal keeps the box
+ *   pw1  Put away › Count one place, a WORKER session: the button is there, a sticker opens the count (Back → Put away)
+ *   iv2  the place picker: a shelf → "Boxes on this shelf aren't included"; a rack / No place yet → no hint
  *   off  capability off → Stock take, the stock-take scan, Inventory › Stock and a Lookup piece render as on main
  *        (snapshots recorded from MAIN's original files) and nothing asks the S5 endpoints
  */
@@ -95,7 +98,7 @@ function piece(code: string, variant = 'v1'): PlaceCountPiece {
 function count(over: Partial<PlaceCount> = {}): PlaceCount {
   return {
     id: 'C1', status: 'open', place: S2, locationId: 'loc-main', locationName: 'Main Warehouse', openedByName: 'Ahmed',
-    createdAt: new Date().toISOString(), finishedAt: null, expected: 3, found: 0, movedHere: 0, notFound: 3,
+    scannedBy: [], finishedByName: null, createdAt: new Date().toISOString(), finishedAt: null, expected: 3, found: 0, movedHere: 0, notFound: 3,
     foundLines: [], movedLines: [], notFoundPieces: [piece('P000001'), piece('P000002'), piece('P000003', 'v2')],
     otherLines: [], applied: null, ...over,
   }
@@ -140,6 +143,7 @@ describe('One-place count', () => {
       if (url.endsWith('/place-counts/C1/scan')) return results[String(body?.code)]
       if (url.endsWith('/place-counts/C1/finish')) {
         return count({ status: 'finished', finishedAt: new Date().toISOString(), found: 1, notFoundPieces: [],
+          scannedBy: ['Ahmed', 'Mona'], finishedByName: 'Mona',
           applied: { placed: 1, moved: 1, cleared: 2, alreadyHere: 0, skipped: [], reason: null } })
       }
       return {}
@@ -176,6 +180,7 @@ describe('One-place count', () => {
     const done = await screen.findByTestId('place-count-done')
     expect(within(done).getByTestId('place-count-applied')).toHaveTextContent('Not found → No place yet2')
     expect(done).toHaveTextContent('2 pieces now show "No place yet". Nothing was written off.')
+    expect(within(done).getByTestId('place-count-who')).toHaveTextContent('Counted by Ahmed, Mona · Finished by Mona')
     expect(screen.queryByTestId('place-count-scan')).toBeNull()
     await userEvent.click(within(done).getByRole('button', { name: 'Back' }))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/settings?tab=places'))
@@ -357,7 +362,9 @@ describe('Inventory place filter and Where is it', () => {
     await chooseOption('Every place', 'S2')
     await waitFor(() => expect(calls.some(c => c.url.includes('/inventory/stock') && c.url.includes('placeId=s2')
       && c.url.includes('locationId=loc-main'))).toBe(true))
+    expect(screen.getByTestId('place-filter-shelf-hint')).toHaveTextContent("Boxes on this shelf aren't included")
     await chooseOption('S2', 'No place yet')
+    expect(screen.queryByTestId('place-filter-shelf-hint')).toBeNull()
     await waitFor(() => expect(calls.some(c => c.url.includes('/inventory/stock') && c.url.includes('noPlace=true'))).toBe(true))
   })
 
@@ -410,9 +417,52 @@ describe('Inventory place filter and Where is it', () => {
   })
 })
 
+describe('Count one place from Put away, and the shelf hint', () => {
+  test('pw1 a worker on Put away: Count one place → scan a sticker → the count opens, Back returns to Put away', async () => {
+    setup(true, 'worker')
+    routes = (url, method) => {
+      if (url.includes('/put-away/waiting')) {
+        return { locationId: 'loc-main', locationName: 'Main Warehouse', hasPlaces: true, total: 0,
+          counts: { receiving: 0, returns: 0, transfers: 0, stock_take: 0, other: 0 }, source: 'all', truncated: false,
+          mine: null, rows: [] }
+      }
+      if (url.endsWith('/put-away/summary')) return { waiting: 0, locations: [] }
+      if (url.endsWith('/place-counts') && method === 'POST') return count()
+      if (url.endsWith('/place-counts/C1') && method === 'GET') return count()
+      if (url.endsWith('/place-counts/C1/cancel')) return count({ status: 'cancelled' })
+      return {}
+    }
+    renderWithProviders(
+      <Routes>
+        <Route path="/put-away" element={<PutAway />} />
+        <Route path="/place-counts/:id" element={<PlaceCountScan />} />
+        <Route path="*" element={<LocationProbe />} />
+      </Routes>, { initialEntries: ['/put-away'] })
+    await userEvent.click(await screen.findByRole('button', { name: 'Count one place' }))
+    const dialog = await screen.findByTestId('count-one-place')
+    await userEvent.type(within(dialog).getByRole('textbox'), 'Q000002{Enter}')
+    expect(await screen.findByTestId('place-count-scan')).toBeInTheDocument()
+    expect(calls.find(c => c.url.endsWith('/place-counts'))?.body).toEqual({ scan: 'Q000002' })
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel count' }))
+    expect(await screen.findByTestId('put-away-page')).toBeInTheDocument()
+  })
+
+  test('iv2 the shelf hint only for a shelf', async () => {
+    setup(true, 'owner')
+    routes = inventoryRoutes
+    renderWithProviders(<StockTab />)
+    await screen.findByText('Black T-shirt')
+    await chooseOption('All locations', 'Main Warehouse')
+    await chooseOption('Every place', 'R01')
+    expect(screen.queryByTestId('place-filter-shelf-hint')).toBeNull()
+    await chooseOption('R01', 'S2')
+    expect(screen.getByTestId('place-filter-shelf-hint')).toHaveTextContent("Boxes on this shelf aren't included")
+  })
+})
+
 function line(code: string, result: 'found_here' | 'move_here' | 'place_here') {
   return { piece: piece(code), raw: code, result, fromPlace: null, locationName: null, status: 'available', viaPhone: false,
-    scannedAt: new Date().toISOString() }
+    scannedAt: new Date().toISOString(), scannedByName: 'Ahmed' }
 }
 
 function lookupPiece(withPlace: boolean) {

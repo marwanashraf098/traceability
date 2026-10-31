@@ -56,6 +56,13 @@ merged, NOT deployed; migration V198).** Nothing here calls Shopify, writes a pi
   PlacesShopifyGuardTest extended, placesS5.test.tsx (pc1–pc5, sc1, st1, iv1, wh1, bm1, off). Revert-checks: Finish
   marks "not found" lost → c3 RED; apply per scan → c1 RED; both restored. Screenshot harness
   `frontend/dev/placess5-shots/` (`node dev/placess5-shots/shoot.mjs <dir>`).
+- **Review (2026-10-31, approved with items):** "Count one place" also on Put away, every role (worker test pw1);
+  each `place_count_scans` row already recorded `scanned_by` and Finish / Cancel `finished_by` — now shown: the
+  count view carries `scannedBy` (names, first scan first), each line `scannedByName`, and `finishedByName`; the
+  summary says "Counted by … · Finished by …" (c9); the Inventory place picker says "Boxes on this shelf aren't
+  included" for a shelf (iv2). `/inventory/stock` for current callers: every S5 line is gated on a place filter
+  being sent; without `placeId` / `noPlace` the filter is null before any query — same SQL text, same parameters,
+  same response records; the old 6-argument Java signature stays as an overload delegating with no filter.
 - **Housekeeping (2026-10-31):** the stock-take review workstream (Found it / Mark lost replaced by scanning) was
   merged to main 2026-10-29 (146e4f76); no open branch or worktree touches StockTake* — no collision with part 2.
 

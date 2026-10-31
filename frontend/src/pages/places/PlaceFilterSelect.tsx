@@ -32,5 +32,12 @@ export default function PlaceFilterSelect({ locationId, value, onChange }: {
       label: '   '.repeat(n.depth) + (n.kind === 'box' ? `${n.code} (${t('places.kind.box')})` : n.label),
     })),
   ]
-  return <Select value={value} onChange={onChange} options={options} className="w-56" />
+  // A shelf means that shelf only — its boxes are places of their own (the server's PlaceScope).
+  const shelf = nodes.find(n => n.id === value)?.kind === 'shelf'
+  return (
+    <>
+      <Select value={value} onChange={onChange} options={options} className="w-56" />
+      {shelf && <span className="text-caption text-muted" data-testid="place-filter-shelf-hint">{t('placeFilter.shelfHint')}</span>}
+    </>
+  )
 }

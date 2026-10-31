@@ -43,7 +43,7 @@ const piece = (v: string): PlaceCountPiece => ({ pieceId: `p${++k}`, code: `P10$
   productTitle: names[v][0], variantTitle: names[v][1], sku: null })
 const line = (p: PlaceCountPiece, result: PlaceCountLine['result'], from: PlaceRef | null = null, extra: Partial<PlaceCountLine> = {}): PlaceCountLine =>
   ({ piece: p, raw: p.code ?? '', result, fromPlace: from, locationName: null, status: 'available', viaPhone: false,
-     scannedAt: new Date().toISOString(), ...extra })
+     scannedAt: new Date().toISOString(), scannedByName: L('Ahmed', 'أحمد'), ...extra })
 
 const found = [...Array(6)].map(() => line(piece('v1'), 'found_here')).concat([line(piece('v2'), 'found_here', null, { viaPhone: true }),
   line(piece('v2'), 'found_here')])
@@ -52,7 +52,8 @@ const notFound = [piece('v2'), piece('v3'), piece('v3')]
 const other = [line(piece('v1'), 'other_location', null, { locationName: L('Zamalek Showroom', 'معرض الزمالك') })]
 const count = (over: Partial<PlaceCount> = {}): PlaceCount => ({
   id: 'C1', status: 'open', place: S2, locationId: 'loc-main', locationName: L('Main Warehouse', 'المخزن الرئيسي'),
-  openedByName: 'Ahmed', createdAt: new Date().toISOString(), finishedAt: null,
+  openedByName: 'Ahmed', scannedBy: [L('Ahmed', 'أحمد'), L('Mona', 'منى')], finishedByName: null,
+  createdAt: new Date().toISOString(), finishedAt: null,
   expected: found.length + notFound.length, found: found.length, movedHere: moved.length, notFound: notFound.length,
   foundLines: found, movedLines: moved, notFoundPieces: notFound, otherLines: other, applied: null, ...over,
 })
@@ -106,7 +107,7 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   // one-place count
   if (url.endsWith('/place-counts/C1') && method === 'GET') {
     return json(view === 'countdone'
-      ? count({ status: 'finished', finishedAt: new Date().toISOString(), notFoundPieces: [],
+      ? count({ status: 'finished', finishedAt: new Date().toISOString(), notFoundPieces: [], finishedByName: L('Mona', 'منى'),
           applied: { placed: 1, moved: 2, cleared: 3, alreadyHere: 0, reason: null,
             skipped: [{ pieceId: 'px', code: 'P103870', reason: 'moved_since' }] } })
       : count())

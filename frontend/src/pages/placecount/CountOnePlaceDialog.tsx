@@ -4,10 +4,10 @@ import { useTranslation } from 'react-i18next'
 import { Alert, Button, Input, Modal } from '../../components/ui'
 import { startPlaceCount, ServerMessageError } from '../../api'
 
-// Warehouse places S5 — Stock take › "Count one place": scan the shelf / box sticker, the count opens (or the
+// Warehouse places S5 — "Count one place" (Stock take; Put away, every role): scan the shelf / box sticker, the count opens (or the
 // place's open count is joined). A zone / rack sticker is refused by the server ("Scan a shelf or box"). The only
 // text input on the screen while open.
-export default function CountOnePlaceDialog({ onClose }: { onClose: () => void }) {
+export default function CountOnePlaceDialog({ from, onClose }: { from: 'stock-take' | 'put-away'; onClose: () => void }) {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [value, setValue] = useState('')
@@ -21,7 +21,7 @@ export default function CountOnePlaceDialog({ onClose }: { onClose: () => void }
     setError(null)
     try {
       const c = await startPlaceCount({ scan })
-      navigate(`/place-counts/${c.id}?from=stock-take`)
+      navigate(`/place-counts/${c.id}?from=${from}`)
     } catch (e: unknown) {
       setError(e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('placeCount.error'))
       setValue('')
