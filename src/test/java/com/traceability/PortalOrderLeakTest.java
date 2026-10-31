@@ -183,6 +183,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/fulfill/printed-not-packed",    list());
         reg("GET /api/v1/fulfill/packed",                list());
         reg("GET /api/v1/fulfill/{orderId}",             byOrder());
+        reg("POST /api/v1/fulfill/{orderId}/unpack-order", byOrder());
         // Warehouse places S3 — display-only places (PickPlacesService, merchant_orders; 404 without places).
         reg("GET /api/v1/fulfill/{orderId}/places",      byOrder());
         reg("POST /api/v1/fulfill/places/variants",      skip("counts pieces per variant id — no order is read, nothing per order is returned"));

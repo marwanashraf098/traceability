@@ -1238,6 +1238,189 @@ public class FulfillService {
         return new UnpackResult(false, remainingCount);
     }
 
+    // ── Unpack a whole order, then repack it (unpack-order S3, approved 2026-10-31) ──
+
+    /** The reasons a manager can give; stored in each piece event's metadata and the audit row. */
+    public static final List<String> UNPACK_REASONS = List.of("customer_edited_order", "packed_wrong_item", "other");
+    static final int UNPACK_NOTE_MAX = 200;
+    private static final com.fasterxml.jackson.databind.ObjectMapper UNPACK_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Unpacks every packed piece of a packed order that is still in the warehouse and puts the order back where it
+     * was before packing, NOT cancelled: pieces packed / awaiting_pickup → available (event 'unpacked', existing ledger
+     * edges), their allocations released, the order back to 'new' — so it satisfies PICKABLE_SHIPMENT_GATE again on
+     * its own (the gate is not touched) and is packed again against its CURRENT line quantities. is_self_pickup is
+     * kept, so a self-pickup order goes back to the self-pickup queue. The edit-conflict signal is cleared here (the
+     * order is pickable again and follows Shopify). Its waybill and print-batch stamp stay.
+     *
+     * One transaction, order row locked first; any refusal is thrown before a write, and a ledger StateConflict
+     * rolls the whole order back. No Shopify write (packing never changed Shopify) and no Bosta call (Mode B — the
+     * COD stays the merchant's to update in Bosta). Owner / manager only (FulfillController).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UnpackOrderResult unpackOrder(UUID orderId, UUID actorUserId, String reasonCode, String note) {
+        UUID tenantId = TenantContext.require();
+        String reason = reasonCode == null || reasonCode.isBlank() ? "customer_edited_order" : reasonCode.trim();
+        String cleanNote = note == null || note.isBlank() ? null : note.strip();
+        if (!UNPACK_REASONS.contains(reason) || ("other".equals(reason)
+                && (cleanNote == null || cleanNote.length() > UNPACK_NOTE_MAX))) {
+            throw new UnpackOrderException(UnpackOrderException.Code.BAD_REASON,
+                "Choose a reason. \"Other\" needs a note of up to " + UNPACK_NOTE_MAX + " characters.",
+                "اختر سببًا. «سبب آخر» يحتاج ملاحظة حتى " + UNPACK_NOTE_MAX + " حرفًا.");
+        }
+        if (!"other".equals(reason)) cleanNote = null;
+
+        // Lock the order row first — every check below and the writes see the same order.
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT number, status::text AS status, cancel_requested_at, is_self_pickup, " +
+            "       shopify_edit_conflict_diff::text AS edit_diff " +
+            "FROM merchant_orders WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            orderId, tenantId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        Map<String, Object> order = rows.get(0);
+        String number = (String) order.get("number");
+        String n = number != null ? number : orderId.toString().substring(0, 8);
+        String status = (String) order.get("status");
+        boolean selfPickup = Boolean.TRUE.equals(order.get("is_self_pickup"));
+
+        // A Lookup exchange's replacement is reserved, never picked (C2) — it is never unpacked here either.
+        if (com.traceability.portal.LookupExchangeService.isLookupReplacementOrder(jdbc, tenantId, orderId)) {
+            throw new UnpackOrderException(UnpackOrderException.Code.LOOKUP_EXCHANGE,
+                "Order " + n + " is the replacement of a Lookup exchange. Use Cancel exchange on that request instead.",
+                "الطلب " + n + " هو بديل استبدال من البحث. استخدم «إلغاء الاستبدال» في ذلك الطلب بدلاً من ذلك.");
+        }
+        if (!UNPACKABLE_STATUSES.contains(status)) {
+            throw notPacked(n);
+        }
+        if (order.get("cancel_requested_at") != null) {
+            throw new UnpackOrderException(UnpackOrderException.Code.CANCEL_REQUESTED,
+                "Order " + n + " is being cancelled. Unpack its pieces from the cancellation on Pick & Pack instead.",
+                "الطلب " + n + " قيد الإلغاء. فُكّ قطعه من شاشة الإلغاء في التجهيز والتغليف بدلاً من ذلك.");
+        }
+        Boolean leftCustody = jdbc.queryForObject(
+            "SELECT " + OrderLineFreeze.shippedPastCreatedSql("?", "?") + " OR EXISTS (" +
+            "  SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id JOIN pieces p ON p.id = a.piece_id " +
+            "  WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status = 'packed' " +
+            "    AND p.status::text IN (" + OrderLineFreeze.leftCustodySqlList() + "))",
+            Boolean.class, orderId, tenantId, orderId, tenantId);
+        if (Boolean.TRUE.equals(leftCustody)) {
+            throw new UnpackOrderException(UnpackOrderException.Code.LEFT_CUSTODY,
+                "Order " + n + " has already left with the courier. It can't be unpacked.",
+                "الطلب " + n + " خرج بالفعل مع شركة الشحن. لا يمكن فكّه.");
+        }
+        if (!selfPickup) {
+            // The newest forward leg (UUIDv4 is not time-ordered — created_at, id only as the tie-break). Ended or
+            // deleted at the courier → unpacking would put the order outside the pickable gate, hidden everywhere.
+            List<Map<String, Object>> leg = jdbc.queryForList(
+                "SELECT internal_state::text AS state, provider_deleted_at FROM shipments " +
+                "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'forward' " +
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                orderId, tenantId);
+            if (!leg.isEmpty() && (!"created".equals(leg.get(0).get("state")) || leg.get(0).get("provider_deleted_at") != null)) {
+                throw new UnpackOrderException(UnpackOrderException.Code.WAYBILL_ENDED,
+                    "The waybill for order " + n + " was cancelled or deleted at the courier. Sort out the waybill first — " +
+                    "unpacking now would hide the order.",
+                    "بوليصة الطلب " + n + " أُلغيت أو حُذفت لدى شركة الشحن. عالج البوليصة أولاً — فكّ الطلب الآن سيُخفيه.");
+            }
+        }
+        List<Map<String, Object>> session = jdbc.queryForList(
+            "SELECT ops.pickup_id, ops.scheduled_date::text AS scheduled_date, ops.scheduled_time_slot " +
+            "FROM merchant_orders o " + PackedOrderService.OPEN_PICKUP_SESSION_LATERAL +
+            "WHERE o.id = ? AND o.tenant_id = ? AND ops.pickup_id IS NOT NULL",
+            orderId, tenantId);
+        if (!session.isEmpty()) {
+            Map<String, Object> s = session.get(0);
+            String date = (String) s.get("scheduled_date");
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("pickupSessionId", s.get("pickup_id").toString());
+            details.put("pickupDate", date);
+            details.put("pickupTimeSlot", s.get("scheduled_time_slot"));
+            throw new UnpackOrderException(UnpackOrderException.Code.IN_PICKUP_SESSION,
+                "Order " + n + " is in an open pickup session" + (date != null ? " (" + date + ")" : "") +
+                ". Remove its waybill from that pickup session first, then unpack it.",
+                "الطلب " + n + " في جلسة استلام مفتوحة" + (date != null ? " (" + date + ")" : "") +
+                ". أزل بوليصته من جلسة الاستلام أولاً، ثم فُكّه.",
+                details);
+        }
+        PackClaim.Holder holder = PackClaim.heldByOther(jdbc, orderId, tenantId, actorUserId);
+        if (holder != null) {
+            String who = holder.name() != null ? holder.name() : "Another packer";
+            String whoAr = holder.name() != null ? holder.name() : "موظف آخر";
+            throw new UnpackOrderException(UnpackOrderException.Code.HELD_BY_PACKER,
+                who + " has order " + n + " open right now. Try again when they're done.",
+                whoAr + " يعمل على الطلب " + n + " الآن. حاول مرة أخرى عندما ينتهي.");
+        }
+
+        List<Map<String, Object>> packed = jdbc.queryForList(
+            "SELECT a.id AS allocation_id, a.piece_id, p.status::text AS piece_status " +
+            "FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id JOIN pieces p ON p.id = a.piece_id " +
+            "WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status = 'packed' " +
+            "ORDER BY a.allocated_at, a.id",
+            orderId, tenantId);
+        if (packed.isEmpty()) throw notPacked(n);
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("scope", "order");
+        meta.put("reason", reason);
+        if (cleanNote != null) meta.put("note", cleanNote);
+        String metaJson;
+        try {
+            metaJson = UNPACK_JSON.writeValueAsString(meta);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("unpack metadata", e);
+        }
+
+        // Pieces back to available through the ledger's existing edges (packed:available, awaiting_pickup:available).
+        // A StateConflict is NOT caught: it rolls the whole order back.
+        List<String> pieceIds = new ArrayList<>();
+        for (Map<String, Object> p : packed) {
+            String pieceId = (String) p.get("piece_id");
+            // Only ever from packed / awaiting_pickup: a piece in any other state is expected as PACKED, so the
+            // ledger's race guard refuses it (StateConflict) instead of taking some other edge (e.g. damaged:available).
+            PieceStatus from = "awaiting_pickup".equals(p.get("piece_status")) ? PieceStatus.AWAITING_PICKUP : PieceStatus.PACKED;
+            ledger.transition(pieceId, from, PieceStatus.AVAILABLE,
+                "unpacked", actorUserId, new TransitionContext(orderId, null, null, null, metaJson));
+            pieceIds.add(pieceId);
+        }
+        int released = 0;
+        for (Map<String, Object> p : packed) {
+            released += jdbc.update("UPDATE allocations SET status = 'released' WHERE id = ? AND status = 'packed'",
+                p.get("allocation_id"));
+        }
+        if (released != packed.size()) {
+            throw new IllegalStateException("Released " + released + " of " + packed.size() + " packed allocations");
+        }
+
+        // APPROVED BACKWARD ORDER-STATUS WRITE (Marawan, 2026-10-31, unpack-order decision 1): packed /
+        // awaiting_pickup / self_pickup_pending → 'new'. This is the ONLY code path allowed to move an order back to
+        // a pickable status (OrderStatusBackwardWriteGuardTest); 'new' + the kept is_self_pickup puts it back in the
+        // right queue. The edit-conflict signal clears with it (the diff is kept in the audit row).
+        int updated = jdbc.update(
+            "UPDATE merchant_orders SET status = 'new'::order_status, locked_by = NULL, locked_at = NULL, " +
+            "       shopify_edit_conflict_at = NULL, shopify_edit_conflict_diff = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND status::text IN ('packed', 'awaiting_pickup', 'self_pickup_pending')",
+            orderId, tenantId);
+        if (updated != 1) throw new IllegalStateException("Order " + orderId + " changed status during unpack");
+
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("reason", reason);
+        if (cleanNote != null) audit.put("note", cleanNote);
+        audit.put("previousStatus", status);
+        audit.put("pieceIds", pieceIds);
+        if (order.get("edit_diff") != null) audit.put("shopifyEditDiff", order.get("edit_diff"));
+        auditService.record(actorUserId, "order_unpacked", "order", orderId.toString(), audit);
+
+        return new UnpackOrderResult(orderId, number, pieceIds.size(), status, "new", selfPickup);
+    }
+
+    private static final Set<String> UNPACKABLE_STATUSES = Set.of("packed", "awaiting_pickup", "self_pickup_pending");
+
+    private static UnpackOrderException notPacked(String n) {
+        return new UnpackOrderException(UnpackOrderException.Code.NOT_PACKED,
+            "Order " + n + " isn't packed, so there is nothing to unpack.",
+            "الطلب " + n + " غير مغلّف، فلا يوجد ما يُفك.");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**
@@ -1535,6 +1718,10 @@ public class FulfillService {
             String status,
             String message,
             int    remainingPacked) {}
+
+    /** Unpack-order S3: what unpackOrder did. status is always 'new' (is_self_pickup unchanged). */
+    public record UnpackOrderResult(UUID orderId, String orderNumber, int pieces, String previousStatus,
+                                    String status, boolean selfPickup) {}
 
     public record UnpackResult(
             boolean cancelled,

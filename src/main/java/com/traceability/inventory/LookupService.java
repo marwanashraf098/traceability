@@ -131,7 +131,10 @@ public class LookupService {
             "       s.tracking_number, " +
             "       loc.name AS location_name, " +
             "       lr.factory_name AS run_factory, lr.reference AS run_reference, " +
-            "       fb.code AS from_place, tb.code AS to_place " +
+            "       fb.code AS from_place, tb.code AS to_place, " +
+            // Unpack-order S3: an order unpack carries its reason (metadata scope 'order').
+            "       pe.metadata ->> 'scope' AS meta_scope, pe.metadata ->> 'reason' AS meta_reason, " +
+            "       pe.metadata ->> 'note' AS meta_note " +
             "FROM piece_events pe " +
             "LEFT JOIN users u     ON u.id  = pe.actor_user_id " +
             "LEFT JOIN merchant_orders o    ON o.id  = pe.order_id " +
@@ -170,6 +173,12 @@ public class LookupService {
                 event.put("phraseKey", "received_factory_run");
                 event.put("factoryRun", com.traceability.labels.FactoryReceivingService.runName(
                     (String) e.get("run_factory"), (String) e.get("run_reference")));
+            }
+            if ("unpacked".equals(eType) && "order".equals(e.get("meta_scope"))) {
+                // Unpack-order S3: unpacked from a packed order to pack it again (not a cancellation), with its reason.
+                event.put("phraseKey",    "unpacked_order");
+                event.put("unpackReason", e.get("meta_reason"));
+                event.put("unpackNote",   e.get("meta_note"));
             }
             if (PLACE_EVENTS.contains(eType)) {
                 event.put("fromPlace", e.get("from_place"));
