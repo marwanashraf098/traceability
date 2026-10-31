@@ -444,7 +444,7 @@
       "cancelled": "Cancelled"
     },
     "badge": {
-      "notTraced": "Not Traced"
+      "notTraced": "Not traced"
     },
     "empty": "No orders found",
     "prev": "Previous",
@@ -559,6 +559,11 @@
         "d90": "Last 90 days",
         "dall": "All time"
       }
+    },
+    "daysSuffix": {
+      "d7": "last 7 days",
+      "d30": "last 30 days",
+      "d90": "last 90 days"
     }
   },
   "orderDetail": {

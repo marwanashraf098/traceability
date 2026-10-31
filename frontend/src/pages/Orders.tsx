@@ -367,7 +367,7 @@ export default function Orders() {
           >
             {row.number ?? t('common.na')}
           </button>
-          {row.isExchange && <Badge tone="info" label={t('exchange.badge')} />}
+          {row.isExchange && <Badge tone="info" className="whitespace-nowrap font-sans" label={t('exchange.badge')} />}
           {/* Quiet marker for fulfilled-outside-Traced orders (derivedStatus.notTraced), beside the number like
               the Exchange tag — grey, so it never shouts over the normal orders in the list. */}
           {row.derivedStatus.notTraced && <Badge tone="neutral" className="whitespace-nowrap font-sans" label={t('orders.badge.notTraced')} />}
@@ -378,12 +378,13 @@ export default function Orders() {
       key: 'customer',
       header: t('orders.columns.customer', { defaultValue: 'Customer' }),
       render: row => (
-        <div className="flex items-center gap-2.5">
+        // Name and phone each stay on one line (phones: the table scrolls sideways inside its card instead).
+        <div className="flex items-center gap-2.5 min-w-[180px]">
           <Avatar name={row.customerName ?? ''} size="sm" showText={false} />
           <div>
-            <div className="text-primary">{row.customerName ?? t('common.na')}</div>
+            <div className="text-primary whitespace-nowrap">{row.customerName ?? t('common.na')}</div>
             {row.customerPhone && (
-              <div className="text-small text-muted mt-0.5">{row.customerPhone}</div>
+              <div className="text-small text-muted mt-0.5 whitespace-nowrap">{row.customerPhone}</div>
             )}
           </div>
         </div>
@@ -474,7 +475,12 @@ export default function Orders() {
 
       {/* Subheader — total + needs-attention count, calm and independent of table state */}
       <p className="text-small text-muted -mt-2" data-testid="orders-subheader">
-        {t('orders.totalCount', { count: summary?.total ?? 0 })}
+        <span data-testid="orders-total">
+          {t('orders.totalCount', { count: counts?.all ?? summary?.total ?? 0 })}
+          {counts && daysApplied && filterValues.days !== 'all' && (
+            <span> · {t(`orders.daysSuffix.d${filterValues.days}`)}</span>
+          )}
+        </span>
         {!!needsAttention && (
           <>
             <span className="mx-2 text-muted/50">•</span>
@@ -545,7 +551,7 @@ export default function Orders() {
       {reasonCounts && (
         <div role="group" aria-label={t('orders.reasonGroupsLabel')} className="flex flex-wrap gap-1.5"
              data-testid="orders-reason-chips">
-          {REASON_GROUPS.map(g => {
+          {REASON_GROUPS.filter(g => (reasonCounts[g] ?? 0) > 0 || reason === g).map(g => {
             const on = reason === g
             return (
               <button key={g} type="button" aria-pressed={on} data-testid={`orders-reason-${g}`}

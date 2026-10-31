@@ -343,7 +343,7 @@ describe('Orders list', () => {
     })
   })
 
-  test('subheader shows the total from GET /orders/summary; every tab shows its count from withCounts', async () => {
+  test('subheader total equals the All tab count (withCounts); every tab shows its count from withCounts', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()], { counts: COUNTS }))
       if (url.includes('/orders/summary')) {
@@ -354,7 +354,9 @@ describe('Orders list', () => {
     renderOrdersList(appFetch)
     await screen.findByText('#1001')
 
-    expect(await screen.findByText('40 orders')).toBeInTheDocument()
+    // Review fix (2026-10-31): the header count is the All tab's count under the active filters, not the summary's
+    // all-time total — with the date window it applies to.
+    expect(await screen.findByTestId('orders-total')).toHaveTextContent('12 orders · last 30 days')
 
     const pill = (name: RegExp) => within(screen.getByRole('button', { name })).getByText(/^\d+$/).textContent
     expect(pill(/^All/)).toBe('12')

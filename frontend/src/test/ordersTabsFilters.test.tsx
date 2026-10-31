@@ -65,7 +65,7 @@ function backend(url: string) {
   calls.push(url)
   if (/\/orders\/o-77(\?|$)/.test(url)) return json({ ...ORDER, id: 'o-77' })
   if (url.includes('/notes') || url.includes('/timeline')) return json([])
-  if (url.includes('/orders/summary')) return json({ total: 31, processing: 9, withCourier: 7, delivered: 11, returned: 3, needsAttention: 6 })
+  if (url.includes('/orders/summary')) return json({ total: 1240, processing: 9, withCourier: 7, delivered: 11, returned: 3, needsAttention: 6 })
   if (url.includes('/orders/counts?')) return json(preview)
   if (url.includes('/orders?')) {
     const tab = new URL(url, 'http://x').searchParams.get('tab')
@@ -129,6 +129,47 @@ describe('tabs', () => {
     renderOrders()
     await screen.findByText('#1001')
     expect(screen.getByTestId('tabs-scroll').className).toContain('overflow-x-auto')
+  })
+})
+
+describe('header count', () => {
+  const total = () => screen.getByTestId('orders-total').textContent
+
+  test('equals the All tab count under the active filters, with the date window when it applies', async () => {
+    const user = userEvent.setup()
+    renderOrders('/orders?courier=bosta')
+    await screen.findByText('#1001')
+    expect(total()).toBe('31 orders · last 30 days')
+    expect(within(screen.getByRole('button', { name: /^All/ })).getByText('31')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('orders-filters-button'))
+    const panel = await screen.findByTestId('orders-filters-panel')
+    await user.click(within(panel).getByTestId('orders-filter-days-7'))
+    await user.click(await within(panel).findByRole('button', { name: /^Show/ }))
+    await waitFor(() => expect(total()).toBe('31 orders · last 7 days'))
+  })
+
+  test('no date suffix for All time, while searching or on Needs attention', async () => {
+    const { unmount } = renderOrders('/orders?days=all')
+    await screen.findByText('#1001')
+    expect(total()).toBe('31 orders')
+    unmount()
+    const s = renderOrders('/orders?q=mona')
+    await screen.findByText('#1001')
+    expect(total()).toBe('31 orders')
+    s.unmount()
+    renderOrders('/orders?tab=attention')
+    await screen.findByText('#1001')
+    expect(total()).toBe('31 orders')
+  })
+
+  test('Arabic suffix', async () => {
+    const i18n = i18next.createInstance()
+    await i18n.use(initReactI18next).init({ lng: 'ar', fallbackLng: 'en', initImmediate: false,
+      resources: { ar: { translation: ar }, en: { translation: en } }, interpolation: { escapeValue: false } })
+    render(<MemoryRouter initialEntries={['/orders?days=90']}><I18nextProvider i18n={i18n}><Orders /></I18nextProvider></MemoryRouter>)
+    await screen.findByText('#1001')
+    expect(screen.getByTestId('orders-total')).toHaveTextContent('31 طلب · آخر 90 يوماً')
   })
 })
 
@@ -222,7 +263,9 @@ describe('Needs attention', () => {
     const chips = await screen.findByTestId('orders-reason-chips')
     expect(lastList().get('tab')).toBe('attention')
     expect(within(chips).getByTestId('orders-reason-no_courier_update')).toHaveTextContent('No courier update3')
-    expect(within(chips).getAllByRole('button')).toHaveLength(6)
+    // Groups with no order are hidden (cancelled_shipped / return_to_handle / other are 0 in COUNTS).
+    expect(within(chips).getAllByRole('button').map(b => b.getAttribute('data-testid'))).toEqual(
+      ['orders-reason-cant_ship', 'orders-reason-no_courier_update', 'orders-reason-delivery_failed'])
 
     await user.click(within(chips).getByTestId('orders-reason-no_courier_update'))
     await waitFor(() => expect(lastList().get('reason')).toBe('no_courier_update'))
@@ -290,9 +333,9 @@ describe('row lines and tags', () => {
     const cells = number.closest('tr')!.querySelectorAll('td')
     const numberCell = number.closest('td')!
     const fulfillmentCell = cells[Array.from(cells).indexOf(numberCell as HTMLTableCellElement) + 2]
-    const tag = within(numberCell).getByText('Not Traced')
+    const tag = within(numberCell).getByText('Not traced')
     expect(tag.className).toContain('text-neutral-text')
-    expect(within(fulfillmentCell).queryByText('Not Traced')).toBeNull()
+    expect(within(fulfillmentCell).queryByText('Not traced')).toBeNull()
     expect(within(fulfillmentCell).getByText('Fulfilled')).toBeInTheDocument()
   })
 })
@@ -361,7 +404,7 @@ describe('Arabic', () => {
     expect(await screen.findByTestId('orders-reason-line-#1001')).toHaveTextContent('منتج مرتجع بانتظار الاستلام في المخزون')
     expect(screen.getByTestId('orders-return-line-#1001')).toHaveTextContent('تم الفحص · عاد سليماً')
     expect(screen.getByRole('button', { name: /^للشحن/ })).toBeInTheDocument()
-    expect(within(screen.getByTestId('orders-reason-chips')).getByText('مرتجع يحتاج إجراء')).toBeInTheDocument()
+    expect(within(screen.getByTestId('orders-reason-chips')).getByText('لا تحديث من شركة الشحن')).toBeInTheDocument()
     await user.click(screen.getByTestId('orders-filters-button'))
     const panel = await screen.findByTestId('orders-filters-panel')
     expect(within(panel).getByText('مسح الكل')).toBeInTheDocument()

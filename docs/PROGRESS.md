@@ -24,7 +24,10 @@ NOT deployed; frontend only, no backend change).** Builds on the merged backend 
   the returnState line ("Pending inspection" amber / "Inspected · …" grey); reason chips (6 groups, counts) on that tab.
   Not traced tag moved beside the order number (grey, `font-sans` — the number column is mono and broke the Arabic).
   Drawer pieces show `shortCode` (full code as title), no wrap.
-- **Pre-existing, not fixed:** the Exchange tag renders in Geist Mono (number column), which splits "استبدال" in Arabic.
+- **Screenshot review fixes (same day):** header "N orders" = the All tab count under the active filters, + "· last
+  7/30/90 days" when the date filter applies; Exchange tag font-sans too (fixed the broken Arabic "استبدال"); phone:
+  customer name / phone one line each (min width 180 px), the table scrolls inside its card; reason chips with 0 hidden;
+  row tag "Not traced" (EN).
 - **Tests:** ordersTabsFilters.test.tsx (17); approved rewrites of orders.test.tsx's two tab tests (216–264) and the
   Returns-tab test. ordersRtl / ordersArabicSearchGuard / phoneMenuOrderLinks / genericCourierG3 /
   ordersSearchDebounce unedited, green.
