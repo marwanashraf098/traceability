@@ -5,8 +5,7 @@
 ## Current state
 
 **Warehouse places S4 — put-away lists after receiving, returns and transfers (2026-10-30/31, branch
-`feat/warehouse-places-s4`, rebased onto main cb397c0 (test-suite speed-up); committed, NOT merged, NOT deployed;
-migration V197). Review approved 2026-10-31 with one change (send-out collect list) — done, tests run (see below).** The gather list in reverse: a flow's pieces and where each should go.
+`feat/warehouse-places-s4`, rebased onto main 899d657; approved 2026-10-31 (collect list as built); migration V197).** The gather list in reverse: a flow's pieces and where each should go.
 - **Flows (`PutAwayListService`, one definition):** `receiving` — a receipt's TAGGED pieces (`pieces.receipt_id`) at its
   location (none → main; count-only/untagged never listed); `tag_session` — the pieces a Tag stock session tagged
   (`label_bound` events, `metadata.tag_session_id`), at its location; `return_session` — RESTOCKED items only
@@ -53,6 +52,10 @@ migration V197). Review approved 2026-10-31 with one change (send-out collect li
   transaction → no tenant GUC; fixed to the ledger bean → 13/13 green alone). Wall time 1:43 h INVALID — the Mac slept
   on battery mid-run; RERUN the full suite on AC before merge. Vitest full: 1,292 tests, 9 timing failures in 7 other
   files under sleep/load, all 149 green when those files ran alone; putAwayLists 18/18. tsc clean.
+- **Future feature (logged 2026-10-31, not scheduled):** PLANNED transfer lines — say what a transfer will carry
+  (variant × qty) before scanning, so the collect list can show before the first scan and the scan-out can check
+  progress against the plan. Today a line exists only after its first scan; the collect list fills in while scanning
+  (approved as built).
 - **Gotchas:** the DS `Button` drops `data-testid` (tsc doesn't catch it) — put the id on a `<span className="contents">`
   wrapper. `ui` Modal has no dialog role. Returns' sessions list is owner/manager only — a worker reaches the closed
   summary through Close. Screenshot harness: `frontend/dev/putawaylists-shots/` (`node dev/putawaylists-shots/shoot.mjs <dir>`).
