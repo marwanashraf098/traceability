@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Orders tabs & filters — backend slice (2026-10-30, branch `feat/orders-tabs-filters-api` off origin/main 43a98ff;
-NOT merged, NOT deployed; no migration; no visual change — backend + api.ts types; the UI slice follows).** Marawan's
+**Orders tabs & filters — backend slice (2026-10-30, branch `feat/orders-tabs-filters-api` off origin/main 43a98ff,
+rebased onto cb397c0 (test suite T1/T2); merged to main 2026-10-31, NOT deployed; no migration; no visual change — backend + api.ts types; the UI slice follows).** Marawan's
 decisions on the Step 0: shipping tabs EXCLUSIVE in priority Cancelled → To ship → In transit (with_courier, exception,
 returning) → Delivered (incl. handed-over self-pickup) → Returned; To ship excludes no-leg + Shopify-fulfilled; days
 ignored while searching and on tab=attention; Back to good = first grade from the return, damaged, then a
