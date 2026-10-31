@@ -81,7 +81,11 @@ public class UserService {
         self.put("warehouseAddressNeeded",
             !worker && com.traceability.setup.SetupStatus.addressNeeded(jdbc, tenantId, setupStep));
         // Warehouse places S1 — zones / racks / shelves / boxes (Settings › Places).
-        self.put("places", com.traceability.places.Places.enabled(jdbc, tenantId));
+        // Rollout: placesDormant — on, but no location set up yet (no live shelf or box): the place features stay
+        // hidden (Put away, its badge and tile). Only sent with places on, so an off tenant's /me is unchanged.
+        boolean places = com.traceability.places.Places.enabled(jdbc, tenantId);
+        self.put("places", places);
+        if (places) self.put("placesDormant", !com.traceability.places.Places.anySetUp(jdbc, tenantId));
         return self;
     }
 

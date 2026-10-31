@@ -5,6 +5,7 @@ import { renderWithProviders, screen, waitFor, within } from './renderWithProvid
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { resetCapabilitiesCache } from '../capabilities'
+import { storedSnapshot } from './storedSnapshot'
 import type { PlaceCount, PlaceCountPiece, PlaceCountScanResult, PlaceKind, PlaceRef } from '../api'
 import PlaceCountScan from '../pages/placecount/PlaceCountScan'
 import MoveBoxScan from '../pages/putaway/MoveBoxScan'
@@ -528,5 +529,87 @@ describe('Places S5 — capability off', () => {
     lk.unmount()
 
     expect(s5Calls()).toHaveLength(0)
+  })
+})
+
+// ── places rollout: switched on, nothing set up ─────────────────────────────
+
+/** Places switched on, but no location has a shelf or box yet (/me placesDormant). */
+function setupDormant(role: 'owner' | 'manager' | 'worker') {
+  setup(true, role)
+  stubFetchWithShellDefaults(vi.fn(backend),
+    { me: { name: 'Ahmed Ali', role, scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: true,
+            places: true, placesDormant: true } })
+}
+const OFF = (name: string) => storedSnapshot('placesS5.test.tsx',
+  `Places S5 — capability off > off screens render as on main and never ask the S5 endpoints > off: ${name} 1`)
+
+describe('rollout: places on, no shelf or box yet — exactly the off screens', () => {
+  test('dormant: stock take list, stock take scan after a sticker, inventory, Lookup === the off snapshots', async () => {
+    setupDormant('manager')
+    routes = url => {
+      if (url.endsWith('/stock-takes/sessions')) return []
+      if (url.endsWith('/stock-takes/summary')) return { countsThisMonth: 1, piecesWrittenOff: 0, avgVariancePercent: null, openSessions: 0 }
+      return {}
+    }
+    const list = renderWithProviders(<StockTake />)
+    await screen.findByTestId('stocktake-summary')
+    expect(list.container.innerHTML).toBe(OFF('stock take list'))
+    list.unmount()
+
+    // The server answers a sticker at a location that isn't set up exactly as with places off: an unknown scan.
+    setupDormant('manager')
+    routes = (url, method) => {
+      if (url.endsWith('/stock-takes/sessions/ST1')) return stSession()
+      if (url.endsWith('/scan') && method === 'POST') {
+        return { sessionId: 'ST1', barcode: 'Q000002', pieceId: null, classification: 'unknown', scanDevice: 'hardware' }
+      }
+      return {}
+    }
+    const st = renderStockTakeScan()
+    await screen.findByTestId('stocktake-scan')
+    await scan('Q000002')
+    await screen.findByTestId('last-scan-feedback')
+    expect(st.container.innerHTML.replace(/unscan-\d+-/g, 'unscan-KEY-')).toBe(OFF('stock take scan after a sticker'))
+    st.unmount()
+
+    setupDormant('owner')
+    routes = inventoryRoutes
+    const inv = renderWithProviders(<StockTab />)
+    await userEvent.click(await screen.findByText('Black T-shirt'))
+    await chooseOption('All locations', 'Main Warehouse')
+    await waitFor(() => expect(calls.filter(c => c.url.includes('/inventory/stock'))).toHaveLength(2))
+    await new Promise(r => setTimeout(r, 30))
+    expect(inv.container.innerHTML).toBe(OFF('inventory stock, a location chosen'))
+    inv.unmount()
+
+    // The server leaves the place out of Lookup for a piece whose location isn't set up — as with places off.
+    setupDormant('owner')
+    routes = url => (url.includes('/lookup?q=') ? lookupPiece(false) : {})
+    const lk = renderWithProviders(<LookupPage />)
+    await userEvent.type(screen.getByRole('textbox'), 'P000001{Enter}')
+    await screen.findByTestId('piece-short-code')
+    await new Promise(r => setTimeout(r, 30))
+    expect(lk.container.innerHTML).toBe(OFF('lookup piece'))
+    lk.unmount()
+
+    expect(s5Calls()).toHaveLength(0)
+    expect(calls.some(c => c.url.includes('/places'))).toBe(false)
+  })
+
+  test('inventory: a location with a zone but no shelf or box → no place filter, exactly the off screen', async () => {
+    setup(true, 'owner')
+    const zoneOnly = { ...placeTree, nodes: placeTree.nodes.filter(n => n.kind === 'zone') }
+    routes = url => (url.includes('/places?locationId=') ? zoneOnly : inventoryRoutes(url))
+    const inv = renderWithProviders(<StockTab />)
+    await userEvent.click(await screen.findByText('Black T-shirt'))
+    await chooseOption('All locations', 'Main Warehouse')
+    await waitFor(() => expect(calls.some(c => c.url.includes('/places?locationId=loc-main'))).toBe(true))
+    await waitFor(() => expect(calls.filter(c => c.url.includes('/inventory/stock'))).toHaveLength(2))
+    await new Promise(r => setTimeout(r, 30))
+    // The variant rows keep "Where is it" (another location is set up); the toolbar is today's.
+    const toolbar = inv.container.firstElementChild!.firstElementChild!.outerHTML
+    expect(OFF('inventory stock, a location chosen')).toContain(toolbar)
+    expect(screen.queryByRole('button', { name: 'Every place' })).toBeNull()
   })
 })

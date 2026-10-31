@@ -17,7 +17,8 @@ import java.util.*;
  *
  * <p>A count is the variant's AVAILABLE pieces at the MAIN warehouse ({@code locations.is_fulfillment}), per place
  * (largest first) plus {@code noPlaceCount} (available there, no place). Other locations and every other status
- * (reserved, damaged, on_hold, …) are left out. 404 unless the tenant has places.
+ * (reserved, damaged, on_hold, …) are left out. 404 unless the main warehouse is set up for places
+ * ({@link Places#mainSetUp} — places on and a live shelf or box there): the screens then show exactly today's lists.
  *
  * <p>All variants of a request are counted in ONE statement (no per-variant query): placed pieces by
  * pieces_bin_idx's predicate, unplaced ones beside them, each place's parents joined in (a box is at most four
@@ -68,7 +69,7 @@ public class PickPlacesService {
     @Transactional(readOnly = true)
     public VariantsResponse variants(List<UUID> variantIds) {
         UUID tenantId = TenantContext.require();
-        Places.require(jdbc, tenantId);
+        Places.requireMainSetUp(jdbc, tenantId);
         List<UUID> ids = distinct(variantIds, MAX_VARIANTS);
         Map<UUID, VariantPlaces> counted = count(tenantId, ids);
         List<VariantPlaces> out = new ArrayList<>(ids.size());
@@ -80,7 +81,7 @@ public class PickPlacesService {
     @Transactional(readOnly = true)
     public OrderPlaces order(UUID orderId) {
         UUID tenantId = TenantContext.require();
-        Places.require(jdbc, tenantId);
+        Places.requireMainSetUp(jdbc, tenantId);
         OrdersResponse r = ordersFor(tenantId, List.of(orderId));
         if (r.orders().isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         return r.orders().get(0);
@@ -90,7 +91,7 @@ public class PickPlacesService {
     @Transactional(readOnly = true)
     public OrdersResponse orders(List<UUID> orderIds) {
         UUID tenantId = TenantContext.require();
-        Places.require(jdbc, tenantId);
+        Places.requireMainSetUp(jdbc, tenantId);
         return ordersFor(tenantId, distinct(orderIds, MAX_ORDERS));
     }
 

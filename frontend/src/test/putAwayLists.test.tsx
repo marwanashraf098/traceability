@@ -5,6 +5,7 @@ import { renderWithProviders, screen, waitFor, within } from './renderWithProvid
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { resetCapabilitiesCache } from '../capabilities'
+import { storedSnapshot } from './storedSnapshot'
 import type {
   PlaceKind, PutAwayList, PutAwayListPiece, PutAwayListPlace, PutAwayScanResult, PutAwaySession,
 } from '../api'
@@ -664,5 +665,90 @@ describe('Put-away list — capability off', () => {
     rc.unmount()
 
     expect(putAwayCalls()).toHaveLength(0)
+  })
+})
+
+// ── places rollout: switched on, nothing set up ─────────────────────────────
+
+/** Places switched on, but no location has a shelf or box yet (/me placesDormant). */
+function setupDormant(role: 'owner' | 'manager' | 'worker') {
+  setup(true, role)
+  stubFetchWithShellDefaults(vi.fn(backend),
+    { me: { name: 'Ahmed Ali', role, scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: true,
+            places: true, placesDormant: true } })
+}
+const OFF = (name: string) => storedSnapshot('putAwayLists.test.tsx',
+  `Put-away list — capability off > off screens render as on main and never ask /put-away > off: ${name} 1`)
+
+describe('rollout: places on, no shelf or box yet — exactly the off screens', () => {
+  test('dormant: Tag stock summary, transfer send-out and reconcile, closed returns summary, finalized receipt === the off snapshots', async () => {
+    setupDormant('manager')
+    routes = url => {
+      if (url.endsWith('/tag-stock/sessions/TS1')) return { id: 'TS1', startedAt: '2026-10-30T08:00:00Z', endedAt: '2026-10-30T09:00:00Z', tagged: 3, variants: [] }
+      return {}
+    }
+    const tag = renderWithProviders(
+      <Routes><Route path="/tag-stock/:id/summary" element={<TagStockSummary />} /></Routes>,
+      { initialEntries: ['/tag-stock/TS1/summary'] })
+    await screen.findByTestId('tag-stock-summary')
+    await new Promise(r => setTimeout(r, 30))
+    expect(tag.container.innerHTML).toBe(OFF('tag stock summary'))
+    expect(putAwayCalls()).toHaveLength(0)
+    tag.unmount()
+
+    setupDormant('manager')
+    routes = url => (url.endsWith('/transfers/T1') ? transfer('preparing') : {})
+    const out = renderWithProviders(
+      <Routes><Route path="/transfers/:id/scan-out" element={<TransferScanOut />} /></Routes>,
+      { initialEntries: ['/transfers/T1/scan-out'] })
+    await screen.findByTestId('transfer-scan-out')
+    await new Promise(r => setTimeout(r, 30))
+    expect(out.container.innerHTML).toBe(OFF('transfer send-out'))
+    expect(putAwayCalls()).toHaveLength(0)
+    expect(calls.some(c => c.url.includes('/fulfill/places'))).toBe(false)
+    out.unmount()
+
+    setupDormant('manager')
+    routes = (url, method) => {
+      if (url.endsWith('/transfers/T1') && method === 'GET') return transfer('reconciling')
+      if (url.endsWith('/transfers/T1/close') && method === 'POST') return {}
+      return {}
+    }
+    const rec = reconcileRender()
+    await screen.findByTestId('reconcile-outstanding')
+    expect(rec.container.innerHTML).toBe(OFF('transfer reconcile'))
+    await closeReconcile()
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/transfers/T1'))
+    expect(putAwayCalls()).toHaveLength(0)
+    rec.unmount()
+
+    setupDormant('manager')
+    routes = returnsRoutes('closed', ['restocked', 'restocked', 'damaged'])
+    const ret = renderWithProviders(<Returns />, { initialEntries: ['/returns'] })
+    await userEvent.click(await screen.findByText('RT-AAAA'))
+    await screen.findByTestId('session-summary-screen')
+    await new Promise(r => setTimeout(r, 30))
+    expect(ret.container.innerHTML).toBe(OFF('closed returns summary'))
+    expect(putAwayCalls()).toHaveLength(0)
+    ret.unmount()
+
+    setupDormant('owner')
+    routes = (url: string) => {
+      if (url.endsWith('/receiving/sessions')) return []
+      if (url.endsWith('/receiving/sessions/R1')) {
+        return { id: 'R1', status: 'finalized', mode: 'print_stick', reference: 'PO-118', supplier_name: null, location_name: 'Main Warehouse',
+          created_at: '2026-10-30T08:00:00Z', finalized_at: '2026-10-30T09:00:00Z', line_units: 4, piece_count: 4, lines: [] }
+      }
+      if (url.includes('/locations')) return [{ id: 'loc-main', name: 'Main Warehouse', is_fulfillment: true }]
+      return {}
+    }
+    const rc = renderWithProviders(<Receiving />, { initialEntries: ['/receiving?session=R1'] })
+    await screen.findByText('PO-118')
+    await new Promise(r => setTimeout(r, 30))
+    expect(rc.container.innerHTML).toBe(OFF('finalized receipt'))
+    rc.unmount()
+
+    expect(putAwayCalls()).toHaveLength(0)
+    expect(calls.some(c => c.url.includes('/fulfill/places'))).toBe(false)
   })
 })

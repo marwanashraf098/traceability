@@ -11,7 +11,7 @@ import i18n from '../i18n'
 
 /**
  * Warehouse places S1 — Settings › Places.
- *   pl1  the tab is hidden without the capability (no /places call), shown after Locations with it
+ *   pl1  the tab is shown after Locations in every store; switched off it is only the switch (no /places call)
  *   pl2  a worker never sees Settings tabs (the page redirects)
  *   pl3  the zone is drawn as racks with stacked shelves, box chips, the floor's boxes, "No place yet"
  *   pl4  tapping a shelf opens it: contents, Print sticker (POST /places/stickers), + Box here
@@ -105,11 +105,10 @@ afterEach(async () => {
 })
 
 describe('Settings › Places', () => {
-  test('pl1 — hidden without the capability, shown after Locations with it', async () => {
+  test('pl1 — shown after Locations in every store; switched off it is only the switch', async () => {
     setup(false)
     const { unmount } = renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=places'] })
-    await screen.findByRole('button', { name: 'Locations' })
-    expect(screen.queryByRole('button', { name: 'Places' })).toBeNull()
+    expect(await screen.findByTestId('places-switch')).toBeTruthy()
     expect(screen.queryByTestId('places-settings')).toBeNull()
     expect(calls.some(c => c.url.includes('/places'))).toBe(false)
     unmount()

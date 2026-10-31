@@ -17,11 +17,18 @@ export interface Capabilities {
   genericCourier: boolean
   /** Flexible labeling — blank labels / untagged stock (backend FlexibleLabeling; no screen reads it yet). */
   flexibleLabeling: boolean
-  /** Warehouse places — zones / racks / shelves / boxes (backend Places; Settings › Places). */
+  /**
+   * Warehouse places — zones / racks / shelves / boxes, as features: the switch is on AND a location is set up (a
+   * live shelf or box — backend Places.anySetUp; /me's placesDormant says it isn't yet). Every place feature reads
+   * this, so a store that switched places on but hasn't set up a shelf or box sees today's screens.
+   */
   places: boolean
+  /** The Settings › Places switch itself ("Use places in this store", backend tenants.places_enabled). */
+  placesEnabled: boolean
 }
 
-const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false, places: false }
+const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false, places: false,
+                             placesEnabled: false }
 
 let cache: { token: string; promise: Promise<Capabilities> } | null = null
 
@@ -30,11 +37,12 @@ export function loadCapabilities(): Promise<Capabilities> {
   if (!token) return Promise.resolve(NONE)
   if (cache?.token !== token) {
     const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown;
-                              flexibleLabeling?: unknown; places?: unknown } | null>('/me')
+                              flexibleLabeling?: unknown; places?: unknown; placesDormant?: unknown } | null>('/me')
       .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true,
                      genericCourier: me?.genericCourier === true,
                      flexibleLabeling: me?.flexibleLabeling === true,
-                     places: me?.places === true }))
+                     places: me?.places === true && me?.placesDormant !== true,
+                     placesEnabled: me?.places === true }))
       .catch(() => NONE)
     cache = { token, promise }
   }

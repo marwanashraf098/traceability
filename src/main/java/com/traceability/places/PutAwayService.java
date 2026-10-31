@@ -96,9 +96,7 @@ public class PutAwayService {
         "p.tenant_id = ? AND p.bin_id IS NULL AND p.short_code IS NOT NULL " +
         "AND p.status::text IN ('available', 'on_hold', 'damaged')";
 
-    private static final String HOLDABLE_EXISTS =
-        "EXISTS (SELECT 1 FROM bins b WHERE b.tenant_id = l.tenant_id AND b.location_id = l.id " +
-        "        AND b.kind IN ('shelf', 'box') AND b.archived_at IS NULL)";
+    private static final String HOLDABLE_EXISTS = Places.liveShelfOrBoxAt("l.tenant_id", "l.id");
 
     /** The pieces waiting at one location ({tenant, location}), each with its source and since. */
     static final String WAITING_SQL =
@@ -431,6 +429,19 @@ public class PutAwayService {
         return closed;
     }
 
+    /**
+     * Places switched off (PlacesSettingsService, in its transaction): every open session of the tenant is closed
+     * 'closed_by_manager' by the person switching off. Pieces placed stay placed. Returns how many were closed.
+     */
+    int closeAllOpen(UUID tenantId, UUID actorUserId) {
+        List<UUID> open = jdbc.queryForList(
+            "SELECT id FROM put_away_sessions WHERE tenant_id = ? AND status = 'open' ORDER BY created_at, id FOR UPDATE",
+            UUID.class, tenantId);
+        int closed = 0;
+        for (UUID id : open) closed += closeLocked(tenantId, id, actorUserId, "closed_by_manager");
+        return closed;
+    }
+
     /** status → closed with the reason and the summary (placed, places used, per place); 0 if no longer closable. */
     private int closeLocked(UUID tenantId, UUID sessionId, UUID closedBy, String reason) {
         return jdbc.update(
@@ -559,8 +570,7 @@ public class PutAwayService {
 
     private boolean hasPlaces(UUID tenantId, UUID locationId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM bins WHERE tenant_id = ? AND location_id = ? AND kind IN ('shelf', 'box') " +
-            "AND archived_at IS NULL)", Boolean.class, tenantId, locationId));
+            "SELECT " + Places.liveShelfOrBoxAt("?", "?"), Boolean.class, tenantId, locationId));
     }
 
     /** null → the main warehouse if it has a shelf or box, else the first location that does, else the main one. */

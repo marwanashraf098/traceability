@@ -519,3 +519,29 @@ test('st1 Settings › Places "no place yet" links to Put away', async () => {
   await userEvent.click(link)
   expect(await screen.findByText('put away page')).toBeInTheDocument()
 })
+
+// ── places rollout: switched on, nothing set up ─────────────────────────────
+
+describe('Put away — rollout: places on, no shelf or box yet', () => {
+  test('nv3 dormant: no sidebar item (owner, worker), no badge, no WorkerHome tile, no summary request', async () => {
+    const dormant = (role: 'owner' | 'worker') => {
+      setup(true, role)
+      stubFetchWithShellDefaults(vi.fn(backend),
+        { me: { name: 'Ahmed Ali', role, scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false,
+                places: true, placesDormant: true } })
+      routes = url => (url.includes('/put-away/summary') ? { waiting: 12, locations: [] } : {})
+    }
+    for (const role of ['owner', 'worker'] as const) {
+      dormant(role)
+      const { unmount } = renderWithProviders(<Sidebar role={role} me={null} navOpen={false} onCloseNav={() => {}} />)
+      await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+      expect(screen.queryByRole('link', { name: /Put away/ })).toBeNull()
+      unmount()
+    }
+    dormant('worker')
+    renderWithProviders(<MeProvider me={null}><WorkerHome /></MeProvider>)
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+    expect(screen.queryByTestId('worker-home-put-away')).toBeNull()
+    expect(calls.some(c => c.url.includes('/put-away'))).toBe(false)
+  })
+})

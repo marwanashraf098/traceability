@@ -230,8 +230,9 @@ public class StockTakeService {
         }
 
         // Warehouse places S5: with places, a shelf / box sticker sets the place being counted — not a piece scan,
-        // nothing is recorded or counted. Without places a sticker stays an unknown scan, exactly as before.
-        boolean places = com.traceability.places.Places.enabled(jdbc, tenantId);
+        // nothing is recorded or counted. Without places — or at a location not set up for them (rollout) — a sticker
+        // stays an unknown scan, exactly as before.
+        boolean places = com.traceability.places.Places.setUp(jdbc, tenantId, session.locationId());
         String sticker = places ? ScanInputNormalizer.normalizePlace(barcode) : null;
         if (sticker != null) {
             return com.traceability.places.StockTakePlaces.setCountingPlace(jdbc, tenantId, sessionId,

@@ -4,12 +4,19 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Box, ClipboardList, Minus, Plus, Printer } from 'lucide-react'
 import {
   archivePlace, createPlace, createPlacesBulk, getPlace, getPlaces, listLocations, movePlace, openPlaceStickers,
-  previewPlacesBulk, renamePlace, setPlacePurpose, startPlaceCount, LocationRow, PlaceBulkPlan, PlaceDetail, PlaceNode, PlaceTree,
-  ServerMessageError,
+  previewPlacesBulk, renamePlace, setPlacePurpose, setPlacesEnabled, startPlaceCount, LocationRow, PlaceBulkPlan, PlaceDetail,
+  PlaceNode, PlaceTree, ServerMessageError,
 } from '../../api'
-import { Button, Input, Modal, Select, Skeleton, cn, useToast } from '../../components/ui'
+import { loadCapabilities, resetCapabilitiesCache } from '../../capabilities'
+import { resetPutAwayWaitingCache } from '../putaway/usePutAwayWaiting'
+import { Button, Input, Modal, Select, Skeleton, Toggle, cn, useToast } from '../../components/ui'
 
-// Warehouse places S1 — Settings › Places (owner + manager; shown only when the tenant has places). The visual setup:
+// Places rollout — Settings › Places is shown to owner + manager in EVERY store. On top: "Use places in this store"
+// (tenants.places_enabled, PUT /places/settings). Off → only the switch and its one line; on → the setup below.
+// Switching off asks first (nothing is deleted; open put-away sessions and place counts end). Creating a place
+// forgets the cached /me, so the place features appear once a location has its first shelf or box.
+//
+// Warehouse places S1 — the setup (shown while the switch is on). The visual setup:
 // zone cards; the selected zone drawn as racks side by side with their shelves stacked inside, white boxes as chips;
 // the zone floor's boxes underneath; Quick add (racks × shelves) and the selected place on the side. No piece is
 // placed here — "No place yet" links to Put away (S2).
@@ -41,7 +48,75 @@ function zoneViews(nodes: PlaceNode[]): ZoneView[] {
   }))
 }
 
+/** The place features hang on /me (placesDormant) — after a change here, read it again on the next screen. */
+function placesChanged() {
+  resetCapabilitiesCache()
+  resetPutAwayWaitingCache()
+}
+
 export default function PlacesTab() {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [confirmOff, setConfirmOff] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    loadCapabilities().then(c => { if (!cancelled) setEnabled(c.placesEnabled) })
+    return () => { cancelled = true }
+  }, [])
+
+  async function save(next: boolean) {
+    if (saving) return
+    setSaving(true)
+    try {
+      const r = await setPlacesEnabled(next)
+      placesChanged()
+      setEnabled(r.enabled)
+      setConfirmOff(false)
+    } catch (e) {
+      toast({ tone: 'error', message: e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('places.errors.generic') })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (enabled === null) return <Skeleton className="h-24 rounded-2xl" />
+
+  return (
+    <div className="space-y-4">
+      <section className="bg-surface border border-line rounded-2xl p-5 flex items-start gap-4" data-testid="places-switch">
+        <div className="flex-1 min-w-0">
+          <p className="text-body font-medium text-primary">{t('places.switch.title')}</p>
+          <p className="text-small text-muted mt-0.5">{t('places.switch.body')}</p>
+        </div>
+        <span className={cn('text-small font-medium mt-0.5', enabled ? 'text-primary' : 'text-muted')} aria-hidden="true">
+          {enabled ? t('places.switch.on') : t('places.switch.off')}
+        </span>
+        <Toggle checked={enabled} ariaLabel={t('places.switch.title')} disabled={saving}
+          onChange={next => (next ? save(true) : setConfirmOff(true))} />
+      </section>
+
+      {enabled && <PlacesSetup />}
+
+      {confirmOff && (
+        <Modal title={t('places.switch.confirmTitle')} onClose={() => !saving && setConfirmOff(false)}>
+          <div className="space-y-4" data-testid="places-switch-confirm">
+            <p className="text-body text-primary">{t('places.switch.confirmBody')}</p>
+            <p className="text-small text-muted">{t('places.switch.confirmEnds')}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setConfirmOff(false)} disabled={saving}>{t('places.switch.keepOn')}</Button>
+              <Button variant="danger" onClick={() => save(false)} loading={saving}>{t('places.switch.turnOff')}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function PlacesSetup() {
   const { t, i18n } = useTranslation()
   const { toast } = useToast()
   const [locations, setLocations] = useState<LocationRow[]>([])
@@ -81,6 +156,7 @@ export default function PlacesTab() {
     setBusy(true)
     try {
       const result = await action()
+      placesChanged()
       await reload(tree?.locationId)
       after?.(result)
     } catch (e) {
@@ -461,6 +537,7 @@ function QuickAdd({ zone, onCreated, fail }: {
     setSaving(true)
     try {
       const r = await createPlacesBulk({ zoneId: zone.id, racks, shelvesPerRack: shelves, floorBoxes: 0 })
+      placesChanged()
       await onCreated(r)
     } catch (e) {
       fail(e)
@@ -512,6 +589,7 @@ function EmptySetup({ tree, onCreated, fail }: {
     setSaving(true)
     try {
       const r = await createPlacesBulk({ locationId: tree.locationId, racks, shelvesPerRack: shelves, floorBoxes: boxes })
+      placesChanged()
       await onCreated(r)
       openPlaceStickers(r.createdIds).catch(fail)
     } catch (e) {
