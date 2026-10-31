@@ -14,6 +14,7 @@ import {
 } from '../api'
 import { Alert, Badge, Button, Modal, Spinner, cn, useToast } from '../components/ui'
 import { placePath } from './putaway/placePath'
+import WhereIsItDrawer from './places/WhereIsItDrawer'
 import { UntaggedSplit } from '../components/UntaggedSplit'
 import OrderDrawer from '../components/OrderDrawer'
 import LookupExchangeDialog from '../components/LookupExchangeDialog'
@@ -238,6 +239,8 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
   const { t } = useTranslation()
   // Flexible labeling: no printed code yet — nothing to reprint, and v1 allows no action until tagged.
   const untagged = result.shortCode === null
+  // Warehouse places S5 — "Where is it" for this piece's variant (places tenants only: result.place is present).
+  const [whereOpen, setWhereOpen] = useState(false)
 
   return (
     <div className="space-y-4 animate-fadeIn">
@@ -265,6 +268,12 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             {/* SKU — mono */}
             {result.variant.sku && (
               <p className="text-small text-muted font-mono mt-1">{result.variant.sku}</p>
+            )}
+            {result.place !== undefined && (
+              <button type="button" data-testid="lookup-where-is-it" onClick={() => setWhereOpen(true)}
+                className="mt-1.5 text-small font-semibold text-trace-blue hover:underline">
+                {t('whereIsIt.button')}
+              </button>
             )}
           </div>
           <Badge status={result.status} className="flex-shrink-0 mt-1" />
@@ -354,6 +363,12 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           </>
         )}
       </div>
+
+      {whereOpen && (
+        <WhereIsItDrawer variantId={result.variant.id}
+          title={[result.variant.productTitle, result.variant.title !== 'Default Title' ? result.variant.title : null].filter(Boolean).join(' / ')}
+          onClose={() => setWhereOpen(false)} />
+      )}
 
       {/* ── Chain-of-custody timeline ── */}
       <div className="card p-6">

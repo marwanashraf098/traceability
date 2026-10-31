@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ScanLine } from 'lucide-react'
+import { Boxes, ClipboardList, ScanLine } from 'lucide-react'
 import {
   closePutAway, getOpenPutAwaySessions, getPutAwaySummary, getPutAwayWaiting, getRoleFromToken, startPutAway,
   PutAwayOpenSession, PutAwaySource, PutAwaySummary, PutAwayWaiting, ServerMessageError,
 } from '../../api'
 import { Alert, Button, DataTable, EmptyState, Modal, Select, TableSkeleton, cn, useToast, type DataTableColumn } from '../../components/ui'
 import { resetPutAwayWaitingCache } from './usePutAwayWaiting'
+import CountOnePlaceDialog from '../placecount/CountOnePlaceDialog'
 
 // Warehouse places S2 — Put away, the WAITING LIST (in-shell; the scan loop is /put-away/:id/scan, full-screen).
 // Pieces at a location that have no shelf or box yet: counts per source, a filter, each piece's suggested place
@@ -39,6 +40,7 @@ export default function PutAway() {
   const [missing, setMissing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
+  const [countingOne, setCountingOne] = useState(false)
   const manager = ['owner', 'manager'].includes(getRoleFromToken() ?? '')
   const [open, setOpen] = useState<PutAwayOpenSession[] | null>(null)
   const [closing, setClosing] = useState<PutAwayOpenSession | null>(null)
@@ -152,6 +154,16 @@ export default function PutAway() {
               options={locations.map(l => ({ value: l.id, label: `${l.name} · ${l.waiting}` }))}
             />
           )}
+          {/* S5 — count one shelf / box (every role: workers count shelves). */}
+          <Button size="lg" variant="secondary" iconStart={ClipboardList} disabled={!data?.hasPlaces}
+            onClick={() => setCountingOne(true)}>
+            {t('placeCount.oneButton')}
+          </Button>
+          {/* S5 — move a whole box by scanning it, then its new shelf / zone. */}
+          <Button size="lg" variant="secondary" iconStart={Boxes} disabled={!data?.hasPlaces}
+            onClick={() => navigate('/put-away/move-box')}>
+            {t('boxMove.button')}
+          </Button>
           <Button size="lg" loading={starting} disabled={!data?.hasPlaces} onClick={start}>
             <ScanLine size={18} strokeWidth={2} />
             {data?.mine ? t('putAway.resume', { count: data.mine.placed }) : t('putAway.start')}
@@ -159,6 +171,7 @@ export default function PutAway() {
         </div>
       </div>
 
+      {countingOne && <CountOnePlaceDialog from="put-away" onClose={() => setCountingOne(false)} />}
       {error && <Alert tone="critical" title={error} />}
 
       {data && !data.hasPlaces && (

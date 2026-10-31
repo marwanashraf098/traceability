@@ -611,6 +611,10 @@ public class InventoryLedger {
     public record PlaceRef(String source, UUID sessionId, boolean viaPhone) {
         public static PlaceRef putAway(UUID sessionId, boolean viaPhone) { return new PlaceRef("put_away", sessionId, viaPhone); }
         public static PlaceRef lookup() { return new PlaceRef("lookup", null, false); }
+        /** S5 — applied at a one-place count's Finish (the count's id). */
+        public static PlaceRef placeCount(UUID countId) { return new PlaceRef("place_count", countId, false); }
+        /** S5 — a full stock take scan after a place sticker (the stock-take session's id). */
+        public static PlaceRef stockTake(UUID sessionId, boolean viaPhone) { return new PlaceRef("stock_take", sessionId, viaPhone); }
     }
 
     /** PUT_AWAY (no place → a place), MOVED (A → B), CLEARED (→ no place), ALREADY_HERE (nothing written). */

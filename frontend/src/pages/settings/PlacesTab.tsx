@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
-import { Box, Minus, Plus, Printer } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Box, ClipboardList, Minus, Plus, Printer } from 'lucide-react'
 import {
   archivePlace, createPlace, createPlacesBulk, getPlace, getPlaces, listLocations, movePlace, openPlaceStickers,
-  previewPlacesBulk, renamePlace, setPlacePurpose, LocationRow, PlaceBulkPlan, PlaceDetail, PlaceNode, PlaceTree,
+  previewPlacesBulk, renamePlace, setPlacePurpose, startPlaceCount, LocationRow, PlaceBulkPlan, PlaceDetail, PlaceNode, PlaceTree,
   ServerMessageError,
 } from '../../api'
 import { Button, Input, Modal, Select, Skeleton, cn, useToast } from '../../components/ui'
@@ -553,6 +553,7 @@ function SelectedPlace({ id, nodes, locationName, busy, onRun, onClose, fail }: 
   fail: (e: unknown) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const node = nodes.find(n => n.id === id)!
   const [detail, setDetail] = useState<PlaceDetail | null>(null)
   const [renaming, setRenaming] = useState(false)
@@ -616,6 +617,14 @@ function SelectedPlace({ id, nodes, locationName, busy, onRun, onClose, fail }: 
       )}
 
       <div className="flex flex-wrap gap-2">
+        {/* S5 — count only this shelf / box (its boxes are counted on their own). */}
+        {(node.kind === 'shelf' || node.kind === 'box') && !node.archived && (
+          <Button size="sm" iconStart={ClipboardList} disabled={busy}
+            onClick={() => startPlaceCount({ binId: node.id })
+              .then(c => navigate(`/place-counts/${c.id}?from=settings`)).catch(fail)}>
+            {t('placeCount.countThisPlace')}
+          </Button>
+        )}
         <Button size="sm" variant="secondary" iconStart={Printer} onClick={() => openPlaceStickers([node.id]).catch(fail)}>
           {node.kind === 'shelf' || node.kind === 'box' ? t('places.printSticker') : t('places.printStickers')}
         </Button>

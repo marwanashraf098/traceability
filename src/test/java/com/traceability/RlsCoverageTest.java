@@ -130,6 +130,9 @@ class RlsCoverageTest {
             // Warehouse places S4 — putAwayLists_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
             "/api/v1/put-away/lists/{source}/{sourceId}",
             "/api/v1/put-away/sessions/{id}/list",
+            // Warehouse places S5 — placesS5_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
+            "/api/v1/place-counts/{id}",
+            "/api/v1/places/where/{variantId}",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1411,6 +1414,104 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
             jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
             jdbc.update("DELETE FROM locations WHERE id IN (?, ?, ?)", otherLoc, otherDest, myDest);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void placesS5_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Warehouse places S5: a one-place count and "Where is it" are the caller's own. Another tenant's count /
+        // variant reads as the same 404 as an unknown id. Over HTTP, then read again as app_user under RLS.
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        UUID otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        UUID otherZone = UUID.randomUUID(), otherRack = UUID.randomUUID(), otherShelf = UUID.randomUUID();
+        UUID myZone = UUID.randomUUID(), myRack = UUID.randomUUID(), myShelf = UUID.randomUUID();
+        UUID myCount = UUID.randomUUID(), otherCount = UUID.randomUUID();
+        String mine = "01COVS5P00000000000000MINE", theirs = "01COVS5P0000000000000THEIR";
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov S5 Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Other', 'cov-s5-other@test.com', 'h', 'owner')", otherUser, otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov S5 Other WH', true)",
+                    otherLoc, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-s5-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'COV-S5-P', 'Their Tee', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'COV-S5-V', 'M', 'COV-S5-THEIRS')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'S5THEIRS', 'Q931001')",
+                    otherZone, otherTenant, otherLoc);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'S5THEIRS-R01', 'Q931002')", otherRack, otherTenant, otherLoc, otherZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'S5THEIRS-R01-S1', 'Q931003')", otherShelf, otherTenant, otherLoc, otherRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, bin_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P931011', ?, ?)", theirs, otherTenant, otherVariant, "PC-" + theirs,
+                    otherLoc, otherShelf);
+        jdbc.update("INSERT INTO place_counts (id, tenant_id, location_id, bin_id, opened_by) VALUES (?, ?, ?, ?, ?)",
+                    otherCount, otherTenant, otherLoc, otherShelf, otherUser);
+
+        jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'S5MINE', 'Q931004')",
+                    myZone, tenantId, locationId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'S5MINE-R01', 'Q931005')", myRack, tenantId, locationId, myZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'S5MINE-R01-S1', 'Q931006')", myShelf, tenantId, locationId, myRack);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, bin_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P931012', ?, ?)", mine, tenantId, variantId, "PC-" + mine, locationId, myShelf);
+        jdbc.update("INSERT INTO place_counts (id, tenant_id, location_id, bin_id, opened_by) VALUES (?, ?, ?, ?, ?)",
+                    myCount, tenantId, locationId, myShelf, ownerUserId);
+        try {
+            ResponseEntity<String> count = get("/api/v1/place-counts/" + myCount, String.class);
+            assertThat(count.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(count.getBody()).as("same-tenant positive control").contains("S5MINE-R01-S1").contains("P931012");
+            assertThat(count.getBody()).doesNotContain("P931011").doesNotContain("S5THEIRS");
+            assertThat(get("/api/v1/place-counts/" + otherCount, String.class).getStatusCode())
+                .as("another tenant's count: the same 404 as an unknown one").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(get("/api/v1/place-counts/" + UUID.randomUUID(), String.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+
+            ResponseEntity<String> where = get("/api/v1/places/where/" + variantId, String.class);
+            assertThat(where.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(where.getBody()).as("same-tenant positive control").contains("S5MINE-R01-S1").doesNotContain("S5THEIRS");
+            assertThat(get("/api/v1/places/where/" + otherVariant, String.class).getStatusCode())
+                .as("another tenant's variant: 404").isEqualTo(HttpStatus.NOT_FOUND);
+
+            var appDs = new com.traceability.tenancy.TenantAwareDataSource(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+            var appJdbc = new JdbcTemplate(appDs);
+            var counts = new com.traceability.places.PlaceCountService(appJdbc, new com.traceability.inventory.InventoryLedger(appJdbc));
+            var whereIs = new com.traceability.places.WhereIsItService(appJdbc);
+            var tx = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(appDs));
+            com.traceability.tenancy.TenantContext.set(tenantId);
+            try {
+                var own = tx.execute(s -> counts.get(myCount));
+                assertThat(own.notFoundPieces()).as("same-tenant positive control (app_user)")
+                    .extracting(com.traceability.places.PlaceCountService.CountPiece::code).containsExactly("P931012");
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> counts.get(otherCount)))
+                    .as("another tenant's count is invisible to app_user")
+                    .isInstanceOf(com.traceability.places.PlaceException.class);
+                var w = tx.execute(s -> whereIs.where(variantId));
+                assertThat(w.locations()).flatExtracting(com.traceability.places.WhereIsItService.LocationStock::places)
+                    .extracting(com.traceability.places.WhereIsItService.PlaceStock::code).containsExactly("S5MINE-R01-S1");
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> whereIs.where(otherVariant)))
+                    .as("another tenant's variant is invisible to app_user")
+                    .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+            } finally {
+                com.traceability.tenancy.TenantContext.clear();
+            }
+        } finally {
+            jdbc.update("DELETE FROM place_count_scans WHERE count_id IN (?, ?)", myCount, otherCount);
+            jdbc.update("DELETE FROM place_counts WHERE id IN (?, ?)", myCount, otherCount);
+            jdbc.update("DELETE FROM pieces WHERE id IN (?, ?)", mine, theirs);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?, ?, ?, ?)", myShelf, myRack, myZone, otherShelf, otherRack, otherZone);
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
             jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
