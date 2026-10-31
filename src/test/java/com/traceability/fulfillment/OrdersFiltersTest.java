@@ -3,6 +3,7 @@ package com.traceability.fulfillment;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController.OrderPage;
 import com.traceability.fulfillment.OrderController.OrderTabCounts;
+import com.traceability.TestPostgres;
 import com.traceability.inventory.*;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -56,7 +57,7 @@ class OrdersFiltersTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            TestPostgres.newContainer()
                     .withDatabaseName("traceability_test")
                     .withUsername("postgres")
                     .withPassword("postgres");
