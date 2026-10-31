@@ -1553,7 +1553,9 @@ public class ExceptionService {
             "       o.status::text AS order_status, " +
             "       o.shopify_edit_conflict_diff::text AS diff_json, " +
             "       o.shopify_edit_conflict_at AS occurred_at, " +
-            "       'shopify_edit_conflict:order:' || o.id AS subject_key " +
+            "       'shopify_edit_conflict:order:' || o.id AS subject_key, " +
+            // Unpack-order S4: packed and still in the warehouse → the alert offers Pick & Pack's unpack.
+            "       (" + PackedOrderService.IN_WAREHOUSE_SQL + ") AS unpackable " +
             "FROM merchant_orders o " +
             "WHERE o.tenant_id = ? " +
             "  AND o.shopify_edit_conflict_at IS NOT NULL " +
@@ -2113,6 +2115,10 @@ public class ExceptionService {
                 item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
                 if (diff != null) item.put("diffJson", diff);
+                // Unpack-order S4: the order is packed and still here — offer the unpack (owner / manager).
+                if (Boolean.TRUE.equals(item.remove("unpackable"))) {
+                    item.put("unpackUrl", "/fulfill?tab=packed&order=" + item.get("order_id") + "&unpack=1");
+                }
             }
             case "return_mismatch" -> {
                 String b = str(item, "barcode");

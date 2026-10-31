@@ -183,7 +183,8 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
 
         <PrintBatchesToday refreshKey={listsKey} />
         <PrintedNotPacked refreshKey={listsKey} />
-        <PackedOrdersList refreshKey={listsKey} focusOrderId={searchParams.get('order')} />
+        <PackedOrdersList refreshKey={listsKey} focusOrderId={searchParams.get('order')}
+          onUnpacked={() => { load(); setListsKey(k => k + 1) }} />
       </div>
 
       {showPrint && flexibleLabeling && (

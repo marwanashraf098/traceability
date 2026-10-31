@@ -625,6 +625,9 @@ export interface TimelineEvent {
   toPlace?: string | null
   /** box_moved only: the box the piece is in. */
   box?: string | null
+  /** unpacked_order only (unpack-order S3): the reason code and, for 'other', the manager's note. */
+  unpackReason?: string | null
+  unpackNote?: string | null
 }
 
 export interface LookupVariant {
@@ -2230,11 +2233,16 @@ export class TransferCommandError extends Error {
   code: string
   messageEn: string
   messageAr: string
-  constructor(body: { code: string; message_en: string; message_ar: string }) {
+  /** Optional structured extras some endpoints send (e.g. unpack-order's open pickup session). */
+  details?: Record<string, unknown>
+  constructor(body: { code: string; message_en: string; message_ar: string; details?: unknown }) {
     super(body.code)
     this.code = body.code
     this.messageEn = body.message_en
     this.messageAr = body.message_ar
+    if (body.details && typeof body.details === 'object' && !Array.isArray(body.details)) {
+      this.details = body.details as Record<string, unknown>
+    }
   }
 }
 
@@ -2557,6 +2565,25 @@ export interface PackedOrderRow {
 
 export function getPackedOrders() {
   return request<PackedOrderRow[]>('/fulfill/packed')
+}
+
+export type UnpackReason = 'customer_edited_order' | 'packed_wrong_item' | 'other'
+
+export interface UnpackOrderResult {
+  orderId: string
+  orderNumber: string | null
+  pieces: number
+  previousStatus: string
+  status: string
+  selfPickup: boolean
+}
+
+/** Unpack-order S3/S4 — owner / manager. A refusal is a TransferCommandError (code, EN / AR text, details). */
+export function unpackOrder(orderId: string, reason: UnpackReason, note?: string) {
+  return transferCommandRequest<UnpackOrderResult>(`/fulfill/${orderId}/unpack-order`, {
+    method: 'POST',
+    body: JSON.stringify(reason === 'other' ? { reason, note } : { reason }),
+  })
 }
 
 /** Regenerates a batch's PDF in its stored order — no new batch. Same result shape as printing. */

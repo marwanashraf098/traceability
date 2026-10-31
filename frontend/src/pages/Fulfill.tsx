@@ -780,7 +780,7 @@ function QueueView({
         </div>
       )}
 
-      {tab === 'packed' ? <PackedOrdersList refreshKey={0} focusOrderId={packedFocus} /> : (<>
+      {tab === 'packed' ? <PackedOrdersList refreshKey={0} focusOrderId={packedFocus} onUnpacked={loadQueue} /> : (<>
       {/* Self-pickup pending section */}
       {handoverQueue.length > 0 && (
         <div className="mb-6 bg-warning/[0.14] border border-warning/[0.30] rounded-xl p-4 flex flex-col gap-2.5">

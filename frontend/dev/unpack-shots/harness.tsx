@@ -1,6 +1,6 @@
 // Dev-only screenshot harness (never part of the production build — vite builds index.html only).
 // Renders the REAL App, fetch answered from the fixture below:
-//   harness.html?lang=en|ar&view=waybill|queue&role=manager|worker
+//   harness.html?lang=en|ar&view=waybill|queue|refused|lookup|alerts&role=manager|worker
 import '@fontsource-variable/geist'
 import '@fontsource/geist-mono'
 import '@fontsource/cairo/400.css'
@@ -48,6 +48,7 @@ const ROWS: PackedOrderRow[] = [
     editConflict: false, codMismatch: false, bostaCod: null, orderCod: null },
 ]
 
+let unpacked = false
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
 window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -63,10 +64,47 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   if (url.endsWith('/pack-sessions/summary')) return json({ packedToday: 14, openSessionId: null })
   if (url.endsWith('/fulfill/print-batches/today')) return json([])
   if (url.endsWith('/fulfill/printed-not-packed')) return json([])
-  if (url.endsWith('/fulfill/packed')) return json(ROWS)
+  if (url.endsWith('/fulfill/packed')) return json(unpacked ? ROWS.slice(1) : ROWS)
+  if (url.endsWith('/unpack-order') && method === 'POST') {
+    if (view === 'refused') {
+      return json({ code: 'IN_PICKUP_SESSION',
+        message_en: 'Order #1047 is in an open pickup session (2026-10-31). Remove its waybill from that pickup session first, then unpack it.',
+        message_ar: 'الطلب #1047 في جلسة استلام مفتوحة (2026-10-31). أزل بوليصته من جلسة الاستلام أولاً، ثم فُكّه.',
+        details: { pickupSessionId: 'pu-1', pickupDate: '2026-10-31', pickupTimeSlot: '12-14' } }, 409)
+    }
+    unpacked = true
+    return json({ orderId: 'o1', orderNumber: '#1047', pieces: 2, previousStatus: 'awaiting_pickup', status: 'new', selfPickup: false })
+  }
+  if (url.includes('/lookup?q=')) {
+    const now = Date.now()
+    const ev = (id: number, phraseKey: string, eventType: string, from: string | null, to: string, mins: number, extra = {}) => ({
+      id, eventType, phraseKey, actor: L('Mona Samir', 'منى سمير'), isSystem: false, fromStatus: from, toStatus: to,
+      orderNumber: '#1047', orderId: 'o1', trackingNumber: null, locationName: L('Main Warehouse', 'المخزن الرئيسي'),
+      metadata: null, occurredAt: new Date(now - mins * 60000).toISOString(), ...extra })
+    return json({ type: 'piece', id: 'p1', barcode: 'PC-1', shortCode: 'P103801', status: 'available',
+      receivedAt: new Date(now - 86400000).toISOString(),
+      variant: { id: 'v1', productTitle: L('Linen Shirt', 'قميص كتان'), title: 'M', sku: 'LS-OLV-M' },
+      currentLocation: { id: 'l', name: L('Main Warehouse', 'المخزن الرئيسي') }, currentOrder: null, currentShipment: null,
+      receivingSession: null,
+      timeline: [
+        ev(4, 'unpacked_order', 'unpacked', 'awaiting_pickup', 'available', 5, { unpackReason: 'customer_edited_order', unpackNote: null }),
+        ev(3, 'tracking_linked', 'tracking_linked', 'packed', 'awaiting_pickup', 50),
+        ev(2, 'packed_for_order', 'pack', 'reserved', 'packed', 51),
+        ev(1, 'reserved_for_order', 'scan', 'available', 'reserved', 52),
+      ] })
+  }
+  if (url.includes('/exceptions?') || url.endsWith('/exceptions')) {
+    return json({ total: 1, page: 0, size: 50, counts: { critical: 0, high: 1, medium: 0, low: 0 }, items: [
+      { type: 'shopify_edit_conflict', severity: 'HIGH', subject_type: 'order', subject_key: 'shopify_edit_conflict:order:o1',
+        order_id: 'o1', order_number: '#1047', occurred_at: new Date(Date.now() - 1800000).toISOString(), ageSeconds: 1800,
+        descriptionEn: 'Shopify edited order #1047 (awaiting_pickup) after it entered the fulfillment flow — line items changed',
+        descriptionAr: 'تعديل Shopify على الطلب #1047 (awaiting_pickup) بعد دخوله مسار التنفيذ — تغيّرت بنود الطلب',
+        suggestedAction: 'review_order', actionUrl: '/orders?order=o1', unpackUrl: '/fulfill?tab=packed&order=o1&unpack=1' }] })
+  }
   return Promise.resolve(new Response('{}', { status: 404 }))
 }) as typeof fetch
 
-const PATHS: Record<string, string> = { waybill: '/fulfill', queue: '/fulfill?tab=packed' }
+const PATHS: Record<string, string> = { waybill: '/fulfill', queue: '/fulfill?tab=packed', refused: '/fulfill',
+  lookup: '/lookup', alerts: '/exceptions' }
 history.replaceState(null, '', PATHS[view] ?? '/fulfill')
 createRoot(document.getElementById('root')!).render(<App />)

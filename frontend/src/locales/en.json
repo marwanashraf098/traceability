@@ -1346,7 +1346,29 @@
       "inPickup": "In pickup session · {{date}}",
       "inPickupSlot": "In pickup session · {{date}} {{slot}}",
       "edited": "Edited in Shopify",
-      "cod": "Bosta still has {{bosta}} EGP, the order is now {{order}} EGP — update the COD in Bosta."
+      "cod": "Bosta still has {{bosta}} EGP, the order is now {{order}} EGP — update the COD in Bosta.",
+      "alertUnpack": "Unpack order"
+    },
+    "unpack": {
+      "button": "Unpack",
+      "title": "Unpack order {{number}}?",
+      "body_one": "The {{count}} packed piece goes back to stock. The order is not cancelled — it goes back to Pick & Pack to be packed again with its current items.",
+      "body_other": "All {{count}} packed pieces go back to stock. The order is not cancelled — it goes back to Pick & Pack to be packed again with its current items.",
+      "selfPickupNote": "It goes back to the self-pickup orders.",
+      "waybillNote": "Keep the waybill — the same waybill opens the order again.",
+      "reasonLabel": "Why are you unpacking it?",
+      "reasons": {
+        "customer_edited_order": "Customer edited the order",
+        "packed_wrong_item": "Packed the wrong item",
+        "other": "Other"
+      },
+      "notePlaceholder": "What happened?",
+      "noteCount": "{{count}}/200",
+      "confirm": "Unpack order",
+      "cancel": "Keep packed",
+      "done": "Order {{number}} unpacked — pack it again from Pick & Pack.",
+      "openPickup": "Open the pickup session",
+      "failed": "Couldn't unpack the order. Try again."
     }
   },
   "lookup": {
@@ -1438,7 +1460,8 @@
       "put_away": "Put away in {{toPlace}}",
       "place_moved": "Moved from {{fromPlace}} to {{toPlace}}",
       "place_cleared": "Place cleared (was {{fromPlace}})",
-      "box_moved": "Box {{box}} moved from {{fromPlace}} to {{toPlace}}"
+      "box_moved": "Box {{box}} moved from {{fromPlace}} to {{toPlace}}",
+      "unpacked_order": "Unpacked from order {{orderNumber}} to pack again — {{reason}}"
     },
     "pieceStatus": {
       "available": "Available",

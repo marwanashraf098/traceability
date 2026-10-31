@@ -450,6 +450,38 @@ class UnpackOrderTest {
             .isEqualTo(HttpStatus.OK);
     }
 
+    // ── u9 ────────────────────────────────────────────────────────────────────
+
+    /** The edit-conflict alert offers the unpack only while the order is packed and still here; unpack clears it. */
+    @Test
+    void u9_editConflictAlert_offersUnpackForAPackedOrderOnly_andUnpackClearsIt() {
+        Shop s = new Shop("U9");
+        Order packed = s.order("#U9-P", false);
+        s.pack(packed);
+        Order open = s.order("#U9-N", false);
+        jdbc.update("UPDATE orders SET shopify_edit_conflict_at = now(), shopify_edit_conflict_diff = '{}' WHERE id IN (?, ?)",
+            packed.id(), open.id());
+
+        Map<String, Map<String, Object>> alerts = editConflictAlerts(s);
+        assertThat(alerts.get("#U9-P").get("unpackUrl"))
+            .isEqualTo("/fulfill?tab=packed&order=" + packed.id() + "&unpack=1");
+        assertThat(alerts.get("#U9-P")).doesNotContainKey("unpackable");
+        assertThat(alerts.get("#U9-N")).as("not packed: nothing to unpack").doesNotContainKey("unpackUrl");
+
+        assertThat(s.unpack(s.managerToken, packed, Map.of()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(editConflictAlerts(s)).as("cleared on unpack").containsOnlyKeys("#U9-N");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Map<String, Object>> editConflictAlerts(Shop s) {
+        Map<String, Object> page = call(s.managerToken, HttpMethod.GET, "/api/v1/exceptions?type=shopify_edit_conflict", null).getBody();
+        Map<String, Map<String, Object>> byNumber = new java.util.HashMap<>();
+        for (Map<String, Object> item : (List<Map<String, Object>>) page.get("items")) {
+            byNumber.put((String) item.get("order_number"), item);
+        }
+        return byNumber;
+    }
+
     // ── x1 ────────────────────────────────────────────────────────────────────
 
     @Test
