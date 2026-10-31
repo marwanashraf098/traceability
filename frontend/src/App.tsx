@@ -44,6 +44,7 @@ import TransferReconcile from './pages/TransferReconcile'
 import LookupPage from './pages/Lookup'
 import PutAway from './pages/putaway/PutAway'
 import PutAwayScan from './pages/putaway/PutAwayScan'
+import PutAwayListPage from './pages/putaway/PutAwayListPage'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
 import ExchangeMapping from './pages/exchanges/ExchangeMapping'
@@ -483,6 +484,16 @@ export default function App() {
           element={
             <RequireAuth>
               <SetupGate><PutAwayScan /></SetupGate>
+            </RequireAuth>
+          }
+        />
+        {/* Warehouse places S4 — a put-away list (receipt / Tag stock / return session / transfer). A printable
+            sheet like /fulfill/gather: not Layout-wrapped, its own Back. */}
+        <Route
+          path="/put-away/list/:source/:sourceId"
+          element={
+            <RequireAuth>
+              <SetupGate><PutAwayListPage /></SetupGate>
             </RequireAuth>
           }
         />

@@ -127,6 +127,9 @@ class RlsCoverageTest {
             "/api/v1/put-away/sessions/{id}",
             // Warehouse places S3 — pickPlaces_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
             "/api/v1/fulfill/{orderId}/places",
+            // Warehouse places S4 — putAwayLists_crossTenantIsolated_withSameTenantPositiveControl below (HTTP + app_user).
+            "/api/v1/put-away/lists/{source}/{sourceId}",
+            "/api/v1/put-away/sessions/{id}/list",
             "/api/v1/receiving/sessions/{id}/factory/labels/{codeId}/pdf",
             "/api/v1/label-runs/{id}/report/csv",
             "/api/v1/label-runs/{id}/report/pdf",
@@ -1263,6 +1266,152 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
             jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
             jdbc.update("DELETE FROM locations WHERE id = ?", otherLoc);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void putAwayLists_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Warehouse places S4: a put-away list (receipt / return session / transfer), a session's list and a
+        // transfer's sent pieces are the caller's own. Another tenant's receipt / session / transfer reads as the
+        // same 404 as an unknown id. Over HTTP, then the list read again on an app_user connection under RLS.
+        UUID otherTenant = UUID.randomUUID(), otherLoc = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        UUID otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID(), otherUser = UUID.randomUUID();
+        UUID otherReceipt = UUID.randomUUID(), otherReturns = UUID.randomUUID(), otherTransfer = UUID.randomUUID();
+        UUID otherLine = UUID.randomUUID(), otherDest = UUID.randomUUID(), otherSession = UUID.randomUUID();
+        UUID myZone = UUID.randomUUID(), myRack = UUID.randomUUID(), myShelf = UUID.randomUUID(), myDest = UUID.randomUUID();
+        UUID myReceipt = UUID.randomUUID(), myReturns = UUID.randomUUID(), myTransfer = UUID.randomUUID();
+        UUID myLine = UUID.randomUUID(), mySession = UUID.randomUUID();
+        String received = "01COVPAL0000000000000RECVD", restocked = "01COVPAL0000000000000RESTK";
+        String back = "01COVPAL00000000000000BACK", theirs = "01COVPAL0000000000000THEIR";
+        jdbc.update("INSERT INTO tenants (id, name, places_enabled) VALUES (?, 'Cov PutAwayLists Other', true)", otherTenant);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Other', 'cov-pal-other@test.com', 'h', 'owner')", otherUser, otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Cov PAL Other WH', true)",
+                    otherLoc, otherTenant);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name) VALUES (?, ?, 'Cov PAL Other Showroom')", otherDest, otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-pal-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'COV-PAL-P', 'Their Tee', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'COV-PAL-V', 'M', 'COV-PAL-THEIRS')", otherVariant, otherTenant, otherProduct);
+        jdbc.update("INSERT INTO receipts (id, tenant_id, location_id, status, finalized_at) VALUES (?, ?, ?, 'finalized', now())",
+                    otherReceipt, otherTenant, otherLoc);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, receipt_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P930011', ?, ?)", theirs, otherTenant, otherVariant, "PC-" + theirs,
+                    otherLoc, otherReceipt);
+        jdbc.update("INSERT INTO return_sessions (id, tenant_id, status, opened_by, closed_at) VALUES (?, ?, 'closed', ?, now())",
+                    otherReturns, otherTenant, otherUser);
+        jdbc.update("INSERT INTO return_session_items (tenant_id, session_id, piece_id, scan_source, disposition) " +
+                    "VALUES (?, ?, ?, 'barcode', 'restocked')", otherTenant, otherReturns, theirs);
+        jdbc.update("INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
+                    "VALUES (?, ?, 'showroom', ?, 'reconciling', ?)", otherTransfer, otherTenant, otherDest, otherUser);
+        jdbc.update("INSERT INTO transfer_lines (id, tenant_id, transfer_id, variant_id, qty_out, qty_returned_good) " +
+                    "VALUES (?, ?, ?, ?, 1, 1)", otherLine, otherTenant, otherTransfer, otherVariant);
+        jdbc.update("INSERT INTO transfer_pieces (tenant_id, transfer_id, line_id, piece_id, outcome) VALUES (?, ?, ?, ?, 'returned_good')",
+                    otherTenant, otherTransfer, otherLine, theirs);
+        jdbc.update("INSERT INTO put_away_sessions (id, tenant_id, location_id, source, source_id, opened_by) " +
+                    "VALUES (?, ?, ?, 'receiving', ?, ?)", otherSession, otherTenant, otherLoc, otherReceipt, otherUser);
+
+        jdbc.update("UPDATE tenants SET places_enabled = true WHERE id = ?", tenantId);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name) VALUES (?, ?, 'Cov PAL Showroom')", myDest, tenantId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, code, scan_code) VALUES (?, ?, ?, 'zone', 'LZMINE', 'Q930004')",
+                    myZone, tenantId, locationId);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'rack', ?, 'zone', 'LZMINE-R01', 'Q930005')", myRack, tenantId, locationId, myZone);
+        jdbc.update("INSERT INTO bins (id, tenant_id, location_id, kind, parent_id, parent_kind, code, scan_code) " +
+                    "VALUES (?, ?, ?, 'shelf', ?, 'rack', 'LZMINE-R01-S1', 'Q930006')", myShelf, tenantId, locationId, myRack);
+        jdbc.update("INSERT INTO receipts (id, tenant_id, location_id, status, finalized_at, reference) " +
+                    "VALUES (?, ?, ?, 'finalized', now(), 'COV-PAL-PO')", myReceipt, tenantId, locationId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id, receipt_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P930012', ?, ?)", received, tenantId, variantId, "PC-" + received,
+                    locationId, myReceipt);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P930013', ?)", restocked, tenantId, variantId, "PC-" + restocked, locationId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+                    "VALUES (?, ?, ?, 'available', ?, 'P930014', ?)", back, tenantId, variantId, "PC-" + back, locationId);
+        jdbc.update("INSERT INTO return_sessions (id, tenant_id, status, opened_by, closed_at) VALUES (?, ?, 'closed', ?, now())",
+                    myReturns, tenantId, ownerUserId);
+        jdbc.update("INSERT INTO return_session_items (tenant_id, session_id, piece_id, scan_source, disposition) " +
+                    "VALUES (?, ?, ?, 'barcode', 'restocked')", tenantId, myReturns, restocked);
+        jdbc.update("INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
+                    "VALUES (?, ?, 'showroom', ?, 'reconciling', ?)", myTransfer, tenantId, myDest, ownerUserId);
+        jdbc.update("INSERT INTO transfer_lines (id, tenant_id, transfer_id, variant_id, qty_out, qty_returned_good) " +
+                    "VALUES (?, ?, ?, ?, 1, 1)", myLine, tenantId, myTransfer, variantId);
+        jdbc.update("INSERT INTO transfer_pieces (tenant_id, transfer_id, line_id, piece_id, outcome) VALUES (?, ?, ?, ?, 'returned_good')",
+                    tenantId, myTransfer, myLine, back);
+        jdbc.update("INSERT INTO put_away_sessions (id, tenant_id, location_id, source, source_id, opened_by) " +
+                    "VALUES (?, ?, ?, 'receiving', ?, ?)", mySession, tenantId, locationId, myReceipt, ownerUserId);
+        try {
+            ResponseEntity<String> receipt = get("/api/v1/put-away/lists/receiving/" + myReceipt, String.class);
+            assertThat(receipt.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(receipt.getBody()).as("same-tenant positive control").contains("P930012").contains("COV-PAL-PO");
+            assertThat(receipt.getBody()).doesNotContain("P930011").doesNotContain("THEIRS");
+            assertThat(get("/api/v1/put-away/lists/receiving/" + otherReceipt, String.class).getStatusCode())
+                .as("another tenant's receipt: the same 404 as an unknown one").isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(get("/api/v1/put-away/lists/receiving/" + UUID.randomUUID(), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+            ResponseEntity<String> returns = get("/api/v1/put-away/lists/return_session/" + myReturns, String.class);
+            assertThat(returns.getBody()).as("same-tenant positive control").contains("P930013").doesNotContain("P930011");
+            assertThat(get("/api/v1/put-away/lists/return_session/" + otherReturns, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+            ResponseEntity<String> transfer = get("/api/v1/put-away/lists/transfer/" + myTransfer, String.class);
+            assertThat(transfer.getBody()).as("same-tenant positive control").contains("P930014").doesNotContain("P930011");
+            assertThat(get("/api/v1/put-away/lists/transfer/" + otherTransfer, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+            ResponseEntity<String> sessionList = get("/api/v1/put-away/sessions/" + mySession + "/list", String.class);
+            assertThat(sessionList.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(sessionList.getBody()).as("same-tenant positive control").contains("\"scoped\":true").contains("P930012");
+            assertThat(get("/api/v1/put-away/sessions/" + otherSession + "/list", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+            // The same list read as app_user under RLS.
+            var appDs = new com.traceability.tenancy.TenantAwareDataSource(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+            var appJdbc = new JdbcTemplate(appDs);
+            var app = new com.traceability.places.PutAwayListService(appJdbc,
+                new com.traceability.places.PutAwayService(appJdbc, new com.traceability.inventory.InventoryLedger(appJdbc)));
+            var tx = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(appDs));
+            com.traceability.tenancy.TenantContext.set(tenantId);
+            try {
+                var own = tx.execute(s -> app.list("receiving", myReceipt, ownerUserId, true));
+                assertThat(own.pieces()).as("same-tenant positive control (app_user)")
+                    .extracting(com.traceability.places.PutAwayListService.ListPiece::code).containsExactly("P930012");
+                for (var source : List.of(Map.entry("receiving", otherReceipt), Map.entry("return_session", otherReturns),
+                        Map.entry("transfer", otherTransfer))) {
+                    org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> tx.execute(s -> app.list(source.getKey(), source.getValue(), ownerUserId, true)))
+                        .as("another tenant's " + source.getKey() + " is invisible to app_user")
+                        .isInstanceOf(com.traceability.places.PlaceException.class);
+                }
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> app.sessionList(otherSession, otherUser)))
+                    .isInstanceOf(com.traceability.places.PlaceException.class);
+            } finally {
+                com.traceability.tenancy.TenantContext.clear();
+            }
+        } finally {
+            jdbc.update("DELETE FROM put_away_session_pieces WHERE session_id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM put_away_sessions WHERE id IN (?, ?)", mySession, otherSession);
+            jdbc.update("DELETE FROM put_away_sessions WHERE tenant_id = ? AND source <> 'manual'", tenantId);
+            jdbc.update("DELETE FROM transfer_pieces WHERE transfer_id IN (?, ?)", myTransfer, otherTransfer);
+            jdbc.update("DELETE FROM transfer_lines WHERE id IN (?, ?)", myLine, otherLine);
+            jdbc.update("DELETE FROM transfers WHERE id IN (?, ?)", myTransfer, otherTransfer);
+            jdbc.update("DELETE FROM return_session_items WHERE session_id IN (?, ?)", myReturns, otherReturns);
+            jdbc.update("DELETE FROM return_sessions WHERE id IN (?, ?)", myReturns, otherReturns);
+            jdbc.update("DELETE FROM pieces WHERE id IN (?, ?, ?, ?)", received, restocked, back, theirs);
+            jdbc.update("DELETE FROM receipts WHERE id IN (?, ?)", myReceipt, otherReceipt);
+            jdbc.update("DELETE FROM bins WHERE id IN (?, ?, ?)", myShelf, myRack, myZone);
+            jdbc.update("UPDATE tenants SET places_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM variants WHERE id = ?", otherVariant);
+            jdbc.update("DELETE FROM products WHERE id = ?", otherProduct);
+            jdbc.update("DELETE FROM stores WHERE id = ?", otherStore);
+            jdbc.update("DELETE FROM locations WHERE id IN (?, ?, ?)", otherLoc, otherDest, myDest);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherUser);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

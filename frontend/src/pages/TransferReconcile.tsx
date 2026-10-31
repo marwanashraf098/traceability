@@ -10,9 +10,12 @@ import {
 } from '../components/ui'
 import {
   getTransfer, getRoleFromToken, scanBackTransferPiece, classifyTransferShortfall,
-  closeTransferSession, TransferCommandError, TransferCondition,
+  closeTransferSession, getPutAwayList, TransferCommandError, TransferCondition,
   TransferDetail as TransferDetailType, TransferLine,
 } from '../api'
+import { Layers } from 'lucide-react'
+import { useCapabilities } from '../capabilities'
+import { putAwayListPath } from './putaway/putAwayListPaths'
 
 // FR-22.9 — Reconcile screen (MANAGER/OWNER only): scan-back (good/condemned)
 // + per-line quantity-based classify, with a live running balance. Close is
@@ -49,6 +52,9 @@ export default function TransferReconcile() {
   const [closeError, setCloseError] = useState<string | null>(null)
   // Q1b: a shortfall quantity field has focus — phone scans wait ("Tablet busy") meanwhile.
   const [shortfallFocused, setShortfallFocused] = useState(false)
+  // Warehouse places S4 — after Close: how many returned-good pieces wait for a place (null: no end screen).
+  const { places } = useCapabilities()
+  const [putAwayWaiting, setPutAwayWaiting] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -122,6 +128,13 @@ export default function TransferReconcile() {
     try {
       await closeTransferSession(id)
       setShowCloseConfirm(false)
+      // Warehouse places S4 — with places, pieces that came back good and wait for a place get an end screen with
+      // "Put away returned pieces"; otherwise (and without places) the transfer opens, as before.
+      if (places) {
+        const waiting = await getPutAwayList('transfer', id)
+          .then(l => (l.hasPlaces ? l.total - l.placed : 0)).catch(() => 0)
+        if (waiting > 0) { setPutAwayWaiting(waiting); return }
+      }
       navigate(`/transfers/${id}`)
     } catch (e: unknown) {
       const msg = e instanceof TransferCommandError ? (isAr ? e.messageAr : e.messageEn)
@@ -134,6 +147,26 @@ export default function TransferReconcile() {
 
   if (loading) {
     return <div className="flex justify-center py-16"><Spinner size={28} /></div>
+  }
+  if (putAwayWaiting != null && id) {
+    return (
+      <div className="max-w-lg mx-auto py-10" data-testid="transfer-reconcile-end">
+        <Card className="space-y-4">
+          <h1 className="text-h2 text-primary">{t('putAway.list.transferEnd.title')}</h1>
+          <p className="text-body text-muted">{t('putAway.list.transferEnd.body', { count: putAwayWaiting })}</p>
+          <div className="flex flex-wrap gap-2">
+            <span className="contents" data-testid="transfer-put-away-returned">
+              <Button iconStart={Layers} onClick={() => navigate(putAwayListPath('transfer', id))}>
+                {t('putAway.list.putAwayReturned')}
+              </Button>
+            </span>
+            <Button variant="secondary" onClick={() => navigate(`/transfers/${id}`)}>
+              {t('putAway.list.transferEnd.goToTransfer')}
+            </Button>
+          </div>
+        </Card>
+      </div>
+    )
   }
   if (!transfer || !id) {
     return <Alert tone="critical" title={error ?? t('transfers.reconcile.notFound')} />

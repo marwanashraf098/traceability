@@ -40,7 +40,8 @@ class PlacesShopifyGuardTest {
         }
         assertThat(files).as("the places package exists where this scan looks").isNotEmpty();
         assertThat(files.stream().map(f -> f.getFileName().toString()))
-            .as("S2's put-away code is in the scan").contains("PutAwayService.java", "PutAwayController.java", "PlacePaths.java");
+            .as("S2's put-away code is in the scan").contains("PutAwayService.java", "PutAwayController.java", "PlacePaths.java")
+            .as("S4's put-away lists are in the scan").contains("PutAwayListService.java", "PutAwayListController.java");
         for (Path f : OUTSIDE) assertThat(Files.exists(f)).as(f.toString()).isTrue();
         files.addAll(OUTSIDE);
         List<String> hits = new ArrayList<>();
@@ -72,7 +73,8 @@ class PlacesShopifyGuardTest {
 
     @Test
     void placesBeans_takeNoShopifyDependency() {
-        for (Class<?> c : List.of(PlacesService.class, PlacesController.class, PutAwayService.class, PutAwayController.class)) {
+        for (Class<?> c : List.of(PlacesService.class, PlacesController.class, PutAwayService.class, PutAwayController.class,
+                PutAwayListService.class, PutAwayListController.class)) {
             for (Constructor<?> ctor : c.getDeclaredConstructors()) {
                 for (Class<?> p : ctor.getParameterTypes()) {
                     assertThat(p.getName()).as(c.getSimpleName() + " constructor").doesNotContain("shopify").doesNotContain("Shopify");

@@ -6,7 +6,11 @@ import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner } from '../components/ui'
-import { getTransfer, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail } from '../api'
+import {
+  getTransfer, getVariantPickPlaces, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail, VariantPickPlaces,
+} from '../api'
+import { useCapabilities } from '../capabilities'
+import TransferCollectList from './putaway/TransferCollectList'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -72,6 +76,20 @@ export default function TransferScanOut() {
       return { success: false, label: message ?? result.code }
     }),
   }))
+
+  // Warehouse places S4 — with places: where to collect each line's variant at the main warehouse (S3's batch
+  // places, one request for every line). Display only; re-read whenever the transfer reloads (after each scan), never
+  // awaited. Not for a bring-back: its pieces are transferred_out at the other location, which holds no place.
+  const { places } = useCapabilities()
+  const [collect, setCollect] = useState<Map<string, VariantPickPlaces> | null>(null)
+  useEffect(() => {
+    if (!places || !transfer || transfer.transfer_mode === 'relocate_return' || transfer.lines.length === 0) return
+    let cancelled = false
+    getVariantPickPlaces(transfer.lines.map(l => l.variant_id))
+      .then(r => { if (!cancelled) setCollect(new Map(r.variants.map(v => [v.variantId, v]))) })
+      .catch(() => { /* keep the last list */ })
+    return () => { cancelled = true }
+  }, [places, transfer])
 
   if (loading) {
     return (
@@ -169,6 +187,10 @@ export default function TransferScanOut() {
             </div>
           )}
         </div>
+
+        {collect && transfer.transfer_mode !== 'relocate_return' && (
+          <TransferCollectList lines={transfer.lines} places={collect} />
+        )}
 
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('transfers.scanOut.recent')}</h2>

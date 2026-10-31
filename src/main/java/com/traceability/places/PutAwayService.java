@@ -201,9 +201,29 @@ public class PutAwayService {
         "  AND b.archived_at IS NULL " +
         "GROUP BY p.variant_id, p.bin_id, b.code ORDER BY p.variant_id, count(*) DESC, upper(b.code), p.bin_id";
 
-    /** Suggested place per piece (pieceId → suggestion; absent = no suggestion). Two queries for any number. */
+    /** Suggested place per piece (pieceId → suggestion; absent = no suggestion). Three queries for any number. */
     Map<String, Suggestion> suggest(UUID tenantId, UUID locationId, List<Map.Entry<String, UUID>> pieces) {
         Map<String, Suggestion> out = new HashMap<>();
+        Map<String, SuggestedBin> bins = suggestBins(jdbc, tenantId, locationId, pieces);
+        Map<UUID, PlacePaths.Place> described = PlacePaths.describe(jdbc, tenantId,
+            bins.values().stream().map(SuggestedBin::binId).toList());
+        bins.forEach((pieceId, b) -> {
+            if (described.containsKey(b.binId())) out.put(pieceId, new Suggestion(PlaceView.of(described.get(b.binId())), b.reason()));
+        });
+        return out;
+    }
+
+    /** One piece's suggested place (a live shelf or box of the location) and why: last_place | most_of_variant. */
+    record SuggestedBin(UUID binId, String reason) {}
+
+    /**
+     * THE suggestion rule, as place ids (S2's waiting list and S4's put-away lists): the piece's last place here,
+     * else the place holding the most available pieces of its variant here, else nothing (absent). Two queries for
+     * any number of pieces ({pieceId, variantId}); the caller describes the places it needs.
+     */
+    static Map<String, SuggestedBin> suggestBins(JdbcTemplate jdbc, UUID tenantId, UUID locationId,
+                                                 List<Map.Entry<String, UUID>> pieces) {
+        Map<String, SuggestedBin> out = new HashMap<>();
         if (pieces.isEmpty()) return out;
         String[] ids = pieces.stream().map(Map.Entry::getKey).toArray(String[]::new);
         UUID[] variants = pieces.stream().map(Map.Entry::getValue).distinct().toArray(UUID[]::new);
@@ -214,19 +234,14 @@ public class PutAwayService {
         jdbc.query(SUGGEST_MOST_OF_VARIANT,
             rs -> { most.put(rs.getObject("variant_id", UUID.class), rs.getObject("bin_id", UUID.class)); },
             tenantId, locationId, variants);
-        Set<UUID> binIds = new HashSet<>(last.values());
-        binIds.addAll(most.values());
-        Map<UUID, PlacePaths.Place> described = PlacePaths.describe(jdbc, tenantId, binIds);
         for (Map.Entry<String, UUID> p : pieces) {
             UUID lastBin = last.get(p.getKey());
-            if (lastBin != null && described.containsKey(lastBin)) {
-                out.put(p.getKey(), new Suggestion(PlaceView.of(described.get(lastBin)), "last_place"));
+            if (lastBin != null) {
+                out.put(p.getKey(), new SuggestedBin(lastBin, "last_place"));
                 continue;
             }
             UUID mostBin = most.get(p.getValue());
-            if (mostBin != null && described.containsKey(mostBin)) {
-                out.put(p.getKey(), new Suggestion(PlaceView.of(described.get(mostBin)), "most_of_variant"));
-            }
+            if (mostBin != null) out.put(p.getKey(), new SuggestedBin(mostBin, "most_of_variant"));
         }
         return out;
     }

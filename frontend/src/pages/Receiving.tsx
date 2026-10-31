@@ -12,6 +12,7 @@ import { ArrowLeft, Barcode, Factory, PackageCheck } from 'lucide-react'
 import { getAccessToken } from '../auth'
 import { authFetch, getRoleFromToken, getLabelSettings, getLabelRuns } from '../api'
 import type { FactoryProgress, LabelRunSummary } from '../api'
+import PutAwayListButton from './putaway/PutAwayListButton'
 
 function authHeaders() {
   const t = getAccessToken()
@@ -513,6 +514,11 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
           </div>
         )}
       </div>
+
+      {/* Warehouse places S4 — renders nothing without places, or when no tagged piece of this receipt waits. */}
+      {session.status === 'finalized' && (
+        <PutAwayListButton source="receiving" sourceId={session.id} label={t('putAway.list.putAwayNow')} variant="primary" />
+      )}
 
       {printError && <Alert tone="critical" title={printError} />}
       {deleteError && <Alert tone="critical" title={deleteError} />}
