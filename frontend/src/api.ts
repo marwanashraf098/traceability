@@ -4403,10 +4403,26 @@ export function setPlacePurpose(id: string, purpose: 'damaged' | null) {
 export function archivePlace(id: string) {
   return requestReadable<PlaceNode>(`/places/${id}/archive`, { method: 'POST' })
 }
-/** Stickers for the shelves and boxes in / under these places — opens the PDF. */
-export async function openPlaceStickers(placeIds: string[]) {
+/** Place sticker sizes: SMALL = 50×25 mm (label printer); A6 one per page ('single') or four per A4 ('sheet'); A4. */
+export type PlaceStickerSize = 'SMALL' | 'A6' | 'A4'
+export interface PlaceStickerChoice { size: PlaceStickerSize; a6Mode: 'single' | 'sheet' | null }
+/** What a print of these places would hold (live places of each kind in / under them) and each kind's size to offer. */
+export interface PlaceStickerPlan {
+  counts: Record<PlaceKind, number>
+  choices: Record<PlaceKind, PlaceStickerChoice>
+}
+export function getPlaceStickerPlan(placeIds: string[]) {
+  return requestReadable<PlaceStickerPlan>('/places/stickers/plan', { method: 'POST', body: JSON.stringify({ placeIds }) })
+}
+/**
+ * Stickers for these places — opens the PDF. Without `kinds`: the 50×25 mm shelves and boxes in / under them. With
+ * `kinds`: each listed kind in its size (a kind left out isn't printed), remembered for next time; `lang` 'ar' → the
+ * kind / path / Damaged text in Arabic.
+ */
+export async function openPlaceStickers(placeIds: string[], kinds?: Partial<Record<PlaceKind, PlaceStickerChoice>>, lang?: string) {
   await openPdfResponse(await authFetch('/places/stickers', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placeIds }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(kinds ? { placeIds, kinds, lang } : { placeIds }),
   }))
 }
 

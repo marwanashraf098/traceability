@@ -3,13 +3,14 @@ import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
 import { Box, ClipboardList, Minus, Plus, Printer } from 'lucide-react'
 import {
-  archivePlace, createPlace, createPlacesBulk, getPlace, getPlaces, listLocations, movePlace, openPlaceStickers,
+  archivePlace, createPlace, createPlacesBulk, getPlace, getPlaces, listLocations, movePlace,
   previewPlacesBulk, renamePlace, setPlacePurpose, setPlacesEnabled, startPlaceCount, LocationRow, PlaceBulkPlan, PlaceDetail,
   PlaceNode, PlaceTree, ServerMessageError,
 } from '../../api'
 import { loadCapabilities, resetCapabilitiesCache } from '../../capabilities'
 import { resetPutAwayWaitingCache } from '../putaway/usePutAwayWaiting'
 import { Button, Input, Modal, Select, Skeleton, Toggle, cn, useToast } from '../../components/ui'
+import { PrintStickersDialog } from './PrintStickersDialog'
 
 // Places rollout — Settings › Places is shown to owner + manager in EVERY store. On top: "Use places in this store"
 // (tenants.places_enabled, PUT /places/settings). Off → only the switch and its one line; on → the setup below.
@@ -126,6 +127,8 @@ function PlacesSetup() {
   const [zoneId, setZoneId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** Place sticker sizes: the places whose stickers the "Print stickers" dialog is choosing sizes for. */
+  const [printIds, setPrintIds] = useState<string[] | null>(null)
 
   const fail = useCallback((e: unknown) => {
     const message = e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('places.errors.generic')
@@ -172,7 +175,7 @@ function PlacesSetup() {
   })
   const printAll = () => {
     if (zones.length === 0) return
-    openPlaceStickers(zones.map(z => z.zone.id)).catch(fail)
+    setPrintIds(zones.map(z => z.zone.id))
   }
 
   if (loadError) {
@@ -182,6 +185,7 @@ function PlacesSetup() {
 
   return (
     <div className="space-y-4" data-testid="places-settings">
+      {printIds && <PrintStickersDialog placeIds={printIds} onClose={() => setPrintIds(null)} fail={fail} />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-h2 text-primary">{t('places.title')}</h2>
@@ -249,7 +253,8 @@ function PlacesSetup() {
       </div>
 
       {zone === null ? (
-        <EmptySetup tree={tree} onCreated={async (r) => { await reload(tree.locationId); setZoneId(r.zoneId) }} fail={fail} />
+        <EmptySetup tree={tree} onCreated={async (r) => { await reload(tree.locationId); setZoneId(r.zoneId); setPrintIds(r.createdIds) }}
+          fail={fail} />
       ) : (
         <div className="flex flex-wrap items-start gap-5">
           <ZoneLayout
@@ -262,7 +267,7 @@ function PlacesSetup() {
             onAddBox={parentId => run(() => createPlace({ kind: 'box', parentId }), b => setSelectedId(b.id))}
             onZoneAction={action => {
               const z = zone.zone
-              if (action === 'print') openPlaceStickers([z.id]).catch(fail)
+              if (action === 'print') setPrintIds([z.id])
               if (action === 'damaged') run(() => setPlacePurpose(z.id, z.purpose === 'damaged' ? null : 'damaged'))
               if (action === 'archive') run(() => archivePlace(z.id), () => setZoneId(null))
               if (action === 'rename') setSelectedId(z.id)
@@ -274,7 +279,7 @@ function PlacesSetup() {
               zone={zone.zone}
               onCreated={async (r) => {
                 await reload(tree.locationId)
-                openPlaceStickers(r.createdIds).catch(fail)
+                setPrintIds(r.createdIds)
               }}
               fail={fail}
             />
@@ -287,6 +292,7 @@ function PlacesSetup() {
                 busy={busy}
                 onRun={run}
                 onClose={() => setSelectedId(null)}
+                onPrint={setPrintIds}
                 fail={fail}
               />
             )}
@@ -591,7 +597,6 @@ function EmptySetup({ tree, onCreated, fail }: {
       const r = await createPlacesBulk({ locationId: tree.locationId, racks, shelvesPerRack: shelves, floorBoxes: boxes })
       placesChanged()
       await onCreated(r)
-      openPlaceStickers(r.createdIds).catch(fail)
     } catch (e) {
       fail(e)
     } finally {
@@ -621,13 +626,14 @@ function EmptySetup({ tree, onCreated, fail }: {
   )
 }
 
-function SelectedPlace({ id, nodes, locationName, busy, onRun, onClose, fail }: {
+function SelectedPlace({ id, nodes, locationName, busy, onRun, onClose, onPrint, fail }: {
   id: string
   nodes: PlaceNode[]
   locationName: string
   busy: boolean
   onRun: <T>(action: () => Promise<T>, after?: (r: T) => void) => Promise<void>
   onClose: () => void
+  onPrint: (placeIds: string[]) => void
   fail: (e: unknown) => void
 }) {
   const { t } = useTranslation()
@@ -703,7 +709,7 @@ function SelectedPlace({ id, nodes, locationName, busy, onRun, onClose, fail }: 
             {t('placeCount.countThisPlace')}
           </Button>
         )}
-        <Button size="sm" variant="secondary" iconStart={Printer} onClick={() => openPlaceStickers([node.id]).catch(fail)}>
+        <Button size="sm" variant="secondary" iconStart={Printer} onClick={() => onPrint([node.id])}>
           {node.kind === 'shelf' || node.kind === 'box' ? t('places.printSticker') : t('places.printStickers')}
         </Button>
         {node.kind === 'shelf' && (

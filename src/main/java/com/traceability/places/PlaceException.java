@@ -14,7 +14,7 @@ public class PlaceException extends RuntimeException {
     public enum Code {
         LOCATION_NOT_FOUND, PLACE_NOT_FOUND, INVALID_KIND, INVALID_PARENT, INVALID_CODE, INVALID_NAME, CODE_TAKEN,
         INVALID_BULK, PLACE_ARCHIVED, PLACE_NOT_EMPTY, PLACE_HAS_CHILDREN, NOT_A_BOX, PURPOSE_NOT_ALLOWED,
-        NO_STICKERS,
+        NO_STICKERS, INVALID_STICKER_CHOICE,
         // S2 — put away
         SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER,
         // S4 — put-away lists
@@ -157,7 +157,12 @@ public class PlaceException extends RuntimeException {
 
     static PlaceException noStickers() {
         return new PlaceException(HttpStatus.BAD_REQUEST, Code.NO_STICKERS,
-            "Choose 1 to 2,000 shelves or boxes to print", "اختر من 1 إلى 2,000 رف أو صندوق للطباعة");
+            "Choose 1 to 2,000 places to print", "اختر من 1 إلى 2,000 مكان للطباعة");
+    }
+
+    static PlaceException invalidStickerChoice() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.INVALID_STICKER_CHOICE,
+            "Choose a sticker size: 50×25 mm, A6 or A4", "اختر مقاس الملصق: 50×25 مم أو A6 أو A4");
     }
 
     private final HttpStatus status;

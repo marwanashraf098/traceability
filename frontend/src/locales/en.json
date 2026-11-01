@@ -5137,6 +5137,29 @@
       "confirmEnds": "Open put-away sessions and place counts are closed. Pieces already put away stay where they are.",
       "keepOn": "Keep places on",
       "turnOff": "Turn off places"
+    },
+    "print": {
+      "title": "Print stickers",
+      "kindCount": "{{kind}} ({{count}})",
+      "kinds": {
+        "zone": "Zones",
+        "rack": "Racks",
+        "shelf": "Shelves",
+        "box": "White boxes"
+      },
+      "size": {
+        "SMALL": "50×25 mm",
+        "A6": "A6",
+        "A4": "A4"
+      },
+      "mode": {
+        "single": "A6 labels",
+        "sheet": "4 per A4 sheet"
+      },
+      "labelPrinter": "Label printer",
+      "paperPrinter": "Paper printer",
+      "hint": "Each kind prints in its own size, all in one PDF. We remember your sizes for next time.",
+      "print": "Print"
     }
   },
   "lookupExchange": {

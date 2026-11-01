@@ -231,7 +231,7 @@ class PortalOrderLeakTest {
         for (String k : List.of("GET /api/v1/places", "GET /api/v1/places/{id}", "POST /api/v1/places",
                 "POST /api/v1/places/bulk/preview", "POST /api/v1/places/bulk", "PUT /api/v1/places/{id}",
                 "PUT /api/v1/places/{id}/parent", "PUT /api/v1/places/{id}/purpose", "POST /api/v1/places/{id}/archive",
-                "POST /api/v1/places/stickers")) {
+                "POST /api/v1/places/stickers", "POST /api/v1/places/stickers/plan")) {
             reg(k, skip("warehouse places: places, piece counts per place and stickers; no order data"));
         }
         // Warehouse places S2 — put away: waiting pieces, places, put-away sessions and Lookup's Move. The waiting

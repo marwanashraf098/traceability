@@ -14,8 +14,10 @@ import i18n from '../i18n'
  *   pl1  the tab is shown after Locations in every store; switched off it is only the switch (no /places call)
  *   pl2  a worker never sees Settings tabs (the page redirects)
  *   pl3  the zone is drawn as racks with stacked shelves, box chips, the floor's boxes, "No place yet"
- *   pl4  tapping a shelf opens it: contents, Print sticker (POST /places/stickers), + Box here
- *   pl5  Quick add: racks × shelves stepper → preview range, "Create and print stickers" posts the bulk to the zone
+ *   pl4  tapping a shelf opens it: contents, Print sticker (the Print stickers dialog — Cancel prints nothing, Print
+ *        posts /places/stickers), + Box here
+ *   pl5  Quick add: racks × shelves stepper → preview range, "Create and print stickers" posts the bulk to the zone,
+ *        then prints through the Print stickers dialog
  *   pl6  no zone yet: the first-zone setup posts a new zone with racks, shelves and floor boxes
  *   pl7  "+ Zone Z2" creates the proposed zone; pl7b "+ Add rack" adds one rack (next free R)
  *   pl8  Arabic: RTL, Arabic copy, codes kept left-to-right
@@ -73,6 +75,11 @@ function backend(url: string, opts: RequestInit = {}) {
       lastShelf: `${zone}-R${String(last).padStart(2, '0')}-S${body.shelvesPerRack}`, firstBox: null, lastBox: null, conflicts: [] })
   }
   if (url.endsWith('/places/bulk') && method === 'POST') return json({ zoneId: 'z1', plan: {}, createdIds: ['new-1', 'new-2'] }, 201)
+  if (url.endsWith('/places/stickers/plan')) {
+    return json({ counts: { zone: 0, rack: 0, shelf: 1, box: 0 },
+      choices: { zone: { size: 'A4', a6Mode: null }, rack: { size: 'A6', a6Mode: 'single' },
+        shelf: { size: 'SMALL', a6Mode: null }, box: { size: 'A6', a6Mode: 'single' } } })
+  }
   if (url.endsWith('/places/stickers')) return json({})
   if (url.endsWith('/places') && method === 'POST') return json(node({ id: 'z2', kind: 'zone', code: 'Z2', label: 'Z2' }), 201)
   if (/\/places\/s1$/.test(url)) {
@@ -159,7 +166,15 @@ describe('Settings › Places', () => {
     expect(within(panel).getByTestId('places-selected-code').textContent).toBe('Z1-R01-S1')
     expect(await within(panel).findByText('Black T-shirt · M')).toBeTruthy()
     await user.click(within(panel).getByRole('button', { name: 'Print sticker' }))
-    await waitFor(() => expect(calls.find(c => c.url.endsWith('/places/stickers'))?.body).toEqual({ placeIds: ['s1'] }))
+    await within(await screen.findByTestId('places-print-dialog')).findByTestId('places-print-row-shelf')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByTestId('places-print-dialog')).toBeNull())
+    expect(calls.some(c => c.url.endsWith('/places/stickers'))).toBe(false)
+    await user.click(within(panel).getByRole('button', { name: 'Print sticker' }))
+    await within(await screen.findByTestId('places-print-dialog')).findByTestId('places-print-row-shelf')
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(calls.find(c => c.url.endsWith('/places/stickers'))?.body)
+      .toEqual({ placeIds: ['s1'], kinds: { shelf: { size: 'SMALL', a6Mode: null } }, lang: 'en' }))
     await user.click(within(panel).getByRole('button', { name: '+ Box here' }))
     await waitFor(() => expect(calls.find(c => c.method === 'POST' && c.url.endsWith('/places'))?.body)
       .toEqual({ kind: 'box', parentId: 's1' }))
@@ -178,7 +193,10 @@ describe('Settings › Places', () => {
     await user.click(within(qa).getByRole('button', { name: 'Create and print stickers' }))
     await waitFor(() => expect(calls.find(c => c.url.endsWith('/places/bulk'))?.body)
       .toEqual({ zoneId: 'z1', racks: 3, shelvesPerRack: 3, floorBoxes: 0 }))
-    await waitFor(() => expect(calls.find(c => c.url.endsWith('/places/stickers'))?.body).toEqual({ placeIds: ['new-1', 'new-2'] }))
+    await within(await screen.findByTestId('places-print-dialog')).findByTestId('places-print-row-shelf')
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(calls.find(c => c.url.endsWith('/places/stickers'))?.body)
+      .toEqual({ placeIds: ['new-1', 'new-2'], kinds: { shelf: { size: 'SMALL', a6Mode: null } }, lang: 'en' }))
   })
 
   test('pl6 — no zone yet: the first-zone setup', async () => {
