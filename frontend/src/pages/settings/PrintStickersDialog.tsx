@@ -32,16 +32,18 @@ export function PrintStickersDialog({ placeIds, onClose, fail }: {
     getPlaceStickerPlan(placeIds)
       .then(p => {
         if (cancelled) return
+        // Read everything before keeping it: a plan without counts / choices is an error, never a broken render.
+        const included = Object.fromEntries(KINDS.map(k => [k, p.counts[k] > 0 && !!p.choices[k]]))
         setPlan(p)
         setChoices(p.choices)
-        setIncluded(Object.fromEntries(KINDS.map(k => [k, p.counts[k] > 0])))
+        setIncluded(included)
       })
       .catch(e => { if (!cancelled) { fail(e); onClose() } })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placeIds.join(',')])
 
-  const rows = plan ? KINDS.filter(k => plan.counts[k] > 0) : []
+  const rows = plan ? KINDS.filter(k => plan.counts[k] > 0 && !!plan.choices[k]) : []
   const chosen = rows.filter(k => included[k])
 
   function setSize(kind: PlaceKind, size: PlaceStickerSize) {
