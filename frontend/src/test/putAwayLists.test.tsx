@@ -200,7 +200,7 @@ describe('Put-away list — page', () => {
     let current = list({ session: { id: 'S7', status: 'open', placedInSession: 3, extra: 0, lastActivityAt: new Date().toISOString() } })
     routes = url => (url.includes('/put-away/lists/') ? current : {})
     const { unmount } = renderListPage()
-    expect(await screen.findByTestId('put-away-list-start')).toHaveTextContent('Resume put away · 3 placed')
+    expect(await screen.findByTestId('put-away-list-start')).toHaveTextContent('Resume placing · 3 placed')
     unmount()
 
     current = list({ placed: 6, pieces: PIECES.map(p => ({ ...p, done: true, placeReason: 'placed', place: p.place ?? Z2S9 })) })
@@ -402,7 +402,7 @@ function reconcileRender() {
 describe('Put-away list — buttons', () => {
   test('bt1 no places → nothing; nothing waiting → nothing; waiting → the list', async () => {
     setup(false)
-    const off = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Put away now" />)
+    const off = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Place on shelves now" />)
     await new Promise(r => setTimeout(r, 30))
     expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
     expect(putAwayCalls()).toHaveLength(0)
@@ -410,7 +410,7 @@ describe('Put-away list — buttons', () => {
 
     setup(true)
     routes = url => (url.includes('/put-away/lists/') ? list({ total: 0, placed: 0, pieces: [] }) : {})
-    const none = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Put away now" />)
+    const none = renderWithProviders(<PutAwayListButton source="receiving" sourceId="R1" label="Place on shelves now" />)
     await waitFor(() => expect(putAwayCalls()).toHaveLength(1))
     expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
     none.unmount()
@@ -419,11 +419,11 @@ describe('Put-away list — buttons', () => {
     routes = url => (url.includes('/put-away/lists/') ? list() : {})
     renderWithProviders(
       <Routes>
-        <Route path="/" element={<PutAwayListButton source="receiving" sourceId="R1" label="Put away now" />} />
+        <Route path="/" element={<PutAwayListButton source="receiving" sourceId="R1" label="Place on shelves now" />} />
         <Route path="*" element={<LocationProbe />} />
       </Routes>)
     const button = await screen.findByTestId('put-away-list-button-receiving')
-    expect(button).toHaveTextContent('Put away now · 4 waiting')
+    expect(button).toHaveTextContent('Place on shelves now · 4 waiting')
     await userEvent.click(within(button).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/list/receiving/R1'))
   })
@@ -440,7 +440,7 @@ describe('Put-away list — buttons', () => {
     setup(true)
     routes = receivingRoutes('print_stick', list())
     renderWithProviders(<Receiving />, { initialEntries: ['/receiving?session=R1'] })
-    expect(await screen.findByTestId('put-away-list-button-receiving')).toHaveTextContent('Put away now · 4 waiting')
+    expect(await screen.findByTestId('put-away-list-button-receiving')).toHaveTextContent('Place on shelves now · 4 waiting')
   })
 
   test('tg1 Tag stock summary: the button opens the session list', async () => {
@@ -456,7 +456,7 @@ describe('Put-away list — buttons', () => {
         <Route path="*" element={<LocationProbe />} />
       </Routes>, { initialEntries: ['/tag-stock/TS1/summary'] })
     const button = await screen.findByTestId('put-away-list-button-tag_session')
-    expect(button).toHaveTextContent('Put away now · 3 waiting')
+    expect(button).toHaveTextContent('Place on shelves now · 3 waiting')
     await userEvent.click(within(button).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('/put-away/list/tag_session/TS1'))
   })
@@ -476,7 +476,7 @@ describe('Put-away list — buttons', () => {
     await screen.findByTestId('close-summary')
     const buttons = await screen.findAllByTestId('put-away-list-button-return_session')
     expect(buttons).toHaveLength(1)
-    expect(buttons[0]).toHaveTextContent('Put away all restocked pieces · 2 waiting')
+    expect(buttons[0]).toHaveTextContent('Place restocked pieces on shelves · 2 waiting')
     expect(screen.queryByTestId('put-away-list-button-receiving')).toBeNull()
     await userEvent.click(within(buttons[0]).getByRole('button'))
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent(`/put-away/list/return_session/${RS}`))

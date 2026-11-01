@@ -15,9 +15,16 @@ const SIZES: PlaceStickerSize[] = ['SMALL', 'A6', 'A4']
  * each with its size (50×25 mm / A6 / A4; A6 one per page or four per A4 sheet), offered as the tenant's last choice
  * for that kind (else shelf 50×25, box and rack A6, zone A4). Print → one PDF, every kind in its size; the server
  * remembers each printed kind's choice.
+ *
+ * Ticks: a bulk print (Print all stickers, Print zone stickers) starts with zones and racks unticked, shelves and
+ * boxes ticked, unless the store remembered another tick for that kind; a direct print (one place, Create and print)
+ * starts with every kind ticked. On a bulk print the kinds whose tick was changed are remembered.
  */
-export function PrintStickersDialog({ placeIds, onClose, fail }: {
+const BULK_DEFAULT: Record<PlaceKind, boolean> = { zone: false, rack: false, shelf: true, box: true }
+
+export function PrintStickersDialog({ placeIds, bulk = false, onClose, fail }: {
   placeIds: string[]
+  bulk?: boolean
   onClose: () => void
   fail: (e: unknown) => void
 }) {
@@ -25,6 +32,7 @@ export function PrintStickersDialog({ placeIds, onClose, fail }: {
   const [plan, setPlan] = useState<PlaceStickerPlan | null>(null)
   const [choices, setChoices] = useState<Partial<Record<PlaceKind, PlaceStickerChoice>>>({})
   const [included, setIncluded] = useState<Partial<Record<PlaceKind, boolean>>>({})
+  const [initial, setInitial] = useState<Partial<Record<PlaceKind, boolean>>>({})
   const [printing, setPrinting] = useState(false)
 
   useEffect(() => {
@@ -33,10 +41,12 @@ export function PrintStickersDialog({ placeIds, onClose, fail }: {
       .then(p => {
         if (cancelled) return
         // Read everything before keeping it: a plan without counts / choices is an error, never a broken render.
-        const included = Object.fromEntries(KINDS.map(k => [k, p.counts[k] > 0 && !!p.choices[k]]))
+        const included = Object.fromEntries(KINDS.map(k => [k,
+          p.counts[k] > 0 && !!p.choices[k] && (bulk ? (p.bulkTicks?.[k] ?? BULK_DEFAULT[k]) : true)]))
         setPlan(p)
         setChoices(p.choices)
         setIncluded(included)
+        setInitial(included)
       })
       .catch(e => { if (!cancelled) { fail(e); onClose() } })
     return () => { cancelled = true }
@@ -55,7 +65,10 @@ export function PrintStickersDialog({ placeIds, onClose, fail }: {
     setPrinting(true)
     try {
       const kinds = Object.fromEntries(chosen.map(k => [k, choices[k]!]))
-      await openPlaceStickers(placeIds, kinds, i18n.language)
+      const changed = bulk
+        ? Object.fromEntries(rows.filter(k => !!included[k] !== !!initial[k]).map(k => [k, !!included[k]]))
+        : undefined
+      await openPlaceStickers(placeIds, kinds, i18n.language, changed)
       onClose()
     } catch (e) {
       fail(e)

@@ -43,7 +43,7 @@
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
     "closeMenu": "Close menu",
-    "putAway": "Put away"
+    "putAway": "Place on shelves"
   },
   "overview": {
     "title": "Overview",
@@ -1457,7 +1457,7 @@
       "sold_offline": "Marked sold outside Shopify",
       "not_sold": "Not sold — piece back to available",
       "received_factory_run": "Received from factory run «{{run}}»",
-      "put_away": "Put away in {{toPlace}}",
+      "put_away": "Placed on {{toPlace}}",
       "place_moved": "Moved from {{fromPlace}} to {{toPlace}}",
       "place_cleared": "Place cleared (was {{fromPlace}})",
       "box_moved": "Box {{box}} moved from {{fromPlace}} to {{toPlace}}",
@@ -3745,8 +3745,8 @@
     "putAway": {
       "desc": "Scan a shelf or box, then the pieces that go there.",
       "start": "Start",
-      "title_one": "{{count}} piece waiting to be put away",
-      "title_other": "{{count}} pieces waiting to be put away"
+      "title_one": "{{count}} piece waiting for a shelf",
+      "title_other": "{{count}} pieces waiting for a shelf"
     }
   },
   "returnsExchanges": {
@@ -4002,7 +4002,7 @@
       "returns": "Scan returns · {{ref}}",
       "tagStock": "Tag stock",
       "factoryReceiving": "Factory receiving · {{ref}}",
-      "putAway": "Put away",
+      "putAway": "Place on shelves",
       "placeCount": "Counting {{code}}",
       "boxMove": "Moving a box"
     },
@@ -5126,7 +5126,7 @@
       "load": "Couldn't load places — refresh to try again"
     },
     "addRack": "Add rack",
-    "putAwayLink": "Put away",
+    "putAwayLink": "Place on shelves",
     "switch": {
       "title": "Use places in this store",
       "body": "Organise your warehouse into zones, racks, shelves and boxes so pickers know where every piece is.",
@@ -5134,7 +5134,7 @@
       "off": "Off",
       "confirmTitle": "Turn off places?",
       "confirmBody": "Places will be hidden. Your zones, shelves, boxes and piece places are kept and come back if you turn it on again.",
-      "confirmEnds": "Open put-away sessions and place counts are closed. Pieces already put away stay where they are.",
+      "confirmEnds": "Open placing sessions and place counts are closed. Pieces already placed on shelves stay where they are.",
       "keepOn": "Keep places on",
       "turnOff": "Turn off places"
     },
@@ -5204,19 +5204,19 @@
     }
   },
   "putAway": {
-    "title": "Put away",
+    "title": "Place on shelves",
     "subtitle": "Pieces in the warehouse that don't have a shelf or box yet.",
-    "start": "Start put away",
+    "start": "Start placing",
     "error": "Something went wrong. Try again.",
     "filter": "Filter by where pieces came from",
     "filterAll": "All",
     "lastPlace": "last place",
     "noSuggestion": "No suggestion",
-    "countWaiting": "waiting to be put away",
+    "countWaiting": "waiting for a shelf",
     "emptyTitle": "Every piece here has a place",
     "suggestionNote": "Suggested place = where the piece was last, or where most pieces of the same product sit. You can always scan a different place.",
     "noPlacesTitle": "No shelves or boxes here yet",
-    "noPlacesBody": "Set up places in Settings › Places, print their stickers, then put pieces away.",
+    "noPlacesBody": "Set up places in Settings › Places, print their stickers, then place pieces on shelves.",
     "source": {
       "receiving": "Receiving",
       "returns": "Returns",
@@ -5273,14 +5273,14 @@
       "cannotPlace": "Can't be placed",
       "pieceIs": "{{piece}} is {{status}}",
       "untagged": "This piece has no label yet",
-      "tagFirst": "Tag it first, then put it away.",
+      "tagFirst": "Tag it first, then place it on a shelf.",
       "unknown": "Unknown sticker",
       "unknownBody": "Nothing changed. Check the sticker and scan again.",
-      "back": "Back to Put away",
+      "back": "Back to Place on shelves",
       "currentPlace": "Current place",
       "puttingInto": {
-        "shelf": "Putting into · Shelf",
-        "box": "Putting into · Box"
+        "shelf": "Placing on · Shelf",
+        "box": "Placing in · Box"
       },
       "putHereNow": "put here now",
       "onThis": {
@@ -5302,11 +5302,11 @@
       "noScans": "Nothing scanned yet.",
       "footer": "Every placement is saved in the piece's history.",
       "finish": "Finish",
-      "closedElsewhere": "This session was closed — new scans aren’t saved. Start put away again to continue."
+      "closedElsewhere": "This session was closed — new scans aren’t saved. Start placing again to continue."
     },
     "done": {
-      "title": "Put away finished",
-      "back": "Back to Put away",
+      "title": "Placing finished",
+      "back": "Back to Place on shelves",
       "body_one": "{{count}} piece placed in {{places}} places.",
       "body_other": "{{count}} pieces placed in {{places}} places.",
       "pieces_one": "{{count}} piece",
@@ -5314,8 +5314,8 @@
       "stillWaiting_one": "{{count}} piece here still has no place",
       "stillWaiting_other": "{{count}} pieces here still have no place"
     },
-    "resume_one": "Resume put away · {{count}} placed",
-    "resume_other": "Resume put away · {{count}} placed",
+    "resume_one": "Resume placing · {{count}} placed",
+    "resume_other": "Resume placing · {{count}} placed",
     "open": {
       "title": "Open sessions",
       "note": "A session with no scan for {{hours}} h closes by itself. Closing one never moves a piece.",
@@ -5329,7 +5329,7 @@
       "confirmBody_other": "{{name}}'s session ends now. The {{count}} pieces it placed stay where they are."
     },
     "list": {
-      "title": "Put-away list",
+      "title": "Place on shelves list",
       "back": "Back",
       "refresh": "Refresh",
       "printA6": "Print A6",
@@ -5354,7 +5354,7 @@
         "return_session": "Scan returns · restocked pieces",
         "transfer": "Transfer · back from {{ref}}"
       },
-      "emptyTitle": "Nothing to put away here",
+      "emptyTitle": "Nothing to place on shelves here",
       "emptyBody": "No piece from this is waiting at this location. Untagged pieces and pieces that have left aren't listed.",
       "allPlaced": "Every piece on this list has a place",
       "thisList": "This list",
@@ -5363,9 +5363,9 @@
       "backToList": "Back to the list",
       "waitingCount_one": "{{count}} waiting",
       "waitingCount_other": "{{count}} waiting",
-      "putAwayNow": "Put away now",
-      "putAwayRestocked": "Put away all restocked pieces",
-      "putAwayReturned": "Put away returned pieces",
+      "putAwayNow": "Place on shelves now",
+      "putAwayRestocked": "Place restocked pieces on shelves",
+      "putAwayReturned": "Place returned pieces on shelves",
       "collectTitle": "Where to collect · main warehouse",
       "collectSent_one": "{{count}} sent",
       "collectSent_other": "{{count}} sent",

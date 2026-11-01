@@ -18,6 +18,11 @@ import i18n from '../i18n'
  *   ps4  Quick add "Create and print stickers" and "Print all stickers" open the dialog for those places
  *   ps5  Arabic: the dialog in Arabic, and the request asks for Arabic stickers
  *   ps6  Cancel prints nothing
+ *   ps7  a bulk print (Print all / Print zone stickers) starts with zones and racks unticked; a tick the person changed
+ *        is sent as bulkTicks, an unchanged one is not
+ *   ps8  a remembered bulk tick wins over the default on the next bulk print
+ *   ps9  a direct print of one zone or rack starts with every kind ticked, even with bulk ticks remembered off
+ *   ps10 Create and print (new places, zone included) starts with every kind ticked; no bulkTicks sent
  */
 
 function fakeJwt(role: 'owner' | 'manager' | 'worker'): string {
@@ -56,9 +61,11 @@ const DEFAULTS: PlaceStickerPlan['choices'] = {
 
 let calls: { method: string; url: string; body?: unknown }[]
 let choices: PlaceStickerPlan['choices']
+let bulkTicks: PlaceStickerPlan['bulkTicks']
 
 function counts(ids: string[]): PlaceStickerPlan['counts'] {
   if (ids.includes('z1') || ids.includes('new-1')) return { zone: 1, rack: 1, shelf: 1, box: 1 }
+  if (ids.includes('r1')) return { zone: 0, rack: 1, shelf: 1, box: 0 }
   if (ids.includes('s1')) return { zone: 0, rack: 0, shelf: 1, box: 0 }
   return { zone: 0, rack: 0, shelf: 0, box: 1 }
 }
@@ -68,7 +75,7 @@ function backend(url: string, opts: RequestInit = {}) {
   const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : undefined
   calls.push({ method, url, body })
   if (url.includes('/locations')) return json([{ id: 'loc-main', name: 'Main warehouse', is_fulfillment: true }])
-  if (url.endsWith('/places/stickers/plan')) return json({ counts: counts(body.placeIds), choices })
+  if (url.endsWith('/places/stickers/plan')) return json({ counts: counts(body.placeIds), choices, bulkTicks })
   if (url.endsWith('/places/stickers')) return json({})
   if (url.includes('/places/bulk/preview')) {
     return json({ locationId: 'loc-main', zoneCode: 'Z1', newZone: false, racks: 1, shelves: 4, boxes: 0, total: 5,
@@ -76,22 +83,30 @@ function backend(url: string, opts: RequestInit = {}) {
       conflicts: [] })
   }
   if (url.endsWith('/places/bulk') && method === 'POST') return json({ zoneId: 'z1', plan: {}, createdIds: ['new-1', 'new-2'] }, 201)
-  if (/\/places\/s1$/.test(url)) {
-    return json({ node: TREE.nodes[2], locationName: 'Main warehouse', contents: [], boxes: [], history: [] })
+  const detail = /\/places\/(z1|r1|s1)$/.exec(url)
+  if (detail) {
+    return json({ node: TREE.nodes.find(n => n.id === detail[1]), locationName: 'Main warehouse', contents: [], boxes: [], history: [] })
   }
   if (url.includes('/places')) return json(TREE)
   return json({})
 }
 
-function setup(remembered: Partial<PlaceStickerPlan['choices']> = {}) {
+function setup(remembered: Partial<PlaceStickerPlan['choices']> = {}, ticks: PlaceStickerPlan['bulkTicks'] = {}) {
   calls = []
   choices = { ...DEFAULTS, ...remembered }
+  bulkTicks = ticks
   resetCapabilitiesCache()
   setAccessToken(fakeJwt('owner'))
   vi.spyOn(window, 'open').mockImplementation(() => null)
   globalThis.URL.createObjectURL = vi.fn(() => 'blob:x')
   stubFetchWithShellDefaults(vi.fn(backend),
     { me: { name: 'O', role: 'owner', scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false, places: true } })
+}
+
+/** Each row's tick, by kind, in row order. */
+function ticked(dialog: HTMLElement): Record<string, boolean> {
+  return Object.fromEntries(within(dialog).getAllByTestId(/^places-print-row-/).map(row => [
+    row.dataset.testid!.replace('places-print-row-', ''), (within(row).getByRole('checkbox') as HTMLInputElement).checked]))
 }
 
 const printed = () => calls.filter(c => c.url.endsWith('/places/stickers'))
@@ -137,6 +152,8 @@ describe('Place sticker sizes — Print stickers dialog', () => {
     await user.click(await screen.findByRole('button', { name: 'Print zone stickers' }))
     const dialog = await screen.findByTestId('places-print-dialog')
     for (const kind of ['zone', 'rack', 'shelf', 'box']) expect(await within(dialog).findByTestId(`places-print-row-${kind}`)).toBeTruthy()
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Zones (1)' }))
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Racks (1)' }))
     expect(activeLabels(within(dialog).getByTestId('places-print-row-zone'))).toEqual(['A4'])
     expect(activeLabels(within(dialog).getByTestId('places-print-row-rack'))).toEqual(['A6', 'A6 labels'])
     expect(activeLabels(within(dialog).getByTestId('places-print-row-shelf'))).toEqual(['50×25 mm'])
@@ -155,7 +172,7 @@ describe('Place sticker sizes — Print stickers dialog', () => {
     await waitFor(() => expect(printed()[0]?.body).toEqual({
       placeIds: ['z1'],
       kinds: { rack: { size: 'A6', a6Mode: 'single' }, shelf: { size: 'A6', a6Mode: 'single' }, box: { size: 'A6', a6Mode: 'sheet' } },
-      lang: 'en' }))
+      lang: 'en', bulkTicks: { rack: true } }))
     expect(printed()).toHaveLength(1)
   })
 
@@ -213,5 +230,82 @@ describe('Place sticker sizes — Print stickers dialog', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByTestId('places-print-dialog')).toBeNull())
     expect(printed()).toHaveLength(0)
+  })
+
+  test('ps7 — a bulk print starts with zones and racks unticked; only a changed tick is sent', async () => {
+    setup()
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=places'] })
+    await user.click(await screen.findByRole('button', { name: 'Print all stickers' }))
+    const dialog = await screen.findByTestId('places-print-dialog')
+    await within(dialog).findByTestId('places-print-row-zone')
+    expect(ticked(dialog)).toEqual({ zone: false, rack: false, shelf: true, box: true })
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printed()[0]?.body).toEqual({
+      placeIds: ['z1'], kinds: { shelf: { size: 'SMALL', a6Mode: null }, box: { size: 'A6', a6Mode: 'single' } }, lang: 'en' }))
+
+    await waitFor(() => expect(screen.queryByTestId('places-print-dialog')).toBeNull())
+    await user.click(screen.getByRole('button', { name: 'Print zone stickers' }))
+    const again = await screen.findByTestId('places-print-dialog')
+    await within(again).findByTestId('places-print-row-zone')
+    expect(ticked(again)).toEqual({ zone: false, rack: false, shelf: true, box: true })
+    await user.click(within(again).getByRole('checkbox', { name: 'Zones (1)' }))
+    await user.click(within(again).getByRole('checkbox', { name: 'White boxes (1)' }))
+    await user.click(within(again).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printed()[1]?.body).toEqual({
+      placeIds: ['z1'], kinds: { zone: { size: 'A4', a6Mode: null }, shelf: { size: 'SMALL', a6Mode: null } }, lang: 'en',
+      bulkTicks: { zone: true, box: false } }))
+  })
+
+  test('ps8 — a remembered bulk tick wins over the default', async () => {
+    setup({}, { zone: true, box: false })
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=places'] })
+    await user.click(await screen.findByRole('button', { name: 'Print all stickers' }))
+    const dialog = await screen.findByTestId('places-print-dialog')
+    await within(dialog).findByTestId('places-print-row-zone')
+    expect(ticked(dialog)).toEqual({ zone: true, rack: false, shelf: true, box: false })
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printed()[0]?.body).toEqual({
+      placeIds: ['z1'], kinds: { zone: { size: 'A4', a6Mode: null }, shelf: { size: 'SMALL', a6Mode: null } }, lang: 'en' }))
+  })
+
+  test('ps9 — a direct print of one zone or rack starts with every kind ticked', async () => {
+    setup({}, { zone: false, rack: false })
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=places'] })
+    const rack = await screen.findByTestId('places-rack-Z1-R01')
+    await user.click(within(rack).getAllByRole('button')[0])
+    await user.click(within(await screen.findByTestId('places-selected')).getByRole('button', { name: 'Print stickers' }))
+    const dialog = await screen.findByTestId('places-print-dialog')
+    await within(dialog).findByTestId('places-print-row-rack')
+    expect(plans()[0].body).toEqual({ placeIds: ['r1'] })
+    expect(ticked(dialog)).toEqual({ rack: true, shelf: true })
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByTestId('places-print-dialog')).toBeNull())
+
+    await user.click(within(screen.getByTestId('places-zone-layout')).getByRole('button', { name: 'Rename' }))
+    await user.click(within(await screen.findByTestId('places-selected')).getByRole('button', { name: 'Print stickers' }))
+    const zone = await screen.findByTestId('places-print-dialog')
+    await within(zone).findByTestId('places-print-row-zone')
+    expect(plans()[1].body).toEqual({ placeIds: ['z1'] })
+    expect(ticked(zone)).toEqual({ zone: true, rack: true, shelf: true, box: true })
+    await user.click(within(zone).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printed()[0]?.body).toEqual({ placeIds: ['z1'], kinds: DEFAULTS, lang: 'en' }))
+  })
+
+  test('ps10 — Create and print starts with every kind ticked, no bulkTicks sent', async () => {
+    setup({}, { zone: false })
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=places'] })
+    const qa = await screen.findByTestId('places-quick-add')
+    await user.click(within(qa).getByRole('button', { name: 'Create and print stickers' }))
+    const dialog = await screen.findByTestId('places-print-dialog')
+    await within(dialog).findByTestId('places-print-row-zone')
+    expect(ticked(dialog)).toEqual({ zone: true, rack: true, shelf: true, box: true })
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Zones (1)' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printed()[0]?.body).toEqual({
+      placeIds: ['new-1', 'new-2'], kinds: { rack: DEFAULTS.rack, shelf: DEFAULTS.shelf, box: DEFAULTS.box }, lang: 'en' }))
   })
 })

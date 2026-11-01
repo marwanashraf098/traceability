@@ -62,9 +62,17 @@ public class PlacesService {
     /** Place sticker sizes: size SMALL (50×25 mm) | A6 | A4; a6Mode single (one per page) | sheet (4 per A4), A6 only. */
     public record KindChoice(String size, String a6Mode) {}
     /** {@code kinds}: kind → size (a kind left out isn't printed); null → the 50×25 mm shelves and boxes. */
-    public record StickerRequest(List<UUID> placeIds, Map<String, KindChoice> kinds, String lang) {}
+    /** {@code bulkTicks}: on a bulk print, the kinds whose tick the person changed → their tick (remembered). */
+    public record StickerRequest(List<UUID> placeIds, Map<String, KindChoice> kinds, String lang,
+                                 Map<String, Boolean> bulkTicks) {
+        public StickerRequest(List<UUID> placeIds, Map<String, KindChoice> kinds, String lang) {
+            this(placeIds, kinds, lang, null);
+        }
+    }
     /** {@code counts}: live places of each kind a print would hold; {@code choices}: each kind's size to offer. */
-    public record StickerPlan(Map<String, Integer> counts, Map<String, KindChoice> choices) {}
+    /** {@code bulkTicks}: each kind's remembered tick for bulk prints (only the kinds a person changed). */
+    public record StickerPlan(Map<String, Integer> counts, Map<String, KindChoice> choices,
+                              Map<String, Boolean> bulkTicks) {}
     /** {@code createdIds}: every place made, zone first, in tree order (the caller prints its stickers). */
     public record BulkResult(UUID zoneId, BulkPlan plan, List<UUID> createdIds) {}
 
@@ -369,6 +377,13 @@ public class PlacesService {
             choices.put(e.getKey(), normalize(e.getValue()));
         }
         if (choices.isEmpty()) throw PlaceException.noStickers();
+        Map<String, Boolean> ticks = new LinkedHashMap<>();
+        if (req.bulkTicks() != null) {
+            for (Map.Entry<String, Boolean> e : req.bulkTicks().entrySet()) {
+                if (!KINDS.contains(e.getKey())) throw PlaceException.invalidStickerChoice();
+                if (e.getValue() != null) ticks.put(e.getKey(), e.getValue());
+            }
+        }
         Selection sel = select(tenantId, req.placeIds(), choices.keySet());
         if (sel.chosen().isEmpty() || sel.chosen().size() > MAX_STICKERS) throw PlaceException.noStickers();
         StickerText text = StickerText.of(req.lang());
@@ -397,12 +412,20 @@ public class PlacesService {
         for (String kind : printed) remember.put(kind, choices.get(kind));
         jdbc.update("UPDATE tenants SET place_sticker_prefs = place_sticker_prefs || ?::jsonb WHERE id = ?",
             JSON.writeValueAsString(remember), tenantId);
+        if (!ticks.isEmpty()) {
+            jdbc.update("UPDATE tenants SET place_sticker_prefs = jsonb_set(place_sticker_prefs, '{bulkTicks}', "
+                + "CASE WHEN jsonb_typeof(place_sticker_prefs->'bulkTicks') = 'object' "
+                + "THEN place_sticker_prefs->'bulkTicks' ELSE '{}'::jsonb END || ?::jsonb) WHERE id = ?",
+                JSON.writeValueAsString(ticks), tenantId);
+        }
         return LabelPdfRenderer.renderPages(pages, PieceLabelLayout.Spec.of(STICKER_WIDTH_MM, STICKER_HEIGHT_MM));
     }
 
     /**
      * What a print of these places would hold — the live places of each kind in / under them (all four kinds) — and
-     * each kind's size to offer: the tenant's last choice, else the default (shelf 50×25, box and rack A6, zone A4).
+     * each kind's size to offer: the tenant's last choice, else the default (shelf 50×25, box and rack A6, zone A4) —
+     * and the ticks remembered for bulk prints (the dialog's defaults otherwise: zone and rack unticked on a bulk
+     * print, everything ticked on a direct one).
      */
     @Transactional(readOnly = true)
     public StickerPlan stickerPlan(List<UUID> binIds) {
@@ -412,19 +435,33 @@ public class PlacesService {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (String kind : KIND_ORDER) counts.put(kind, 0);
         for (Chosen c : sel.chosen()) counts.merge(c.node().kind(), 1, Integer::sum);
-        return new StickerPlan(counts, stickerChoices(tenantId));
+        return new StickerPlan(counts, stickerChoices(tenantId), bulkTicks(tenantId));
+    }
+
+    /** The remembered bulk-print ticks ({@code place_sticker_prefs.bulkTicks}): kind → ticked, booleans only. */
+    Map<String, Boolean> bulkTicks(UUID tenantId) {
+        Map<String, Object> stored = storedPrefs(tenantId);
+        Map<String, Boolean> out = new LinkedHashMap<>();
+        if (stored.get("bulkTicks") instanceof Map<?, ?> m) {
+            for (String kind : KIND_ORDER) if (m.get(kind) instanceof Boolean b) out.put(kind, b);
+        }
+        return out;
+    }
+
+    private Map<String, Object> storedPrefs(UUID tenantId) {
+        String raw = jdbc.queryForObject("SELECT place_sticker_prefs::text FROM tenants WHERE id = ?", String.class, tenantId);
+        try {
+            if (raw != null) return JSON.readValue(raw, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (IOException e) {
+            // unreadable → nothing remembered
+        }
+        return Map.of();
     }
 
     /** Each kind's remembered choice over the defaults (an unreadable remembered value falls back to the default). */
     Map<String, KindChoice> stickerChoices(UUID tenantId) {
-        String raw = jdbc.queryForObject("SELECT place_sticker_prefs::text FROM tenants WHERE id = ?", String.class, tenantId);
         Map<String, KindChoice> out = new LinkedHashMap<>();
-        Map<String, Object> stored = Map.of();
-        try {
-            if (raw != null) stored = JSON.readValue(raw, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-        } catch (IOException e) {
-            stored = Map.of();
-        }
+        Map<String, Object> stored = storedPrefs(tenantId);
         for (String kind : KIND_ORDER) {
             KindChoice choice = DEFAULT_CHOICES.get(kind);
             if (stored.get(kind) instanceof Map<?, ?> m) {

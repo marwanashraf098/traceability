@@ -128,7 +128,8 @@ function PlacesSetup() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   /** Place sticker sizes: the places whose stickers the "Print stickers" dialog is choosing sizes for. */
-  const [printIds, setPrintIds] = useState<string[] | null>(null)
+  const [printing, setPrinting] = useState<{ ids: string[]; bulk: boolean } | null>(null)
+  const setPrintIds = (ids: string[], bulk = false) => setPrinting({ ids, bulk })
 
   const fail = useCallback((e: unknown) => {
     const message = e instanceof ServerMessageError ? e.messageFor(i18n.language) : t('places.errors.generic')
@@ -175,7 +176,7 @@ function PlacesSetup() {
   })
   const printAll = () => {
     if (zones.length === 0) return
-    setPrintIds(zones.map(z => z.zone.id))
+    setPrintIds(zones.map(z => z.zone.id), true)
   }
 
   if (loadError) {
@@ -185,7 +186,7 @@ function PlacesSetup() {
 
   return (
     <div className="space-y-4" data-testid="places-settings">
-      {printIds && <PrintStickersDialog placeIds={printIds} onClose={() => setPrintIds(null)} fail={fail} />}
+      {printing && <PrintStickersDialog placeIds={printing.ids} bulk={printing.bulk} onClose={() => setPrinting(null)} fail={fail} />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-h2 text-primary">{t('places.title')}</h2>
@@ -267,7 +268,7 @@ function PlacesSetup() {
             onAddBox={parentId => run(() => createPlace({ kind: 'box', parentId }), b => setSelectedId(b.id))}
             onZoneAction={action => {
               const z = zone.zone
-              if (action === 'print') setPrintIds([z.id])
+              if (action === 'print') setPrintIds([z.id], true)
               if (action === 'damaged') run(() => setPlacePurpose(z.id, z.purpose === 'damaged' ? null : 'damaged'))
               if (action === 'archive') run(() => archivePlace(z.id), () => setZoneId(null))
               if (action === 'rename') setSelectedId(z.id)
@@ -292,7 +293,7 @@ function PlacesSetup() {
                 busy={busy}
                 onRun={run}
                 onClose={() => setSelectedId(null)}
-                onPrint={setPrintIds}
+                onPrint={ids => setPrintIds(ids)}
                 fail={fail}
               />
             )}

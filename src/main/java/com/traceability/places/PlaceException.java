@@ -65,17 +65,17 @@ public class PlaceException extends RuntimeException {
     /** An unknown list source, or a receipt / session / transfer that isn't the caller's tenant's — the same answer. */
     static PlaceException sourceNotFound() {
         return new PlaceException(HttpStatus.NOT_FOUND, Code.SOURCE_NOT_FOUND,
-            "Nothing to put away was found for this", "لم يتم العثور على قطع للترتيب من هذا المصدر");
+            "Nothing to place on shelves was found for this", "لم يتم العثور على قطع لوضعها على الرفوف من هذا المصدر");
     }
 
     static PlaceException sessionNotFound() {
         return new PlaceException(HttpStatus.NOT_FOUND, Code.SESSION_NOT_FOUND,
-            "Put-away session not found", "لم يتم العثور على جلسة الترتيب");
+            "Placing session not found", "لم يتم العثور على جلسة الوضع على الرفوف");
     }
 
     static PlaceException sessionClosed() {
         return new PlaceException(HttpStatus.CONFLICT, Code.SESSION_CLOSED,
-            "This put-away session is finished", "انتهت جلسة الترتيب هذه");
+            "This placing session is finished", "انتهت جلسة الوضع على الرفوف هذه");
     }
 
     static PlaceException unknownSticker() {

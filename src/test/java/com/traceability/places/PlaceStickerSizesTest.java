@@ -353,6 +353,41 @@ class PlaceStickerSizesTest {
             .isEqualTo("{}");
     }
 
+    // ── z9: the bulk-print ticks, remembered per kind per tenant ───────────────
+
+    @Test
+    void z9_bulkTicks_rememberedPerKind_perTenant_onlyOnAPrint() throws Exception {
+        T t = tenant("z9", true), other = tenant("z9o", true);
+        bulk(t, 1, 1, 1);
+        bulk(other, 1, 1, 1);
+        UUID zone = id(t, "Z1");
+        assertThat(as(t, () -> places.stickerPlan(List.of(zone))).bulkTicks()).as("nothing remembered yet").isEmpty();
+
+        // The person ticked zone and unticked box on a bulk print: both remembered, the sizes too.
+        as(t, () -> places.stickers(new PlacesService.StickerRequest(List.of(zone),
+            Map.of("zone", choice("A4", null), "shelf", choice("SMALL", null)), "en",
+            Map.of("zone", true, "box", false))));
+        assertThat(as(t, () -> places.stickerPlan(List.of(zone))).bulkTicks())
+            .containsExactly(Map.entry("zone", true), Map.entry("box", false));
+
+        // A later change of one kind keeps the others.
+        as(t, () -> places.stickers(new PlacesService.StickerRequest(List.of(zone),
+            Map.of("shelf", choice("SMALL", null)), "en", Map.of("zone", false))));
+        assertThat(as(t, () -> places.stickerPlan(List.of(zone))).bulkTicks())
+            .containsExactly(Map.entry("zone", false), Map.entry("box", false));
+
+        // A direct print (no ticks) and a refused print change nothing; a bad kind is 400.
+        print(t, List.of(zone), Map.of("zone", choice("A4", null)), "en");
+        assertThatThrownBy(() -> as(t, () -> places.stickers(new PlacesService.StickerRequest(List.of(zone),
+            Map.of("shelf", choice("SMALL", null)), "en", Map.of("bin", true)))))
+            .extracting(e -> ((PlaceException) e).code()).isEqualTo(PlaceException.Code.INVALID_STICKER_CHOICE);
+        assertThat(as(t, () -> places.stickerPlan(List.of(zone))).bulkTicks())
+            .containsExactly(Map.entry("zone", false), Map.entry("box", false));
+
+        assertThat(as(other, () -> places.stickerPlan(List.of(id(other, "Z1")))).bulkTicks())
+            .as("another tenant remembers nothing").isEmpty();
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────────
 
     private byte[] print(T t, List<UUID> ids, Map<String, PlacesService.KindChoice> kinds, String lang) throws Exception {

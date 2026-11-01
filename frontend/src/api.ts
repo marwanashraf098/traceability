@@ -4410,6 +4410,8 @@ export interface PlaceStickerChoice { size: PlaceStickerSize; a6Mode: 'single' |
 export interface PlaceStickerPlan {
   counts: Record<PlaceKind, number>
   choices: Record<PlaceKind, PlaceStickerChoice>
+  /** The ticks remembered for bulk prints — only the kinds someone changed. */
+  bulkTicks?: Partial<Record<PlaceKind, boolean>>
 }
 export function getPlaceStickerPlan(placeIds: string[]) {
   return requestReadable<PlaceStickerPlan>('/places/stickers/plan', { method: 'POST', body: JSON.stringify({ placeIds }) })
@@ -4417,12 +4419,14 @@ export function getPlaceStickerPlan(placeIds: string[]) {
 /**
  * Stickers for these places — opens the PDF. Without `kinds`: the 50×25 mm shelves and boxes in / under them. With
  * `kinds`: each listed kind in its size (a kind left out isn't printed), remembered for next time; `lang` 'ar' → the
- * kind / path / Damaged text in Arabic.
+ * kind / path / Damaged text in Arabic; `bulkTicks` (a bulk print) — the kinds whose tick was changed, remembered.
  */
-export async function openPlaceStickers(placeIds: string[], kinds?: Partial<Record<PlaceKind, PlaceStickerChoice>>, lang?: string) {
+export async function openPlaceStickers(placeIds: string[], kinds?: Partial<Record<PlaceKind, PlaceStickerChoice>>, lang?: string,
+  bulkTicks?: Partial<Record<PlaceKind, boolean>>) {
+  const ticks = bulkTicks && Object.keys(bulkTicks).length > 0 ? { bulkTicks } : {}
   await openPdfResponse(await authFetch('/places/stickers', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(kinds ? { placeIds, kinds, lang } : { placeIds }),
+    body: JSON.stringify(kinds ? { placeIds, kinds, lang, ...ticks } : { placeIds }),
   }))
 }
 

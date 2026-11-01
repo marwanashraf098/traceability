@@ -38,7 +38,7 @@ public class PlacesController {
     public record MoveRequest(UUID parentId) {}
     public record PurposeRequest(String purpose) {}
     public record StickersRequest(List<UUID> placeIds, java.util.Map<String, PlacesService.KindChoice> kinds,
-                                  String lang) {}
+                                  String lang, java.util.Map<String, Boolean> bulkTicks) {}
 
     private final PlacesService service;
 
@@ -102,7 +102,7 @@ public class PlacesController {
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"place-stickers.pdf\"")
             .body(service.stickers(req == null ? null
-                : new PlacesService.StickerRequest(req.placeIds(), req.kinds(), req.lang())));
+                : new PlacesService.StickerRequest(req.placeIds(), req.kinds(), req.lang(), req.bulkTicks())));
     }
 
     @PostMapping("/stickers/plan")
