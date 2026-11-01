@@ -53,6 +53,47 @@ again against the current line quantities. Both packing modes.
   past the lookback window gets TOO_OLD on re-scan / drops out of the queue; (5) the per-piece guided unpack endpoint
   (FulfillController `/unpack/{pieceId}`) is open to any signed-in user.
 
+**Place sticker sizes + "Place on shelves" (2026-11-01, branch `feat/place-sticker-sizes` from main 159d8803; V199;
+merged to main after review, NOT deployed).**
+- **Sizes:** SMALL 50×25 mm (today's sticker, unchanged output), A6 105×148 mm (one per page, or "4 per A4 sheet": 2×2
+  in reading order with cut marks on the cut lines 5–12 mm in from the edge and a centre cross), A4 210×297 mm. A6 / A4
+  are drawn by `inventory.PlaceSigns`: kind (Shelf / Box / Rack / Zone), the code as large as fits, the path line
+  (shelf / rack `Z1 › R01 › S2`, box `on Z1-R01-S2` / `Z1 floor`, zone its name), the location (· zone name), then a
+  VECTOR Code 128 of the Q code and the Q code text. Bar width X = whole 203-dpi dots: A6 4 dots (0.50 mm), A4 8 dots
+  (1.00 mm), narrowed only when a long code wouldn't fit (≥ 0.25 mm); quiet zone 10 X. Decodes at 203 DPI, A4 also at
+  300 DPI (PlaceStickerSizesTest z1).
+- **Every kind prints now** — zones and racks get stickers / signs with their own Q code. Scanning one is unchanged
+  (put away still says "Scan a shelf or box"; Move a box still takes a zone as its floor).
+- **Damaged** (the place, or a place it is inside, has purpose damaged) → red DAMAGED band (AR تالف) on every size; on
+  50×25 a 4 mm band at the bottom, the barcode 7 mm tall instead of 10 (bar width unchanged).
+- **EN / AR:** the request's `lang` picks the kind / path / band words (`places.StickerText`); text goes through
+  LabelTextFitter (ICU4J shaping + bidi), codes stay as they are.
+- **Choosing:** "Print stickers" dialog (`PrintStickersDialog`) wherever stickers print — Print sticker(s), Print zone
+  stickers, Print all stickers, Quick add / first-zone "Create and print": a row per kind in / under the selection
+  (count, include checkbox, size, A6 mode). `POST /api/v1/places/stickers/plan {placeIds}` → counts per kind + each
+  kind's size to offer = `tenants.place_sticker_prefs` (V199, jsonb, default '{}') over the defaults shelf SMALL, box
+  A6, rack A6, zone A4. `POST /api/v1/places/stickers {placeIds, kinds, lang}` prints each chosen kind in its size and
+  merges the printed kinds' choices into the prefs (`||`). One PDF: 50×25 first (zone separators as before), then A6
+  single, then A6 sheets, then A4, each in tree order. Without `kinds` the endpoint is exactly the old one (50×25
+  shelves and boxes). Places off → both 404.
+- **Tests:** PlaceStickerSizesTest z1–z8 (new); migration counts bumped (MigrationSmokeTest 198, NotTracedBackfillTest
+  143); PortalOrderLeakTest classifies the plan endpoint SKIP. Frontend placeStickerSizes.test.tsx ps1–ps6 (new);
+  places.test.tsx pl4 / pl5 changed with Marawan's approval (they print through the dialog now; pl4 also checks Cancel
+  sends nothing). WarehousePlacesTest k1 (old request shape) unchanged and green.
+- **Review (2026-11-01) — ticks:** a BULK print (Print all stickers, Print zone stickers) starts with zone and rack
+  rows UNTICKED (shelf / box ticked); a DIRECT print (one place's Print sticker(s), Quick add / first-zone "Create and
+  print") starts with every row ticked. On a bulk print the kinds whose tick the person changed go as `bulkTicks`
+  {kind: bool} and are merged into `place_sticker_prefs.bulkTicks` (only after a successful print); the plan returns
+  them and they win over the bulk default next time. Never applied to a direct print. Tests z9, ps7–ps10.
+- **Review — "Put away" is "Place on shelves" in the UI (EN + AR, text only):** sidebar / page title "Place on shelves"
+  / "وضع على الرفوف"; "waiting for a shelf" / "في انتظار رف"; "Start placing" / "Resume placing · N placed"; scan header
+  "Placing on · Shelf" / "Placing in · Box" (AR "يتم الوضع في"); list "Place on shelves list"; buttons "Place on shelves
+  now", "Place restocked pieces on shelves", "Place returned pieces on shelves"; Lookup "Placed on X" / "تم وضعها في X";
+  the three put-away PlaceException messages too. Routes (/put-away), API paths, event type put_away, i18n keys and
+  code identifiers unchanged. putAway.test.tsx / putAwayLists.test.tsx: old-text assertions updated (approved).
+- **Gotcha:** Noto Sans Arabic maps its one yeh glyph back to U+06CC on text extraction — compare extracted Arabic with
+  U+06CC read as U+064A.
+
 **Places rollout — the merchant switch + dormant until set up (2026-11-01, branch `feat/places-rollout` from main
 5817058a; no migration; NOT deployed).** Marawan's revised spec (replaces "default on for new signups" — the V-default
 migration was dropped; `places_enabled` stays default false and merchants switch it on):

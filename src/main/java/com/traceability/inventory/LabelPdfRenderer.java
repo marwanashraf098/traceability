@@ -33,7 +33,7 @@ public final class LabelPdfRenderer {
      * One page of a label PDF: a piece label, (packing labels, flexible labeling slice 4) a separator, or (warehouse
      * places S1) a place sticker.
      */
-    public sealed interface Page permits Piece, Separator, Location {}
+    public sealed interface Page permits Piece, Separator, Location, Sign, SignSheet {}
 
     /** What one label shows. */
     public record Piece(String shortCode, String productTitle, String variantTitle, String sku) implements Page {}
@@ -49,7 +49,33 @@ public final class LabelPdfRenderer {
      * code, the place's path and the scan code — the piece label's rows (code, title, SKU), so the same layout rules
      * fit it.
      */
-    public record Location(String scanCode, String code, String path) implements Page {}
+    public record Location(String scanCode, String code, String path, String damagedLabel) implements Page {
+        public Location(String scanCode, String code, String path) {
+            this(scanCode, code, path, null);
+        }
+    }
+
+    /** Place sticker sizes — the large place sticker / sign sizes ({@link PlaceSigns}). */
+    public enum SignSize { A6, A4 }
+
+    /**
+     * A large place sticker / sign on its own page: kind (Shelf / Box / Rack / Zone), the code as large as fits, the
+     * path line, the location, the Code 128 of {@code scanCode} and the Q code under it. {@code damagedLabel} non-null
+     * → the red band with that text across the top.
+     */
+    public record Sign(SignSize size, String scanCode, String code, String kind, String path, String location,
+                       String damagedLabel) implements Page {}
+
+    /** One A4 page holding up to four A6 {@link Sign}s, 2×2 in reading order, with cut marks. */
+    public record SignSheet(List<Sign> signs) implements Page {
+        public SignSheet {
+            if (signs.isEmpty() || signs.size() > 4) throw new IllegalArgumentException("a sheet holds 1 to 4 signs");
+            signs = List.copyOf(signs);
+        }
+    }
+
+    /** The red band at the bottom of a 50×25 mm Damaged place sticker; the barcode shortens to make room. */
+    static final float SMALL_BAND_MM = 4f, SMALL_DAMAGED_BARCODE_MM = 7f, SMALL_BAND_PT = 7f;
 
     static final float SEPARATOR_MARGIN_MM = 2f, SEPARATOR_LINE1_PT = 14f, SEPARATOR_LINE2_PT = 11f, SEPARATOR_MIN_PT = 6f;
 
@@ -63,6 +89,18 @@ public final class LabelPdfRenderer {
             for (Page item : pages) {
                 if (item instanceof Separator sep) {
                     drawSeparator(doc, fonts, sep, spec);
+                    continue;
+                }
+                if (item instanceof Sign sign) {
+                    PlaceSigns.page(doc, fonts, sign);
+                    continue;
+                }
+                if (item instanceof SignSheet sheet) {
+                    PlaceSigns.sheet(doc, fonts, sheet.signs());
+                    continue;
+                }
+                if (item instanceof Location loc && loc.damagedLabel() != null) {
+                    drawDamagedLocation(doc, fonts, loc, spec);
                     continue;
                 }
                 String barcode;
@@ -87,6 +125,36 @@ public final class LabelPdfRenderer {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
             return out.toByteArray();
+        }
+    }
+
+    /**
+     * A Damaged place's 50×25 mm sticker: the same rows laid out {@link #SMALL_BAND_MM} shorter with a
+     * {@link #SMALL_DAMAGED_BARCODE_MM} barcode (bar width and quiet zones unchanged), above a red band with the label.
+     */
+    private static void drawDamagedLocation(PDDocument doc, LabelFonts.Loaded fonts, Location loc,
+                                            PieceLabelLayout.Spec spec) throws IOException {
+        float w = spec.widthMm() * PieceLabelLayout.MM, h = spec.heightMm() * PieceLabelLayout.MM;
+        float band = SMALL_BAND_MM * PieceLabelLayout.MM;
+        PieceLabelLayout.Layout layout = PieceLabelLayout.layout(
+            new PieceLabelLayout.Spec(spec.widthMm(), spec.heightMm() - SMALL_BAND_MM, SMALL_DAMAGED_BARCODE_MM),
+            loc.code(), loc.path(), null, loc.scanCode());
+        PDPage page = new PDPage(new PDRectangle(w, h));
+        doc.addPage(page);
+        try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+            cs.setNonStrokingColor(PlaceSigns.RED);
+            cs.addRect(0, 0, w, band);
+            cs.fill();
+            cs.setNonStrokingColor(java.awt.Color.WHITE);
+            String label = LabelTextFitter.display(loc.damagedLabel());
+            drawCentred(cs, fonts, label, LabelFonts.Face.BOLD, SMALL_BAND_PT, w - 4 * PieceLabelLayout.MM, w,
+                (band - 0.7f * SMALL_BAND_PT) / 2);
+            cs.setNonStrokingColor(java.awt.Color.BLACK);
+            cs.saveGraphicsState();
+            cs.transform(org.apache.pdfbox.util.Matrix.getTranslateInstance(0, band));
+            drawBarcode(cs, doc, loc.scanCode(), layout.barcode());
+            for (PieceLabelLayout.TextLine line : layout.lines()) drawLine(cs, fonts, line);
+            cs.restoreGraphicsState();
         }
     }
 

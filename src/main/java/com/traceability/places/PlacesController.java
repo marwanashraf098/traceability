@@ -25,7 +25,9 @@ import java.util.UUID;
  *   PUT  /api/v1/places/{id}/parent        {parentId} a box moves zone ↔ shelf
  *   PUT  /api/v1/places/{id}/purpose       {purpose: "damaged" | null}
  *   POST /api/v1/places/{id}/archive
- *   POST /api/v1/places/stickers           {placeIds} → PDF (shelves and boxes in / under them)
+ *   POST /api/v1/places/stickers           {placeIds, kinds?, lang?} → PDF (no kinds: the 50×25 mm shelves and boxes
+ *                                          in / under them; kinds: each kind in its chosen size, remembered)
+ *   POST /api/v1/places/stickers/plan      {placeIds} → {counts per kind, each kind's size to offer}
  */
 @RestController
 @RequestMapping("/api/v1/places")
@@ -35,7 +37,8 @@ public class PlacesController {
     public record RenameRequest(String code, String name) {}
     public record MoveRequest(UUID parentId) {}
     public record PurposeRequest(String purpose) {}
-    public record StickersRequest(List<UUID> placeIds) {}
+    public record StickersRequest(List<UUID> placeIds, java.util.Map<String, PlacesService.KindChoice> kinds,
+                                  String lang, java.util.Map<String, Boolean> bulkTicks) {}
 
     private final PlacesService service;
 
@@ -98,6 +101,12 @@ public class PlacesController {
         return ResponseEntity.ok()
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"place-stickers.pdf\"")
-            .body(service.stickers(req == null ? null : req.placeIds()));
+            .body(service.stickers(req == null ? null
+                : new PlacesService.StickerRequest(req.placeIds(), req.kinds(), req.lang(), req.bulkTicks())));
+    }
+
+    @PostMapping("/stickers/plan")
+    public PlacesService.StickerPlan stickerPlan(@RequestBody StickersRequest req) {
+        return service.stickerPlan(req == null ? null : req.placeIds());
     }
 }

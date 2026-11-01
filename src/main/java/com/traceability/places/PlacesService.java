@@ -32,6 +32,13 @@ public class PlacesService {
     static final int MAX_BULK = 2000, MAX_RACKS = 99, MAX_SHELVES = 20, MAX_BOXES = 200;
     static final float STICKER_WIDTH_MM = 50f, STICKER_HEIGHT_MM = 25f;   // = the piece label (v1)
     private static final Set<String> KINDS = Set.of("zone", "rack", "shelf", "box");
+    static final List<String> KIND_ORDER = List.of("zone", "rack", "shelf", "box");
+    static final Set<String> STICKER_SIZES = Set.of("SMALL", "A6", "A4");
+    /** Place sticker sizes — what a kind prints at until the tenant chooses otherwise. */
+    static final Map<String, KindChoice> DEFAULT_CHOICES = Map.of(
+        "shelf", new KindChoice("SMALL", null), "box", new KindChoice("A6", "single"),
+        "rack", new KindChoice("A6", "single"), "zone", new KindChoice("A4", null));
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
     private static final Map<String, Set<String>> ALLOWED_PARENTS = Map.of(
         "rack", Set.of("zone"), "shelf", Set.of("rack"), "box", Set.of("zone", "shelf"));
 
@@ -52,6 +59,20 @@ public class PlacesService {
     public record BulkPlan(UUID locationId, String zoneCode, boolean newZone, int racks, int shelves, int boxes, int total,
                            String firstRack, String lastRack, String firstShelf, String lastShelf, String firstBox,
                            String lastBox, List<String> conflicts) {}
+    /** Place sticker sizes: size SMALL (50×25 mm) | A6 | A4; a6Mode single (one per page) | sheet (4 per A4), A6 only. */
+    public record KindChoice(String size, String a6Mode) {}
+    /** {@code kinds}: kind → size (a kind left out isn't printed); null → the 50×25 mm shelves and boxes. */
+    /** {@code bulkTicks}: on a bulk print, the kinds whose tick the person changed → their tick (remembered). */
+    public record StickerRequest(List<UUID> placeIds, Map<String, KindChoice> kinds, String lang,
+                                 Map<String, Boolean> bulkTicks) {
+        public StickerRequest(List<UUID> placeIds, Map<String, KindChoice> kinds, String lang) {
+            this(placeIds, kinds, lang, null);
+        }
+    }
+    /** {@code counts}: live places of each kind a print would hold; {@code choices}: each kind's size to offer. */
+    /** {@code bulkTicks}: each kind's remembered tick for bulk prints (only the kinds a person changed). */
+    public record StickerPlan(Map<String, Integer> counts, Map<String, KindChoice> choices,
+                              Map<String, Boolean> bulkTicks) {}
     /** {@code createdIds}: every place made, zone first, in tree order (the caller prints its stickers). */
     public record BulkResult(UUID zoneId, BulkPlan plan, List<UUID> createdIds) {}
 
@@ -322,12 +343,157 @@ public class PlacesService {
 
     /**
      * Stickers for the shelves and boxes in / under the chosen places (a zone → all of its shelves and boxes), live
-     * places only, in tree order. More than one sticker → a separator page before each zone's stickers.
+     * places only, in tree order, all 50×25 mm. More than one sticker → a separator page before each zone's stickers.
+     * (The request without size choices — {@link #stickers(StickerRequest)} with {@code kinds} null.)
      */
     @Transactional(readOnly = true)
     public byte[] stickers(List<UUID> binIds) throws IOException {
         UUID tenantId = TenantContext.require();
         Places.require(jdbc, tenantId);
+        Selection sel = select(tenantId, binIds, Set.of("shelf", "box"));
+        List<Chosen> small = new ArrayList<>();
+        for (Chosen c : sel.chosen()) small.add(c);
+        if (small.isEmpty() || small.size() > MAX_STICKERS) throw PlaceException.noStickers();
+        List<LabelPdfRenderer.Page> pages = new ArrayList<>();
+        addSmall(pages, sel, small, StickerText.EN);
+        return LabelPdfRenderer.renderPages(pages, PieceLabelLayout.Spec.of(STICKER_WIDTH_MM, STICKER_HEIGHT_MM));
+    }
+
+    /**
+     * Place sticker sizes: stickers in the size chosen for each kind ({@code kinds}: kind → size; a kind left out is
+     * not printed), every place of those kinds in / under the chosen places — zones and racks included — in ONE PDF:
+     * the 50×25 mm stickers first (zone separators as before), then A6 one per page, then A6 four per A4 sheet, then
+     * A4, each in tree order. Each kind's choice is remembered for the tenant ({@code tenants.place_sticker_prefs}).
+     * {@code kinds} null → {@link #stickers(List)}. {@code lang} 'ar' → the kind / path / Damaged text in Arabic.
+     */
+    @Transactional
+    public byte[] stickers(StickerRequest req) throws IOException {
+        if (req == null || req.kinds() == null) return stickers(req == null ? null : req.placeIds());
+        UUID tenantId = TenantContext.require();
+        Places.require(jdbc, tenantId);
+        Map<String, KindChoice> choices = new LinkedHashMap<>();
+        for (Map.Entry<String, KindChoice> e : req.kinds().entrySet()) {
+            if (!KINDS.contains(e.getKey())) throw PlaceException.invalidStickerChoice();
+            choices.put(e.getKey(), normalize(e.getValue()));
+        }
+        if (choices.isEmpty()) throw PlaceException.noStickers();
+        Map<String, Boolean> ticks = new LinkedHashMap<>();
+        if (req.bulkTicks() != null) {
+            for (Map.Entry<String, Boolean> e : req.bulkTicks().entrySet()) {
+                if (!KINDS.contains(e.getKey())) throw PlaceException.invalidStickerChoice();
+                if (e.getValue() != null) ticks.put(e.getKey(), e.getValue());
+            }
+        }
+        Selection sel = select(tenantId, req.placeIds(), choices.keySet());
+        if (sel.chosen().isEmpty() || sel.chosen().size() > MAX_STICKERS) throw PlaceException.noStickers();
+        StickerText text = StickerText.of(req.lang());
+
+        List<Chosen> small = new ArrayList<>();
+        List<LabelPdfRenderer.Sign> a6 = new ArrayList<>(), a6Sheet = new ArrayList<>(), a4 = new ArrayList<>();
+        Set<String> printed = new LinkedHashSet<>();
+        for (Chosen c : sel.chosen()) {
+            KindChoice k = choices.get(c.node().kind());
+            printed.add(c.node().kind());
+            switch (k.size()) {
+                case "SMALL" -> small.add(c);
+                case "A6" -> ("sheet".equals(k.a6Mode()) ? a6Sheet : a6).add(sign(sel, c, LabelPdfRenderer.SignSize.A6, text));
+                default -> a4.add(sign(sel, c, LabelPdfRenderer.SignSize.A4, text));
+            }
+        }
+        List<LabelPdfRenderer.Page> pages = new ArrayList<>();
+        addSmall(pages, sel, small, text);
+        pages.addAll(a6);
+        for (int i = 0; i < a6Sheet.size(); i += 4) {
+            pages.add(new LabelPdfRenderer.SignSheet(a6Sheet.subList(i, Math.min(i + 4, a6Sheet.size()))));
+        }
+        pages.addAll(a4);
+
+        Map<String, KindChoice> remember = new LinkedHashMap<>();
+        for (String kind : printed) remember.put(kind, choices.get(kind));
+        jdbc.update("UPDATE tenants SET place_sticker_prefs = place_sticker_prefs || ?::jsonb WHERE id = ?",
+            JSON.writeValueAsString(remember), tenantId);
+        if (!ticks.isEmpty()) {
+            jdbc.update("UPDATE tenants SET place_sticker_prefs = jsonb_set(place_sticker_prefs, '{bulkTicks}', "
+                + "CASE WHEN jsonb_typeof(place_sticker_prefs->'bulkTicks') = 'object' "
+                + "THEN place_sticker_prefs->'bulkTicks' ELSE '{}'::jsonb END || ?::jsonb) WHERE id = ?",
+                JSON.writeValueAsString(ticks), tenantId);
+        }
+        return LabelPdfRenderer.renderPages(pages, PieceLabelLayout.Spec.of(STICKER_WIDTH_MM, STICKER_HEIGHT_MM));
+    }
+
+    /**
+     * What a print of these places would hold — the live places of each kind in / under them (all four kinds) — and
+     * each kind's size to offer: the tenant's last choice, else the default (shelf 50×25, box and rack A6, zone A4) —
+     * and the ticks remembered for bulk prints (the dialog's defaults otherwise: zone and rack unticked on a bulk
+     * print, everything ticked on a direct one).
+     */
+    @Transactional(readOnly = true)
+    public StickerPlan stickerPlan(List<UUID> binIds) {
+        UUID tenantId = TenantContext.require();
+        Places.require(jdbc, tenantId);
+        Selection sel = select(tenantId, binIds, KINDS);
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String kind : KIND_ORDER) counts.put(kind, 0);
+        for (Chosen c : sel.chosen()) counts.merge(c.node().kind(), 1, Integer::sum);
+        return new StickerPlan(counts, stickerChoices(tenantId), bulkTicks(tenantId));
+    }
+
+    /** The remembered bulk-print ticks ({@code place_sticker_prefs.bulkTicks}): kind → ticked, booleans only. */
+    Map<String, Boolean> bulkTicks(UUID tenantId) {
+        Map<String, Object> stored = storedPrefs(tenantId);
+        Map<String, Boolean> out = new LinkedHashMap<>();
+        if (stored.get("bulkTicks") instanceof Map<?, ?> m) {
+            for (String kind : KIND_ORDER) if (m.get(kind) instanceof Boolean b) out.put(kind, b);
+        }
+        return out;
+    }
+
+    private Map<String, Object> storedPrefs(UUID tenantId) {
+        String raw = jdbc.queryForObject("SELECT place_sticker_prefs::text FROM tenants WHERE id = ?", String.class, tenantId);
+        try {
+            if (raw != null) return JSON.readValue(raw, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (IOException e) {
+            // unreadable → nothing remembered
+        }
+        return Map.of();
+    }
+
+    /** Each kind's remembered choice over the defaults (an unreadable remembered value falls back to the default). */
+    Map<String, KindChoice> stickerChoices(UUID tenantId) {
+        Map<String, KindChoice> out = new LinkedHashMap<>();
+        Map<String, Object> stored = storedPrefs(tenantId);
+        for (String kind : KIND_ORDER) {
+            KindChoice choice = DEFAULT_CHOICES.get(kind);
+            if (stored.get(kind) instanceof Map<?, ?> m) {
+                try {
+                    choice = normalize(new KindChoice(m.get("size") instanceof String sz ? sz : null,
+                        m.get("a6Mode") instanceof String md ? md : null));
+                } catch (PlaceException ignored) {
+                    // keep the default
+                }
+            }
+            out.put(kind, choice);
+        }
+        return out;
+    }
+
+    /** SMALL | A6 | A4 (any case); a6Mode single | sheet, only for A6 (default single). Anything else → 400. */
+    static KindChoice normalize(KindChoice c) {
+        if (c == null || c.size() == null) throw PlaceException.invalidStickerChoice();
+        String size = c.size().strip().toUpperCase(Locale.ROOT);
+        if (!STICKER_SIZES.contains(size)) throw PlaceException.invalidStickerChoice();
+        if (!"A6".equals(size)) return new KindChoice(size, null);
+        String mode = c.a6Mode() == null ? "single" : c.a6Mode().strip().toLowerCase(Locale.ROOT);
+        if (!mode.equals("single") && !mode.equals("sheet")) throw PlaceException.invalidStickerChoice();
+        return new KindChoice(size, mode);
+    }
+
+    /** One place to print and the facts its sticker shows. */
+    record Chosen(Node node, Row zone, Loc loc, boolean damaged, Forest forest) {}
+    record Selection(List<Chosen> chosen, Map<UUID, Loc> locs) {}
+
+    /** The live places of {@code kinds} in / under the chosen places (the chosen ones included), in tree order. */
+    private Selection select(UUID tenantId, List<UUID> binIds, Set<String> kinds) {
         if (binIds == null || binIds.isEmpty() || binIds.size() > MAX_STICKERS) throw PlaceException.noStickers();
         Map<UUID, Forest> forests = new LinkedHashMap<>();
         Map<UUID, Loc> locs = new HashMap<>();
@@ -336,36 +502,70 @@ public class PlacesService {
             Row bin = bin(tenantId, id, false);
             Forest f = forests.computeIfAbsent(bin.locationId(), l -> forest(tenantId, l));
             locs.computeIfAbsent(bin.locationId(), l -> location(tenantId, l));
-            collectHoldable(f, bin, chosen);
+            collect(f, bin, kinds, chosen);
         }
-        record Sticker(UUID zoneId, LabelPdfRenderer.Location page) {}
-        List<Sticker> stickers = new ArrayList<>();
+        List<Chosen> out = new ArrayList<>();
         for (Map.Entry<UUID, Forest> e : forests.entrySet()) {
             Forest f = e.getValue();
-            String locName = locs.get(e.getKey()).name();
             List<Node> ordered = new ArrayList<>();
             for (Row zone : f.children(null)) addSubtree(f, zone, 0, ordered);
             for (Node n : ordered) {
                 if (!chosen.contains(n.id())) continue;
-                String path = n.path().isEmpty() ? locName : locName + " · " + String.join(" › ", n.path());
-                stickers.add(new Sticker(zoneOf(f, f.get(n.id())).id(),
-                    new LabelPdfRenderer.Location(n.scanCode(), n.code(), path)));
+                out.add(new Chosen(n, zoneOf(f, f.get(n.id())), locs.get(e.getKey()), damaged(f, f.get(n.id())), f));
             }
         }
-        if (stickers.isEmpty() || stickers.size() > MAX_STICKERS) throw PlaceException.noStickers();
-        List<LabelPdfRenderer.Page> pages = new ArrayList<>();
+        return new Selection(out, locs);
+    }
+
+    private static void collect(Forest f, Row r, Set<String> kinds, Set<UUID> out) {
+        if (r.archived()) return;
+        if (kinds.contains(r.kind())) out.add(r.id());
+        for (Row child : f.children(r.id())) collect(f, child, kinds, out);
+    }
+
+    /** The place or one it is inside is the Damaged place. */
+    private static boolean damaged(Forest f, Row r) {
+        for (Row cur = r; cur != null; cur = cur.parentId() == null ? null : f.get(cur.parentId())) {
+            if ("damaged".equals(cur.purpose())) return true;
+        }
+        return false;
+    }
+
+    /** The 50×25 mm stickers in tree order; more than one → a separator page before each zone's. */
+    private static void addSmall(List<LabelPdfRenderer.Page> pages, Selection sel, List<Chosen> small, StickerText text) {
         UUID lastZone = null;
-        for (Sticker s : stickers) {
-            if (stickers.size() > 1 && !s.zoneId().equals(lastZone)) {
-                Row zone = null;
-                for (Forest f : forests.values()) if (f.get(s.zoneId()) != null) zone = f.get(s.zoneId());
+        for (Chosen c : small) {
+            if (small.size() > 1 && !c.zone().id().equals(lastZone)) {
+                Row zone = c.zone();
                 String line1 = zone.name() == null ? zone.code() : zone.code() + " · " + zone.name();
-                pages.add(new LabelPdfRenderer.Separator(line1, locs.get(zone.locationId()).name()));
-                lastZone = s.zoneId();
+                pages.add(new LabelPdfRenderer.Separator(line1, sel.locs().get(zone.locationId()).name()));
+                lastZone = zone.id();
             }
-            pages.add(s.page());
+            Node n = c.node();
+            String path = n.path().isEmpty() ? c.loc().name() : c.loc().name() + " · " + String.join(" › ", n.path());
+            pages.add(new LabelPdfRenderer.Location(n.scanCode(), n.code(), path, c.damaged() ? text.damaged() : null));
         }
-        return LabelPdfRenderer.renderPages(pages, PieceLabelLayout.Spec.of(STICKER_WIDTH_MM, STICKER_HEIGHT_MM));
+    }
+
+    /** A6 / A4: kind, code, the path line (Z1 › R01 › S2 / on Z1-R01-S2 / Z1 floor), location (· zone name). */
+    private static LabelPdfRenderer.Sign sign(Selection sel, Chosen c, LabelPdfRenderer.SignSize size, StickerText text) {
+        Node n = c.node();
+        String path;
+        if ("zone".equals(n.kind())) {
+            path = n.name();
+        } else if ("box".equals(n.kind())) {
+            Row parent = n.parentId() == null ? null : c.forest().get(n.parentId());
+            path = parent == null ? null
+                : "zone".equals(parent.kind()) ? text.floor(parent.code()) : text.on(parent.code());
+        } else {
+            List<String> trail = new ArrayList<>(n.path());
+            trail.add(n.label());
+            path = String.join(" › ", trail);
+        }
+        String location = c.loc().name();
+        if (!"zone".equals(n.kind()) && c.zone().name() != null) location = location + " · " + c.zone().name();
+        return new LabelPdfRenderer.Sign(size, n.scanCode(), n.code(), text.kind(n.kind()), path, location,
+            c.damaged() ? text.damaged() : null);
     }
 
     // ── internals ────────────────────────────────────────────────────────────
@@ -494,12 +694,6 @@ public class PlacesService {
         Row z = r;
         while (z.parentId() != null) z = f.get(z.parentId());
         return z;
-    }
-
-    private static void collectHoldable(Forest f, Row r, Set<UUID> out) {
-        if (r.archived()) return;
-        if ("shelf".equals(r.kind()) || "box".equals(r.kind())) out.add(r.id());
-        for (Row child : f.children(r.id())) collectHoldable(f, child, out);
     }
 
     private static String nextZoneCode(Forest f) {

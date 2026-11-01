@@ -14,7 +14,7 @@ public class PlaceException extends RuntimeException {
     public enum Code {
         LOCATION_NOT_FOUND, PLACE_NOT_FOUND, INVALID_KIND, INVALID_PARENT, INVALID_CODE, INVALID_NAME, CODE_TAKEN,
         INVALID_BULK, PLACE_ARCHIVED, PLACE_NOT_EMPTY, PLACE_HAS_CHILDREN, NOT_A_BOX, PURPOSE_NOT_ALLOWED,
-        NO_STICKERS,
+        NO_STICKERS, INVALID_STICKER_CHOICE,
         // S2 — put away
         SESSION_NOT_FOUND, SESSION_CLOSED, UNKNOWN_STICKER,
         // S4 — put-away lists
@@ -65,17 +65,17 @@ public class PlaceException extends RuntimeException {
     /** An unknown list source, or a receipt / session / transfer that isn't the caller's tenant's — the same answer. */
     static PlaceException sourceNotFound() {
         return new PlaceException(HttpStatus.NOT_FOUND, Code.SOURCE_NOT_FOUND,
-            "Nothing to put away was found for this", "لم يتم العثور على قطع للترتيب من هذا المصدر");
+            "Nothing to place on shelves was found for this", "لم يتم العثور على قطع لوضعها على الرفوف من هذا المصدر");
     }
 
     static PlaceException sessionNotFound() {
         return new PlaceException(HttpStatus.NOT_FOUND, Code.SESSION_NOT_FOUND,
-            "Put-away session not found", "لم يتم العثور على جلسة الترتيب");
+            "Placing session not found", "لم يتم العثور على جلسة الوضع على الرفوف");
     }
 
     static PlaceException sessionClosed() {
         return new PlaceException(HttpStatus.CONFLICT, Code.SESSION_CLOSED,
-            "This put-away session is finished", "انتهت جلسة الترتيب هذه");
+            "This placing session is finished", "انتهت جلسة الوضع على الرفوف هذه");
     }
 
     static PlaceException unknownSticker() {
@@ -157,7 +157,12 @@ public class PlaceException extends RuntimeException {
 
     static PlaceException noStickers() {
         return new PlaceException(HttpStatus.BAD_REQUEST, Code.NO_STICKERS,
-            "Choose 1 to 2,000 shelves or boxes to print", "اختر من 1 إلى 2,000 رف أو صندوق للطباعة");
+            "Choose 1 to 2,000 places to print", "اختر من 1 إلى 2,000 مكان للطباعة");
+    }
+
+    static PlaceException invalidStickerChoice() {
+        return new PlaceException(HttpStatus.BAD_REQUEST, Code.INVALID_STICKER_CHOICE,
+            "Choose a sticker size: 50×25 mm, A6 or A4", "اختر مقاس الملصق: 50×25 مم أو A6 أو A4");
     }
 
     private final HttpStatus status;
