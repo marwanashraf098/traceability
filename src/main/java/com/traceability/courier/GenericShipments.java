@@ -156,7 +156,7 @@ public final class GenericShipments {
 
     /**
      * A cancelled Shopify fulfillment cancels its generic shipment only while {@link #CANCELLABLE_SQL}
-     * holds — through {@link #cancel}, the same state write + history row as any other cancellation.
+     * holds — through {@link #cancel}, the same state write (no history row) as any other cancellation.
      * Past 'created', nothing is written: the generic_fulfillment_cancelled exception derives it.
      */
     private static void cancelForCancelledFulfillments(JdbcTemplate jdbc, UUID tenantId, UUID orderId,
@@ -232,16 +232,18 @@ public final class GenericShipments {
         "(s.provider = 'generic' AND s.shipment_leg = 'forward' " +
         " AND s.internal_state NOT IN ('terminated', 'cancelled') AND NOT " + CANCELLABLE_SQL + ")";
 
-    /** The generic leg's state write: 'cancelled' + one shipment_status_history row (only if it moved). */
+    /**
+     * The generic leg's state write: 'cancelled' and NO shipment_status_history row — the BostaDeletionService
+     * pattern. Traced cancels only a leg still in 'created' (Bosta wins, or Shopify cancelled the fulfillment);
+     * a history row past 'created' reads as "this order shipped" to OrderLineFreeze, FulfillService's
+     * ALREADY_SHIPPED guard and WaybillResolver's moved state, which would then refuse to pack the order against
+     * its next waybill (GenericCancelPackTest). The leg's own internal_state records the cancel.
+     */
     static void cancel(JdbcTemplate jdbc, UUID tenantId, UUID shipmentId) {
-        int n = jdbc.update(
+        jdbc.update(
             "UPDATE shipments SET internal_state = 'cancelled', last_synced_at = now() " +
             "WHERE id = ? AND tenant_id = ? AND provider = 'generic' AND internal_state = 'created'",
             shipmentId, tenantId);
-        if (n == 1) {
-            jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state) " +
-                "VALUES (?, ?, 'cancelled')", tenantId, shipmentId);
-        }
     }
 
     // ── JSON helpers (same reading as FulfillmentTrackingCapture) ────────────────────────────────

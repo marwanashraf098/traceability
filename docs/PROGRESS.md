@@ -4,6 +4,27 @@
 
 ## Current state
 
+**Shopify tracking-number edits follow the forward leg (started 2026-11-01; approved after the Step 0 diagnosis; NOT
+merged, NOT deployed).** Goal: when a merchant edits a Shopify fulfillment's tracking number (same fulfillment, or the
+strict cancel-and-refulfill shape), Traced moves the order's forward leg to the new number while the parcel is still
+in custody (`OrderLineFreeze.frozenSql`, re-checked under the order row lock); after custody, never — an alert.
+Decisions D1–D6 (2026-11-01): D1 cancel-and-refulfill = edit only in the strict shape; D2 unanchored Bosta legs follow
+only when the new number resolves + passes identityProblem AND the old delivery is confirmed deleted / cancelled /
+terminated (else MEDIUM "Shopify shows a different waybill"); the 55 prod 'skipped' second-parcel rows must stay
+skipped (golden test); D3 packed → update + MEDIUM relabel; D4 open pickup session → refuse + HIGH; D5 blanked →
+removed_at + audit only; D6 first, separately. Order: step 0 (D6) → S1+S2 (groundwork + generic) → S3 (Bosta +
+fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK BRK-46639-EG). Stop after each.
+- **Step 0 / D6 (branch `fix/generic-cancel-history` off origin/main 15181909, worktree
+  `~/Documents/traceability-tracking-edit`; not pushed):** confirmed bug — `GenericShipments.cancel()` (Bosta wins,
+  or Shopify cancelled the fulfillment) wrote a `'cancelled'` shipment_status_history row; any forward history row
+  ≠ 'created' trips `OrderLineFreeze` clause 1, FulfillService's ALREADY_SHIPPED and WaybillResolver's moved state,
+  so the order could never be packed against its next waybill. `GenericCancelPackTest` (w1, w2, c1 + same-tenant
+  control pc) RED on main (w1/c1 frozen, w2 NOT_PACKABLE), GREEN with the fix: cancel writes the state only, no
+  history row (BostaDeletionService pattern). `GenericCourierG1Test.bw1` asserts the old history row (count 1) —
+  edit awaiting approval. Prod (read-only, 2026-11-01): Maron Fashion 14 orders frozen by such a row alone (all
+  'new', placed 2026-10-23..29; 11 with a newer live generic Aramex leg, unpackable today; 3 waiting for a
+  refulfill) — the code fix does not unstick them; a repair script is proposed, not written.
+
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in
 Shopify before pickup → a manager unpacks the whole order, it goes back to Pick & Pack (not cancelled), staff pack it
