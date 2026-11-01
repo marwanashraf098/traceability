@@ -300,8 +300,9 @@ class GenericCourierG1Test {
         assertThat(r.verdict()).isEqualTo(BostaFulfillmentLinkService.Verdict.LINKED);
         assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE id = ?", String.class, generic))
             .isEqualTo("cancelled");
+        // D6 (2026-11-01): Traced's own cancel writes no history row, so the order still packs (GenericCancelPackTest).
         assertThat(jdbc.queryForObject("SELECT count(*) FROM shipment_status_history WHERE shipment_id = ? " +
-            "AND internal_state = 'cancelled'", Integer.class, generic)).isEqualTo(1);
+            "AND internal_state = 'cancelled'", Integer.class, generic)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM shipments WHERE order_id = ? AND provider = 'bosta' " +
             "AND tracking_number = '9811000001' AND shipment_leg = 'forward'", Integer.class, o)).isEqualTo(1);
         assertThat(badges(s).get("BW-1")).isEqualTo("linked|Bosta");
