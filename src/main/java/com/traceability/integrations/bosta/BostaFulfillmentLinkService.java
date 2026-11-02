@@ -209,10 +209,23 @@ public class BostaFulfillmentLinkService {
             "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'bosta' " +
             "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled') LIMIT 1",
             rs -> rs.next() ? rs.getString(1) : null, tenantId, orderId));
+        // V201: Shopify's number for this order changed (a tracking edit) — the live leg may be replaced instead.
+        Supersede supersede = null;
         if (otherLeg != null) {
-            String reason = "order already has an active forward leg (" + otherLeg + ")";
-            if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
-            return Result.skip(reason);
+            // No active Bosta account (e.g. a simulated-courier tenant): never a tracking edit — as before V201.
+            supersede = hasActiveAccount(tenantId) ? tx.execute(s -> supersedeCandidate(tenantId, orderId, tn)) : null;
+            if (supersede == null) {   // a second parcel, or not a tracking-edit shape: exactly as before V201
+                String reason = "order already has an active forward leg (" + otherLeg + ")";
+                if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
+                return Result.skip(reason);
+            }
+            final Supersede sup = supersede;
+            String refused = tx.execute(s -> preCheck(tenantId, orderId, tn, sup, dryRun));
+            if (refused != null) {
+                String reason = "tracking change not applied (" + refused + ") — order keeps " + sup.oldTn();
+                if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
+                return Result.skip(reason);
+            }
         }
         // V169 Bosta wins over a generic (non-Bosta courier) leg only while it is still cancellable — the
         // link pipeline cancels it then (GenericShipments.yieldToBosta). Past 'created': never guess.
@@ -264,13 +277,35 @@ public class BostaFulfillmentLinkService {
             return Result.skip(identityProblem, delivery);
         }
 
-        if (dryRun) return new Result(Verdict.WOULD_LINK, null, delivery.typeCode(), delivery.stateCode());
+        // V201 D2: a leg no fulfillment anchors follows only once its OLD delivery is confirmed ended in Bosta.
+        if (supersede != null && !supersede.anchored()) {
+            String waiting = oldDeliveryNotEnded(tenantId, orderId, tn, supersede, apiKey, dryRun);
+            if (waiting != null) return Result.skip(waiting, delivery);
+        }
+
+        if (dryRun) return new Result(Verdict.WOULD_LINK, supersede != null ? "replaces " + supersede.oldTn() : null,
+            delivery.typeCode(), delivery.stateCode());
 
         // 4. Link through the discovery pipeline.
-        Long eventId = insertEvent(tenantId, orderId, tn, delivery);
+        Long eventId = insertEvent(tenantId, orderId, tn, delivery, supersede);
         if (eventId != null) {
             try {
                 webhookJob.process(eventId, tenantId);
+            } catch (ShipmentLinkService.SupersedeRefusedException e) {
+                // Re-checked under the lock inside the link: frozen / pickup session since the pre-check. Rolled back.
+                TenantContext.set(tenantId);
+                final Supersede sup = supersede;
+                tx.execute(s -> {
+                    jdbc.update("UPDATE webhook_events SET status = 'failed', error = ? WHERE id = ?", e.getMessage(), eventId);
+                    if (sup != null && (com.traceability.courier.TrackingChanges.REASON_FROZEN.equals(e.reason())
+                            || com.traceability.courier.TrackingChanges.REASON_PICKUP_SESSION.equals(e.reason()))) {
+                        com.traceability.courier.TrackingChanges.record(jdbc, tenantId, orderId, sup.legId(), null, sup.kind(),
+                            sup.oldTn(), tn, sup.oldFid(), sup.newFid(), null, "refused", e.reason(), List.of());
+                    }
+                    return null;
+                });
+                markStatus(tenantId, orderId, tn, "skipped", e.getMessage());
+                return Result.skip(e.getMessage(), delivery);
             } catch (RuntimeException e) {
                 TenantContext.set(tenantId);
                 markRetry(tenantId, orderId, tn, "link pipeline error: " + e.getClass().getSimpleName(), 0, true);
@@ -388,7 +423,7 @@ public class BostaFulfillmentLinkService {
      * with a discovery / webhook event for the same state (which may have been recorded unlinked).
      * ON CONFLICT → null: an identical event exists (a concurrent or earlier attempt).
      */
-    private Long insertEvent(UUID tenantId, UUID orderId, String tn, BostaDelivery d) {
+    private Long insertEvent(UUID tenantId, UUID orderId, String tn, BostaDelivery d, Supersede supersede) {
         String updatedAt = (d.raw() != null ? d.raw().path("updatedAt").asText("backfill-epoch") : "backfill-epoch")
             + "|fulfillment:" + orderId;
         ObjectNode payload = mapper.createObjectNode();
@@ -397,6 +432,10 @@ public class BostaFulfillmentLinkService {
         payload.put("type", d.type() != null && !d.type().isBlank() ? d.type() : "SEND");
         payload.put("updatedAt", updatedAt);
         payload.put("orderId", orderId.toString());
+        if (supersede != null) {   // V201: read only from this source by BostaWebhookJob (like the order hint)
+            payload.put("supersedes", supersede.legId().toString());
+            payload.put("supersedeKind", supersede.kind());
+        }
         String idemKey = BostaWebhookJob.sha256(d.trackingNumber() + ":" + d.stateCode() + ":" + updatedAt);
         return tx.execute(s -> jdbc.query(
             "INSERT INTO webhook_events (source, tenant_id, topic, payload, status, received_at, external_event_id) " +
@@ -405,6 +444,130 @@ public class BostaFulfillmentLinkService {
             "RETURNING id",
             rs -> rs.next() ? rs.getLong(1) : null,
             BostaWebhookJob.FULFILLMENT_SOURCE, tenantId, payload.toString(), idemKey));
+    }
+
+    // ---- V201: Shopify tracking edits on a Bosta leg ---------------------------------------------
+
+    /** The order's live Bosta leg Shopify replaced, and how. anchored = a fulfillment carried the old number. */
+    record Supersede(UUID legId, String oldTn, String kind, String oldFid, String newFid, boolean anchored, boolean ambiguous) {}
+
+    /**
+     * Is {@code tn} a tracking edit of the order's live Bosta forward leg L (old number N)? Read from the stored
+     * tracking rows (the capture keeps them current and stale-safe). Null = not that shape → the pre-V201 'skipped'.
+     * <ul>
+     *   <li>N's row removed from the same fulfillment that now carries tn → <b>edit</b> (ambiguous unless that
+     *       fulfillment has exactly one live Bosta number);</li>
+     *   <li>N's fulfillment cancelled, tn on another one → <b>cancel_refulfill</b> (ambiguous unless tn is the order's
+     *       only live Bosta number);</li>
+     *   <li>no row for N at all (L linked by discovery / a pack scan) and tn the order's only live Bosta number →
+     *       <b>edit</b>, unanchored (D2: switched only once N's delivery is confirmed ended in Bosta);</li>
+     *   <li>N still live on Shopify (a second parcel — the prod 'skipped' rows) or anything else → null.</li>
+     * </ul>
+     */
+    private Supersede supersedeCandidate(UUID tenantId, UUID orderId, String tn) {
+        Map<String, Object> leg = BostaSupersede.liveLeg(jdbc, tenantId, orderId);
+        if (leg == null) return null;
+        String oldTn = (String) leg.get("tracking_number");
+        Map<String, Object> nw = trackingRow(tenantId, orderId, tn);
+        if (nw == null || nw.get("removed_at") != null || "cancelled".equalsIgnoreCase((String) nw.get("fulfillment_status"))) return null;
+        String newFid = (String) nw.get("shopify_fulfillment_id");
+        Integer liveBosta = jdbc.queryForObject(
+            "SELECT count(*) FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? AND carrier_class = 'bosta' " +
+            "  AND removed_at IS NULL AND lower(coalesce(fulfillment_status, '')) <> 'cancelled'", Integer.class, tenantId, orderId);
+        Map<String, Object> old = trackingRow(tenantId, orderId, oldTn);
+        UUID legId = (UUID) leg.get("id");
+        if (old == null) {
+            if (liveBosta == null || liveBosta != 1) return null;   // several Bosta parcels: never guess
+            return new Supersede(legId, oldTn, com.traceability.courier.TrackingChanges.KIND_EDIT, null, newFid, false, false);
+        }
+        String oldFid = (String) old.get("shopify_fulfillment_id");
+        boolean removed = old.get("removed_at") != null;
+        boolean cancelled = "cancelled".equalsIgnoreCase((String) old.get("fulfillment_status"));
+        if (removed && java.util.Objects.equals(oldFid, newFid)) {
+            Integer inF = jdbc.queryForObject(
+                "SELECT count(*) FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? AND carrier_class = 'bosta' " +
+                "  AND shopify_fulfillment_id = ? AND removed_at IS NULL", Integer.class, tenantId, orderId, newFid);
+            return new Supersede(legId, oldTn, com.traceability.courier.TrackingChanges.KIND_EDIT, oldFid, newFid, true,
+                inF == null || inF != 1);
+        }
+        if (cancelled && !java.util.Objects.equals(oldFid, newFid)) {
+            return new Supersede(legId, oldTn, com.traceability.courier.TrackingChanges.KIND_CANCEL_REFULFILL, oldFid, newFid,
+                true, liveBosta == null || liveBosta != 1);
+        }
+        return null;
+    }
+
+    private Map<String, Object> trackingRow(UUID tenantId, UUID orderId, String tn) {
+        return jdbc.queryForList(
+            "SELECT shopify_fulfillment_id, removed_at, fulfillment_status FROM order_fulfillment_tracking " +
+            "WHERE tenant_id = ? AND order_id = ? AND tracking_number = ?", tenantId, orderId, tn)
+            .stream().findFirst().orElse(null);
+    }
+
+    /**
+     * Before any Bosta call, under the order row lock (courier.TrackingChanges): ambiguous → refused; frozen → refused
+     * (HIGH); open pickup session → refused (HIGH). Recorded once (not on a dry run). Null = go on.
+     */
+    private String preCheck(UUID tenantId, UUID orderId, String tn, Supersede sup, boolean dryRun) {
+        String reason = null;
+        if (sup.ambiguous()) reason = com.traceability.courier.TrackingChanges.REASON_AMBIGUOUS;
+        else if (com.traceability.courier.TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId)) {
+            reason = com.traceability.courier.TrackingChanges.REASON_FROZEN;
+        } else if (com.traceability.courier.TrackingChanges.inOpenPickupSession(jdbc, tenantId, sup.legId())) {
+            reason = com.traceability.courier.TrackingChanges.REASON_PICKUP_SESSION;
+        }
+        if (reason != null && !dryRun) {
+            com.traceability.courier.TrackingChanges.record(jdbc, tenantId, orderId, sup.legId(), null, sup.kind(), sup.oldTn(),
+                tn, sup.oldFid(), sup.newFid(), null, "refused", reason, List.of());
+        }
+        return reason;
+    }
+
+    /**
+     * D2 — null when the OLD delivery is confirmed ended in Bosta: deletion confirmed (BostaDeletionService's rule,
+     * provider_deleted_at) or Bosta shows it 48 Terminated / 49 Canceled / 104 Archived (read-only fetch with the
+     * tenant's own key). Otherwise no switch: refused 'old_delivery_live' (MEDIUM "Shopify shows a different
+     * waybill", clears on its own once the leg changes or Shopify shows the old number again) and the row re-checks
+     * every 30 minutes for {@link BostaSupersede#WATCH_DAYS} days, then stays skipped.
+     */
+    private String oldDeliveryNotEnded(UUID tenantId, UUID orderId, String tn, Supersede sup, String apiKey, boolean dryRun) {
+        Boolean deleted = tx.execute(s -> jdbc.queryForObject(
+            "SELECT provider_deleted_at IS NOT NULL FROM shipments WHERE id = ?", Boolean.class, sup.legId()));
+        if (Boolean.TRUE.equals(deleted)) return null;
+        Integer oldState = null;
+        try {
+            BostaDelivery old = bostaGateway.fetchDelivery(apiKey, sup.oldTn());
+            if (old != null) oldState = old.stateCode();
+        } catch (DeliveryNotFoundException e) {
+            oldState = null;   // not found is not a confirmation (BostaDeletionService needs two, with a positive control)
+        } catch (BostaRateLimitException e) {
+            if (!dryRun) markRetry(tenantId, orderId, tn, "rate limited", e.getRetryAfterSeconds(), false);
+            return "rate limited by Bosta";
+        }
+        if (oldState != null && ENDED_CODES.contains(oldState)) return null;
+        String reason = "Shopify shows a different waybill — the old one (" + sup.oldTn() + ") isn't ended in Bosta";
+        if (dryRun) return reason;
+        tx.execute(s -> {
+            com.traceability.courier.TrackingChanges.record(jdbc, tenantId, orderId, sup.legId(), null, sup.kind(), sup.oldTn(),
+                tn, sup.oldFid(), sup.newFid(), null, "refused", "old_delivery_live", List.of());
+            return null;
+        });
+        Boolean expired = tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipment_tracking_changes WHERE shipment_id = ? AND reason = 'old_delivery_live' " +
+            "  AND new_tracking_number = ? AND created_at < now() - INTERVAL '" + BostaSupersede.WATCH_DAYS + " days')",
+            Boolean.class, sup.legId(), tn));
+        if (Boolean.TRUE.equals(expired)) markStatus(tenantId, orderId, tn, "skipped", reason);
+        else markRetry(tenantId, orderId, tn, reason, 1800, false);
+        return reason;
+    }
+
+    /** Bosta 48 Terminated, 49 Canceled, 104 Archived — the old delivery ended before anyone had it. */
+    static final java.util.Set<Integer> ENDED_CODES = java.util.Set.of(48, 49, 104);
+
+    private boolean hasActiveAccount(UUID tenantId) {
+        return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
+            Boolean.class, tenantId)));
     }
 
     // ---- link state on the tracking row -------------------------------------------------------

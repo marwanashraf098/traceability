@@ -511,7 +511,8 @@
       "generic_delivered_without_pickup": "Delivered with no pickup scan",
       "tracking_changed_after_custody": "Tracking number changed after shipping",
       "tracking_change_needs_review": "Tracking number change to review",
-      "tracking_changed_relabel": "New tracking number — relabel the parcel"
+      "tracking_changed_relabel": "New tracking number — relabel the parcel",
+      "superseded_waybill_moving": "Old waybill still moving at Bosta"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {

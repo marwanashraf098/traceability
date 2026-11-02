@@ -146,7 +146,8 @@ public class BostaDeletionService {
             "  provider_not_found_at = COALESCE(provider_not_found_at, LOCALTIMESTAMP), " +
             "  not_found_count = CASE WHEN " + COUNTS_SQL + " THEN not_found_count + 1 ELSE not_found_count END, " +
             "  last_not_found_at = CASE WHEN " + COUNTS_SQL + " THEN LOCALTIMESTAMP ELSE last_not_found_at END " +
-            "WHERE id = ? AND tenant_id = ? AND provider = 'bosta' AND provider_deleted_at IS NULL",
+            "WHERE id = ? AND tenant_id = ? AND provider = 'bosta' AND provider_deleted_at IS NULL " +
+            "  AND superseded_at IS NULL",   // V201: a replaced leg is never a deletion candidate
             shipmentId, tenantId));
     }
 
@@ -195,6 +196,7 @@ public class BostaDeletionService {
             "FROM shipments s WHERE s.id = ? AND s.tenant_id = ? FOR UPDATE",
             shipmentId, tenantId);
         if (rows.isEmpty() || !"bosta".equals(rows.get(0).get("provider"))) return Confirmation.NOT_BOSTA;
+        if (BostaSupersede.isReplaced(jdbc, shipmentId)) return Confirmation.NOT_BOSTA;   // V201: never confirmed here
         Map<String, Object> r = rows.get(0);
         if (r.get("provider_deleted_at") != null) return Confirmation.ALREADY_DELETED;
         if (((Number) r.get("not_found_count")).intValue() < 2) {   // two counted 400s, ≥ 30 min apart
@@ -348,7 +350,7 @@ public class BostaDeletionService {
             if (n++ >= PRINT_RECHECK_CAP) break;
             UUID shipmentId = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.query(
                 "SELECT id FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta' " +
-                "  AND provider_deleted_at IS NULL", rs -> rs.next() ? rs.getObject(1, UUID.class) : null, tenantId, tn)));
+                "  AND provider_deleted_at IS NULL AND superseded_at IS NULL", rs -> rs.next() ? rs.getObject(1, UUID.class) : null, tenantId, tn)));
             if (shipmentId == null) continue;
             try {
                 BostaDelivery d = BostaRateLimiter.userFacing(() -> gateway.fetchDelivery(apiKey, tn));

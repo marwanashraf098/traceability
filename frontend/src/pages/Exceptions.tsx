@@ -93,6 +93,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   tracking_changed_after_custody: { en: 'Tracking Changed After Shipping', ar: 'تغيّر رقم التتبع بعد الشحن' },
   tracking_change_needs_review:   { en: 'Tracking Change To Review',       ar: 'تغيير رقم تتبع للمراجعة' },
   tracking_changed_relabel:       { en: 'New Waybill — Relabel Parcel',    ar: 'بوليصة جديدة — غيّر ملصق الطرد' },
+  superseded_waybill_moving:      { en: 'Old Waybill Moving At Bosta',     ar: 'البوليصة القديمة تتحرك في Bosta' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

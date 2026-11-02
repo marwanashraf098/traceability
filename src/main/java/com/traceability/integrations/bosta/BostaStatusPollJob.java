@@ -289,6 +289,11 @@ public class BostaStatusPollJob {
             }
 
         });
+        // V201: replaced legs, at the LOWEST priority — after every normal fetch of this cycle, never when the cycle
+        // was rate limited, a few per cycle (bosta.poll.replaced-max-per-cycle), only those the walk hasn't shown for
+        // the safety-net hours. A 400 here only stamps provider_not_found_at (which ends the watch) — replaced legs
+        // never go to BostaDeletionService.
+        if (walk.ok() && !rateLimitedThisCycle(tenantId)) TenantContext.runAs(tenantId, (Runnable) () -> pollReplaced(tenantId, apiKey, cycleStart));
         // Deleted-in-Bosta slice 4: the suspect re-check queue — after the walk, which is this cycle's positive
         // control for the tenant's key (a confirmation needs one in the last 30 minutes).
         if (walk.ok() && deletion != null) TenantContext.runAs(tenantId, (Runnable) () -> {
@@ -447,6 +452,42 @@ public class BostaStatusPollJob {
             tenantId, trackingNumbers.toArray(new String[0]), stampEveryMinutes()));
     }
 
+    /** The safety net (or the walk) hit a rate limit in this cycle: the tenant is backing off. */
+    private boolean rateLimitedThisCycle(UUID tenantId) {
+        Long until = rateLimitRetryUntilByTenant.get(tenantId);
+        return until != null && System.currentTimeMillis() < until;
+    }
+
+    /** At most this many replaced legs are fetched one by one per tenant per cycle (V201). */
+    @org.springframework.beans.factory.annotation.Value("${bosta.poll.replaced-max-per-cycle:5}")
+    int replacedMaxPerCycle = 5;
+
+    private void pollReplaced(UUID tenantId, String apiKey, java.sql.Timestamp cycleStart) {
+        List<Map<String, Object>> legs = tx.execute(s -> jdbc.queryForList(
+            "SELECT id, tracking_number, provider_state FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' " +
+            "  AND " + BostaSupersede.watchedSql("s") +
+            "  AND (s.last_polled_at IS NULL OR s.last_polled_at < LEAST(now() - (? * INTERVAL '1 hour'), ?)) " +
+            "ORDER BY s.last_polled_at ASC NULLS FIRST, s.superseded_at ASC LIMIT ?",
+            tenantId, safetyNetHours, cycleStart, replacedMaxPerCycle));
+        if (legs == null) return;
+        for (Map<String, Object> row : legs) {
+            UUID id = (UUID) row.get("id");
+            try {
+                ingestionHelper.ingestDelivery(tenantId, apiKey, (String) row.get("tracking_number"), "bosta_poll",
+                    (Integer) row.get("provider_state"));
+            } catch (DeliveryNotFoundException e) {
+                tx.execute(s -> jdbc.update("UPDATE shipments SET provider_not_found_at = COALESCE(provider_not_found_at, LOCALTIMESTAMP) " +
+                    "WHERE id = ? AND tenant_id = ? AND superseded_at IS NOT NULL", id, tenantId));
+            } catch (BostaRateLimitException e) {
+                backOff(tenantId, e.getRetryAfterSeconds());
+                return;
+            } catch (RuntimeException e) {
+                log.warn("Status poll tenant {}: replaced leg {} check failed: {}", tenantId, row.get("tracking_number"), e.toString());
+            }
+            tx.execute(s -> jdbc.update("UPDATE shipments SET last_polled_at = now() WHERE id = ?", id));
+        }
+    }
+
     private void backOff(UUID tenantId, long retryAfterSeconds) {
         rateLimitRetryUntilByTenant.put(tenantId, System.currentTimeMillis() + (retryAfterSeconds + 10) * 1000L);
         log.warn("Status poll tenant {}: rate limited (retryAfter={}s) — cycle stops, next after {}s",
@@ -462,7 +503,9 @@ public class BostaStatusPollJob {
         args.addAll(trackingNumbers);
         List<String> found = tx.execute(s -> jdbc.queryForList(
             "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND provider = 'bosta' " +
-            "  AND internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") AND provider_deleted_at IS NULL " +
+            "  AND ((internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") AND provider_deleted_at IS NULL) " +
+            // V201: a replaced leg the poll still watches — on the walk's page anyway, so it costs no call
+            "       OR " + BostaSupersede.watchedSql("shipments") + ") " +
             "  AND tracking_number IN (" + in + ")", String.class, args.toArray()));
         return new java.util.HashSet<>(found);
     }

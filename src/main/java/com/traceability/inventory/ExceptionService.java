@@ -198,6 +198,7 @@ public class ExceptionService {
         all.addAll(detectTransferStockNotRemoved(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
+        all.addAll(detectSupersededWaybillMoving(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -324,7 +325,8 @@ public class ExceptionService {
         Map.entry("generic_delivered_without_pickup/shipment", OrderLink.VIA_SHIPMENT),
         Map.entry("tracking_changed_after_custody/order",      OrderLink.DIRECT),
         Map.entry("tracking_change_needs_review/order",        OrderLink.DIRECT),
-        Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT));
+        Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT),
+        Map.entry("superseded_waybill_moving/shipment",        OrderLink.VIA_SHIPMENT));
 
     /**
      * Orders "Needs attention" reason groups (2026-10-30): what the merchant has to do, in display priority — an
@@ -372,7 +374,8 @@ public class ExceptionService {
         Map.entry("blocked_customer",                 "other"),
         Map.entry("shopify_edit_conflict",            "other"),
         Map.entry("generic_delivered_without_pickup", "other"),
-        Map.entry("tracking_changed_after_custody",   "other"));
+        Map.entry("tracking_changed_after_custody",   "other"),
+        Map.entry("superseded_waybill_moving",        "other"));
 
     /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
     public static String reasonGroupOf(String type) {
@@ -1124,7 +1127,7 @@ public class ExceptionService {
             "WHERE " + refusedStands + "AND c.reason IN ('frozen', 'pickup_session') " + notResolved +
             "UNION ALL " +
             "SELECT 'tracking_change_needs_review' AS type, 'MEDIUM' AS severity, " + cols +
-            "WHERE " + refusedStands + "AND c.reason IN ('ambiguous', 'key_taken') " + notResolved +
+            "WHERE " + refusedStands + "AND c.reason IN ('ambiguous', 'key_taken', 'old_delivery_live') " + notResolved +
             "UNION ALL " +
             "SELECT 'tracking_changed_relabel' AS type, 'MEDIUM' AS severity, " + cols +
             "WHERE c.outcome = 'applied' AND cardinality(c.relabel) > 0 AND s.tracking_number = c.new_tracking_number " +
@@ -1135,6 +1138,27 @@ public class ExceptionService {
             "    OR ('printed' = ANY (c.relabel) AND NOT EXISTS (SELECT 1 FROM pack_print_batch_items bi " +
             "          WHERE bi.shipment_id = s.id AND bi.tenant_id = s.tenant_id AND bi.tracking_number = c.new_tracking_number)) " +
             "    OR ('claimed' = ANY (c.relabel) AND o.locked_by IS NOT NULL)) " + notResolved,
+            tid);
+    }
+
+    /**
+     * HIGH — V201: a Bosta leg replaced by a Shopify tracking edit, whose OLD delivery is moving in Bosta anyway
+     * (the fence saw with_courier … exception): the courier may have the parcel under the old waybill. Clears when
+     * Bosta shows the old delivery ended (terminated / cancelled), its deletion is confirmed, or it is resolved.
+     */
+    private List<Map<String, Object>> detectSupersededWaybillMoving(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'superseded_waybill_moving' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
+            "       s.order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number AS old_tracking_number, " +
+            "       n.tracking_number AS new_tracking_number, s.superseded_last_state, s.superseded_moved_at AS occurred_at, " +
+            "       'superseded_waybill_moving:' || s.id AS subject_key " +
+            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "LEFT JOIN shipments n ON n.id = s.superseded_by_shipment_id " +
+            "WHERE s.tenant_id = ? AND s.superseded_at IS NOT NULL AND s.superseded_moved_at IS NOT NULL " +
+            "  AND coalesce(s.superseded_last_state, '') NOT IN ('terminated', 'cancelled') " +
+            "  AND s.provider_deleted_at IS NULL " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'superseded_waybill_moving' AND er.subject_key = 'superseded_waybill_moving:' || s.id) ",
             tid);
     }
 
@@ -2003,13 +2027,31 @@ public class ExceptionService {
             }
             case "tracking_change_needs_review" -> {
                 String n = str(item, "order_number"), was = str(item, "old_tracking_number"), now = str(item, "new_tracking_number");
-                boolean taken = "key_taken".equals(str(item, "reason"));
-                item.put("descriptionEn", "Order " + n + ": Shopify shows a different tracking number (" + now + ") — "
-                    + (taken ? "it is already another shipment's" : "more than one new number, Traced didn't guess")
+                String why = str(item, "reason");
+                boolean taken = "key_taken".equals(why), live = "old_delivery_live".equals(why);
+                item.put("descriptionEn", "Order " + n + ": Shopify shows a different " + (live ? "waybill" : "tracking number")
+                    + " (" + now + ") — "
+                    + (taken ? "it is already another shipment's"
+                       : live ? "the old waybill " + was + " is still live in Bosta. Cancel it in Bosta and Traced switches"
+                       : "more than one new number, Traced didn't guess")
                     + "; Traced kept " + was);
-                item.put("descriptionAr", "الطلب " + n + ": شوبيفاي يعرض رقم تتبع مختلفاً (" + now + ") — "
-                    + (taken ? "هذا الرقم لشحنة أخرى" : "أكثر من رقم جديد، ولم يخمّن Traced")
+                item.put("descriptionAr", "الطلب " + n + ": شوبيفاي يعرض " + (live ? "بوليصة مختلفة" : "رقم تتبع مختلفاً")
+                    + " (" + now + ") — "
+                    + (taken ? "هذا الرقم لشحنة أخرى"
+                       : live ? "البوليصة القديمة " + was + " ما زالت فعّالة في Bosta. ألغِها في Bosta وسيبدّل Traced"
+                       : "أكثر من رقم جديد، ولم يخمّن Traced")
                     + "؛ أبقى Traced الرقم " + was);
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "superseded_waybill_moving" -> {
+                String n = str(item, "order_number"), was = str(item, "old_tracking_number"), now = str(item, "new_tracking_number");
+                item.put("descriptionEn", "Order " + n + ": the old Bosta waybill " + was + " is moving at Bosta ("
+                    + str(item, "superseded_last_state") + ") although Shopify replaced it with " + now
+                    + " — check which parcel the courier has");
+                item.put("descriptionAr", "الطلب " + n + ": بوليصة Bosta القديمة " + was + " تتحرك في Bosta ("
+                    + str(item, "superseded_last_state") + ") رغم أن شوبيفاي استبدلها بـ " + now
+                    + " — تحقّق من الطرد الذي مع المندوب");
                 item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
             }
