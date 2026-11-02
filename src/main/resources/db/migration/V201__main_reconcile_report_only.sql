@@ -1,4 +1,4 @@
--- V200 — Shopify Main-location reconciler ("check-up"), R0 + R1: REPORT-ONLY (approved 2026-11-02).
+-- V201 — Shopify Main-location reconciler ("check-up"), R0 + R1: REPORT-ONLY (approved 2026-11-02).
 --
 -- Rule (decided 2026-10-21, scope confirmed 2026-11-02): Shopify's Traced Main Warehouse = Traced, for every store;
 -- other Shopify locations are never touched. R1 only READS Shopify and records what it would change. No Shopify write

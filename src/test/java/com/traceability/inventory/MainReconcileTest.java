@@ -34,7 +34,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Shopify Main-location reconciler, R1 report-only (V200). Every run goes through the real service on an app_user
+ * Shopify Main-location reconciler, R1 report-only (V201). Every run goes through the real service on an app_user
  * connection (RLS enforced); fixtures are written as postgres. Shopify is a mock whose Main levels the test sets.
  *
  *   t1  target = custody at Main − units Shopify already fulfilled FROM MAIN for orders Traced still holds;
@@ -473,7 +473,7 @@ class MainReconcileTest {
                 mapper.readTree("{\"inventory_item_id\": " + x.item().replaceAll("^.*/", "") + ", \"location_id\": 999}"));
             return null;
         });
-        claimRow(t, x, "receiving_session", "applied", UUID.randomUUID().toString());   // the V200 trigger queues it
+        claimRow(t, x, "receiving_session", "applied", UUID.randomUUID().toString());   // the V201 trigger queues it
 
         Map<UUID, Map<String, Object>> st = new HashMap<>();
         for (Map<String, Object> r : jdbc.queryForList("SELECT * FROM main_reconcile_variant_state WHERE tenant_id = ?", t.tenant())) {

@@ -588,7 +588,7 @@ public interface ShopifyGateway {
                                                     String locationGid, List<String> inventoryItemGids);
 
     /**
-     * Main reconcile (V200, R1 — READ ONLY): one inventory item's quantities at the Traced Main location.
+     * Main reconcile (V201, R1 — READ ONLY): one inventory item's quantities at the Traced Main location.
      * {@code stocked} = false when the item has no InventoryLevel there (never activated): every quantity is then 0.
      */
     record MainLevel(String inventoryItemGid, boolean stocked, int onHand, int available, int committed, int damaged) {}

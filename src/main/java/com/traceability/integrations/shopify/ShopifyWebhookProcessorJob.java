@@ -258,7 +258,7 @@ public class ShopifyWebhookProcessorJob {
                     topic, shopDomain);
             }
         }
-        // Main reconcile (V200, report-only): queue the variants this event names. Never throws.
+        // Main reconcile (V201, report-only): queue the variants this event names. Never throws.
         if (mainReconcileQueue != null && MAIN_RECONCILE_TOPICS.contains(topic)) {
             mainReconcileQueue.onWebhook(tenantId, topic, payload);
         }

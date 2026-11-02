@@ -1896,7 +1896,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
-    // ---- Main reconcile reads (V200, R1 — read only) ----------------------
+    // ---- Main reconcile reads (V201, R1 — read only) ----------------------
 
     private static final String MAIN_QUANTITY_NAMES = "[\"on_hand\", \"available\", \"committed\", \"damaged\"]";
 
