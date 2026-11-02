@@ -99,6 +99,18 @@ import java.util.concurrent.CompletableFuture;
 @Service
 public class ShopifyInventoryService {
 
+    /**
+     * Units of variant {@code v} the merchant restocked through Shopify refunds on order {@code <alias>} AT THE TRACED
+     * MAIN location (V201 — the restock gate fix, approved 2026-11-02): a refund restock that names another Shopify
+     * location never blocks Traced's +1 at Main; a restock line with no location_id still counts (unchanged). Needs
+     * the variant aliased {@code v}. The ONE expression — the restock guards here and ExceptionService.restocked_twice.
+     */
+    public static String refundRestockedAtMainSql(String orderAlias) {
+        return "shopify_refund_restocked_units(" + orderAlias + ".raw, v.external_id, " +
+               "(SELECT ml.shopify_location_id FROM locations ml WHERE ml.tenant_id = " + orderAlias + ".tenant_id " +
+               "   AND ml.is_fulfillment = true AND ml.shopify_location_id IS NOT NULL LIMIT 1))";
+    }
+
     /** Claim status set by the initial seed (V123) — never retried, repushed or reclaimed. */
     public static final String SUPERSEDED_BY_SEED = "superseded_by_seed";
 
@@ -252,7 +264,7 @@ public class ShopifyInventoryService {
             jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                 rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
             Map<String, Object> counts = jdbc.queryForMap(
-                "SELECT COALESCE((SELECT shopify_refund_restocked_units(o.raw, v.external_id) " +
+                "SELECT COALESCE((SELECT " + refundRestockedAtMainSql("o") + " " +
                 "                 FROM orders o, variants v " +
                 "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
                 "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
@@ -892,7 +904,7 @@ public class ShopifyInventoryService {
                 jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                     rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
                 Map<String, Object> counts = jdbc.queryForMap(
-                    "SELECT COALESCE((SELECT shopify_refund_restocked_units(o.raw, v.external_id) " +
+                    "SELECT COALESCE((SELECT " + refundRestockedAtMainSql("o") + " " +
                     "                 FROM orders o, variants v " +
                     "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
                     "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +

@@ -118,6 +118,14 @@ public class ShopifyWebhookProcessorJob {
         this.inventoryReads = inventoryReads;
     }
 
+    static final java.util.Set<String> MAIN_RECONCILE_TOPICS =
+        java.util.Set.of("orders/updated", "orders/cancelled", "inventory_levels/update");
+
+    private com.traceability.inventory.MainReconcileQueue mainReconcileQueue;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMainReconcileQueue(com.traceability.inventory.MainReconcileQueue q) { this.mainReconcileQueue = q; }
+
     /** Analytics slice 10: inventory_items/update + inventory_levels/update refresh READ columns only. */
     private final com.traceability.analytics.AnalyticsInventoryWebhookHandler inventoryReads;
 
@@ -249,6 +257,10 @@ public class ShopifyWebhookProcessorJob {
                 log.error("Unhandled Shopify webhook topic={} shop={} — this topic has no registered handler",
                     topic, shopDomain);
             }
+        }
+        // Main reconcile (V201, report-only): queue the variants this event names. Never throws.
+        if (mainReconcileQueue != null && MAIN_RECONCILE_TOPICS.contains(topic)) {
+            mainReconcileQueue.onWebhook(tenantId, topic, payload);
         }
     }
 
