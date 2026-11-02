@@ -107,6 +107,14 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     app_user: decision written, other tenant sees 0, no UPDATE / DELETE). Revert-checked R1–R7 (no hook → 12 red; no
     markRemoved → 14; no stale guard → t2 + g10; no removed filter → t6; no frozen → g3; no pickup → g4; no removal
     stamp → t2 + g10); golden t5 green throughout.
+  - **Review checks (2026-11-02):** (1) unpacked cancel-and-refulfill (existing cancel + new leg path) now writes a
+    `cancel_refulfill` applied row on the old leg with `new_shipment_id` = the new leg and the old waybill's relabel
+    reasons (printed / claimed), also when cancel and refulfill arrive in two payloads (Maron); the relabel alert reads
+    the CURRENT leg (`coalesce(new_shipment_id, shipment_id)`) — g5b updated, g5c added; revert-checked (no record →
+    g5b + g5c RED; alert on the old leg → g5c RED). (2) Labels: the Alerts page showed the raw key and the Orders list
+    a de-underscored key — minimal EN + AR labels added (`Exceptions.tsx` TYPE_LABELS, `orders.reason.*`). Full suite
+    3,725: ExchangeBackfillTest + GenericCourierSnapshotScriptTest (a Postgres connection error while another session's
+    full suite ran in parallel — green alone); vitest 1,397 green; tsc clean.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

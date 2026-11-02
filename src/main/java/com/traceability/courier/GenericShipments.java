@@ -127,8 +127,10 @@ public final class GenericShipments {
                 String key = GenericTrackingKey.of(tn);
                 if (key == null) continue;
                 // a conflict (replay, or the key is another order's) → null: never guess further
-                return insertFromFulfillment(jdbc, tenantId, orderId, tn, key, text(f, "id"),
+                UUID created = insertFromFulfillment(jdbc, tenantId, orderId, tn, key, text(f, "id"),
                     trimToNull(text(f, "tracking_company")), firstUrl(f));
+                if (created != null) recordReplacedLeg(jdbc, tenantId, orderId, created, tn, text(f, "id"), text(f, "updated_at"));
+                return created;
             }
         }
         return null;
@@ -279,6 +281,34 @@ public final class GenericShipments {
     }
 
     private record Leg(UUID id, String trackingNumber, String key, String fulfillmentId) {}
+
+    /**
+     * Unpacked cancel-and-refulfill (V200): the cancelled-fulfillment rule cancelled the old leg and this call (or a
+     * later one) created the new leg from the new fulfillment. Recorded as a cancel_refulfill decision on the old leg
+     * pointing at the new one (new_shipment_id), with the relabel reasons the old waybill still carries (printed /
+     * claimed — nothing is packed, or the old leg couldn't have been cancelled). The old leg = the order's newest
+     * generic forward leg from a Shopify fulfillment that is cancelled and whose fulfillment Shopify cancelled
+     * (never a Bosta-wins cancel, whose fulfillment is live). Once per old leg. Nothing else changes.
+     */
+    private static void recordReplacedLeg(JdbcTemplate jdbc, UUID tenantId, UUID orderId, UUID newLeg, String newTn,
+                                          String newFid, String updatedAt) {
+        List<Map<String, Object>> old = jdbc.queryForList(
+            "SELECT s.id, s.tracking_number, s.shopify_fulfillment_id FROM shipments s " +
+            "WHERE s.order_id = ? AND s.tenant_id = ? AND s.id <> ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.source = 'shopify_fulfillment' AND s.internal_state = 'cancelled' AND s.provider_deleted_at IS NULL " +
+            "  AND EXISTS (SELECT 1 FROM order_fulfillment_tracking t WHERE t.tenant_id = s.tenant_id AND t.order_id = s.order_id " +
+            "              AND t.shopify_fulfillment_id = s.shopify_fulfillment_id " +
+            "              AND lower(coalesce(t.fulfillment_status, '')) = 'cancelled') " +
+            "  AND NOT EXISTS (SELECT 1 FROM shipment_tracking_changes c WHERE c.shipment_id = s.id AND c.new_shipment_id IS NOT NULL) " +
+            "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
+            orderId, tenantId, newLeg);
+        if (old.isEmpty()) return;
+        UUID oldId = (UUID) old.get(0).get("id");
+        String oldTn = (String) old.get(0).get("tracking_number");
+        List<String> relabel = TrackingChanges.relabelReasons(jdbc, tenantId, orderId, oldId, oldTn);
+        TrackingChanges.record(jdbc, tenantId, orderId, oldId, newLeg, TrackingChanges.KIND_CANCEL_REFULFILL, oldTn, newTn,
+            (String) old.get(0).get("shopify_fulfillment_id"), newFid, updatedAt, "applied", null, relabel);
+    }
 
     /** Freeze / pickup / key checks under the order row lock, then the in-place write. */
     private static void decide(JdbcTemplate jdbc, UUID tenantId, UUID orderId, Leg l, String kind, String newTn,

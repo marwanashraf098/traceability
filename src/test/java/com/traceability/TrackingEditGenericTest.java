@@ -283,7 +283,40 @@ class TrackingEditGenericTest {
         assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE id = ?", String.class, old)).isEqualTo("cancelled");
         assertThat(leg(o).get("tracking_number")).isEqualTo("ARV3626461");
         assertThat(leg(o).get("id")).isNotEqualTo(old);
+        assertThat(changes(s)).as("recorded on the old leg, pointing at the new one")
+            .containsExactly("cancel_refulfill|ARV3626460→ARV3626461|applied||{}");
+        assertThat(jdbc.queryForObject("SELECT new_shipment_id FROM shipment_tracking_changes WHERE shipment_id = ?",
+            UUID.class, old)).isEqualTo(leg(o).get("id"));
+        assertThat(trackingAlerts(s)).as("nothing physical carries the old number").isEmpty();
+    }
+
+    @Test
+    void g5c_unpackedCancelThenRefulfill_oldWaybillPrintedAndClaimed_reprintAlert_clearsWhenReprinted() {
+        Shop s = new Shop("g5c");
+        UUID o = s.order("#37763");
+        captureAs(s, o, payload(f(7329122353523L, "success", "Aramex", "2026-10-30T21:00:00+02:00", "ARV3626470")));
+        UUID old = (UUID) leg(o).get("id");
+        UUID batch = jdbc.queryForObject("INSERT INTO pack_print_batches (tenant_id, batch_no, paper, sort, scope, waybill_count, " +
+            "order_guaranteed) VALUES (?, 1, 'A6', 'oldest', 'new', 1, true) RETURNING id", UUID.class, s.f.tenant);
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, 'ARV3626470', 1)", batch, s.f.tenant, o, old);
+        jdbc.update("UPDATE orders SET locked_by = ? WHERE id = ?", s.packer, o);
+        // Maron's shape: the cancel and the refulfill arrive in two payloads.
+        captureAs(s, o, payload(f(7329122353523L, "cancelled", "Aramex", "2026-10-30T21:13:00+02:00", "ARV3626470")));
         assertThat(changes(s)).isEmpty();
+        captureAs(s, o, payload(f(7329122353523L, "cancelled", "Aramex", "2026-10-30T21:13:00+02:00", "ARV3626470"),
+                                f(7331107176819L, "success", "Aramex", "2026-11-01T22:03:26+02:00", "ARV3626471")));
+
+        UUID now = (UUID) leg(o).get("id");
+        assertThat(now).isNotEqualTo(old);
+        assertThat(changes(s)).containsExactly("cancel_refulfill|ARV3626470→ARV3626471|applied||{printed,claimed}");
+        assertThat(trackingAlerts(s)).containsExactly("tracking_changed_relabel|MEDIUM|#37763");
+
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, 'ARV3626471', 2)", batch, s.f.tenant, o, now);
+        assertThat(trackingAlerts(s)).as("reprinted, but still claimed").containsExactly("tracking_changed_relabel|MEDIUM|#37763");
+        jdbc.update("UPDATE orders SET locked_by = NULL WHERE id = ?", o);
+        assertThat(trackingAlerts(s)).as("reprinted and released").isEmpty();
     }
 
     @Test

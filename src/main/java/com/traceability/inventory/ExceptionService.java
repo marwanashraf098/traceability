@@ -1105,7 +1105,8 @@ public class ExceptionService {
             "       'order' AS subject_type, o.id AS order_id, o.number AS order_number, s.id AS shipment_id, " +
             "       c.old_tracking_number, c.new_tracking_number, c.reason, array_to_string(c.relabel, ',') AS relabel, " +
             "       s.carrier_name, c.created_at AS occurred_at, 'tracking_change:' || c.id AS subject_key " +
-            "FROM c JOIN shipments s ON s.id = c.shipment_id AND s.tenant_id = c.tenant_id " +
+            // s = the leg that carries the order now: the new leg of an unpacked cancel-and-refulfill, else the same leg
+            "FROM c JOIN shipments s ON s.id = coalesce(c.new_shipment_id, c.shipment_id) AND s.tenant_id = c.tenant_id " +
             "JOIN merchant_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id ";
         // A refusal stands while the leg still has its old number and Shopify no longer shows that number live.
         String refusedStands =

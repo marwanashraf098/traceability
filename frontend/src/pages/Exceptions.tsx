@@ -89,6 +89,10 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   shopify_location_inactive: { en: 'Traced Location Inactive In Shopify', ar: 'موقع Traced غير مُفعَّل في شوبيفاي' },
   // A transfer's pieces still counted at the main warehouse in Shopify
   transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
+  // Shopify tracking-number edits (V200)
+  tracking_changed_after_custody: { en: 'Tracking Changed After Shipping', ar: 'تغيّر رقم التتبع بعد الشحن' },
+  tracking_change_needs_review:   { en: 'Tracking Change To Review',       ar: 'تغيير رقم تتبع للمراجعة' },
+  tracking_changed_relabel:       { en: 'New Waybill — Relabel Parcel',    ar: 'بوليصة جديدة — غيّر ملصق الطرد' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

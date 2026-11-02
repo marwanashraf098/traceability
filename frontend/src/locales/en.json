@@ -508,7 +508,10 @@
       "restocked_twice": "Restocked twice (Shopify and Traced)",
       "blocked_customer": "Customer on the blocklist",
       "shopify_edit_conflict": "Edited in Shopify after packing",
-      "generic_delivered_without_pickup": "Delivered with no pickup scan"
+      "generic_delivered_without_pickup": "Delivered with no pickup scan",
+      "tracking_changed_after_custody": "Tracking number changed after shipping",
+      "tracking_change_needs_review": "Tracking number change to review",
+      "tracking_changed_relabel": "New tracking number — relabel the parcel"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {
