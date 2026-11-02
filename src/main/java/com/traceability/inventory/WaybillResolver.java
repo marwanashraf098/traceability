@@ -284,14 +284,17 @@ public class WaybillResolver {
         return null;
     }
 
-    /** The shipment's state if it has left 'created' — live, or ever in a forward leg's history. */
+    /**
+     * The shipment's state if it has left 'created' — live, or ever in a forward leg's history (a movement row,
+     * {@link OrderLineFreeze#movementRowSql}: a leg ended before it moved doesn't count).
+     */
     private String movedState(UUID orderId, UUID tenantId, String liveState) {
         if (liveState != null && !"created".equals(liveState)) return liveState;
         List<String> past = jdbc.queryForList(
             "SELECT h.internal_state FROM shipment_status_history h " +
             "JOIN shipments s ON s.id = h.shipment_id " +
             "WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
-            "  AND h.internal_state <> 'created' " +
+            "  AND " + OrderLineFreeze.movementRowSql("h") + " " +
             // history id is a bigserial (insert-ordered); occurred_at first, id only as the tie-break
             "ORDER BY h.occurred_at DESC, h.id DESC LIMIT 1",
             String.class, orderId, tenantId);

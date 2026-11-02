@@ -48,7 +48,27 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
   order (courier history — CLAUDE.md "history records truth"; needs a freeze-rule decision; prod: 0 today);
   (b) Dolt.eg #17243: a 'cancelled' row with source 'manual' on old Bosta leg 853795364, written 2026-11-01 22:48
   outside any code path (no code writes a manual cancel) — new leg 8384882226 'created', order frozen; not in the
-  script's scope (Bosta leg).
+  script's scope (Bosta leg). **Resolved 2026-11-02:** Marawan's own ops write (another session), row 94792 deleted;
+  re-checked read-only — no manual row, order awaiting_pickup with a packed allocation, new leg with_courier.
+  Dropped from the S4 catch-up list.
+- **D6 deployed + repaired (2026-11-02):** bba05350 deployed; the repair committed by Marawan — backup holds 16
+  rows / 16 orders, all Maron Fashion (14 at the 2026-11-01 count + 2 written before the deploy, newest
+  2026-11-02 13:24); none of that shape on prod since.
+- **D7 — a Bosta leg ended before it moved (48 Terminated / 49 Canceled / 104 Archived) no longer freezes the order
+  (branch `fix/bosta-ended-leg-freeze` off origin/main 3377f928, same worktree; not pushed; no migration).**
+  Bosta's history is untouched; only the readers changed, through ONE predicate `OrderLineFreeze.movementRowSql(h)`:
+  a history row counts unless it is 'cancelled' / 'terminated' on a leg with no other row past 'created' that
+  isn't one of those (49 and 104 map to 'cancelled', 48 to 'terminated'; 'exception' still counts). Used by
+  `shippedPastCreatedSql` (freeze clause 1 → `isFrozen`, FulfillService's ALREADY_SHIPPED guard, unpack's
+  LEFT_CUSTODY check, the Packed list) and `WaybillResolver.movedState`. A moved-then-ended leg keeps its end row,
+  so the resolver still says 'terminated'. Not changed: BostaWebhookJob's monotonic-vs-created writer guard,
+  LookupExchangeService's REPLACEMENT_LEFT check, NotTracedTagger. `BostaEndedLegFreezeTest` (e × 49/48/104 queue +
+  waybill, g1 moved-then-terminated golden, g2 pre-pickup 47 golden, pc control); revert-checked both ways (old
+  reading → the 6 e cases RED; dropping the moved-then-ended clause → g1 RED). Prod read-only: 0 orders frozen only by
+  such rows. Side effect: D7 also covers the D6 shape (a cancel row on a leg that never moved).
+  `OrderLineFreezeTest.z3` and `GenericCancelHistoryRepairScriptTest.z` (the repair scripts must inline frozenSql
+  verbatim) and `GenericCancelHistoryRepairScriptTest.rs3/rs4` ("frozen before the repair") go RED — edits awaiting
+  approval.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

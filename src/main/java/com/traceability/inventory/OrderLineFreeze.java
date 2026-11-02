@@ -22,7 +22,8 @@ import java.util.stream.Collectors;
  *
  * Frozen when ANY of:
  *   1. the forward leg has a shipment_status_history row past 'created' — {@link #shippedPastCreatedSql},
- *      the ALREADY_SHIPPED guard FulfillService.scan()/complete() use;
+ *      the ALREADY_SHIPPED guard FulfillService.scan()/complete() use; a leg cancelled / terminated before it
+ *      ever moved doesn't count ({@link #movementRowSql}, D7);
  *   2. a piece on a live packed allocation of the order is in a {@link PieceStatus#LEFT_CUSTODY} status
  *      (self-pickup has no forward leg; a courier path whose history lags);
  *   3. a piece allocated to the order has a piece_events row FOR THIS ORDER into a LEFT_CUSTODY status —
@@ -39,9 +40,28 @@ public final class OrderLineFreeze {
     }
 
     /**
+     * D7 (2026-11-02) — THE one definition of "this forward-leg history row is movement past 'created'", for
+     * every reader that asks whether the order left (clause 1 here, so FulfillService's ALREADY_SHIPPED guard,
+     * and WaybillResolver's moved state). {@code h} = the shipment_status_history alias.
+     *
+     * A row counts unless it ENDS a leg that never moved: 'cancelled' / 'terminated' (Bosta 49 Canceled and
+     * 104 Archived map to 'cancelled', 48 Terminated to 'terminated') on a leg with no other row past 'created'
+     * that isn't one of those. Such a delivery was ended before the courier had it, so the order can be packed
+     * against its next waybill. A leg that moved and then ended still counts — the end row included, so
+     * WaybillResolver still names it ('terminated'). Bosta's history is never changed; only this reading is.
+     */
+    public static String movementRowSql(String h) {
+        return "(" + h + ".internal_state NOT IN ('created', 'cancelled', 'terminated') " +
+               " OR (" + h + ".internal_state IN ('cancelled', 'terminated') AND EXISTS (" +
+               "     SELECT 1 FROM shipment_status_history h_mv WHERE h_mv.shipment_id = " + h + ".shipment_id " +
+               "       AND h_mv.internal_state NOT IN ('created', 'cancelled', 'terminated'))))";
+    }
+
+    /**
      * The order's forward leg has ever moved past 'created' (shipment_status_history — append-only,
-     * never the live internal_state column a Bosta "back at hub" webhook can rewind). {@code orderIdExpr}
-     * and {@code tenantIdExpr} are SQL expressions (a column or a '?' bind, order then tenant).
+     * never the live internal_state column a Bosta "back at hub" webhook can rewind; a movement row per
+     * {@link #movementRowSql}). {@code orderIdExpr} and {@code tenantIdExpr} are SQL expressions (a column
+     * or a '?' bind, order then tenant).
      */
     public static String shippedPastCreatedSql(String orderIdExpr, String tenantIdExpr) {
         return "EXISTS (" +
@@ -49,7 +69,7 @@ public final class OrderLineFreeze {
                "    JOIN shipments s ON s.id = h.shipment_id " +
                "    WHERE s.order_id = " + orderIdExpr + " AND s.tenant_id = " + tenantIdExpr + " " +
                "      AND s.shipment_leg = 'forward' " +
-               "      AND h.internal_state <> 'created'" +
+               "      AND " + movementRowSql("h") +
                ")";
     }
 
