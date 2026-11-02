@@ -308,8 +308,18 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const handleScan = scanner.handleScan
 
   // Always refocus the input after any interaction.
+  // BROEK, 2026-11-02: a plain focus() scrolled the page back up to the scan input.
+  // On a long scan list, pressing Close session (or a row's ✕) blurred the input,
+  // 50 ms later focus() scrolled the button away before release, and the click
+  // never landed. So: never scroll when refocusing, and don't refocus at all while
+  // the close confirm is open (read through a ref so this callback isn't stale).
+  const confirmOpenRef = useRef(false)
+  confirmOpenRef.current = showConfirm
   const refocus = useCallback(() => {
-    setTimeout(() => scanner.inputRef.current?.focus(), 50)
+    setTimeout(() => {
+      if (confirmOpenRef.current) return
+      scanner.inputRef.current?.focus({ preventScroll: true })
+    }, 50)
   }, [scanner.inputRef])
 
   useEffect(() => {
