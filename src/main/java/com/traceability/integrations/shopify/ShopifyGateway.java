@@ -587,6 +587,27 @@ public interface ShopifyGateway {
     List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,
                                                     String locationGid, List<String> inventoryItemGids);
 
+    /**
+     * Main reconcile (V200, R1 — READ ONLY): one inventory item's quantities at the Traced Main location.
+     * {@code stocked} = false when the item has no InventoryLevel there (never activated): every quantity is then 0.
+     */
+    record MainLevel(String inventoryItemGid, boolean stocked, int onHand, int available, int committed, int damaged) {}
+
+    /** One page of every level at a location, for the full sweep; {@code nextCursor} null on the last page. */
+    record MainLevelsPage(List<MainLevel> levels, String nextCursor) {}
+
+    /**
+     * Main reconcile per-variant read: on_hand / available / committed / damaged of these items at one location
+     * (nodes(ids:), ≤ 250 ids per call). Read-only — the reconciler compares ON-HAND (available excludes committed).
+     */
+    List<MainLevel> fetchMainLevels(String shopDomain, String token, String locationGid, List<String> inventoryItemGids);
+
+    /**
+     * Main reconcile sweep read: one page (250) of location(id).inventoryLevels with the same four quantities.
+     * Read-only. Its own read, separate from the analytics stock read (that one is analytics-only by guard).
+     */
+    MainLevelsPage fetchMainLevelsPage(String shopDomain, String token, String locationGid, String afterCursor);
+
     // ---- scope utilities -----------------------------------------------
 
     /**

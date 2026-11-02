@@ -129,6 +129,22 @@ traced:
   # Review mode S5 — shared secret for the ops endpoints (/api/v1/ops/**, X-Ops-Secret header,
   # constant-time compare). Blank / unset → every ops endpoint answers 404 (they don't exist).
   ops-secret: ${TRACED_OPS_SECRET:}
+  # Shopify Main-location reconciler ("check-up", V200) — R1 is REPORT-ONLY: reads Shopify, records differences on
+  # main_reconcile_runs / main_reconcile_diffs and Part 1's would-be subtracts; never writes to Shopify. report-only
+  # must stay true (false refuses to start — write mode is R2). shops: comma-separated shop domains, empty = every store.
+  main-reconcile:
+    enabled: ${TRACED_MAIN_RECONCILE_ENABLED:false}
+    report-only: ${TRACED_MAIN_RECONCILE_REPORT_ONLY:true}
+    shops: ${TRACED_MAIN_RECONCILE_SHOPS:}
+    sweep-cron: ${TRACED_MAIN_RECONCILE_SWEEP_CRON:15 */4 * * *}
+    queue-cron: "* * * * *"
+    debounce-seconds: 60
+    confirm-after-minutes: ${TRACED_MAIN_RECONCILE_CONFIRM_AFTER_MINUTES:10}
+    part1-window-days: 30
+    queue-batch: 500
+    cancelled-fulfillment-window-minutes: ${TRACED_MAIN_RECONCILE_CANCELLED_WINDOW_MINUTES:60}
+    store-skip-row-minutes: 60
+    retention-days: ${TRACED_MAIN_RECONCILE_RETENTION_DAYS:14}
 
 shopify:
   # Pin the API version — never use "latest" in code paths.

@@ -768,8 +768,8 @@ public class ExceptionService {
      * (orders/updated) then restocked the same units again. Read-only — Traced never decrements
      * for this; a manager lowers the quantity in Shopify and resolves.
      * Per (order, variant): pushed = Traced restock claims 'applied'; offset = 'skipped_shopify_restocked'
-     * (units the guard already left to Shopify's refund); shopify = shopify_refund_restocked_units (V151,
-     * the one definition). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is
+     * (units the guard already left to Shopify's refund); shopify = ShopifyInventoryService.refundRestockedAtMainSql (V200 — Main-location
+     * restocks only). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is
      * in the subject key, so a resolved row comes back only if more units get double-counted.
      */
     private List<Map<String, Object>> detectRestockedTwice(UUID tid) {
@@ -791,7 +791,7 @@ public class ExceptionService {
             "JOIN variants v ON v.id = a.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "CROSS JOIN LATERAL (SELECT LEAST(a.pushed, " +
-            "    shopify_refund_restocked_units(o.raw, v.external_id) - a.offset_units) AS qty) x " +
+            "    " + ShopifyInventoryService.refundRestockedAtMainSql("o") + " - a.offset_units) AS qty) x " +
             "WHERE x.qty > 0 " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = o.tenant_id AND er.exception_type = 'restocked_twice' " +
