@@ -66,9 +66,10 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
   waybill, g1 moved-then-terminated golden, g2 pre-pickup 47 golden, pc control); revert-checked both ways (old
   reading → the 6 e cases RED; dropping the moved-then-ended clause → g1 RED). Prod read-only: 0 orders frozen only by
   such rows. Side effect: D7 also covers the D6 shape (a cancel row on a leg that never moved).
-  `OrderLineFreezeTest.z3` and `GenericCancelHistoryRepairScriptTest.z` (the repair scripts must inline frozenSql
-  verbatim) and `GenericCancelHistoryRepairScriptTest.rs3/rs4` ("frozen before the repair") go RED — edits awaiting
-  approval.
+  Approved test edits: `OrderLineFreezeTest.z3` and `GenericCancelHistoryRepairScriptTest.z` compare the two repair
+  scripts (unchanged — they ran on prod before D7) against the pre-D7 freeze text in `PreD7Freeze` (test fixture);
+  `rs3`'s before-check is now "already unfrozen under D7" (deletion / backup / proof assertions kept). Full suite:
+  3,705, only ExchangeBackfillTest red.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in
