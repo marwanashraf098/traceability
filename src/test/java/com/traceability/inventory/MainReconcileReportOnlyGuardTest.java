@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Main reconcile R1 is REPORT-ONLY (V200): its classes reach Shopify only through the two read methods (and the
+ * Main reconcile R1 is REPORT-ONLY (V201): its classes reach Shopify only through the two read methods (and the
  * item-id read the seed uses), name no inventory mutation, and those reads issue no GraphQL mutation. The named
  * decrement set is untouched (NamedDecrementSetGuardTest still counts seven — pushMainReconcile is R2).
  */

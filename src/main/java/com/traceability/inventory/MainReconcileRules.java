@@ -3,7 +3,7 @@ package com.traceability.inventory;
 import java.util.List;
 
 /**
- * Shopify Main-location reconciler ("check-up", V200 — R0 + R1, report-only; approved 2026-11-02). THE definitions,
+ * Shopify Main-location reconciler ("check-up", V201 — R0 + R1, report-only; approved 2026-11-02). THE definitions,
  * as SQL, for what Shopify's Traced Main Warehouse should hold for a variant, why a variant is not checked this run,
  * and Part 1 (fulfillments shipped from another Shopify location). Never re-derive these anywhere else.
  *

@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Main reconcile (V200, R1, report-only) — two recurring passes, both no-ops unless traced.main-reconcile.enabled:
+ * Main reconcile (V201, R1, report-only) — two recurring passes, both no-ops unless traced.main-reconcile.enabled:
  *   queue (every minute): tenants with a variant queued and untouched for debounce-seconds → one per-variant run each;
  *   sweep (traced.main-reconcile.sweep-cron, default every 4 h): every tenant with a store and a main warehouse → a
  *          full run over every level at its Shopify Main location plus every variant Traced holds there; first, the

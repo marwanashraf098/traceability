@@ -13,10 +13,10 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Main reconcile (V200, R1) — the per-variant trigger from Shopify webhooks: orders/updated, orders/cancelled and
+ * Main reconcile (V201, R1) — the per-variant trigger from Shopify webhooks: orders/updated, orders/cancelled and
  * inventory_levels/update (Main location only) queue every variant they name on main_reconcile_variant_state and stamp
  * last_event_at — the two-run rule's "no Shopify event in between". Traced's own claims queue their variants through
- * the V200 triggers on the claim tables (every return restock and restock skip included). Debounced by MainReconcileJob.
+ * the V201 triggers on the claim tables (every return restock and restock skip included). Debounced by MainReconcileJob.
  * Never throws: a failure here must not fail the webhook.
  */
 @Component

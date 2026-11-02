@@ -1,4 +1,4 @@
--- Main reconcile (V200, R1 report-only) — summary of the first runs, per store. READ ONLY: SELECTs only, no writes.
+-- Main reconcile (V201, R1 report-only) — summary of the first runs, per store. READ ONLY: SELECTs only, no writes.
 -- Run as the owner (psql or the Supabase SQL editor); every query carries its own statement_timeout.
 -- "Latest sweep" = each tenant's most recent completed full sweep (the per-variant runs only see what changed).
 

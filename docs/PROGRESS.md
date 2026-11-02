@@ -5,7 +5,7 @@
 ## Current state
 
 **Shopify Main-location reconciler ("check-up") — R0 + R1 REPORT-ONLY built (2026-11-02; review fixes 2026-11-03;
-merged to main, NOT deployed; V200).**
+merged to main, NOT deployed; V201).**
 Decisions (Marawan, 2026-11-02, after the Step 0 diagnosis): ALL stores, no coverage / fulfilled-from-Main / stock-take
 eligibility — Traced Main in Shopify = Traced; store-level skip only (Main inactive / deleted → skip, existing
 shopify_location_inactive alert; env allowlist); `pushMainReconcile` (±delta, inventoryAdjustQuantities +
@@ -25,8 +25,8 @@ APPROVED for R2 — neither is built. Marawan writes the CLAUDE.md amendment.
   not_shipped_by_traced / cancelled_before_shipping / fulfillment_cancelled recorded as run outcomes, no claim.
 - **Triggers:** webhooks orders/updated, orders/cancelled, inventory_levels/update (Main only) → `MainReconcileQueue`
   (wired by setter into ShopifyWebhookProcessorJob, never throws); every claim on shopify_inventory_adjustments /
-  transfer_shopify_syncs / stock_take_shopify_syncs → V200 trigger; a piece event INTO with_courier / delivered (from
-  anything else) → V200 trigger on piece_events (`piece_left`), so Part 1 is evaluated within ~1 min. `MainReconcileJob`: queue every minute (debounce
+  transfer_shopify_syncs / stock_take_shopify_syncs → V201 trigger; a piece event INTO with_courier / delivered (from
+  anything else) → V201 trigger on piece_events (`piece_left`), so Part 1 is evaluated within ~1 min. `MainReconcileJob`: queue every minute (debounce
   60 s), sweep `15 */4 * * *` (location.inventoryLevels paged + every Traced variant). Seed's advisory lock.
 - **Noise / retention:** at most one store-level skipped run row per store per hour (`store-skip-row-minutes`; later
   runs write nothing and take the queue off). The sweep job first deletes runs + diffs older than `retention-days`

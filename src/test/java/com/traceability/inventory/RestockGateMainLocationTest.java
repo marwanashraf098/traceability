@@ -26,7 +26,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * The return-restock gate counts only Shopify refund restocks AT THE TRACED MAIN location (V200, approved 2026-11-02).
+ * The return-restock gate counts only Shopify refund restocks AT THE TRACED MAIN location (V201, approved 2026-11-02).
  * Before, any refund restock of the order + variant blocked Traced's +1 at Main — even one Shopify put back into
  * another location, which left Main one unit short (prod: 3 Nuvira restocks, #3134 / #3140 / #3149).
  *

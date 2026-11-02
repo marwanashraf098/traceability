@@ -101,7 +101,7 @@ public class ShopifyInventoryService {
 
     /**
      * Units of variant {@code v} the merchant restocked through Shopify refunds on order {@code <alias>} AT THE TRACED
-     * MAIN location (V200 — the restock gate fix, approved 2026-11-02): a refund restock that names another Shopify
+     * MAIN location (V201 — the restock gate fix, approved 2026-11-02): a refund restock that names another Shopify
      * location never blocks Traced's +1 at Main; a restock line with no location_id still counts (unchanged). Needs
      * the variant aliased {@code v}. The ONE expression — the restock guards here and ExceptionService.restocked_twice.
      */

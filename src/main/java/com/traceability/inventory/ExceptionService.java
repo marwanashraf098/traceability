@@ -776,7 +776,7 @@ public class ExceptionService {
      * (orders/updated) then restocked the same units again. Read-only — Traced never decrements
      * for this; a manager lowers the quantity in Shopify and resolves.
      * Per (order, variant): pushed = Traced restock claims 'applied'; offset = 'skipped_shopify_restocked'
-     * (units the guard already left to Shopify's refund); shopify = ShopifyInventoryService.refundRestockedAtMainSql (V200 — Main-location
+     * (units the guard already left to Shopify's refund); shopify = ShopifyInventoryService.refundRestockedAtMainSql (V201 — Main-location
      * restocks only). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is
      * in the subject key, so a resolved row comes back only if more units get double-counted.
      */
