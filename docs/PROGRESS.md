@@ -4,6 +4,12 @@
 
 ## Current state
 
+**Pickups close fix (2026-11-02, BROEK): the scan input's blur refocus now uses focus({ preventScroll: true }) and
+skips while the close confirm is open. A plain focus() scrolled the page up mid-press, so Close session / ✕ clicks
+never landed.** (`PickupSessions.tsx` only; two new tests in `pickupSessionScreen.test.tsx`, both red on the old
+code; full frontend vitest 1,397/1,397 green.) Follow-up logged: preventScroll on the two SAFETY-CRITICAL useScanner
+focus calls (useScanner.ts:176, :287), not done, needs its own approval.
+
 **Shopify tracking-number edits follow the forward leg (started 2026-11-01; approved after the Step 0 diagnosis; NOT
 merged, NOT deployed).** Goal: when a merchant edits a Shopify fulfillment's tracking number (same fulfillment, or the
 strict cancel-and-refulfill shape), Traced moves the order's forward leg to the new number while the parcel is still
