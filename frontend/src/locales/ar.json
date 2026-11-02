@@ -504,7 +504,10 @@
       "restocked_twice": "أُعيد للمخزون مرتين",
       "blocked_customer": "العميل في قائمة الحظر",
       "shopify_edit_conflict": "عُدِّل في Shopify بعد التغليف",
-      "generic_delivered_without_pickup": "تم التوصيل دون مسح عند التسليم"
+      "generic_delivered_without_pickup": "تم التوصيل دون مسح عند التسليم",
+      "tracking_changed_after_custody": "تغيّر رقم التتبع بعد الشحن",
+      "tracking_change_needs_review": "تغيير رقم تتبع للمراجعة",
+      "tracking_changed_relabel": "رقم تتبع جديد — غيّر ملصق الطرد"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {
