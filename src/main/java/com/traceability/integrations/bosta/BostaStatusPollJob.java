@@ -289,7 +289,7 @@ public class BostaStatusPollJob {
             }
 
         });
-        // V201: replaced legs, at the LOWEST priority — after every normal fetch of this cycle, never when the cycle
+        // V202: replaced legs, at the LOWEST priority — after every normal fetch of this cycle, never when the cycle
         // was rate limited, a few per cycle (bosta.poll.replaced-max-per-cycle), only those the walk hasn't shown for
         // the safety-net hours. A 400 here only stamps provider_not_found_at (which ends the watch) — replaced legs
         // never go to BostaDeletionService.
@@ -458,7 +458,7 @@ public class BostaStatusPollJob {
         return until != null && System.currentTimeMillis() < until;
     }
 
-    /** At most this many replaced legs are fetched one by one per tenant per cycle (V201). */
+    /** At most this many replaced legs are fetched one by one per tenant per cycle (V202). */
     @org.springframework.beans.factory.annotation.Value("${bosta.poll.replaced-max-per-cycle:5}")
     int replacedMaxPerCycle = 5;
 
@@ -504,7 +504,7 @@ public class BostaStatusPollJob {
         List<String> found = tx.execute(s -> jdbc.queryForList(
             "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND provider = 'bosta' " +
             "  AND ((internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") AND provider_deleted_at IS NULL) " +
-            // V201: a replaced leg the poll still watches — on the walk's page anyway, so it costs no call
+            // V202: a replaced leg the poll still watches — on the walk's page anyway, so it costs no call
             "       OR " + BostaSupersede.watchedSql("shipments") + ") " +
             "  AND tracking_number IN (" + in + ")", String.class, args.toArray()));
         return new java.util.HashSet<>(found);

@@ -209,12 +209,12 @@ public class BostaFulfillmentLinkService {
             "SELECT tracking_number FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'bosta' " +
             "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled') LIMIT 1",
             rs -> rs.next() ? rs.getString(1) : null, tenantId, orderId));
-        // V201: Shopify's number for this order changed (a tracking edit) — the live leg may be replaced instead.
+        // V202: Shopify's number for this order changed (a tracking edit) — the live leg may be replaced instead.
         Supersede supersede = null;
         if (otherLeg != null) {
-            // No active Bosta account (e.g. a simulated-courier tenant): never a tracking edit — as before V201.
+            // No active Bosta account (e.g. a simulated-courier tenant): never a tracking edit — as before V202.
             supersede = hasActiveAccount(tenantId) ? tx.execute(s -> supersedeCandidate(tenantId, orderId, tn)) : null;
-            if (supersede == null) {   // a second parcel, or not a tracking-edit shape: exactly as before V201
+            if (supersede == null) {   // a second parcel, or not a tracking-edit shape: exactly as before V202
                 String reason = "order already has an active forward leg (" + otherLeg + ")";
                 if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
                 return Result.skip(reason);
@@ -277,7 +277,7 @@ public class BostaFulfillmentLinkService {
             return Result.skip(identityProblem, delivery);
         }
 
-        // V201 D2: a leg no fulfillment anchors follows only once its OLD delivery is confirmed ended in Bosta.
+        // V202 D2: a leg no fulfillment anchors follows only once its OLD delivery is confirmed ended in Bosta.
         if (supersede != null && !supersede.anchored()) {
             String waiting = oldDeliveryNotEnded(tenantId, orderId, tn, supersede, apiKey, dryRun);
             if (waiting != null) return Result.skip(waiting, delivery);
@@ -432,7 +432,7 @@ public class BostaFulfillmentLinkService {
         payload.put("type", d.type() != null && !d.type().isBlank() ? d.type() : "SEND");
         payload.put("updatedAt", updatedAt);
         payload.put("orderId", orderId.toString());
-        if (supersede != null) {   // V201: read only from this source by BostaWebhookJob (like the order hint)
+        if (supersede != null) {   // V202: read only from this source by BostaWebhookJob (like the order hint)
             payload.put("supersedes", supersede.legId().toString());
             payload.put("supersedeKind", supersede.kind());
         }
@@ -446,14 +446,14 @@ public class BostaFulfillmentLinkService {
             BostaWebhookJob.FULFILLMENT_SOURCE, tenantId, payload.toString(), idemKey));
     }
 
-    // ---- V201: Shopify tracking edits on a Bosta leg ---------------------------------------------
+    // ---- V202: Shopify tracking edits on a Bosta leg ---------------------------------------------
 
     /** The order's live Bosta leg Shopify replaced, and how. anchored = a fulfillment carried the old number. */
     record Supersede(UUID legId, String oldTn, String kind, String oldFid, String newFid, boolean anchored, boolean ambiguous) {}
 
     /**
      * Is {@code tn} a tracking edit of the order's live Bosta forward leg L (old number N)? Read from the stored
-     * tracking rows (the capture keeps them current and stale-safe). Null = not that shape → the pre-V201 'skipped'.
+     * tracking rows (the capture keeps them current and stale-safe). Null = not that shape → the pre-V202 'skipped'.
      * <ul>
      *   <li>N's row removed from the same fulfillment that now carries tn → <b>edit</b> (ambiguous unless that
      *       fulfillment has exactly one live Bosta number);</li>

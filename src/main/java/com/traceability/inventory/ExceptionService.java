@@ -1142,7 +1142,7 @@ public class ExceptionService {
     }
 
     /**
-     * HIGH — V201: a Bosta leg replaced by a Shopify tracking edit, whose OLD delivery is moving in Bosta anyway
+     * HIGH — V202: a Bosta leg replaced by a Shopify tracking edit, whose OLD delivery is moving in Bosta anyway
      * (the fence saw with_courier … exception): the courier may have the parcel under the old waybill. Clears when
      * Bosta shows the old delivery ended (terminated / cancelled), its deletion is confirmed, or it is resolved.
      */

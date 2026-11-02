@@ -37,7 +37,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Shopify tracking-number edits, S3 — Bosta legs (V201). Shopify payloads go through the real capture, links
+ * Shopify tracking-number edits, S3 — Bosta legs (V202). Shopify payloads go through the real capture, links
  * through the real BostaFulfillmentLinkService → BostaWebhookJob pipeline; Bosta is mocked (fetch / v2 search).
  * Realistic bare numeric Bosta AWBs.
  *
@@ -49,9 +49,9 @@ import static org.mockito.Mockito.*;
  *   b5  strict cancel-and-refulfill → replaced (cancel_refulfill)
  *   b6  D2, unanchored leg (linked by discovery): old delivery still live → refused MEDIUM "Shopify shows a different
  *       waybill", retried; once Bosta shows the old delivery Canceled (49) → replaced, the alert gone
- *   b7  Bosta 404 on the new number → old leg untouched, 'retry' (as before V201)
+ *   b7  Bosta 404 on the new number → old leg untouched, 'retry' (as before V202)
  *   b8  golden: the prod 'skipped' shape (a second Bosta parcel, the leg's number still live on Shopify) stays
- *       'skipped', no Bosta call, no decision — byte-identical to the pre-V201 outcome
+ *       'skipped', no Bosta call, no decision — byte-identical to the pre-V202 outcome
  *   b9  the new waybill's unlinked_bosta_deliveries row is resolved when it links
  *   f1  FENCE, webhook: Bosta's webhook for the OLD waybill after the switch → raw / state only, no history row, no
  *       piece move, no error; HIGH superseded_waybill_moving; Bosta 49 on it → alert gone, watch over

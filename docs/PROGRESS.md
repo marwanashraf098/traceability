@@ -158,17 +158,17 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     3,725: ExchangeBackfillTest + GenericCourierSnapshotScriptTest (a Postgres connection error while another session's
     full suite ran in parallel — green alone); vitest 1,397 green; tsc clean. **Merged to main c274242c (2026-11-03);
     deploy pending.**
-- **S3 — Bosta legs (branch `feat/tracking-edit-s3` off main c274242c; NOT pushed; migration V201).**
-  - **V201:** `shipments.superseded_at / superseded_by_shipment_id / superseded_reason ('shopify_tracking_edit') /
+- **S3 — Bosta legs (branch `feat/tracking-edit-s3` off main c274242c; NOT pushed; migration V202).**
+  - **V202:** `shipments.superseded_at / superseded_by_shipment_id / superseded_reason ('shopify_tracking_edit') /
     superseded_last_state / superseded_moved_at` + CHECK `shipments_superseded_bosta_forward` (a replaced leg is a
     Bosta forward leg that stays 'cancelled' — a backstop behind the fence) + partial index; the
-    shipment_tracking_changes reason CHECK gains 'old_delivery_live'. MigrationSmokeTest 200 files,
-    NotTracedBackfillTest 145.
+    shipment_tracking_changes reason CHECK gains 'old_delivery_live'. MigrationSmokeTest 201 files,
+    NotTracedBackfillTest 146.
   - **Decision (`BostaFulfillmentLinkService.attemptInTenant`, where the old code marked 'skipped' because the order
     has a live Bosta leg):** `supersedeCandidate` from the stored tracking rows — the leg's number removed from the
     same fulfillment (edit) / its fulfillment cancelled and the new number on another (strict cancel-and-refulfill) /
     no row at all for the leg's number with the new one the order's only live Bosta number (D2, unanchored);
-    anything else — notably the leg's number still live on Shopify (the 55 prod second-parcel rows) — → the pre-V201
+    anything else — notably the leg's number still live on Shopify (the 55 prod second-parcel rows) — → the pre-V202
     'skipped', byte-identical. Then `preCheck` before any Bosta call (courier.TrackingChanges, under the order lock):
     ambiguous → refused; frozen → refused HIGH; open pickup session → refused HIGH; link row 'skipped'. Then the
     unchanged fetch / type / identityProblem (404 → 'retry' → 'gave_up' as before; old leg untouched). D2:
@@ -194,7 +194,7 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
   - **Also:** WaybillResolver `NotPackable.REPLACED_IN_SHOPIFY` ("replaced in Shopify by X — use the new waybill",
     EN + AR) for an unpacked order's old waybill; alert texts EN + AR; Alerts / Orders labels for the new type.
   - **Tests `BostaTrackingEditTest` (12):** b1–b9, f1–f3. Fence removed → f1 (webhook) and f2 (poll) each RED,
-    run alone (the update hits the V201 CHECK — `DataIntegrityViolationException`); fence back → both GREEN.
+    run alone (the update hits the V202 CHECK — `DataIntegrityViolationException`); fence back → both GREEN.
     Revert-checked: no supersede → 11 red; no D2 gate → b6; no frozen pre-check → b3; no replaced poll → f2; no
     deletion skip → f3; no lowest-priority guard → f3; second parcel treated as an edit → b8 (golden).
 

@@ -507,13 +507,13 @@ public class ShipmentLinkService {
     }
 
     /**
-     * V201 — the same, replacing {@code supersedes} (the order's live Bosta forward leg, a Shopify tracking edit
+     * V202 — the same, replacing {@code supersedes} (the order's live Bosta forward leg, a Shopify tracking edit
      * BostaFulfillmentLinkService already decided) in THIS transaction: re-checked under the order row lock — frozen
      * (OrderLineFreeze) or in an open pickup session → {@link SupersedeRefusedException} (the whole link rolls back,
      * the link job retries and records the refusal) — then the old leg is replaced with no history row
      * (BostaSupersede.replace), the new delivery linked exactly as any fulfillment link, the old leg pointed at the
      * new one and the decision recorded with the old waybill's relabel reasons. A link that doesn't happen rolls the
-     * replacement back too. Null {@code supersedes} = the pre-V201 path, unchanged.
+     * replacement back too. Null {@code supersedes} = the pre-V202 path, unchanged.
      */
     public LinkResult linkDeliveryToOrder(UUID tenantId, UUID orderId, String trackingNumber, BostaDelivery delivery,
                                           BostaStateMapper.MappedState mapped, UUID supersedes, String supersedeKind) {
@@ -556,7 +556,7 @@ public class ShipmentLinkService {
         return r;
     }
 
-    /** V201 — a replacement that must not happen after all: thrown inside the link transaction so it rolls back. */
+    /** V202 — a replacement that must not happen after all: thrown inside the link transaction so it rolls back. */
     public static final class SupersedeRefusedException extends RuntimeException {
         private final String reason;
         public SupersedeRefusedException(String reason) {

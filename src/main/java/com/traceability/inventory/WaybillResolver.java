@@ -51,7 +51,7 @@ public class WaybillResolver {
     public enum NotPackable {
         /** The scanned forward leg was confirmed deleted in Bosta (deleted-in-Bosta slice 4). */
         DELETED_IN_BOSTA,
-        /** V201: Shopify replaced this waybill with a new one (a tracking edit) — the new waybill opens the order. */
+        /** V202: Shopify replaced this waybill with a new one (a tracking edit) — the new waybill opens the order. */
         REPLACED_IN_SHOPIFY,
         /** The scanned forward leg is terminated / cancelled. */
         LEG_ENDED,
