@@ -92,6 +92,8 @@ public final class GenericShipments {
         if (!fulfillments.isArray() || fulfillments.isEmpty()) return null;
 
         cancelForCancelledFulfillments(jdbc, tenantId, orderId, fulfillments);
+        // V200: the live leg follows Shopify's edited tracking number while the parcel is still in custody.
+        followTrackingEdit(jdbc, tenantId, orderId, fulfillments, classOf, trackingNumbersOf);
 
         Map<String, Object> order = jdbc.queryForList(
             "SELECT o.id FROM merchant_orders o LEFT JOIN stores st ON st.id = o.store_id " +
@@ -179,6 +181,182 @@ public final class GenericShipments {
                 UUID.class, tenantId, orderId, fid);
             for (UUID id : ids) cancel(jdbc, tenantId, id);
         }
+    }
+
+    // ── Shopify tracking-number edits (V200, S2) ─────────────────────────────────────────────────
+
+    /**
+     * The order's live generic forward leg L (from a Shopify fulfillment F, still 'created' — anything past that is
+     * frozen anyway) follows Shopify when the merchant changed its number. No write at all for a fulfillment whose
+     * numbers didn't change. The shapes (TrackingChanges kinds):
+     * <ul>
+     *   <li><b>edit</b> — F still live, L's number gone from it (the capture marked it removed, so the payload is not
+     *       stale), exactly one new number of the same carrier type → L takes it in place;</li>
+     *   <li><b>cancel_refulfill</b> — F cancelled while L could no longer be cancelled (something packed), exactly one
+     *       new live fulfillment G of a generic carrier with exactly one number, L's number on no live fulfillment →
+     *       L takes G's number and fulfillment id in place. (Nothing packed: the cancelled-fulfillment rule already
+     *       cancelled L and the new leg comes from G, as before.)</li>
+     *   <li><b>cosmetic</b> — the same number written differently (same GenericTrackingKey) → the text only, quietly;</li>
+     *   <li><b>blanked</b> — F live with no number → recorded only (D5);</li>
+     *   <li>anything looser (two new numbers, or more than one new live fulfillment) → refused 'ambiguous', alert.</li>
+     * </ul>
+     * Under the order row lock: frozen (OrderLineFreeze) → refused HIGH; in an open pickup session → refused HIGH;
+     * the new key (or G) already another shipment's → refused 'key_taken'; else applied, with the relabel reasons.
+     * L's number still on another live fulfillment, or a carrier change to Bosta (the Bosta-wins path), → nothing.
+     */
+    static void followTrackingEdit(JdbcTemplate jdbc, UUID tenantId, UUID orderId, JsonNode fulfillments,
+                                   java.util.function.BiFunction<String, String, String> classOf,
+                                   Function<JsonNode, List<String>> trackingNumbersOf) {
+        Map<String, Object> leg = jdbc.queryForList(
+            "SELECT s.id, s.tracking_number, s.tracking_key, s.shopify_fulfillment_id FROM shipments s " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "WHERE s.order_id = ? AND s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "  AND s.source = 'shopify_fulfillment' AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "  AND s.shopify_fulfillment_id IS NOT NULL AND o.external_id NOT LIKE 'internal:%'",
+            orderId, tenantId).stream().findFirst().orElse(null);
+        if (leg == null) return;
+        Leg l = new Leg((UUID) leg.get("id"), (String) leg.get("tracking_number"), (String) leg.get("tracking_key"),
+            (String) leg.get("shopify_fulfillment_id"));
+        JsonNode f = null;
+        for (JsonNode x : fulfillments) if (l.fulfillmentId().equals(text(x, "id"))) f = x;
+        if (f == null) return;
+
+        if (!isCancelled(f)) {
+            List<String> numbers = trackingNumbersOf.apply(f);
+            if (numbers.contains(l.trackingNumber())) return;                     // unchanged, or a number added
+            if (liveElsewhere(fulfillments, l, trackingNumbersOf)) return;        // its number moved to another parcel
+            if (!oldNumberRemoved(jdbc, tenantId, orderId, l.trackingNumber())) return;   // stale payload
+            String u = text(f, "updated_at");
+            for (String n : numbers) {
+                if (l.key().equals(GenericTrackingKey.of(n))) {
+                    decide(jdbc, tenantId, orderId, l, TrackingChanges.KIND_COSMETIC, n, f);
+                    return;
+                }
+            }
+            if (numbers.isEmpty()) {
+                TrackingChanges.record(jdbc, tenantId, orderId, l.id(), null, TrackingChanges.KIND_BLANKED,
+                    l.trackingNumber(), null, l.fulfillmentId(), null, u, "recorded", null, List.of());
+                return;
+            }
+            if (!genericClass(jdbc, tenantId, f, classOf)) return;                // now Bosta: the Bosta-wins path
+            List<String> keyed = numbers.stream().filter(n -> GenericTrackingKey.of(n) != null).toList();
+            if (keyed.size() == 1) {
+                decide(jdbc, tenantId, orderId, l, TrackingChanges.KIND_EDIT, keyed.get(0), f);
+            } else if (keyed.size() > 1) {
+                TrackingChanges.record(jdbc, tenantId, orderId, l.id(), null, TrackingChanges.KIND_EDIT,
+                    l.trackingNumber(), String.join(", ", keyed), l.fulfillmentId(), l.fulfillmentId(), u,
+                    "refused", TrackingChanges.REASON_AMBIGUOUS, List.of());
+            }
+            return;
+        }
+
+        // F cancelled and L still live: L was no longer cancellable (something packed). The stored row must say so
+        // too (the capture never lets an older payload rewrite it), so a stale payload never moves L.
+        if (!Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? " +
+                "  AND tracking_number = ? AND lower(coalesce(fulfillment_status, '')) = 'cancelled')",
+                Boolean.class, tenantId, orderId, l.trackingNumber()))) return;
+        if (liveElsewhere(fulfillments, l, trackingNumbersOf)) return;
+        List<JsonNode> others = new ArrayList<>();
+        for (JsonNode x : fulfillments) {
+            if (!isCancelled(x) && text(x, "id") != null && !trackingNumbersOf.apply(x).isEmpty()) others.add(x);
+        }
+        if (others.isEmpty()) return;   // waiting for the refulfill (generic_fulfillment_cancelled says so)
+        if (others.size() == 1) {
+            JsonNode g = others.get(0);
+            if (!genericClass(jdbc, tenantId, g, classOf)) return;                // refulfilled with Bosta
+            List<String> keyed = trackingNumbersOf.apply(g).stream().filter(n -> GenericTrackingKey.of(n) != null).toList();
+            if (keyed.size() == 1) {
+                decide(jdbc, tenantId, orderId, l, TrackingChanges.KIND_CANCEL_REFULFILL, keyed.get(0), g);
+                return;
+            }
+        }
+        List<String> all = new ArrayList<>();
+        for (JsonNode x : others) all.addAll(trackingNumbersOf.apply(x));
+        TrackingChanges.record(jdbc, tenantId, orderId, l.id(), null, TrackingChanges.KIND_CANCEL_REFULFILL,
+            l.trackingNumber(), String.join(", ", all), l.fulfillmentId(), null, null,
+            "refused", TrackingChanges.REASON_AMBIGUOUS, List.of());
+    }
+
+    private record Leg(UUID id, String trackingNumber, String key, String fulfillmentId) {}
+
+    /** Freeze / pickup / key checks under the order row lock, then the in-place write. */
+    private static void decide(JdbcTemplate jdbc, UUID tenantId, UUID orderId, Leg l, String kind, String newTn,
+                               JsonNode to) {
+        String newKey = GenericTrackingKey.of(newTn);
+        String newFid = text(to, "id");
+        String u = text(to, "updated_at");
+        boolean frozen = TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId);
+        List<Map<String, Object>> now = jdbc.queryForList(
+            "SELECT internal_state::text AS state, tracking_number FROM shipments WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            l.id(), tenantId);
+        if (now.isEmpty() || !l.trackingNumber().equals(now.get(0).get("tracking_number"))) return;   // changed meanwhile
+        boolean cosmetic = TrackingChanges.KIND_COSMETIC.equals(kind);
+        // Frozen first: a leg that left custody (whatever its live state says) is refused and raises the HIGH alert.
+        if (frozen) {
+            if (!cosmetic) record(jdbc, tenantId, orderId, l, kind, newTn, newFid, u, "refused", TrackingChanges.REASON_FROZEN, List.of());
+            return;
+        }
+        if (!"created".equals(now.get(0).get("state"))) return;
+        if (!cosmetic && TrackingChanges.inOpenPickupSession(jdbc, tenantId, l.id())) {
+            record(jdbc, tenantId, orderId, l, kind, newTn, newFid, u, "refused", TrackingChanges.REASON_PICKUP_SESSION, List.of());
+            return;
+        }
+        if (!cosmetic && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic' AND id <> ? " +
+                "  AND (tracking_key = ? OR shopify_fulfillment_id = ?))",
+                Boolean.class, tenantId, l.id(), newKey, newFid))) {
+            record(jdbc, tenantId, orderId, l, kind, newTn, newFid, u, "refused", TrackingChanges.REASON_KEY_TAKEN, List.of());
+            return;
+        }
+        List<String> relabel = cosmetic ? List.of()
+            : TrackingChanges.relabelReasons(jdbc, tenantId, orderId, l.id(), l.trackingNumber());
+        int n = jdbc.update(
+            "UPDATE shipments SET tracking_number = ?, tracking_key = ?, shopify_fulfillment_id = ?, " +
+            "    carrier_name = coalesce(?, carrier_name), tracking_url = coalesce(?, tracking_url), " +
+            "    tracking_changed_at = now(), last_synced_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND provider = 'generic' AND internal_state = 'created' AND tracking_number = ?",
+            newTn, newKey, newFid, trimToNull(text(to, "tracking_company")), firstUrl(to),
+            l.id(), tenantId, l.trackingNumber());
+        if (n != 1) return;
+        record(jdbc, tenantId, orderId, l, kind, newTn, newFid, u, "applied", null, relabel);
+        log.info("Generic shipment {} (order {}): tracking changed in Shopify ({}), relabel {}", l.id(), orderId, kind, relabel);
+    }
+
+    private static void record(JdbcTemplate jdbc, UUID tenantId, UUID orderId, Leg l, String kind, String newTn,
+                               String newFid, String u, String outcome, String reason, List<String> relabel) {
+        TrackingChanges.record(jdbc, tenantId, orderId, l.id(), null, kind, l.trackingNumber(), newTn,
+            l.fulfillmentId(), newFid, u, outcome, reason, relabel);
+    }
+
+    /** L's number (by key) is on another live fulfillment of the payload. */
+    private static boolean liveElsewhere(JsonNode fulfillments, Leg l, Function<JsonNode, List<String>> trackingNumbersOf) {
+        for (JsonNode x : fulfillments) {
+            if (isCancelled(x) || l.fulfillmentId().equals(text(x, "id"))) continue;
+            for (String n : trackingNumbersOf.apply(x)) if (l.key().equals(GenericTrackingKey.of(n))) return true;
+        }
+        return false;
+    }
+
+    /**
+     * The capture (FulfillmentTrackingCapture.markRemoved) marked L's number removed from its fulfillment — only a
+     * payload at least as new as the one that wrote it does that, so an older payload never moves L.
+     */
+    private static boolean oldNumberRemoved(JdbcTemplate jdbc, UUID tenantId, UUID orderId, String tn) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? " +
+            "  AND tracking_number = ? AND removed_at IS NOT NULL)", Boolean.class, tenantId, orderId, tn));
+    }
+
+    /** G1's class rule: a named non-Bosta carrier, or an unknown one while the tenant has no active Bosta account. */
+    private static boolean genericClass(JdbcTemplate jdbc, UUID tenantId, JsonNode f,
+                                        java.util.function.BiFunction<String, String, String> classOf) {
+        String cls = classOf.apply(text(f, "tracking_company"), firstUrl(f));
+        if ("other_known".equals(cls)) return true;
+        if (!"unknown".equals(cls)) return false;
+        return !Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
+            Boolean.class, tenantId));
     }
 
     // ── Bosta wins ───────────────────────────────────────────────────────────────────────────────

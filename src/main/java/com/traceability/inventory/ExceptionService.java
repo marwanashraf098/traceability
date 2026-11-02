@@ -196,6 +196,8 @@ public class ExceptionService {
         all.addAll(detectShopifyLocationInactive(tenantId));
         // A transfer left out pieces whose arrival hadn't reached Shopify; it has since — Shopify counts them at main.
         all.addAll(detectTransferStockNotRemoved(tenantId));
+        // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
+        all.addAll(detectTrackingChanges(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -319,7 +321,10 @@ public class ExceptionService {
         Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
         Map.entry("generic_fulfillment_cancelled/order",       OrderLink.DIRECT),
         Map.entry("generic_cancelled_live_shipment/order",     OrderLink.DIRECT),
-        Map.entry("generic_delivered_without_pickup/shipment", OrderLink.VIA_SHIPMENT));
+        Map.entry("generic_delivered_without_pickup/shipment", OrderLink.VIA_SHIPMENT),
+        Map.entry("tracking_changed_after_custody/order",      OrderLink.DIRECT),
+        Map.entry("tracking_change_needs_review/order",        OrderLink.DIRECT),
+        Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT));
 
     /**
      * Orders "Needs attention" reason groups (2026-10-30): what the merchant has to do, in display priority — an
@@ -344,6 +349,8 @@ public class ExceptionService {
         Map.entry("generic_bosta_conflict",           "cant_ship"),
         Map.entry("generic_multiple_parcels",         "cant_ship"),
         Map.entry("generic_fulfillment_cancelled",    "cant_ship"),
+        Map.entry("tracking_change_needs_review",     "cant_ship"),
+        Map.entry("tracking_changed_relabel",         "cant_ship"),
         Map.entry("stuck_shipment",                   "no_courier_update"),
         Map.entry("delivery_limbo",                   "no_courier_update"),
         Map.entry("exchange_unmapped_state",          "no_courier_update"),
@@ -364,7 +371,8 @@ public class ExceptionService {
         Map.entry("restocked_twice",                  "return_to_handle"),
         Map.entry("blocked_customer",                 "other"),
         Map.entry("shopify_edit_conflict",            "other"),
-        Map.entry("generic_delivered_without_pickup", "other"));
+        Map.entry("generic_delivered_without_pickup", "other"),
+        Map.entry("tracking_changed_after_custody",   "other"));
 
     /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
     public static String reasonGroupOf(String type) {
@@ -1055,7 +1063,12 @@ public class ExceptionService {
             "    WHERE ft.order_id = s.order_id AND ft.tenant_id = s.tenant_id " +
             "      AND ft.carrier_class <> 'bosta' " +
             "      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled' " +
+            "      AND ft.removed_at IS NULL " +   // V200: a number Shopify replaced is no extra parcel …
             "      AND ft.tracking_number IS DISTINCT FROM s.tracking_number " +
+            // … nor a replacement Traced refused to follow (that has its own tracking-change alert)
+            "      AND NOT EXISTS (SELECT 1 FROM shipment_tracking_changes c WHERE c.shipment_id = s.id " +
+            "                        AND c.tenant_id = s.tenant_id AND c.outcome = 'refused' " +
+            "                        AND ft.tracking_number = ANY (string_to_array(c.new_tracking_number, ', '))) " +
             ") x ON x.extra_parcels > 0 " +
             "WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
             "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
@@ -1065,6 +1078,62 @@ public class ExceptionService {
             "        AND er.exception_type = 'generic_multiple_parcels' " +
             "        AND er.subject_key = 'generic_multiple_parcels:order:' || o.id " +
             "        AND er.resolved_at > x.last_seen) ",
+            tid);
+    }
+
+    /**
+     * Shopify tracking-number edits (V200) — one alert per shipment, from its LATEST shipment_tracking_changes row:
+     * <ul>
+     *   <li>HIGH tracking_changed_after_custody — refused because the order left custody ('frozen') or the parcel
+     *       is in an open pickup session;</li>
+     *   <li>MEDIUM tracking_change_needs_review — refused 'ambiguous' (more than one new number / fulfillment) or
+     *       'key_taken' (the new number is another shipment's);</li>
+     *   <li>MEDIUM tracking_changed_relabel — applied while the parcel carried the old number (packed / printed /
+     *       claimed).</li>
+     * </ul>
+     * A refusal clears itself once Shopify shows the leg's own number again (a live tracking row for it) or the
+     * leg's number changed since; the relabel alert once the order left custody (OrderLineFreeze), or the reason is
+     * gone (unpacked / reprinted with the new number / no longer claimed), or the leg's number changed again.
+     * Resolving one hides that decision only — a newer decision raises again.
+     */
+    private List<Map<String, Object>> detectTrackingChanges(UUID tid) {
+        String latest =
+            "WITH c AS (SELECT DISTINCT ON (c.shipment_id) c.* FROM shipment_tracking_changes c WHERE c.tenant_id = ? " +
+            "      AND c.outcome IN ('applied', 'refused') AND c.kind <> 'cosmetic' " +
+            "      ORDER BY c.shipment_id, c.created_at DESC, c.id DESC) ";
+        String cols =
+            "       'order' AS subject_type, o.id AS order_id, o.number AS order_number, s.id AS shipment_id, " +
+            "       c.old_tracking_number, c.new_tracking_number, c.reason, array_to_string(c.relabel, ',') AS relabel, " +
+            "       s.carrier_name, c.created_at AS occurred_at, 'tracking_change:' || c.id AS subject_key " +
+            "FROM c JOIN shipments s ON s.id = c.shipment_id AND s.tenant_id = c.tenant_id " +
+            "JOIN merchant_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id ";
+        // A refusal stands while the leg still has its old number and Shopify no longer shows that number live.
+        String refusedStands =
+            "c.outcome = 'refused' AND s.tracking_number = c.old_tracking_number " +
+            "AND NOT EXISTS (SELECT 1 FROM order_fulfillment_tracking ft WHERE ft.tenant_id = c.tenant_id " +
+            "      AND ft.order_id = c.order_id AND ft.tracking_number = c.old_tracking_number AND ft.removed_at IS NULL " +
+            "      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled') ";
+        String notResolved =
+            "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = c.tenant_id " +
+            "      AND er.exception_type IN ('tracking_changed_after_custody', 'tracking_change_needs_review', " +
+            "                                'tracking_changed_relabel') " +
+            "      AND er.subject_key = 'tracking_change:' || c.id) ";
+        return jdbc.queryForList(latest +
+            "SELECT 'tracking_changed_after_custody' AS type, 'HIGH' AS severity, " + cols +
+            "WHERE " + refusedStands + "AND c.reason IN ('frozen', 'pickup_session') " + notResolved +
+            "UNION ALL " +
+            "SELECT 'tracking_change_needs_review' AS type, 'MEDIUM' AS severity, " + cols +
+            "WHERE " + refusedStands + "AND c.reason IN ('ambiguous', 'key_taken') " + notResolved +
+            "UNION ALL " +
+            "SELECT 'tracking_changed_relabel' AS type, 'MEDIUM' AS severity, " + cols +
+            "WHERE c.outcome = 'applied' AND cardinality(c.relabel) > 0 AND s.tracking_number = c.new_tracking_number " +
+            "  AND NOT " + OrderLineFreeze.frozenSql("o.id", "o.tenant_id") + " " +
+            "  AND (('packed' = ANY (c.relabel) AND (o.status IN ('packed', 'awaiting_pickup') " +
+            "          OR EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+            "                     WHERE oi.order_id = o.id AND oi.tenant_id = o.tenant_id AND a.status = 'packed'))) " +
+            "    OR ('printed' = ANY (c.relabel) AND NOT EXISTS (SELECT 1 FROM pack_print_batch_items bi " +
+            "          WHERE bi.shipment_id = s.id AND bi.tenant_id = s.tenant_id AND bi.tracking_number = c.new_tracking_number)) " +
+            "    OR ('claimed' = ANY (c.relabel) AND o.locked_by IS NOT NULL)) " + notResolved,
             tid);
     }
 
@@ -1916,6 +1985,39 @@ public class ExceptionService {
                     + (c != null ? " (" + c + ")" : "") + " — Traced tracks only the first one");
                 item.put("descriptionAr", "الطلب " + n + " له أكثر من طرد في شوبيفاي"
                     + (c != null ? " (" + c + ")" : "") + " — Traced يتابع الطرد الأول فقط");
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "tracking_changed_after_custody" -> {
+                String n = str(item, "order_number"), was = str(item, "old_tracking_number"), now = str(item, "new_tracking_number");
+                boolean pickup = "pickup_session".equals(str(item, "reason"));
+                item.put("descriptionEn", "Order " + n + ": the tracking number was changed in Shopify (" + was + " → " + now + ") "
+                    + (pickup ? "while the parcel is in an open pickup session" : "after the parcel left the warehouse")
+                    + " — Traced kept " + was);
+                item.put("descriptionAr", "الطلب " + n + ": تغيّر رقم التتبع في شوبيفاي (" + was + " ← " + now + ") "
+                    + (pickup ? "والطرد في جلسة استلام مفتوحة" : "بعد خروج الطرد من المخزن")
+                    + " — أبقى Traced الرقم " + was);
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "tracking_change_needs_review" -> {
+                String n = str(item, "order_number"), was = str(item, "old_tracking_number"), now = str(item, "new_tracking_number");
+                boolean taken = "key_taken".equals(str(item, "reason"));
+                item.put("descriptionEn", "Order " + n + ": Shopify shows a different tracking number (" + now + ") — "
+                    + (taken ? "it is already another shipment's" : "more than one new number, Traced didn't guess")
+                    + "; Traced kept " + was);
+                item.put("descriptionAr", "الطلب " + n + ": شوبيفاي يعرض رقم تتبع مختلفاً (" + now + ") — "
+                    + (taken ? "هذا الرقم لشحنة أخرى" : "أكثر من رقم جديد، ولم يخمّن Traced")
+                    + "؛ أبقى Traced الرقم " + was);
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "tracking_changed_relabel" -> {
+                String n = str(item, "order_number"), was = str(item, "old_tracking_number"), now = str(item, "new_tracking_number");
+                item.put("descriptionEn", "Order " + n + ": the tracking number changed in Shopify (" + was + " → " + now
+                    + ") — the parcel still carries the old waybill. Put the new waybill on it");
+                item.put("descriptionAr", "الطلب " + n + ": تغيّر رقم التتبع في شوبيفاي (" + was + " ← " + now
+                    + ") — الطرد ما زال يحمل البوليصة القديمة. ضع البوليصة الجديدة عليه");
                 item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
             }

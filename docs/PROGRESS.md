@@ -69,7 +69,44 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
   Approved test edits: `OrderLineFreezeTest.z3` and `GenericCancelHistoryRepairScriptTest.z` compare the two repair
   scripts (unchanged — they ran on prod before D7) against the pre-D7 freeze text in `PreD7Freeze` (test fixture);
   `rs3`'s before-check is now "already unfrozen under D7" (deletion / backup / proof assertions kept). Full suite:
-  3,705, only ExchangeBackfillTest red.
+  3,705, only ExchangeBackfillTest red. **Merged to main f1814223 (2026-11-02), no migration; deploy pending.**
+- **S1 + S2 (branch `feat/tracking-edit-s1s2` off main f1814223, same worktree; NOT pushed; migration V200).**
+  - **V200:** `order_fulfillment_tracking.removed_at` + `fulfillment_updated_at`; `shipments.tracking_changed_at`;
+    `shipment_tracking_changes` (append-only decisions: kind edit / cancel_refulfill / cosmetic / blanked, outcome
+    applied / refused / recorded, reason frozen / pickup_session / ambiguous / key_taken, relabel text[]; one row per
+    decision — unique index; RLS; app_user INSERT / SELECT only). MigrationSmokeTest 199 files, NotTracedBackfillTest
+    144 (approved bumps).
+  - **S1 — capture (`FulfillmentTrackingCapture`):** both upserts store the fulfillment's `updated_at` and clear
+    `removed_at`; an upsert whose updated_at is OLDER for the SAME fulfillment changes nothing (null-safe: missing
+    updated_at on either side = written as before). `markRemoved`: a number gone from a still-live fulfillment of the
+    payload gets `removed_at` (+ the removing payload's updated_at, so an older payload can't revive it); never a
+    cancelled fulfillment's rows, never deleted. Readers taught: capture's Bosta `toLink` skips removed numbers;
+    `generic_multiple_parcels` ignores removed rows and numbers Traced refused to follow (false alert after an edit
+    gone; a real second parcel still alerts).
+  - **S2 — generic legs (`GenericShipments.followTrackingEdit`, called from `onFulfillments` right after the
+    cancelled-fulfillment rule):** the live leg from a Shopify fulfillment (source shopify_fulfillment, not
+    internal / merchant_entered / portal_request) follows: **edit** (F live, its number gone — proof: the capture
+    marked it removed — exactly one new same-type number) and **cancel_refulfill** (strict D1 shape; only reached
+    when the leg wasn't cancellable, i.e. packed — unpacked keeps the pre-V200 cancel + new leg) → in place (same row:
+    tracking_number / key / fulfillment id / carrier / url, `tracking_changed_at`); **cosmetic** (same key) → text
+    only, quiet; **blanked** → recorded only (D5); two new numbers / more than one new fulfillment → refused
+    'ambiguous'. Under the order row lock (`courier.TrackingChanges`, shared with S3): frozen (OrderLineFreeze)
+    first → refused HIGH; open pickup session → refused HIGH (D4); new key / fulfillment on another shipment →
+    refused 'key_taken'; else applied with relabel reasons (packed / printed / claimed — D3). Carrier change to
+    Bosta → not followed (Bosta-wins path).
+  - **Alerts (`ExceptionService.detectTrackingChanges`, every tenant, from the latest decision per shipment):**
+    HIGH `tracking_changed_after_custody` (frozen / pickup_session), MEDIUM `tracking_change_needs_review`
+    (ambiguous / key_taken) — both clear once Shopify shows the leg's own number again or the leg's number changed;
+    MEDIUM `tracking_changed_relabel` (applied with relabel) — clears when the order leaves custody, the reason is gone
+    (unpacked / reprinted with the new number / unclaimed) or the number changes again. ORDER_LINK DIRECT; reason
+    groups other / cant_ship / cant_ship. EN + AR descriptions in enrich(); frontend reason labels are S4.
+  - **Guards kept (no test edits):** the detector emits three literal `'…' AS type` arms (OrdersAttentionTest.a3's scan);
+    TrackingChanges reads `merchant_orders`, never `orders` (OrdersTableAccessGuardTest). Full suite: 3,724, only
+    ExchangeBackfillTest red.
+  - **Tests `TrackingEditGenericTest` (19):** t1–t6, g1–g11 (+g5b), rls (the edit through the real capture as
+    app_user: decision written, other tenant sees 0, no UPDATE / DELETE). Revert-checked R1–R7 (no hook → 12 red; no
+    markRemoved → 14; no stale guard → t2 + g10; no removed filter → t6; no frozen → g3; no pickup → g4; no removal
+    stamp → t2 + g10); golden t5 green throughout.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

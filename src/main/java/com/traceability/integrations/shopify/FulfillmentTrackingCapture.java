@@ -86,6 +86,7 @@ public class FulfillmentTrackingCapture {
             "SELECT t.tracking_number FROM order_fulfillment_tracking t " +
             "WHERE t.tenant_id = ? AND t.order_id = ? AND t.carrier_class = 'bosta' " +
             "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' AND t.link_status IS NULL " +
+            "  AND t.removed_at IS NULL " +   // V200: a number Shopify replaced is never linked
             "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
             "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
             "                    AND s.provider = 'bosta' AND s.shipment_leg = 'forward')",
@@ -164,8 +165,8 @@ public class FulfillmentTrackingCapture {
                 rows += jdbc.update(
                     "INSERT INTO order_fulfillment_tracking " +
                     "    (tenant_id, order_id, tracking_number, carrier_raw, tracking_url, carrier_class, " +
-                    "     shopify_fulfillment_id, fulfillment_status, shipment_status) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                    "     shopify_fulfillment_id, fulfillment_status, shipment_status, fulfillment_updated_at) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz) " +
                     "ON CONFLICT (tenant_id, order_id, tracking_number) DO UPDATE SET " +
                     "    carrier_raw            = EXCLUDED.carrier_raw, " +
                     "    tracking_url           = EXCLUDED.tracking_url, " +
@@ -173,28 +174,70 @@ public class FulfillmentTrackingCapture {
                     "    shopify_fulfillment_id = EXCLUDED.shopify_fulfillment_id, " +
                     "    fulfillment_status     = EXCLUDED.fulfillment_status, " +
                     "    shipment_status        = EXCLUDED.shipment_status, " +
-                    "    last_seen_at           = now()",
+                    UPSERT_TAIL,
                     tenantId, orderId, e.getKey(), company, url, carrierClass(company, url),
-                    text(f, "id"), text(f, "status"), text(f, "shipment_status"));
+                    text(f, "id"), text(f, "status"), text(f, "shipment_status"), text(f, "updated_at"));
                 continue;
             }
             rows += jdbc.update(
                 "INSERT INTO order_fulfillment_tracking " +
                 "    (tenant_id, order_id, tracking_number, carrier_raw, tracking_url, carrier_class, " +
-                "     shopify_fulfillment_id, fulfillment_status) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+                "     shopify_fulfillment_id, fulfillment_status, fulfillment_updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz) " +
                 "ON CONFLICT (tenant_id, order_id, tracking_number) DO UPDATE SET " +
                 "    carrier_raw            = EXCLUDED.carrier_raw, " +
                 "    tracking_url           = EXCLUDED.tracking_url, " +
                 "    carrier_class          = EXCLUDED.carrier_class, " +
                 "    shopify_fulfillment_id = EXCLUDED.shopify_fulfillment_id, " +
                 "    fulfillment_status     = EXCLUDED.fulfillment_status, " +
-                "    last_seen_at           = now()",
+                UPSERT_TAIL,
                 tenantId, orderId, e.getKey(), company, url, carrierClass(company, url),
-                text(f, "id"), text(f, "status"));
+                text(f, "id"), text(f, "status"), text(f, "updated_at"));
         }
-        log.debug("Fulfillment tracking: order {} — {} tracking row(s) upserted", orderId, rows);
+        int removed = markRemoved(tenantId, orderId, fulfillments);
+        log.debug("Fulfillment tracking: order {} — {} tracking row(s) upserted, {} removed", orderId, rows, removed);
         return rows;
+    }
+
+    /**
+     * V200 — the end of both upserts: the number is on its fulfillment again (removed_at cleared), and the
+     * fulfillment's Shopify updated_at is kept. A payload whose updated_at for the SAME fulfillment is older than
+     * the one that last wrote the row changes nothing — a stale payload never rewrites or revives a number. With no
+     * updated_at on either side, or another fulfillment, the row is written as before V200.
+     */
+    private static final String UPSERT_TAIL =
+        "    removed_at             = NULL, " +
+        "    fulfillment_updated_at = coalesce(EXCLUDED.fulfillment_updated_at, order_fulfillment_tracking.fulfillment_updated_at), " +
+        "    last_seen_at           = now() " +
+        // Null-safe on purpose: with an updated_at missing on either side the row is written (a bare comparison would
+        // make the WHERE NULL and skip every pre-V200 row).
+        "WHERE NOT coalesce(EXCLUDED.shopify_fulfillment_id IS NOT DISTINCT FROM order_fulfillment_tracking.shopify_fulfillment_id " +
+        "                   AND EXCLUDED.fulfillment_updated_at < order_fulfillment_tracking.fulfillment_updated_at, false)";
+
+    /**
+     * V200 — a number that left its still-live fulfillment (Shopify replaced tracking_numbers[] — an edit — or
+     * blanked it) gets removed_at; it is never deleted. Only rows of a fulfillment this payload carries as live, only
+     * when the payload is at least as new as the row (fulfillment updated_at), and never a cancelled fulfillment's
+     * rows (they keep fulfillment_status 'cancelled', as before). Nothing happens for a fulfillment whose numbers
+     * didn't change. A number that comes back is cleared by the upsert itself.
+     */
+    private int markRemoved(UUID tenantId, UUID orderId, JsonNode fulfillments) {
+        int removed = 0;
+        for (JsonNode f : fulfillments) {
+            String fid = text(f, "id");
+            if (fid == null || isCancelled(f)) continue;
+            String[] numbers = trackingNumbers(f).toArray(new String[0]);
+            removed += jdbc.update(
+                // The removing payload's updated_at is kept, so an older payload can't bring the number back.
+                "UPDATE order_fulfillment_tracking SET removed_at = now(), " +
+                "    fulfillment_updated_at = coalesce(?::timestamptz, fulfillment_updated_at) " +
+                "WHERE tenant_id = ? AND order_id = ? AND shopify_fulfillment_id = ? " +
+                "  AND removed_at IS NULL AND lower(coalesce(fulfillment_status, '')) <> 'cancelled' " +
+                "  AND tracking_number <> ALL (?) " +
+                "  AND (fulfillment_updated_at IS NULL OR ?::timestamptz IS NULL OR fulfillment_updated_at <= ?::timestamptz)",
+                text(f, "updated_at"), tenantId, orderId, fid, numbers, text(f, "updated_at"), text(f, "updated_at"));
+        }
+        return removed;
     }
 
     public static String carrierClass(String company, String url) {
