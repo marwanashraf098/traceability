@@ -1896,6 +1896,90 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    // ---- Main reconcile reads (V200, R1 — read only) ----------------------
+
+    private static final String MAIN_QUANTITY_NAMES = "[\"on_hand\", \"available\", \"committed\", \"damaged\"]";
+
+    private static final String MAIN_LEVELS_QUERY = """
+            query MainLevels($ids: [ID!]!, $locationId: ID!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) {
+                    quantities(names: %s) { name quantity }
+                  }
+                }
+              }
+            }
+            """.formatted(MAIN_QUANTITY_NAMES);
+
+    private static final String MAIN_LEVELS_PAGE_QUERY = """
+            query MainLevelsPage($locationId: ID!, $after: String) {
+              location(id: $locationId) {
+                inventoryLevels(first: 250, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    item { id }
+                    quantities(names: %s) { name quantity }
+                  }
+                }
+              }
+            }
+            """.formatted(MAIN_QUANTITY_NAMES);
+
+    @Override
+    public List<MainLevel> fetchMainLevels(String shopDomain, String token, String locationGid,
+                                           List<String> inventoryItemGids) {
+        List<MainLevel> out = new ArrayList<>();
+        for (List<String> chunk : chunks(inventoryItemGids, MAX_INPUT_ARRAY)) {
+            ObjectNode vars = mapper.createObjectNode();
+            vars.set("ids", mapper.valueToTree(chunk));
+            vars.put("locationId", locationGid);
+            JsonNode nodes = executeGraphQL(shopDomain, token, MAIN_LEVELS_QUERY, vars).path("nodes");
+            if (!nodes.isArray()) continue;
+            for (JsonNode node : nodes) {
+                if (node == null || node.isNull() || node.isMissingNode()) continue;
+                String itemGid = node.path("id").asText(null);
+                if (itemGid == null) continue;
+                out.add(mainLevel(itemGid, node.path("inventoryLevel")));
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public MainLevelsPage fetchMainLevelsPage(String shopDomain, String token, String locationGid, String afterCursor) {
+        ObjectNode vars = mapper.createObjectNode();
+        vars.put("locationId", locationGid);
+        if (afterCursor == null) vars.putNull("after"); else vars.put("after", afterCursor);
+        JsonNode levels = executeGraphQL(shopDomain, token, MAIN_LEVELS_PAGE_QUERY, vars)
+            .path("location").path("inventoryLevels");
+        List<MainLevel> out = new ArrayList<>();
+        for (JsonNode node : levels.path("nodes")) {
+            String itemGid = node.path("item").path("id").asText(null);
+            if (itemGid != null) out.add(mainLevel(itemGid, node));
+        }
+        JsonNode pageInfo = levels.path("pageInfo");
+        String next = pageInfo.path("hasNextPage").asBoolean(false) ? pageInfo.path("endCursor").asText(null) : null;
+        return new MainLevelsPage(out, next);
+    }
+
+    static MainLevel mainLevel(String itemGid, JsonNode level) {
+        if (level == null || level.isMissingNode() || level.isNull()) return new MainLevel(itemGid, false, 0, 0, 0, 0);
+        int onHand = 0, available = 0, committed = 0, damaged = 0;
+        for (JsonNode q : level.path("quantities")) {
+            int n = q.path("quantity").asInt(0);
+            switch (q.path("name").asText("")) {
+                case "on_hand"   -> onHand = n;
+                case "available" -> available = n;
+                case "committed" -> committed = n;
+                case "damaged"   -> damaged = n;
+                default -> { }
+            }
+        }
+        return new MainLevel(itemGid, true, onHand, available, committed, damaged);
+    }
+
     static <T> List<List<T>> chunks(List<T> items, int size) {
         List<List<T>> out = new ArrayList<>();
         for (int i = 0; i < items.size(); i += size) {

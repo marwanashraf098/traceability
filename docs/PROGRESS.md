@@ -4,6 +4,48 @@
 
 ## Current state
 
+**Shopify Main-location reconciler ("check-up") — R0 + R1 REPORT-ONLY built (2026-11-02; review fixes 2026-11-03;
+merged to main, NOT deployed; V200).**
+Decisions (Marawan, 2026-11-02, after the Step 0 diagnosis): ALL stores, no coverage / fulfilled-from-Main / stock-take
+eligibility — Traced Main in Shopify = Traced; store-level skip only (Main inactive / deleted → skip, existing
+shopify_location_inactive alert; env allowlist); `pushMainReconcile` (±delta, inventoryAdjustQuantities +
+changeFromQuantity CAS, single attempt, one caller) and settling failed_ambiguous claims "superseded by reconcile"
+APPROVED for R2 — neither is built. Marawan writes the CLAUDE.md amendment.
+- **Rules (one definition, `MainReconcileRules`):** target = custody at Main (available / reserved / packed /
+  awaiting_pickup — physical presence) + away pieces still counted at Main (NOT `TransferShopifySync.RETURN_COUNTED_SQL`)
+  − units Shopify already fulfilled FROM MAIN for orders Traced still holds (successful REST lines only, minus refund
+  restocks at Main, minus pieces already left) + Part 1 units owed. Compared with Shopify ON-HAND. Variant skips (first
+  wins): not_linked, shopify_unread, part1_in_flight, arrival_revisit_pending, claim_in_flight, claim_ambiguous,
+  stock_take_sync_in_flight, transfer_sync_in_flight, fulfillment_unreadable (GraphQL shape), fulfillment_pending,
+  fulfillment_cancelled (ONLY while the cancelled / errored fulfillment changed < `cancelled-fulfillment-window-minutes`
+  (60) ago — Shopify may re-fulfill; older ones are just ignored), not_activated_at_main. Two-run rule via `main_reconcile_variant_state` (delta_since,
+  last_event_at; unconfirmed diffs re-queued). Damaged: report only (`damaged_only` rows).
+- **Part 1:** REST fulfillment lines at another location whose pieces Traced shipped → `main_reconcile_part1_claims`
+  ('report_only', UNIQUE (tenant, fulfillment id, line item id)); waiting while pieces are in custody;
+  not_shipped_by_traced / cancelled_before_shipping / fulfillment_cancelled recorded as run outcomes, no claim.
+- **Triggers:** webhooks orders/updated, orders/cancelled, inventory_levels/update (Main only) → `MainReconcileQueue`
+  (wired by setter into ShopifyWebhookProcessorJob, never throws); every claim on shopify_inventory_adjustments /
+  transfer_shopify_syncs / stock_take_shopify_syncs → V200 trigger; a piece event INTO with_courier / delivered (from
+  anything else) → V200 trigger on piece_events (`piece_left`), so Part 1 is evaluated within ~1 min. `MainReconcileJob`: queue every minute (debounce
+  60 s), sweep `15 */4 * * *` (location.inventoryLevels paged + every Traced variant). Seed's advisory lock.
+- **Noise / retention:** at most one store-level skipped run row per store per hour (`store-skip-row-minutes`; later
+  runs write nothing and take the queue off). The sweep job first deletes runs + diffs older than `retention-days`
+  (14, `TRACED_MAIN_RECONCILE_RETENTION_DAYS`) per tenant under RLS (app_user has DELETE on those two tables only;
+  20 runs per transaction); Part 1 claims and the variant state are never deleted.
+- **Config:** `TRACED_MAIN_RECONCILE_ENABLED` (default false), `TRACED_MAIN_RECONCILE_SHOPS` (empty = all),
+  `TRACED_MAIN_RECONCILE_REPORT_ONLY` (must stay true — false refuses to start),
+  `TRACED_MAIN_RECONCILE_CANCELLED_WINDOW_MINUTES` (60), `TRACED_MAIN_RECONCILE_RETENTION_DAYS` (14).
+- **Restock gate fix:** `shopify_refund_restocked_units(raw, variant_gid, main_location_gid)` — refund restocks naming
+  another location no longer block Traced's +1 at Main (a line without location_id still counts). Used by both
+  ShopifyInventoryService guards and ExceptionService.restocked_twice via `refundRestockedAtMainSql`. Prod: 3 wrongly
+  skipped (Nuvira #3134, #3140, #3149) — not repaired.
+- **Post-deploy read-only summary:** `scripts/ops/2026-11-02-main-reconcile-first-runs.sql`.
+- **Next:** deploy with ENABLED=true (report-only), read the first runs, then R2 (pushMainReconcile + NamedDecrementSet
+  guard update + Part 1 sending + failed_ambiguous settlement) after the CLAUDE.md amendment.
+- **Gotcha found while building:** a plpgsql trigger shared by tables with different columns must reference
+  `NEW.<col>` only in branch-separated statements — a CASE naming `NEW.deltas` failed every stock_take_shopify_syncs
+  write. And RETURN_COUNTED_SQL is NULL (not false) for a tenant with no seed — COALESCE it in expressions.
+
 **Pickups close fix (2026-11-02, BROEK): the scan input's blur refocus now uses focus({ preventScroll: true }) and
 skips while the close confirm is open. A plain focus() scrolled the page up mid-press, so Close session / ✕ clicks
 never landed.** (`PickupSessions.tsx` only; two new tests in `pickupSessionScreen.test.tsx`, both red on the old
