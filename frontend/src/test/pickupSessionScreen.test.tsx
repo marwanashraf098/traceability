@@ -125,3 +125,53 @@ describe('Pickup session — legs that ended in Bosta', () => {
     expect(within(dialog).getByTestId('pickup-close-error')).toBe(err)
   })
 })
+
+// BROEK, 2026-11-02: pressing Close session at the bottom of a long scan list blurred the scan
+// input; the blur refocus called a plain focus(), which scrolled the page back up to the input
+// before the press was released, so the click never landed.
+describe('Pickup session — blur refocus never scrolls the page', () => {
+  beforeEach(() => {
+    clearAccessToken()
+    validToken = `h.${btoa(JSON.stringify({ role: 'worker' }))}.s`
+    closeStatus = 200
+    setAccessToken(validToken)
+    session = { ...base, sessionStatus: 'open', scannedCount: 2, closedByName: null, closedAt: null, scans: [LIVE, ENDED] }
+    fetchFn = vi.fn(backend)
+    stubFetchWithShellDefaults(fetchFn)
+  })
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); clearAccessToken() })
+
+  const scanInput = () => waitFor(() => {
+    const el = document.querySelector<HTMLInputElement>('input')
+    expect(el).toBeTruthy()
+    return el!
+  })
+  const settle = () => new Promise(r => setTimeout(r, 150))   // past the 50 ms refocus timer
+
+  test('the blur refocus calls focus({ preventScroll: true })', async () => {
+    await openSession()
+    const input = await scanInput()
+    input.focus()
+    await settle()
+    const focusSpy = vi.spyOn(input, 'focus')
+    input.blur()
+    await waitFor(() => expect(focusSpy).toHaveBeenCalled())
+    await settle()
+    for (const call of focusSpy.mock.calls) expect(call).toEqual([{ preventScroll: true }])
+    expect(document.activeElement).toBe(input)
+  })
+
+  test('the blur refocus leaves the input alone while the close confirm is open', async () => {
+    const user = await openSession()
+    const input = await scanInput()
+    await user.click(await screen.findByRole('button', { name: /close session/i }))
+    expect(await screen.findByRole('button', { name: /confirm handover/i })).toBeTruthy()
+    input.focus()
+    await settle()
+    const focusSpy = vi.spyOn(input, 'focus')
+    input.blur()
+    await settle()
+    expect(focusSpy).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(input)
+  })
+})
