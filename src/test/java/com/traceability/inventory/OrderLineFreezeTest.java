@@ -14,7 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   z1 PieceStatus.LEFT_CUSTODY is exactly with_courier, delivered, return_in_transit,
  *      return_pending_inspection — a reordering of the enum that changes the range fails here
  *   z2 frozenSql starts with the ALREADY_SHIPPED predicate FulfillService.scan()/complete() use
- *   z3 the repair script inlines frozenSql("o.id", "o.tenant_id") verbatim (whitespace aside)
+ *   z3 the repair script inlines the pre-D7 frozenSql("o.id", "o.tenant_id") verbatim (whitespace aside) —
+ *      it ran on prod before D7 and is kept unchanged (PreD7Freeze)
  */
 class OrderLineFreezeTest {
 
@@ -37,8 +38,9 @@ class OrderLineFreezeTest {
 
     @Test
     void z3_repairScript_inlinesTheFreezeVerbatim() throws Exception {
+        // The script ran on prod before D7 (2026-11-02) and is kept as it ran: it inlines the pre-D7 freeze.
         String script = Files.readString(Path.of("scripts/ops/2026-10-21-order-edit-quantity-repair.sql"));
-        assertThat(strip(script)).contains("ANDNOT" + strip(OrderLineFreeze.frozenSql("o.id", "o.tenant_id")));
+        assertThat(strip(script)).contains("ANDNOT" + strip(PreD7Freeze.FROZEN_SQL_O));
     }
 
     private static String strip(String s) {

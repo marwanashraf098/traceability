@@ -30,7 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * -v ON_ERROR_STOP=1). Fixture: the Maron Fashion shape (a generic Aramex leg cancelled with the old history row and
  * a newer live leg; one still waiting for its refulfill) plus everything the script must leave alone.
  *
- *   z   the script inlines OrderLineFreeze.frozenSql verbatim (whitespace aside)
+ *   z   the script inlines the pre-D7 OrderLineFreeze.frozenSql verbatim (whitespace aside) — it ran on prod
+ *       before D7 (2026-11-02) and is kept unchanged (PreD7Freeze)
  *   rs1 dry run: lists the two candidates with the simulated after-check (unfrozen, not moving), lists the three
  *       orders another freeze clause still holds as skipped, never lists the controls, writes nothing
  *   rs2 commit with the wrong expect_orders aborts — nothing written, no backup table
@@ -133,7 +134,7 @@ class GenericCancelHistoryRepairScriptTest {
     @Test @Order(0)
     void z_scriptInlinesTheFreezeVerbatim() throws Exception {
         String script = Files.readString(Path.of(SCRIPT));
-        assertThat(strip(script)).contains(strip(OrderLineFreeze.frozenSql("o.id", "o.tenant_id")));
+        assertThat(strip(script)).contains(strip(com.traceability.inventory.PreD7Freeze.FROZEN_SQL_O));
     }
 
     @Test @Order(1)
@@ -168,9 +169,10 @@ class GenericCancelHistoryRepairScriptTest {
 
     @Test @Order(3)
     void rs3_commit_deletesOnlyCandidates_backupHoldsThem_orderPacksAgain() throws Exception {
+        // D7 (2026-11-02): a cancel row on a leg that never moved no longer freezes, so the order is already
+        // unfrozen before the repair; the script still removes the rows (below).
         TenantContext.set(f.tenant);
-        assertThat(OrderLineFreeze.isFrozen(jdbc, refulfilled, f.tenant)).as("frozen before the repair").isTrue();
-        assertThat(resolver.resolve("ARV3626181", packer).code()).isEqualTo(WaybillResolver.Code.NOT_PACKABLE);
+        assertThat(OrderLineFreeze.isFrozen(jdbc, refulfilled, f.tenant)).as("already unfrozen under D7").isFalse();
         TenantContext.clear();
 
         List<String> rowsBefore = historyRows(candidateRows);
