@@ -62,7 +62,8 @@ import static org.mockito.Mockito.*;
  *       Part 1 claims and another tenant's old runs stay
  *   x1  cross-tenant as app_user: a run for tenant B sees nothing of A (positive control: A sees its own); with no
  *       tenant set app_user reads zero rows of every new table
- *   w1  report-only: the only Shopify calls are reads, every read targets the Main location; report-only=false refuses
+ *   w1  report-only: the only Shopify calls are reads, every read targets the Main location; writes need report-only
+ *       off, a write shop and the Part 1 cutoff (R2 — the write tests are MainReconcileWriteTest)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -601,9 +602,19 @@ class MainReconcileTest {
     // ── report-only ───────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void w1_reportOnly_offRefusesToStart() {
+    void w1_reportOnlyByDefault_writesNeedReportOnlyOff_aWriteShop_andTheCutoff() {
+        // R2 (V203): report-only=false is allowed now; a store writes only when also listed (or 'all') with a cutoff.
         MainReconcileService s = new MainReconcileService(appJdbc, appTxm, shopifyGateway, tokenProvider, new StoreRepository(appJdbc, appTxm));
-        assertThatThrownBy(() -> s.setReportOnly(false)).isInstanceOf(IllegalStateException.class).hasMessageContaining("R2");
+        s.setReportOnly(true); s.setWriteShops("all"); s.setPart1Since("2026-11-04T00:00:00Z");
+        assertThat(s.writeEnabled("x.myshopify.com")).isFalse();
+        s.setReportOnly(false);
+        assertThat(s.writeEnabled("x.myshopify.com")).isTrue();
+        s.setWriteShops("");
+        assertThat(s.writeEnabled("x.myshopify.com")).isFalse();
+        s.setWriteShops("all"); s.setPart1Since("");
+        assertThat(s.writeEnabled("x.myshopify.com")).isFalse();
+        // This class's service stays report-only: every run here is mode 'report_only' (assertOnlyReadsAtMain after each).
+        assertThat(service.writeEnabled("x.myshopify.com")).isFalse();
     }
 
     /** After every test: Shopify saw reads only, and every location-scoped read named the tenant's Main location. */

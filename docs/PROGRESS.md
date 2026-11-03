@@ -4,6 +4,54 @@
 
 ## Current state
 
+**Shopify Main-location reconciler — R2 WRITE MODE built (2026-11-04; merged to main, NOT deployed; V203).**
+Marawan (2026-11-04): Traced Main = Traced for EVERY store, fixed automatically, no hold on big changes (accepted
+knowingly for stores that ship outside Traced: Juno Babies, mashwar, hs-sparkle, High line, Soccer corner). CLAUDE.md
+amendment added verbatim under the FR-17 v2 invariant — named writes (8) `pushPart1MainDecrement` and (9)
+`pushMainReconcile`, ONE caller each: `MainReconcileWriter` (NamedDecrementSetGuardTest now nine;
+`MainReconcileWriteGuardTest` replaces R1's report-only guard: every write names `main.gid()`).
+- **Fix 1 — Part 1 only for new fulfillments:** `TRACED_MAIN_RECONCILE_PART1_SINCE` (ISO-8601, set to the R2 deploy
+  time). Fulfillments created before it (or with no readable created_at): no claim (run outcome `pre_cutoff`, their
+  shipped units used up so a later line can't claim them), nothing owed. Existing report_only claims from pre-cutoff
+  fulfillments → `ignored_pre_cutoff` (kept). V203 backfills `fulfillment_created_at` on the R1 claims. Unset = R1
+  behaviour AND no writes anywhere. (Evidence: Dolt's 29 pre-cutoff claims; without them 14/15 differences are 0.)
+- **Fix 2 — shipped for orders still unfulfilled in Shopify:** target + `unfulfilled_shipped` = pieces now with_courier
+  / delivered (their latest move out names the order) for a non-cancelled, non-internal order line Shopify still shows
+  unfulfilled — `LEAST(out, order_items qty − successful fulfilled qty from any location)` per (order, variant)
+  (`MainReconcileRules.unfulfilledUnitsSql`, shared with the alert); per variant capped at Shopify's committed at Main,
+  diff note `unfulfilled_capped`. Orders whose fulfillments are the unreadable GraphQL shape skip the variant
+  (fulfillment_unreadable) unless Shopify says FULFILLED. (Evidence: JUMI's −10, mostly 5 delivered 11–14 Oct orders.)
+- **New alert `delivered_not_fulfilled_in_shopify` (MEDIUM, per order, live):** delivered by Traced > 7 days ago
+  (`TRACED_MAIN_RECONCILE_DELIVERED_UNFULFILLED_DAYS`), within a 90-day lookback, still unfulfilled in Shopify; clears
+  when fulfilled / cancelled; resolvable. Connected-store, non-simulated tenants only. Orders "Needs attention": "other".
+- **Write mode:** `TRACED_MAIN_RECONCILE_REPORT_ONLY=false` allowed; writes only for `TRACED_MAIN_RECONCILE_WRITE_SHOPS`
+  ('all' = every store; empty = none) AND the cutoff set; every other store stays report-only (run `mode`).
+  - Part 1 claims are 'queued' in a write store (report_only ones at/after the cutoff are promoted), sent after the
+    compute transaction: queued/failed → pending (committed) → ONE call (−N, key `main-p1:<id>:<attempt>`) → applied |
+    failed (definite, re-sent next run, ≤ 5 attempts) | failed_ambiguous (never re-sent). Pending > 15 min →
+    failed_ambiguous.
+  - Confirmed differences: claim row `main_reconcile_writes` 'pending' (one per variant, partial UNIQUE), committed →
+    FRESH read → if on_hand moved since the confirmed read: `changed_before_write`, nothing sent → else
+    `pushMainReconcile(delta, changeFromQuantity = fresh "available")` → applied | cas_rejected (definite, variant
+    re-queued; next run retries) | failed | failed_ambiguous (never re-sent; holds the variant 60 min —
+    `reconcile_write_in_flight` — then the next write supersedes it; the CAS keeps a late arrival from doubling).
+    Shopify's adjust takes a named quantity, not on_hand: the write adjusts "available" by the delta (= on_hand delta).
+  - Settling: in a write store a failed_ambiguous claim at Main older than 60 min (shopify_inventory_adjustments, Part 1,
+    or an earlier reconcile write) no longer skips its variant; it is set 'superseded_by_reconcile' (+ superseded_at) in
+    the transaction that records the APPLIED write, listed in `main_reconcile_writes.settled`. Transfer / stock-take
+    ambiguous syncs still skip (not settled). Every sender re-sends only queued / failed rows, so the new status is
+    terminal everywhere; rules that don't know it read it as "not reached" and the reconciler corrects Shopify.
+  - Every write logged (store, variant, Shopify before / fresh, target + parts, delta, reason, claim id, result).
+    `TRACED_MAIN_RECONCILE_ENABLED=false` stops every run (checked at each entry point and before each call).
+- **Tests:** MainReconcileWriteTest (w1 allowlist, w2 CAS + changed-before-write, w3 settling + own ambiguous, w4 kill
+  switch, p1 Part 1 once-only / ambiguous never re-sent / definite retried, p2 cutoff, f2 fix 2 + cap + cancelled /
+  fulfilled, a1 alert, x2 cross-tenant app_user + positive control; after each: writes only at Main). Revert-to-confirm
+  RED: fix 1, fix 2 (term and cap), allowlist, CAS baseline, CAS rejection handling. R1's `w1` rewritten (report-only=false
+  no longer refuses). MigrationSmokeTest 202, NotTracedBackfillTest 147.
+- **Ops SQL:** `scripts/ops/2026-11-04-main-reconcile-r2.sql` — (i) differences per store with the fixes applied,
+  (ii) every write in the last 24 h per store, (iii) open delivered-not-fulfilled alerts. Read-only.
+- **Next up:** deploy (a) report-only for all + cutoff → (b) writes for Dolt → (c) 'all'.
+
 **Shopify Main-location reconciler ("check-up") — R0 + R1 REPORT-ONLY built (2026-11-02; review fixes 2026-11-03;
 merged to main, NOT deployed; V201).**
 Decisions (Marawan, 2026-11-02, after the Step 0 diagnosis): ALL stores, no coverage / fulfilled-from-Main / stock-take

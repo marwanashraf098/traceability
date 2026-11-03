@@ -21,7 +21,13 @@ import java.sql.Timestamp;
 import java.util.*;
 
 /**
- * Shopify Main-location reconciler ("check-up") — R1, REPORT-ONLY (V201, approved 2026-11-02).
+ * Shopify Main-location reconciler ("check-up") — R1 report-only (V201, approved 2026-11-02) + R2 write mode (V203,
+ * approved 2026-11-04: Traced Main = Traced for every store, fixed automatically).
+ *
+ * R2: a store in traced.main-reconcile.write-shops ('all' = every store; empty = none — the safe default), with
+ * report-only off and a Part 1 cutoff set, gets writes, through {@link MainReconcileWriter} only (named writes 8 and 9):
+ * Part 1 claims are sent once each, confirmed differences are written with a compare-and-set against a fresh read.
+ * Every other store stays report-only exactly as R1.
  *
  * For one tenant, per variant: Traced's target for Shopify's Traced Main Warehouse ({@link MainReconcileRules}) against
  * Shopify's ON-HAND there, recorded on main_reconcile_runs / main_reconcile_diffs, plus Part 1's would-be subtracts
@@ -70,6 +76,12 @@ public class MainReconcileService {
     private int cancelledFulfillmentWindowMinutes = 60;
     private int storeSkipRowMinutes = 60;
     private int retentionDays = 14;
+    private boolean reportOnly = true;
+    private boolean writeAll = false;
+    private Set<String> writeShops = Set.of();
+    private java.time.Instant part1Since = null;
+    private int ambiguousHoldMinutes = 60;
+    private int pendingStaleMinutes = 15;
 
     public MainReconcileService(JdbcTemplate jdbc, PlatformTransactionManager txm, ShopifyGateway shopify,
                                 ShopifyTokenProvider tokenProvider, StoreRepository storeRepository) {
@@ -84,14 +96,39 @@ public class MainReconcileService {
 
     // ── configuration ───────────────────────────────────────────────────────────────────────────────────────────
 
-    /** Write mode does not exist in R1: report-only must stay on. */
+    /** R2: false allows writes — still only for stores in write-shops, and only with a Part 1 cutoff set. */
     @Autowired
-    public void setReportOnly(@Value("${traced.main-reconcile.report-only:true}") boolean reportOnly) {
-        if (!reportOnly) {
-            throw new IllegalStateException("traced.main-reconcile.report-only=false: write mode is not built (R2) — " +
-                "the reconciler only reports");
+    public void setReportOnly(@Value("${traced.main-reconcile.report-only:true}") boolean reportOnly) { this.reportOnly = reportOnly; }
+
+    /** Write allowlist: comma-separated shop domains; 'all' = every store; empty = no writes anywhere. */
+    @Autowired
+    public void setWriteShops(@Value("${traced.main-reconcile.write-shops:}") String csv) {
+        Set<String> s = new HashSet<>();
+        boolean all = false;
+        if (csv != null) for (String x : csv.split(",")) {
+            String t = x.trim().toLowerCase(Locale.ROOT);
+            if (t.equals("all")) all = true;
+            else if (!t.isEmpty()) s.add(t);
         }
+        this.writeAll = all;
+        this.writeShops = Set.copyOf(s);
     }
+
+    /**
+     * R2 fix 1: Part 1 only for fulfillments created at/after this instant (ISO-8601, set to the R2 deploy time).
+     * Unset → no cutoff (R1 behaviour) and no writes anywhere.
+     */
+    @Autowired
+    public void setPart1Since(@Value("${traced.main-reconcile.part1-since:}") String iso) {
+        this.part1Since = (iso == null || iso.isBlank()) ? null : java.time.OffsetDateTime.parse(iso.trim()).toInstant();
+    }
+
+    /** A failed_ambiguous claim older than this is settled by a reconcile write; younger skips the variant. */
+    @Autowired
+    public void setAmbiguousHoldMinutes(@Value("${traced.main-reconcile.ambiguous-hold-minutes:60}") int m) { this.ambiguousHoldMinutes = m; }
+    /** A Part 1 claim left 'pending' (sent, no outcome recorded) this long becomes failed_ambiguous. */
+    @Autowired
+    public void setPendingStaleMinutes(@Value("${traced.main-reconcile.pending-stale-minutes:15}") int m) { this.pendingStaleMinutes = m; }
 
     @Autowired
     public void setEnabled(@Value("${traced.main-reconcile.enabled:false}") boolean enabled) { this.enabled = enabled; }
@@ -131,6 +168,20 @@ public class MainReconcileService {
     public int retentionDays() { return retentionDays; }
     public int debounceSeconds() { return debounceSeconds; }
 
+    /** Writes for this store: report-only off, a Part 1 cutoff set, and the store in write-shops ('all' or listed). */
+    boolean writeEnabled(String shopDomain) {
+        if (reportOnly || part1Since == null) return false;
+        return writeAll || (shopDomain != null && writeShops.contains(shopDomain.trim().toLowerCase(Locale.ROOT)));
+    }
+
+    @jakarta.annotation.PostConstruct
+    void warnMisconfigured() {
+        if (!reportOnly && (writeAll || !writeShops.isEmpty()) && part1Since == null) {
+            log.warn("Main reconcile: report-only is off and write-shops is set, but part1-since is not — NO writes " +
+                     "until TRACED_MAIN_RECONCILE_PART1_SINCE is set");
+        }
+    }
+
     boolean allowlisted(String shopDomain) {
         return shops.isEmpty() || (shopDomain != null && shops.contains(shopDomain.trim().toLowerCase(Locale.ROOT)));
     }
@@ -169,6 +220,7 @@ public class MainReconcileService {
     }
 
     private UUID run(UUID tenantId, String kind, List<UUID> variantIds) {
+        if (!enabled) return null;   // global kill switch: no reads, no writes
         StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store != null && !allowlisted(store.shopDomain())) {
             // Not in the staged rollout: no run row; drop what was queued so the queue job doesn't re-pick it every minute.
@@ -192,9 +244,10 @@ public class MainReconcileService {
             return null;
         }
 
+        boolean write = store != null && writeEnabled(store.shopDomain());
         UUID runId = tx.execute(s -> jdbc.queryForObject(
-            "INSERT INTO main_reconcile_runs (tenant_id, kind, location_id, shopify_location_id) VALUES (?, ?, ?, ?) RETURNING id",
-            UUID.class, tenantId, kind, main == null ? null : main.id(), main == null ? null : main.gid()));
+            "INSERT INTO main_reconcile_runs (tenant_id, kind, mode, location_id, shopify_location_id) VALUES (?, ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, kind, write ? "write" : "report_only", main == null ? null : main.id(), main == null ? null : main.gid()));
         Timestamp startedAt = tx.execute(s -> jdbc.queryForObject(
             "SELECT started_at FROM main_reconcile_runs WHERE id = ? AND tenant_id = ?", Timestamp.class, runId, tenantId));
 
@@ -231,7 +284,24 @@ public class MainReconcileService {
                 }
             }
             Timestamp readAt = tx.execute(s -> jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class));
-            compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt);
+            List<MainReconcileWriter.Candidate> candidates =
+                compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write);
+            if (write) {
+                // After the compute transaction committed — no DB transaction is open during a Shopify call.
+                MainReconcileWriter writer = new MainReconcileWriter(jdbc, tx, shopify, this::enabled);
+                MainReconcileWriter.Main m = new MainReconcileWriter.Main(main.id(), main.gid());
+                MainReconcileWriter.Outcome p1 = writer.sendPart1(tenantId, store.shopDomain(), token, m);
+                int attempted = p1.attempted(), applied = p1.applied();
+                for (MainReconcileWriter.Candidate c : candidates) {
+                    if (!enabled()) break;
+                    attempted++;
+                    if (writer.write(tenantId, runId, store.shopDomain(), token, m, c)) applied++;
+                }
+                int a = attempted, ap = applied;
+                tx.executeWithoutResult(s -> jdbc.update(
+                    "UPDATE main_reconcile_runs SET writes_attempted = ?, writes_applied = ? WHERE id = ? AND tenant_id = ?",
+                    a, ap, runId, tenantId));
+            }
         } catch (RuntimeException e) {
             log.warn("Main reconcile run {} tenant={} failed: {}", runId, tenantId, e.toString());
             String msg = String.valueOf(e.getMessage());
@@ -353,14 +423,17 @@ public class MainReconcileService {
 
     private record State(Integer lastDelta, Timestamp deltaSince, Timestamp lastEventAt) {}
 
-    private void compute(UUID tenantId, UUID runId, String kind, Main main, Map<UUID, String> items,
-                         Map<String, Level> levels, Set<String> readItems, Timestamp readAt, Timestamp startedAt) {
+    private List<MainReconcileWriter.Candidate> compute(UUID tenantId, UUID runId, String kind, Main main,
+                         Map<UUID, String> items, Map<String, Level> levels, Set<String> readItems, Timestamp readAt,
+                         Timestamp startedAt, boolean write) {
+        List<MainReconcileWriter.Candidate> candidates = new ArrayList<>();
         tx.executeWithoutResult(st -> {
             // The seed's lock (ShopifyInventoryReconcileService.acquireTenantLock): one Main writer/reader at a time.
             jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", rs -> null, tenantId.toString());
+            preparePart1(tenantId, write);
 
             List<UUID> ids = new ArrayList<>(items.keySet());
-            ObjectNode part1 = part1(tenantId, runId, main, "sweep".equals(kind) ? null : ids);
+            ObjectNode part1 = part1(tenantId, runId, main, "sweep".equals(kind) ? null : ids, write);
 
             Map<UUID, State> states = new HashMap<>();
             for (List<UUID> chunk : chunks(ids)) {
@@ -380,7 +453,8 @@ public class MainReconcileService {
                 List<Map<String, Object>> rows = named.queryForList(MainReconcileRules.EVALUATE_SQL,
                     new MapSqlParameterSource("t", tenantId).addValue("main", main.id()).addValue("mainGid", main.gid())
                         .addValue("mainNum", main.numeric()).addValue("ids", uuidArray(chunk))
-                        .addValue("cancelWindowMinutes", cancelledFulfillmentWindowMinutes));
+                        .addValue("cancelWindowMinutes", cancelledFulfillmentWindowMinutes)
+                        .addValue("settle", write).addValue("holdMinutes", ambiguousHoldMinutes));
                 for (Map<String, Object> r : rows) {
                     checked++;
                     UUID variantId = (UUID) r.get("variant_id");
@@ -390,11 +464,16 @@ public class MainReconcileService {
                     int fulfilled = num(r, "fulfilled_from_main");
                     int owed      = num(r, "part1_owed");
                     int tDamaged  = num(r, "traced_damaged");
-                    int target    = custody + away - fulfilled + owed;
                     Level lv = item == null ? null : levels.getOrDefault(item, Level.UNSTOCKED);
+                    // Fix 2: shipped pieces of lines Shopify still shows unfulfilled, capped at Shopify's committed at Main.
+                    int unfulfilledRaw = num(r, "unfulfilled_shipped_raw");
+                    int unfulfilled = lv == null ? unfulfilledRaw : Math.min(unfulfilledRaw, Math.max(0, lv.committed()));
+                    String note = unfulfilled < unfulfilledRaw ? MainReconcileRules.NOTE_UNFULFILLED_CAPPED : null;
+                    int target    = custody + away - fulfilled + owed + unfulfilled;
 
                     String skip = item == null ? MainReconcileRules.NOT_LINKED
                         : !readItems.contains(item) ? MainReconcileRules.SHOPIFY_UNREAD
+                        : flag(r, "reconcile_write_in_flight") ? MainReconcileRules.RECONCILE_WRITE_IN_FLIGHT
                         : flag(r, "part1_in_flight") ? MainReconcileRules.PART1_IN_FLIGHT
                         : flag(r, "arrival_revisit_pending") ? MainReconcileRules.ARRIVAL_REVISIT_PENDING
                         : flag(r, "claim_in_flight") ? MainReconcileRules.CLAIM_IN_FLIGHT
@@ -433,6 +512,9 @@ public class MainReconcileService {
                             status = "confirmed";
                             confirmed++;
                             if (delta > 0) up += delta; else down += -delta;
+                            if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand, target,
+                                custody, away, fulfilled, owed, unfulfilled, delta, longs(r.get("settle_claims")),
+                                uuids(r.get("settle_part1")), uuids(r.get("settle_writes"))));
                         } else {
                             status = "unconfirmed";
                             recheckAt = new Timestamp(deltaSince.getTime() + confirmMillis - debounceSeconds * 1000L + 1000L);
@@ -442,11 +524,13 @@ public class MainReconcileService {
                     if (status != null) {
                         jdbc.update("INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
                             "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
-                            "shopify_available, shopify_committed, shopify_damaged, traced_damaged, delta, delta_since) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "shopify_available, shopify_committed, shopify_damaged, traced_damaged, delta, delta_since, " +
+                            "unfulfilled_shipped, unfulfilled_shipped_raw, note) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             tenantId, runId, variantId, status, skip, custody, away, fulfilled, owed, target, onHand,
                             lv == null || onHand == null ? null : lv.available(), lv == null || onHand == null ? null : lv.committed(),
-                            lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince);
+                            lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince,
+                            unfulfilled, unfulfilledRaw, note);
                     }
                     Integer keepDelta = skip != null ? null : delta;
                     jdbc.update("INSERT INTO main_reconcile_variant_state AS s (tenant_id, variant_id, last_checked_at, " +
@@ -473,14 +557,56 @@ public class MainReconcileService {
                 readAt, checked, inSync, skipped, differences, confirmed, up, down, damagedMismatch,
                 reasons.toString(), part1.toString(), runId, tenantId);
         });
+        return candidates;
+    }
+
+    /**
+     * Under the run's lock, before Part 1 and the target: (fix 1) report_only claims from fulfillments before the
+     * cutoff → 'ignored_pre_cutoff' (kept, never owed, never sent); in a write store, a claim left 'pending' for
+     * pending-stale-minutes → 'failed_ambiguous' (never re-sent), and report_only claims at/after the cutoff → 'queued'.
+     */
+    private void preparePart1(UUID tenantId, boolean write) {
+        if (part1Since != null) {
+            jdbc.update("UPDATE main_reconcile_part1_claims SET status = 'ignored_pre_cutoff', reason = 'pre_cutoff', " +
+                        "  updated_at = now() WHERE tenant_id = ? AND status = 'report_only' " +
+                        "  AND COALESCE(fulfillment_created_at, created_at) < ?", tenantId, Timestamp.from(part1Since));
+        }
+        if (write) {
+            jdbc.update("UPDATE main_reconcile_part1_claims SET status = 'failed_ambiguous', " +
+                        "  error = 'pending with no recorded outcome — not re-sent', updated_at = now() " +
+                        "WHERE tenant_id = ? AND status = 'pending' AND send_started_at < now() - make_interval(mins => ?)",
+                        tenantId, pendingStaleMinutes);
+            jdbc.update("UPDATE main_reconcile_part1_claims SET status = 'queued', updated_at = now() " +
+                        "WHERE tenant_id = ? AND status = 'report_only'", tenantId);
+        }
+    }
+
+    private static List<Long> longs(Object arr) {
+        List<Long> out = new ArrayList<>();
+        try {
+            if (arr instanceof java.sql.Array a) for (Object o : (Object[]) a.getArray()) if (o != null) out.add(((Number) o).longValue());
+        } catch (java.sql.SQLException e) { throw new IllegalStateException(e); }
+        return out;
+    }
+
+    private static List<UUID> uuids(Object arr) {
+        List<UUID> out = new ArrayList<>();
+        try {
+            if (arr instanceof java.sql.Array a) for (Object o : (Object[]) a.getArray()) if (o != null) out.add((UUID) o);
+        } catch (java.sql.SQLException e) { throw new IllegalStateException(e); }
+        return out;
     }
 
     // ── Part 1 (report-only claims) ─────────────────────────────────────────────────────────────────────────────
 
     private record P1Line(UUID orderId, boolean orderCancelled, UUID variantId, String fulfillmentId, String lineItemId,
-                          String status, String location, int qty) {}
+                          String status, String location, int qty, Timestamp createdAt) {
+        boolean preCutoff(java.time.Instant since) {
+            return since != null && (createdAt == null || createdAt.toInstant().isBefore(since));
+        }
+    }
 
-    private ObjectNode part1(UUID tenantId, UUID runId, Main main, List<UUID> variantIds) {
+    private ObjectNode part1(UUID tenantId, UUID runId, Main main, List<UUID> variantIds, boolean write) {
         Map<String, Integer> outcomes = new TreeMap<>();
         int units = 0;
         MapSqlParameterSource p = new MapSqlParameterSource("t", tenantId).addValue("mainNum", main.numeric())
@@ -489,7 +615,7 @@ public class MainReconcileService {
         List<P1Line> lines = named.query(MainReconcileRules.PART1_LINES_SQL, p, (rs, i) -> new P1Line(
             rs.getObject("order_id", UUID.class), rs.getBoolean("order_cancelled"), rs.getObject("variant_id", UUID.class),
             rs.getString("fulfillment_id"), rs.getString("line_item_id"), rs.getString("fulfillment_status"),
-            rs.getString("fulfilled_location_id"), rs.getInt("qty")));
+            rs.getString("fulfilled_location_id"), rs.getInt("qty"), rs.getTimestamp("fulfillment_created_at")));
 
         Map<List<UUID>, List<P1Line>> groups = new LinkedHashMap<>();
         for (P1Line l : lines) {
@@ -518,18 +644,23 @@ public class MainReconcileService {
                     String outcome;
                     if (claimedKeys.contains(l.fulfillmentId() + "|" + l.lineItemId())) {
                         outcome = MainReconcileRules.P1_ALREADY_CLAIMED;
+                    } else if (l.preCutoff(part1Since)) {
+                        // Fix 1: before the cutoff — treated as already settled: no claim, not owed. Its shipped units
+                        // are used up here so a later line of the same order can't claim them.
+                        if ("success".equals(l.status())) availOther -= Math.min(Math.max(availOther, 0), l.qty());
+                        outcome = MainReconcileRules.P1_PRE_CUTOFF;
                     } else if (Set.of("cancelled", "error", "failure").contains(l.status())) {
                         outcome = MainReconcileRules.P1_FULFILLMENT_CANCELLED;
                     } else if (!"success".equals(l.status())) {
                         outcome = MainReconcileRules.P1_FULFILLMENT_PENDING;
                     } else if (availOther >= l.qty()) {
-                        if (claim(tenantId, runId, main, l, l.qty())) units += l.qty();
+                        if (claim(tenantId, runId, main, l, l.qty(), write)) units += l.qty();
                         availOther -= l.qty();
                         outcome = MainReconcileRules.P1_WOULD_SUBTRACT;
                     } else if (inCustody > 0) {
                         outcome = MainReconcileRules.P1_WAITING;
                     } else if (availOther > 0) {
-                        if (claim(tenantId, runId, main, l, availOther)) units += availOther;
+                        if (claim(tenantId, runId, main, l, availOther, write)) units += availOther;
                         availOther = 0;
                         outcome = MainReconcileRules.P1_WOULD_SUBTRACT;
                     } else if (l.orderCancelled()) {
@@ -550,15 +681,18 @@ public class MainReconcileService {
         return out;
     }
 
-    /** The claim (exactly once per fulfillment + line item — the UNIQUE key). R1: 'report_only', never sent. */
-    private boolean claim(UUID tenantId, UUID runId, Main main, P1Line l, int qty) {
+    /**
+     * The claim (exactly once per fulfillment + line item — the UNIQUE key). Report-only store: 'report_only', never
+     * sent; write store: 'queued' — MainReconcileWriter sends it once after this transaction commits.
+     */
+    private boolean claim(UUID tenantId, UUID runId, Main main, P1Line l, int qty, boolean write) {
         return jdbc.update(
             "INSERT INTO main_reconcile_part1_claims (tenant_id, order_id, variant_id, location_id, fulfillment_id, " +
-            "  line_item_id, fulfilled_location_id, fulfilled_quantity, quantity, status, reason, run_id) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'report_only', 'shipped_by_traced_fulfilled_elsewhere', ?) " +
+            "  line_item_id, fulfilled_location_id, fulfilled_quantity, quantity, status, reason, run_id, fulfillment_created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shipped_by_traced_fulfilled_elsewhere', ?, ?) " +
             "ON CONFLICT (tenant_id, fulfillment_id, line_item_id) DO NOTHING",
             tenantId, l.orderId(), l.variantId(), main.id(), l.fulfillmentId(), l.lineItemId(), l.location(),
-            l.qty(), qty, runId) > 0;
+            l.qty(), qty, write ? "queued" : "report_only", runId, l.createdAt()) > 0;
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
