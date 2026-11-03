@@ -1230,6 +1230,7 @@
         "notPackedEmpty": "Every printed waybill has been packed.",
         "batchNo": "Batch #{{no}}",
         "statusCancelled": "Cancelled after print",
+        "statusReprintNeeded": "Reprint needed · new waybill {{tracking}}",
         "statusPacking": "Packing now · {{name}}",
         "statusSetAside": "Set aside · {{reason}}",
         "statusWaiting": "Waiting"

@@ -1274,6 +1274,7 @@
         "notPackedEmpty": "كل البوالص المطبوعة تم تغليفها.",
         "batchNo": "الدفعة رقم {{no}}",
         "statusCancelled": "أُلغي بعد الطباعة",
+        "statusReprintNeeded": "يلزم إعادة الطباعة · البوليصة الجديدة {{tracking}}",
         "statusPacking": "يُغلَّف الآن · {{name}}",
         "statusSetAside": "جانباً · {{reason}}",
         "statusWaiting": "في الانتظار"

@@ -35,10 +35,26 @@ public class PackListService {
      * 'set_aside' (open set-aside — setAsideReason), 'waiting'. exceptionType / subjectKey are set
      * for the two exception rows so a manager can open the exception.
      */
+    /** reprintTrackingNumber: status reprint_needed only — the order's live waybill, never printed yet. */
     public record NotPackedRow(UUID orderId, String orderNumber, String customerName, UUID shipmentId,
                                String trackingNumber, UUID batchId, int batchNo, Instant batchPrintedAt,
                                String status, String packerName, String setAsideReason,
-                               String exceptionType, String subjectKey) {}
+                               String exceptionType, String subjectKey, String reprintTrackingNumber) {}
+
+    /**
+     * S4 (approved 2026-11-03) — the printed leg (alias {@code s}) is no longer the order's live waybill: cancelled /
+     * terminated / deleted in Bosta / replaced by a Shopify tracking edit.
+     */
+    static final String PRINTED_LEG_DEAD_SQL =
+        "(s.internal_state IN ('cancelled', 'terminated') OR s.provider_deleted_at IS NOT NULL OR s.superseded_at IS NOT NULL)";
+
+    /** The order's live forward waybill (alias {@code o}) when it isn't the printed one and was never printed. */
+    static final String UNPRINTED_LIVE_LEG_SQL =
+        "(SELECT x.tracking_number FROM shipments x WHERE x.order_id = o.id AND x.tenant_id = o.tenant_id " +
+        "   AND x.shipment_leg = 'forward' AND x.internal_state NOT IN ('cancelled', 'terminated') " +
+        "   AND x.provider_deleted_at IS NULL AND x.id <> s.id " +
+        "   AND NOT EXISTS (SELECT 1 FROM pack_print_batch_items b2 WHERE b2.shipment_id = x.id AND b2.tenant_id = x.tenant_id) " +
+        " ORDER BY x.created_at DESC, x.id DESC LIMIT 1)";
 
     public record NeedsManager(UUID orderId, String orderNumber, String customerName, String kind,
                                String reason, String rawScan, Instant at) {}
@@ -210,6 +226,11 @@ public class PackListService {
      * cancelled-after-print ones; one row per shipment (its latest batch). Status priority:
      * cancelled → packing now (live claim) → set aside → waiting; sorted cancelled, set aside, packing
      * now, waiting, then the oldest batch first, then the waybill's position in the printed stack.
+     *
+     * S4 (approved 2026-11-03): a printout drops off once the order left custody (OrderLineFreeze.frozenSql — the one
+     * custody rule; the order's own status rarely moves when packing happens outside Traced), or once its waybill is
+     * no longer the order's live one (PRINTED_LEG_DEAD_SQL) — then 'reprint_needed' (sorted right after cancelled)
+     * when the order's live waybill was never printed, otherwise gone.
      */
     @Transactional(readOnly = true)
     public List<NotPackedRow> printedNotPacked() {
@@ -221,20 +242,25 @@ public class PackListService {
             "         CASE WHEN " + PackListRules.CANCELLED_AFTER_PRINT_OPEN_SQL + " THEN 'cancelled' " +
             "              WHEN " + PackListRules.CANCELLED_SQL + " THEN NULL " +
             "              WHEN NOT " + PackListRules.NOT_YET_PACKED_SQL + " THEN NULL " +
+            "              WHEN " + OrderLineFreeze.frozenSql("o.id", "o.tenant_id") + " THEN NULL " +
+            "              WHEN " + PRINTED_LEG_DEAD_SQL + " THEN CASE WHEN " + UNPRINTED_LIVE_LEG_SQL + " IS NOT NULL " +
+            "                   THEN 'reprint_needed' END " +
             "              WHEN o.locked_by IS NOT NULL AND COALESCE(o.locked_at, '-infinity'::timestamptz) " +
             "                   > now() - interval '" + PackClaim.STALE_AFTER_MINUTES + " minutes' THEN 'packing' " +
             "              WHEN " + PackListRules.SET_ASIDE_OPEN_SQL + " THEN 'set_aside' " +
             "              ELSE 'waiting' END AS status, " +
             "         lu.name AS packer_name, ps.reason AS set_aside_reason, " +
             "         " + PackListRules.SET_ASIDE_KEY_SQL + " AS set_aside_key, " +
-            "         " + PackListRules.CANCELLED_AFTER_PRINT_KEY_SQL + " AS cancelled_key " +
+            "         " + PackListRules.CANCELLED_AFTER_PRINT_KEY_SQL + " AS cancelled_key, " +
+            "         " + UNPRINTED_LIVE_LEG_SQL + " AS reprint_tracking_number " +
             "  " + ITEM_STATE_FROM +
             "  LEFT JOIN users lu ON lu.id = o.locked_by " +
             "  WHERE bi.tenant_id = ? " +
             // latest batch per shipment (UUIDv4 is not time-ordered — created_at, id only as tie-break)
             "  ORDER BY s.id, b.created_at DESC, b.id DESC " +
             ") x WHERE x.status IS NOT NULL " +
-            "ORDER BY CASE x.status WHEN 'cancelled' THEN 0 WHEN 'set_aside' THEN 1 WHEN 'packing' THEN 2 ELSE 3 END, " +
+            "ORDER BY CASE x.status WHEN 'cancelled' THEN 0 WHEN 'reprint_needed' THEN 1 WHEN 'set_aside' THEN 2 " +
+            "                       WHEN 'packing' THEN 3 ELSE 4 END, " +
             "         x.printed_at ASC, x.batch_no ASC, x.position ASC",
             (rs, i) -> {
                 String status = rs.getString("status");
@@ -247,7 +273,8 @@ public class PackListService {
                     "cancelled".equals(status) ? "pack_cancelled_after_print"
                         : "set_aside".equals(status) ? "pack_set_aside" : null,
                     "cancelled".equals(status) ? rs.getString("cancelled_key")
-                        : "set_aside".equals(status) ? rs.getString("set_aside_key") : null);
+                        : "set_aside".equals(status) ? rs.getString("set_aside_key") : null,
+                    "reprint_needed".equals(status) ? rs.getString("reprint_tracking_number") : null);
             },
             tenantId);
     }

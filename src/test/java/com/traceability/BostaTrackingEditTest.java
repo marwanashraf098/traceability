@@ -105,6 +105,7 @@ class BostaTrackingEditTest {
     @Autowired EncryptionService           encryption;
     @Autowired com.traceability.inventory.PickupSessionService pickups;
     @Autowired BostaFulfillmentCatchUpService catchUp;
+    @Autowired com.traceability.inventory.PackListService packLists;
     @MockBean  BostaGateway                bostaGateway;
     @MockBean  BostaV2Client               bostaV2;
     @MockBean  JobScheduler                jobScheduler;
@@ -540,7 +541,90 @@ class BostaTrackingEditTest {
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq("2036246051"));
     }
 
+    // ── S4 (c): Printed but not packed ──────────────────────────────────────────────────────────
+
+    @Test
+    void pn1_deadPrintout_orderShippedOnAnotherWaybill_dropsOff() {
+        Shop s = new Shop("pn1");
+        // Dolt.eg #17118: Traced printed 6941206863, it was cancelled, the order went out on 4266118553 (delivered)
+        // with no Traced pack scan — the order is still 'new'.
+        UUID o = s.order("#17118");
+        UUID printed = bostaLeg(s, o, "6941206863");
+        print(s, o, printed, "6941206863");
+        jdbc.update("UPDATE shipments SET internal_state = 'cancelled' WHERE id = ?", printed);
+        UUID shipped = bostaLeg(s, o, "4266118553");
+        jdbc.update("UPDATE shipments SET internal_state = 'delivered' WHERE id = ?", shipped);
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state) VALUES " +
+            "(?, ?, 'with_courier', 21), (?, ?, 'delivered', 45)", s.f.tenant, shipped, s.f.tenant, shipped);
+        assertThat(notPacked(s)).as("left custody: gone").isEmpty();
+    }
+
+    @Test
+    void pn2_replacedNotReprinted_reprintNeeded_thenReprinted_onlyTheNewWaybillWaits() {
+        Shop s = new Shop("pn2");
+        UUID o = s.order("#17700");
+        UUID old = linkedLeg(s, o, 7329122353570L, "7500000001", "2026-10-31T12:00:00+02:00");
+        UUID batch = print(s, o, old, "7500000001");
+        deliveryInBosta(s, o, "7500000002", 10);
+        capture(s, o, payload(f(7329122353570L, "success", "2026-10-31T18:00:00+02:00", "7500000002")));
+        link(s, o, "7500000002");
+
+        assertThat(notPacked(s)).containsExactly("#17700|7500000001|reprint_needed|7500000002");
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, '7500000002', 2)", batch, s.f.tenant, o, liveLeg(o));
+        assertThat(notPacked(s)).containsExactly("#17700|7500000002|waiting|null");
+    }
+
+    @Test
+    void pn3_golden_livePrintedWaybill_unchanged() {
+        Shop s = new Shop("pn3");
+        UUID o = s.order("#17701");
+        UUID leg = linkedLeg(s, o, 7329122353571L, "7500000011", "2026-10-31T12:00:00+02:00");
+        print(s, o, leg, "7500000011");
+        assertThat(notPacked(s)).containsExactly("#17701|7500000011|waiting|null");
+        jdbc.update("UPDATE orders SET locked_by = ?, locked_at = now() WHERE id = ?", s.packer, o);
+        assertThat(notPacked(s)).containsExactly("#17701|7500000011|packing|null");
+    }
+
+    @Test
+    void pn4_deletedPrintout_noLiveLeg_dropsOff_butTheOrderKeepsTheRedNotLinkedBadge() {
+        Shop s = new Shop("pn4");
+        com.traceability.fulfillment.OrderController controller = new com.traceability.fulfillment.OrderController(
+            jdbc, mapper, txm, new com.traceability.fulfillment.OrderNotesService(jdbc), fulfill);
+        // BRK-45472-EG: printed 4640111860 (deleted in Bosta, cancelled); Shopify's 8887279245 was skipped long ago.
+        UUID o = s.order("BRK-45472-EG");
+        UUID printed = bostaLeg(s, o, "4640111860");
+        print(s, o, printed, "4640111860");
+        jdbc.update("UPDATE shipments SET internal_state = 'cancelled', provider_deleted_at = now(), " +
+            "provider_deleted_reason = 'deleted_in_bosta' WHERE id = ?", printed);
+        capture(s, o, payload(f(7400000000300L, "success", "2026-10-16T12:00:00+02:00", "8887279245")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped', first_seen_at = now() - INTERVAL '10 days' " +
+            "WHERE order_id = ?", o);
+
+        assertThat(notPacked(s)).isEmpty();
+        String badge = TenantContext.runAs(s.f.tenant, () -> controller.list(null, null, null, null, 0, 100).items()).stream()
+            .filter(r -> "BRK-45472-EG".equals(r.number())).map(r -> r.shippingBadge() == null ? "none" : r.shippingBadge().state())
+            .findFirst().orElseThrow();
+        assertThat(badge).as("still visible on the Orders list").isEqualTo("bosta_tracking_not_linked");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
+
+    private UUID print(Shop s, UUID o, UUID shipment, String tn) {
+        Integer next = jdbc.queryForObject("SELECT coalesce(max(batch_no), 0) + 1 FROM pack_print_batches WHERE tenant_id = ?",
+            Integer.class, s.f.tenant);
+        UUID batch = jdbc.queryForObject("INSERT INTO pack_print_batches (tenant_id, batch_no, paper, sort, scope, waybill_count, " +
+            "order_guaranteed) VALUES (?, ?, 'A6', 'oldest', 'new', 1, true) RETURNING id", UUID.class, s.f.tenant, next);
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, ?, 1)", batch, s.f.tenant, o, shipment, tn);
+        return batch;
+    }
+
+    /** "order|printed waybill|status|reprint waybill" per row of Printed but not packed. */
+    private List<String> notPacked(Shop s) {
+        return TenantContext.runAs(s.f.tenant, () -> packLists.printedNotPacked()).stream()
+            .map(r -> r.orderNumber() + "|" + r.trackingNumber() + "|" + r.status() + "|" + r.reprintTrackingNumber()).toList();
+    }
 
     private String shipmentsAndRows(Shop s) {
         return String.join("\n", jdbc.queryForList("SELECT x::text FROM shipments x WHERE tenant_id = ? UNION ALL " +
