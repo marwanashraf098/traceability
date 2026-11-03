@@ -90,10 +90,10 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // A transfer's pieces still counted at the main warehouse in Shopify
   transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
   // Shopify tracking-number edits (V200)
-  tracking_changed_after_custody: { en: 'Tracking Changed After Shipping', ar: 'تغيّر رقم التتبع بعد الشحن' },
-  tracking_change_needs_review:   { en: 'Tracking Change To Review',       ar: 'تغيير رقم تتبع للمراجعة' },
-  tracking_changed_relabel:       { en: 'New Waybill — Relabel Parcel',    ar: 'بوليصة جديدة — غيّر ملصق الطرد' },
-  superseded_waybill_moving:      { en: 'Old Waybill Moving At Bosta',     ar: 'البوليصة القديمة تتحرك في Bosta' },
+  tracking_changed_after_custody: { en: 'Waybill Changed After Pickup',      ar: 'تغيّرت البوليصة بعد خروج الطرد' },
+  tracking_change_needs_review:   { en: 'Shopify Shows A Different Waybill', ar: 'شوبيفاي يعرض بوليصة مختلفة' },
+  tracking_changed_relabel:       { en: 'Put The New Waybill On The Parcel', ar: 'ضع البوليصة الجديدة على الطرد' },
+  superseded_waybill_moving:      { en: 'Old Waybill Still Moving At Bosta', ar: 'البوليصة القديمة ما زالت تتحرك في Bosta' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

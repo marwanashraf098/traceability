@@ -435,6 +435,8 @@ export interface TimelineItem {
   detail: string | null
   kind: 'done' | 'now' | 'fail'
   source?: GenericLegSource
+  /** waybill_change_not_followed only: why Traced kept the old waybill (orders.timeline.reason.*). */
+  reasonKey?: 'frozen' | 'pickup_session' | 'ambiguous' | 'key_taken' | 'old_delivery_live'
 }
 
 export function getOrderTimeline(id: string) {
@@ -2496,7 +2498,7 @@ export interface PrintBatchToday {
   waiting: number
 }
 
-export type NotPackedStatus = 'cancelled' | 'packing' | 'set_aside' | 'waiting'
+export type NotPackedStatus = 'cancelled' | 'reprint_needed' | 'packing' | 'set_aside' | 'waiting'
 
 export interface NotPackedRow {
   orderId: string
@@ -2513,6 +2515,8 @@ export interface NotPackedRow {
   /** pack_cancelled_after_print / pack_set_aside — opens the exception (owner/manager). */
   exceptionType: string | null
   subjectKey: string | null
+  /** reprint_needed only: the order's live waybill, which was never printed (S4). */
+  reprintTrackingNumber?: string | null
 }
 
 export interface SessionSummary {

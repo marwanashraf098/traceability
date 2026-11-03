@@ -82,6 +82,27 @@ public final class BostaSupersede {
         ShipmentSettlement.apply(jdbc, shipmentId, delivery.raw());
     }
 
+    /** link_reason of a row re-queued by {@link #requeueAfterLegEnded} — its next attempt is the one re-attempt. */
+    public static final String REQUEUE_REASON_PREFIX = "requeued: ";
+
+    /**
+     * S4 (d, approved 2026-11-03) — the order's Bosta forward leg {@code endedTn} ended in Bosta (deletion confirmed,
+     * or 48 / 49 / 104): its 'skipped' / 'gave_up' Bosta tracking rows that Shopify still shows (not removed, not
+     * cancelled, not already a shipment) get ONE re-attempt through the normal link pipeline — every S3 gate applies
+     * (freeze, pickup session, D2, identity), the retry sweeper picks them up. Never touches another order's rows,
+     * so a second parcel whose order's leg is live is never re-queued. No Bosta call here.
+     */
+    public static int requeueAfterLegEnded(JdbcTemplate jdbc, UUID tenantId, UUID orderId, String endedTn) {
+        return jdbc.update(
+            "UPDATE order_fulfillment_tracking t SET link_status = 'retry', link_reason = ?, link_next_retry_at = now(), " +
+            "    link_first_failed_at = NULL, link_checked_at = now() " +
+            "WHERE t.tenant_id = ? AND t.order_id = ? AND t.carrier_class = 'bosta' AND t.link_status IN ('skipped', 'gave_up') " +
+            "  AND t.removed_at IS NULL AND lower(coalesce(t.fulfillment_status, '')) <> 'cancelled' " +
+            "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id AND s.tracking_number = t.tracking_number " +
+            "                    AND s.provider = 'bosta')",
+            REQUEUE_REASON_PREFIX + "old waybill " + endedTn + " ended in Bosta", tenantId, orderId);
+    }
+
     /** The order's live Bosta forward leg of a Shopify order (never an internal order), or null. */
     static Map<String, Object> liveLeg(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
         List<Map<String, Object>> rows = jdbc.queryForList(

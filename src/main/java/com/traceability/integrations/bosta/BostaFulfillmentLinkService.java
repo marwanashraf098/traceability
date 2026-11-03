@@ -166,12 +166,37 @@ public class BostaFulfillmentLinkService {
         if (order == null) return Result.skip("order not found");
 
         Map<String, Object> row = tx.execute(s -> jdbc.queryForList(
-            "SELECT carrier_class, fulfillment_status, link_status FROM order_fulfillment_tracking " +
+            "SELECT carrier_class, fulfillment_status, link_status, link_reason FROM order_fulfillment_tracking " +
             "WHERE tenant_id = ? AND order_id = ? AND tracking_number = ?", tenantId, orderId, tn)
             .stream().findFirst().orElse(null));
         if (row != null && !"bosta".equals(row.get("carrier_class"))) return Result.skip("not a Bosta fulfillment");
         if (row != null && "cancelled".equalsIgnoreCase((String) row.get("fulfillment_status"))) {
             return Result.skip("fulfillment cancelled");
+        }
+
+        // S4 (d): a row re-queued because the order's old Bosta waybill ended gets its ONE re-attempt — refused when the
+        // order already left custody (the ended leg moved first): no switch, the HIGH after-custody alert.
+        boolean requeued = row != null && row.get("link_reason") instanceof String lr
+            && lr.startsWith(BostaSupersede.REQUEUE_REASON_PREFIX);
+        if (requeued) {
+            Map<String, Object> ended = tx.execute(s -> jdbc.queryForList(
+                "SELECT id, tracking_number FROM shipments WHERE tenant_id = ? AND order_id = ? AND provider = 'bosta' " +
+                "  AND shipment_leg = 'forward' ORDER BY created_at DESC, id DESC LIMIT 1", tenantId, orderId)
+                .stream().findFirst().orElse(null));
+            Boolean frozen = tx.execute(s -> com.traceability.courier.TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId));
+            if (ended != null && Boolean.TRUE.equals(frozen)) {
+                String reason = "tracking change not applied (frozen) — the order already left with " + ended.get("tracking_number");
+                if (!dryRun) {
+                    tx.execute(s -> {
+                        com.traceability.courier.TrackingChanges.record(jdbc, tenantId, orderId, (UUID) ended.get("id"), null,
+                            com.traceability.courier.TrackingChanges.KIND_EDIT, (String) ended.get("tracking_number"), tn,
+                            null, null, null, "refused", com.traceability.courier.TrackingChanges.REASON_FROZEN, List.of());
+                        return null;
+                    });
+                    markStatus(tenantId, orderId, tn, "skipped", reason);
+                }
+                return Result.skip(reason);
+            }
         }
 
         Map<String, Object> existing = tx.execute(s -> jdbc.queryForList(

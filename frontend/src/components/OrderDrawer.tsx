@@ -637,7 +637,13 @@ function DrawerTimeline({ items }: { items: TimelineItem[] }) {
             <p className={cn('text-small font-medium', item.kind === 'fail' ? 'text-danger' : 'text-primary')}>
               {label}
             </p>
-            {item.detail && <p className="text-caption text-muted">{item.detail}</p>}
+            {item.detail && (
+              // a waybill change's detail is "old → new" (numbers) — keep its order in RTL too
+              <p className="text-caption text-muted" dir={item.eventKey.startsWith('waybill_change') ? 'ltr' : undefined}>{item.detail}</p>
+            )}
+            {item.reasonKey && (
+              <p className="text-caption text-muted" data-testid="timeline-reason">{t(`orders.timeline.reason.${item.reasonKey}`)}</p>
+            )}
             {/* G3: where a generic (non-Bosta courier) leg's step came from — Bosta rows carry no source. */}
             {item.source && (
               <p className="text-caption text-muted" data-testid="timeline-source">{t(`orders.timeline.source.${item.source}`)}</p>

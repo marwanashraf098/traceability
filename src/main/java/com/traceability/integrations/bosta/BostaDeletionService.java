@@ -230,16 +230,22 @@ public class BostaDeletionService {
 
         List<String> out = orderId == null ? List.of() : jdbc.queryForList(
             "SELECT status FROM (" + ORDER_PIECES_OUT_SQL + ") x", String.class, orderId, tenantId);
+        // S4 (d): every confirmed forward leg gives the order's skipped Shopify numbers one re-attempt (all S3 gates).
         if (out.contains("awaiting_pickup") || out.contains("with_courier")) {
             stamp(tenantId, shipmentId);
+            if (orderId != null) BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, orderId, (String) r.get("tracking_number"));
             return Confirmation.KEPT_PIECES_OUT;
         }
         if (out.contains("delivered")) {
             stamp(tenantId, shipmentId);
+            if (orderId != null) BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, orderId, (String) r.get("tracking_number"));
             return Confirmation.KEPT_DELIVERED;
         }
         close(tenantId, shipmentId);
-        if (orderId != null) retryStrandedUnlinked(tenantId, orderId);
+        if (orderId != null) {
+            retryStrandedUnlinked(tenantId, orderId);
+            BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, orderId, (String) r.get("tracking_number"));
+        }
         return Confirmation.CLOSED;
     }
 

@@ -149,6 +149,7 @@ export function PrintBatchesToday({ refreshKey }: { refreshKey: number }) {
 
 const STATUS_TONE: Record<NotPackedRow['status'], string> = {
   cancelled: 'bg-critical/[0.12] text-critical-text',
+  reprint_needed: 'bg-warning/[0.14] text-warning-text',
   packing:   'bg-trace-blue/[0.12] text-trace-blue',
   set_aside: 'bg-warning/[0.14] text-warning-text',
   waiting:   'bg-elevated text-muted',
@@ -195,6 +196,8 @@ export function PrintedNotPacked({ refreshKey }: { refreshKey: number }) {
   function chip(r: NotPackedRow) {
     switch (r.status) {
       case 'cancelled': return t('fulfill.waybill.lists.statusCancelled')
+      // S4: the printed waybill is no longer the order's (replaced / cancelled / deleted) — print the new one.
+      case 'reprint_needed': return t('fulfill.waybill.lists.statusReprintNeeded', { tracking: r.reprintTrackingNumber ?? '' })
       case 'packing':   return t('fulfill.waybill.lists.statusPacking', { name: r.packerName ?? '' })
       case 'set_aside': return t('fulfill.waybill.lists.statusSetAside', {
         reason: t(`fulfill.waybill.setAside.reasons.${setAsideReasonKey(r.setAsideReason)}`) })

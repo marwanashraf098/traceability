@@ -402,6 +402,8 @@
       "awb_linked": "Bosta AWB Linked",
       "return_awb_linked": "Bosta Return AWB Linked",
       "back_at_bosta_hub": "Back at Bosta hub",
+      "waybill_changed_in_shopify": "Waybill changed in Shopify",
+      "waybill_change_not_followed": "Waybill change in Shopify not followed",
       "delivery_attempt_failed": "Delivery attempt failed",
       "shipment_state_created": "Label created",
       "shipment_state_with_courier": "Out for delivery",
@@ -421,6 +423,13 @@
       "return_shipment_state_exception": "Return issue",
       "return_shipment_state_terminated": "Return terminated",
       "return_shipment_state_cancelled": "Return cancelled",
+      "reason": {
+        "frozen": "The parcel had already left the warehouse — Traced kept the old waybill",
+        "pickup_session": "The parcel was in an open pickup session — Traced kept the old waybill",
+        "ambiguous": "Shopify showed more than one new number — Traced didn't guess",
+        "key_taken": "The new number already belongs to another shipment",
+        "old_delivery_live": "The old waybill is still live in Bosta — cancel it there and Traced switches"
+      },
       "source": {
         "pickup_scan": "Scanned out at Pickups",
         "inferred_handover": "No pickup scan — handover inferred from Shopify",
@@ -509,9 +518,9 @@
       "blocked_customer": "Customer on the blocklist",
       "shopify_edit_conflict": "Edited in Shopify after packing",
       "generic_delivered_without_pickup": "Delivered with no pickup scan",
-      "tracking_changed_after_custody": "Tracking number changed after shipping",
-      "tracking_change_needs_review": "Tracking number change to review",
-      "tracking_changed_relabel": "New tracking number — relabel the parcel",
+      "tracking_changed_after_custody": "Waybill changed after pickup",
+      "tracking_change_needs_review": "Shopify shows a different waybill",
+      "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta"
     },
     "reasonMore": "+{{count}}",
@@ -1221,6 +1230,7 @@
         "notPackedEmpty": "Every printed waybill has been packed.",
         "batchNo": "Batch #{{no}}",
         "statusCancelled": "Cancelled after print",
+        "statusReprintNeeded": "Reprint needed · new waybill {{tracking}}",
         "statusPacking": "Packing now · {{name}}",
         "statusSetAside": "Set aside · {{reason}}",
         "statusWaiting": "Waiting"

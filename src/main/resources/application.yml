@@ -263,6 +263,8 @@ bosta:
       delay-ms: 3000
       on-startup: ""
       apply: false
+      # S4: BOSTA_FULFILLMENT_LINK_CATCH_UP_ORDERS=<order numbers> — only those orders (one job each)
+      orders: ""
   # Exchange / CRP reference catch-up (ExchangeReferenceCatchUpService, 2026-10-05): one-off, never
   # scheduled — BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<tenant ids>|all (+ _APPLY=true to write).
   exchange-reference:

@@ -678,6 +678,16 @@ public class BostaWebhookJob {
             // Analytics slice 3: the payload's wallet → settlement columns (monotonic).
             ShipmentSettlement.apply(jdbc, resolvedShipment.id(), delivery.raw());
 
+            // S4 (d): Bosta ended this forward leg (48 Terminated / 49 Canceled / 104 Archived) — the order's skipped
+            // Shopify numbers get one re-attempt (every S3 gate applies). Only a Bosta forward leg of the order.
+            if (BostaFulfillmentLinkService.ENDED_CODES.contains(delivery.stateCode()) && resolvedShipment.orderId() != null) {
+                List<java.util.Map<String, Object>> leg = jdbc.queryForList(
+                    "SELECT tracking_number FROM shipments WHERE id = ? AND provider = 'bosta' AND shipment_leg = 'forward' " +
+                    "  AND internal_state IN ('terminated', 'cancelled')", resolvedShipment.id());
+                if (!leg.isEmpty()) BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, resolvedShipment.orderId(),
+                    (String) leg.get(0).get("tracking_number"));
+            }
+
             // 9.2 — Returns portal (V100): the forward leg's delivered timestamp, set ONCE —
             // never overwritten by a repeat or later 'delivered' event. Return legs and the
             // exchange paths (type 30, incl. the admin re-interpret) are deliberately excluded.

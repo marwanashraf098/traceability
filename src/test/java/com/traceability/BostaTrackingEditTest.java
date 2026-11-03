@@ -104,6 +104,11 @@ class BostaTrackingEditTest {
     @Autowired ExceptionService            exceptions;
     @Autowired EncryptionService           encryption;
     @Autowired com.traceability.inventory.PickupSessionService pickups;
+    @Autowired BostaFulfillmentCatchUpService catchUp;
+    @Autowired com.traceability.inventory.PackListService packLists;
+    @Autowired BostaVisibilityCheckService visibilityCheck;
+    @Autowired BostaRateLimitedReprocessService reprocess;
+    @Autowired @org.springframework.boot.autoconfigure.flyway.FlywayDataSource javax.sql.DataSource ownerDs;
     @MockBean  BostaGateway                bostaGateway;
     @MockBean  BostaV2Client               bostaV2;
     @MockBean  JobScheduler                jobScheduler;
@@ -470,7 +475,306 @@ class BostaTrackingEditTest {
             .isEqualTo("with_courier");
     }
 
+    // ── S4 (a): the order timeline ──────────────────────────────────────────────────────────────
+
+    @Test
+    void t1_timeline_waybillChangedInShopify_andNotFollowed_withItsReason() {
+        Shop s = new Shop("t1");
+        com.traceability.fulfillment.OrderController controller = new com.traceability.fulfillment.OrderController(
+            jdbc, mapper, txm, new com.traceability.fulfillment.OrderNotesService(jdbc), fulfill);
+        UUID o = s.order("#17600");
+        switched(s, o, 7329122353560L, "7400000001", "7400000002");
+        UUID frozen = s.order("#17601");
+        UUID leg = linkedLeg(s, frozen, 7329122353561L, "7400000011", "2026-10-31T12:00:00+02:00");
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state) " +
+            "VALUES (?, ?, 'with_courier', 21)", s.f.tenant, leg);
+        deliveryInBosta(s, frozen, "7400000012", 10);
+        capture(s, frozen, payload(f(7329122353561L, "success", "2026-10-31T18:00:00+02:00", "7400000012")));
+        link(s, frozen, "7400000012");
+
+        List<com.traceability.fulfillment.OrderController.TimelineItem> followed =
+            TenantContext.runAs(s.f.tenant, () -> controller.timeline(o));
+        assertThat(followed).filteredOn(i -> i.eventKey().startsWith("waybill_change"))
+            .singleElement().satisfies(i -> {
+                assertThat(i.eventKey()).isEqualTo("waybill_changed_in_shopify");
+                assertThat(i.detail()).isEqualTo("7400000001 → 7400000002");
+                assertThat(i.reasonKey()).isNull();
+            });
+        List<com.traceability.fulfillment.OrderController.TimelineItem> refused =
+            TenantContext.runAs(s.f.tenant, () -> controller.timeline(frozen));
+        assertThat(refused).filteredOn(i -> i.eventKey().startsWith("waybill_change"))
+            .singleElement().satisfies(i -> {
+                assertThat(i.eventKey()).isEqualTo("waybill_change_not_followed");
+                assertThat(i.kind()).isEqualTo("fail");
+                assertThat(i.reasonKey()).isEqualTo("frozen");
+                assertThat(i.detail()).isEqualTo("7400000011 → 7400000012");
+            });
+    }
+
+    // ── S4 (b): the per-order catch-up dry run ──────────────────────────────────────────────────
+
+    @Test
+    void c1_catchUp_oneOrder_dryRun_wouldReplaceTheDeletedLeg_writesNothing_otherOrderUntouched() {
+        Shop s = new Shop("c1");
+        // The BRK-46639-EG shape: packed, old leg linked by a pack scan (no fulfillment row), confirmed deleted in
+        // Bosta with its state kept; Shopify's number was 'skipped' before S3.
+        UUID o = s.order("BRK-46639-EG");
+        pack(s, o);
+        UUID old = bostaLeg(s, o, "4491317552");
+        jdbc.update("UPDATE shipments SET provider_deleted_at = now(), provider_deleted_reason = 'deleted_in_bosta' WHERE id = ?", old);
+        capture(s, o, payload(f(7317931000087L, "success", "2026-10-31T18:49:41+02:00", "2036246150")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped', " +
+            "link_reason = 'order already has an active forward leg (4491317552)' WHERE order_id = ?", o);
+        deliveryInBosta(s, o, "2036246150", 10);
+        UUID other = s.order("BRK-46640-EG");
+        bostaLeg(s, other, "4491317553");
+        capture(s, other, payload(f(7317931000088L, "success", "2026-10-31T18:49:41+02:00", "2036246151")));
+        clearInvocations(bostaGateway);
+        String before = shipmentsAndRows(s);
+
+        List<BostaFulfillmentCatchUpService.Row> rows = catchUp.run(s.f.tenant, false, "BRK-46639-EG");
+
+        assertThat(rows).singleElement().satisfies(r -> {
+            assertThat(r.orderNumber()).isEqualTo("BRK-46639-EG");
+            assertThat(r.verdict()).isEqualTo("WOULD_LINK");
+            assertThat(r.reason()).isEqualTo("replaces 4491317552");
+        });
+        assertThat(shipmentsAndRows(s)).as("a dry run writes nothing").isEqualTo(before);
+        assertThat(changes(s)).isEmpty();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq("2036246151"));
+    }
+
+    @Test
+    void o1_opsStartupTrigger_ordersSetting_oneDryRunJobPerOrder_noToken() throws Exception {
+        Shop s = new Shop("o1");
+        UUID a = s.order("BRK-46700-EG"), b = s.order("BRK-46701-EG"), c = s.order("BRK-46702-EG");
+        for (UUID o : List.of(a, b, c)) {
+            bostaLeg(s, o, "48" + Math.abs(o.getMostSignificantBits() % 100000000L));
+        }
+        capture(s, a, payload(f(7400000000500L, "success", "2026-10-31T18:00:00+02:00", "8100000001")));
+        capture(s, b, payload(f(7400000000501L, "success", "2026-10-31T18:00:00+02:00", "8100000002")));
+        capture(s, c, payload(f(7400000000502L, "success", "2026-10-31T18:00:00+02:00", "8100000003")));
+        BostaVisibilityCheckTrigger trigger = new BostaVisibilityCheckTrigger(ownerDs, jobScheduler, visibilityCheck, "",
+            catchUp, s.f.tenant.toString(), false, " BRK-46700-EG , BRK-46701-EG ", reprocess, "", false);
+        String before = shipmentsAndRows(s);
+
+        trigger.onReady();
+
+        org.mockito.ArgumentCaptor<org.jobrunr.jobs.lambdas.JobLambda> jobs =
+            org.mockito.ArgumentCaptor.forClass(org.jobrunr.jobs.lambdas.JobLambda.class);
+        verify(jobScheduler, times(2)).enqueue(jobs.capture());
+        clearInvocations(bostaGateway);
+        for (org.jobrunr.jobs.lambdas.JobLambda job : jobs.getAllValues()) job.run();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq("8100000003"));   // the third order isn't touched
+        assertThat(shipmentsAndRows(s)).as("dry run (apply=false) writes nothing").isEqualTo(before);
+        assertThat(BostaVisibilityCheckTrigger.orderNumbers(" BRK-1 ,, BRK-2 ")).containsExactly("BRK-1", "BRK-2");
+    }
+
+    // ── S4 (c): Printed but not packed ──────────────────────────────────────────────────────────
+
+    @Test
+    void pn1_deadPrintout_orderShippedOnAnotherWaybill_dropsOff() {
+        Shop s = new Shop("pn1");
+        // Dolt.eg #17118: Traced printed 6941206963, it was cancelled, the order went out on 4266118653 (delivered)
+        // with no Traced pack scan — the order is still 'new'.
+        UUID o = s.order("#17118");
+        UUID printed = bostaLeg(s, o, "6941206963");
+        print(s, o, printed, "6941206963");
+        jdbc.update("UPDATE shipments SET internal_state = 'cancelled' WHERE id = ?", printed);
+        UUID shipped = bostaLeg(s, o, "4266118653");
+        jdbc.update("UPDATE shipments SET internal_state = 'delivered' WHERE id = ?", shipped);
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state) VALUES " +
+            "(?, ?, 'with_courier', 21), (?, ?, 'delivered', 45)", s.f.tenant, shipped, s.f.tenant, shipped);
+        assertThat(notPacked(s)).as("left custody: gone").isEmpty();
+    }
+
+    @Test
+    void pn2_replacedNotReprinted_reprintNeeded_thenReprinted_onlyTheNewWaybillWaits() {
+        Shop s = new Shop("pn2");
+        UUID o = s.order("#17700");
+        UUID old = linkedLeg(s, o, 7329122353570L, "7500000001", "2026-10-31T12:00:00+02:00");
+        UUID batch = print(s, o, old, "7500000001");
+        deliveryInBosta(s, o, "7500000002", 10);
+        capture(s, o, payload(f(7329122353570L, "success", "2026-10-31T18:00:00+02:00", "7500000002")));
+        link(s, o, "7500000002");
+
+        assertThat(notPacked(s)).containsExactly("#17700|7500000001|reprint_needed|7500000002");
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, '7500000002', 2)", batch, s.f.tenant, o, liveLeg(o));
+        assertThat(notPacked(s)).containsExactly("#17700|7500000002|waiting|null");
+    }
+
+    @Test
+    void pn3_golden_livePrintedWaybill_unchanged() {
+        Shop s = new Shop("pn3");
+        UUID o = s.order("#17701");
+        UUID leg = linkedLeg(s, o, 7329122353571L, "7500000011", "2026-10-31T12:00:00+02:00");
+        print(s, o, leg, "7500000011");
+        assertThat(notPacked(s)).containsExactly("#17701|7500000011|waiting|null");
+        jdbc.update("UPDATE orders SET locked_by = ?, locked_at = now() WHERE id = ?", s.packer, o);
+        assertThat(notPacked(s)).containsExactly("#17701|7500000011|packing|null");
+    }
+
+    @Test
+    void pn4_deletedPrintout_noLiveLeg_dropsOff_butTheOrderKeepsTheRedNotLinkedBadge() {
+        Shop s = new Shop("pn4");
+        com.traceability.fulfillment.OrderController controller = new com.traceability.fulfillment.OrderController(
+            jdbc, mapper, txm, new com.traceability.fulfillment.OrderNotesService(jdbc), fulfill);
+        // BRK-45472-EG: printed 4640111960 (deleted in Bosta, cancelled); Shopify's 8887279345 was skipped long ago.
+        UUID o = s.order("BRK-45472-EG");
+        UUID printed = bostaLeg(s, o, "4640111960");
+        print(s, o, printed, "4640111960");
+        jdbc.update("UPDATE shipments SET internal_state = 'cancelled', provider_deleted_at = now(), " +
+            "provider_deleted_reason = 'deleted_in_bosta' WHERE id = ?", printed);
+        capture(s, o, payload(f(7400000000300L, "success", "2026-10-16T12:00:00+02:00", "8887279345")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped', first_seen_at = now() - INTERVAL '10 days' " +
+            "WHERE order_id = ?", o);
+
+        assertThat(notPacked(s)).isEmpty();
+        String badge = TenantContext.runAs(s.f.tenant, () -> controller.list(null, null, null, null, 0, 100).items()).stream()
+            .filter(r -> "BRK-45472-EG".equals(r.number())).map(r -> r.shippingBadge() == null ? "none" : r.shippingBadge().state())
+            .findFirst().orElseThrow();
+        assertThat(badge).as("still visible on the Orders list").isEqualTo("bosta_tracking_not_linked");
+    }
+
+    // ── S4 (d): the old waybill ended in Bosta → one re-attempt ─────────────────────────────────
+
+    @Test
+    void d1_deletionConfirmed_legClosed_skippedNumberReattempted_links() {
+        Shop s = new Shop("d1");
+        // BRK-45472-EG: the old leg (no pieces out) is deleted in Bosta; Shopify's number was skipped before.
+        UUID o = s.order("BRK-45472-EG");
+        UUID old = bostaLeg(s, o, "4640111860");
+        capture(s, o, payload(f(7400000000400L, "success", "2026-10-16T12:00:00+02:00", "8887279245")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped' WHERE order_id = ?", o);
+        deliveryInBosta(s, o, "8887279245", 10);
+
+        confirmDeleted(s, old);
+        assertThat(shipment(old).get("internal_state")).isEqualTo("cancelled");
+        assertThat(linkStatus(o, "8887279245")).isEqualTo("retry");
+        fulfillmentLink.retryDue();
+
+        assertThat(linkStatus(o, "8887279245")).isEqualTo("linked");
+        assertThat(jdbc.queryForObject("SELECT tracking_number FROM shipments WHERE id = ?", String.class, liveLeg(o)))
+            .isEqualTo("8887279245");
+    }
+
+    @Test
+    void d1b_deletionConfirmed_stateKept_packed_reattempt_isTheD2Switch() {
+        Shop s = new Shop("d1b");
+        UUID o = s.order("BRK-46639-EG");
+        pack(s, o);
+        UUID old = bostaLeg(s, o, "4491317652");
+        jdbc.update("UPDATE pieces SET status = 'awaiting_pickup' WHERE id IN (SELECT a.piece_id FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id WHERE oi.order_id = ?)", o);
+        capture(s, o, payload(f(7317931000087L, "success", "2026-10-31T18:49:41+02:00", "2036246250")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped' WHERE order_id = ?", o);
+        deliveryInBosta(s, o, "2036246250", 10);
+
+        confirmDeleted(s, old);
+        assertThat(shipment(old).get("internal_state")).as("pieces out: state kept").isEqualTo("created");
+        fulfillmentLink.retryDue();
+
+        assertThat(shipment(old).get("superseded_at")).isNotNull();
+        assertThat(changes(s)).containsExactly("edit|4491317652→2036246250|applied||{packed}");
+        assertThat(linkStatus(o, "2036246250")).isEqualTo("linked");
+    }
+
+    @Test
+    void d2_legMovedThenTerminated_reattempt_refusedFrozen_noSwitch_highAlert() {
+        Shop s = new Shop("d2");
+        UUID o = s.order("#17800");
+        UUID old = linkedLeg(s, o, 7400000000410L, "7600000001", "2026-10-31T12:00:00+02:00");
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state) " +
+            "VALUES (?, ?, 'with_courier', 21)", s.f.tenant, old);
+        // a second Bosta number on another fulfillment, skipped while the leg was live
+        capture(s, o, payload(f(7400000000410L, "success", "2026-10-31T12:00:00+02:00", "7600000001"),
+                              f(7400000000411L, "success", "2026-10-31T13:00:00+02:00", "7600000002")));
+        link(s, o, "7600000002");
+        assertThat(linkStatus(o, "7600000002")).isEqualTo("skipped");
+        deliveryInBosta(s, o, "7600000002", 10);
+
+        ((ObjectNode) bosta.get("7600000001").path("state")).put("code", 48);   // Bosta terminates the old delivery
+        webhook(s, "7600000001", 48);
+        assertThat(linkStatus(o, "7600000002")).as("re-queued").isEqualTo("retry");
+        fulfillmentLink.retryDue();
+
+        assertThat(linkStatus(o, "7600000002")).isEqualTo("skipped");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM shipments WHERE tracking_number = '7600000002'", Integer.class))
+            .as("no switch").isZero();
+        assertThat(changes(s)).containsExactly("edit|7600000001→7600000002|refused|frozen|{}");
+        // Shopify still shows the old waybill on its own fulfillment (a second parcel, not an edit), so the S2 rule keeps
+        // the after-custody alert quiet; an edited-away old number raises it (S3 b3).
+        assertThat(alerts(s)).isEmpty();
+    }
+
+    @Test
+    void d3_golden_secondParcelWithALiveOldLeg_untouched_whenAnotherOrdersLegIsDeleted() {
+        Shop s = new Shop("d3");
+        UUID a = s.order("BRK-46000-EG");
+        linkedLeg(s, a, 7400000000420L, "4779965149", "2026-10-31T12:00:00+02:00");
+        capture(s, a, payload(f(7400000000420L, "success", "2026-10-31T12:00:00+02:00", "4779965149"),
+                              f(7400000000421L, "success", "2026-10-31T13:00:00+02:00", "4779965150")));
+        link(s, a, "4779965150");
+        String before = jdbc.queryForObject("SELECT t::text FROM order_fulfillment_tracking t WHERE order_id = ? " +
+            "AND tracking_number = '4779965150'", String.class, a);
+        UUID b = s.order("BRK-46001-EG");
+        UUID bLeg = bostaLeg(s, b, "4779965160");
+        confirmDeleted(s, bLeg);
+        webhook(s, "4779965149", 10);   // A's own leg keeps moving normally
+
+        assertThat(jdbc.queryForObject("SELECT t::text FROM order_fulfillment_tracking t WHERE order_id = ? " +
+            "AND tracking_number = '4779965150'", String.class, a)).as("byte-identical").isEqualTo(before);
+        assertThat(linkStatus(a, "4779965150")).isEqualTo("skipped");
+    }
+
+    @Test
+    void d4_bosta49OnANeverMovedLeg_reattempt_links() {
+        Shop s = new Shop("d4");
+        UUID o = s.order("#17801");
+        UUID old = linkedLeg(s, o, 7400000000430L, "7600000011", "2026-10-31T12:00:00+02:00");
+        capture(s, o, payload(f(7400000000430L, "success", "2026-10-31T12:00:00+02:00", "7600000011"),
+                              f(7400000000431L, "success", "2026-10-31T13:00:00+02:00", "7600000012")));
+        link(s, o, "7600000012");
+        deliveryInBosta(s, o, "7600000012", 10);
+        ((ObjectNode) bosta.get("7600000011").path("state")).put("code", 49);
+        webhook(s, "7600000011", 49);
+        fulfillmentLink.retryDue();
+        assertThat(linkStatus(o, "7600000012")).isEqualTo("linked");
+        assertThat(liveLeg(o)).isNotEqualTo(old);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
+
+    /** BostaDeletionService's real confirmation: two counted not-founds and a positive control on the key. */
+    private void confirmDeleted(Shop s, UUID shipment) {
+        jdbc.update("UPDATE shipments SET provider_not_found_at = LOCALTIMESTAMP, not_found_count = 2, " +
+            "last_not_found_at = LOCALTIMESTAMP - INTERVAL '40 minutes' WHERE id = ?", shipment);
+        jdbc.update("UPDATE courier_accounts SET lookup_ok_at = now(), lookup_auth_failed_at = NULL WHERE tenant_id = ?", s.f.tenant);
+        BostaDeletionService.Confirmation c = TenantContext.runAs(s.f.tenant, () -> deletion.tryConfirm(s.f.tenant, shipment));
+        assertThat(c.name()).isIn("CLOSED", "KEPT_PIECES_OUT", "KEPT_DELIVERED");
+    }
+
+    private UUID print(Shop s, UUID o, UUID shipment, String tn) {
+        Integer next = jdbc.queryForObject("SELECT coalesce(max(batch_no), 0) + 1 FROM pack_print_batches WHERE tenant_id = ?",
+            Integer.class, s.f.tenant);
+        UUID batch = jdbc.queryForObject("INSERT INTO pack_print_batches (tenant_id, batch_no, paper, sort, scope, waybill_count, " +
+            "order_guaranteed) VALUES (?, ?, 'A6', 'oldest', 'new', 1, true) RETURNING id", UUID.class, s.f.tenant, next);
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+            "VALUES (?, ?, ?, ?, ?, 1)", batch, s.f.tenant, o, shipment, tn);
+        return batch;
+    }
+
+    /** "order|printed waybill|status|reprint waybill" per row of Printed but not packed. */
+    private List<String> notPacked(Shop s) {
+        return TenantContext.runAs(s.f.tenant, () -> packLists.printedNotPacked()).stream()
+            .map(r -> r.orderNumber() + "|" + r.trackingNumber() + "|" + r.status() + "|" + r.reprintTrackingNumber()).toList();
+    }
+
+    private String shipmentsAndRows(Shop s) {
+        return String.join("\n", jdbc.queryForList("SELECT x::text FROM shipments x WHERE tenant_id = ? UNION ALL " +
+            "SELECT t::text FROM order_fulfillment_tracking t WHERE tenant_id = ? ORDER BY 1", String.class, s.f.tenant, s.f.tenant));
+    }
 
     /** A Bosta leg linked from a Shopify fulfillment (capture + the real link job). */
     private UUID linkedLeg(Shop s, UUID o, long fid, String tn, String updatedAt) {
