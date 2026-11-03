@@ -435,6 +435,8 @@ export interface TimelineItem {
   detail: string | null
   kind: 'done' | 'now' | 'fail'
   source?: GenericLegSource
+  /** waybill_change_not_followed only: why Traced kept the old waybill (orders.timeline.reason.*). */
+  reasonKey?: 'frozen' | 'pickup_session' | 'ambiguous' | 'key_taken' | 'old_delivery_live'
 }
 
 export function getOrderTimeline(id: string) {

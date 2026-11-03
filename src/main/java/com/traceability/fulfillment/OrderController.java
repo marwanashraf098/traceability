@@ -1222,10 +1222,18 @@ public class OrderController {
         Instant occurredAt, String eventKey, String actorName,
         String locationName, String detail, String kind,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-        String source) {
+        String source,
+        // V200/V202: why Traced didn't follow a Shopify waybill change (waybill_change_not_followed only) — the
+        // frontend renders orders.timeline.reason.<key> (EN + AR). Absent from the JSON on every other row.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String reasonKey) {
         public TimelineItem(Instant occurredAt, String eventKey, String actorName,
                             String locationName, String detail, String kind) {
-            this(occurredAt, eventKey, actorName, locationName, detail, kind, null);
+            this(occurredAt, eventKey, actorName, locationName, detail, kind, null, null);
+        }
+        public TimelineItem(Instant occurredAt, String eventKey, String actorName,
+                            String locationName, String detail, String kind, String source) {
+            this(occurredAt, eventKey, actorName, locationName, detail, kind, source, null);
         }
     }
 
@@ -1431,6 +1439,25 @@ public class OrderController {
                 }
             }
 
+            // 4b. Shopify waybill changes (V200 / V202) — each decision Traced recorded: followed ('done', old → new)
+            // or not followed ('fail', with its reason). Formatting-only changes and blanked numbers aren't shown.
+            jdbc.query(
+                """
+                SELECT c.created_at, c.outcome, c.reason, c.old_tracking_number, c.new_tracking_number
+                FROM shipment_tracking_changes c
+                WHERE c.order_id = ? AND c.kind <> 'cosmetic' AND c.outcome IN ('applied', 'refused')
+                  AND c.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                ORDER BY c.created_at ASC, c.id ASC
+                """,
+                (rs, i) -> {
+                    boolean applied = "applied".equals(rs.getString("outcome"));
+                    items.add(new TimelineItem(rs.getTimestamp("created_at").toInstant(),
+                        applied ? "waybill_changed_in_shopify" : "waybill_change_not_followed", null, null,
+                        rs.getString("old_tracking_number") + " → " + rs.getString("new_tracking_number"),
+                        applied ? "done" : "fail", null, applied ? null : rs.getString("reason")));
+                    return null;
+                }, orderId);
+
             // 5. Phase-primary, occurred_at-within-phase (2c) — order created always first;
             // return-leg events always last (occurred_at ASC within that group); every
             // OTHER forward-side event (picked_up, packed, awb_linked,
@@ -1462,7 +1489,7 @@ public class OrderController {
                 if (!"fail".equals(last.kind())) {
                     items.set(lastIdx, new TimelineItem(
                         last.occurredAt(), last.eventKey(), last.actorName(),
-                        last.locationName(), last.detail(), "now", last.source()));
+                        last.locationName(), last.detail(), "now", last.source(), last.reasonKey()));
                 }
             }
 

@@ -470,6 +470,42 @@ class BostaTrackingEditTest {
             .isEqualTo("with_courier");
     }
 
+    // ── S4 (a): the order timeline ──────────────────────────────────────────────────────────────
+
+    @Test
+    void t1_timeline_waybillChangedInShopify_andNotFollowed_withItsReason() {
+        Shop s = new Shop("t1");
+        com.traceability.fulfillment.OrderController controller = new com.traceability.fulfillment.OrderController(
+            jdbc, mapper, txm, new com.traceability.fulfillment.OrderNotesService(jdbc), fulfill);
+        UUID o = s.order("#17600");
+        switched(s, o, 7329122353560L, "7400000001", "7400000002");
+        UUID frozen = s.order("#17601");
+        UUID leg = linkedLeg(s, frozen, 7329122353561L, "7400000011", "2026-10-31T12:00:00+02:00");
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, provider_state) " +
+            "VALUES (?, ?, 'with_courier', 21)", s.f.tenant, leg);
+        deliveryInBosta(s, frozen, "7400000012", 10);
+        capture(s, frozen, payload(f(7329122353561L, "success", "2026-10-31T18:00:00+02:00", "7400000012")));
+        link(s, frozen, "7400000012");
+
+        List<com.traceability.fulfillment.OrderController.TimelineItem> followed =
+            TenantContext.runAs(s.f.tenant, () -> controller.timeline(o));
+        assertThat(followed).filteredOn(i -> i.eventKey().startsWith("waybill_change"))
+            .singleElement().satisfies(i -> {
+                assertThat(i.eventKey()).isEqualTo("waybill_changed_in_shopify");
+                assertThat(i.detail()).isEqualTo("7400000001 → 7400000002");
+                assertThat(i.reasonKey()).isNull();
+            });
+        List<com.traceability.fulfillment.OrderController.TimelineItem> refused =
+            TenantContext.runAs(s.f.tenant, () -> controller.timeline(frozen));
+        assertThat(refused).filteredOn(i -> i.eventKey().startsWith("waybill_change"))
+            .singleElement().satisfies(i -> {
+                assertThat(i.eventKey()).isEqualTo("waybill_change_not_followed");
+                assertThat(i.kind()).isEqualTo("fail");
+                assertThat(i.reasonKey()).isEqualTo("frozen");
+                assertThat(i.detail()).isEqualTo("7400000011 → 7400000012");
+            });
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /** A Bosta leg linked from a Shopify fulfillment (capture + the real link job). */
