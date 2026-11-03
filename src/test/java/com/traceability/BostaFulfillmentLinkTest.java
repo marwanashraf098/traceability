@@ -198,16 +198,29 @@ class BostaFulfillmentLinkTest {
     // ── fl6 / fl7 ─────────────────────────────────────────────────────────────
 
     @Test
-    void fl6_existingForwardLeg_isANoOp_noBostaCall() {
+    void fl6_existingForwardLeg_unanchored_oldDeliveryLive_noSwitch_refusedMedium() {
+        // Approved edit 2026-11-03 (S3 D2): an order whose live Bosta leg no fulfillment carries (linked by discovery /
+        // a pack scan) and Shopify shows one different Bosta number is no longer a silent no-op: Traced reads both
+        // numbers in Bosta (read-only) and, the old delivery still live, switches nothing, records the refusal and
+        // raises the MEDIUM "Shopify shows a different waybill" — never the HIGH fulfillment_link_problem.
         UUID order = order(a, "BRK-44839-EG", 18912000000839L);
         shipment(a, order, "5903442100");
         tracking(a, order, "5903442156");
+        delivery(a, "5903442156", 10, "Send", 10, "BRK-44839-EG", null);
+        delivery(a, "5903442100", 10, "Send", 21, "BRK-44839-EG", null);   // the old delivery: still live in Bosta
 
         BostaFulfillmentLinkService.Result r = linkService.attempt(a.tenantId(), order, "5903442156", false);
 
-        assertThat(r.reason()).contains("active forward leg");
-        verify(bostaGateway, never()).fetchDelivery(anyString(), anyString());
-        assertThat(linkStatus(a, order, "5903442156")).isEqualTo("skipped");
+        assertThat(r.reason()).contains("isn't ended in Bosta");
+        assertThat(linkStatus(a, order, "5903442156")).isEqualTo("retry");
+        assertThat(count("SELECT count(*) FROM shipments WHERE tracking_number = '5903442156'")).as("no switch").isZero();
+        assertThat(count("SELECT count(*) FROM shipments WHERE tracking_number = '5903442100' AND superseded_at IS NULL " +
+            "AND internal_state = 'with_courier'")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM shipment_tracking_changes WHERE old_tracking_number = '5903442100' " +
+            "AND new_tracking_number = '5903442156' AND outcome = 'refused' AND reason = 'old_delivery_live'")).isEqualTo(1);
+        assertThat(TenantContext.runAs(a.tenantId(), () -> exceptionService.detectAllOpen()).stream()
+            .filter(e -> "tracking_change_needs_review".equals(e.get("type"))).map(e -> e.get("severity")).toList())
+            .containsExactly("MEDIUM");
         assertThat(problems(a)).isEmpty();
     }
 

@@ -985,6 +985,12 @@ public class ExceptionService {
             "       'fulfillment_link:' || t.id AS subject_key " +
             "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
             "WHERE t.tenant_id = ? AND t.link_status IN ('conflict', 'gave_up') " +
+            // V202 D2: a number Traced is waiting on because the order's old Bosta waybill is still live has its own
+            // MEDIUM alert (tracking_change_needs_review) while that leg is live — not this HIGH one too.
+            "  AND NOT EXISTS (SELECT 1 FROM shipment_tracking_changes c JOIN shipments ol ON ol.id = c.shipment_id " +
+            "                  WHERE c.tenant_id = t.tenant_id AND c.order_id = t.order_id AND c.reason = 'old_delivery_live' " +
+            "                    AND c.new_tracking_number = t.tracking_number " +
+            "                    AND ol.internal_state NOT IN ('terminated', 'cancelled')) " +
             "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
             "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
             "                    AND s.provider = 'bosta') " +
@@ -1114,6 +1120,8 @@ public class ExceptionService {
         // A refusal stands while the leg still has its old number and Shopify no longer shows that number live.
         String refusedStands =
             "c.outcome = 'refused' AND s.tracking_number = c.old_tracking_number " +
+            // the old delivery ended (Bosta) → the 'old_delivery_live' refusal no longer stands
+            "AND NOT (c.reason = 'old_delivery_live' AND s.internal_state IN ('terminated', 'cancelled')) " +
             "AND NOT EXISTS (SELECT 1 FROM order_fulfillment_tracking ft WHERE ft.tenant_id = c.tenant_id " +
             "      AND ft.order_id = c.order_id AND ft.tracking_number = c.old_tracking_number AND ft.removed_at IS NULL " +
             "      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled') ";

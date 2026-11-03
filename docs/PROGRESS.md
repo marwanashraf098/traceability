@@ -173,8 +173,13 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     ambiguous → refused; frozen → refused HIGH; open pickup session → refused HIGH; link row 'skipped'. Then the
     unchanged fetch / type / identityProblem (404 → 'retry' → 'gave_up' as before; old leg untouched). D2:
     `oldDeliveryNotEnded` — deletion confirmed (provider_deleted_at) or a read-only fetch showing 48 / 49 / 104; else
-    refused 'old_delivery_live' (MEDIUM "Shopify shows a different waybill"), link 'retry' every 30 min, 'skipped'
-    after 14 days.
+    refused 'old_delivery_live' (MEDIUM "Shopify shows a different waybill"). Cadence (approved 2026-11-03): re-check
+    every 30 min for the first 2 h, then every 6 h, 'gave_up' at 48 h — the MEDIUM alert stays until resolved or the
+    old delivery ends; re-checks only when the tenant's Bosta bucket has a token free right now
+    (`BostaRateLimiter.hasHeadroom(key, 0)` — user-facing and normal poll calls first), else in 5 min, not counted;
+    the HIGH fulfillment_link_problem never fires for such a row while the old leg is live. `fl6` edited (approved):
+    expects no switch, refused 'old_delivery_live', MEDIUM. Noise check (prod, read-only, last 30 days): 1 order
+    would take this path — Femine #72153, already delivered → the HIGH after-custody refusal, not MEDIUM; BROEK 0.
   - **Switch, in the link transaction:** the link event carries a `supersedes` (+ kind) hint, read by BostaWebhookJob
     only from the 'shopify_fulfillment' source like the order hint → `ShipmentLinkService.linkDeliveryToOrder(…,
     supersedes, kind)`: lock + freeze / pickup re-check (else `SupersedeRefusedException`, the link rolls back, the
@@ -196,7 +201,9 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
   - **Tests `BostaTrackingEditTest` (12):** b1–b9, f1–f3. Fence removed → f1 (webhook) and f2 (poll) each RED,
     run alone (the update hits the V202 CHECK — `DataIntegrityViolationException`); fence back → both GREEN.
     Revert-checked: no supersede → 11 red; no D2 gate → b6; no frozen pre-check → b3; no replaced poll → f2; no
-    deletion skip → f3; no lowest-priority guard → f3; second parcel treated as an edit → b8 (golden).
+    deletion skip → f3; no lowest-priority guard → f3; second parcel treated as an edit → b8 (golden). +b6c / b6d
+    (cadence, headroom), revert-checked: no 6 h step / no give-up / no HIGH exclusion / no "ended clears" → b6c; no
+    headroom gate → b6d. Renumbered V201 → V202 (main-reconcile took V201): MigrationSmokeTest 201, NotTraced 146.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

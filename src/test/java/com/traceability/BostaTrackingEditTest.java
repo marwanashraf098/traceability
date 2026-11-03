@@ -49,6 +49,9 @@ import static org.mockito.Mockito.*;
  *   b5  strict cancel-and-refulfill → replaced (cancel_refulfill)
  *   b6  D2, unanchored leg (linked by discovery): old delivery still live → refused MEDIUM "Shopify shows a different
  *       waybill", retried; once Bosta shows the old delivery Canceled (49) → replaced, the alert gone
+ *   b6c D2 cadence: every 30 min for 2 h, then every 6 h, gave_up at 48 h — the MEDIUM alert stays (never the HIGH link
+ *       problem while the old leg is live) until the old delivery ends
+ *   b6d D2 re-checks wait for Bosta headroom (lowest priority): no call, back in 5 min
  *   b7  Bosta 404 on the new number → old leg untouched, 'retry' (as before V202)
  *   b8  golden: the prod 'skipped' shape (a second Bosta parcel, the leg's number still live on Shopify) stays
  *       'skipped', no Bosta call, no decision — byte-identical to the pre-V202 outcome
@@ -260,6 +263,53 @@ class BostaTrackingEditTest {
         assertThat(shipment(old).get("superseded_at")).isNotNull();
         assertThat(historyPastCreated(old)).isZero();
         assertThat(alerts(s)).isEmpty();
+    }
+
+    @Test
+    void b6c_d2_cadence_30min_then6h_gaveUpAt48h_alertStays_untilTheOldDeliveryEnds() {
+        Shop s = new Shop("b6c");
+        UUID o = s.order("#46700");
+        UUID old = bostaLeg(s, o, "4491317470");
+        deliveryInBosta(s, o, "4491317470", 21);       // the old delivery is live (with the courier) in Bosta
+        deliveryInBosta(s, o, "2036246070", 10);
+        capture(s, o, payload(f(7317931000187L, "success", "2026-10-31T18:49:41+02:00", "2036246070")));
+
+        link(s, o, "2036246070");
+        assertThat(linkStatus(o, "2036246070")).isEqualTo("retry");
+        assertThat(minutesToNextRetry(o, "2036246070")).as("first 2 h: every 30 min").isBetween(29L, 31L);
+
+        jdbc.update("UPDATE shipment_tracking_changes SET created_at = now() - INTERVAL '3 hours' WHERE shipment_id = ?", old);
+        link(s, o, "2036246070");
+        assertThat(minutesToNextRetry(o, "2036246070")).as("after 2 h: every 6 h").isBetween(359L, 361L);
+
+        jdbc.update("UPDATE shipment_tracking_changes SET created_at = now() - INTERVAL '49 hours' WHERE shipment_id = ?", old);
+        link(s, o, "2036246070");
+        assertThat(linkStatus(o, "2036246070")).as("48 h: gave up").isEqualTo("gave_up");
+        assertThat(alerts(s)).as("the MEDIUM alert stays").containsExactly("tracking_change_needs_review|MEDIUM|#46700");
+        assertThat(alertTypes(s)).as("never the HIGH link problem while the old leg is live").doesNotContain("fulfillment_link_problem");
+
+        jdbc.update("UPDATE shipments SET internal_state = 'cancelled' WHERE id = ?", old);   // Bosta: the old delivery ended
+        assertThat(alerts(s)).as("the old delivery ended").isEmpty();
+    }
+
+    @Test
+    void b6d_d2_recheck_waitsForBostaHeadroom_noCall() {
+        Shop s = new Shop("b6d");
+        UUID o = s.order("#46701");
+        bostaLeg(s, o, "4491317480");
+        deliveryInBosta(s, o, "4491317480", 21);
+        deliveryInBosta(s, o, "2036246080", 10);
+        capture(s, o, payload(f(7317931000188L, "success", "2026-10-31T18:49:41+02:00", "2036246080")));
+        link(s, o, "2036246080");   // first look: refused, retry
+        clearInvocations(bostaGateway);
+        fulfillmentLink.setD2Headroom(key -> false);
+        try {
+            assertThat(link(s, o, "2036246080").reason()).isEqualTo("waiting for Bosta headroom");
+        } finally {
+            fulfillmentLink.setD2Headroom(key -> true);
+        }
+        verify(bostaGateway, never()).fetchDelivery(anyString(), anyString());
+        assertThat(minutesToNextRetry(o, "2036246080")).isBetween(4L, 6L);
     }
 
     @Test
@@ -528,6 +578,15 @@ class BostaTrackingEditTest {
         return TenantContext.runAs(s.f.tenant, () -> exceptions.detectAllOpen()).stream()
             .filter(e -> ((String) e.get("type")).startsWith("tracking_change") || "superseded_waybill_moving".equals(e.get("type")))
             .map(e -> e.get("type") + "|" + e.get("severity") + "|" + e.get("order_number")).toList();
+    }
+
+    private long minutesToNextRetry(UUID o, String tn) {
+        return jdbc.queryForObject("SELECT round(extract(epoch FROM link_next_retry_at - now()) / 60)::bigint " +
+            "FROM order_fulfillment_tracking WHERE order_id = ? AND tracking_number = ?", Long.class, o, tn);
+    }
+
+    private List<String> alertTypes(Shop s) {
+        return TenantContext.runAs(s.f.tenant, () -> exceptions.detectAllOpen()).stream().map(e -> (String) e.get("type")).toList();
     }
 
     private String alertText(Shop s) {

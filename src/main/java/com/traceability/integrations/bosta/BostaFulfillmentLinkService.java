@@ -247,6 +247,14 @@ public class BostaFulfillmentLinkService {
         if (encryptedKey == null) return Result.skip("no active Bosta account");
         String apiKey = encryptionService.decrypt(encryptedKey);   // this tenant's own key, only
 
+        // V202 D2 re-checks run at the lowest Bosta priority: only when the tenant's bucket has a token free right now
+        // (user-facing and normal poll calls go first); otherwise in 5 minutes, no call, not counted.
+        if (supersede != null && !supersede.anchored() && hasD2Refusal(tenantId, supersede.legId(), tn)
+                && !d2Headroom.test(apiKey)) {
+            if (!dryRun) markRetry(tenantId, orderId, tn, "waiting for Bosta headroom (re-check of the old waybill)", 300, false);
+            return Result.skip("waiting for Bosta headroom");
+        }
+
         // 2. Fetch.
         BostaDelivery delivery;
         try {
@@ -527,8 +535,9 @@ public class BostaFulfillmentLinkService {
      * D2 — null when the OLD delivery is confirmed ended in Bosta: deletion confirmed (BostaDeletionService's rule,
      * provider_deleted_at) or Bosta shows it 48 Terminated / 49 Canceled / 104 Archived (read-only fetch with the
      * tenant's own key). Otherwise no switch: refused 'old_delivery_live' (MEDIUM "Shopify shows a different
-     * waybill", clears on its own once the leg changes or Shopify shows the old number again) and the row re-checks
-     * every 30 minutes for {@link BostaSupersede#WATCH_DAYS} days, then stays skipped.
+     * waybill", clears on its own once the leg changes or ends, or Shopify shows the old number again) and the row
+     * re-checks every 30 min for 2 h, then every 6 h, and gives up after 48 h (the alert stays) — re-checks at the
+     * lowest Bosta priority.
      */
     private String oldDeliveryNotEnded(UUID tenantId, UUID orderId, String tn, Supersede sup, String apiKey, boolean dryRun) {
         Boolean deleted = tx.execute(s -> jdbc.queryForObject(
@@ -552,14 +561,39 @@ public class BostaFulfillmentLinkService {
                 tn, sup.oldFid(), sup.newFid(), null, "refused", "old_delivery_live", List.of());
             return null;
         });
-        Boolean expired = tx.execute(s -> jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM shipment_tracking_changes WHERE shipment_id = ? AND reason = 'old_delivery_live' " +
-            "  AND new_tracking_number = ? AND created_at < now() - INTERVAL '" + BostaSupersede.WATCH_DAYS + " days')",
-            Boolean.class, sup.legId(), tn));
-        if (Boolean.TRUE.equals(expired)) markStatus(tenantId, orderId, tn, "skipped", reason);
-        else markRetry(tenantId, orderId, tn, reason, 1800, false);
+        // Cadence (approved 2026-11-03): every 30 min for the first 2 h after the first refusal, then every 6 h; after
+        // 48 h the row gives up — the MEDIUM alert stays until resolved or the old delivery ends.
+        Long ageMinutes = tx.execute(s -> jdbc.queryForObject(
+            "SELECT floor(extract(epoch FROM now() - min(created_at)) / 60)::bigint FROM shipment_tracking_changes " +
+            "WHERE shipment_id = ? AND reason = 'old_delivery_live' AND new_tracking_number = ?",
+            Long.class, sup.legId(), tn));
+        long age = ageMinutes == null ? 0 : ageMinutes;
+        if (age >= D2_GIVE_UP_MINUTES) markStatus(tenantId, orderId, tn, "gave_up", reason);
+        else markRetry(tenantId, orderId, tn, reason, age < D2_FAST_MINUTES ? 1800 : 21600, false);
         return reason;
     }
+
+    /** D2 re-check cadence: every 30 min until this age, then every 6 h, gave_up at {@link #D2_GIVE_UP_MINUTES}. */
+    static final long D2_FAST_MINUTES = 120;
+    static final long D2_GIVE_UP_MINUTES = 48 * 60;
+
+    /** A D2 refusal was already recorded for this (leg, new number): this attempt is a re-check. */
+    private boolean hasD2Refusal(UUID tenantId, UUID legId, String tn) {
+        return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipment_tracking_changes WHERE tenant_id = ? AND shipment_id = ? " +
+            "  AND reason = 'old_delivery_live' AND new_tracking_number = ?)", Boolean.class, tenantId, legId, tn)));
+    }
+
+    /** "A token is free right now" for the tenant's key (BostaRateLimiter.hasHeadroom with no wait); settable for tests. */
+    private java.util.function.Predicate<String> d2Headroom = key -> true;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRateLimiter(BostaRateLimiter limiter) {
+        if (limiter != null) this.d2Headroom = key -> limiter.hasHeadroom(key, 0);
+    }
+
+    /** Tests only: replace the headroom check. */
+    public void setD2Headroom(java.util.function.Predicate<String> headroom) { this.d2Headroom = headroom; }
 
     /** Bosta 48 Terminated, 49 Canceled, 104 Archived — the old delivery ended before anyone had it. */
     static final java.util.Set<Integer> ENDED_CODES = java.util.Set.of(48, 49, 104);
