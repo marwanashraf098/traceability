@@ -104,6 +104,7 @@ class BostaTrackingEditTest {
     @Autowired ExceptionService            exceptions;
     @Autowired EncryptionService           encryption;
     @Autowired com.traceability.inventory.PickupSessionService pickups;
+    @Autowired BostaFulfillmentCatchUpService catchUp;
     @MockBean  BostaGateway                bostaGateway;
     @MockBean  BostaV2Client               bostaV2;
     @MockBean  JobScheduler                jobScheduler;
@@ -506,7 +507,45 @@ class BostaTrackingEditTest {
             });
     }
 
+    // ── S4 (b): the per-order catch-up dry run ──────────────────────────────────────────────────
+
+    @Test
+    void c1_catchUp_oneOrder_dryRun_wouldReplaceTheDeletedLeg_writesNothing_otherOrderUntouched() {
+        Shop s = new Shop("c1");
+        // The BRK-46639-EG shape: packed, old leg linked by a pack scan (no fulfillment row), confirmed deleted in
+        // Bosta with its state kept; Shopify's number was 'skipped' before S3.
+        UUID o = s.order("BRK-46639-EG");
+        pack(s, o);
+        UUID old = bostaLeg(s, o, "4491317452");
+        jdbc.update("UPDATE shipments SET provider_deleted_at = now(), provider_deleted_reason = 'deleted_in_bosta' WHERE id = ?", old);
+        capture(s, o, payload(f(7317931000087L, "success", "2026-10-31T18:49:41+02:00", "2036246050")));
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_status = 'skipped', " +
+            "link_reason = 'order already has an active forward leg (4491317452)' WHERE order_id = ?", o);
+        deliveryInBosta(s, o, "2036246050", 10);
+        UUID other = s.order("BRK-46640-EG");
+        bostaLeg(s, other, "4491317453");
+        capture(s, other, payload(f(7317931000088L, "success", "2026-10-31T18:49:41+02:00", "2036246051")));
+        clearInvocations(bostaGateway);
+        String before = shipmentsAndRows(s);
+
+        List<BostaFulfillmentCatchUpService.Row> rows = catchUp.run(s.f.tenant, false, "BRK-46639-EG");
+
+        assertThat(rows).singleElement().satisfies(r -> {
+            assertThat(r.orderNumber()).isEqualTo("BRK-46639-EG");
+            assertThat(r.verdict()).isEqualTo("WOULD_LINK");
+            assertThat(r.reason()).isEqualTo("replaces 4491317452");
+        });
+        assertThat(shipmentsAndRows(s)).as("a dry run writes nothing").isEqualTo(before);
+        assertThat(changes(s)).isEmpty();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq("2036246051"));
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
+
+    private String shipmentsAndRows(Shop s) {
+        return String.join("\n", jdbc.queryForList("SELECT x::text FROM shipments x WHERE tenant_id = ? UNION ALL " +
+            "SELECT t::text FROM order_fulfillment_tracking t WHERE tenant_id = ? ORDER BY 1", String.class, s.f.tenant, s.f.tenant));
+    }
 
     /** A Bosta leg linked from a Shopify fulfillment (capture + the real link job). */
     private UUID linkedLeg(Shop s, UUID o, long fid, String tn, String updatedAt) {

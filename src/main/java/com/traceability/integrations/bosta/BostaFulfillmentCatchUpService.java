@@ -69,11 +69,20 @@ public class BostaFulfillmentCatchUpService {
 
     @Job(name = "Bosta fulfillment-link catch-up — tenant %0 (apply=%1)", retries = 0)
     public void runAndLog(UUID tenantId, boolean apply) {
+        runAndLog(tenantId, apply, null);
+    }
+
+    /**
+     * S4 (approved 2026-11-03): {@code orderNumber} limits the run to that ONE order (null = the whole tenant, as
+     * before). Dry run unless apply — the same decision path, gates and logging.
+     */
+    @Job(name = "Bosta fulfillment-link catch-up — tenant %0 (apply=%1, order=%2)", retries = 0)
+    public void runAndLog(UUID tenantId, boolean apply, String orderNumber) {
         Map<String, Integer> byVerdict = new LinkedHashMap<>();
         int[] count = {0};
         String error = null;
         try {
-            run(tenantId, apply, r -> {
+            run(tenantId, apply, orderNumber, r -> {
                 log.info("BOSTA_CATCHUP {}", json(r));   // each row as soon as it's decided
                 byVerdict.merge(r.verdict(), 1, Integer::sum);
                 count[0]++;
@@ -85,6 +94,7 @@ public class BostaFulfillmentCatchUpService {
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("tenantId", tenantId.toString());
             summary.put("apply", apply);
+            if (orderNumber != null) summary.put("order", orderNumber);
             summary.put("rows", count[0]);
             summary.put("verdicts", byVerdict);
             if (error != null) summary.put("error", error);
@@ -93,8 +103,12 @@ public class BostaFulfillmentCatchUpService {
     }
 
     public List<Row> run(UUID tenantId, boolean apply) {
+        return run(tenantId, apply, null);
+    }
+
+    public List<Row> run(UUID tenantId, boolean apply, String orderNumber) {
         List<Row> out = new ArrayList<>();
-        run(tenantId, apply, out::add);
+        run(tenantId, apply, orderNumber, out::add);
         return out;
     }
 
@@ -102,10 +116,10 @@ public class BostaFulfillmentCatchUpService {
      * Each row is isolated: an exception on one row becomes verdict ERROR with its message and the
      * run continues with the next row.
      */
-    private void run(UUID tenantId, boolean apply, java.util.function.Consumer<Row> sink) {
+    private void run(UUID tenantId, boolean apply, String orderNumber, java.util.function.Consumer<Row> sink) {
         String tenantName = TenantContext.runAs(tenantId, () -> tx.execute(s ->
             jdbc.queryForObject("SELECT name FROM tenants WHERE id = ?", String.class, tenantId)));
-        List<Candidate> candidates = TenantContext.runAs(tenantId, () -> candidates(tenantId));
+        List<Candidate> candidates = TenantContext.runAs(tenantId, () -> candidates(tenantId, orderNumber));
         boolean first = true;
         for (Candidate c : candidates) {
             if (!first) sleep(delayMs);
@@ -129,6 +143,11 @@ public class BostaFulfillmentCatchUpService {
 
     /** Orders with a non-cancelled Bosta fulfillment and no forward shipment with that number. */
     List<Candidate> candidates(UUID tenantId) {
+        return candidates(tenantId, null);
+    }
+
+    /** The same, for one order number only when {@code orderNumber} isn't null. */
+    List<Candidate> candidates(UUID tenantId, String orderNumber) {
         List<Candidate> out = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         Set<UUID> tracked = new LinkedHashSet<>();
@@ -139,10 +158,12 @@ public class BostaFulfillmentCatchUpService {
                     "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
                     "WHERE t.tenant_id = ? AND t.carrier_class = 'bosta' " +
                     "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' " +
+                    "  AND t.removed_at IS NULL " +   // V200: a number Shopify replaced is never re-attempted
+                    "  AND (?::text IS NULL OR o.number = ?) " +
                     "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
                     "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number " +
                     "                    AND s.provider = 'bosta' AND s.shipment_leg = 'forward') " +
-                    "ORDER BY o.placed_at, t.tracking_number", tenantId)) {
+                    "ORDER BY o.placed_at, t.tracking_number", tenantId, orderNumber, orderNumber)) {
                 UUID orderId = (UUID) r.get("id");
                 tracked.add(orderId);
                 if (seen.add(orderId + "|" + r.get("tracking_number"))) {
@@ -154,10 +175,11 @@ public class BostaFulfillmentCatchUpService {
                     "SELECT o.id, o.number, o.store_id, o.external_id, o.raw::text AS raw " +
                     "FROM merchant_orders o " +
                     "WHERE o.tenant_id = ? AND jsonb_typeof(o.raw->'fulfillments') = 'array' " +
+                    "  AND (?::text IS NULL OR o.number = ?) " +
                     "  AND EXISTS (SELECT 1 FROM jsonb_array_elements(o.raw->'fulfillments') f " +
                     "              WHERE (f->>'tracking_company' ILIKE '%bosta%' OR f->>'tracking_url' ILIKE '%bosta%') " +
                     "                AND coalesce(f->>'status', '') <> 'cancelled') " +
-                    "ORDER BY o.placed_at", tenantId)) {
+                    "ORDER BY o.placed_at", tenantId, orderNumber, orderNumber)) {
                 UUID orderId = (UUID) r.get("id");
                 if (tracked.contains(orderId)) continue;
                 JsonNode raw;

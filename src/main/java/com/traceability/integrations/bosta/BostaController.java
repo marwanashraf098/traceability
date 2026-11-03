@@ -260,12 +260,18 @@ public class BostaController {
     @PreAuthorize("hasRole('OWNER')")
     public Map<String, String> fulfillmentLinkCatchUp(
             @RequestParam(name = "apply", defaultValue = "false") boolean apply,
+            // S4: one order only (its number, e.g. BRK-46639-EG); absent = the whole tenant, as before
+            @RequestParam(name = "order", required = false) String order,
             @AuthenticationPrincipal CustomUserDetails principal) {
         UUID tenantId = principal.tenantId();
-        JobId jobId = jobScheduler.enqueue(() -> catchUp.runAndLog(tenantId, apply));
+        String orderNumber = order == null || order.isBlank() ? null : order.trim();
+        JobId jobId = orderNumber == null
+            ? jobScheduler.enqueue(() -> catchUp.runAndLog(tenantId, apply))
+            : jobScheduler.enqueue(() -> catchUp.runAndLog(tenantId, apply, orderNumber));
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
-        resp.put("message", (apply ? "Catch-up (APPLY)" : "Catch-up dry run") + " enqueued — results in the logs (BOSTA_CATCHUP)");
+        resp.put("message", (apply ? "Catch-up (APPLY)" : "Catch-up dry run")
+            + (orderNumber != null ? " for order " + orderNumber : "") + " enqueued — results in the logs (BOSTA_CATCHUP)");
         return resp;
     }
 
