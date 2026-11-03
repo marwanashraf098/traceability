@@ -503,10 +503,67 @@ public class ShipmentLinkService {
      */
     public LinkResult linkDeliveryToOrder(UUID tenantId, UUID orderId, String trackingNumber,
                                           BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
+        return linkDeliveryToOrder(tenantId, orderId, trackingNumber, delivery, mapped, null, null);
+    }
+
+    /**
+     * V202 — the same, replacing {@code supersedes} (the order's live Bosta forward leg, a Shopify tracking edit
+     * BostaFulfillmentLinkService already decided) in THIS transaction: re-checked under the order row lock — frozen
+     * (OrderLineFreeze) or in an open pickup session → {@link SupersedeRefusedException} (the whole link rolls back,
+     * the link job retries and records the refusal) — then the old leg is replaced with no history row
+     * (BostaSupersede.replace), the new delivery linked exactly as any fulfillment link, the old leg pointed at the
+     * new one and the decision recorded with the old waybill's relabel reasons. A link that doesn't happen rolls the
+     * replacement back too. Null {@code supersedes} = the pre-V202 path, unchanged.
+     */
+    public LinkResult linkDeliveryToOrder(UUID tenantId, UUID orderId, String trackingNumber, BostaDelivery delivery,
+                                          BostaStateMapper.MappedState mapped, UUID supersedes, String supersedeKind) {
         UUID found = jdbc.query("SELECT id FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null, orderId, tenantId);
         if (found == null) return new LinkResult(null, REASON_NO_MATCH);
-        return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+        if (supersedes == null) return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+
+        boolean frozen = com.traceability.courier.TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId);
+        List<Map<String, Object>> old = jdbc.queryForList(
+            "SELECT tracking_number FROM shipments WHERE id = ? AND tenant_id = ? AND order_id = ? AND provider = 'bosta' " +
+            "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled') FOR UPDATE",
+            supersedes, tenantId, orderId);
+        if (old.isEmpty()) return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);   // already gone
+        if (frozen) throw new SupersedeRefusedException(com.traceability.courier.TrackingChanges.REASON_FROZEN);
+        if (com.traceability.courier.TrackingChanges.inOpenPickupSession(jdbc, tenantId, supersedes)) {
+            throw new SupersedeRefusedException(com.traceability.courier.TrackingChanges.REASON_PICKUP_SESSION);
+        }
+        String oldTn = (String) old.get(0).get("tracking_number");
+        List<String> relabel = com.traceability.courier.TrackingChanges.relabelReasons(jdbc, tenantId, orderId, supersedes, oldTn);
+        if (!com.traceability.integrations.bosta.BostaSupersede.replace(jdbc, tenantId, orderId, supersedes)) {
+            throw new SupersedeRefusedException("not_replaceable");
+        }
+        LinkResult r = linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+        if (r.orderId() == null) throw new SupersedeRefusedException("link_failed: " + r.unlinkedReason());
+        UUID newLeg = jdbc.queryForObject(
+            "SELECT id FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND provider = 'bosta'",
+            UUID.class, tenantId, trackingNumber);
+        com.traceability.integrations.bosta.BostaSupersede.pointAt(jdbc, tenantId, supersedes, newLeg);
+        Map<String, Object> fids = jdbc.queryForMap(
+            "SELECT (SELECT shopify_fulfillment_id FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? " +
+            "          AND tracking_number = ?) AS old_fid, " +
+            "       (SELECT shopify_fulfillment_id FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? " +
+            "          AND tracking_number = ?) AS new_fid", tenantId, orderId, oldTn, tenantId, orderId, trackingNumber);
+        com.traceability.courier.TrackingChanges.record(jdbc, tenantId, orderId, supersedes, newLeg,
+            supersedeKind != null ? supersedeKind : com.traceability.courier.TrackingChanges.KIND_EDIT, oldTn, trackingNumber,
+            (String) fids.get("old_fid"), (String) fids.get("new_fid"), null, "applied", null, relabel);
+        log.info("Tracking edit: order {} — Bosta leg {} replaced by {} ({}), relabel {}", orderId, oldTn, trackingNumber,
+            supersedeKind, relabel);
+        return r;
+    }
+
+    /** V202 — a replacement that must not happen after all: thrown inside the link transaction so it rolls back. */
+    public static final class SupersedeRefusedException extends RuntimeException {
+        private final String reason;
+        public SupersedeRefusedException(String reason) {
+            super("tracking edit not applied: " + reason);
+            this.reason = reason;
+        }
+        public String reason() { return reason; }
     }
 
     /** The portal pre-connect order whose return request booked this tracking number, or null. */

@@ -156,7 +156,66 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     g5b + g5c RED; alert on the old leg → g5c RED). (2) Labels: the Alerts page showed the raw key and the Orders list
     a de-underscored key — minimal EN + AR labels added (`Exceptions.tsx` TYPE_LABELS, `orders.reason.*`). Full suite
     3,725: ExchangeBackfillTest + GenericCourierSnapshotScriptTest (a Postgres connection error while another session's
-    full suite ran in parallel — green alone); vitest 1,397 green; tsc clean.
+    full suite ran in parallel — green alone); vitest 1,397 green; tsc clean. **Merged to main c274242c (2026-11-03);
+    deploy pending.**
+- **S3 — Bosta legs (branch `feat/tracking-edit-s3` off main c274242c; NOT pushed; migration V202).**
+  - **V202:** `shipments.superseded_at / superseded_by_shipment_id / superseded_reason ('shopify_tracking_edit') /
+    superseded_last_state / superseded_moved_at` + CHECK `shipments_superseded_bosta_forward` (a replaced leg is a
+    Bosta forward leg that stays 'cancelled' — a backstop behind the fence) + partial index; the
+    shipment_tracking_changes reason CHECK gains 'old_delivery_live'. MigrationSmokeTest 201 files,
+    NotTracedBackfillTest 146.
+  - **Decision (`BostaFulfillmentLinkService.attemptInTenant`, where the old code marked 'skipped' because the order
+    has a live Bosta leg):** `supersedeCandidate` from the stored tracking rows — the leg's number removed from the
+    same fulfillment (edit) / its fulfillment cancelled and the new number on another (strict cancel-and-refulfill) /
+    no row at all for the leg's number with the new one the order's only live Bosta number (D2, unanchored);
+    anything else — notably the leg's number still live on Shopify (the 55 prod second-parcel rows) — → the pre-V202
+    'skipped', byte-identical. Then `preCheck` before any Bosta call (courier.TrackingChanges, under the order lock):
+    ambiguous → refused; frozen → refused HIGH; open pickup session → refused HIGH; link row 'skipped'. Then the
+    unchanged fetch / type / identityProblem (404 → 'retry' → 'gave_up' as before; old leg untouched). D2:
+    `oldDeliveryNotEnded` — deletion confirmed (provider_deleted_at) or a read-only fetch showing 48 / 49 / 104; else
+    refused 'old_delivery_live' (MEDIUM "Shopify shows a different waybill"). Cadence (approved 2026-11-03): re-check
+    every 30 min for the first 2 h, then every 6 h, 'gave_up' at 48 h — the MEDIUM alert stays until resolved or the
+    old delivery ends; re-checks only when the tenant's Bosta bucket has a token free right now
+    (`BostaRateLimiter.hasHeadroom(key, 0)` — user-facing and normal poll calls first), else in 5 min, not counted;
+    the HIGH fulfillment_link_problem never fires for such a row while the old leg is live. `fl6` edited (approved):
+    expects no switch, refused 'old_delivery_live', MEDIUM. Noise check (prod, read-only, last 30 days): 1 order
+    would take this path — Femine #72153, already delivered → the HIGH after-custody refusal, not MEDIUM; BROEK 0.
+  - **Switch, in the link transaction:** the link event carries a `supersedes` (+ kind) hint, read by BostaWebhookJob
+    only from the 'shopify_fulfillment' source like the order hint → `ShipmentLinkService.linkDeliveryToOrder(…,
+    supersedes, kind)`: lock + freeze / pickup re-check (else `SupersedeRefusedException`, the link rolls back, the
+    link job marks the event failed and records the refusal), `BostaSupersede.replace` (cancelled, NO history row),
+    the normal link (unlinked row resolved as before), `pointAt`, decision recorded with relabel reasons. Order
+    status / OrderStatusDeriver untouched (newest live leg wins as before).
+  - **Fence (`BostaWebhookJob.applyMappedState`, first thing):** a replaced leg → `BostaSupersede.fence` stores raw /
+    provider_state / superseded_last_state (+ superseded_moved_at on movement) only — no history row, no piece move,
+    no internal_state. Covers webhook, poll walk, safety net and discovery (all go through process()). HIGH
+    `superseded_waybill_moving` while moved and not terminated / cancelled / deleted (or resolved).
+  - **Watch (approved 2026-11-03):** `BostaSupersede.watchedSql` (ONE definition): replaced < 14 days ago, not
+    deleted / not found, latest fenced state not terminal. The status walk's in-flight set includes watched legs (no
+    extra call); `pollReplaced` fetches at most `bosta.poll.replaced-max-per-cycle` (5) per tenant, after every
+    normal fetch of the cycle and never on a rate-limited cycle (lowest priority); a 400 only stamps
+    provider_not_found_at (ends the watch). Expected at once in prod: 0–2 (2 pre-custody Bosta edits in all history
+    since V129). `BostaDeletionService` never touches a replaced leg (observeNotFound / tryConfirm / print recheck).
+  - **Also:** WaybillResolver `NotPackable.REPLACED_IN_SHOPIFY` ("replaced in Shopify by X — use the new waybill",
+    EN + AR) for an unpacked order's old waybill; alert texts EN + AR; Alerts / Orders labels for the new type.
+  - **Tests `BostaTrackingEditTest` (12):** b1–b9, f1–f3. Fence removed → f1 (webhook) and f2 (poll) each RED,
+    run alone (the update hits the V202 CHECK — `DataIntegrityViolationException`); fence back → both GREEN.
+    Revert-checked: no supersede → 11 red; no D2 gate → b6; no frozen pre-check → b3; no replaced poll → f2; no
+    deletion skip → f3; no lowest-priority guard → f3; second parcel treated as an edit → b8 (golden). +b6c / b6d
+    (cadence, headroom), revert-checked: no 6 h step / no give-up / no HIGH exclusion / no "ended clears" → b6c; no
+    headroom gate → b6d. Renumbered V201 → V202 (main-reconcile took V201): MigrationSmokeTest 201, NotTraced 146.
+  - **Backstop audit (2026-11-03, before push):** all 49 `UPDATE shipments` in src/main classified — 37 write no
+    state column (raw / timestamps / settlement / PII / intake: allowed by the V202 CHECK); 12 write internal_state:
+    GenericLegTransitions ×6, GenericShipments.cancel, LookupExchangeService cancel (provider = 'generic'),
+    ShipmentLinkService return-leg resolve (shipment_leg = 'return') — never a replaced leg; BostaSupersede.replace
+    (the writer); BostaWebhookJob.applyMappedState (fenced first — f1 / f2); BostaDeletionService confirm (returns
+    early; its write would be allowed anyway); ReviewTenantSeeder (simulated review tenant only);
+    PickupSessionService.closeSession (no state guard in its UPDATE, but a replaced leg is 'cancelled' → refused at
+    scan, LEG_ENDED, and left out at close by step 2b — new test p1, revert-checked: without the left-out filter the
+    close throws on the CHECK). No INSERT … ON CONFLICT DO UPDATE on shipments; no DB function / trigger writes a
+    state column. Prod (read-only): superseded columns and the CHECK absent, all 6,250 shipments rows will satisfy it
+    (columns added NULL); the reason CHECK exists under the expected name, the 6 tracking-change rows pass the new
+    list; prod Flyway at V201 (main-reconcile deployed).
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

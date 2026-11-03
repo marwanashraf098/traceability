@@ -507,7 +507,8 @@
       "generic_delivered_without_pickup": "تم التوصيل دون مسح عند التسليم",
       "tracking_changed_after_custody": "تغيّر رقم التتبع بعد الشحن",
       "tracking_change_needs_review": "تغيير رقم تتبع للمراجعة",
-      "tracking_changed_relabel": "رقم تتبع جديد — غيّر ملصق الطرد"
+      "tracking_changed_relabel": "رقم تتبع جديد — غيّر ملصق الطرد",
+      "superseded_waybill_moving": "البوليصة القديمة ما زالت تتحرك في Bosta"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {

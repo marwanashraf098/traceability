@@ -468,8 +468,12 @@ public class BostaWebhookJob {
                 // Shopify id were checked against it before this event was written.
                 UUID hintedOrder = FULFILLMENT_SOURCE.equals(sourceHolder[0])
                     ? parseUuid(payload.path("orderId").asText(null)) : null;
+                // V202: the leg this delivery replaces (a Shopify tracking edit) — same source rule as the order hint.
+                UUID supersedes = hintedOrder != null ? parseUuid(payload.path("supersedes").asText(null)) : null;
+                String supersedeKind = payload.path("supersedeKind").asText(null);
                 ShipmentLinkService.LinkResult linkResult = tx.execute(s -> hintedOrder != null
-                    ? shipmentLinkService.linkDeliveryToOrder(tenantId, hintedOrder, trackingNumber, delivery, mapped)
+                    ? shipmentLinkService.linkDeliveryToOrder(tenantId, hintedOrder, trackingNumber, delivery, mapped,
+                        supersedes, supersedeKind)
                     : shipmentLinkService.tryMatchDelivery(tenantId, trackingNumber, delivery, mapped));
 
                 if (linkResult.orderId() != null) {
@@ -540,6 +544,15 @@ public class BostaWebhookJob {
      */
     private void applyMappedState(Long webhookEventId, UUID tenantId, BostaDelivery delivery,
                                    BostaStateMapper.MappedState mapped, ShipmentRow resolvedShipment) {
+        // V202 fence: a leg REPLACED by a Shopify tracking edit (BostaSupersede) only keeps Bosta's raw / state for
+        // its old delivery — no history row, no piece move, no internal_state (so no unique-index error, no order
+        // effect). Real movement of the old delivery raises HIGH superseded_waybill_moving.
+        if (Boolean.TRUE.equals(tx.execute(s -> BostaSupersede.isReplaced(jdbc, resolvedShipment.id())))) {
+            tx.execute(s -> { BostaSupersede.fence(jdbc, resolvedShipment.id(), delivery, mapped.shipmentInternalState()); return null; });
+            log.info("Tracking {}: replaced leg {} — Bosta state {} stored only (fence)", delivery.trackingNumber(),
+                resolvedShipment.id(), delivery.stateCode());
+            return;
+        }
         // webhookEventId is null for a manually-triggered application (the admin
         // re-interpret action — see reinterpretExchangeForwardLeg()): shipment_status_
         // history.webhook_event_id is a nullable FK (V40) precisely for this — a
