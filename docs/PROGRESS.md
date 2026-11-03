@@ -204,6 +204,18 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     deletion skip → f3; no lowest-priority guard → f3; second parcel treated as an edit → b8 (golden). +b6c / b6d
     (cadence, headroom), revert-checked: no 6 h step / no give-up / no HIGH exclusion / no "ended clears" → b6c; no
     headroom gate → b6d. Renumbered V201 → V202 (main-reconcile took V201): MigrationSmokeTest 201, NotTraced 146.
+  - **Backstop audit (2026-11-03, before push):** all 49 `UPDATE shipments` in src/main classified — 37 write no
+    state column (raw / timestamps / settlement / PII / intake: allowed by the V202 CHECK); 12 write internal_state:
+    GenericLegTransitions ×6, GenericShipments.cancel, LookupExchangeService cancel (provider = 'generic'),
+    ShipmentLinkService return-leg resolve (shipment_leg = 'return') — never a replaced leg; BostaSupersede.replace
+    (the writer); BostaWebhookJob.applyMappedState (fenced first — f1 / f2); BostaDeletionService confirm (returns
+    early; its write would be allowed anyway); ReviewTenantSeeder (simulated review tenant only);
+    PickupSessionService.closeSession (no state guard in its UPDATE, but a replaced leg is 'cancelled' → refused at
+    scan, LEG_ENDED, and left out at close by step 2b — new test p1, revert-checked: without the left-out filter the
+    close throws on the CHECK). No INSERT … ON CONFLICT DO UPDATE on shipments; no DB function / trigger writes a
+    state column. Prod (read-only): superseded columns and the CHECK absent, all 6,250 shipments rows will satisfy it
+    (columns added NULL); the reason CHECK exists under the expected name, the 6 tracking-change rows pass the new
+    list; prod Flyway at V201 (main-reconcile deployed).
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in

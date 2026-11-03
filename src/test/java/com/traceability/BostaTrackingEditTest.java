@@ -59,6 +59,9 @@ import static org.mockito.Mockito.*;
  *   f1  FENCE, webhook: Bosta's webhook for the OLD waybill after the switch → raw / state only, no history row, no
  *       piece move, no error; HIGH superseded_waybill_moving; Bosta 49 on it → alert gone, watch over
  *   f2  FENCE, status poll: the poll's per-leg check of the replaced leg → same
+ *   p1  every shipments writer that sets a state is safe on a replaced leg (the V202 CHECK is a hard backstop): a
+ *       pickup scan of the OLD waybill is refused (LEG_ENDED); a replaced leg already in a session (the race with the
+ *       D4 check) is left out at close — the close succeeds, the new leg goes with the courier
  *   f3  the watch: lowest priority (after the cycle's normal fetches, never on a rate-limited cycle), ends at 14 days,
  *       on a terminal state, on not-found; BostaDeletionService never touches a replaced leg
  */
@@ -100,6 +103,7 @@ class BostaTrackingEditTest {
     @Autowired WaybillResolver             resolver;
     @Autowired ExceptionService            exceptions;
     @Autowired EncryptionService           encryption;
+    @Autowired com.traceability.inventory.PickupSessionService pickups;
     @MockBean  BostaGateway                bostaGateway;
     @MockBean  BostaV2Client               bostaV2;
     @MockBean  JobScheduler                jobScheduler;
@@ -437,6 +441,33 @@ class BostaTrackingEditTest {
         when(bostaGateway.fetchDelivery(anyString(), eq("7200000099"))).thenThrow(new BostaRateLimitException(30));
         poll.pollAll();
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq("7200000021"));
+    }
+
+    @Test
+    void p1_pickup_oldWaybillRefused_replacedLegInASession_leftOutAtClose_noConstraintError() {
+        Shop s = new Shop("p1");
+        UUID o = s.order("#17500");
+        pack(s, o);
+        UUID old = switched(s, o, 7329122353550L, "7300000001", "7300000002");
+        UUID now = liveLeg(o);
+        UUID session = pickups.openSession(s.f.tenant, s.packer, java.time.LocalDate.now(), "10:00 to 13:00", null);
+
+        assertThat(pickups.scan(s.f.tenant, session, s.packer, "7300000001").outcome())
+            .isEqualTo(com.traceability.inventory.PickupSessionService.ScanOutcome.LEG_ENDED);
+        assertThat(pickups.scan(s.f.tenant, session, s.packer, "7300000002").outcome())
+            .isEqualTo(com.traceability.inventory.PickupSessionService.ScanOutcome.ACCEPTED);
+        // The race: the old leg was scanned in before the switch.
+        jdbc.update("INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)", session, old, s.f.tenant);
+
+        com.traceability.inventory.PickupSessionService.CloseResult close = pickups.closeSession(s.f.tenant, session, s.packer);
+
+        assertThat(close.shipmentsClosed()).isEqualTo(1);
+        assertThat(close.leftOut()).extracting(com.traceability.inventory.PickupSessionService.LeftOut::trackingNumber)
+            .containsExactly("7300000001");
+        assertThat(shipment(old).get("internal_state")).as("the replaced leg is never handed over").isEqualTo("cancelled");
+        assertThat(historyPastCreated(old)).isZero();
+        assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE id = ?", String.class, now))
+            .isEqualTo("with_courier");
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
