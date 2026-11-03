@@ -106,6 +106,9 @@ class BostaTrackingEditTest {
     @Autowired com.traceability.inventory.PickupSessionService pickups;
     @Autowired BostaFulfillmentCatchUpService catchUp;
     @Autowired com.traceability.inventory.PackListService packLists;
+    @Autowired BostaVisibilityCheckService visibilityCheck;
+    @Autowired BostaRateLimitedReprocessService reprocess;
+    @Autowired @org.springframework.boot.autoconfigure.flyway.FlywayDataSource javax.sql.DataSource ownerDs;
     @MockBean  BostaGateway                bostaGateway;
     @MockBean  BostaV2Client               bostaV2;
     @MockBean  JobScheduler                jobScheduler;
@@ -539,6 +542,32 @@ class BostaTrackingEditTest {
         assertThat(shipmentsAndRows(s)).as("a dry run writes nothing").isEqualTo(before);
         assertThat(changes(s)).isEmpty();
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq("2036246151"));
+    }
+
+    @Test
+    void o1_opsStartupTrigger_ordersSetting_oneDryRunJobPerOrder_noToken() throws Exception {
+        Shop s = new Shop("o1");
+        UUID a = s.order("BRK-46700-EG"), b = s.order("BRK-46701-EG"), c = s.order("BRK-46702-EG");
+        for (UUID o : List.of(a, b, c)) {
+            bostaLeg(s, o, "48" + Math.abs(o.getMostSignificantBits() % 100000000L));
+        }
+        capture(s, a, payload(f(7400000000500L, "success", "2026-10-31T18:00:00+02:00", "8100000001")));
+        capture(s, b, payload(f(7400000000501L, "success", "2026-10-31T18:00:00+02:00", "8100000002")));
+        capture(s, c, payload(f(7400000000502L, "success", "2026-10-31T18:00:00+02:00", "8100000003")));
+        BostaVisibilityCheckTrigger trigger = new BostaVisibilityCheckTrigger(ownerDs, jobScheduler, visibilityCheck, "",
+            catchUp, s.f.tenant.toString(), false, " BRK-46700-EG , BRK-46701-EG ", reprocess, "", false);
+        String before = shipmentsAndRows(s);
+
+        trigger.onReady();
+
+        org.mockito.ArgumentCaptor<org.jobrunr.jobs.lambdas.JobLambda> jobs =
+            org.mockito.ArgumentCaptor.forClass(org.jobrunr.jobs.lambdas.JobLambda.class);
+        verify(jobScheduler, times(2)).enqueue(jobs.capture());
+        clearInvocations(bostaGateway);
+        for (org.jobrunr.jobs.lambdas.JobLambda job : jobs.getAllValues()) job.run();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq("8100000003"));   // the third order isn't touched
+        assertThat(shipmentsAndRows(s)).as("dry run (apply=false) writes nothing").isEqualTo(before);
+        assertThat(BostaVisibilityCheckTrigger.orderNumbers(" BRK-1 ,, BRK-2 ")).containsExactly("BRK-1", "BRK-2");
     }
 
     // ── S4 (c): Printed but not packed ──────────────────────────────────────────────────────────

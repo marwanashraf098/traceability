@@ -47,6 +47,7 @@ public class BostaVisibilityCheckTrigger {
     private final BostaFulfillmentCatchUpService catchUp;
     private final String catchUpOnStartup;
     private final boolean catchUpApply;
+    private final String catchUpOrders;
     private final BostaRateLimitedReprocessService reprocess;
     private final String reprocessOnStartup;
     private final boolean reprocessApply;
@@ -70,6 +71,7 @@ public class BostaVisibilityCheckTrigger {
                                        BostaFulfillmentCatchUpService catchUp,
                                        @Value("${bosta.fulfillment-link.catch-up.on-startup:}") String catchUpOnStartup,
                                        @Value("${bosta.fulfillment-link.catch-up.apply:false}") boolean catchUpApply,
+                                       @Value("${bosta.fulfillment-link.catch-up.orders:}") String catchUpOrders,
                                        BostaRateLimitedReprocessService reprocess,
                                        @Value("${bosta.reprocess-rate-limited.on-startup:}") String reprocessOnStartup,
                                        @Value("${bosta.reprocess-rate-limited.apply:false}") boolean reprocessApply) {
@@ -80,6 +82,7 @@ public class BostaVisibilityCheckTrigger {
         this.catchUp = catchUp;
         this.catchUpOnStartup = catchUpOnStartup;
         this.catchUpApply = catchUpApply;
+        this.catchUpOrders = catchUpOrders;
         this.reprocess = reprocess;
         this.reprocessOnStartup = reprocessOnStartup;
         this.reprocessApply = reprocessApply;
@@ -94,11 +97,22 @@ public class BostaVisibilityCheckTrigger {
         }
         // Fulfillment-link catch-up (2026-10-03): BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<ids>|all,
         // dry run unless BOSTA_FULFILLMENT_LINK_CATCH_UP_APPLY=true. One-shot per startup.
+        // S4 (2026-11-03): BOSTA_FULFILLMENT_LINK_CATCH_UP_ORDERS=<order numbers> limits it to those orders (one job
+        // each) — the ops way to run the single-order catch-up without an owner token.
         final boolean apply = catchUpApply;
+        List<String> orders = orderNumbers(catchUpOrders);
         for (UUID tenantId : tenants(catchUpOnStartup)) {
             final UUID t = tenantId;
-            jobScheduler.enqueue(() -> catchUp.runAndLog(t, apply));
-            log.info("Bosta fulfillment-link catch-up enqueued for tenant {} (apply={})", t, apply);
+            if (orders.isEmpty()) {
+                jobScheduler.enqueue(() -> catchUp.runAndLog(t, apply));
+                log.info("Bosta fulfillment-link catch-up enqueued for tenant {} (apply={})", t, apply);
+                continue;
+            }
+            for (String order : orders) {
+                final String o = order;
+                jobScheduler.enqueue(() -> catchUp.runAndLog(t, apply, o));
+                log.info("Bosta fulfillment-link catch-up enqueued for tenant {} order {} (apply={})", t, o, apply);
+            }
         }
         // Rate-limited events re-process (2026-10-04): BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<ids>|all,
         // dry run unless BOSTA_REPROCESS_RATE_LIMITED_APPLY=true. One-shot per startup.
@@ -123,6 +137,17 @@ public class BostaVisibilityCheckTrigger {
 
     List<UUID> tenantsToCheck() {
         return tenants(onStartup);
+    }
+
+    /** Comma-separated order numbers, trimmed; empty = none (the whole tenant). */
+    public static List<String> orderNumbers(String setting) {
+        List<String> out = new ArrayList<>();
+        if (setting == null) return out;
+        for (String part : setting.split(",")) {
+            String p = part.trim();
+            if (!p.isEmpty()) out.add(p);
+        }
+        return out;
     }
 
     List<UUID> tenants(String setting) {
