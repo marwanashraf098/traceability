@@ -221,7 +221,8 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     discovery / safety net, deletion, settlement, print, raw refresh / provider ids, pickup close, returns / CRP,
     exchange linking, generic / Lookup, GDPR, review seeder, the 2026-10-19 ops backfill script, JobRunr sweepers):
     each skips replaced legs or writes columns the V202 CHECK allows; none can throw — no hotfix needed.
-- **S4 (branch `feat/tracking-edit-s4` off main 2417e68d; NOT pushed; no migration) — approved 2026-11-03.**
+- **S4 (branch `feat/tracking-edit-s4` off main 2417e68d; merged to main 3db8d872 and deployed by Marawan
+  2026-11-03; no migration) — approved 2026-11-03.**
   - **(a) Timeline:** `OrderController.timeline()` arm 4b from `shipment_tracking_changes` — applied →
     `waybill_changed_in_shopify` (done, "old → new"); refused → `waybill_change_not_followed` (fail) with a new
     `reasonKey` (JSON only when set) rendered as `orders.timeline.reason.<key>` (EN + AR, plain sentences); the
@@ -247,6 +248,24 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     custody is refused frozen even on the plain link path). Prod: 2 orders today (BRK-45472-EG, BRK-46639-EG).
     Tests d1, d1b, d2, d3 (golden), d4; revert-checked (no deletion hook → d1 + d1b; no webhook hook → d2 + d4; no
     re-queue freeze gate → d2; not scoped to the order → d3).
+  - **Ops (2026-11-03):** `BOSTA_FULFILLMENT_LINK_CATCH_UP_ORDERS=<order numbers>` with
+    `BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<tenant id>` runs the startup catch-up for those orders only (one job
+    each; dry run unless `_APPLY=true`) — the no-token way to run single orders (the endpoint takes the caller's own
+    tenant, so it needs that tenant's owner). Remove the lines and recreate the app after.
+  - **BROEK catch-up (2026-11-03, Marawan):** dry run — both WOULD_LINK (BRK-46639-EG "replaces 4491317452"; both new
+    waybills already Bosta 45 delivered); applied — both LINKED. BRK-46639-EG: old leg cancelled +
+    superseded_reason shopify_tracking_edit, new leg 2036246050 delivered, both pieces delivered; BRK-45472-EG: old leg
+    cancelled, new leg 8887279245 delivered (no pieces). Catch-up env lines removed, app recreated.
+  - **Post-apply read-only check (2026-11-03):** stored `orders.status` stays stale (BRK-46639-EG awaiting_pickup,
+    BRK-45472-EG new — the usual Traced-didn't-see-the-handover case) but nothing that matters reads it for these:
+    displayed status / Orders tab = Delivered (newest live leg); not in the Pick & Pack queue / ready-to-print /
+    committed stock (PICKABLE_SHIPMENT_GATE needs a 'created' newest leg), not in Packed-not-picked-up, not in Printed
+    but not packed (frozen), not late-to-pack (derived status), no relabel alert (left custody), red not-linked badge
+    cleared (both rows linked). Only wording nit: scanning BRK-46639-EG's new waybill in waybill mode says "already
+    packed" (from the stored status) — still a refusal, harmless; BRK-45472-EG's says "already moving (Bosta: delivered)".
+- **Tracking-edit workstream: COMPLETE (2026-11-03)** — D6, D7, S1+S2, S3, S4 merged and deployed. Pending only: the
+  live Bosta switch test on The Snouts (Marawan to run). Branches deleted (feat/tracking-edit-s1s2 / -s3 / -s4,
+  fix/generic-cancel-history, fix/bosta-ended-leg-freeze) and the worktree removed.
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in
