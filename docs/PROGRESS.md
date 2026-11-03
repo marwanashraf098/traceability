@@ -158,7 +158,8 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     3,725: ExchangeBackfillTest + GenericCourierSnapshotScriptTest (a Postgres connection error while another session's
     full suite ran in parallel — green alone); vitest 1,397 green; tsc clean. **Merged to main c274242c (2026-11-03);
     deploy pending.**
-- **S3 — Bosta legs (branch `feat/tracking-edit-s3` off main c274242c; NOT pushed; migration V202).**
+- **S3 — Bosta legs (branch `feat/tracking-edit-s3` off main c274242c; merged to main 2417e68d 2026-11-03 and
+  deployed by Marawan the same day; migration V202).**
   - **V202:** `shipments.superseded_at / superseded_by_shipment_id / superseded_reason ('shopify_tracking_edit') /
     superseded_last_state / superseded_moved_at` + CHECK `shipments_superseded_bosta_forward` (a replaced leg is a
     Bosta forward leg that stays 'cancelled' — a backstop behind the fence) + partial index; the
@@ -216,6 +217,36 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     state column. Prod (read-only): superseded columns and the CHECK absent, all 6,250 shipments rows will satisfy it
     (columns added NULL); the reason CHECK exists under the expected name, the 6 tracking-change rows pass the new
     list; prod Flyway at V201 (main-reconcile deployed).
+  - **Writer audit as a list (2026-11-03, sent in full):** all 49 `UPDATE shipments` by area (webhook / poll /
+    discovery / safety net, deletion, settlement, print, raw refresh / provider ids, pickup close, returns / CRP,
+    exchange linking, generic / Lookup, GDPR, review seeder, the 2026-10-19 ops backfill script, JobRunr sweepers):
+    each skips replaced legs or writes columns the V202 CHECK allows; none can throw — no hotfix needed.
+- **S4 (branch `feat/tracking-edit-s4` off main 2417e68d; NOT pushed; no migration) — approved 2026-11-03.**
+  - **(a) Timeline:** `OrderController.timeline()` arm 4b from `shipment_tracking_changes` — applied →
+    `waybill_changed_in_shopify` (done, "old → new"); refused → `waybill_change_not_followed` (fail) with a new
+    `reasonKey` (JSON only when set) rendered as `orders.timeline.reason.<key>` (EN + AR, plain sentences); the
+    numbers render ltr in RTL (waybill rows only). Alert labels reworded (TYPE_LABELS, `orders.reason.*`). Tests:
+    BostaTrackingEditTest.t1, vitest waybillChangeTimeline wc1–wc3 (EN + AR render); revert-checked (no arm → t1;
+    no reason line → wc2 / wc3).
+  - **(b) Per-order catch-up:** `POST /api/v1/bosta/fulfillment-link/catch-up?order=<number>` (dry run unless
+    `apply=true`), the 2-arg JobRunr method kept for queued jobs; candidates never re-attempt a number Shopify
+    replaced (`removed_at`). Test c1 (the BRK-46639-EG shape → WOULD_LINK "replaces 4491317452", writes nothing,
+    the other order untouched); revert-checked. The live dry run for BRK-46639-EG waits for this to be deployed.
+  - **(c) Printed but not packed:** `PackListService.printedNotPacked` — a printout drops once the order left
+    custody (`OrderLineFreeze.frozenSql`) or its waybill isn't the live one (`PRINTED_LEG_DEAD_SQL`: cancelled /
+    terminated / deleted / replaced); then `reprint_needed` (sorted after cancelled, carries
+    `reprintTrackingNumber`) when the live waybill was never printed. Prod (read-only, 2026-11-03): 305 rows shown,
+    285 dead (BROEK 173, overdue 77, hs-sparkle 34, Dolt 1 — printed in Traced, shipped without a Traced pack scan);
+    the 20 that stay are all Bosta state 10 (pickup requested), no pieces allocated; reprint_needed 0 today.
+    BRK-45472-EG drops and keeps the red `bosta_tracking_not_linked` badge. Tests pn1–pn4, vitest
+    printedNotPackedReprint pr1–pr2; revert-checked (no custody drop → pn1; no dead rule → pn2 + pn4).
+  - **(d) Relink after the old waybill ends:** `BostaSupersede.requeueAfterLegEnded` — on a confirmed deletion
+    (BostaDeletionService, every forward branch) or a Bosta 48 / 49 / 104 on a forward leg (BostaWebhookJob, any
+    source), the ORDER's 'skipped' / 'gave_up' Bosta rows Shopify still shows go to 'retry' with link_reason
+    `requeued: …` for ONE attempt through the normal pipeline (all S3 gates; a re-queued attempt on an order that left
+    custody is refused frozen even on the plain link path). Prod: 2 orders today (BRK-45472-EG, BRK-46639-EG).
+    Tests d1, d1b, d2, d3 (golden), d4; revert-checked (no deletion hook → d1 + d1b; no webhook hook → d2 + d4; no
+    re-queue freeze gate → d2; not scoped to the order → d3).
 
 **Unpack an order, then repack it (2026-10-31, branch `feat/unpack-order` off origin/main 1cbc520; NOT merged, NOT
 deployed; no migration).** Approved 2026-10-31 (S1–S4 after the Step 0 diagnosis). Customer edits a packed order in
