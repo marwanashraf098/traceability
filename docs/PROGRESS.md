@@ -50,7 +50,14 @@ amendment added verbatim under the FR-17 v2 invariant — named writes (8) `push
   no longer refuses). MigrationSmokeTest 202, NotTracedBackfillTest 147.
 - **Ops SQL:** `scripts/ops/2026-11-04-main-reconcile-r2.sql` — (i) differences per store with the fixes applied,
   (ii) every write in the last 24 h per store, (iii) open delivered-not-fulfilled alerts. Read-only.
-- **Next up:** deploy (a) report-only for all + cutoff → (b) writes for Dolt → (c) 'all'.
+- **Review (2026-11-04): approved** — adjusting "available" with the on_hand changed_before_write guard, settling
+  failed_ambiguous claims > 60 min (transfers / stock takes left alone), the 60-min hold on own ambiguous writes, the
+  90-day alert window and skipping unreadable fulfillments under fix 2 all accepted. Marawan deploying step (a)
+  (report-only for all + cutoff) 2026-11-04.
+- **Next up:** (b) writes for Dolt → (c) 'all'.
+- **OPEN — Part 1 exhausted claims are silent (do NOT build yet):** a Part 1 claim that fails definitely 5 times
+  (`MainReconcileWriter.PART1_MAX_ATTEMPTS`) stays 'failed', stays owed and keeps its variant skipped
+  (part1_in_flight) with no alert. Needs an alert — MEDIUM, per store.
 
 **Shopify Main-location reconciler ("check-up") — R0 + R1 REPORT-ONLY built (2026-11-02; review fixes 2026-11-03;
 merged to main, NOT deployed; V201).**
@@ -311,6 +318,15 @@ fence + D2) → S4 (timeline, EN/AR, dry-run catch-up for Dolt.eg #17243 / BROEK
     but not packed (frozen), not late-to-pack (derived status), no relabel alert (left custody), red not-linked badge
     cleared (both rows linked). Only wording nit: scanning BRK-46639-EG's new waybill in waybill mode says "already
     packed" (from the stored status) — still a refusal, harmless; BRK-45472-EG's says "already moving (Bosta: delivered)".
+  - **Re-check (2026-11-04, code trace) — confirms the above, plus ONE reader of the stale column not covered:**
+    Bosta "Schedule pickup" (`BostaPickupService.AWAITING_PICKUP_SQL`, both the real and the simulated path) takes
+    every FORWARD shipment of an order whose stored status is `awaiting_pickup` that isn't in a non-cancelled pickup —
+    no leg-state filter. So BRK-46639-EG's new leg 2036246050 (delivered; never in a pickup), and its old cancelled leg
+    4491317452 unless it already sits in a pickup, would be added to the next scheduled pickup's manifest (parcel
+    count + COD total, and the count sent to Bosta createPickup in TRACED_MANAGED mode). Not fixed (report only);
+    harmless if BROEK never uses Schedule pickup. The other awaiting_pickup readers are safe for these orders:
+    PackedOrderService.IN_WAREHOUSE_SQL (needs no movement history + packed pieces in custody), shopify_cancel_vs_inflight
+    (needs a Shopify cancel request), the relabel alert and relabelReasons (NOT frozen).
 - **Tracking-edit workstream: COMPLETE (2026-11-03)** — D6, D7, S1+S2, S3, S4 merged and deployed. Pending only: the
   live Bosta switch test on The Snouts (Marawan to run). Branches deleted (feat/tracking-edit-s1s2 / -s3 / -s4,
   fix/generic-cancel-history, fix/bosta-ended-leg-freeze) and the worktree removed.
