@@ -49,6 +49,22 @@ public class ExceptionService {
         this.shipmentLinkService = shipmentLinkService;
     }
 
+    private int deliveredUnfulfilledDays = 7;
+    private int deliveredUnfulfilledLookbackDays = 90;
+
+    /** delivered_not_fulfilled_in_shopify: delivered by Traced more than this many days ago (Main reconcile R2). */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDeliveredUnfulfilledDays(
+            @org.springframework.beans.factory.annotation.Value("${traced.main-reconcile.delivered-unfulfilled-days:7}") int d) {
+        this.deliveredUnfulfilledDays = d;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDeliveredUnfulfilledLookbackDays(
+            @org.springframework.beans.factory.annotation.Value("${traced.main-reconcile.delivered-unfulfilled-lookback-days:90}") int d) {
+        this.deliveredUnfulfilledLookbackDays = d;
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -199,6 +215,8 @@ public class ExceptionService {
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
+        // Main reconcile R2 fix 2 (V203): Traced delivered it, Shopify still shows it unfulfilled.
+        if (!simulated) all.addAll(detectDeliveredNotFulfilledInShopify(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -326,7 +344,8 @@ public class ExceptionService {
         Map.entry("tracking_changed_after_custody/order",      OrderLink.DIRECT),
         Map.entry("tracking_change_needs_review/order",        OrderLink.DIRECT),
         Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT),
-        Map.entry("superseded_waybill_moving/shipment",        OrderLink.VIA_SHIPMENT));
+        Map.entry("superseded_waybill_moving/shipment",        OrderLink.VIA_SHIPMENT),
+        Map.entry("delivered_not_fulfilled_in_shopify/order",  OrderLink.DIRECT));
 
     /**
      * Orders "Needs attention" reason groups (2026-10-30): what the merchant has to do, in display priority — an
@@ -375,7 +394,8 @@ public class ExceptionService {
         Map.entry("shopify_edit_conflict",            "other"),
         Map.entry("generic_delivered_without_pickup", "other"),
         Map.entry("tracking_changed_after_custody",   "other"),
-        Map.entry("superseded_waybill_moving",        "other"));
+        Map.entry("superseded_waybill_moving",        "other"),
+        Map.entry("delivered_not_fulfilled_in_shopify", "other"));
 
     /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
     public static String reasonGroupOf(String type) {
@@ -1489,6 +1509,30 @@ public class ExceptionService {
      * active again; clears by itself then (the check sets it back). One alert per episode: the subject key carries the
      * state and when it was recorded, so a later episode is a new subject (and a new immediate email).
      */
+    /**
+     * MEDIUM — Main reconcile R2 fix 2 (V203): Traced delivered the order's pieces more than
+     * delivered-unfulfilled-days ago and Shopify still shows those lines unfulfilled (so Shopify still counts them
+     * as committed stock). One alert per order (subject = the order); clears by itself once Shopify fulfills it or it
+     * is cancelled; hidden once resolved. Only for a tenant with a connected Shopify store. The rule is
+     * {@link MainReconcileRules#DELIVERED_NOT_FULFILLED_SQL} — never re-derive it.
+     */
+    private List<Map<String, Object>> detectDeliveredNotFulfilledInShopify(UUID tid) {
+        boolean hasStore = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM stores WHERE tenant_id = ? AND status <> 'disconnected')", Boolean.class, tid));
+        if (!hasStore) return List.of();
+        List<Map<String, Object>> rows = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc).queryForList(
+            "SELECT 'delivered_not_fulfilled_in_shopify' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       d.order_id, d.order_number, d.delivered_at AS occurred_at, d.pieces, " +
+            "       'delivered_not_fulfilled_in_shopify:' || d.order_id AS subject_key " +
+            "FROM (" + MainReconcileRules.DELIVERED_NOT_FULFILLED_SQL + ") d " +
+            "WHERE NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = :t " +
+            "        AND er.exception_type = 'delivered_not_fulfilled_in_shopify' " +
+            "        AND er.subject_key = 'delivered_not_fulfilled_in_shopify:' || d.order_id)",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("t", tid)
+                .addValue("days", deliveredUnfulfilledDays).addValue("lookbackDays", deliveredUnfulfilledLookbackDays));
+        return new ArrayList<>(rows);
+    }
+
     private List<Map<String, Object>> detectShopifyLocationInactive(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'shopify_location_inactive' AS type, 'HIGH' AS severity, 'location' AS subject_type, " +
@@ -2436,6 +2480,17 @@ public class ExceptionService {
                         + "تنتظر وتُرسل بمجرد تفعيله من جديد.");
                 item.put("suggestedAction", deleted ? "recreate_shopify_location" : "reactivate_shopify_location");
                 item.put("actionUrl", "/settings?tab=connections");
+            }
+            case "delivered_not_fulfilled_in_shopify" -> {
+                String n = str(item, "order_number");
+                item.put("descriptionEn", "Order " + n + " was delivered more than " + deliveredUnfulfilledDays
+                    + " days ago but is still unfulfilled in Shopify, so Shopify still counts its stock as committed. "
+                    + "Mark it fulfilled in Shopify (or cancel it if it didn't go through).");
+                item.put("descriptionAr", "تم توصيل الطلب " + n + " منذ أكثر من " + deliveredUnfulfilledDays
+                    + " أيام لكنه ما زال غير منفّذ في شوبيفاي، لذلك ما زال شوبيفاي يحتسب مخزونه كمحجوز. "
+                    + "علّمه كمنفّذ في شوبيفاي (أو ألغِه إن لم يتم).");
+                item.put("suggestedAction", "fulfill_in_shopify");
+                item.put("actionUrl", "/orders/" + item.get("order_id"));
             }
             case "transfer_stock_not_removed" -> {
                 String dest = str(item, "destination_name");

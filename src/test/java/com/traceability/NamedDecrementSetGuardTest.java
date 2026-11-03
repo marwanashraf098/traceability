@@ -17,7 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * are sanctioned ONLY through a named, closed set of dedicated single-attempt gateway methods —
  * pushStockTakeWriteOff, pushVoidCorrection, pushHoldEnter, (Step 5a, approved 2026-09-26)
  * pushExchangeDispatch, (Issue 2, 2026-10-08) pushTransferOut, (D1, 2026-10-10) pushPieceWriteOff and
- * (C1, 2026-10-25) pushPieceSold —
+ * (C1, 2026-10-25) pushPieceSold, and the Main reconcile amendment (R2, approved 2026-11-04) pushPart1MainDecrement
+ * (8) and pushMainReconcile (9, ±delta, compare-and-set) —
  * each called from exactly ONE approved site. Adding a fourth decrement method, or a second caller of any of these three,
  * requires the same explicit approval this set itself required.
  *
@@ -49,23 +50,26 @@ class NamedDecrementSetGuardTest {
         // D1 (2026-10-10) — the sixth: Lookup lost / destroyed of a Shopify-counted piece.
         new Rule("shopify.pushPieceWriteOff(",      "ShopifyInventoryService.java"),
         // C1 (2026-10-25) — the seventh: Lookup Sold of a Shopify-counted piece.
-        new Rule("shopify.pushPieceSold(",          "ShopifyInventoryService.java")
+        new Rule("shopify.pushPieceSold(",          "ShopifyInventoryService.java"),
+        // Main reconcile R2 (2026-11-04) — (8) Part 1 and (9) the reconcile write, both Main location only.
+        new Rule("shopify.pushPart1MainDecrement(", "MainReconcileWriter.java"),
+        new Rule("shopify.pushMainReconcile(",      "MainReconcileWriter.java")
     );
 
     /** The closed set, by name — every ShopifyGateway method that takes a negative delta. */
     private static final java.util.Set<String> NAMED_DECREMENTS = java.util.Set.of(
         "pushStockTakeWriteOff", "pushVoidCorrection", "pushHoldEnter", "pushExchangeDispatch",
-        "pushTransferOut", "pushPieceWriteOff", "pushPieceSold");
+        "pushTransferOut", "pushPieceWriteOff", "pushPieceSold", "pushPart1MainDecrement", "pushMainReconcile");
 
     /**
      * D11: the Back-to-good reverse move (moveDamagedToAvailable, trigger damage_restore) is a MOVE, not
      * a decrement — it is not in the named set, takes a positive quantity, and refuses a non-positive one
-     * before any network call. The gateway's decrement surface is exactly the seven named methods: every
+     * before any network call. The gateway's decrement surface is exactly the nine named methods: every
      * ShopifyGateway method named push* is one of them except the +1 (pushPieceIncrement).
      */
     @Test
-    void damageRestore_isAMove_notADecrement_andTheSetIsExactlySeven() {
-        assertThat(NAMED_DECREMENTS).hasSize(7).doesNotContain("moveDamagedToAvailable");
+    void damageRestore_isAMove_notADecrement_andTheSetIsExactlyNine() {
+        assertThat(NAMED_DECREMENTS).hasSize(9).doesNotContain("moveDamagedToAvailable");
         java.util.Set<String> pushMethods = new java.util.TreeSet<>();
         for (java.lang.reflect.Method m : com.traceability.integrations.shopify.ShopifyGateway.class.getDeclaredMethods()) {
             if (m.getName().startsWith("push")) pushMethods.add(m.getName());

@@ -1964,6 +1964,188 @@ class ShopifyHttpGateway implements ShopifyGateway {
         return new MainLevelsPage(out, next);
     }
 
+    private static final String PART1_MAIN_DECREMENT_MUTATION = """
+            mutation Part1MainDecrement($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Main reconcile R2 — named write (8), Part 1. Deliberately self-contained, like {@link #pushPieceWriteOff}: no
+     * executeGraphQL() (its Resilience4j retry would silently re-send a timed-out −N), exactly one HTTP attempt,
+     * classified exactly like pushPieceWriteOff / pushTransferOut. Reason "correction".
+     */
+    @Override
+    public void pushPart1MainDecrement(String shopDomain, String token, String inventoryItemGid, String locationGid,
+                                       int negativeDelta, String referenceDocumentUri, String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException("pushPart1MainDecrement requires a negative delta; got " + negativeDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "correction")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", PART1_MAIN_DECREMENT_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Part 1 decrement HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                "Part 1 decrement HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException("Part 1 decrement: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Part 1 decrement: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Part 1 decrement: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Part 1 decrement GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Part 1 decrement GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Part 1 decrement: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            throw new ShopifyException("Part 1 decrement failed: " + userErrors.get(0).path("message").asText("unknown error"));
+        }
+    }
+
+    private static final String MAIN_RECONCILE_MUTATION = """
+            mutation MainReconcile($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Main reconcile R2 — named write (9). Self-contained, one HTTP attempt, classified like pushPieceWriteOff; a
+     * userError with code CHANGE_FROM_QUANTITY_STALE is the compare-and-set refusing → ShopifyCasStaleException.
+     */
+    @Override
+    public void pushMainReconcile(String shopDomain, String token, String inventoryItemGid, String locationGid,
+                                  int delta, Integer changeFromQuantity, String referenceDocumentUri,
+                                  String idempotencyKey) {
+        if (delta == 0) throw new IllegalArgumentException("pushMainReconcile requires a non-zero delta");
+        if (changeFromQuantity == null) {
+            throw new IllegalArgumentException("pushMainReconcile requires changeFromQuantity (compare-and-set)");
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", delta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid)
+            .put("changeFromQuantity", changeFromQuantity.intValue());
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "correction")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", MAIN_RECONCILE_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Main reconcile HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                "Main reconcile HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException("Main reconcile: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Main reconcile: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Main reconcile: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Main reconcile GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Main reconcile GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Main reconcile: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            JsonNode first = userErrors.get(0);
+            String msg = first.path("message").asText("unknown error");
+            if ("CHANGE_FROM_QUANTITY_STALE".equals(first.path("code").asText(""))) {
+                throw new ShopifyCasStaleException("Main reconcile: Shopify's quantity changed since the read: " + msg);
+            }
+            throw new ShopifyException("Main reconcile failed: " + msg);
+        }
+    }
+
     static MainLevel mainLevel(String itemGid, JsonNode level) {
         if (level == null || level.isMissingNode() || level.isNull()) return new MainLevel(itemGid, false, 0, 0, 0, 0);
         int onHand = 0, available = 0, committed = 0, damaged = 0;

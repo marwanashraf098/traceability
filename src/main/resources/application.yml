@@ -145,6 +145,15 @@ traced:
     cancelled-fulfillment-window-minutes: ${TRACED_MAIN_RECONCILE_CANCELLED_WINDOW_MINUTES:60}
     store-skip-row-minutes: 60
     retention-days: ${TRACED_MAIN_RECONCILE_RETENTION_DAYS:14}
+    # R2 (V203): writes only for these shops (comma-separated; 'all' = every store; empty = none), only with
+    # report-only=false AND part1-since set (ISO-8601, the R2 deploy time — Part 1 ignores older fulfillments).
+    write-shops: ${TRACED_MAIN_RECONCILE_WRITE_SHOPS:}
+    part1-since: ${TRACED_MAIN_RECONCILE_PART1_SINCE:}
+    ambiguous-hold-minutes: 60
+    pending-stale-minutes: 15
+    # The delivered_not_fulfilled_in_shopify alert: delivered more than N days ago, looked back M days.
+    delivered-unfulfilled-days: ${TRACED_MAIN_RECONCILE_DELIVERED_UNFULFILLED_DAYS:7}
+    delivered-unfulfilled-lookback-days: 90
 
 shopify:
   # Pin the API version — never use "latest" in code paths.

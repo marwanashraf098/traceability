@@ -608,6 +608,36 @@ public interface ShopifyGateway {
      */
     MainLevelsPage fetchMainLevelsPage(String shopDomain, String token, String locationGid, String afterCursor);
 
+    /**
+     * Main reconcile (V203, R2, approved 2026-11-04) — named write (8) of the FR-17 v2 amendment: Part 1. A Shopify
+     * fulfillment line Shopify fulfilled from ANOTHER location whose pieces Traced shipped: −N at the Traced Main
+     * location, exactly once per (fulfillment id, line item id) — the claim row is the guard. One caller
+     * (MainReconcileWriter). Self-contained, single HTTP attempt, classified like {@link #pushPieceWriteOff}; shares no
+     * code with any other decrement method.
+     *
+     * @param negativeDelta must be < 0 — checked BEFORE any network call
+     * @throws ShopifyException          definite rejection — nothing was applied
+     * @throws ShopifyAmbiguousException no confirmed response — the caller must NOT auto-retry
+     */
+    void pushPart1MainDecrement(String shopDomain, String token, String inventoryItemGid, String locationGid,
+                                int negativeDelta, String referenceDocumentUri, String idempotencyKey);
+
+    /**
+     * Main reconcile (V203, R2, approved 2026-11-04) — named write (9) of the FR-17 v2 amendment: one confirmed
+     * difference at the Traced Main location, ±delta via inventoryAdjustQuantities on "available" (Shopify adjusts
+     * on_hand only through a named quantity; available moves on_hand by the same delta) with changeFromQuantity = the
+     * "available" Traced read immediately before (compare-and-set). One caller (MainReconcileWriter). Single HTTP
+     * attempt, classified like {@link #pushPieceWriteOff}.
+     *
+     * @param delta              ≠ 0 — checked BEFORE any network call
+     * @param changeFromQuantity required (never null — no opting out of the compare-and-set)
+     * @throws ShopifyCasStaleException  the quantity changed since the read — definite, nothing applied
+     * @throws ShopifyException          other definite rejection — nothing was applied
+     * @throws ShopifyAmbiguousException no confirmed response — the caller must NOT auto-retry
+     */
+    void pushMainReconcile(String shopDomain, String token, String inventoryItemGid, String locationGid, int delta,
+                           Integer changeFromQuantity, String referenceDocumentUri, String idempotencyKey);
+
     // ---- scope utilities -----------------------------------------------
 
     /**

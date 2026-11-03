@@ -9,7 +9,7 @@ import java.util.List;
  *
  * <h3>Target (per variant, at the tenant's main warehouse — compared with Shopify ON-HAND, never available)</h3>
  * <pre>
- *   target = custody_at_main + away_counted − fulfilled_from_main + part1_owed
+ *   target = custody_at_main + away_counted − fulfilled_from_main + part1_owed + unfulfilled_shipped
  * </pre>
  * <ul>
  *   <li><b>custody_at_main</b>: pieces at the main warehouse that are available / reserved / packed / awaiting_pickup.
@@ -35,8 +35,24 @@ import java.util.List;
  *       variant that already left custody (with_courier / delivered) — those are already out of the target.</li>
  *   <li><b>part1_owed</b>: Part 1 claims not yet applied — units Traced shipped for a line Shopify fulfilled from ANOTHER
  *       location, so Shopify Main still holds them until Part 1 subtracts. Adding them back keeps the runner from
- *       subtracting the same units a second time; once applied they drop out (and Shopify Main dropped with them).</li>
+ *       subtracting the same units a second time; once applied they drop out (and Shopify Main dropped with them).
+ *       'ignored_pre_cutoff' / 'superseded_by_reconcile' claims are never owed.</li>
+ *   <li><b>unfulfilled_shipped</b> (R2 fix 2): pieces that left Traced custody (now with_courier / delivered — their
+ *       latest move out names the order) for a line of a non-cancelled order that Shopify still shows UNFULFILLED:
+ *       Shopify still holds them on_hand as committed and subtracts on fulfillment. Per (order, variant)
+ *       {@code LEAST(out, quantity − fulfilled)} ({@link #unfulfilledUnitsSql}); per variant capped at Shopify's
+ *       committed at Main (Traced can't see which location an unfulfilled order is committed at) — a capped variant's
+ *       diff carries note 'unfulfilled_capped'. An order whose fulfillments Traced can't read skips the variant
+ *       ({@link #FULFILLMENT_UNREADABLE}) unless Shopify says it is FULFILLED.</li>
  * </ul>
+ *
+ * <h3>Write mode (R2, V203) — settling other paths' ambiguous claims</h3>
+ * In a write store ({@code :settle}), a failed_ambiguous claim at Main older than {@code :holdMinutes} (another path's
+ * shopify_inventory_adjustments row, a Part 1 claim, or an earlier reconcile write) no longer skips its variant: the
+ * target is Traced's own count, so the reconcile write makes Shopify right whatever the ambiguous one did; the claim
+ * is settled 'superseded_by_reconcile' in the transaction that records the applied write (so nothing re-sends it).
+ * A pending reconcile write, or an ambiguous one still inside the hold, skips the variant
+ * ({@link #RECONCILE_WRITE_IN_FLIGHT}).
  *
  * <h3>Part 1 (per successful REST fulfillment line at a location that is not Main)</h3>
  * Units Traced shipped for (order, variant) first cover what Shopify fulfilled from Main; the rest, minus earlier
@@ -70,8 +86,12 @@ public final class MainReconcileRules {
     public static final String FULFILLMENT_PENDING       = "fulfillment_pending";
     public static final String FULFILLMENT_CANCELLED     = "fulfillment_cancelled";
     public static final String NOT_ACTIVATED_AT_MAIN     = "not_activated_at_main";
+    public static final String RECONCILE_WRITE_IN_FLIGHT = "reconcile_write_in_flight";
 
-    public static final List<String> SKIP_ORDER = List.of(NOT_LINKED, SHOPIFY_UNREAD, PART1_IN_FLIGHT,
+    /** Diff note: unfulfilled_shipped was capped at Shopify's committed at Main. */
+    public static final String NOTE_UNFULFILLED_CAPPED = "unfulfilled_capped";
+
+    public static final List<String> SKIP_ORDER = List.of(NOT_LINKED, SHOPIFY_UNREAD, RECONCILE_WRITE_IN_FLIGHT, PART1_IN_FLIGHT,
         ARRIVAL_REVISIT_PENDING, CLAIM_IN_FLIGHT, CLAIM_AMBIGUOUS, STOCK_TAKE_SYNC_IN_FLIGHT, TRANSFER_SYNC_IN_FLIGHT,
         FULFILLMENT_UNREADABLE, FULFILLMENT_PENDING, FULFILLMENT_CANCELLED, NOT_ACTIVATED_AT_MAIN);
 
@@ -85,6 +105,8 @@ public final class MainReconcileRules {
     public static final String P1_FULFILLMENT_PENDING       = "fulfillment_pending";
     public static final String P1_UNLINKED_VARIANT          = "unlinked_variant";
     public static final String P1_FULFILLMENT_UNREADABLE    = "fulfillment_unreadable";
+    /** R2 fix 1: a fulfillment created before TRACED_MAIN_RECONCILE_PART1_SINCE (or with no readable time) — settled. */
+    public static final String P1_PRE_CUTOFF                = "pre_cutoff";
 
     /** Part 1 claim statuses that still owe their units to Shopify Main (target adds them back). */
     public static final String P1_OWED_STATUSES_SQL = "('report_only', 'queued', 'pending', 'failed', 'failed_ambiguous')";
@@ -119,6 +141,58 @@ public final class MainReconcileRules {
                "WHEN " + f + "->>'created_at' ~ " + ts + " THEN (" + f + "->>'created_at')::timestamptz END)";
     }
 
+    /** Shopify's fulfillment created_at; NULL when unreadable (never a cast error). */
+    static String fulfillmentCreatedAtSql(String f) {
+        return "(CASE WHEN " + f + "->>'created_at' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}' " +
+               "THEN (" + f + "->>'created_at')::timestamptz END)";
+    }
+
+    /**
+     * R2 fix 2 — THE "units of this variant Shopify has not fulfilled on this order": Traced's order lines' quantity
+     * (Shopify's current quantity) minus SUCCESSFUL REST fulfillment lines of the variant from ANY location; never < 0.
+     * Shared by the target and the delivered_not_fulfilled_in_shopify alert. o = the order, vv = the variant.
+     */
+    public static String unfulfilledUnitsSql(String o, String vv) {
+        return "GREATEST(0, " +
+               "  COALESCE((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.tenant_id = " + o + ".tenant_id " +
+               "            AND oi.order_id = " + o + ".id AND oi.variant_id = " + vv + ".id), 0) " +
+               "  - COALESCE((SELECT SUM((li->>'quantity')::int) " +
+               "              FROM jsonb_array_elements(" + fulfillmentsSql(o) + ") f, jsonb_array_elements(" + lineItemsSql("f") + ") li " +
+               "              WHERE " + restShapeSql("f") + " AND lower(f->>'status') = 'success' " +
+               "                AND " + lineMatchesVariantSql("li", vv) + " AND li->>'quantity' ~ '^[0-9]+$'), 0))";
+    }
+
+    /** The order has a fulfillment Traced can't read and Shopify doesn't say the order is fulfilled. */
+    static String unfulfilledUnreadableSql(String o) {
+        return "(EXISTS (SELECT 1 FROM jsonb_array_elements(" + fulfillmentsSql(o) + ") f WHERE NOT " + restShapeSql("f") + ") " +
+               " AND COALESCE(upper(" + o + ".raw->>'displayFulfillmentStatus'), '') <> 'FULFILLED')";
+    }
+
+    /** Shopify says the whole order is fulfilled (REST fulfillment_status / GraphQL displayFulfillmentStatus). */
+    static String orderFulfilledSql(String o) {
+        return "(lower(COALESCE(" + o + ".raw->>'fulfillment_status', '')) = 'fulfilled' " +
+               " OR upper(COALESCE(" + o + ".raw->>'displayFulfillmentStatus', '')) = 'FULFILLED')";
+    }
+
+    /** A non-cancelled, non-internal merchant order. */
+    static String liveShopifyOrderSql(String o) {
+        return "(" + o + ".external_id NOT LIKE 'internal:%' AND NOT COALESCE(" + o + ".is_cancelled, false) " +
+               " AND " + o + ".status <> 'cancelled')";
+    }
+
+    /**
+     * Each piece now out of Traced custody (with_courier / delivered) with the order its LATEST move out named
+     * (a piece sold twice counts for the order it left on last). Columns piece_id, variant_id, order_id, left_at.
+     * pieceFilter is extra SQL on p (e.g. a variant restriction).
+     */
+    static String piecesOutSql(String pieceFilter) {
+        return "SELECT DISTINCT ON (p.id) p.id AS piece_id, p.variant_id, e.order_id, e.occurred_at AS left_at " +
+               "FROM pieces p JOIN piece_events e ON e.piece_id = p.id AND e.tenant_id = p.tenant_id " +
+               "WHERE p.tenant_id = :t AND p.status::text IN ('with_courier', 'delivered') " +
+               "  AND e.to_status::text IN ('with_courier', 'delivered') AND e.order_id IS NOT NULL " + pieceFilter + " " +
+               "ORDER BY p.id, e.occurred_at DESC, e.id DESC";
+    }
+
     static String lineMatchesVariantSql(String li, String variantAlias) {
         return "('gid://shopify/ProductVariant/' || (" + li + "->>'variant_id') = " + variantAlias + ".external_id)";
     }
@@ -126,7 +200,8 @@ public final class MainReconcileRules {
     /**
      * One row per variant id in :ids — the target's parts and every skip flag. Named parameters: :t (tenant), :main
      * (main warehouse id), :mainGid (its Shopify location gid), :mainNum (its numeric id), :ids (uuid[] as text),
-     * :cancelWindowMinutes (a cancelled / errored fulfillment younger than this skips the variant).
+     * :cancelWindowMinutes (a cancelled / errored fulfillment younger than this skips the variant), :settle (write store —
+     * old ambiguous claims are settleable), :holdMinutes (how old an ambiguous claim must be to be settled).
      * Runs on the caller's connection, under RLS.
      */
     public static final String EVALUATE_SQL =
@@ -213,22 +288,49 @@ public final class MainReconcileRules {
         "  SELECT variant_id, SUM(GREATEST(0, LEAST(held, f_main - r_main - left_n))) AS fulfilled_from_main, " +
         "         bool_or(unreadable) AS unreadable, bool_or(pending) AS pending, bool_or(cancelled) AS cancelled " +
         "  FROM hf GROUP BY variant_id " +
+        "), p1x AS ( " +
+        "  SELECT c.*, (:settle AND c.status = 'failed_ambiguous' " +
+        "               AND COALESCE(c.send_started_at, c.updated_at) < now() - make_interval(mins => :holdMinutes)) AS settleable " +
+        "  FROM main_reconcile_part1_claims c JOIN v ON v.variant_id = c.variant_id WHERE c.tenant_id = :t " +
         "), p1 AS ( " +
-        "  SELECT c.variant_id, " +
-        "         COALESCE(SUM(c.quantity) FILTER (WHERE c.status IN " + P1_OWED_STATUSES_SQL + "), 0) AS owed, " +
-        "         bool_or(c.status IN " + P1_IN_FLIGHT_STATUSES_SQL + ") AS in_flight " +
-        "  FROM main_reconcile_part1_claims c JOIN v ON v.variant_id = c.variant_id " +
-        "  WHERE c.tenant_id = :t GROUP BY c.variant_id " +
+        "  SELECT variant_id, " +
+        "         COALESCE(SUM(quantity) FILTER (WHERE status IN " + P1_OWED_STATUSES_SQL + " AND NOT settleable), 0) AS owed, " +
+        "         bool_or(status IN " + P1_IN_FLIGHT_STATUSES_SQL + " AND NOT settleable) AS in_flight, " +
+        "         array_agg(id) FILTER (WHERE settleable) AS settle_part1 " +
+        "  FROM p1x GROUP BY variant_id " +
         "), cl AS ( " +
         "  SELECT sia.variant_id, " +
         "         bool_or(sia.status IN ('queued', 'pending') " +
         "                 OR (sia.status = 'failed' AND NOT sia.legacy AND sia.attempt_count < " + IncrementRecoveryRules.MAX_ATTEMPTS +
         "                     AND NOT COALESCE(" + IncrementRecoveryRules.AMBIGUOUS_EXPIRED_SQL + ", false))) AS in_flight, " +
-        "         bool_or(sia.status = 'failed_ambiguous') AS ambiguous " +
+        "         bool_or(sia.status = 'failed_ambiguous' AND NOT (:settle " +
+        "                 AND COALESCE(sia.send_started_at, sia.created_at) < now() - make_interval(mins => :holdMinutes))) AS ambiguous, " +
+        "         array_agg(sia.id) FILTER (WHERE sia.status = 'failed_ambiguous' AND :settle " +
+        "                 AND COALESCE(sia.send_started_at, sia.created_at) < now() - make_interval(mins => :holdMinutes)) AS settle_claims " +
         "  FROM shopify_inventory_adjustments sia JOIN v ON v.variant_id = sia.variant_id " +
         "  WHERE sia.tenant_id = :t AND sia.location_id = :main " +
         "    AND sia.status IN ('queued', 'pending', 'failed', 'failed_ambiguous') " +
         "  GROUP BY sia.variant_id " +
+        "), rw AS ( " +
+        "  SELECT w.variant_id, " +
+        "         bool_or(w.status = 'pending' OR (w.status = 'failed_ambiguous' " +
+        "                 AND w.created_at >= now() - make_interval(mins => :holdMinutes))) AS in_flight, " +
+        "         array_agg(w.id) FILTER (WHERE w.status = 'failed_ambiguous' " +
+        "                 AND w.created_at < now() - make_interval(mins => :holdMinutes)) AS settle_writes " +
+        "  FROM main_reconcile_writes w JOIN v ON v.variant_id = w.variant_id " +
+        "  WHERE w.tenant_id = :t AND w.status IN ('pending', 'failed_ambiguous') GROUP BY w.variant_id " +
+        "), lo AS ( " +
+        "  SELECT x.variant_id, x.order_id, COUNT(*) AS out_n " +
+        "  FROM (" + piecesOutSql("AND p.variant_id = ANY(CAST(:ids AS uuid[]))") + ") x GROUP BY x.variant_id, x.order_id " +
+        "), uf AS ( " +
+        "  SELECT lo.variant_id, " +
+        "         SUM(CASE WHEN " + orderFulfilledSql("o") + " OR " + unfulfilledUnreadableSql("o") + " THEN 0 " +
+        "                  ELSE LEAST(lo.out_n, " + unfulfilledUnitsSql("o", "vv") + ") END) AS unfulfilled_shipped, " +
+        "         bool_or(NOT " + orderFulfilledSql("o") + " AND " + unfulfilledUnreadableSql("o") + ") AS unreadable " +
+        "  FROM lo JOIN merchant_orders o ON o.id = lo.order_id AND o.tenant_id = :t " +
+        "  JOIN variants vv ON vv.id = lo.variant_id AND vv.tenant_id = :t " +
+        "  WHERE " + liveShopifyOrderSql("o") + " " +
+        "  GROUP BY lo.variant_id " +
         "), ar AS ( " +
         "  SELECT DISTINCT p.variant_id " +
         "  FROM shopify_inventory_adjustments sia " +
@@ -246,7 +348,10 @@ public final class MainReconcileRules {
         "       COALESCE(custody.custody, 0) AS custody_at_main, COALESCE(custody.damaged, 0) AS traced_damaged, " +
         "       COALESCE(away.away_counted, 0) AS away_counted, COALESCE(fsum.fulfilled_from_main, 0) AS fulfilled_from_main, " +
         "       COALESCE(p1.owed, 0) AS part1_owed, " +
+        "       COALESCE(uf.unfulfilled_shipped, 0) AS unfulfilled_shipped_raw, " +
         "       COALESCE(p1.in_flight, false) AS part1_in_flight, " +
+        "       COALESCE(rw.in_flight, false) AS reconcile_write_in_flight, " +
+        "       p1.settle_part1, cl.settle_claims, rw.settle_writes, " +
         "       (ar.variant_id IS NOT NULL) AS arrival_revisit_pending, " +
         "       COALESCE(cl.in_flight, false) AS claim_in_flight, COALESCE(cl.ambiguous, false) AS claim_ambiguous, " +
         "       EXISTS (SELECT 1 FROM stock_take_shopify_syncs s WHERE s.tenant_id = :t " +
@@ -258,7 +363,7 @@ public final class MainReconcileRules {
         "                    OR (y.status = 'failed' AND y.attempt_count < " + TransferShopifySync.MAX_ATTEMPTS + ")) " +
         "               AND jsonb_typeof(y.deltas) = 'object' AND jsonb_exists(y.deltas, v.variant_id::text))) " +
         "           AS transfer_sync_in_flight, " +
-        "       COALESCE(fsum.unreadable, false) AS fulfillment_unreadable, " +
+        "       (COALESCE(fsum.unreadable, false) OR COALESCE(uf.unreadable, false)) AS fulfillment_unreadable, " +
         "       COALESCE(fsum.pending, false) AS fulfillment_pending, " +
         "       COALESCE(fsum.cancelled, false) AS fulfillment_cancelled " +
         "FROM v " +
@@ -267,6 +372,8 @@ public final class MainReconcileRules {
         "LEFT JOIN fsum ON fsum.variant_id = v.variant_id " +
         "LEFT JOIN p1 ON p1.variant_id = v.variant_id " +
         "LEFT JOIN cl ON cl.variant_id = v.variant_id " +
+        "LEFT JOIN rw ON rw.variant_id = v.variant_id " +
+        "LEFT JOIN uf ON uf.variant_id = v.variant_id " +
         "LEFT JOIN ar ON ar.variant_id = v.variant_id";
 
     /**
@@ -292,7 +399,7 @@ public final class MainReconcileRules {
         "SELECT o.id AS order_id, (COALESCE(o.is_cancelled, false) OR o.status = 'cancelled') AS order_cancelled, " +
         "       vv.id AS variant_id, f->>'id' AS fulfillment_id, li->>'id' AS line_item_id, " +
         "       lower(f->>'status') AS fulfillment_status, f->>'location_id' AS fulfilled_location_id, " +
-        "       (li->>'quantity')::int AS qty, f->>'created_at' AS fulfillment_created_at " +
+        "       (li->>'quantity')::int AS qty, " + fulfillmentCreatedAtSql("f") + " AS fulfillment_created_at " +
         "FROM merchant_orders o " +
         "CROSS JOIN LATERAL jsonb_array_elements(" + fulfillmentsSql("o") + ") f " +
         "CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(f->'line_items') = 'array' " +
@@ -305,6 +412,23 @@ public final class MainReconcileRules {
         "  AND li->>'quantity' ~ '^[0-9]+$' AND (li->>'quantity')::int > 0 " +
         "  AND (:all OR vv.id = ANY(CAST(:ids AS uuid[]))) " +
         "ORDER BY o.id, vv.id, f->>'created_at', f->>'id', li->>'id'";
+
+    /**
+     * R2 fix 2 alert (delivered_not_fulfilled_in_shopify, MEDIUM): non-cancelled Shopify orders whose pieces Traced
+     * delivered more than :days days ago (and within :lookbackDays) while Shopify still shows units of those variants
+     * unfulfilled. One row per order. :t, :days, :lookbackDays.
+     */
+    public static final String DELIVERED_NOT_FULFILLED_SQL =
+        "SELECT o.id AS order_id, o.number AS order_number, MIN(x.left_at) AS delivered_at, COUNT(*) AS pieces " +
+        "FROM (" + piecesOutSql("AND p.status = 'delivered'") + ") x " +
+        "JOIN merchant_orders o ON o.id = x.order_id AND o.tenant_id = :t " +
+        "JOIN variants vv ON vv.id = x.variant_id AND vv.tenant_id = :t " +
+        "WHERE " + liveShopifyOrderSql("o") + " AND NOT " + orderFulfilledSql("o") +
+        "  AND NOT " + unfulfilledUnreadableSql("o") +
+        "  AND x.left_at < now() - make_interval(days => :days) " +
+        "  AND x.left_at > now() - make_interval(days => :lookbackDays) " +
+        "  AND " + unfulfilledUnitsSql("o", "vv") + " > 0 " +
+        "GROUP BY o.id, o.number";
 
     /** Orders in the window with a fulfillment Traced can't read (GraphQL import shape) — counted for Part 1. */
     public static final String PART1_UNREADABLE_SQL =
