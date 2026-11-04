@@ -175,12 +175,64 @@ public class ShopifySyncService {
         }
     }
 
+    /**
+     * UPSERT_ORDER for the WEBHOOK path (orders/create, orders/updated), 2026-11-04. FRESHNESS: an existing
+     * order is updated only when the incoming payload's Shopify updated time is at least the stored one's
+     * ({@code >=} — an equal time still applies), or either side has none (no comparable time → applied, as
+     * before). A stale payload writes nothing and returns no row: the caller skips the event (superseded).
+     * The WHERE is evaluated after the row lock is granted, against the row as it is then — so an older
+     * event that waited on the lock behind a newer one never overwrites it (the processor's pre-check,
+     * supersededReason, runs before the lock and cannot see that). A new order (no stored row) is inserted.
+     * {@code inserted} (xmax = 0) tells a fresh insert from an update of an existing order.
+     */
+    static final String UPSERT_ORDER_WEBHOOK = UPSERT_ORDER
+        .replace("RETURNING id, customer_phone",
+                 "WHERE shopify_order_updated_at(EXCLUDED.raw) IS NULL\n" +
+                 "   OR shopify_order_updated_at(orders.raw) IS NULL\n" +
+                 "   OR shopify_order_updated_at(EXCLUDED.raw) >= shopify_order_updated_at(orders.raw)\n" +
+                 "RETURNING id, customer_phone, (xmax = 0) AS inserted");
+
+    static {
+        if (!UPSERT_ORDER_WEBHOOK.contains("shopify_order_updated_at(EXCLUDED.raw) >= shopify_order_updated_at(orders.raw)")) {
+            throw new IllegalStateException("UPSERT_ORDER_WEBHOOK lost its freshness rule — UPSERT_ORDER changed");
+        }
+    }
+
     /** UPSERT_ORDER's result: the order and the phone it now holds (the blocklist gate's input). */
-    private record Upserted(UUID id, String phone) {}
+    private record Upserted(UUID id, String phone, boolean inserted) {}
 
     private static Upserted upserted(java.sql.ResultSet rs) throws java.sql.SQLException {
-        return rs.next() ? new Upserted(rs.getObject("id", UUID.class), rs.getString("customer_phone")) : null;
+        return rs.next() ? new Upserted(rs.getObject("id", UUID.class), rs.getString("customer_phone"), false) : null;
     }
+
+    private static Upserted upsertedWebhook(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return rs.next()
+            ? new Upserted(rs.getObject("id", UUID.class), rs.getString("customer_phone"), rs.getBoolean("inserted"))
+            : null;
+    }
+
+    /** What a webhook order ingest did. */
+    public enum OrderIngest {
+        /** The order (and its lines) were written. */
+        APPLIED,
+        /** Traced already holds a newer copy of the order (UPSERT_ORDER_WEBHOOK's freshness rule) — nothing written. */
+        STALE,
+        /** Not ingested at all: no admin_graphql_api_id, or placed before the store's cutoff. */
+        SKIPPED
+    }
+
+    /**
+     * A step run inside the order's upsert transaction, right after UPSERT_ORDER (the order row is locked) and
+     * the freeze check, before the line upserts — so it sees the pre-edit lines. Only for an applied upsert.
+     * {@code inserted}: the order was new; {@code frozen}: OrderLineFreeze, decided under the lock.
+     */
+    @FunctionalInterface
+    public interface LockedOrderStep {
+        void run(UUID orderId, boolean inserted, boolean frozen);
+    }
+
+    /** One webhook line, its variant resolved before the order row is locked (null = unmapped). */
+    private record ResolvedLine(JsonNode line, UUID variantId) {}
 
     // Partial unique index: ON CONFLICT target must match V4's index predicate exactly.
     // Hard-deletes of removed Shopify lines are a D6 webhook concern, not the importer's.
@@ -382,11 +434,21 @@ public class ShopifySyncService {
      * The payload's admin_graphql_api_id is used as the external_id (GID form) for consistency
      * with the GraphQL import.
      */
-    public void ingestOrderWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
+    public OrderIngest ingestOrderWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
+        return ingestOrderWebhook(storeId, tenantId, payload, null);
+    }
+
+    /**
+     * As {@link #ingestOrderWebhook(UUID, UUID, JsonNode)}, running {@code lockedStep} (may be null) inside the
+     * upsert transaction — see {@link LockedOrderStep}. The order row is locked only for the writes: every
+     * variant lookup runs before UPSERT_ORDER; under the lock run the freeze check, the step, the line upserts,
+     * the unmapped flag, the blocklist gate and the simulated shipment.
+     */
+    public OrderIngest ingestOrderWebhook(UUID storeId, UUID tenantId, JsonNode payload, LockedOrderStep lockedStep) {
         String gid = payload.path("admin_graphql_api_id").asText(null);
         if (gid == null || gid.isBlank()) {
             log.warn("orders webhook missing admin_graphql_api_id, store={}", storeId);
-            return;
+            return OrderIngest.SKIPPED;
         }
 
         // FR-18: skip orders placed before the connection cutoff.
@@ -403,7 +465,7 @@ public class ShopifySyncService {
                 if (!Boolean.TRUE.equals(exists)) {
                     log.info("Skipping pre-connection order {} (placed_at={}) for store {} — before cutoff {}",
                         payload.path("name").asText("#?"), placedAt, storeId, cutoff.get());
-                    return;
+                    return OrderIngest.SKIPPED;
                 }
             }
         }
@@ -432,20 +494,13 @@ public class ShopifySyncService {
         final String finalPaymentMethod = paymentMethod;
         final BigDecimal finalCodAmount = codAmount;
 
-        Boolean flagged = tx.execute(s -> {
-            Upserted up = jdbc.query(UPSERT_ORDER, ShopifySyncService::upserted,
-                tenantId, storeId, finalGid, name, finalPaymentMethod, finalCodAmount,
-                java.sql.Timestamp.from(finalCreatedAt), toJson(payload));
-            if (up == null) return false;
-            UUID orderId = up.id();
-
-            boolean needsHold = false;
-            boolean frozen = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
-            String upsertItem = frozen ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
+        OrderIngest outcome = tx.execute(s -> {
+            // 1. Before the order row is locked: resolve every line's variant (catalog reads only).
+            List<ResolvedLine> resolved = new java.util.ArrayList<>();
             for (JsonNode line : payload.path("line_items")) {
                 long variantRestId = line.path("variant_id").asLong(0);
                 if (variantRestId == 0) {
-                    needsHold = true;
+                    resolved.add(new ResolvedLine(line, null));
                     continue;
                 }
                 // Variant GID from webhook REST line item
@@ -456,6 +511,25 @@ public class ShopifySyncService {
                 if (variantId == null) {
                     log.warn("Webhook order {} line references unknown variant GID {} — flagging order",
                         name, variantGid);
+                }
+                resolved.add(new ResolvedLine(line, variantId));
+            }
+
+            // 2. The order row is locked from here to commit.
+            Upserted up = jdbc.query(UPSERT_ORDER_WEBHOOK, ShopifySyncService::upsertedWebhook,
+                tenantId, storeId, finalGid, name, finalPaymentMethod, finalCodAmount,
+                java.sql.Timestamp.from(finalCreatedAt), toJson(payload));
+            if (up == null) return OrderIngest.STALE;   // Traced holds a newer copy — nothing written
+            UUID orderId = up.id();
+
+            boolean needsHold = false;
+            boolean frozen = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
+            if (lockedStep != null) lockedStep.run(orderId, up.inserted(), frozen);
+            String upsertItem = frozen ? UPSERT_ORDER_ITEM_FROZEN : UPSERT_ORDER_ITEM;
+            for (ResolvedLine r : resolved) {
+                JsonNode line = r.line();
+                UUID variantId = r.variantId();
+                if (variantId == null) {
                     needsHold = true;
                     continue;
                 }
@@ -475,9 +549,13 @@ public class ShopifySyncService {
             // the same transaction. No-op for real tenants, cancelled orders and an existing leg.
             SimulatedShipments.ensureForwardShipment(jdbc, tenantId, orderId);
 
-            return needsHold;
+            log.debug("Webhook order upsert: gid={} store={} flagged={}", finalGid, storeId, needsHold);
+            return OrderIngest.APPLIED;
         });
-        log.debug("Webhook order upsert: gid={} store={} flagged={}", gid, storeId, flagged);
+        if (outcome == OrderIngest.STALE) {
+            log.info("Webhook order {} ({}) store={} is older than the stored copy — not applied", name, gid, storeId);
+        }
+        return outcome;
     }
 
     /**
