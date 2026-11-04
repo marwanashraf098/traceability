@@ -34,8 +34,9 @@ Small, likely most of the slowness. Prod runs 10 JobRunr workers (env override),
 - **Full suite (2026-11-04, host load average ~80–100 on 8 cores — took ~6 h):** 3794 tests, 3 failures: ExchangeBackfillTest
   (expected red), BostaPollJobTest.p6 (known load flake) and ShopifyMagicLinkTest.expiry_expiredToken_isMagicLinkInvalid
   (302 instead of 401). Rerun: under load the magic-link test also failed on unchanged main and p6 passed there; with
-  the machine quiet both classes pass on the branch. **New flake to note:** ShopifyMagicLinkTest's expiry test inserts a
-  token expired 1 s ago by the JVM clock while the DB decides with its own now() — too tight a margin under heavy load.
+  the machine quiet both classes pass on the branch. **Fixed, not a flake:** ShopifyMagicLinkTest's expiry test inserted a
+  token expired 1 s ago by the JVM clock while the DB decides with its own now(); it now inserts
+  `expires_at = now() - interval '1 hour'` (DB clock, 1 h margin).
 - **FOLLOW-UP — not built (fix 5 of the Step 0 diagnosis):** the per-minute queued Main-reconcile run and the
   4-hourly sweep (`MainReconcileJob`) can overlap for one tenant on the shared per-tenant advisory lock
   (`pg_advisory_xact_lock(hashtext(tenant_id))`, also the seed's and the activation's) — prod saw a 67 s wait. The
