@@ -48,7 +48,13 @@ public class BostaPickupService {
     private final ObjectMapper        mapper;
     private final Clock               clock;
 
-    /** Forward shipments of awaiting_pickup orders not already in a live pickup (shared by both paths). */
+    /**
+     * Forward shipments of awaiting_pickup orders not already in a live pickup (shared by both paths) — only the
+     * order's newest forward waybill and only while it still waits for the courier
+     * ({@link com.traceability.inventory.OrderLineFreeze#prePickupWaybillSql}). The stored order status alone can't
+     * say it: it stays 'awaiting_pickup' when Traced never saw the handover (or a Shopify tracking edit replaced the
+     * waybill), so without this a cancelled or delivered waybill joined the next pickup (BRK-46639-EG, 2026-11-04).
+     */
     private static final String AWAITING_PICKUP_SQL =
         "SELECT s.id, s.tracking_number, s.cod_amount, " +
         "       o.number AS order_number " +
@@ -57,6 +63,7 @@ public class BostaPickupService {
         "WHERE s.tenant_id    = ? " +
         "  AND s.shipment_leg = 'forward' " +
         "  AND o.status       = 'awaiting_pickup'::order_status " +
+        "  AND " + com.traceability.inventory.OrderLineFreeze.prePickupWaybillSql("s") + " " +
         "  AND NOT EXISTS ( " +
         "      SELECT 1 FROM pickup_shipments ps " +
         "      JOIN pickups p ON p.id = ps.pickup_id " +

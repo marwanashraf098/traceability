@@ -1171,6 +1171,7 @@
         "OPEN": "",
         "CANCELLED": "لا تغلّف هذا الطلب",
         "ALREADY_PACKED": "مغلّف بالفعل",
+        "ALREADY_SHIPPED": "تم شحنه بالفعل",
         "CLAIMED_BY_OTHER": "شخص آخر يجهّزه",
         "RETURN_WAYBILL": "ليست بوليصة طلب",
         "EXCHANGE_NOT_MAPPED": "الاستبدال غير جاهز بعد",

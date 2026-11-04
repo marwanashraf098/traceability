@@ -187,6 +187,13 @@ public class WaybillResolver {
         }
 
         if (!List.of("new", "confirmed", "ready_to_pick", "picking").contains(status)) {
+            if (newestLegShipped(orderId, tenantId)) {
+                // Wording only (2026-11-04): the stored status says packed, but the order's newest waybill already
+                // moved (Traced didn't see the handover) — say shipped. Same code, refused the same way.
+                return of(Code.ALREADY_PACKED, orderId, number, shipmentId, tn, null, null, ALREADY_SHIPPED_DETAIL,
+                    "Order " + label + " has already shipped. Put the waybill to one side — it isn't needed.",
+                    "الطلب " + label + " تم شحنه بالفعل. ضع البوليصة جانباً — لا حاجة لها.");
+            }
             Map<String, Object> packer = lastPack(orderId, tenantId);
             String who = packer != null ? (String) packer.get("name") : null;
             Instant at = packer != null ? ((java.sql.Timestamp) packer.get("created_at")).toInstant() : null;
@@ -356,6 +363,17 @@ public class WaybillResolver {
     private static Instant parseInstant(String s) {
         if (s == null || s.isBlank()) return null;
         try { return OffsetDateTime.parse(s).toInstant(); } catch (Exception e) { return null; }
+    }
+
+    /** detail of an ALREADY_PACKED refusal whose order's newest forward waybill already moved. */
+    public static final String ALREADY_SHIPPED_DETAIL = "ALREADY_SHIPPED";
+
+    /** The order's newest forward leg has moved ({@link OrderLineFreeze#legMovedSql}). */
+    private boolean newestLegShipped(UUID orderId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? " +
+            "  AND " + OrderLineFreeze.newestForwardLegSql("s") + " AND " + OrderLineFreeze.legMovedSql("s") + ")",
+            Boolean.class, orderId, tenantId));
     }
 
     private static Resolution of(Code code, UUID orderId, String number, UUID shipmentId, String tn,

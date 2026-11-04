@@ -4,6 +4,20 @@
 
 ## Current state
 
+**Schedule pickup only takes the newest waybill still waiting for the courier (2026-11-04; merged to main, NOT
+deployed; no migration).** Prod: BRK-46639-EG (BROEK, stored status awaiting_pickup) had a cancelled old waybill
+4491317452 and a delivered new one 2036246050, neither in a pickup; BROEK schedules pickups actively (7 in 14 days), so
+its next pickup would have carried both. Rule, ONE definition: `OrderLineFreeze.prePickupWaybillSql(s)` — the
+order's NEWEST forward leg (created_at DESC, id DESC), internal_state 'created', not deleted in Bosta, never moved
+(`legMovedSql`: live state past created, or a `movementRowSql` history row). `BostaPickupService.AWAITING_PICKUP_SQL`
+(real and simulated schedule: manifest, parcel count, COD, the count sent to Bosta createPickup) requires it. Waybill
+mode wording only: an awaiting_pickup / packed order whose newest leg moved is still refused ALREADY_PACKED but with
+subReason ALREADY_SHIPPED ("Already shipped" / "has already shipped", EN + AR) instead of "already packed". NOT
+changed: the stored order status, PICKABLE_ORDERS_FILTER. Tests SchedulePickupNewestLegTest (s1, x1 app_user +
+positive control, w1, o1 the ops script); revert-to-confirm RED on cancelled leg / moved leg / newest-only / normal
+leg still included / wording. Ops (read-only, all tenants): `scripts/ops/2026-11-04-schedule-pickup-affected.sql` —
+what the old rule would schedule that the new one doesn't.
+
 **Shopify Main-location reconciler — R2 WRITE MODE built (2026-11-04; merged to main, NOT deployed; V203).**
 Marawan (2026-11-04): Traced Main = Traced for EVERY store, fixed automatically, no hold on big changes (accepted
 knowingly for stores that ship outside Traced: Juno Babies, mashwar, hs-sparkle, High line, Soccer corner). CLAUDE.md

@@ -1159,6 +1159,7 @@
         "OPEN": "",
         "CANCELLED": "Don't pack this one",
         "ALREADY_PACKED": "Already packed",
+        "ALREADY_SHIPPED": "Already shipped",
         "CLAIMED_BY_OTHER": "Someone else is packing it",
         "RETURN_WAYBILL": "Not an order waybill",
         "EXCHANGE_NOT_MAPPED": "Exchange not ready yet",

@@ -73,6 +73,34 @@ public final class OrderLineFreeze {
                ")";
     }
 
+    /**
+     * This forward shipment {@code s} (alias) has moved: its live state is past 'created' (and not an end state), or
+     * its history has a movement row ({@link #movementRowSql}). A leg ended before it moved does NOT count.
+     */
+    public static String legMovedSql(String s) {
+        return "(" + s + ".internal_state NOT IN ('created', 'cancelled', 'terminated') " +
+               " OR EXISTS (SELECT 1 FROM shipment_status_history h_lm WHERE h_lm.shipment_id = " + s + ".id " +
+               "            AND " + movementRowSql("h_lm") + "))";
+    }
+
+    /** {@code s} (alias) is its order's NEWEST forward leg (created_at DESC, id DESC — UUIDv4 is not time-ordered). */
+    public static String newestForwardLegSql(String s) {
+        return "(" + s + ".shipment_leg = 'forward' AND " + s + ".id = (SELECT x_nf.id FROM shipments x_nf " +
+               "  WHERE x_nf.order_id = " + s + ".order_id AND x_nf.tenant_id = " + s + ".tenant_id " +
+               "    AND x_nf.shipment_leg = 'forward' ORDER BY x_nf.created_at DESC, x_nf.id DESC LIMIT 1))";
+    }
+
+    /**
+     * Schedule-pickup fix (2026-11-04) — THE one definition of "this waybill is still waiting for the courier":
+     * {@code s} is the order's newest forward leg, its state is 'created', it never moved, and it wasn't deleted in
+     * Bosta. A cancelled / terminated / delivered / moved / older waybill never is. Read by
+     * BostaPickupService (what a scheduled pickup includes) and WaybillResolver (the "already shipped" wording).
+     */
+    public static String prePickupWaybillSql(String s) {
+        return "(" + newestForwardLegSql(s) + " AND " + s + ".internal_state = 'created' " +
+               " AND " + s + ".provider_deleted_at IS NULL AND NOT " + legMovedSql(s) + ")";
+    }
+
     /** The full freeze predicate (a boolean SQL expression); expressions as {@link #shippedPastCreatedSql}. */
     public static String frozenSql(String orderIdExpr, String tenantIdExpr) {
         String left = leftCustodySqlList();

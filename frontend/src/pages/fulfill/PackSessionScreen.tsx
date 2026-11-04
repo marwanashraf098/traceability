@@ -591,7 +591,9 @@ function RejectionCard({ r, fmtTime, onOk }: {
       <div className="w-full max-w-xl rounded-2xl border-2 border-critical/40 bg-critical/[0.06] p-6 space-y-4 text-center">
         <OctagonAlert size={44} className="text-critical mx-auto" />
         <p className="text-h2 text-critical-text" data-testid="rejected-title">
-          {t(`fulfill.waybill.rejected.${r.code}`, { defaultValue: r.code ?? '' })}
+          {r.code === 'ALREADY_PACKED' && r.subReason === 'ALREADY_SHIPPED'
+            ? t('fulfill.waybill.rejected.ALREADY_SHIPPED')
+            : t(`fulfill.waybill.rejected.${r.code}`, { defaultValue: r.code ?? '' })}
         </p>
         {message && <p className="text-body text-primary">{message}</p>}
         {r.code === 'WAYBILL_DELETED_IN_BOSTA' && (
@@ -602,7 +604,7 @@ function RejectionCard({ r, fmtTime, onOk }: {
         {r.code === 'CANCELLED' && r.at && (
           <p className="text-small text-muted">{t('fulfill.waybill.rejected.cancelledAt', { time: fmtTime(r.at) })}</p>
         )}
-        {r.code === 'ALREADY_PACKED' && r.at && (
+        {r.code === 'ALREADY_PACKED' && r.subReason !== 'ALREADY_SHIPPED' && r.at && (
           <p className="text-small text-muted">{t('fulfill.waybill.rejected.packedAt', { time: fmtTime(r.at) })}</p>
         )}
         <Button onClick={onOk} className="w-full">{t('fulfill.waybill.rejected.ok')}</Button>
