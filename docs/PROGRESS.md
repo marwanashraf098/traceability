@@ -4,6 +4,19 @@
 
 ## Current state
 
+**"Shopify cancel vs in flight" decided from the newest live waybill (2026-11-04; merged to main, NOT deployed; no
+migration).** The stored order status never moves past 'awaiting_pickup' for a courier order (webhooks / poll / pickup
+close move shipments and pieces only), so the alert's old gate (stored awaiting_pickup) both missed and mislabelled.
+Now, for an order with `shopify_cancel_requested_at` (the webhook's 409 stamp) that isn't 'cancelled' in Traced, the
+order's NEWEST LIVE forward waybill decides (`ExceptionService.NEWEST_LIVE_FORWARD_LATERAL` +
+`OrderStatusDeriver.LIVE_FORWARD_LEG_SQL`, as the displayed status): pre-pickup / with the courier / exception / lost /
+ended → HIGH `shopify_cancel_vs_inflight` as before; delivered → `cancelled_but_delivered` (second arm, same subject
+key, disjoint from the stored-cancelled arm); returning / returned → no alert; no live forward waybill → no alert.
+Predicates `SHOPIFY_CANCEL_IN_FLIGHT_SQL` / `SHOPIFY_CANCEL_DELIVERED_SQL`, shared with OverviewService's counts.
+Effect: orders with the stamp whose stored status is e.g. 'new' (shipped outside Traced's pack flow) now alert too.
+Tests ShopifyCancelAlertByWaybillTest (c1–c6, x1 app_user + positive control), revert-to-confirm per case; existing
+ExceptionExtTest / CancellationConflictDetectorsTest / ConditionOnlyAlertsTest / ExceptionRlsTest unchanged and green.
+
 **Schedule pickup only takes the newest waybill still waiting for the courier (2026-11-04; merged to main, NOT
 deployed; no migration).** Prod: BRK-46639-EG (BROEK, stored status awaiting_pickup) had a cancelled old waybill
 4491317452 and a delivered new one 2036246050, neither in a pickup; BROEK schedules pickups actively (7 in 14 days), so

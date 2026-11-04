@@ -1371,18 +1371,39 @@ public class ExceptionService {
             tid);
     }
 
+    /**
+     * Shopify cancelled an order Traced could not cancel (the webhook's 409 stamps shopify_cancel_requested_at) — decided
+     * from the order's NEWEST LIVE forward waybill, as the displayed status is (OrderStatusDeriver, LIVE_FORWARD_LEG_SQL),
+     * never from the stored status (it stays 'awaiting_pickup' after the parcel left — fix 2026-11-04). Alias
+     * {@code fl} ({@link #NEWEST_LIVE_FORWARD_LATERAL}), columns id, tracking_number, state, last_synced_at.
+     */
+    public static final String NEWEST_LIVE_FORWARD_LATERAL =
+        "JOIN LATERAL ( " +
+        "    SELECT id, tracking_number, internal_state::text AS state, last_synced_at FROM shipments " +
+        "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
+        com.traceability.fulfillment.OrderStatusDeriver.LIVE_FORWARD_LEG_SQL +
+        // UUIDv4 is not time-ordered — order by created_at, never id.
+        "    ORDER BY created_at DESC, id DESC LIMIT 1) fl ON true ";
+
+    /** Shopify cancel, not cancelled in Traced, newest live waybill not delivered / returning / returned → HIGH
+     *  shopify_cancel_vs_inflight (pre-pickup, with the courier, exception, …). No live forward waybill → nothing. */
+    public static final String SHOPIFY_CANCEL_IN_FLIGHT_SQL =
+        "(o.shopify_cancel_requested_at IS NOT NULL AND o.status <> 'cancelled'::order_status " +
+        " AND fl.state NOT IN ('delivered', 'returning', 'returned'))";
+
+    /** Shopify cancel, not cancelled in Traced, newest live waybill delivered → cancelled_but_delivered. */
+    public static final String SHOPIFY_CANCEL_DELIVERED_SQL =
+        "(o.shopify_cancel_requested_at IS NOT NULL AND o.status <> 'cancelled'::order_status AND fl.state = 'delivered')";
+
     private List<Map<String, Object>> detectShopifyCancelVsInflight(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'shopify_cancel_vs_inflight' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
             "       o.id AS order_id, o.number AS order_number, " +
-            "       s.tracking_number, " +
+            "       fl.tracking_number, " +
             "       o.shopify_cancel_requested_at AS occurred_at, " +
             "       'shopify_cancel_vs_inflight:order:' || o.id AS subject_key " +
-            "FROM merchant_orders o " +
-            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
-            "WHERE o.tenant_id = ? " +
-            "  AND o.shopify_cancel_requested_at IS NOT NULL " +
-            "  AND o.status = 'awaiting_pickup'::order_status " +
+            "FROM merchant_orders o " + NEWEST_LIVE_FORWARD_LATERAL +
+            "WHERE o.tenant_id = ? AND " + SHOPIFY_CANCEL_IN_FLIGHT_SQL +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = o.tenant_id " +
@@ -1641,8 +1662,24 @@ public class ExceptionService {
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = o.tenant_id " +
             "        AND er.exception_type = 'cancelled_but_delivered' " +
+            "        AND er.subject_key = 'cancelled_but_delivered:order:' || o.id) " +
+            // 2026-11-04: Shopify cancelled it, Traced couldn't (still not 'cancelled' here), and the newest live
+            // waybill was delivered anyway — the same alert, decided from the waybill (SHOPIFY_CANCEL_DELIVERED_SQL).
+            // Disjoint from the arm above (status <> 'cancelled'), so one row per order.
+            "UNION ALL " +
+            "SELECT 'cancelled_but_delivered' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       fl.id AS shipment_id, fl.tracking_number, " +
+            "       COALESCE(o.shopify_cancel_requested_at, fl.last_synced_at, o.created_at) AS occurred_at, " +
+            "       'cancelled_but_delivered:order:' || o.id AS subject_key " +
+            "FROM merchant_orders o " + NEWEST_LIVE_FORWARD_LATERAL +
+            "WHERE o.tenant_id = ? AND " + SHOPIFY_CANCEL_DELIVERED_SQL +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'cancelled_but_delivered' " +
             "        AND er.subject_key = 'cancelled_but_delivered:order:' || o.id) ",
-            tid);
+            tid, tid);
     }
 
     private List<Map<String, Object>> detectMissingAwb(UUID tid) {

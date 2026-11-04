@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.traceability.inventory.ExceptionService;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
@@ -221,9 +222,17 @@ public class OverviewService {
         // shopify_cancel_vs_inflight
         all.addAll(jdbc.query(
             "SELECT o.shopify_cancel_requested_at FROM merchant_orders o " +
-            "WHERE o.tenant_id = ? AND o.shopify_cancel_requested_at IS NOT NULL " +
-            "  AND o.status = 'awaiting_pickup'::order_status " +
+            ExceptionService.NEWEST_LIVE_FORWARD_LATERAL +
+            "WHERE o.tenant_id = ? AND " + ExceptionService.SHOPIFY_CANCEL_IN_FLIGHT_SQL +
             "  AND o.shopify_cancel_requested_at >= ?",
+            TS_MAPPER, tid, lower));
+
+        // cancelled_but_delivered — Shopify-cancelled arm (decided from the newest live waybill, 2026-11-04)
+        all.addAll(jdbc.query(
+            "SELECT COALESCE(o.shopify_cancel_requested_at, fl.last_synced_at, o.created_at) FROM merchant_orders o " +
+            ExceptionService.NEWEST_LIVE_FORWARD_LATERAL +
+            "WHERE o.tenant_id = ? AND " + ExceptionService.SHOPIFY_CANCEL_DELIVERED_SQL +
+            "  AND COALESCE(o.shopify_cancel_requested_at, fl.last_synced_at, o.created_at) >= ?",
             TS_MAPPER, tid, lower));
 
         // cancelled_with_live_shipment
