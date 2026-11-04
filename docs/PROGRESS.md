@@ -4,6 +4,39 @@
 
 ## Current state
 
+**Finding 2 — Shopify-native exchanges no longer decrement Shopify (2026-11-04; branch
+`fix/shopify-native-exchange-dispatch-skip`, merged to main 2026-11-05, NOT deployed; no migration).** Prod (read-only, 2026-11-03):
+6 exchange_dispatch claims ever, 5 legit (portal / Lookup); BROEK claim for piece 01M4JQ870VCJ9BZGV7D5SB82SA is
+QUEUED since 2026-10-31 18:58 — type-30 AWB 7756985263, businessReference "BRK-46369-EG:BRK-46369-EG-R1", original
+BRK-46369-EG has a same-variant line stored qty 0 / current_qty 1 (Shopify's own exchange line) → a would-be double
+decrement. Exposure by -R<digits> references: BROEK 60, overdue 7, HERNAMEIS JAMILA 6; none sent.
+- **Rule, ONE definition — `inventory.ShopifyNativeExchange`:** a dashboard exchange (exchanges row with
+  return_request_id NULL, no exchange request naming the order) where (a) the businessReference's part after ':'
+  ends in -R<digits>, or (b) the matched original is a Shopify order with a same-variant line quantity 0 /
+  current_qty > 0. → claim `'skipped'`, skip_reason `shopify_native_exchange`, no call, no alert. Checked in
+  `processExchangeDispatch` before the arrival skip / hold / claim (live + re-push; converts a queued / failed /
+  arrival-skipped claim) and again at the top of `sendExchangeDispatch` (held claims resumed after a reconnect,
+  ArrivalRevisit flips). Portal and Lookup / generic exchanges never skipped. Reads `merchant_orders` (no
+  OrdersTableAccessGuardTest change). skip_reason is free text — no migration.
+- **Tests: ShopifyNativeExchangeDispatchTest** (10) — a1 (a) skipped / a2 control; b1 (b) skipped / b2 other variant /
+  b3 original not Shopify; p1 portal + l1 Lookup with BOTH signals still decrement exactly once; h1 a claim queued
+  before the fix (BROEK shape) is never sent by the resume; f1 failed native claim's re-push never sends; x1
+  app_user cross-tenant + same-tenant native skip and control decrement. Revert-to-confirm RED: (a) off → a1;
+  (b) off → b1 f1; portal exclusion off → p1; Lookup exclusion off → l1; send guard off → h1; whole fix off → a1 b1
+  f1 h1 x1. Regression (11 classes, 94 tests) green: ExchangeDispatchDecrement, LookupExchange, PortalExchangeBooking,
+  ArrivalRevisit, GenericCourierG4b, GenericG4bIsolationGolden, NamedDecrementSetGuard, OrdersTableAccessGuard,
+  MainReconcileWriteGuard, PortalOrderLeak. Full suite NOT run.
+- **Ops (Marawan runs, as postgres):** `scripts/ops/2026-11-04-broek-native-exchange-dispatch-skip.sql` — dry run by
+  default, `-v commit=yes` to apply; locks the claim, guards (exactly one claim, still queued, piece is the
+  replacement of dashboard exchange 7756985263 with that reference), flips it queued → skipped with the same reason,
+  then lists (read-only) any other unsent claim the rule would skip. Rehearsed locally on V203: dry run rolled back,
+  wrong-reference guard STOPped with nothing written, commit flipped exactly that row, re-run STOPped. Run it BEFORE
+  BROEK's hold clears (the reconnect resume would otherwise send it) — deploy order doesn't matter after that.
+  **APPLIED on prod 2026-11-05 by Marawan: claim 3054 is skipped (shopify_native_exchange), confirmed in the DB.**
+- **Known, not changed:** the claim key is the piece id alone, so a piece skipped here and later reused as a portal
+  replacement gets no decrement (same as the existing gap after an applied one). Finding 3 (double restock) and the
+  S1 shadow order are separate.
+
 **Shopify order webhooks — freshness under the row lock + shorter lock (2026-11-04; merged to main
 2026-11-05 from `fix/order-webhook-lock-hold`, NOT deployed; no migration).** Prod: order upserts waited 10–40 s
 (max 39 s) on each other's row lock ("while inserting index tuple … in relation orders"). Step 0 found no
