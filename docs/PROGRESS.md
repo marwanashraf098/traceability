@@ -4,6 +4,49 @@
 
 ## Current state
 
+**Shopify order webhooks — freshness under the row lock + shorter lock (2026-11-04; merged to main
+2026-11-05 from `fix/order-webhook-lock-hold`, NOT deployed; no migration).** Prod: order upserts waited 10–40 s
+(max 39 s) on each other's row lock ("while inserting index tuple … in relation orders"). Step 0 found no
+Shopify / Bosta HTTP inside any transaction that holds an order row; the generic-plan hypothesis was ruled out on
+prod by Marawan (shipments_order_idx, 1.1 ms). The DB was on Micro (1 GB, ~350 MB swap for a week) — upgraded to
+Small, likely most of the slowness. Prod runs 10 JobRunr workers (env override), not 8.
+- **Fix 4 — freshness rule:** `ShopifySyncService.UPSERT_ORDER_WEBHOOK` (webhook path only; the import keeps
+  UPSERT_ORDER_IMPORT) updates an existing order only when `shopify_order_updated_at(EXCLUDED.raw) >=` the stored
+  one (equal still applies), or either side has no readable updated time (applied, as before). Evaluated after the
+  row lock is granted, so an older event that waited behind a newer one no longer overwrites it — the processor's
+  pre-check `supersededReason` runs before the lock and could not see that. A stale upsert returns no row →
+  `OrderIngest.STALE`: no line upserts, no edit diff, no fulfillment tracking capture, no main-reconcile queue
+  mark; the event is marked processed + `superseded_at` (MARK_SUPERSEDED, the same as a pre-check supersede —
+  never failed, never retried). The reason ("stale, superseded …", `ShopifyWebhookProcessorJob.STALE_REASON`) is
+  in the log only: shopify_webhook_events has no reason column (same as the existing supersedes). New orders
+  insert as before.
+- **Fix 3 — lock only for the writes:** every line's LOOKUP_VARIANT runs before UPSERT_ORDER (same transaction).
+  orders/updated is now ONE transaction: the duplicate `isFrozen` (old :329), the separate pre-edit reads and the
+  separate edit transaction are gone; the edit decision runs inside the upsert (`LockedOrderStep`) after the
+  freeze check under the lock and before the line upserts, on the status read under the lock;
+  `handleShopifyLineItemEdit` joins that transaction (edit + upsert now commit or roll back together). A new order
+  (`inserted`, xmax = 0) or a frozen one is never diffed — unchanged rules.
+- **Tests:** OrderWebhookFreshnessTest — f1 older commits after newer (stored = newer; stale event processed +
+  superseded, no error / retry; its lines and tracking not written), f2 equal updated_at applies, f3 create inserts +
+  direct older ingest returns STALE, f4 a stale edit on an order being picked releases nothing, raises nothing, l1
+  variants resolved before the row lock (variant re-keyed while the upsert waits → line still written).
+  Revert-to-confirm RED: no WHERE → f1 f3 f4; `>` instead of `>=` → f2; lookups after the lock → l1.
+- **Full suite (2026-11-04, host load average ~80–100 on 8 cores — took ~6 h):** 3794 tests, 3 failures: ExchangeBackfillTest
+  (expected red), BostaPollJobTest.p6 (known load flake) and ShopifyMagicLinkTest.expiry_expiredToken_isMagicLinkInvalid
+  (302 instead of 401). Rerun: under load the magic-link test also failed on unchanged main and p6 passed there; with
+  the machine quiet both classes pass on the branch. **Fixed, not a flake:** ShopifyMagicLinkTest's expiry test inserted a
+  token expired 1 s ago by the JVM clock while the DB decides with its own now(); it now inserts
+  `expires_at = now() - interval '1 hour'` (DB clock, 1 h margin).
+- **FOLLOW-UP — not built (fix 5 of the Step 0 diagnosis):** the per-minute queued Main-reconcile run and the
+  4-hourly sweep (`MainReconcileJob`) can overlap for one tenant on the shared per-tenant advisory lock
+  (`pg_advisory_xact_lock(hashtext(tenant_id))`, also the seed's and the activation's) — prod saw a 67 s wait. The
+  compute transaction (`MainReconcileService.compute`) upserts `main_reconcile_variant_state` for every variant in
+  the run, so the webhook's `MainReconcileQueue.onWebhook` mark waited 48 s behind it (own transaction, not the
+  order lock, but it holds a webhook worker). Options: skip a queued run while the tenant lock is held
+  (`pg_try_advisory_xact_lock`), and/or a short `SET LOCAL lock_timeout` on the queue mark — that one risks a missed
+  `last_event_at` stamp weakening the two-run rule (write mode's changed_before_write catches most, not all).
+  Re-measure after the Small upgrade first.
+
 **Main reconcile: fulfilled_unpicked (V204, 2026-11-04; merged to main, NOT deployed; writes stay OFF until Marawan
 confirms on prod).** Found on prod in write mode before any write landed (Dolt 22:13–22:15, ~20 variants +1..+4,
 fulfilled_from_main 0; back to REPORT_ONLY=true at 22:17): the Bosta app fulfills in Shopify FROM MAIN when it creates

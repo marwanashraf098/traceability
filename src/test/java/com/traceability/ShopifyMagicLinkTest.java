@@ -27,9 +27,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.http.HttpClient;
-import java.sql.Timestamp;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -220,15 +217,16 @@ class ShopifyMagicLinkTest {
     @Test
     @Order(3)
     void expiry_expiredToken_isMagicLinkInvalid() {
-        // Insert an already-expired token directly (expired 1 second ago)
+        // Insert an already-expired token directly — expired an hour ago by the DB's own clock, so JVM vs DB
+        // clock skew under load can't tip it back to valid (it did with a 1-second margin, 2026-11-04).
         byte[] bytes = new byte[16];
         new java.security.SecureRandom().nextBytes(bytes);
         String rawToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         String hash = com.traceability.identity.AuthRepository.sha256(rawToken);
-        Instant expired = Instant.now().minus(1, ChronoUnit.SECONDS);
         jdbc.update(
-            "INSERT INTO magic_link_tokens (tenant_id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
-            tenantIdA, ownerIdA, hash, Timestamp.from(expired));
+            "INSERT INTO magic_link_tokens (tenant_id, user_id, token_hash, expires_at) " +
+            "VALUES (?, ?, ?, now() - interval '1 hour')",
+            tenantIdA, ownerIdA, hash);
 
         ResponseEntity<Map> resp = noRedirectRest.exchange(
             base() + "/auth/magic?token=" + rawToken,

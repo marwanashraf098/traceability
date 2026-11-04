@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.FulfillService;
-import com.traceability.inventory.OrderLineFreeze;
 import com.traceability.inventory.ShopifyCatalogActivationService;
 import com.traceability.privacy.CustomerDataRequestService;
 import com.traceability.privacy.CustomerRedaction;
@@ -168,7 +167,14 @@ public class ShopifyWebhookProcessorJob {
                     log.info("Webhook event {} ({} shop={}) superseded — not applied: {}", eventId, topic, shopDomain, superseded);
                     return;
                 }
-                dispatch(tenantId, eventId, topic, shopDomain, payload);
+                String stale = dispatch(tenantId, eventId, topic, shopDomain, payload);
+                if (stale != null) {
+                    // Lost the race to a newer event for the same order (checked under the row lock): processed,
+                    // superseded, never failed and never retried.
+                    tx.execute(s -> { jdbc.update(MARK_SUPERSEDED, eventId); return null; });
+                    log.info("Webhook event {} ({} shop={}) superseded — not applied: {}", eventId, topic, shopDomain, stale);
+                    return;
+                }
                 tx.execute(s -> { jdbc.update(MARK_PROCESSED, eventId); return null; });
             } catch (Exception e) {
                 if (isTransientDbFailure(e)) {
@@ -240,10 +246,15 @@ public class ShopifyWebhookProcessorJob {
 
     // ---- dispatch -------------------------------------------------------
 
-    private void dispatch(UUID tenantId, UUID eventId, String topic, String shopDomain, JsonNode payload) {
+    /** Reason the stale order payload was not applied (UPSERT_ORDER_WEBHOOK's freshness rule). */
+    static final String STALE_REASON = "stale, superseded: Traced already holds a newer copy of the order (checked under the row lock)";
+
+    /** @return null when applied; {@link #STALE_REASON} when an order upsert found a newer stored copy. */
+    private String dispatch(UUID tenantId, UUID eventId, String topic, String shopDomain, JsonNode payload) {
+        ShopifySyncService.OrderIngest ingest = null;
         switch (topic) {
-            case "orders/create"  -> handleOrderUpsert(tenantId, shopDomain, payload);
-            case "orders/updated" -> handleOrderUpdated(tenantId, shopDomain, payload);
+            case "orders/create"  -> ingest = handleOrderUpsert(tenantId, shopDomain, payload);
+            case "orders/updated" -> ingest = handleOrderUpdated(tenantId, shopDomain, payload);
             case "orders/cancelled"                 -> handleOrderCancelled(tenantId, shopDomain, payload);
             case "products/create", "products/update" -> handleProductUpsert(tenantId, shopDomain, payload);
             case "app/uninstalled"                  -> handleAppUninstalled(tenantId, shopDomain);
@@ -258,92 +269,82 @@ public class ShopifyWebhookProcessorJob {
                     topic, shopDomain);
             }
         }
+        // A stale order payload: nothing after the upsert runs for this event (no tracking capture, no queue).
+        if (ingest == ShopifySyncService.OrderIngest.STALE) return STALE_REASON;
         // Main reconcile (V201, report-only): queue the variants this event names. Never throws.
         if (mainReconcileQueue != null && MAIN_RECONCILE_TOPICS.contains(topic)) {
             mainReconcileQueue.onWebhook(tenantId, topic, payload);
         }
+        return null;
     }
 
     // ---- topic handlers -------------------------------------------------
 
-    private void handleOrderUpsert(UUID tenantId, String shopDomain, JsonNode payload) {
+    private ShopifySyncService.OrderIngest handleOrderUpsert(UUID tenantId, String shopDomain, JsonNode payload) {
         UUID storeId = syncService.resolveStore(tenantId, shopDomain);
         if (storeId == null) {
             log.warn("orders webhook: store not found or disconnected shop={} tenant={}", shopDomain, tenantId);
-            return;
+            return ShopifySyncService.OrderIngest.SKIPPED;
         }
-        syncService.ingestOrderWebhook(storeId, tenantId, payload);
+        return syncService.ingestOrderWebhook(storeId, tenantId, payload);
     }
 
     /**
      * FR-3.6: orders/updated — detect line-item edits and route by order status.
      *
-     * Diff is computed against the pre-edit local order_items (before ingestOrderWebhook
-     * upserts them), on Shopify's CURRENT line quantities (ShopifySyncService.restLineQuantity).
-     * An order that has left Traced custody (OrderLineFreeze) is never diffed — its quantities
-     * are kept, nothing is released, nothing is raised. Otherwise routing is
-     * FulfillService.handleShopifyLineItemEdit:
+     * ONE transaction (2026-11-04): the edit decision runs inside the order upsert, right after
+     * UPSERT_ORDER locked the row and OrderLineFreeze was decided under that lock
+     * (ShopifySyncService.LockedOrderStep) — before the line upserts, so the diff is against the
+     * pre-edit local order_items, on Shopify's CURRENT line quantities
+     * (ShopifySyncService.restLineQuantity). A new order (first seen here) is never diffed. An order
+     * that has left Traced custody (frozen) is never diffed — its quantities are kept, nothing is
+     * released, nothing is raised. Otherwise routing is FulfillService.handleShopifyLineItemEdit
+     * (joins this transaction), on the order's status read under the lock:
      *   packed / self_pickup_pending / awaiting_pickup (PAST_PACKING_STATUSES) → no touch; exception.
      *   any other status with an active allocation (being picked) → release allocations for
      *     removed / reduced lines; exception.
      *   any other status with no active allocation → line items updated, no exception.
+     * A stale payload (a newer copy is stored) changes nothing — no diff, no release, no capture.
      */
-    private void handleOrderUpdated(UUID tenantId, String shopDomain, JsonNode payload) {
+    private ShopifySyncService.OrderIngest handleOrderUpdated(UUID tenantId, String shopDomain, JsonNode payload) {
         UUID storeId = syncService.resolveStore(tenantId, shopDomain);
         if (storeId == null) {
             log.warn("orders/updated: store not found or disconnected shop={} tenant={}", shopDomain, tenantId);
-            return;
+            return ShopifySyncService.OrderIngest.SKIPPED;
         }
 
         String externalId = payload.path("admin_graphql_api_id").asText(null);
         if (externalId == null || externalId.isBlank()) {
             log.warn("orders/updated missing admin_graphql_api_id shop={}", shopDomain);
-            syncService.ingestOrderWebhook(storeId, tenantId, payload);
-            return;
+            return syncService.ingestOrderWebhook(storeId, tenantId, payload);
         }
 
-        // Load pre-edit order state (status + line items)
-        Map<String, Object> preEdit = tx.execute(s ->
-            jdbc.query(
-                "SELECT o.id, o.status::text AS status FROM orders o " +
-                "WHERE o.tenant_id = ? AND o.external_id = ? LIMIT 1",
-                rs -> rs.next()
-                    ? Map.of("id", rs.getObject("id", UUID.class),
-                             "status", rs.getString("status"))
-                    : null,
-                tenantId, externalId));
+        ShopifySyncService.OrderIngest ingest = syncService.ingestOrderWebhook(storeId, tenantId, payload,
+            (orderId, inserted, frozen) -> {
+                // Not known locally before this event (treated as a create), or left Traced custody: no diff.
+                if (inserted || frozen) return;
+                // Pre-edit order status, read under the lock.
+                String orderStatus = jdbc.queryForObject(
+                    "SELECT o.status::text FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+                    String.class, orderId, tenantId);
+                applyLineEdit(tenantId, orderId, orderStatus, payload);
+            });
+        if (ingest == ShopifySyncService.OrderIngest.APPLIED) captureFulfillmentTracking(storeId, externalId, payload);
+        return ingest;
+    }
 
-        if (preEdit == null) {
-            // Order not known locally yet — treat as create
-            syncService.ingestOrderWebhook(storeId, tenantId, payload);
-            captureFulfillmentTracking(storeId, externalId, payload);
-            return;
-        }
-
-        UUID   orderId     = (UUID)   preEdit.get("id");
-        String orderStatus = (String) preEdit.get("status");
-
-        // The order has left Traced custody (OrderLineFreeze): its lines are what was shipped. A lower
-        // Shopify quantity now is a refund or a post-ship cancel, never a pick change — no diff, no
-        // release, no edit-conflict alert; the upsert keeps the stored quantities.
-        boolean frozen = Boolean.TRUE.equals(tx.execute(s -> OrderLineFreeze.isFrozen(jdbc, orderId, tenantId)));
-        if (frozen) {
-            syncService.ingestOrderWebhook(storeId, tenantId, payload);
-            captureFulfillmentTracking(storeId, externalId, payload);
-            return;
-        }
-
-        // Load pre-edit local order_items: externalId → qty
-        Map<String, Integer> localQty = tx.execute(s ->
-            jdbc.query(
-                "SELECT external_id, quantity FROM order_items " +
-                "WHERE order_id = ? AND tenant_id = ? AND external_id IS NOT NULL",
-                rs -> {
-                    Map<String, Integer> m = new LinkedHashMap<>();
-                    while (rs.next()) m.put(rs.getString("external_id"), rs.getInt("quantity"));
-                    return m;
-                },
-                orderId, tenantId));
+    /** FR-3.6's diff + routing, inside the upsert transaction (the order row is locked; lines not yet upserted). */
+    private void applyLineEdit(UUID tenantId, UUID orderId, String orderStatus, JsonNode payload) {
+        // Pre-edit local order_items: externalId → qty
+        Map<String, Integer> localQty = jdbc.query(
+            "SELECT external_id, quantity FROM order_items " +
+            "WHERE order_id = ? AND tenant_id = ? AND external_id IS NOT NULL",
+            rs -> {
+                Map<String, Integer> m = new LinkedHashMap<>();
+                while (rs.next()) m.put(rs.getString("external_id"), rs.getInt("quantity"));
+                return m;
+            },
+            orderId, tenantId);
 
         // Build incoming line-item map: externalId → qty
         Map<String, Integer> incomingQty = new LinkedHashMap<>();
@@ -357,22 +358,9 @@ public class ShopifyWebhookProcessorJob {
         }
 
         LineDiff diff = computeLineDiff(localQty != null ? localQty : Map.of(), incomingQty);
-
-        if (!diff.isEmpty()) {
-            String diffJson = serializeDiff(diff);
-            final UUID fOrderId = orderId;
-            final String fStatus = orderStatus;
-            tx.execute(s -> {
-                fulfillService.handleShopifyLineItemEdit(
-                    fOrderId, fStatus, diffJson,
-                    diff.removed(), diff.releaseCountByExternalId());
-                return null;
-            });
-        }
-
-        // Always upsert the order + line items (metadata, raw JSON etc.)
-        syncService.ingestOrderWebhook(storeId, tenantId, payload);
-        captureFulfillmentTracking(storeId, externalId, payload);
+        if (diff.isEmpty()) return;
+        fulfillService.handleShopifyLineItemEdit(
+            orderId, orderStatus, serializeDiff(diff), diff.removed(), diff.releaseCountByExternalId());
     }
 
     /**
