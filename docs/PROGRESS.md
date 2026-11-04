@@ -4,6 +4,23 @@
 
 ## Current state
 
+**Main reconcile: fulfilled_unpicked (V204, 2026-11-04; merged to main, NOT deployed; writes stay OFF until Marawan
+confirms on prod).** Found on prod in write mode before any write landed (Dolt 22:13–22:15, ~20 variants +1..+4,
+fulfilled_from_main 0; back to REPORT_ONLY=true at 22:17): the Bosta app fulfills in Shopify FROM MAIN when it creates
+the shipment, before Traced picks — Dolt had 52 orders / 64 units fulfilled from Main with no Traced allocation, so
+Shopify on_hand had dropped while Traced's pieces were plain 'available'. New target term `fulfilled_unpicked` (diffs +
+writes columns): per (order, variant) `GREATEST(0, F_main − R_main − left − allocated in custody)` for successful REST
+fulfillments from Main on a live, non-cancelled order still waiting to be picked (`MainReconcileRules.AWAITING_PICK_SQL`:
+NOT_YET_PACKED and self-pickup or newest waybill pre-pickup — `OrderLineFreeze.prePickupWaybillSql`). With
+fulfilled_from_main a partly allocated line is subtracted exactly once. Target floored at 0 (note `target_floored`).
+- **Fulfilled elsewhere, not picked yet:** no double count — the new term is Main-only, Part 1 waits for the pieces to
+  leave, unfulfilled_shipped sees the line as fulfilled.
+- **Fulfilled from Main, never picked in Traced (waybill moved without a Traced pick):** no longer subtracted. Traced
+  can't tell whether that stock was ever in Traced; if it was (a phantom 'available' piece) the target stays high —
+  the existing not-traced drift, not new.
+- Tests MainReconcileWriteTest u1–u6 (cross-tenant app_user + positive control); revert-to-confirm RED on each case.
+  MigrationSmokeTest 203, NotTracedBackfillTest 148. Proof SQL (per variant, Dolt + Nuvira) given in the report.
+
 **"Shopify cancel vs in flight" decided from the newest live waybill (2026-11-04; merged to main, NOT deployed; no
 migration).** The stored order status never moves past 'awaiting_pickup' for a courier order (webhooks / poll / pickup
 close move shipments and pieces only), so the alert's old gate (stored awaiting_pickup) both missed and mislabelled.

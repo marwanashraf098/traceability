@@ -468,8 +468,15 @@ public class MainReconcileService {
                     // Fix 2: shipped pieces of lines Shopify still shows unfulfilled, capped at Shopify's committed at Main.
                     int unfulfilledRaw = num(r, "unfulfilled_shipped_raw");
                     int unfulfilled = lv == null ? unfulfilledRaw : Math.min(unfulfilledRaw, Math.max(0, lv.committed()));
-                    String note = unfulfilled < unfulfilledRaw ? MainReconcileRules.NOTE_UNFULFILLED_CAPPED : null;
-                    int target    = custody + away - fulfilled + owed + unfulfilled;
+                    String noteCap = unfulfilled < unfulfilledRaw ? MainReconcileRules.NOTE_UNFULFILLED_CAPPED : null;
+                    String note = noteCap;
+                    int unpicked  = num(r, "fulfilled_unpicked");
+                    int rawTarget = custody + away - fulfilled - unpicked + owed + unfulfilled;
+                    int target    = Math.max(0, rawTarget);
+                    if (rawTarget < 0) {
+                        note = note == null ? MainReconcileRules.NOTE_TARGET_FLOORED
+                            : note + "," + MainReconcileRules.NOTE_TARGET_FLOORED;
+                    }
 
                     String skip = item == null ? MainReconcileRules.NOT_LINKED
                         : !readItems.contains(item) ? MainReconcileRules.SHOPIFY_UNREAD
@@ -513,7 +520,7 @@ public class MainReconcileService {
                             confirmed++;
                             if (delta > 0) up += delta; else down += -delta;
                             if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand, target,
-                                custody, away, fulfilled, owed, unfulfilled, delta, longs(r.get("settle_claims")),
+                                custody, away, fulfilled, unpicked, owed, unfulfilled, delta, longs(r.get("settle_claims")),
                                 uuids(r.get("settle_part1")), uuids(r.get("settle_writes"))));
                         } else {
                             status = "unconfirmed";
@@ -525,12 +532,12 @@ public class MainReconcileService {
                         jdbc.update("INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
                             "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
                             "shopify_available, shopify_committed, shopify_damaged, traced_damaged, delta, delta_since, " +
-                            "unfulfilled_shipped, unfulfilled_shipped_raw, note) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "unfulfilled_shipped, unfulfilled_shipped_raw, note, fulfilled_unpicked) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             tenantId, runId, variantId, status, skip, custody, away, fulfilled, owed, target, onHand,
                             lv == null || onHand == null ? null : lv.available(), lv == null || onHand == null ? null : lv.committed(),
                             lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince,
-                            unfulfilled, unfulfilledRaw, note);
+                            unfulfilled, unfulfilledRaw, note, unpicked);
                     }
                     Integer keepDelta = skip != null ? null : delta;
                     jdbc.update("INSERT INTO main_reconcile_variant_state AS s (tenant_id, variant_id, last_checked_at, " +

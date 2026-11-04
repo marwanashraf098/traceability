@@ -58,6 +58,12 @@ import static org.mockito.Mockito.*;
  *   a1  delivered_not_fulfilled_in_shopify: fires for an order delivered > 7 days ago and unfulfilled in Shopify (one
  *       per order), not for a recent one; clears when Shopify fulfills it or it is cancelled
  *   x2  cross-tenant as app_user: no tenant → zero writes rows; tenant B can't see A's; A sees its own
+ *   u1  fulfilled_unpicked (V204): a line Shopify fulfilled from Main before Traced picked it is subtracted
+ *   u2  a partly allocated line is never subtracted twice (fulfilled_from_main + fulfilled_unpicked = the line)
+ *   u3  a cancelled fulfillment / cancelled order adds nothing
+ *   u4  the target is floored at 0 (note target_floored)
+ *   u5  a waybill that moved without a Traced pick (shipped outside Traced) is no longer subtracted
+ *   u6  cross-tenant as app_user, with a same-tenant positive control
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -435,6 +441,103 @@ class MainReconcileWriteTest {
         // A run for B with A's variant writes nothing.
         UUID rb = run(s, b, va);
         assertThat(runRow(b, rb)).containsEntry("variants_checked", 0).containsEntry("writes_attempted", 0);
+    }
+
+    // ── fulfilled_unpicked (V204) ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void u1_fulfilledFromMainBeforeThePick_subtracted() {
+        T t = tenant("u1");
+        V v = variant(t);
+        for (int i = 0; i < 3; i++) piece(t, v, "available", t.main());
+        awaitingPick(t, fulfillments(f("9501", t.mainNum(), "success", line("95011", v, 2))));
+        level(v, 1, 1, 0, 0);                       // Shopify already took the 2 off Main
+        UUID r = run(service("", CUTOFF), t, v);
+        assertThat(runRow(t, r)).containsEntry("variants_in_sync", 1).containsEntry("differences", 0);
+        level(v, 0, 0, 0, 0);
+        assertThat(onlyDiff(t, run(service("", CUTOFF), t, v))).containsEntry("fulfilled_unpicked", 2)
+            .containsEntry("target", 1).containsEntry("delta", 1);
+    }
+
+    @Test
+    void u2_partlyAllocatedLine_neverSubtractedTwice() {
+        T t = tenant("u2");
+        V v = variant(t);
+        for (int i = 0; i < 4; i++) piece(t, v, "available", t.main());
+        UUID o = awaitingPick(t, fulfillments(f("9502", t.mainNum(), "success", line("95021", v, 3))));
+        allocate(t, orderItem(t, o, v, 3), piece(t, v, "reserved", t.main()), "active");
+        level(v, 2, 2, 0, 0);                       // Traced 5 in custody − 3 fulfilled from Main
+        UUID r = run(service("", CUTOFF), t, v);
+        assertThat(runRow(t, r)).containsEntry("variants_in_sync", 1);
+        level(v, 1, 1, 0, 0);
+        assertThat(onlyDiff(t, run(service("", CUTOFF), t, v))).containsEntry("fulfilled_from_main", 1)
+            .containsEntry("fulfilled_unpicked", 2).containsEntry("target", 2);
+    }
+
+    @Test
+    void u3_cancelledFulfillment_andCancelledOrder_ignored() {
+        T t = tenant("u3");
+        V v = variant(t), w = variant(t);
+        piece(t, v, "available", t.main());
+        piece(t, w, "available", t.main());
+        awaitingPick(t, fulfillments(f("9503", t.mainNum(), "cancelled", line("95031", v, 1))));
+        UUID oc = awaitingPick(t, fulfillments(f("9504", t.mainNum(), "success", line("95041", w, 1))));
+        jdbc.update("UPDATE orders SET status = 'cancelled'::order_status WHERE id = ?", oc);
+        jdbc.update("UPDATE orders SET raw = raw || '{\"cancelled_at\": \"2026-11-03T09:00:00Z\"}'::jsonb WHERE id = ?", oc);
+        level(v, 0, 0, 0, 0);
+        level(w, 0, 0, 0, 0);
+        UUID r = run(service("", CUTOFF), t, v, w);
+        assertThat(onlyDiffFor(t, r, v)).containsEntry("fulfilled_unpicked", 0).containsEntry("delta", 1);
+        assertThat(onlyDiffFor(t, r, w)).containsEntry("fulfilled_unpicked", 0).containsEntry("delta", 1);
+    }
+
+    @Test
+    void u4_targetFlooredAtZero() {
+        T t = tenant("u4");
+        V v = variant(t);
+        piece(t, v, "available", t.main());                                    // Traced holds 1 …
+        awaitingPick(t, fulfillments(f("9505", t.mainNum(), "success", line("95051", v, 3))));   // … Shopify fulfilled 3
+        level(v, 1, 1, 0, 0);
+        assertThat(onlyDiff(t, run(service("", CUTOFF), t, v))).containsEntry("target", 0)
+            .containsEntry("fulfilled_unpicked", 3).containsEntry("delta", -1)
+            .containsEntry("note", MainReconcileRules.NOTE_TARGET_FLOORED);
+    }
+
+    @Test
+    void u5_waybillMovedWithoutATracedPick_notSubtracted() {
+        T t = tenant("u5");
+        V v = variant(t);
+        piece(t, v, "available", t.main());
+        UUID o = order(t, fulfillments(f("9506", t.mainNum(), "success", line("95061", v, 1))));
+        leg(t, o, "with_courier");                    // shipped outside Traced: no longer waiting to be picked
+        level(v, 1, 1, 0, 0);
+        UUID r = run(service("", CUTOFF), t, v);
+        assertThat(runRow(t, r)).containsEntry("variants_in_sync", 1);
+    }
+
+    @Test
+    void u6_crossTenant_appUser_positiveControl() {
+        T a = tenant("ua"), b = tenant("ub");
+        V v = variant(a);
+        piece(a, v, "available", a.main());
+        awaitingPick(a, fulfillments(f("9507", a.mainNum(), "success", line("95071", v, 1))));
+        level(v, 1, 1, 0, 0);
+        assertThat(runRow(b, run(service("", CUTOFF), b, v))).containsEntry("variants_checked", 0);
+        assertThat(onlyDiff(a, run(service("", CUTOFF), a, v))).as("positive control")
+            .containsEntry("fulfilled_unpicked", 1).containsEntry("target", 0).containsEntry("delta", -1);
+    }
+
+    /** An order still waiting to be picked in Traced: status 'new', its waybill created and never moved. */
+    private UUID awaitingPick(T t, String raw) {
+        UUID o = order(t, raw);
+        leg(t, o, "created");
+        return o;
+    }
+
+    private void leg(T t, UUID order, String state) {
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'forward')",
+            t.tenant(), order, String.valueOf(5_000_000_000L + seq.incrementAndGet()), state);
     }
 
     // ── ops script ────────────────────────────────────────────────────────────────────────────────────────────

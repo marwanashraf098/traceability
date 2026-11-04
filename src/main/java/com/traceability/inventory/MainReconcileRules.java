@@ -9,7 +9,8 @@ import java.util.List;
  *
  * <h3>Target (per variant, at the tenant's main warehouse — compared with Shopify ON-HAND, never available)</h3>
  * <pre>
- *   target = custody_at_main + away_counted − fulfilled_from_main + part1_owed + unfulfilled_shipped
+ *   target = MAX(0, custody_at_main + away_counted − fulfilled_from_main − fulfilled_unpicked + part1_owed
+ *                   + unfulfilled_shipped)
  * </pre>
  * <ul>
  *   <li><b>custody_at_main</b>: pieces at the main warehouse that are available / reserved / packed / awaiting_pickup.
@@ -33,6 +34,11 @@ import java.util.List;
  *       less than cancelled-fulfillment-window-minutes ago — Shopify may re-fulfill — or its time is unreadable); R_main = refund restocks at Main ({@code shopify_refund_restocked_units}, 3-arg — so a cancel +
  *       restock at Main while Traced still holds the pieces reconciles as in sync); left = the order's pieces of the
  *       variant that already left custody (with_courier / delivered) — those are already out of the target.</li>
+ *   <li><b>fulfilled_unpicked</b> (V204, prod 2026-11-04): units Shopify fulfilled FROM MAIN on a live order Traced
+ *       hasn't picked yet ({@link #AWAITING_PICK_SQL}) — the Bosta app fulfills at shipment creation. Per (order,
+ *       variant) {@code GREATEST(0, F_main − R_main − left − allocated in custody)}; fulfilled_from_main covers the
+ *       allocated part, so a partly allocated line is never subtracted twice. The target is floored at 0 (diff note
+ *       'target_floored').</li>
  *   <li><b>part1_owed</b>: Part 1 claims not yet applied — units Traced shipped for a line Shopify fulfilled from ANOTHER
  *       location, so Shopify Main still holds them until Part 1 subtracts. Adding them back keeps the runner from
  *       subtracting the same units a second time; once applied they drop out (and Shopify Main dropped with them).
@@ -90,6 +96,8 @@ public final class MainReconcileRules {
 
     /** Diff note: unfulfilled_shipped was capped at Shopify's committed at Main. */
     public static final String NOTE_UNFULFILLED_CAPPED = "unfulfilled_capped";
+    /** Diff note: the parts summed below 0 and the target was floored at 0. */
+    public static final String NOTE_TARGET_FLOORED = "target_floored";
 
     public static final List<String> SKIP_ORDER = List.of(NOT_LINKED, SHOPIFY_UNREAD, RECONCILE_WRITE_IN_FLIGHT, PART1_IN_FLIGHT,
         ARRIVAL_REVISIT_PENDING, CLAIM_IN_FLIGHT, CLAIM_AMBIGUOUS, STOCK_TAKE_SYNC_IN_FLIGHT, TRANSFER_SYNC_IN_FLIGHT,
@@ -173,6 +181,18 @@ public final class MainReconcileRules {
         return "(lower(COALESCE(" + o + ".raw->>'fulfillment_status', '')) = 'fulfilled' " +
                " OR upper(COALESCE(" + o + ".raw->>'displayFulfillmentStatus', '')) = 'FULFILLED')";
     }
+
+    /**
+     * The order is still waiting to be picked in Traced — the Bosta app fulfills in Shopify when it creates the shipment,
+     * before the pick: not packed yet (PackListRules.NOT_YET_PACKED_SQL) and either self-pickup or its newest forward
+     * waybill still waits for the courier (OrderLineFreeze.prePickupWaybillSql). Once that waybill moves without a Traced
+     * pick (shipped outside Traced) the order no longer counts: Traced can't tell then whether its stock was ever in
+     * Traced, and subtracting units Traced never held would read Shopify too high. Alias o.
+     */
+    static final String AWAITING_PICK_SQL =
+        "(" + PackListRules.NOT_YET_PACKED_SQL + " AND (o.is_self_pickup " +
+        " OR EXISTS (SELECT 1 FROM shipments s_ap WHERE s_ap.order_id = o.id AND s_ap.tenant_id = o.tenant_id " +
+        "            AND " + OrderLineFreeze.prePickupWaybillSql("s_ap") + ")))";
 
     /** A non-cancelled, non-internal merchant order. */
     static String liveShopifyOrderSql(String o) {
@@ -288,6 +308,37 @@ public final class MainReconcileRules {
         "  SELECT variant_id, SUM(GREATEST(0, LEAST(held, f_main - r_main - left_n))) AS fulfilled_from_main, " +
         "         bool_or(unreadable) AS unreadable, bool_or(pending) AS pending, bool_or(cancelled) AS cancelled " +
         "  FROM hf GROUP BY variant_id " +
+        // fulfilled_unpicked: lines Shopify fulfilled FROM MAIN (successful REST only — a cancelled / errored
+        // fulfillment never counts) on a live, non-cancelled order still waiting to be picked in Traced, minus what
+        // Traced already covers on the line (pieces allocated in custody anywhere + pieces that left) and refund
+        // restocks at Main. With fulfilled_from_main the two never subtract more than F − R − left per line.
+        "), fu_lines AS ( " +
+        "  SELECT o.id AS order_id, vv.id AS variant_id, SUM((li->>'quantity')::int) AS f_main " +
+        "  FROM merchant_orders o " +
+        "  CROSS JOIN LATERAL jsonb_array_elements(" + fulfillmentsSql("o") + ") f " +
+        "  CROSS JOIN LATERAL jsonb_array_elements(" + lineItemsSql("f") + ") li " +
+        "  JOIN variants vv ON vv.tenant_id = o.tenant_id AND " + lineMatchesVariantSql("li", "vv") +
+        "                  AND vv.id = ANY(CAST(:ids AS uuid[])) " +
+        "  WHERE o.tenant_id = :t AND " + restShapeSql("f") + " AND lower(f->>'status') = 'success' " +
+        "    AND f->>'location_id' = :mainNum AND li->>'quantity' ~ '^[0-9]+$' " +
+        "    AND " + liveShopifyOrderSql("o") + " AND " + AWAITING_PICK_SQL +
+        "  GROUP BY o.id, vv.id " +
+        "), fu AS ( " +
+        "  SELECT x.variant_id, SUM(GREATEST(0, x.f_main " +
+        "           - shopify_refund_restocked_units(o.raw, vv.external_id, :mainGid) " +
+        "           - (SELECT COUNT(DISTINCT e.piece_id) FROM piece_events e " +
+        "                JOIN pieces pp ON pp.id = e.piece_id AND pp.tenant_id = e.tenant_id " +
+        "               WHERE e.tenant_id = :t AND e.order_id = x.order_id " +
+        "                 AND e.to_status::text IN ('with_courier', 'delivered') AND pp.variant_id = x.variant_id) " +
+        "           - (SELECT COUNT(*) FROM allocations a " +
+        "                JOIN order_items oi ON oi.id = a.order_item_id AND oi.tenant_id = a.tenant_id " +
+        "                JOIN pieces p ON p.id = a.piece_id AND p.tenant_id = a.tenant_id " +
+        "               WHERE a.tenant_id = :t AND oi.order_id = x.order_id AND p.variant_id = x.variant_id " +
+        "                 AND a.status IN ('active', 'packed') AND p.status::text IN " + CUSTODY_SQL + "))) AS fulfilled_unpicked " +
+        "  FROM fu_lines x " +
+        "  JOIN merchant_orders o ON o.id = x.order_id AND o.tenant_id = :t " +
+        "  JOIN variants vv ON vv.id = x.variant_id AND vv.tenant_id = :t " +
+        "  GROUP BY x.variant_id " +
         "), p1x AS ( " +
         "  SELECT c.*, (:settle AND c.status = 'failed_ambiguous' " +
         "               AND COALESCE(c.send_started_at, c.updated_at) < now() - make_interval(mins => :holdMinutes)) AS settleable " +
@@ -347,6 +398,7 @@ public final class MainReconcileRules {
         "SELECT v.variant_id, v.item, " +
         "       COALESCE(custody.custody, 0) AS custody_at_main, COALESCE(custody.damaged, 0) AS traced_damaged, " +
         "       COALESCE(away.away_counted, 0) AS away_counted, COALESCE(fsum.fulfilled_from_main, 0) AS fulfilled_from_main, " +
+        "       COALESCE(fu.fulfilled_unpicked, 0) AS fulfilled_unpicked, " +
         "       COALESCE(p1.owed, 0) AS part1_owed, " +
         "       COALESCE(uf.unfulfilled_shipped, 0) AS unfulfilled_shipped_raw, " +
         "       COALESCE(p1.in_flight, false) AS part1_in_flight, " +
@@ -370,6 +422,7 @@ public final class MainReconcileRules {
         "LEFT JOIN custody ON custody.variant_id = v.variant_id " +
         "LEFT JOIN away ON away.variant_id = v.variant_id " +
         "LEFT JOIN fsum ON fsum.variant_id = v.variant_id " +
+        "LEFT JOIN fu ON fu.variant_id = v.variant_id " +
         "LEFT JOIN p1 ON p1.variant_id = v.variant_id " +
         "LEFT JOIN cl ON cl.variant_id = v.variant_id " +
         "LEFT JOIN rw ON rw.variant_id = v.variant_id " +

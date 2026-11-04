@@ -31,7 +31,7 @@ final class MainReconcileWriter {
 
     /** One confirmed difference to write. */
     record Candidate(UUID variantId, String item, int shopifyOnHand, int target, int custody, int away, int fulfilled,
-                     int owed, int unfulfilled, int delta, List<Long> settleClaims, List<UUID> settlePart1,
+                     int unpicked, int owed, int unfulfilled, int delta, List<Long> settleClaims, List<UUID> settlePart1,
                      List<UUID> settleWrites) {}
 
     record Main(UUID id, String gid) {}
@@ -130,10 +130,10 @@ final class MainReconcileWriter {
             List<UUID> r = jdbc.queryForList(
                 "INSERT INTO main_reconcile_writes (tenant_id, run_id, variant_id, location_id, shopify_location_id, " +
                 "  inventory_item_id, shopify_on_hand, target, custody_at_main, away_counted, fulfilled_from_main, " +
-                "  part1_owed, unfulfilled_shipped, delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "  part1_owed, unfulfilled_shipped, delta, fulfilled_unpicked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (tenant_id, variant_id) WHERE status = 'pending' DO NOTHING RETURNING id",
                 UUID.class, tenantId, runId, c.variantId(), main.id(), main.gid(), c.item(), c.shopifyOnHand(),
-                c.target(), c.custody(), c.away(), c.fulfilled(), c.owed(), c.unfulfilled(), c.delta());
+                c.target(), c.custody(), c.away(), c.fulfilled(), c.owed(), c.unfulfilled(), c.delta(), c.unpicked());
             return r.isEmpty() ? null : r.get(0);
         });
         if (writeId == null) return false;   // another write of this variant is pending
@@ -232,10 +232,10 @@ final class MainReconcileWriter {
 
     private static void logWrite(String shop, Candidate c, UUID writeId, Integer freshOnHand, String result) {
         log.info("Main reconcile write [reconcile] store={} variant={} shopify_before={} fresh_on_hand={} target={} " +
-                 "(custody={} away={} fulfilled_from_main={} part1_owed={} unfulfilled_shipped={}) delta={} " +
+                 "(custody={} away={} fulfilled_from_main={} fulfilled_unpicked={} part1_owed={} unfulfilled_shipped={}) delta={} " +
                  "reason=confirmed_difference claim={} result={}",
             shop, c.variantId(), c.shopifyOnHand(), freshOnHand, c.target(), c.custody(), c.away(), c.fulfilled(),
-            c.owed(), c.unfulfilled(), c.delta(), writeId, result);
+            c.unpicked(), c.owed(), c.unfulfilled(), c.delta(), writeId, result);
     }
 
     private void queueVariant(UUID tenantId, UUID variantId, String source) {
