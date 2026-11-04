@@ -487,6 +487,28 @@ public class ShopifyInventoryService {
 
         ObjectNode initialPayload = mapper.createObjectNode().put("reason", "exchange_dispatch").put("delta", -1);
 
+        // Finding 2 (2026-11-04): the replacement of a Shopify-native exchange — Shopify already counts the unit on
+        // its own exchange line, so a −1 here would take it out twice. Recorded 'skipped', never sent, no alert.
+        // Checked first, so the reason is this one and not an arrival / hold outcome.
+        if (Boolean.TRUE.equals(tx.execute(st ->
+                ShopifyNativeExchange.isReplacement(jdbc, tenantId, pieceId, storedLocationId != null)))) {
+            tx.execute(st -> jdbc.update(
+                "INSERT INTO shopify_inventory_adjustments " +
+                "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, skip_reason) " +
+                "VALUES (?, ?, ?, ?, -1, 'exchange_dispatch', ?, ?::jsonb, 'skipped', ?) " +
+                "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO UPDATE " +
+                "  SET status = 'skipped', skip_reason = EXCLUDED.skip_reason " +
+                // Only a claim that was never sent: held (queued), definitely rejected (failed), or skipped for an
+                // arrival that a later +N would revisit. Never applied / pending / failed_ambiguous.
+                "  WHERE shopify_inventory_adjustments.status IN ('queued', 'failed') " +
+                "     OR (shopify_inventory_adjustments.status = 'skipped' " +
+                "         AND shopify_inventory_adjustments.skip_reason IN " + ArrivalRevisit.REVISIT_REASONS_SQL + ")",
+                tenantId, batchId, row.variantId(), locationId, pieceId, initialPayload.toString(),
+                ShopifyNativeExchange.SKIP_REASON));
+            log.info("Shopify inventory: exchange_dispatch skipped ({}) piece={}", ShopifyNativeExchange.SKIP_REASON, pieceId);
+            return;
+        }
+
         // Drift fix (2026-10-30): the same arrival rule as every piece departure — a replacement whose receiving +N
         // has not reached Shopify is not counted there, so a −1 now would push Shopify below the true count. Skipped
         // as arrival_unconfirmed / arrival_not_counted; ArrivalRevisit flips it to 'queued' once that +N applies.
@@ -562,6 +584,18 @@ public class ShopifyInventoryService {
 
     /** The claimed ('pending') exchange_dispatch claim's one attempt: preconditions, the −1, the outcome. */
     private void sendExchangeDispatch(UUID tenantId, String pieceId, UUID variantId, UUID locationId) {
+        // Finding 2 backstop: a claim queued before the fix (held for a reconnect) or flipped to queued by
+        // ArrivalRevisit is checked again right before the call — a Shopify-native exchange is never sent.
+        if (Boolean.TRUE.equals(tx.execute(st -> ShopifyNativeExchange.isReplacement(jdbc, tenantId, pieceId, true)))) {
+            tx.execute(st -> jdbc.update(
+                "UPDATE shopify_inventory_adjustments SET status = 'skipped', skip_reason = ? " +
+                "WHERE tenant_id = ? AND trigger_type = 'exchange_dispatch' AND trigger_id = ? " +
+                "  AND variant_id = ? AND location_id = ? AND status = 'pending'",
+                ShopifyNativeExchange.SKIP_REASON, tenantId, pieceId, variantId, locationId));
+            log.info("Shopify inventory: exchange_dispatch skipped before send ({}) piece={}",
+                     ShopifyNativeExchange.SKIP_REASON, pieceId);
+            return;
+        }
         Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "exchange_dispatch", pieceId);
         if (p.error() != null) {
             markResult(tenantId, "exchange_dispatch", pieceId, variantId, locationId,
