@@ -61,6 +61,9 @@ fulfilled_from_main a partly allocated line is subtracted exactly once. Target f
   would have added them back. `AWAITING_PICK_SQL` is now: not packed AND (self-pickup OR no forward waybill of any state
   OR newest forward waybill pre-pickup). An order whose only forward legs are cancelled/terminated still isn't counted.
   No migration. Test MainReconcileWriteTest.u7 (revert-checked RED).
+- **OPEN follow-up (2026-11-05, do NOT build until asked):** an order that is not packed, fulfilled from Main, and whose
+  ONLY forward waybills are cancelled / terminated should also count as "waiting to be picked" in fulfilled_unpicked
+  (`MainReconcileRules.AWAITING_PICK_SQL`). Today it isn't subtracted, so the runner would add those units back.
 - **Fulfilled elsewhere, not picked yet:** no double count — the new term is Main-only, Part 1 waits for the pieces to
   leave, unfulfilled_shipped sees the line as fulfilled.
 - **Fulfilled from Main, never picked in Traced (waybill moved without a Traced pick):** no longer subtracted. Traced
