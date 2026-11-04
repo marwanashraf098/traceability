@@ -31,6 +31,11 @@ Small, likely most of the slowness. Prod runs 10 JobRunr workers (env override),
   direct older ingest returns STALE, f4 a stale edit on an order being picked releases nothing, raises nothing, l1
   variants resolved before the row lock (variant re-keyed while the upsert waits → line still written).
   Revert-to-confirm RED: no WHERE → f1 f3 f4; `>` instead of `>=` → f2; lookups after the lock → l1.
+- **Full suite (2026-11-04, host load average ~80–100 on 8 cores — took ~6 h):** 3794 tests, 3 failures: ExchangeBackfillTest
+  (expected red), BostaPollJobTest.p6 (known load flake) and ShopifyMagicLinkTest.expiry_expiredToken_isMagicLinkInvalid
+  (302 instead of 401). Rerun: under load the magic-link test also failed on unchanged main and p6 passed there; with
+  the machine quiet both classes pass on the branch. **New flake to note:** ShopifyMagicLinkTest's expiry test inserts a
+  token expired 1 s ago by the JVM clock while the DB decides with its own now() — too tight a margin under heavy load.
 - **FOLLOW-UP — not built (fix 5 of the Step 0 diagnosis):** the per-minute queued Main-reconcile run and the
   4-hourly sweep (`MainReconcileJob`) can overlap for one tenant on the shared per-tenant advisory lock
   (`pg_advisory_xact_lock(hashtext(tenant_id))`, also the seed's and the activation's) — prod saw a 67 s wait. The
