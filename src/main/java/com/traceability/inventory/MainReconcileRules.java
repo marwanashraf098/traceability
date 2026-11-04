@@ -35,7 +35,8 @@ import java.util.List;
  *       restock at Main while Traced still holds the pieces reconciles as in sync); left = the order's pieces of the
  *       variant that already left custody (with_courier / delivered) — those are already out of the target.</li>
  *   <li><b>fulfilled_unpicked</b> (V204, prod 2026-11-04): units Shopify fulfilled FROM MAIN on a live order Traced
- *       hasn't picked yet ({@link #AWAITING_PICK_SQL}) — the Bosta app fulfills at shipment creation. Per (order,
+ *       hasn't picked yet ({@link #AWAITING_PICK_SQL}: not packed AND (self-pickup OR no forward waybill yet — the
+ *       Bosta link hasn't attached it — OR the newest forward waybill still pre-pickup)) — the Bosta app fulfills at shipment creation. Per (order,
  *       variant) {@code GREATEST(0, F_main − R_main − left − allocated in custody)}; fulfilled_from_main covers the
  *       allocated part, so a partly allocated line is never subtracted twice. The target is floored at 0 (diff note
  *       'target_floored').</li>
@@ -191,6 +192,8 @@ public final class MainReconcileRules {
      */
     static final String AWAITING_PICK_SQL =
         "(" + PackListRules.NOT_YET_PACKED_SQL + " AND (o.is_self_pickup " +
+        " OR NOT EXISTS (SELECT 1 FROM shipments s_nw WHERE s_nw.order_id = o.id AND s_nw.tenant_id = o.tenant_id " +
+        "                AND s_nw.shipment_leg = 'forward') " +
         " OR EXISTS (SELECT 1 FROM shipments s_ap WHERE s_ap.order_id = o.id AND s_ap.tenant_id = o.tenant_id " +
         "            AND " + OrderLineFreeze.prePickupWaybillSql("s_ap") + ")))";
 

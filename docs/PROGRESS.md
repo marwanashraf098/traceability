@@ -56,6 +56,11 @@ writes columns): per (order, variant) `GREATEST(0, F_main − R_main − left �
 fulfillments from Main on a live, non-cancelled order still waiting to be picked (`MainReconcileRules.AWAITING_PICK_SQL`:
 NOT_YET_PACKED and self-pickup or newest waybill pre-pickup — `OrderLineFreeze.prePickupWaybillSql`). With
 fulfilled_from_main a partly allocated line is subtracted exactly once. Target floored at 0 (note `target_floored`).
+- **No waybill yet (2026-11-05, after the V204 deploy):** Dolt had 2 orders / 2 units fulfilled from Main with no Traced
+  allocation and NO forward waybill linked yet (Bosta created it, the link hadn't attached it) — skipped, so the runner
+  would have added them back. `AWAITING_PICK_SQL` is now: not packed AND (self-pickup OR no forward waybill of any state
+  OR newest forward waybill pre-pickup). An order whose only forward legs are cancelled/terminated still isn't counted.
+  No migration. Test MainReconcileWriteTest.u7 (revert-checked RED).
 - **Fulfilled elsewhere, not picked yet:** no double count — the new term is Main-only, Part 1 waits for the pieces to
   leave, unfulfilled_shipped sees the line as fulfilled.
 - **Fulfilled from Main, never picked in Traced (waybill moved without a Traced pick):** no longer subtracted. Traced

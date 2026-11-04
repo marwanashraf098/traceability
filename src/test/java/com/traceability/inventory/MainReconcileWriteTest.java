@@ -516,6 +516,20 @@ class MainReconcileWriteTest {
     }
 
     @Test
+    void u7_fulfilledFromMain_noWaybillYet_notPicked_subtracted() {
+        T t = tenant("u7");
+        V v = variant(t);
+        for (int i = 0; i < 3; i++) piece(t, v, "available", t.main());
+        order(t, fulfillments(f("9508", t.mainNum(), "success", line("95081", v, 2))));   // no forward leg linked yet
+        level(v, 1, 1, 0, 0);                       // Shopify already took the 2 off Main
+        UUID r = run(service("", CUTOFF), t, v);
+        assertThat(runRow(t, r)).containsEntry("variants_in_sync", 1).containsEntry("differences", 0);
+        level(v, 0, 0, 0, 0);
+        assertThat(onlyDiff(t, run(service("", CUTOFF), t, v))).containsEntry("fulfilled_unpicked", 2)
+            .containsEntry("target", 1).containsEntry("delta", 1);
+    }
+
+    @Test
     void u6_crossTenant_appUser_positiveControl() {
         T a = tenant("ua"), b = tenant("ub");
         V v = variant(a);
