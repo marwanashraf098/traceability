@@ -795,13 +795,16 @@ public class ExceptionService {
      */
     /**
      * restocked_twice (HIGH, 2026-10-08) — the late case of the restock double-count guard: Traced
-     * already sent +1 for returned units of an order + variant, and the order's Shopify refunds
-     * (orders/updated) then restocked the same units again. Read-only — Traced never decrements
-     * for this; a manager lowers the quantity in Shopify and resolves.
-     * Per (order, variant): pushed = Traced restock claims 'applied'; offset = 'skipped_shopify_restocked'
-     * (units the guard already left to Shopify's refund); shopify = ShopifyInventoryService.refundRestockedAtMainSql (V201 — Main-location
-     * restocks only). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is
-     * in the subject key, so a resolved row comes back only if more units get double-counted.
+     * already sent +1 for returned units of an order + variant, and Shopify then restocked the same units
+     * again — a refund restock (orders/updated) or, since S1b (V212), a return's RESTOCKED disposition
+     * (the returns mirror). Read-only — Traced never decrements for this; a manager lowers the quantity
+     * in Shopify and resolves.
+     * Per (order, variant): pushed = Traced restock claims 'applied' + units of finalized Receiving lines
+     * linked to the order whose receiving claim applied (V212, minus the units the Receiving guard left to
+     * Shopify); offset = 'skipped_shopify_restocked' claims + those left units; shopify =
+     * ShopifyInventoryService.shopifyRestockedAtMainSql (GREATEST of refund restocks and dispositions, Main
+     * only). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is in the subject key,
+     * so a resolved row comes back only if more units get double-counted.
      */
     private List<Map<String, Object>> detectRestockedTwice(UUID tid) {
         return jdbc.queryForList(
@@ -809,26 +812,42 @@ public class ExceptionService {
             "       o.id AS order_id, o.number AS order_number, v.id AS variant_id, v.sku, " +
             "       pr.title AS product_title, v.title AS variant_title, x.qty, a.occurred_at, " +
             "       'restocked_twice:' || o.id || ':' || v.id || ':' || x.qty AS subject_key " +
-            "FROM (SELECT sia.source_order_id, sia.variant_id, " +
-            "             COUNT(*) FILTER (WHERE sia.status = 'applied') AS pushed, " +
-            "             COUNT(*) FILTER (WHERE sia.status = 'skipped_shopify_restocked') AS offset_units, " +
-            "             MAX(sia.applied_at) AS occurred_at " +
-            "      FROM shopify_inventory_adjustments sia " +
-            "      WHERE sia.tenant_id = ? AND sia.trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
-            "        AND sia.source_order_id IS NOT NULL " +
-            "      GROUP BY sia.source_order_id, sia.variant_id " +
-            "      HAVING COUNT(*) FILTER (WHERE sia.status = 'applied') > 0) a " +
+            "FROM (SELECT u.source_order_id, u.variant_id, SUM(u.pushed)::bigint AS pushed, SUM(u.offset_units)::bigint AS offset_units, " +
+            "             MAX(u.occurred_at) AS occurred_at " +
+            "      FROM (SELECT sia.source_order_id, sia.variant_id, " +
+            "                   COUNT(*) FILTER (WHERE sia.status = 'applied') AS pushed, " +
+            "                   COUNT(*) FILTER (WHERE sia.status = 'skipped_shopify_restocked') AS offset_units, " +
+            "                   MAX(sia.applied_at) AS occurred_at " +
+            "            FROM shopify_inventory_adjustments sia " +
+            "            WHERE sia.tenant_id = ? AND sia.trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
+            "              AND sia.source_order_id IS NOT NULL " +
+            "            GROUP BY sia.source_order_id, sia.variant_id " +
+            // S1b (V212): returned units added through Receiving, linked to their order.
+            "            UNION ALL " +
+            "            SELECT rl.return_order_id, rl.variant_id, " +
+            "                   COALESCE(SUM(rl.quantity - rl.shopify_restocked_units) FILTER (WHERE c.status = 'applied'), 0), " +
+            "                   SUM(rl.shopify_restocked_units), MAX(c.applied_at) " +
+            "            FROM receipt_lines rl " +
+            "            JOIN receipts r ON r.id = rl.receipt_id AND r.tenant_id = rl.tenant_id AND r.status = 'finalized' " +
+            "            JOIN locations l ON l.id = r.location_id AND l.tenant_id = r.tenant_id AND l.is_fulfillment " +
+            "            LEFT JOIN shopify_inventory_adjustments c ON c.tenant_id = rl.tenant_id " +
+            "                 AND c.trigger_type = 'receiving_session' AND c.trigger_id = r.id::text " +
+            "                 AND c.variant_id = rl.variant_id AND c.location_id = r.location_id " +
+            "            WHERE rl.tenant_id = ? AND rl.return_order_id IS NOT NULL " +
+            "            GROUP BY rl.return_order_id, rl.variant_id) u " +
+            "      GROUP BY u.source_order_id, u.variant_id " +
+            "      HAVING SUM(u.pushed) > 0) a " +
             "JOIN merchant_orders o   ON o.id = a.source_order_id AND o.tenant_id = ? " +
             "JOIN variants v ON v.id = a.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "CROSS JOIN LATERAL (SELECT LEAST(a.pushed, " +
-            "    " + ShopifyInventoryService.refundRestockedAtMainSql("o") + " - a.offset_units) AS qty) x " +
+            "    " + ShopifyInventoryService.shopifyRestockedAtMainSql("o") + " - a.offset_units) AS qty) x " +
             "WHERE x.qty > 0 " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = o.tenant_id AND er.exception_type = 'restocked_twice' " +
             "        AND er.subject_key = 'restocked_twice:' || o.id || ':' || v.id || ':' || x.qty) " +
             "ORDER BY a.occurred_at ASC",
-            tid, tid);
+            tid, tid, tid);
     }
 
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
@@ -2405,6 +2424,8 @@ public class ExceptionService {
                         "أضفه في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن يعود إلى المخزون.");
                     item.put("suggestedAction", "add_in_receiving");
                     item.put("actionUrl", "/receiving");
+                    // S1b: Receiving links the line to this return (the Shopify restock guard needs the order).
+                    item.put("returnSource", "untracked_unit:" + item.get("unit_intake_id"));
                     return;
                 }
                 item.put("descriptionEn",
@@ -2415,17 +2436,18 @@ public class ExceptionService {
                     "أضف القطعة في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن تعود إلى المخزون.");
                 item.put("suggestedAction", "add_in_receiving");
                 item.put("actionUrl", "/receiving");
+                item.put("returnSource", "shipment:" + item.get("shipment_id"));
             }
             case "restocked_twice" -> {
                 String n = str(item, "order_number");
                 Object vt = item.get("variant_title");
                 String product = str(item, "product_title") + (vt != null ? " / " + vt : "");
                 String qty = str(item, "qty");
-                item.put("descriptionEn", "Restocked twice — Shopify refund restock after Traced restock: order " + n +
+                item.put("descriptionEn", "Restocked twice — Shopify restock after Traced restock: order " + n +
                     ", " + product + ", " + qty + " unit(s). Traced already added these returned units to Shopify, and the " +
-                    "Shopify refund restocked them again. Lower this item's quantity in Shopify by " + qty + ", then resolve.");
-                item.put("descriptionAr", "أُعيد للمخزون مرتين — استرداد في Shopify أعاد التخزين بعد Traced: الطلب " + n +
-                    "، " + product + "، " + qty + " قطعة. أضاف Traced هذه القطع المرتجعة إلى Shopify، ثم أعادها استرداد Shopify " +
+                    "Shopify refund or return restocked them again. Lower this item's quantity in Shopify by " + qty + ", then resolve.");
+                item.put("descriptionAr", "أُعيد للمخزون مرتين — Shopify أعاد التخزين بعد Traced: الطلب " + n +
+                    "، " + product + "، " + qty + " قطعة. أضاف Traced هذه القطع المرتجعة إلى Shopify، ثم أعادها استرداد أو مرتجع في Shopify " +
                     "إلى المخزون مرة أخرى. خفّض كمية هذا المنتج في Shopify بمقدار " + qty + "، ثم أغلق التنبيه.");
                 item.put("suggestedAction", "lower_shopify_quantity");
                 item.put("actionUrl", ordersUrl(item));
@@ -2441,6 +2463,7 @@ public class ExceptionService {
                     " صالحًا للبيع، لكن Traced لم يتتبّعه. أضفه في جلسة الاستلام القادمة.");
                 item.put("suggestedAction", "add_in_receiving");
                 item.put("actionUrl", "/receiving");
+                item.put("returnSource", "request_item:" + item.get("request_item_id"));
             }
             case "pickup_booking_problem" -> {
                 String ref = str(item, "reference");

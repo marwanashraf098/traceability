@@ -31,7 +31,7 @@ import java.util.List;
  *       {@code GREATEST(0, LEAST(held, F_main − R_main − left))} — held = custody pieces at Main allocated to the order;
  *       F_main = quantity of SUCCESSFUL REST fulfillment lines from the Main location (cancelled / errored / pending
  *       never count; a cancelled / errored one skips the variant ({@link #FULFILLMENT_CANCELLED}) only while it changed
- *       less than cancelled-fulfillment-window-minutes ago — Shopify may re-fulfill — or its time is unreadable); R_main = refund restocks at Main ({@code shopify_refund_restocked_units}, 3-arg — so a cancel +
+ *       less than cancelled-fulfillment-window-minutes ago — Shopify may re-fulfill — or its time is unreadable); R_main = Shopify restocks at Main ({@code shopify_restocked_units}, V212: GREATEST of refund restocks and RESTOCKED return dispositions — so a cancel or a return +
  *       restock at Main while Traced still holds the pieces reconciles as in sync); left = the order's pieces of the
  *       variant that already left custody (with_courier / delivered) — those are already out of the target.</li>
  *   <li><b>fulfilled_unpicked</b> (V204, prod 2026-11-04): units Shopify fulfilled FROM MAIN on a live order Traced
@@ -286,7 +286,7 @@ public final class MainReconcileRules {
         "              FROM jsonb_array_elements(" + fulfillmentsSql("o") + ") f, jsonb_array_elements(" + lineItemsSql("f") + ") li " +
         "              WHERE " + restShapeSql("f") + " AND lower(f->>'status') = 'success' AND f->>'location_id' = :mainNum " +
         "                AND " + lineMatchesVariantSql("li", "vv") + " AND li->>'quantity' ~ '^[0-9]+$'), 0) AS f_main, " +
-        "    shopify_refund_restocked_units(o.raw, vv.external_id, :mainGid) AS r_main, " +
+        "    shopify_restocked_units(o.raw, o.tenant_id, o.id, vv.external_id, :mainGid) AS r_main, " +
         "    (SELECT COUNT(DISTINCT e.piece_id) FROM piece_events e " +
         "       JOIN pieces pp ON pp.id = e.piece_id AND pp.tenant_id = e.tenant_id " +
         "       WHERE e.tenant_id = :t AND e.order_id = h.order_id AND e.to_status::text IN ('with_courier', 'delivered') " +
@@ -328,7 +328,7 @@ public final class MainReconcileRules {
         "  GROUP BY o.id, vv.id " +
         "), fu AS ( " +
         "  SELECT x.variant_id, SUM(GREATEST(0, x.f_main " +
-        "           - shopify_refund_restocked_units(o.raw, vv.external_id, :mainGid) " +
+        "           - shopify_restocked_units(o.raw, o.tenant_id, o.id, vv.external_id, :mainGid) " +
         "           - (SELECT COUNT(DISTINCT e.piece_id) FROM piece_events e " +
         "                JOIN pieces pp ON pp.id = e.piece_id AND pp.tenant_id = e.tenant_id " +
         "               WHERE e.tenant_id = :t AND e.order_id = x.order_id " +

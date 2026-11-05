@@ -63,6 +63,13 @@ public class ReceivingController {
         return receiving.getSession(sessionId);
     }
 
+    /** S1b: the return a Receiving line can bring back (from a Return To Receive alert) and its Shopify warning. */
+    @GetMapping("/return-source")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> returnSource(@RequestParam String key) {
+        return receiving.returnSourcePreview(key);
+    }
+
     // ── Lines ─────────────────────────────────────────────────────────────────
 
     @PostMapping("/sessions/{sessionId}/lines")
@@ -70,7 +77,7 @@ public class ReceivingController {
     public ResponseEntity<Map<String, Object>> addLine(
             @PathVariable UUID sessionId,
             @RequestBody AddLineRequest req) {
-        UUID lineId = receiving.addLine(sessionId, UUID.fromString(req.variantId()), req.quantity());
+        UUID lineId = receiving.addLine(sessionId, UUID.fromString(req.variantId()), req.quantity(), req.returnSource());
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(Map.of("lineId", lineId.toString()));
     }
@@ -205,7 +212,8 @@ public class ReceivingController {
     public record CreateSessionRequest(
         String locationId, String reference, String supplierName, String note, String mode, String labelRunId) {}
 
-    public record AddLineRequest(String variantId, int quantity) {}
+    /** returnSource (S1b, optional): the Return To Receive alert this line brings back — see ReceivingService. */
+    public record AddLineRequest(String variantId, int quantity, String returnSource) {}
 
     public record UpdateLineRequest(int quantity) {}
 
