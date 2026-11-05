@@ -23,6 +23,30 @@
 - **Cancel webhook:** not the cause for BRK-46696 — the cancel (11-04) came after state 46 (11-03), so
   `cancelOrder` 409'd on courier history and stamped `shopify_cancel_requested_at`.
 
+**S1 follow-up — fulfillment-order mirror goes stale on fulfillment (2026-11-05; branch `fix/s1-fo-mirror-refresh`,
+NOT merged, NOT deployed; no migration).** Prod test (store marwan, order #1006): the exchange FO was released
+(hold_released → OPEN, correct), then fulfilled in Shopify, but `shopify_fulfillment_orders` kept OPEN — Shopify sends
+no fulfillment_orders/* webhook when an FO is fulfilled.
+- **Fix:** orders/updated (any outcome, stale included — the fetch reads Shopify's current state) and
+  fulfillments/create + fulfillments/update re-fetch, by GID, the order's mirrored FOs that aren't final
+  (`ShopifyReturnsStore.FO_FINAL_STATUSES` = CLOSED / CANCELLED / INCOMPLETE; `openFulfillmentOrderGids`) and upsert
+  them (`ShopifyReturnsWebhooks.refreshOpenFulfillmentOrders`). An order with no mirrored FO makes no Shopify call
+  (and no token read). No transaction during the call, every DB touch in TenantContext.runAs, idempotent upsert,
+  never throws (a failure leaves the mirror as it was; the order event is unaffected).
+- **Tests (ShopifyNativeReturnsMirrorTest, 16/16):** f1 fulfilled-after-release → CLOSED, then a final FO is not
+  fetched again; f2 order with no mirrored FO → zero returns/FO gateway calls, no token read; f3 fulfillments/create
+  closes it. Revert-to-confirm: refresh disabled → f1 + f3 fail ("Wanted but not invoked", expected CLOSED). z1 golden
+  unchanged. Neighbours green: AnalyticsInventorySync 12, OrderWebhookFreshness 5, OrdersTableAccessGuard 3,
+  ShopifyOAuthDay3 12, ShopifyWebhookEnqueueDeadline 3, ShopifyWebhookRetention 9, ShopifyWebhookRetry 10,
+  PortalOrderLeak 9. Full suite not run.
+- **HELD — fulfillments/create + fulfillments/update are NOT registered yet** (handler is in, TOPICS / TOPICS_VERSION
+  unchanged). Two blockers, need Marawan: (1) registering them changes two existing assertions
+  (ShopifyOAuthDay3Test #11 times(9) → 11; AnalyticsInventorySyncTest second run times(3) → 5, version → 3);
+  (2) GDPR: a stored fulfillments/* payload carries the destination (name / phone / address); redact
+  (CustomerRedaction), the redacted-order insert trigger (V164) and the data-request export match stored webhooks
+  by `orders/%` / `returns/%` topics only, so these payloads would escape redaction. Proposal: a V207 BEFORE INSERT
+  trigger that strips fulfillments/* payloads to ids / status / tracking (Traced only needs order_id).
+
 **Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
 `feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V206).** Data only: no reservation, no committed
 demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
