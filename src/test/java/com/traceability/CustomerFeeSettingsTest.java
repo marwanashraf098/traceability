@@ -55,8 +55,9 @@ import static org.mockito.Mockito.*;
  *        'requested'; never deleted; another tenant sees and changes nothing (same-tenant positive control).
  *   x1 — app_user: the service on another tenant reads none of this tenant's rules / overrides / settings; the
  *        same tenant on the same connection reads its own (positive control).
- *   g1 — GOLDEN, settings inert: with every new setting switched on, the portal config, lookup and submit
- *        (refund and exchange) answer exactly as with everything off, and no amounts row is written.
+ *   g1 — GOLDEN, settings inert: with every other new setting switched on and the fee rules saved but switched off
+ *        (a switched-on rule charges fees since F2), the portal config, lookup and submit (refund and exchange) answer
+ *        exactly as with everything off, and no amounts row is written.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -425,8 +426,10 @@ class CustomerFeeSettingsTest {
         Object submitExchangeOff = norm(submit(t, exchangeOff, lookup(t, exchangeOff), true), exchangeOff);
 
         // Every new setting on, through the real endpoints.
-        assertThat(put(t, BASE + "/rules/refund", rule(true, "fixed", 75, null, null, null, false)).getStatusCode().value()).isEqualTo(200);
-        assertThat(put(t, BASE + "/rules/exchange", rule(true, "percent", null, "20", 10, 500, false)).getStatusCode().value()).isEqualTo(200);
+        // F2 (approved 2026-11-05): the fee rules are saved but switched OFF — a switched-on rule charges fees since F2
+        // (PortalFeesTest covers that); this test keeps proving every other F1 setting changes nothing.
+        assertThat(put(t, BASE + "/rules/refund", rule(false, "fixed", 75, null, null, null, false)).getStatusCode().value()).isEqualTo(200);
+        assertThat(put(t, BASE + "/rules/exchange", rule(false, "percent", null, "20", 10, 500, false)).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/merchant-fault-reasons", Map.of("reasons", List.of("wrong_size", "changed_mind"))).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/exchange-pricing", Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 0,
                 "freeVariantSwaps", true))
@@ -452,7 +455,7 @@ class CustomerFeeSettingsTest {
                 "SELECT type, status::text, refund_fallback_ok, booking_status FROM return_requests WHERE tenant_id = ? " +
                 "AND order_id IN (?, ?) ORDER BY type", t.id(), refundOff.id(), exchangeOff.id()));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM return_request_amounts WHERE tenant_id = ?", Integer.class, t.id()))
-            .as("nothing writes frozen amounts in F1").isZero();
+            .as("no fee rule on → no frozen amounts").isZero();
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────────

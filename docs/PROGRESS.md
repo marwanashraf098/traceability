@@ -36,10 +36,14 @@ On, a store with no fee rule switched on also sees no change (no fees key, no am
   config / lookup / quote 404 / refund + exchange submit / detail / suggestion identical; no amounts row);
   portalFees.test.tsx (5), feeBreakdown.test.tsx (6). PortalOrderLeakTest (2 endpoints), MigrationSmokeTest 209 → 210,
   NotTracedBackfillTest 154 → 155 — standing approval.
-- **Open:** CustomerFeeSettingsTest.g1 (F1, on main) asserts every setting on = no change and no amounts row — F2
-  makes the rules act, so it fails by design; editing it needs Marawan's approval (proposed: its rules stay switched
-  OFF so it keeps proving the other F1 settings inert; F2's own tests cover the rules). A switched-to-refund exchange
-  keeps its exchange amounts (fee_kind 'exchange'): its refund suggestion is today's — revisit in F3.
+- **CustomerFeeSettingsTest.g1 edited (approved 2026-11-05):** its fee rules are saved but switched OFF — it keeps
+  proving the other F1 settings inert; F2's own tests cover the rules.
+- **F3 list (approved 2026-11-05):** a switched-to-refund exchange keeps its exchange amounts (fee_kind 'exchange'), so
+  its refund suggestion is today's and no refund fee applies — F3 recalculates it under the refund rule.
+- **Watch list:** PortalOnDemandLookupTest.e1 (two concurrent lookups → one row) failed once in the F2 full suite
+  (NOT_FOUND), passed 3/3 alone, runs with fees off — possible flake; watch it.
+- **Migration:** V211 checked free on main (835a8e2e) and every branch; prod at V210 (Marawan, 20:26). The S1b session
+  planned V211 too — it becomes V212 once F2 is merged.
 
 **Returns portal fees F1 — data model + Customer fees / Exchange pricing settings (2026-11-05; branch
 `feat/portal-fees-f1`, rebased on main 42924620, NOT merged, NOT deployed; V210).** No behaviour change: nothing reads these
