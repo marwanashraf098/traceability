@@ -49,7 +49,8 @@ class WatchdogDbProbeTest {
         POSTGRES.start();
         assertThat(FlywayTestSupport.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-            .locations("classpath:db/migration").outOfOrder(true).load().migrate().success).isTrue();
+            .locations("classpath:db/migration").outOfOrder(true)
+            .connectRetries(5).connectRetriesInterval(2).load().migrate().success).isTrue();
         ds = new HikariDataSource();
         ds.setJdbcUrl(POSTGRES.getJdbcUrl());
         ds.setUsername(POSTGRES.getUsername());
