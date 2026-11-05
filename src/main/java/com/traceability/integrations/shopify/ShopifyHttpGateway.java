@@ -100,6 +100,17 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     static String ordersQuery(OrderPiiTier tier) {
+        return ordersQuery(tier, true);
+    }
+
+    /**
+     * Portal fees F0: each line's unit price after every discount (stored as 'paid_unit_price', read through
+     * V208's order_line_paid_unit_price). {@code withPrices=false} is the pre-F0 query — used only when Shopify
+     * refuses the priced one as too expensive (MAX_COST_EXCEEDED), so the field can never fail an import.
+     */
+    static final String LINE_PAID_PRICE_FIELD = "discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }";
+
+    static String ordersQuery(OrderPiiTier tier, boolean withPrices) {
         String pii = switch (tier) {
             case FULL -> """
                     shippingAddress { name phone address1 address2 city province zip country }
@@ -124,6 +135,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                         node {
                           id quantity currentQuantity
                           variant { id }
+            """ + (withPrices ? "              " + LINE_PAID_PRICE_FIELD + "\n" : "") + """
                         }
                       }
                     }
@@ -414,9 +426,14 @@ class ShopifyHttpGateway implements ShopifyGateway {
         if (cursor != null) vars.put("cursor", cursor);
         vars.put("queryStr", "created_at:>" + createdAfter);
         OrderPiiTier tier = orderPiiTier(shopDomain, token);
+        boolean withPrices = linePricesAllowed(shopDomain);
         JsonNode data;
         while (true) {
-            JsonNode response = postGraphQL(shopDomain, token, ordersQuery(tier), vars);
+            JsonNode response = postGraphQL(shopDomain, token, ordersQuery(tier, withPrices), vars);
+            if (withPrices && hasMaxCostExceeded(response)) {
+                withPrices = noLinePrices(shopDomain, "orders import");
+                continue;
+            }
             if (tier != OrderPiiTier.NONE && hasAccessDenied(response)) {
                 // A missing scope / unapproved field must never fail or empty the import: ask for less.
                 OrderPiiTier lower = tier.lower();
@@ -443,6 +460,10 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
     /** One order by name, with what the portal needs: lines, tracking numbers, the tier's customer fields. */
     static String portalOrderQuery(OrderPiiTier tier) {
+        return portalOrderQuery(tier, true);
+    }
+
+    static String portalOrderQuery(OrderPiiTier tier, boolean withPrices) {
         String pii = switch (tier) {
             case FULL -> """
                     shippingAddress { name phone address1 address2 city province zip country }
@@ -462,7 +483,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
                   node {
                     id name createdAt updatedAt
                     lineItems(first: 100) {
-                      edges { node { id quantity currentQuantity variant { id } } }
+                      edges { node { id quantity currentQuantity variant { id }
+            """ + (withPrices ? "              " + LINE_PAID_PRICE_FIELD + "\n" : "") + """
+                      } }
                     }
                     fulfillments(first: 20) { status trackingInfo(first: 5) { number company } }
                     currentTotalPriceSet { shopMoney { amount currencyCode } }
@@ -485,9 +508,14 @@ class ShopifyHttpGateway implements ShopifyGateway {
         ObjectNode vars = mapper.createObjectNode();
         vars.put("queryStr", "name:\"#" + bare + "\" OR name:\"" + bare + "\"");
         OrderPiiTier tier = orderPiiTier(shopDomain, token);
+        boolean withPrices = linePricesAllowed(shopDomain);
         List<String> denied = new ArrayList<>();
         while (true) {
-            JsonNode response = postGraphQL(shopDomain, token, portalOrderQuery(tier), vars);
+            JsonNode response = postGraphQL(shopDomain, token, portalOrderQuery(tier, withPrices), vars);
+            if (withPrices && hasMaxCostExceeded(response)) {
+                withPrices = noLinePrices(shopDomain, "portal order lookup");
+                continue;
+            }
             if (tier != OrderPiiTier.NONE && hasAccessDenied(response)) {
                 OrderPiiTier lower = tier.lower();
                 log.warn("Shopify portal lookup: ACCESS_DENIED for customer data at tier {} on {} — retrying at {}",
@@ -2517,7 +2545,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 JsonNode ln = le.path("node");
                 String variantGid = ln.path("variant").path("id").asText(null);
                 Integer current = ln.path("currentQuantity").isIntegralNumber() ? ln.path("currentQuantity").asInt() : null;
-                lines.add(new LineItem(ln.path("id").asText(), ln.path("quantity").asInt(1), variantGid, current));
+                lines.add(new LineItem(ln.path("id").asText(), ln.path("quantity").asInt(1), variantGid, current,
+                                       paidUnitPrice(ln)));
             }
 
             Instant createdAt = Instant.parse(node.path("createdAt").asText());
@@ -2539,6 +2568,45 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     // ---- helpers --------------------------------------------------------
+
+    /** Shopify's unit price after all discounts, as its decimal text; null when absent or not a plain decimal. */
+    static String paidUnitPrice(JsonNode line) {
+        JsonNode amount = line.path("discountedUnitPriceAfterAllDiscountsSet").path("shopMoney").path("amount");
+        if (!amount.isTextual() && !amount.isNumber()) return null;
+        String text = amount.asText().trim();
+        return PLAIN_DECIMAL.matcher(text).matches() ? text : null;
+    }
+
+    private static final java.util.regex.Pattern PLAIN_DECIMAL = java.util.regex.Pattern.compile("^-?[0-9]+(\\.[0-9]+)?$");
+
+    /** A top-level error whose extensions.code is MAX_COST_EXCEEDED (Shopify refused the query before running it). */
+    static boolean hasMaxCostExceeded(JsonNode response) {
+        JsonNode errors = response.get("errors");
+        if (errors == null || !errors.isArray()) return false;
+        for (JsonNode e : errors) {
+            if ("MAX_COST_EXCEEDED".equals(e.path("extensions").path("code").asText(null))) return true;
+        }
+        return false;
+    }
+
+    /** Per shop: until when the priced order queries are skipped after Shopify refused one as too expensive. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Instant> linePricesOffUntil =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    static final Duration LINE_PRICES_OFF_TTL = Duration.ofHours(1);
+
+    private boolean linePricesAllowed(String shopDomain) {
+        Instant until = linePricesOffUntil.get(shopDomain);
+        return until == null || Instant.now().isAfter(until);
+    }
+
+    /** Remember the refusal for this shop and return false (the caller retries the same page without prices). */
+    private boolean noLinePrices(String shopDomain, String what) {
+        log.warn("Shopify {}: MAX_COST_EXCEEDED with line prices on {} — retrying without them (for {})",
+                 what, shopDomain, LINE_PRICES_OFF_TTL);
+        linePricesOffUntil.put(shopDomain, Instant.now().plus(LINE_PRICES_OFF_TTL));
+        return false;
+    }
 
     private long computeThrottleWaitMs(JsonNode response) {
         JsonNode cost = response.path("extensions").path("cost");

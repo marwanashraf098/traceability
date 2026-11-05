@@ -102,6 +102,8 @@ class OrdersTableAccessGuardTest {
           "P4b: a Traced-booked return leg of a portal order links by the request's tracking number"),
         e("portal/PortalService.java#submitInTenant", MUST_INCLUDE,
           "portal submission re-reads the looked-up order"),
+        e("portal/OrderLinePaidPrices.java#field:LOAD_SQL", MUST_INCLUDE,
+          "F0: prices a returns order's lines — portal pre-connect orders must be priced too"),
         e("portal/RefundSuggestionService.java#suggest", MUST_INCLUDE,
           "refund suggestion for a return request's order"),
         e("portal/ReturnPickupBookingService.java#verifyInTenant", MUST_INCLUDE,

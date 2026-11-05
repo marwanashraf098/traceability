@@ -491,12 +491,48 @@ public class PortalOnDemandLookup {
 
     // ── insert ───────────────────────────────────────────────────────────────────
 
+    /**
+     * Portal fees F0 — the unit price paid per variant GID, for the stored lines' 'paid_unit_price' key (read
+     * through V208's order_line_paid_unit_price). The lines of one variant are merged into one stored line, so
+     * the price is their quantity-weighted average (2 dp, HALF_UP); a variant with ANY unpriced line (qty > 0)
+     * gets none — the resolver then reads Shopify live or the catalogue. Same line filter as {@link #insert}.
+     */
+    static Map<String, String> paidUnitPriceByVariant(ShopifyGateway.Order order) {
+        Map<String, String> byLine = new HashMap<>();
+        if (order.lineItems() != null) {
+            for (ShopifyGateway.LineItem li : order.lineItems()) {
+                if (li.gid() != null && li.paidUnitPrice() != null) byLine.put(li.gid(), li.paidUnitPrice());
+            }
+        }
+        Map<String, BigDecimal> sum = new HashMap<>();
+        Map<String, Integer> qty = new HashMap<>();
+        java.util.Set<String> unpriced = new java.util.HashSet<>();
+        for (JsonNode e : order.raw().path("lineItems").path("edges")) {
+            JsonNode n = e.path("node");
+            String gid = n.path("variant").path("id").asText(null);
+            int q = n.path("quantity").asInt(0);
+            if (gid == null || q <= 0) continue;
+            String price = byLine.get(n.path("id").asText(""));
+            if (price == null) { unpriced.add(gid); continue; }
+            sum.merge(gid, new BigDecimal(price).multiply(BigDecimal.valueOf(q)), BigDecimal::add);
+            qty.merge(gid, q, Integer::sum);
+        }
+        Map<String, String> out = new HashMap<>();
+        sum.forEach((gid, total) -> {
+            if (!unpriced.contains(gid)) {
+                out.put(gid, total.divide(BigDecimal.valueOf(qty.get(gid)), 2, java.math.RoundingMode.HALF_UP).toPlainString());
+            }
+        });
+        return out;
+    }
+
     /** The portal row + its lines, or the concurrent winner's row; null when nothing usable was stored. */
     private UUID insert(UUID tenantId, Tenant t, ShopifyGateway.Order order, BostaDelivery delivery, Instant deliveredAt) {
         // Lines → catalog variants. A line whose variant Traced doesn't know is left out (it couldn't be
         // returned or exchanged through the portal anyway); with no known line at all nothing is stored.
         Map<String, Integer> quantities = new LinkedHashMap<>();
         Map<String, Integer> current = new HashMap<>();
+        Map<String, String> paid = paidUnitPriceByVariant(order);
         for (JsonNode e : order.raw().path("lineItems").path("edges")) {
             JsonNode n = e.path("node");
             String gid = n.path("variant").path("id").asText(null);
@@ -552,6 +588,7 @@ public class PortalOnDemandLookup {
             if (variant == null) continue;
             ObjectNode raw = mapper.createObjectNode();
             if (current.containsKey(line.getKey())) raw.put("current_quantity", current.get(line.getKey()));
+            if (paid.containsKey(line.getKey())) raw.put("paid_unit_price", paid.get(line.getKey()));
             jdbc.update("INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, raw) VALUES (?, ?, ?, ?, ?::jsonb)",
                 tenantId, orderId, variant, line.getValue(), raw.toString());
         }

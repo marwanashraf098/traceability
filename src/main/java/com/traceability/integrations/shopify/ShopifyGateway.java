@@ -63,9 +63,22 @@ public interface ShopifyGateway {
     record LineItem(String gid, int quantity, String variantGid,
                     @com.fasterxml.jackson.annotation.JsonProperty("current_quantity")
                     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                    Integer currentQuantity) {
+                    Integer currentQuantity,
+                    /*
+                     * Portal fees F0: discountedUnitPriceAfterAllDiscountsSet.shopMoney.amount — the unit price after
+                     * every discount — as Shopify's decimal text (null when not asked for / unreadable). Serialised
+                     * as 'paid_unit_price', NEVER 'price' (V149's analytics columns read that key); read only
+                     * through order_line_paid_unit_price (V208).
+                     */
+                    @com.fasterxml.jackson.annotation.JsonProperty("paid_unit_price")
+                    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                    String paidUnitPrice) {
         public LineItem(String gid, int quantity, String variantGid) {
-            this(gid, quantity, variantGid, null);
+            this(gid, quantity, variantGid, null, null);
+        }
+
+        public LineItem(String gid, int quantity, String variantGid, Integer currentQuantity) {
+            this(gid, quantity, variantGid, currentQuantity, null);
         }
 
         /** The quantity Traced stores: the current quantity, else the ordered one. */
