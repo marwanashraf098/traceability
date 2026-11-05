@@ -274,10 +274,10 @@ class BostaBackfillTest {
         webhookJob.process(eventId41, ownerTenantId);
         assertThat(webhookStatus(eventId41)).isEqualTo("processed");
 
-        // State=41 SEND: piece_status_after is null (no courier_update transition).
-        // BUT tryMatchDelivery ran (no pre-existing shipment) and called transitionPackedPieces
-        // which moves piece packed → awaiting_pickup with event_type='tracking_linked'.
-        assertThat(pieceStatus(piece)).isEqualTo("awaiting_pickup");
+        // tryMatchDelivery ran (no pre-existing shipment) and called transitionPackedPieces,
+        // which moves piece packed → awaiting_pickup with event_type='tracking_linked'; then,
+        // since V207, the 41 SEND itself (out for delivery) moves it on to with_courier.
+        assertThat(pieceStatus(piece)).isEqualTo("with_courier");
 
         // Phase 2: live webhook at state=45 with a different updatedAt → new idem key
         when(bostaGateway.fetchDelivery(eq("bf-api-key-4"), eq(tracking)))

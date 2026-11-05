@@ -202,11 +202,12 @@ class ExchangeDispatchDecrementTest {
         assertThat(pieceStatus(f.piece())).isEqualTo("with_courier");
         awaitRows(f.piece(), 1);
 
-        // The pickup writer can't move it again (not packed) — and if both writers ever fired
-        // for the same piece, the per-piece claim would still allow one call only.
+        // The pickup writer can't move it again: the scan answers "already with courier" and records
+        // nothing (2026-11-05) — and if both writers ever fired for the same piece, the per-piece claim
+        // would still allow one call only.
         UUID pickup = pickups.openSession(tenantId, actorId, LocalDate.now(), null, null);
         assertThat(pickups.scan(tenantId, pickup, actorId, f.tracking()).outcome())
-            .isEqualTo(PickupSessionService.ScanOutcome.NOT_PACKED);
+            .isEqualTo(PickupSessionService.ScanOutcome.ALREADY_WITH_COURIER);
         shopifyInventory.onExchangeReplacementDispatched(tenantId, f.piece()).get(5, TimeUnit.SECONDS);
 
         settle();

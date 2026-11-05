@@ -214,8 +214,9 @@ class Day11Test {
             UUID.class, tracking, tenantId);
         assertThat(shipOrderId).isEqualTo(orderId);
 
-        // Piece advanced by auto-match (packed → awaiting_pickup)
-        assertThat(pieceStatus(piece)).isEqualTo("awaiting_pickup");
+        // Piece advanced by auto-match (packed → awaiting_pickup), then — since V207 — by the
+        // 41 SEND itself (out for delivery = proof Bosta has the parcel) → with_courier.
+        assertThat(pieceStatus(piece)).isEqualTo("with_courier");
 
         // Order advanced
         assertThat(orderStatus(orderId)).isEqualTo("awaiting_pickup");

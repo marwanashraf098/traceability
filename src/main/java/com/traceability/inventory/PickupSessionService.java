@@ -81,7 +81,7 @@ public class PickupSessionService {
      * with no generic shipments and the switch off.
      */
     public enum ScanOutcome { ACCEPTED, DUPLICATE, OTHER_SESSION, NOT_FORWARD_LEG, LEG_ENDED, NOT_PACKED, UNKNOWN_AWB,
-                              WRONG_CARRIER, AMBIGUOUS }
+                              WRONG_CARRIER, AMBIGUOUS, ALREADY_WITH_COURIER }
 
     /**
      * A forward leg that must never be handed to a courier: cancelled or terminated in Bosta, or
@@ -388,6 +388,27 @@ public class PickupSessionService {
                     WHERE oi.order_id = ? AND a.status IN ('active','packed')
                     """,
                     Integer.class, shipment.orderId());
+                // 6b. ALREADY_WITH_COURIER (2026-11-05): every piece already moved to with_courier — Bosta's own
+                //     status (21, or since V207 24 / 30 / 41) got there before this scan. Not an error: the
+                //     parcel is with the courier. Nothing is recorded — no scan row (so the close writes no
+                //     second handover, no history row, no custody lock for it) and no piece event; a repeat
+                //     scan answers the same.
+                if (totalAllocated != null && totalAllocated > 0 && (packableCount == null || packableCount == 0)) {
+                    Integer withCourier = jdbc.queryForObject(
+                        """
+                        SELECT COUNT(*)::int FROM pieces p2
+                        JOIN allocations a  ON a.piece_id      = p2.id
+                        JOIN order_items oi ON oi.id            = a.order_item_id
+                        WHERE oi.order_id = ? AND a.status IN ('active','packed')
+                          AND p2.status = 'with_courier'::piece_status
+                        """,
+                        Integer.class, shipment.orderId());
+                    if (withCourier != null && withCourier.equals(totalAllocated)) {
+                        return new ScanResult(ScanOutcome.ALREADY_WITH_COURIER,
+                            new ScanEntry(shipment.id(), echoTracking, shipment.orderNumber(),
+                                          shipment.cod(), null, null, null));
+                    }
+                }
                 if (totalAllocated == null || totalAllocated == 0 ||
                     packableCount == null || packableCount == 0)
                     return new ScanResult(ScanOutcome.NOT_PACKED, null);

@@ -4,7 +4,7 @@
 
 ## Current state
 
-**BROEK pack-scan block — returned pieces (2026-11-05; branch `fix/pack-scan-returned-piece-message`, NOT committed, NOT deployed; no migration).**
+**BROEK pack-scan block — returned pieces (2026-11-05). Fix #3 merged to main 2026-11-05 as 9876dec6 (no migration), NOT deployed; fix #1 on branch `fix/bosta-forward-proof-with-courier` (V207 — ships first; the returns F0 / F1 branches must renumber their V207 / V208).**
 - **Incident:** packers' scans refused "Piece is already reserved for another order" for 86 BROEK pieces in
   `return_pending_inspection` with a live `packed` allocation (54 orders, 48 cancelled in Shopify). The proposed
   SQL repair was NOT written: prod history shows every one of those waybills really went out with Bosta (24 / 30 / 41
@@ -17,9 +17,21 @@
   locale keys `fulfill.rejection.RETURNED_NEEDS_INSPECTION`), checked before ALREADY_RESERVED. Message only — the
   piece is refused exactly as before. Test PackScanReturnedPieceTest r1 / r2 (r1 RED with the check disabled);
   Day9Test 18/18, fulfill.test.tsx 15/15.
-- **Fix #1 (design approved, NOT built):** pieces still awaiting_pickup / packed move to with_courier on the first
-  forward state proving Bosta has the parcel (24 / 30 / 41). Prod today: 52 BROEK + 1 Nuvira pieces sit at
-  awaiting_pickup on waybills with 24/30/41 history. Design in the 2026-11-05 session reply; awaiting approval.
+- **Fix #1 (built 2026-11-05; branch `fix/bosta-forward-proof-with-courier`, V207):** the first forward
+  state proving Bosta has the parcel moves pieces packed / awaiting_pickup → with_courier, as 21 always did:
+  V207 sets `piece_status_after = 'with_courier'` on 24:ALL, 30:ALL, 41:SEND, 41:FXF_SEND (10 / 11 / 20 and
+  the RTO / CRP 41 rows untouched). Same piece loop as 21 — event `courier_update`, no actor, provider_state in
+  metadata; reserved pieces and pieces past with_courier are skipped by the existing guards; return legs never
+  move pieces; type-30 exchange legs after pack use ExchangeStateInterpreter (not this table). **Pickup scan** of
+  a parcel whose pieces are all already with_courier → new outcome `ALREADY_WITH_COURIER` (success banner +
+  beep, EN + AR): nothing recorded — no scan row, so the close writes no handover / history row / custody lock
+  for it, no piece event; a repeat scan answers the same. A parcel scanned BEFORE 24 and closed after keeps its
+  scan row; the close skips its already-moved pieces (no second event) but still writes the shipment's
+  handover history row + custody lock, exactly as when 21 arrives before the close today. **No backfill:** the
+  53 pieces stuck at awaiting_pickup on prod (52 BROEK + Nuvira P000152 / #3453) are all on Shopify orders —
+  none is a portal or Lookup exchange replacement (checked read-only 2026-11-05); they move on with their next
+  45 / 46. Tests: BostaForwardProofWithCourierTest f1–f9 (no migration → f1–f4, f6–f8 RED; scan check off →
+  f6 RED), pickupAlreadyWithCourier.test.tsx.
 - **Cancel webhook:** not the cause for BRK-46696 — the cancel (11-04) came after state 46 (11-03), so
   `cancelOrder` 409'd on courier history and stamped `shopify_cancel_requested_at`.
 
