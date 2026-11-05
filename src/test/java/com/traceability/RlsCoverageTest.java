@@ -261,9 +261,6 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
-        Map.entry("/api/v1/ops/receipt-reversal",
-            "One-off ops report (no JWT, X-Ops-Secret): hard-wired to one tenant / receipt, runs under TenantContext.runAs " +
-            "as app_user; never reads the caller's tenant. Removed after the 2026-11-05 Floe Wear reversal."),
             entry("/api/v1/scan-helpers/{context}",
                     "capability-gated: 404 for every real tenant (the only kind this class seeds) — " +
                     "candidates, the gate and RLS are covered by ScanHelpersTest h2/h3/h6 (h6 on app_user)"),

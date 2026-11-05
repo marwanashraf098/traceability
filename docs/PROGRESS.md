@@ -77,34 +77,20 @@ branch + worktree deleted).**
   work for discovery-ingested deliveries (nothing re-reads them) — not edited. GitHub rejected the branch push twice with
   "fatal error in commit_refs_rules" (transient; third try after ~1 min went through).
 
-**Floe Wear PO-01 receiving reversal — ONE-OFF ops endpoint (2026-11-05; branch `fix/floe-receipt-reversal` (db431316), merged to main, NOT
-deployed yet; no migration). Remove `com.traceability.opsreversal` + `PieceAdjustService.voidPieceSendLater`
-+ the two guard-registry entries after the run has settled.**
-- **Target:** tenant caec9b94 (Floe Wear), receipt 947d7c0f (PO-01, finalized 2026-11-04, 23 variants, 1,113 pieces,
-  +1,113 applied via 23 `receiving_session` claims). Prod check 2026-11-05 (read-only): all 1,113 available, at Main,
-  tagged, no order, no bin, only 'received' events; Shopify counting through receiving; Main linked + active. Receipt
-  c5002445 (2 Nov) is never written — the service is hard-wired to the one receipt id (any other → 400).
-- **Decisions (Marawan):** (a) reuse void per piece — 1,113 void_correction claims, −1 each, no new decrement path;
-  sends PACED one at a time (`traced.ops.receipt-reversal.pace-ms`, default 400) instead of 1,113 after-commit
-  pushes; actor on piece_events / piece_void audit = Floe owner marco@ (5c598c9c), reason 'other', note "receiving
-  session reversed by Traced support (Marawan), at merchant's request"; receipt audit row `receipt_reversed` actor =
-  Marawan's own user (9a6d802d, another tenant — FK is global); status 'reversed' with NO migration (receipts.status
-  has no CHECK).
-- **Endpoint:** `POST /api/v1/ops/receipt-reversal` {receiptId, actorUserId, requestedByUserId, apply, allowNegative}
-  (X-Ops-Secret) starts a background run; `GET` = report (plan per variant: pieces / to_void / blocked pieces /
-  expected Shopify delta / Shopify available at Main / would_go_negative; live claim outcomes per variant +
-  `settled`). Logs `RECEIPT_REVERSAL`. Apply: whole-run guard before any write → refuses WOULD_GO_NEGATIVE (or an
-  unreadable variant) unless allowNegative → one transaction per variant (rows FOR UPDATE, guard re-checked) →
-  receipt 'reversed' + audit → paced sends, then up to 4 retry passes (30 s apart) for definite failures with
-  attempts left; failed_ambiguous never re-sent. Resumable (pieces voided with the note count as done). The Main
-  reconciler skips a variant while its claims are queued / pending / failed, so no double decrement.
-- **receipts.status readers:** Receiving list + detail show a translated "Reversed" badge (critical) + a note (EN + AR,
-  `receiving.reversedStatus` / `reversedNote`), no label / put-away actions; label print refuses with "This session was
-  reversed"; Overview recent activity and 30-day received throughput leave the reversed session out; onboarding
-  first_receiving ignores it. Analytics don't read receipts.
-- **Tests:** ReceiptReversalTest d1 d2 a1–a6 o1 (revert-checked: in-transaction re-check off → a6 RED; overview filter
-  off → o1 RED), ReceiptReversalAppUserTest u1 (app_user end to end), receivingReversed.test.tsx. Guard registries
-  extended (pre-approved): PortalOrderLeakTest (2 × skip R_OPS), RlsCoverageTest EXEMPT.
+**Floe Wear PO-01 receiving reversal — CANCELLED, ops endpoint REMOVED (2026-11-05; branch
+`chore/remove-floe-reversal-endpoint`, NOT deployed).** The one-off reversal of receipt 947d7c0f (tenant caec9b94, PO-01,
+1,113 pieces) was cancelled by Marawan before anything ran on prod: the endpoint was never deployed, so neither the dry run
+nor apply ever ran there and nothing was written; the receipt stays 'finalized' and its pieces available. Built in
+`fix/floe-receipt-reversal` (db431316, merged to main 41dea976, never deployed); this branch removes the temporary parts:
+`com.traceability.opsreversal` (POST/GET `/api/v1/ops/receipt-reversal`), `PieceAdjustService.voidPieceSendLater` (and
+its private `voidAndClaim` split — `voidPiece` is again byte-for-byte the pre-reversal code: void + claim + after-commit
+push in one method), ReceiptReversalTest + ReceiptReversalAppUserTest, and the two guard-registry entries
+(PortalOrderLeakTest 2 × skip R_OPS, RlsCoverageTest EXEMPT).
+- **Kept (harmless, ready for any future reversed receipt):** receipts.status 'reversed' readers — Receiving list + detail
+  "Reversed" badge + note (EN + AR, `receiving.reversedStatus` / `reversedNote`, receivingReversed.test.tsx), label print
+  refuses a reversed session, Overview recent activity / 30-day throughput and onboarding first_receiving leave it out.
+  No receipt has that status; nothing writes it now. The backend reader fixes lost their test with ReceiptReversalTest
+  (o1 covered the Overview filter) — add one if a writer of 'reversed' is ever built.
 
 **Returns portal fees F0 — order line price paid (2026-11-05; branch `feat/portal-fees-f0`, rebased on main 712bd97d,
 NOT merged, NOT deployed; V208).** Workstream: returns portal (A) exchange to a different product with a price
