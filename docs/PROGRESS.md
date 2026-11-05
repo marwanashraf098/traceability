@@ -10,6 +10,17 @@ demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S
 untouched. No new SECURITY DEFINER hatch.
 - **Scopes:** + read_returns, write_returns (S5 only — no write call exists), read_merchant_managed_fulfillment_orders,
   in shopify.app.toml AND application.yml (stale legacy-install comments fixed: install is managed since ad65a690).
+- **shopify.app.toml = the LIVE app version (2026-11-05, after S1 merge):** Marawan pulled the live config and it
+  differed from main beyond scopes — live `name = "Traced"` (repo said "Trace") and live declares the GDPR webhooks as
+  `[[webhooks.subscriptions]]` with `compliance_topics` + relative `uri`s (repo used `[webhooks.privacy_compliance]`
+  with absolute URLs). The toml was replaced with the live file, only the scopes line changed, so `shopify app deploy`
+  changes nothing but scopes; "live vs main" diff = the scopes line only. The toml carries no comments now — the
+  notes live here and in CLAUDE.md: business webhooks are registered per shop by RegisterShopifyWebhooksJob (plus
+  ShopifyWebhookTopicsBackfill / app/scopes_update), never declared in the toml; install is MANAGED
+  (`use_legacy_install_flow = false`, since ad65a690) — Shopify asks merchants to approve new [access_scopes] on their
+  next app open, then sends app/scopes_update; only the mandatory compliance (GDPR) webhooks are app-level. Keep the
+  toml scopes and application.yml `shopify.scopes` the same set. Before any future `shopify app deploy`: pull the live
+  config and diff it against the toml first. NOT deployed yet.
   read_third_party_fulfillment_orders NOT added — no evidence in code; `scripts/ops/2026-11-05-shopify-returns-s1-check.sql`
   part 3 counts app-fulfilled lines per store on prod. Scope review (docs, 2026-11-05): none of the four scopes is
   "Shopify approval required" (only marketplace ones are); the docs are silent on re-review for added scopes on a
