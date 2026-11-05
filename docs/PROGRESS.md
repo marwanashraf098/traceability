@@ -4,7 +4,7 @@
 
 ## Current state
 
-**BROEK pack-scan block — returned pieces (2026-11-05). Fix #3 merged to main 2026-11-05 as 9876dec6 (no migration), NOT deployed; fix #1 on branch `fix/bosta-forward-proof-with-courier` (V207 — ships first; the returns F0 / F1 branches must renumber their V207 / V208).**
+**BROEK pack-scan block — returned pieces (2026-11-05). Fix #3 (9876dec6, no migration) and fix #1 (e3ad7cd4, V207) merged to main and DEPLOYED to prod 2026-11-05; V207 applied, mappings verified. Branches deleted. The returns F0 / F1 branches must renumber their V207 / V208 → V208 / V209.**
 - **Incident:** packers' scans refused "Piece is already reserved for another order" for 86 BROEK pieces in
   `return_pending_inspection` with a live `packed` allocation (54 orders, 48 cancelled in Shopify). The proposed
   SQL repair was NOT written: prod history shows every one of those waybills really went out with Bosta (24 / 30 / 41
@@ -17,7 +17,7 @@
   locale keys `fulfill.rejection.RETURNED_NEEDS_INSPECTION`), checked before ALREADY_RESERVED. Message only — the
   piece is refused exactly as before. Test PackScanReturnedPieceTest r1 / r2 (r1 RED with the check disabled);
   Day9Test 18/18, fulfill.test.tsx 15/15.
-- **Fix #1 (built 2026-11-05; branch `fix/bosta-forward-proof-with-courier`, V207):** the first forward
+- **Fix #1 (deployed 2026-11-05, merge e3ad7cd4, V207):** the first forward
   state proving Bosta has the parcel moves pieces packed / awaiting_pickup → with_courier, as 21 always did:
   V207 sets `piece_status_after = 'with_courier'` on 24:ALL, 30:ALL, 41:SEND, 41:FXF_SEND (10 / 11 / 20 and
   the RTO / CRP 41 rows untouched). Same piece loop as 21 — event `courier_update`, no actor, provider_state in
