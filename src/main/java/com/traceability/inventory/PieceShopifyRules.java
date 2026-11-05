@@ -227,7 +227,10 @@ public final class PieceShopifyRules {
                 "attempts", rs.getInt(3), "class", String.valueOf(rs.getString(4))) : null,
             tenantId, p.receiptId().toString(), p.variantId(), s.mainId());
         String status = recv == null ? null : (String) recv.get("status");
-        if ("applied".equals(status) || ShopifyInventoryService.SUPERSEDED_BY_SEED.equals(status)) {
+        // S1b (V212): a receiving claim whose whole +N was returned units Shopify had already restocked itself
+        // ('skipped_shopify_restocked') — Shopify counted them through its own restock, so the arrival counts.
+        if ("applied".equals(status) || ShopifyInventoryService.SUPERSEDED_BY_SEED.equals(status)
+                || "skipped_shopify_restocked".equals(status)) {
             return Verdict.send(s.mainId(), "arrival");
         }
         // The piece row is created when it is received (InventoryLedger.batchReceive).

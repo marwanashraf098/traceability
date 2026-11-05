@@ -911,6 +911,24 @@
       "extraPrinted": "Label {{code}} is ready — stick it on the piece, then scan it.",
       "extraPrintedOverage": "Label {{code}} is ready — stick it on, then scan it. This product already has all its expected pieces, so it's counted as an extra piece.",
       "error": "Something went wrong. Try again."
+    },
+    "returnLink": {
+      "title": "Receiving a return of order {{order}}",
+      "sub": "Add the returned item to this session — Traced links it to the return.",
+      "openSession": "Open or start a Receiving session at your main warehouse to add the returned item.",
+      "dismiss": "Dismiss",
+      "add": "Add 1 to this session",
+      "added": "Added to this session.",
+      "alreadyInShopify_one": "Shopify already restocked {{count}} unit of this item for order {{order}}. It won't be added to Shopify again when you finish.",
+      "alreadyInShopify_other": "Shopify already restocked {{count}} units of this item for order {{order}}. They won't be added to Shopify again when you finish.",
+      "linesTitle": "Returned items in this session",
+      "lineOrder_one": "Return of order {{order}} · {{count}} unit",
+      "lineOrder_other": "Return of order {{order}} · {{count}} units",
+      "lineSkipped_one": "{{count}} already restocked in Shopify — not sent again",
+      "lineSkipped_other": "{{count}} already restocked in Shopify — not sent again",
+      "remove": "Remove",
+      "allAlreadyInShopify_one": "Not sent — Shopify already restocked {{count}} returned unit",
+      "allAlreadyInShopify_other": "Not sent — Shopify already restocked {{count}} returned units"
     }
   },
   "fulfill": {

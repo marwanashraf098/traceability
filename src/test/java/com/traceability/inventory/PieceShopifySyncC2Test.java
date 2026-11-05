@@ -497,6 +497,35 @@ class PieceShopifySyncC2Test {
         assertThat(alertTypes(t)).contains("restocked_twice");
     }
 
+    /**
+     * S1b (V212): the Back to good guard counts a Shopify RETURN restock (a RESTOCKED disposition of the mirrored
+     * return, no refund) too — skipped, nothing sent. Positive control: the same order's second unit, restored after
+     * Traced's count is level, still gets its +1.
+     */
+    @Test
+    void b3d_returnInspectionDamaged_dispositionRestockOutstanding_skipped() throws Exception {
+        T t = tenant("b3d", true);
+        String piece = returnedDamagedPiece(t, null);
+        UUID order = jdbc.queryForObject("SELECT oi.order_id FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE a.piece_id = ?", UUID.class, piece);
+        ShopifyReturnFixtures.restockedReturn(jdbc, t.tenant(), t.store(), order, t.variantGid(), 1, t.traced());
+
+        as(t, () -> adjust.restore(piece, "repaired", null, t.user()));
+
+        assertThat(claim(t, "damaged_restore_increment", piece))
+            .containsEntry("status", "skipped_shopify_restocked").containsEntry("skip_reason", "shopify_restocked");
+        Thread.sleep(300);
+        // Scoped to this tenant's item: the class shares one gateway mock, and an earlier test's after-commit sync
+        // can still land while this one runs.
+        verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), eq(t.item()), any(), anyInt(), any(), any(), any());
+        verify(shopifyGateway, never()).moveDamagedToAvailable(any(), any(), eq(t.item()), any(), anyInt(), any(), any(), any());
+
+        String second = returnedDamagedPiece(t, null);
+        jdbc.update("UPDATE pieces SET current_order_id = ? WHERE id = ?", order, second);
+        as(t, () -> adjust.restore(second, "repaired", null, t.user()));
+        awaitStatus(t, "damaged_restore_increment", second, "applied");
+    }
+
     @Test
     void b4_damagedBeforeTheSeed_backToGood_plusOne() throws Exception {
         T t = tenant("b4", false);

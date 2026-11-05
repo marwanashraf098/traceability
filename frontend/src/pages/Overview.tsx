@@ -25,6 +25,7 @@ import {
   SegmentedControl, Input,
 } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
+import { withReturnSource } from '../receivingReturn'
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
 // Mirrors tailwind.config.js exactly — never introduce a hex value that isn't
@@ -429,6 +430,8 @@ interface AlertException {
   descriptionEn: string
   descriptionAr: string
   actionUrl: string
+  /** S1b: a Return To Receive alert — Receiving links its line to this return. */
+  returnSource?: string
   ageSeconds: number
   order_id?: string
 }
@@ -455,7 +458,7 @@ function destinationFor(item: AlertException): AlertDestination {
   if (EXCEPTIONS_FALLBACK_ALERT_TYPES.has(item.type)) {
     return { kind: 'url', url: `/exceptions?type=${item.type}` }
   }
-  return { kind: 'url', url: item.actionUrl }
+  return { kind: 'url', url: withReturnSource(item.actionUrl, item.returnSource) }
 }
 
 interface AlertRow {

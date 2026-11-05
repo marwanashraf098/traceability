@@ -100,16 +100,39 @@ import java.util.concurrent.CompletableFuture;
 public class ShopifyInventoryService {
 
     /**
-     * Units of variant {@code v} the merchant restocked through Shopify refunds on order {@code <alias>} AT THE TRACED
-     * MAIN location (V201 — the restock gate fix, approved 2026-11-02): a refund restock that names another Shopify
-     * location never blocks Traced's +1 at Main; a restock line with no location_id still counts (unchanged). Needs
-     * the variant aliased {@code v}. The ONE expression — the restock guards here and ExceptionService.restocked_twice.
+     * Units of variant {@code v} Shopify restocked AT THE TRACED MAIN location for order {@code <alias>} (V212, S1b):
+     * GREATEST(refund restock lines, RESTOCKED dispositions of the order's mirrored returns) — one unit returned with
+     * refund AND restock in one step carries both records (dev store, 2026-11-05), so they are never summed. A restock
+     * naming another Shopify location never blocks Traced's +1 at Main; one with no location still counts (V201).
+     * Needs the variant aliased {@code v}. The ONE expression — the restock guards here (return inspection, Back to
+     * good, Receiving of a returned unit) and ExceptionService.restocked_twice.
      */
-    public static String refundRestockedAtMainSql(String orderAlias) {
-        return "shopify_refund_restocked_units(" + orderAlias + ".raw, v.external_id, " +
-               "(SELECT ml.shopify_location_id FROM locations ml WHERE ml.tenant_id = " + orderAlias + ".tenant_id " +
-               "   AND ml.is_fulfillment = true AND ml.shopify_location_id IS NOT NULL LIMIT 1))";
+    public static String shopifyRestockedAtMainSql(String orderAlias) {
+        return "shopify_restocked_units(" + orderAlias + ".raw, " + orderAlias + ".tenant_id, " + orderAlias + ".id, " +
+               "v.external_id, " + MAIN_LOCATION_GID_SQL.replace("<t>", orderAlias + ".tenant_id") + ")";
     }
+
+    /** The tenant's Traced Main Warehouse Shopify location GID ({@code <t>} = the tenant expression), or NULL. */
+    static final String MAIN_LOCATION_GID_SQL =
+        "(SELECT ml.shopify_location_id FROM locations ml WHERE ml.tenant_id = <t> " +
+        "   AND ml.is_fulfillment = true AND ml.shopify_location_id IS NOT NULL LIMIT 1)";
+
+    /**
+     * Units of one (order, variant) Traced already counted as returned: every restock-type claim row (applied, queued,
+     * failed or skipped — a skip consumed one of Shopify's restocked units too) except the trigger being decided, plus
+     * every unit of a FINALIZED Receiving line linked to that order at the main warehouse (V212) except the line being
+     * decided. Parameters: tenant, order, variant, trigger_id to leave out, tenant, order, variant, receipt line to
+     * leave out (NULL = none). The ONE count — both piece guards and the Receiving guard.
+     */
+    static final String TRACED_COUNTED_SQL =
+        "(SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+        "  WHERE tenant_id = ? AND trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
+        "    AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) " +
+        "+ (SELECT COALESCE(SUM(rl.quantity), 0) FROM receipt_lines rl " +
+        "   JOIN receipts r ON r.id = rl.receipt_id AND r.tenant_id = rl.tenant_id " +
+        "   JOIN locations l ON l.id = r.location_id AND l.tenant_id = r.tenant_id AND l.is_fulfillment " +
+        "  WHERE rl.tenant_id = ? AND rl.return_order_id = ? AND rl.variant_id = ? AND r.status = 'finalized' " +
+        "    AND rl.id IS DISTINCT FROM ?::uuid)";
 
     /** Claim status set by the initial seed (V123) — never retried, repushed or reclaimed. */
     public static final String SUPERSEDED_BY_SEED = "superseded_by_seed";
@@ -264,13 +287,12 @@ public class ShopifyInventoryService {
             jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                 rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
             Map<String, Object> counts = jdbc.queryForMap(
-                "SELECT COALESCE((SELECT " + refundRestockedAtMainSql("o") + " " +
+                "SELECT COALESCE((SELECT " + shopifyRestockedAtMainSql("o") + " " +
                 "                 FROM orders o, variants v " +
                 "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
-                "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-                "        WHERE tenant_id = ? AND trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
-                "          AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) AS traced_units",
-                orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId);
+                "       " + TRACED_COUNTED_SQL + " AS traced_units",
+                orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId,
+                tenantId, orderId, variantId, null);
             long shopifyUnits = ((Number) counts.get("shopify_units")).longValue();
             long tracedUnits  = ((Number) counts.get("traced_units")).longValue();
             if (shopifyUnits > tracedUnits) {
@@ -284,9 +306,9 @@ public class ShopifyInventoryService {
                     tenantId, UUID.randomUUID(), variantId, v.locationId(), triggerId,
                     mapper.createObjectNode().put("piece_id", pieceId).put("delta", 1).put("via", "inspection").toString(),
                     PieceShopifyRules.SHOPIFY_RESTOCKED,
-                    "Already restocked in Shopify by a refund (" + shopifyUnits + " unit(s) restocked, "
+                    "Already restocked in Shopify by a refund or a return (" + shopifyUnits + " unit(s) restocked, "
                         + tracedUnits + " counted by Traced before this one) — nothing sent", orderId);
-                log.info("Back to good +1 skipped — the merchant already restocked this unit through a Shopify refund " +
+                log.info("Back to good +1 skipped — the merchant already restocked this unit in Shopify (refund or return) " +
                          "(piece={} order={} variant={})", pieceId, orderId, variantId);
                 return null;
             }
@@ -887,6 +909,57 @@ public class ShopifyInventoryService {
         }
     }
 
+    /**
+     * S1b (V212) — the Receiving guard for a returned unit (a Receiving line linked to the return it brings back).
+     * Decided in the finalize transaction, under the same per (order, variant) restock lock as the piece guards: of the
+     * line's {@code quantity}, how many units Shopify already restocked at Main for that order and Traced hasn't counted
+     * yet (other restock claims, earlier finalized Receiving lines of the order, and {@code earlierInThisReceipt} —
+     * lines of this receipt already decided). Those units are not sent to Shopify again. Only for a receipt at the
+     * main warehouse (anything else never reaches Shopify). Never a decrement.
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public int receivingShopifyRestockedUnits(UUID orderId, UUID variantId, UUID locationId, int quantity,
+                                              int earlierInThisReceipt) {
+        UUID tenantId = TenantContext.require();
+        if (orderId == null || quantity <= 0) return 0;
+        if (!Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM locations WHERE id = ? AND tenant_id = ? AND is_fulfillment)",
+                Boolean.class, locationId, tenantId))) return 0;
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
+        Map<String, Object> counts = jdbc.queryForMap(
+            "SELECT COALESCE((SELECT " + shopifyRestockedAtMainSql("o") + " " +
+            "                 FROM orders o, variants v " +
+            "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
+            "       " + TRACED_COUNTED_SQL + " AS traced_units",
+            orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, "",
+            tenantId, orderId, variantId, null);
+        long open = ((Number) counts.get("shopify_units")).longValue()
+                  - ((Number) counts.get("traced_units")).longValue() - earlierInThisReceipt;
+        return (int) Math.max(0, Math.min(quantity, open));
+    }
+
+    /**
+     * S1b — a receipt + variant whose WHOLE Receiving +N was Shopify-restocked units: the receiving claim row is
+     * recorded as 'skipped_shopify_restocked' (delta = the units), nothing is sent. PieceShopifyRules.arrival counts
+     * such a claim as Shopify-counted (Shopify's own restock counted those units), so the pieces' later departures
+     * still remove them. In the caller's (finalize) transaction; idempotent on the claim key.
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void recordReceivingShopifyRestocked(UUID sessionId, UUID locationId, UUID variantId, int units) {
+        UUID tenantId = TenantContext.require();
+        jdbc.update(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, error) " +
+            "VALUES (?, ?, ?, ?, ?, 'receiving_session', ?, ?::jsonb, 'skipped_shopify_restocked', ?) " +
+            "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
+            tenantId, UUID.randomUUID(), variantId, locationId, units, sessionId.toString(),
+            mapper.createObjectNode().put("reason", "received").put("delta", units).toString(),
+            "Already restocked in Shopify by a refund or a return (" + units + " returned unit(s)) — nothing sent");
+        log.info("Receiving +{} skipped — Shopify already restocked these returned units (session={} variant={})",
+                 units, sessionId, variantId);
+    }
+
     // ── Return inspection processing ─────────────────────────────────────────
 
     /**
@@ -938,19 +1011,18 @@ public class ShopifyInventoryService {
                 jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                     rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
                 Map<String, Object> counts = jdbc.queryForMap(
-                    "SELECT COALESCE((SELECT " + refundRestockedAtMainSql("o") + " " +
+                    "SELECT COALESCE((SELECT " + shopifyRestockedAtMainSql("o") + " " +
                     "                 FROM orders o, variants v " +
                     "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
-                    "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-                    "        WHERE tenant_id = ? AND trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
-                    "          AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) AS traced_units",
-                    orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId);
+                    "       " + TRACED_COUNTED_SQL + " AS traced_units",
+                    orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId,
+                    tenantId, orderId, variantId, null);
                 long shopifyUnits = ((Number) counts.get("shopify_units")).longValue();
                 long tracedUnits  = ((Number) counts.get("traced_units")).longValue();
                 if (shopifyUnits > tracedUnits) {
                     insertRestockSkipRow(tenantId, batchId, variantId, locationId, triggerId, orderId,
                         "skipped_shopify_restocked",
-                        "Already restocked in Shopify by a refund (" + shopifyUnits + " unit(s) restocked, "
+                        "Already restocked in Shopify by a refund or a return (" + shopifyUnits + " unit(s) restocked, "
                             + tracedUnits + " counted by Traced before this one) — nothing sent");
                     return "skipped";
                 }
@@ -960,7 +1032,7 @@ public class ShopifyInventoryService {
         });
 
         if ("skipped".equals(outcome)) {
-            log.info("Shopify restock +1 skipped — the merchant already restocked this unit through a Shopify refund " +
+            log.info("Shopify restock +1 skipped — the merchant already restocked this unit in Shopify (refund or return) " +
                      "(piece={} order={} variant={})", pieceId, orderId, variantId);
             return;
         }
