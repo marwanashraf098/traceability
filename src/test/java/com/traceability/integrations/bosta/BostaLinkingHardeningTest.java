@@ -180,7 +180,7 @@ class BostaLinkingHardeningTest {
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT match_reason, resolved FROM unlinked_bosta_deliveries " +
             "WHERE tenant_id = ? AND tracking_number = '3670960121'", tenantA);
-        assertThat(row.get("match_reason")).isEqualTo("NO_MATCH");
+        assertThat(row.get("match_reason")).isEqualTo("ACTIVE_FORWARD_LEG");
         assertThat(row.get("resolved")).isEqualTo(false);
         assertThat(eventStatus(wid[0])).isEqualTo("processed");
     }

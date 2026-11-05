@@ -55,6 +55,8 @@ import static org.mockito.Mockito.*;
  *   a5  a reference matching two orders → never linked (refused:identity)
  *   a6  the BRK-45321-EG shape: cancelled order, dead leg, stranded delivery → never linked (refused:order_closed)
  *   a7  Bosta 48 / 49 / 104 on the old leg → the stranded delivery is re-linked
+ *   a9  old delivery live → at most one lookup per order per hour (same delivery re-ingested, a second one)
+ *   a10 reconcile attempts reset only when a Bosta FORWARD leg links (not a return leg, not with no link)
  *   a8  same-tenant controls: a normal new order links as before; another order's live leg + unlinked row are
  *       untouched; a deletion with no re-booked delivery keeps the normal two-step path (NO_NEW_DELIVERY)
  */
@@ -361,6 +363,81 @@ class BostaActiveForwardLegRelinkTest {
         Map<String, Object> row = jdbc.queryForMap("SELECT resolved, relink_outcome FROM unlinked_bosta_deliveries WHERE id = ?", otherRow);
         assertThat(row.get("resolved")).isEqualTo(false);
         assertThat(row.get("relink_outcome")).isNull();
+    }
+
+    // ── a9 ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void a9_oldDeliveryLive_atMostOneLookupPerOrderPerHour() {
+        Shop s = new Shop("AFL9");
+        Order o = s.order("BRK-47309-EG");
+        String newTn = PackFixtures.nextTracking();
+        inBosta(newTn, o.number(), 10);
+        webhook(s, newTn, 10);
+        check.check(s.f.tenant, newTn, 1);
+        verify(gateway, times(1)).fetchDelivery(eq(KEY), eq(o.tracking()));
+        assertThat(unlinked(newTn).get("relink_outcome")).isEqualTo(ActiveForwardLegCheckJob.OLD_DELIVERY_LIVE);
+
+        // Re-ingest of the same delivery (a new Bosta state) → no new check enqueued.
+        clearInvocations(jobScheduler);
+        inBosta(newTn, o.number(), 11);
+        webhook(s, newTn, 11);
+        verify(jobScheduler, never()).enqueue(any(JobLambda.class));
+        // A check that runs anyway, and a second re-booked delivery of the same order → no lookup either.
+        check.check(s.f.tenant, newTn, 1);
+        String newTn2 = PackFixtures.nextTracking();
+        inBosta(newTn2, o.number(), 10);
+        webhook(s, newTn2, 10);
+        check.check(s.f.tenant, newTn2, 1);
+        verify(gateway, times(1)).fetchDelivery(eq(KEY), eq(o.tracking()));
+
+        // An hour later the order may be looked up again.
+        jdbc.update("UPDATE unlinked_bosta_deliveries SET relink_at = now() - INTERVAL '61 minutes' WHERE tenant_id = ?", s.f.tenant);
+        check.check(s.f.tenant, newTn2, 1);
+        verify(gateway, times(2)).fetchDelivery(eq(KEY), eq(o.tracking()));
+    }
+
+    // ── a10 ───────────────────────────────────────────────────────────────────
+
+    @Test
+    void a10_reconcileAttemptsReset_onlyWhenABostaForwardLegLinks() {
+        Shop s = new Shop("AFL10");
+        // (1) An order that used its 10 reconcile attempts before Bosta's delivery showed up → linked → back to 0.
+        UUID late = s.f.order("BRK-47310-EG", 0);
+        s.f.item(late, s.variant, 1);
+        maxAttempts(late);
+        String tn = PackFixtures.nextTracking();
+        inBosta(tn, "BRK-47310-EG", 10);
+        webhook(s, tn, 10);
+        assertThat(leg(tn).get("order_id")).isEqualTo(late);
+        assertThat(attempts(late)).isZero();
+        assertThat(jdbc.queryForObject("SELECT bosta_link_last_check FROM orders WHERE id = ?", Object.class, late)).isNull();
+
+        // (2) A customer-return pickup (a Bosta RETURN leg) links to an order at the limit → its counter is kept.
+        UUID returned = s.f.order("BRK-47311-EG", 0);
+        s.f.item(returned, s.variant, 1);
+        s.f.leg(returned, "forward", "delivered", null);
+        maxAttempts(returned);
+        String crp = PackFixtures.nextTracking();
+        inBosta(crp, "BRK-47311-EG", 10);
+        ((ObjectNode) bosta.get(crp)).putObject("type").put("code", 25).put("value", "Customer Return Pickup");
+        webhook(s, crp, 10);
+        assertThat(jdbc.queryForObject("SELECT shipment_leg::text FROM shipments WHERE tracking_number = ?", String.class, crp))
+            .isEqualTo("return");
+        assertThat(attempts(returned)).isEqualTo(10);
+
+        // (3) An order nothing links to keeps its counter (no backfill).
+        UUID idle = s.f.order("BRK-47312-EG", 0);
+        maxAttempts(idle);
+        assertThat(attempts(idle)).isEqualTo(10);
+    }
+
+    private void maxAttempts(UUID order) {
+        jdbc.update("UPDATE orders SET bosta_link_attempts = 10, bosta_link_last_check = now() WHERE id = ?", order);
+    }
+
+    private int attempts(UUID order) {
+        return jdbc.queryForObject("SELECT bosta_link_attempts FROM orders WHERE id = ?", Integer.class, order);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

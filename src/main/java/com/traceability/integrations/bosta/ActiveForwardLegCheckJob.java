@@ -38,6 +38,10 @@ import java.util.UUID;
  * ({@link BostaRateLimiter#hasHeadroom}, user-facing and poll calls first) at BACKGROUND priority; otherwise — or on
  * a 429 — it is re-scheduled in {@code bosta.active-leg-check.retry-seconds} (60), at most
  * {@code bosta.active-leg-check.max-attempts} (10) times. No transaction is open during the Bosta call.
+ * Quiet period: once a check found the order's old delivery still live ({@code old_delivery_live} — a real
+ * two-parcel order, or a re-booking the merchant hasn't cleaned up), no further lookup for that order for
+ * {@code bosta.active-leg-check.live-quiet-minutes} (60): every re-ingest of the unlinked delivery would otherwise
+ * cost one Bosta call.
  */
 @Service
 public class ActiveForwardLegCheckJob {
@@ -57,7 +61,13 @@ public class ActiveForwardLegCheckJob {
     private final BostaRateLimiter      limiter;
     private final int                   maxAttempts;
     private final long                  retrySeconds;
+    private int                         liveQuietMinutes = 60;
     private JobScheduler                jobScheduler;
+
+    @Autowired
+    public void setLiveQuietMinutes(@Value("${bosta.active-leg-check.live-quiet-minutes:60}") int minutes) {
+        this.liveQuietMinutes = minutes;
+    }
 
     public ActiveForwardLegCheckJob(JdbcTemplate jdbc, PlatformTransactionManager txm, BostaGateway gateway,
                                     EncryptionService encryption, BostaDeletionService deletion, BostaRelink relink,
@@ -83,6 +93,12 @@ public class ActiveForwardLegCheckJob {
     /** Enqueue the check for the unlinked delivery {@code newTrackingNumber}. Never throws. */
     public void enqueue(UUID tenantId, String newTrackingNumber) {
         if (jobScheduler == null) return;
+        // The common re-ingest: this same delivery's check already found the old one live within the quiet period.
+        Boolean quiet = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ? " +
+            "  AND resolved = false AND relink_outcome = ? AND relink_at > now() - (? * INTERVAL '1 minute'))",
+            Boolean.class, tenantId, newTrackingNumber, OLD_DELIVERY_LIVE, liveQuietMinutes)));
+        if (Boolean.TRUE.equals(quiet)) return;
         final ActiveForwardLegCheckJob self = this;
         try {
             jobScheduler.enqueue(() -> self.check(tenantId, newTrackingNumber, 1));
@@ -129,6 +145,12 @@ public class ActiveForwardLegCheckJob {
             return;
         }
 
+        if (inQuietPeriod(tenantId, orderId)) {
+            log.info("Active-leg check: tenant {} order {} — old waybill found live < {} min ago, no lookup",
+                tenantId, orderId, liveQuietMinutes);
+            return;
+        }
+
         List<String> keys = tx.execute(s -> jdbc.queryForList(
             "SELECT api_key_encrypted FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
             String.class, tenantId));
@@ -166,6 +188,21 @@ public class ActiveForwardLegCheckJob {
             log.warn("Active-leg check: tenant {} tracking {} inconclusive: {}", tenantId, oldTn, e.toString());
             mark(tenantId, newTn, CHECK_INCONCLUSIVE);
         }
+    }
+
+    /** Any of the ORDER's unlinked deliveries had a check find the old delivery live within the quiet period. */
+    private boolean inQuietPeriod(UUID tenantId, UUID orderId) {
+        List<Map<String, Object>> recent = tx.execute(s -> jdbc.queryForList(
+            "SELECT business_reference, raw #>> '{shopifyInfo,orderId}' AS shopify_id FROM unlinked_bosta_deliveries " +
+            "WHERE tenant_id = ? AND resolved = false AND relink_outcome = ? AND relink_at > now() - (? * INTERVAL '1 minute')",
+            tenantId, OLD_DELIVERY_LIVE, liveQuietMinutes));
+        if (recent == null) return false;
+        for (Map<String, Object> r : recent) {
+            List<UUID> to = tx.execute(s -> OrderReference.resolve(jdbc, tenantId,
+                (String) r.get("business_reference"), (String) r.get("shopify_id")));
+            if (to != null && to.size() == 1 && to.get(0).equals(orderId)) return true;
+        }
+        return false;
     }
 
     private void reschedule(UUID tenantId, String newTn, int attempt, String why) {

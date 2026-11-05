@@ -433,7 +433,7 @@ public class ShipmentLinkService {
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
-        clearReconcileFlag(orderId, tenantId);
+        clearReconcileFlag(orderId, tenantId, true);
         resolveUnlinked(tenantId, trackingNumber);
 
         log.info("Order {} AWB-linked to {} ({} pieces)", orderNumber, trackingNumber, linked);
@@ -971,7 +971,7 @@ public class ShipmentLinkService {
                         bostaId, existing);
                 }
             }
-            clearReconcileFlag(orderId, tenantId);
+            clearReconcileFlag(orderId, tenantId, true);
             return existing;
         }
 
@@ -1017,17 +1017,28 @@ public class ShipmentLinkService {
             rawJson, bostaId);
         com.traceability.integrations.bosta.ShipmentSettlement.apply(
             jdbc, id, delivery != null ? delivery.raw() : null);
-        clearReconcileFlag(orderId, tenantId);
+        clearReconcileFlag(orderId, tenantId, true);
         return id;
     }
 
     private void clearReconcileFlag(UUID orderId, UUID tenantId) {
-        // Idempotent: WHERE bosta_link_status IS NOT NULL makes this a no-op for
-        // orders that were never flagged (the common case).
+        clearReconcileFlag(orderId, tenantId, false);
+    }
+
+    /**
+     * {@code bostaForwardLeg} (2026-11-05): a Bosta FORWARD leg was just linked / found for the order — the
+     * reconcile job's attempt counter also goes back to 0 (it never did since V139 stopped setting
+     * bosta_link_status, so an order that had used its 10 attempts before its first link was never reconciled
+     * again after that leg died — BROEK BRK-47264-EG). Generic and return-leg links keep the old rule (only a set
+     * flag is cleared). No backfill: orders already at the limit change only when a Bosta leg links.
+     */
+    private void clearReconcileFlag(UUID orderId, UUID tenantId, boolean bostaForwardLeg) {
+        // Idempotent: a no-op for orders never flagged and (for a Bosta forward leg) with no attempts counted.
         jdbc.update(
             "UPDATE orders SET bosta_link_status = NULL, bosta_link_attempts = 0, " +
             "    bosta_link_last_check = NULL " +
-            "WHERE id = ? AND tenant_id = ? AND bosta_link_status IS NOT NULL",
+            "WHERE id = ? AND tenant_id = ? AND (bosta_link_status IS NOT NULL" +
+            (bostaForwardLeg ? " OR bosta_link_attempts > 0)" : ")"),
             orderId, tenantId);
         // V139: a linked Bosta shipment makes the order's carrier Bosta (it wins over any other).
         com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
