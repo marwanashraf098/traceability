@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Bosta re-booked delivery stranded behind a deleted leg — ACTIVE_FORWARD_LEG + instant check + relink (2026-11-05;
+branch `fix/bosta-active-forward-leg-relink` merged to main 47b31cec and DEPLOYED 2026-11-05, V209 applied 18:26;
+branch + worktree deleted).**
+- **Incident (BROEK BRK-47264-EG):** leg 8048566307 linked 12:35, deleted in Bosta 14:14, re-booked 5552672140 at 15:21
+  → unlinked NO_MATCH (row 16292). Causes: (1) the -updatedAt walk never sees a deleted delivery, so detection = 4-h
+  safety net + 30-min second 400 (~3.5–4.5 h); (2) the V104 duplicate-key path returned NO_MATCH; (3) after a
+  confirmed deletion `retryStrandedUnlinked` only NULLs matcher_version — nothing re-reads a discovery-ingested
+  delivery, and the step-4 dedup (event 'unlinked:' at the current version) would block it anyway (BRK-45321-EG has sat
+  like that since 2026-10-20); (4) the reconcile job skipped it — bosta_link_attempts 10, never reset since V139.
+  Fixed by hand on prod 16:34 (Marawan): old leg cancelled, attempts → 0, reconcile linked at 16:35.
+- **Built:** `ShipmentLinkService.REASON_ACTIVE_FORWARD_LEG` — order found but has a live Bosta forward leg (pre-checked
+  in createOrFindShipment before any write; the V104 race maps to it too; manualLink → same 409). `ActiveForwardLegCheckJob`
+  (enqueued by BostaWebhookJob on that reason): ONE read-only v0 lookup of the old leg, only with a free token
+  (`hasHeadroom(key, 0)`, BACKGROUND), else / on 429 rescheduled 60 s up to 10×; 400 → observeNotFound +
+  `BostaDeletionService.confirmOnFirstCheck` (the re-booked unlinked SEND/RTO of exactly this order stands in for the
+  second 400; positive control, 'created', not replaced; refused when frozen / open pickup session / pieces out / packed
+  → stays suspected, normal two-step path); Bosta still has it → `old_delivery_live`, MEDIUM unmatched_delivery alert
+  reads "two Bosta waybills" (EN + AR), and no further lookup for that order for 60 min
+  (`bosta.active-leg-check.live-quiet-minutes`). `BostaRelink.relinkStrandedUnlinked` — the ONE re-match: from every
+  confirmed forward-leg deletion branch, Bosta 48/49/104 on a forward leg (next to requeueAfterLegEnded), and the check;
+  stored raw → tryMatchDelivery, no Bosta call, no re-ingest; refuses identity (≠ 1 order) / order_closed / frozen /
+  pickup_session / packed / active_forward_leg. Outcome on the row: V209 `relink_outcome` / `relink_at`.
+  `clearReconcileFlag` resets bosta_link_attempts when a Bosta FORWARD leg links (generic / return-leg links unchanged;
+  no backfill).
+- **Prod count (read-only, 2026-11-05):** 443 open orders at max attempts with no live Bosta leg (Dolt 169, Nuvira 122,
+  Femine 81, BROEK 27, …): 418 never had a Bosta leg, 25 had a dead one; none with an unresolved unlinked row of the same
+  reference. Unchanged by the deploy (reset only on a new Bosta link).
+- **Tests:** `BostaActiveForwardLegRelinkTest` a1–a10 (14), revert-checked per piece. Edited (approved):
+  `BostaLinkingHardeningTest.h2` NO_MATCH → ACTIVE_FORWARD_LEG. Counts MigrationSmokeTest 208, NotTracedBackfillTest 153.
+  Full suite 3,919: only ExchangeBackfillTest red (BostaPollJobTest.p6 flaked once, green alone).
+- **Gotchas:** a relinked leg has no history row for its current state until Bosta's next change (the stored event is
+  deduped — same as manualLink). CLAUDE.md's "UPDATE matcher_version = NULL, wait for the next poll" force-retry does NOT
+  work for discovery-ingested deliveries (nothing re-reads them) — not edited. GitHub rejected the branch push twice with
+  "fatal error in commit_refs_rules" (transient; third try after ~1 min went through).
+
 **Floe Wear PO-01 receiving reversal — ONE-OFF ops endpoint (2026-11-05; branch `fix/floe-receipt-reversal` (db431316), merged to main, NOT
 deployed yet; no migration). Remove `com.traceability.opsreversal` + `PieceAdjustService.voidPieceSendLater`
 + the two guard-registry entries after the run has settled.**
