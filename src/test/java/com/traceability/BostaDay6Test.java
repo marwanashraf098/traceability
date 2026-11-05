@@ -250,11 +250,11 @@ class BostaDay6Test {
     }
 
     // -------------------------------------------------------------------------
-    // (5a) State 41 SEND → shipment moves to 'with_courier', but pieces are NOT
-    //      moved (piece_status_after is NULL for this mapping).
+    // (5a) State 41 SEND → shipment moves to 'with_courier' and, since V207 (out for
+    //      delivery = proof Bosta has the parcel), pieces move to 'with_courier' too.
     // -------------------------------------------------------------------------
     @Test
-    void webhookJob_state41Send_shipmentUpdatedNoPieceTransition() {
+    void webhookJob_state41Send_shipmentUpdated_piecesToWithCourier() {
         String trackingNumber = "BOS-D6-SEND";
         setupCourierAccount(encryptionService.encrypt("api-key-d6e"));
 
@@ -273,8 +273,8 @@ class BostaDay6Test {
         bostaWebhookJob.process(webhookId, ownerTenantId);
 
         assertThat(webhookStatus(webhookId)).isEqualTo("processed");
-        assertThat(pieceStatus(piece1)).isEqualTo("packed");
-        assertThat(courierUpdateEventCount(piece1)).isEqualTo(0);
+        assertThat(pieceStatus(piece1)).isEqualTo("with_courier");
+        assertThat(courierUpdateEventCount(piece1)).isEqualTo(1);
 
         String shipmentState = jdbc.queryForObject(
             "SELECT internal_state FROM shipments WHERE tracking_number = ?",

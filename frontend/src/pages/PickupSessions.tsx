@@ -215,7 +215,7 @@ function CreateSessionForm({ onCreated, onCancel }: {
 // ── Session view (scan screen + closed manifest) ──────────────────────────────
 
 type FeedbackOutcome = 'ACCEPTED' | 'DUPLICATE' | 'OTHER_SESSION' | 'NOT_FORWARD_LEG' | 'LEG_ENDED' | 'NOT_PACKED' | 'UNKNOWN_AWB'
-  | 'WRONG_CARRIER' | 'AMBIGUOUS' | null
+  | 'WRONG_CARRIER' | 'AMBIGUOUS' | 'ALREADY_WITH_COURIER' | null
 
 /** A scanned waybill whose leg was cancelled / deleted in Bosta before close — not handed over. */
 interface LeftOut { shipmentId: string; trackingNumber: string; orderNumber: string | null }
@@ -294,7 +294,8 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       // Rollback optimistic entry.
       setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
       showFeedback(res.outcome as FeedbackOutcome, tn, res.carrier)
-      return { success: false }
+      // Bosta already has this parcel (its own status moved it): not an error, nothing added to the session.
+      return { success: res.outcome === 'ALREADY_WITH_COURIER' }
     } catch {
       setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
       showFeedback('UNKNOWN_AWB', tn)
@@ -489,7 +490,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
           {/* Feedback banner */}
           {feedback && (
             <div data-testid="pickup-scan-feedback" className={`rounded-lg px-4 py-4 text-xl font-bold text-center transition-all ${
-              feedback === 'ACCEPTED'
+              feedback === 'ACCEPTED' || feedback === 'ALREADY_WITH_COURIER'
                 ? 'bg-success/15 text-success border border-success/30'
                 : feedback === 'DUPLICATE'
                 ? 'bg-warning/15 text-warning border border-warning/30'

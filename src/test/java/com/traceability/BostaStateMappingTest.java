@@ -211,7 +211,8 @@ class BostaStateMappingTest {
         BostaStateMapper.MappedState s24 = stateMapper.map(24, "SEND");
         assertThat(s24.unknownCode()).isFalse();
         assertThat(s24.shipmentInternalState()).isEqualTo("with_courier");
-        assertThat(s24.pieceStatusAfter()).isNull();  // 24 = received at warehouse, no piece move
+        // V207: 24 = received at Bosta's warehouse — proof Bosta has the parcel, pieces move to with_courier.
+        assertThat(s24.pieceStatusAfter()).isEqualTo("with_courier");
 
         BostaStateMapper.MappedState s45 = stateMapper.map(45, "SEND");
         assertThat(s45.unknownCode()).isFalse();

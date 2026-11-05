@@ -3258,6 +3258,7 @@
       "UNKNOWN_AWB": "AWB not found",
       "WRONG_CARRIER": "This parcel goes with {{carrier}} — keep it for that courier's pickup.",
       "AMBIGUOUS": "This waybill matches two shipments — give it to a manager.",
+      "ALREADY_WITH_COURIER": "Already with the courier — Bosta has this parcel, nothing to do.",
       "LEG_ENDED_NEUTRAL": "This waybill is cancelled (or deleted in Bosta) — don't hand it to the courier."
     },
     "manifestTitle": "Handover Manifest",
