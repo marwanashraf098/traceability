@@ -62,7 +62,7 @@ public class ReturnSessionAutoCloseJob {
         this.sessionService = sessionService;
     }
 
-    @Recurring(id = "return-session-auto-close", cron = "0 */3 * * *")
+    @Recurring(id = "return-session-auto-close", cron = "0 */3 * * *", zoneId = "UTC")
     @Job(name = "Auto-close idle return sessions")
     public void run() {
         List<UUID> tenantIds = ownerJdbc.queryForList("SELECT id FROM tenants", UUID.class);

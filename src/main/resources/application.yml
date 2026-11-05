@@ -22,6 +22,14 @@ spring:
   # for Flyway — the TenantAwareDataSource primary bean is NOT used by Flyway.
   # Uploads (returns portal P1 logo, P3 photos). The outer ceiling only — each endpoint enforces
   # its own, smaller cap (logo: 2 MB) with a clear error. Matches nginx client_max_body_size 10m.
+  # SMTP timeouts (ms). JavaMail's default is no timeout at all: a hung SMTP server would hold the sender
+  # forever — a JobRunr worker for the alert emails, the watchdog's sender thread for its alert.
+  mail:
+    properties:
+      "[mail.smtp.connectiontimeout]": 10000
+      "[mail.smtp.timeout]": 20000
+      "[mail.smtp.writetimeout]": 20000
+
   servlet:
     multipart:
       max-file-size: 8MB
@@ -110,8 +118,32 @@ traced:
   owner-pool:
     size: 4
     connection-timeout-ms: 3000
+    # JDBC socket timeout (s) — bounds a read on a dead connection. 600 because Flyway migrations run here.
+    socket-timeout-seconds: 600
   datasource:
     leak-detection-ms: 20000
+    # app_user pool JDBC socket timeout (s); was 0 = wait forever on a dead socket (2026-11-04 stall).
+    app-socket-timeout-seconds: 300
+    # Hikari keepaliveTime: idle connections pinged every 2 min (a silently dropped one is replaced first).
+    keepalive-ms: 120000
+  # JobRunr's own storage calls: 60 s network timeout per borrowed connection (JobRunrConfig).
+  jobrunr:
+    storage-network-timeout-seconds: 60
+  # Job-server watchdog (JobServerWatchdog, 2026-11-05) — runs on its own thread + one-connection pool, not on
+  # JobRunr. Every interval: stale unprocessed Shopify webhook events, the liveness recurring job, this server's
+  # heartbeat. On failure: thread dump, ONE HIGH email to alert-emails, BackgroundJobServer stop + start;
+  # escalation email if still stalled escalate-after-minutes later.
+  watchdog:
+    enabled: ${TRACED_WATCHDOG_ENABLED:true}
+    alert-emails: ${TRACED_WATCHDOG_ALERT_EMAILS:}
+    interval-seconds: 60
+    startup-grace-minutes: 5
+    webhook-stale-minutes: 3
+    liveness-recurring-job-id: bosta-discovery-poll
+    liveness-max-age-minutes: 5
+    heartbeat-max-age-seconds: 60
+    escalate-after-minutes: 5
+    restart-timeout-seconds: 120
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
   # Feature A — address backfill for the Traced Main Warehouse Shopify location (LocationAddressBackfillJob).
@@ -158,6 +190,10 @@ traced:
 shopify:
   # Pin the API version — never use "latest" in code paths.
   api-version: ${SHOPIFY_API_VERSION:2026-04}
+  # Main Admin API client (ShopifyHttpGateway). The token endpoint has its own 5 s / 10 s client.
+  http:
+    connect-timeout: 5s
+    read-timeout: 30s
   # Orders older than this are excluded from the pick queue and the initial import.
   # Override via SHOPIFY_IMPORT_LOOKBACK_DAYS env var.
   import-lookback-days: ${SHOPIFY_IMPORT_LOOKBACK_DAYS:30}
@@ -380,6 +416,18 @@ logging:
     org.flywaydb: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} %5p [%X{requestId:--}] %logger{36} : %m%n%wEx"
+    # File lines carry the full date + offset and the thread (the watchdog's dumps name threads).
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS XXX} %5p [%t] [%X{requestId:--}] %logger{36} : %m%n%wEx"
+  # Rolling log file in addition to stdout (2026-11-05: the Nov 4 logs died with the container). Empty = no
+  # file (local dev, tests). Prod sets TRACED_LOG_FILE=/app/logs/traced.log on a named volume
+  # (deploy/docker-compose.yml). Daily + 50 MB files, kept 7 days, 500 MB total at most.
+  file:
+    name: ${TRACED_LOG_FILE:}
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 7
+      total-size-cap: 500MB
 
 # Sentry error tracking (NFR-6).
 # Set SENTRY_DSN env var in production; leave unset locally/in tests (disables Sentry).

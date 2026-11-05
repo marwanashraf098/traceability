@@ -38,7 +38,7 @@ public class ReturnPhotoJobs {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "return-photos-expire-unclaimed", cron = "17 */3 * * *")
+    @Recurring(id = "return-photos-expire-unclaimed", cron = "17 */3 * * *", zoneId = "UTC")
     @Job(name = "Return photos: expire unclaimed uploads")
     public void expireUnclaimed() {
         run("expired", "SELECT DISTINCT tenant_id FROM return_request_photos WHERE request_id IS NULL", photos::expireUnclaimed);

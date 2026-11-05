@@ -81,7 +81,7 @@ public class BostaOrderReconcileJob {
         this.batchSize          = batchSize;
     }
 
-    @Recurring(id = "bosta-order-reconcile", cron = "*/5 * * * *")
+    @Recurring(id = "bosta-order-reconcile", cron = "*/5 * * * *", zoneId = "UTC")
     @Job(name = "Bosta order reconcile — detect unlinked orders")
     public void reconcileAll() {
         List<UUID> tenantIds = ownerJdbc.query(

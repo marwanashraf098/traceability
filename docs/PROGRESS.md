@@ -4,6 +4,54 @@
 
 ## Current state
 
+**JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, NOT merged,
+NOT deployed; no migration).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
+- **Root cause (JobRunr 7.3.0 OSS):** `ServerZooKeeper.run` catches ANY exception from the heartbeat
+  (`signalBackgroundJobServerAlive` → StorageException on a failed connection / query) and calls
+  `backgroundJobServer.stop()` — one failed heartbeat stops the whole server (zookeepers, steward, workers) for good;
+  `JobHandler.run` does the same after > 5 net task exceptions ("FATAL - JobRunr encountered too many storage
+  exceptions"). Nothing ever starts it again. Web enqueues keep writing jobrunr_jobs rows (JobScheduler writes storage
+  directly), which sit ENQUEUED. Reproduced on a real JobRunr server (JobServerWatchdogEndToEndTest.e1: a few seconds
+  without connections → "An unrecoverable error occurred. Shutting server down...", never recovers by itself).
+  Second hang class: pgjdbc socketTimeout=0 and no TCP keep-alive → a read on a dead socket blocks forever; inside
+  `stop()` that also holds the lifecycle write lock every JobRunr thread needs.
+- **DST:** JobRunr's `CronExpression.next()` converts the next LOCAL time with `atZone()` (earlier offset in an
+  overlap), so in Cairo's repeated hour every minute-based job's next run is an hour in the past → a burst every 5 s
+  poll. The JVM default zone is Africa/Cairo (Dockerfile), so every zone-less cron was Cairo. Fix: all 24 interval /
+  hourly jobs now `zoneId = "UTC"` (incl. demo-tenant-reseed and bosta-settlement-refresh, which were explicit Cairo);
+  the 7 daily wall-clock jobs stay Africa/Cairo. `RecurringJobZonesTest` enforces the rule for every @Recurring.
+  Phase shift: `0 */3` / `17 */3` / `15 */4` jobs now fire on UTC hours (2–3 h shift in Cairo terms); minute-based
+  ones are unchanged in effect (Cairo's offset is whole hours).
+- **Watchdog** (`com.traceability.jobs.watchdog`): own one-thread TaskScheduler, own one-connection read-only pool
+  on the OWNER credentials ("watchdog-pool", statement_timeout 10 s, socketTimeout 15 s; held in a `WatchdogPool`
+  record, not a DataSource bean — kept out of autowiring and health). Every 60 s after a 5 min startup grace:
+  Shopify events unprocessed > 3 min (48 h window, below the retry cap); a `bosta-discovery-poll` job created within
+  max(5 min, 2 × its cron interval + 1 min) or one PROCESSING with a fresh updatedAt; this server's heartbeat < 60 s.
+  Failure → full thread dump (platform threads with JobRunr's first + virtual threads via HotSpotDiagnosticMXBean),
+  ONE HIGH email to `TRACED_WATCHDOG_ALERT_EMAILS` (EmailGateway, 30 s send cap — NOT the tenant exception system:
+  its emails are sent by a JobRunr job), then `stop()` + `start()` (120 s cap). Still failing 5 min after → ONE
+  escalation email + dump. Healthy tick closes the incident. A failed probe acts only on its 2nd consecutive time.
+  Kill switch `TRACED_WATCHDOG_ENABLED=false`. NOT built (needs OK): controlled JVM exit on escalation so Docker
+  restarts the container (compose `restart: unless-stopped` — an exit with any code is restarted).
+- **Connections:** both pools `socketTimeout` (app 300 s, owner 600 s — Flyway runs there) + `tcpKeepAlive=true` +
+  Hikari keepaliveTime 2 min; JobRunr's StorageProvider borrows through `NetworkTimeoutDataSource` (60 s per
+  connection; Hikari resets it on return). Compose sets the container's net.ipv4.tcp_keepalive_* (60 s / 10 s × 6).
+- **HTTP timeouts:** the main Shopify Admin API RestClient had NO read timeout — now connect 5 s / read 30 s
+  (`shopify.http.*`, Spring constructor only; the hand-wired test constructor is unchanged). SMTP (JavaMail) had none
+  either — now 10 s connect / 20 s read+write. Bosta (v0 5/20 s, v2 5/30 s, create 5/20 s), Shopify token 5/10 s,
+  store check 3 s, bulk download 10 s / 5 min already had them.
+- **Logs:** `TRACED_LOG_FILE` → rolling file (daily + 50 MB, 7 days, 500 MB cap) besides stdout; compose mounts the
+  named volume `app_logs` at /app/logs (host: /var/lib/docker/volumes/deploy_app_logs/_data).
+- **Tests:** JobServerWatchdogTest w1–w6, WatchdogDbProbeTest p1–p5, JobServerWatchdogEndToEndTest e1–e2,
+  RecurringJobZonesTest z1–z3, ShopifyHttpTimeoutTest t1–t2, JobServerResilienceConfigTest r1–r5. Revert-to-confirm
+  RED: restart without start() → e1 e2; no escalation guard → w2; network timeout 0 → r2 r3; Shopify factory removed
+  → r4.
+- **FOLLOW-UP:** the Bosta webhook endpoint enqueues synchronously with no timeout and no try/catch after committing
+  the webhook_events row (Shopify's endpoint caps it at 2 s); a failed enqueue answers 500 and the stored 'pending'
+  row is never swept (no Bosta pending sweeper). Proposed: same 2 s guard + a pending-row sweep.
+- **Tooling gotcha:** the shell's `grep` function in this environment silently SKIPS files it thinks are binary —
+  e.g. ExceptionImmediateAlertJob.java (a stray non-UTF-8 byte). Use `/usr/bin/grep -a` for code sweeps.
+
 **Shopify order webhooks — freshness under the row lock + shorter lock (2026-11-04; merged to main
 2026-11-05 from `fix/order-webhook-lock-hold`, NOT deployed; no migration).** Prod: order upserts waited 10–40 s
 (max 39 s) on each other's row lock ("while inserting index tuple … in relation orders"). Step 0 found no

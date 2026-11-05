@@ -132,7 +132,7 @@ public class BostaFulfillmentLinkService {
             tenantId, orderId, trackingNumber, r.verdict(), r.reason() == null ? "" : r.reason());
     }
 
-    @Recurring(id = "fulfillment-link-retry", cron = "*/2 * * * *")
+    @Recurring(id = "fulfillment-link-retry", cron = "*/2 * * * *", zoneId = "UTC")
     @Job(name = "Bosta fulfillment link — retry due")
     public void retryDue() {
         List<Map<String, Object>> due = ownerJdbc.queryForList(

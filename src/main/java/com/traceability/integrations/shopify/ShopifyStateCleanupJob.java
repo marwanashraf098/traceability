@@ -45,7 +45,7 @@ public class ShopifyStateCleanupJob {
         this.jdbc = jdbc;
     }
 
-    @Recurring(id = "shopify-state-cleanup", cron = "0 */3 * * *")
+    @Recurring(id = "shopify-state-cleanup", cron = "0 */3 * * *", zoneId = "UTC")
     @Job(name = "Shopify OAuth state cleanup")
     public void purgeExpiredStates() {
         Integer deleted = jdbc.queryForObject("SELECT purge_expired_shopify_oauth_state()", Integer.class);

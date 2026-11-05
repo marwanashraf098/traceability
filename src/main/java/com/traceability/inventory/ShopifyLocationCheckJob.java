@@ -35,14 +35,14 @@ public class ShopifyLocationCheckJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "shopify-location-check-held", cron = "*/10 * * * *")
+    @Recurring(id = "shopify-location-check-held", cron = "*/10 * * * *", zoneId = "UTC")
     @Job(name = "Traced location in Shopify — check held tenants")
     public void checkHeld() {
         run("SELECT DISTINCT tenant_id FROM locations WHERE is_fulfillment = true AND shopify_sync_status = 'linked' " +
             "AND shopify_location_state <> 'active'");
     }
 
-    @Recurring(id = "shopify-location-check-all", cron = "17 * * * *")
+    @Recurring(id = "shopify-location-check-all", cron = "17 * * * *", zoneId = "UTC")
     @Job(name = "Traced location in Shopify — hourly check")
     public void checkAll() {
         run("SELECT DISTINCT l.tenant_id FROM locations l WHERE l.is_fulfillment = true AND l.shopify_sync_status = 'linked' " +

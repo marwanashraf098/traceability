@@ -155,7 +155,7 @@ public class BostaDiscoveryPollJob {
     // Cron is config-wired (bosta.poll.discovery-cron) but defaults to the same */20 as
     // before — this change does NOT flip the effective cadence; that's a follow-up once
     // the high-water mark + lock above have proven themselves at the current interval.
-    @Recurring(id = "bosta-discovery-poll", cron = "${bosta.poll.discovery-cron:*/20 * * * *}")
+    @Recurring(id = "bosta-discovery-poll", cron = "${bosta.poll.discovery-cron:*/20 * * * *}", zoneId = "UTC")
     @Job(name = "Bosta discovery poll")
     public void discoverAll() {
         // In-method guard, not @ConditionalOnProperty at class level (bed889d): a

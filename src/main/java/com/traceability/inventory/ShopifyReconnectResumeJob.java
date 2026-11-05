@@ -49,7 +49,7 @@ public class ShopifyReconnectResumeJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "shopify-reconnect-resume", cron = "*/5 * * * *")
+    @Recurring(id = "shopify-reconnect-resume", cron = "*/5 * * * *", zoneId = "UTC")
     @Job(name = "Shopify reconnect — send held updates")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(

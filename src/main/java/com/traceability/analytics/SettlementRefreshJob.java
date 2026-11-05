@@ -104,7 +104,7 @@ public class SettlementRefreshJob {
         this.enabled = enabled;
     }
 
-    @Recurring(id = "bosta-settlement-refresh", cron = "23 * * * *", zoneId = "Africa/Cairo")
+    @Recurring(id = "bosta-settlement-refresh", cron = "23 * * * *", zoneId = "UTC")
     @Job(name = "Bosta settlement refresh")
     public void refreshAll() {
         if (!enabled) return;

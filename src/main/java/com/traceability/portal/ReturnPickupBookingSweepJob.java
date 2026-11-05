@@ -37,7 +37,7 @@ public class ReturnPickupBookingSweepJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "return-pickup-booking-sweep", cron = "*/10 * * * *")
+    @Recurring(id = "return-pickup-booking-sweep", cron = "*/10 * * * *", zoneId = "UTC")
     @Job(name = "Return pickup booking sweep")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(
