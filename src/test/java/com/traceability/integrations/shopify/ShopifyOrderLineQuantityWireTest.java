@@ -38,7 +38,7 @@ class ShopifyOrderLineQuantityWireTest {
 
         String q = bodies.stream().map(b -> b.path("query").asText())
             .filter(s -> s.contains("OrdersPage")).findFirst().orElseThrow();
-        assertThat(q.replaceAll("\\s+", " ")).contains("node { id quantity currentQuantity variant { id } }");
+        assertThat(q.replaceAll("\\s+", " ")).contains("node { id quantity currentQuantity variant { id }");
         List<ShopifyGateway.LineItem> lines = page.orders().get(0).lineItems();
         assertThat(lines).extracting(ShopifyGateway.LineItem::currentQuantity).containsExactly(0, 1, null);
         assertThat(lines).extracting(ShopifyGateway.LineItem::storedQuantity).containsExactly(0, 1, 2);

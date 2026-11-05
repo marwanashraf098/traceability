@@ -4,6 +4,40 @@
 
 ## Current state
 
+**Returns portal fees F0 — order line price paid (2026-11-05; branch `feat/portal-fees-f0`, rebased on main 712bd97d,
+NOT merged, NOT deployed; V208).** Workstream: returns portal (A) exchange to a different product with a price
+difference, (B) customer fees on exchanges and refunds. Step 0 approved 2026-11-05; build order F0 → F1 → F2 → F3 → F4,
+one branch per slice, each stops before merge with a report.
+- **Decisions (Marawan, 2026-11-05):** "exchange to a different product" off for everyone (opt-in). Merchant-fault
+  reasons (fee waived): damaged, wrong_item, not_as_pictured — editable by the merchant. A fixed fee is charged unless
+  EVERY item is merchant-fault; a percent fee is waived per item. Fees round to whole EGP (ROUND_HALF_UP). Only an
+  approximate (catalogue) price → block a different-product exchange, allow same-product. Fee ≥ refund value → allow,
+  close as `nothing_owed`. No amount override after approval. Mode B amendment #3 COD wording APPROVED ("cod = the
+  request's frozen collect amount (≥ 0, ≤ 30,000), verified on read-back") — written into CLAUDE.md, built in F4.
+  Area overrides: city + district only. S5's handling of an exchange balance collected by COD: deferred to S5's
+  Step 0. From F3, same-product exchanges also compare old paid price vs new variant price (the "same price, nothing
+  extra to pay" copy goes where no longer true).
+- **Prod check (Marawan, 2026-11-05):** last 60 days, 221 of 29,902 order lines have no net_unit_price (0.7%; The Snouts
+  23, Dolt.eg 6, the rest pre-connect / internal). No re-import, no backfill.
+- **Built:** V208 `order_line_paid_unit_price(order_items)` — the ONE stored definition (REST net, else the
+  `paid_unit_price` key, floored at 0, NULL when neither). `ShopifyGateway.LineItem.paidUnitPrice` (serialised as
+  `paid_unit_price`, never `price`) filled from `discountedUnitPriceAfterAllDiscountsSet` in the import and the portal
+  pre-connect query; pre-connect lines (merged per variant) store the quantity-weighted average
+  (`PortalOnDemandLookup.paidUnitPriceByVariant`; any unpriced line of the variant → no key). Both queries retry the
+  same page without prices on MAX_COST_EXCEEDED and skip prices for that shop for 1 h (the field can never fail an
+  import / lookup). `portal.OrderLinePaidPrices.resolve(tenant, order)`: stored → Shopify live (`order(id:)`, only
+  when a line is unpriced, connected store, Shopify order GID; token under runAs) → catalogue (approximate) → NONE;
+  refuses to run inside a transaction. No caller yet (F2 / F3 use it). RefundSuggestionService unchanged.
+- **Shopify query cost — measured 2026-11-05 on the test store marwan-nnrumxdy (API 2026-04):** the price field adds
+  NOTHING to the requested cost — import page (orders 50 × lineItems 100) 177 / 163 / 149 (FULL / ADDRESSES / NONE)
+  with or without prices; portal lookup 29 / 27 / 25 both ways (max 2000). The MAX_COST step-down stays as a safety
+  net only. After deploy, "MAX_COST_EXCEEDED with line prices" in the logs is still the thing to watch for.
+- **Migration number:** V208 (renumbered from V207 at rebase: main's Bosta forward-proof fix e3ad7cd4 took V207
+  and is deployed). S1 (V206) deployed 13:22 2026-11-05 (Marawan verified).
+- **Tests:** OrderLinePaidPricesTest d1, r1–r7 (r7: never a Shopify-exchange shadow order), i1, x1 (app_user cross-tenant + same-tenant positive control);
+  ShopifyLinePaidPriceWireTest q1, w1–w3, s1; PortalPreConnectPaidPriceTest p1–p4. Count gates: MigrationSmokeTest
+  206 → 207 files, NotTracedBackfillTest 151 → 152. OrdersTableAccessGuardTest: LOAD_SQL MUST_INCLUDE (approved).
+
 **BROEK pack-scan block — returned pieces (2026-11-05). Fix #3 (9876dec6, no migration) and fix #1 (e3ad7cd4, V207) merged to main and DEPLOYED to prod 2026-11-05; V207 applied, mappings verified. Branches deleted. The returns F0 / F1 branches must renumber their V207 / V208 → V208 / V209.**
 - **Incident:** packers' scans refused "Piece is already reserved for another order" for 86 BROEK pieces in
   `return_pending_inspection` with a live `packed` allocation (54 orders, 48 cancelled in Shopify). The proposed
