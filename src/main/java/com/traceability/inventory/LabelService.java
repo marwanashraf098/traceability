@@ -274,6 +274,11 @@ public class LabelService {
         if (rows.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
         }
+        if ("reversed".equals(rows.get(0))) {
+            // A reversed session's pieces were all voided (one-off admin reversal, 2026-11-05) — nothing to label.
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "This session was reversed — its pieces were voided, there is nothing to print");
+        }
         if (!"finalized".equals(rows.get(0))) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Session is not finalized — finalize the session first");

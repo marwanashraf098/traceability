@@ -97,7 +97,7 @@ public class OnboardingController {
             // ⑤ First receiving session finalized
             boolean receivingAuto = Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS(SELECT 1 FROM receipts " +
-                "WHERE tenant_id = ? AND finalized_at IS NOT NULL)",
+                "WHERE tenant_id = ? AND finalized_at IS NOT NULL AND status <> 'reversed')",
                 Boolean.class, tenantId));
 
             List<String> manualSteps = onboardingService.readManualSteps(tenantId);

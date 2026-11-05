@@ -753,6 +753,8 @@
     "printBarcodes": "طباعة الباركود",
     "piecesCreated": "{{count}} قطعة تم إنشاؤها",
     "finalizedAt": "تم الإنهاء في {{date}}",
+    "reversedStatus": "ملغاة",
+    "reversedNote": "تم إلغاء هذه الجلسة: تم إبطال {{count}} قطعة كأنها لم تصل أبدًا.",
     "finalizeModalTitle": "إنهاء الجلسة {{ref}}؟",
     "finalizeModalBody": "سيؤدي هذا إلى إنشاء {{count}} قطعة وقفل الجلسة عن التعديل.",
     "finalizeModalConfirm": "إنهاء",

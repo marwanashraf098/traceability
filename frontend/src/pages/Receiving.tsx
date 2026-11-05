@@ -60,11 +60,18 @@ interface ShopifySync { applied: number; pending: number; failed: number; skippe
 interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync; factory?: FactoryProgress }
 interface Location { id: string; name: string; is_fulfillment?: boolean }
 
-// open → warning, finalized → success, unknown → neutral
-function sessionTone(status: string): 'warning' | 'success' | 'neutral' {
+// open → warning, finalized → success, reversed → critical, unknown → neutral
+function sessionTone(status: string): 'warning' | 'success' | 'critical' | 'neutral' {
   if (status === 'open') return 'warning'
   if (status === 'finalized') return 'success'
+  if (status === 'reversed') return 'critical'
   return 'neutral'
+}
+
+// A reversed session (one-off admin reversal: its pieces were voided) gets a translated label;
+// open / finalized keep the label they always had.
+function sessionLabel(status: string, t: (k: string) => string): string {
+  return status === 'reversed' ? t('receiving.reversedStatus') : status
 }
 
 export default function Receiving() {
@@ -192,7 +199,7 @@ export default function Receiving() {
                   <td className="tbl-cell text-primary">{s.line_units}</td>
                   <td className="tbl-cell text-primary">{s.piece_count}</td>
                   <td className="tbl-cell">
-                    <Badge tone={sessionTone(s.status)} label={s.status} />
+                    <Badge tone={sessionTone(s.status)} label={sessionLabel(s.status, t)} />
                   </td>
                   <td className="tbl-cell text-muted text-small">
                     {new Date(s.created_at).toLocaleDateString()}
@@ -477,7 +484,7 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
             {session.reference ?? t('receiving.untitled')}
           </h1>
           <p className="text-small text-muted mt-0.5 flex items-center gap-2">
-            {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
+            {session.location_name} · <Badge tone={sessionTone(session.status)} label={sessionLabel(session.status, t)} />
             {flexibleLabeling && (
               <span data-testid="receiving-session-mode">
                 <Badge tone="neutral" label={t(countOnly ? 'receiving.countOnly.badge'
@@ -518,6 +525,10 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
       {/* Warehouse places S4 — renders nothing without places, or when no tagged piece of this receipt waits. */}
       {session.status === 'finalized' && (
         <PutAwayListButton source="receiving" sourceId={session.id} label={t('putAway.list.putAwayNow')} variant="primary" />
+      )}
+
+      {session.status === 'reversed' && (
+        <Alert tone="warning" title={t('receiving.reversedNote', { count: session.piece_count })} />
       )}
 
       {printError && <Alert tone="critical" title={printError} />}

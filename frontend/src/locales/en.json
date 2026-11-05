@@ -753,6 +753,8 @@
     "printBarcodes": "Print Barcodes",
     "piecesCreated": "{{count}} pieces created",
     "finalizedAt": "Finalized at {{date}}",
+    "reversedStatus": "Reversed",
+    "reversedNote": "This session was reversed: its {{count}} pieces were voided, as if they never arrived.",
     "finalizeModalTitle": "Finalize session {{ref}}?",
     "finalizeModalBody": "This creates {{count}} pieces and locks the session for editing.",
     "finalizeModalConfirm": "Finalize",
