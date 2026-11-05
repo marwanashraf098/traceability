@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Alert, Badge, Button, EmptyState, Input, Modal, Tabs, TableSkeleton, useToast } from '../components/ui'
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
+import { ReturnReceiveBanner, ReturnedLines } from './receiving/ReturnReceiveBanner'
 import { ImportFromExcelButton, ImportPanel } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
 import FactoryRuns from './receiving/FactoryRuns'
@@ -54,9 +55,11 @@ interface Session {
 export interface Line {
   id: string; variant_id: string; variant_title: string; sku: string | null
   product_title: string; quantity: number; piece_count: number
+  /** S1b: the return this line brings back (from a Return To Receive alert), its order, and units not re-sent. */
+  return_source?: string | null; return_order_number?: string | null; shopify_restocked_units?: number
 }
 /** Count-only finished sessions: units of this session's Shopify +N by outcome. */
-interface ShopifySync { applied: number; pending: number; failed: number; skipped: number }
+interface ShopifySync { applied: number; pending: number; failed: number; skipped: number; shopifyRestocked?: number }
 interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync; factory?: FactoryProgress }
 interface Location { id: string; name: string; is_fulfillment?: boolean }
 
@@ -88,10 +91,13 @@ export default function Receiving() {
 
   // The factory scan loop (full-screen route) comes back here with ?session=<id> — reopen that session.
   const [searchParams, setSearchParams] = useSearchParams()
+  // S1b: arrived from a Return To Receive alert — the line added for it is linked to that return.
+  const [returnKey, setReturnKey] = useState<string | null>(() => searchParams.get('return'))
   useEffect(() => {
     loadSessions(); loadLocations()
     const back = searchParams.get('session')
-    if (back) { openSession(back); setSearchParams({}, { replace: true }) }
+    if (back || searchParams.get('return')) setSearchParams({}, { replace: true })
+    if (back) openSession(back)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -126,6 +132,8 @@ export default function Receiving() {
     return (
       <SessionView
         session={activeSession}
+        returnKey={returnKey}
+        onDismissReturn={() => setReturnKey(null)}
         flexibleLabeling={flexibleLabeling}
         onRefresh={() => openSession(activeSession.id)}
         onBack={() => { loadSessions(); setView('list') }}
@@ -161,6 +169,11 @@ export default function Receiving() {
       {tabs}
 
       {error && <Alert tone="critical" title={error} />}
+
+      {returnKey && (
+        <ReturnReceiveBanner returnKey={returnKey} canAdd={false} linkedLines={[]} onAdded={() => {}}
+          onDismiss={() => setReturnKey(null)} />
+      )}
 
       {loading ? (
         <div className="card overflow-hidden">
@@ -388,8 +401,9 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
 
 // ── Session View ──────────────────────────────────────────────────────────────
 
-function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
-  session: SessionDetail; flexibleLabeling: boolean; onRefresh: () => void; onBack: () => void
+function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, onRefresh, onBack }: {
+  session: SessionDetail; returnKey?: string | null; onDismissReturn?: () => void
+  flexibleLabeling: boolean; onRefresh: () => void; onBack: () => void
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -548,10 +562,19 @@ function SessionView({ session, flexibleLabeling, onRefresh, onBack }: {
           onFinish={() => setShowFinalizeModal(true)} finishing={finalizing} />
       )}
 
+      {/* S1b: a returned unit from a Return To Receive alert — added as a line linked to its return. */}
+      {returnKey && (
+        <ReturnReceiveBanner returnKey={returnKey} sessionId={session.id} canAdd={isOpen && !factory}
+          linkedLines={session.lines.filter(l => l.return_source)} onAdded={onRefresh}
+          onDismiss={() => onDismissReturn?.()} />
+      )}
+      <ReturnedLines lines={session.lines.filter(l => l.return_source)} sessionId={session.id}
+        canEdit={isOpen && !factory} onChanged={onRefresh} />
+
       {isOpen && !factory && (
         <ProductSelectionGrid
           sessionId={session.id}
-          lines={session.lines}
+          lines={session.lines.filter(l => !l.return_source)}
           onRefresh={onRefresh}
           onFinalizeClick={() => setShowFinalizeModal(true)}
           finalizing={finalizing}
@@ -785,6 +808,7 @@ function CountOnlyDone({ session }: { session: SessionDetail }) {
   const shopify = !s || s.pending > 0 ? t('receiving.countOnly.shopifyUpdating', { count: total })
     : s.failed > 0 ? t('receiving.countOnly.shopifyFailed')
     : s.applied > 0 ? t('receiving.countOnly.shopifyUpdated', { count: s.applied })
+    : (s.shopifyRestocked ?? 0) > 0 ? t('receiving.returnLink.allAlreadyInShopify', { count: s.shopifyRestocked })
     : t('receiving.countOnly.shopifyNone')
   return (
     <div className="card p-5 space-y-4" data-testid="count-only-done">

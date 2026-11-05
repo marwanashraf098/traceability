@@ -240,6 +240,30 @@ class MainReconcileTest {
         assertThat(diffs(t, run)).isEmpty();
     }
 
+    /**
+     * S1b (V212): R_main counts a Shopify RETURN restock (a RESTOCKED disposition, no refund) at Main like a refund
+     * restock — a unit fulfilled from Main and restocked back there by a processed return, while Traced still holds the
+     * piece (before Traced's intake), reconciles as in sync: no −1 at Main. A disposition at another location doesn't
+     * count (Main really is one short there). t3's refund cases are unchanged.
+     */
+    @Test
+    void t7_dispositionRestockAtMainBeforeTracedIntake_inSync_noMinusOne() {
+        T t = tenant("t7");
+        V atMain = variant(t), elsewhere = variant(t);
+        UUID o1 = order(t, "{" + fulfillmentsField(f("71", t.mainNum(), "success", line("711", atMain, 1))) + ", \"refunds\": []}");
+        allocate(t, orderItem(t, o1, atMain, 1), piece(t, atMain, "reserved", t.main()), "active");
+        ShopifyReturnFixtures.restockedReturn(jdbc, t.tenant(), t.store(), o1, atMain.gid(), 1, t.mainGid());
+        UUID o2 = order(t, "{" + fulfillmentsField(f("72", t.mainNum(), "success", line("721", elsewhere, 1))) + ", \"refunds\": []}");
+        allocate(t, orderItem(t, o2, elsewhere, 1), piece(t, elsewhere, "reserved", t.main()), "active");
+        ShopifyReturnFixtures.restockedReturn(jdbc, t.tenant(), t.store(), o2, elsewhere.gid(), 1, "gid://shopify/Location/999777");
+        level(atMain, 1, 1, 0, 0);      // −1 fulfilled from Main, +1 restocked at Main by the return
+        level(elsewhere, 0, 0, 0, 0);   // −1 fulfilled from Main; the return restocked another location
+
+        UUID run = run(t, atMain, elsewhere);
+        assertThat(runRow(t, run)).containsEntry("variants_checked", 2).containsEntry("variants_in_sync", 2);
+        assertThat(diffs(t, run)).isEmpty();
+    }
+
     // ── t4 / t5: skips ────────────────────────────────────────────────────────────────────────────────────────
 
     @Test

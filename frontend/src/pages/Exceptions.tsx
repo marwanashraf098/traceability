@@ -1,3 +1,4 @@
+import { withReturnSource } from '../receivingReturn'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -33,6 +34,8 @@ interface ExceptionItem {
   descriptionAr: string
   suggestedAction: string
   actionUrl: string
+  /** S1b: a Return To Receive alert — Receiving links its line to this return. */
+  returnSource?: string
   releaseUrl?: string
   cancelUrl?: string
   /** shopify_edit_conflict on an order packed and still in the warehouse: Pick & Pack's unpack (unpack-order S4). */
@@ -278,7 +281,7 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
           </>
         )}
         {item.actionUrl && item.type !== 'blocked_customer' && (
-          <Button size="sm" onClick={() => navigate(item.actionUrl)}>
+          <Button size="sm" onClick={() => navigate(withReturnSource(item.actionUrl, item.returnSource))}>
             {isAr ? 'الإجراء' : 'Go →'}
           </Button>
         )}

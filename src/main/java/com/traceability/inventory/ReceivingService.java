@@ -112,24 +112,139 @@ public class ReceivingService {
 
     @Transactional
     public UUID addLine(UUID sessionId, UUID variantId, int quantity) {
+        return addLine(sessionId, variantId, quantity, null);
+    }
+
+    /**
+     * S1b (V212): a line may name the return it brings back ({@code returnSource} = 'shipment:&lt;id&gt;' |
+     * 'untracked_unit:&lt;id&gt;' | 'request_item:&lt;id&gt;', from a Return To Receive / request item alert). The
+     * variant must be one the return can bring back; a unit-level source is one unit, linked once.
+     */
+    @Transactional
+    public UUID addLine(UUID sessionId, UUID variantId, int quantity, String returnSource) {
         UUID tenantId = TenantContext.require();
         requireOpenWithLines(sessionId, tenantId);
+        UUID orderId = null;
+        if (returnSource != null && !returnSource.isBlank()) {
+            ReturnSource src = resolveReturnSource(tenantId, returnSource);
+            if (src.variants().stream().noneMatch(v -> v.equals(variantId))) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "This item isn't part of the return");
+            }
+            if (src.unitLevel()) {
+                if (quantity != 1) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "A returned unit is received one at a time");
+                Boolean taken = jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM receipt_lines rl JOIN receipts r ON r.id = rl.receipt_id " +
+                    "  AND r.tenant_id = rl.tenant_id WHERE rl.tenant_id = ? AND rl.return_source = ? " +
+                    "  AND r.status IN ('open', 'finalized'))", Boolean.class, tenantId, src.key());
+                if (Boolean.TRUE.equals(taken)) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This returned unit is already in a Receiving session");
+            }
+            returnSource = src.key();
+            orderId = src.orderId();
+        } else {
+            returnSource = null;
+        }
         UUID id = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO receipt_lines (id, tenant_id, receipt_id, variant_id, quantity) VALUES (?, ?, ?, ?, ?)",
-            id, tenantId, sessionId, variantId, quantity);
+            "INSERT INTO receipt_lines (id, tenant_id, receipt_id, variant_id, quantity, return_order_id, return_source) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id, tenantId, sessionId, variantId, quantity, orderId, returnSource);
         return id;
+    }
+
+    /** What a Return To Receive alert brings back: its order and the variant(s) the line may be. */
+    public record ReturnSource(String key, UUID orderId, String orderNumber, List<UUID> variants, boolean unitLevel) {}
+
+    /**
+     * The ONE resolution of a return source key, for addLine and the Receiving screen's banner. 404 when it isn't this
+     * tenant's (RLS + explicit tenant). shipment = a return leg / returned-to-sender parcel (any line of its order);
+     * untracked_unit = one unit marked Arrived · sellable (V154); request_item = one untracked request item marked
+     * Arrived sellable (Step 6a).
+     */
+    public ReturnSource resolveReturnSource(UUID tenantId, String key) {
+        String[] kv = key == null ? new String[0] : key.split(":", 2);
+        UUID id;
+        try { id = kv.length == 2 ? UUID.fromString(kv[1]) : null; } catch (IllegalArgumentException e) { id = null; }
+        if (id == null) throw notFound("return");
+        String norm = kv[0] + ":" + id;
+        List<Map<String, Object>> rows = switch (kv[0]) {
+            case "shipment" -> jdbc.queryForList(
+                "SELECT s.order_id, oi.variant_id FROM shipments s " +
+                "JOIN order_items oi ON oi.order_id = s.order_id AND oi.tenant_id = s.tenant_id " +
+                "WHERE s.id = ? AND s.tenant_id = ? AND oi.variant_id IS NOT NULL", id, tenantId);
+            case "untracked_unit" -> jdbc.queryForList(
+                "SELECT u.order_id, oi.variant_id FROM untracked_unit_intakes u " +
+                "JOIN order_items oi ON oi.id = u.order_item_id AND oi.tenant_id = u.tenant_id " +
+                "WHERE u.id = ? AND u.tenant_id = ? AND oi.variant_id IS NOT NULL", id, tenantId);
+            case "request_item" -> jdbc.queryForList(
+                "SELECT rr.order_id, ri.variant_id FROM return_request_items ri " +
+                "JOIN return_requests rr ON rr.id = ri.request_id AND rr.tenant_id = ri.tenant_id " +
+                "WHERE ri.id = ? AND ri.tenant_id = ? AND ri.variant_id IS NOT NULL", id, tenantId);
+            default -> List.of();
+        };
+        if (rows.isEmpty()) throw notFound("return");
+        UUID orderId = (UUID) rows.get(0).get("order_id");
+        List<UUID> variants = rows.stream().map(r -> (UUID) r.get("variant_id")).distinct().toList();
+        String number = jdbc.query("SELECT number FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, orderId, tenantId);
+        return new ReturnSource(norm, orderId, number, variants, !"shipment".equals(kv[0]));
+    }
+
+    /**
+     * The Receiving screen's return banner: the order, and per variant the product, how many units Shopify already
+     * restocked at Main for the order and how many of those Traced hasn't counted yet — the units that will NOT be
+     * added to Shopify again at finalize (shown as a warning before the manager receives them).
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> returnSourcePreview(String key) {
+        UUID tenantId = TenantContext.require();
+        ReturnSource src = resolveReturnSource(tenantId, key);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (UUID variantId : src.variants()) {
+            Map<String, Object> row = jdbc.queryForMap(
+                "SELECT v.id AS variant_id, v.title AS variant_title, v.sku, p.title AS product_title, " +
+                "       COALESCE((SELECT " + ShopifyInventoryService.shopifyRestockedAtMainSql("o") + " " +
+                "                 FROM orders o WHERE o.id = ? AND o.tenant_id = ?), 0) AS shopify_restocked, " +
+                "       " + ShopifyInventoryService.TRACED_COUNTED_SQL + " AS traced_counted " +
+                "FROM variants v JOIN products p ON p.id = v.product_id WHERE v.id = ? AND v.tenant_id = ?",
+                src.orderId(), tenantId,
+                tenantId, src.orderId(), variantId, "", tenantId, src.orderId(), variantId, null,
+                variantId, tenantId);
+            long restocked = ((Number) row.get("shopify_restocked")).longValue();
+            long counted = ((Number) row.get("traced_counted")).longValue();
+            Map<String, Object> item = new LinkedHashMap<>(row);
+            item.remove("traced_counted");
+            item.put("alreadyInShopify", Math.max(0, restocked - counted));
+            items.add(item);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("source", src.key());
+        out.put("orderId", src.orderId());
+        out.put("orderNumber", src.orderNumber());
+        out.put("unitLevel", src.unitLevel());
+        out.put("items", items);
+        return out;
     }
 
     @Transactional
     public void updateLine(UUID sessionId, UUID lineId, int quantity) {
         UUID tenantId = TenantContext.require();
         requireOpenWithLines(sessionId, tenantId);
+        // S1b: a line bringing back ONE returned unit stays one unit (remove it instead).
         int rows = jdbc.update(
             "UPDATE receipt_lines SET quantity = ? " +
-            "WHERE id = ? AND receipt_id = ? AND tenant_id = ?",
-            quantity, lineId, sessionId, tenantId);
-        if (rows == 0) throw notFound("line");
+            "WHERE id = ? AND receipt_id = ? AND tenant_id = ? " +
+            "  AND (? = 1 OR return_source IS NULL OR return_source LIKE 'shipment:%')",
+            quantity, lineId, sessionId, tenantId, quantity);
+        if (rows == 0) {
+            Boolean exists = jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM receipt_lines " +
+                "WHERE id = ? AND receipt_id = ? AND tenant_id = ?)", Boolean.class, lineId, sessionId, tenantId);
+            if (Boolean.TRUE.equals(exists)) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "A returned unit is received one at a time");
+            throw notFound("line");
+        }
     }
 
     @Transactional
@@ -211,7 +326,8 @@ public class ReceivingService {
 
         // Fetch lines: variantId × quantity.
         List<Map<String, Object>> lines = jdbc.queryForList(
-            "SELECT variant_id, quantity FROM receipt_lines WHERE receipt_id = ? AND tenant_id = ?",
+            "SELECT id, variant_id, quantity, return_order_id FROM receipt_lines WHERE receipt_id = ? AND tenant_id = ? " +
+            "ORDER BY created_at, id",
             sessionId, tenantId);
 
         if (lines.isEmpty()) {
@@ -244,6 +360,29 @@ public class ReceivingService {
         // Two-INSERT atomic commit — all pieces + events or nothing.
         ledger.batchReceive(specs, actorUserId, !countOnly);
 
+        // S1b (V212): a line that brings back a return — units Shopify already restocked at Main for that order are
+        // not sent again. Decided BEFORE the receipt is marked finalized (the count reads finalized receipts only), in
+        // line order, so two lines of one receipt never both claim the same restocked unit.
+        Map<UUID, Integer> shopifyRestocked = new java.util.LinkedHashMap<>();
+        Map<String, Integer> decidedHere = new HashMap<>();
+        if (shopifyInventory != null) {
+            for (Map<String, Object> line : lines) {
+                UUID orderId = (UUID) line.get("return_order_id");
+                if (orderId == null) continue;
+                UUID variantId = (UUID) line.get("variant_id");
+                int qty = (Integer) line.get("quantity");
+                String k = orderId + ":" + variantId;
+                int skip = shopifyInventory.receivingShopifyRestockedUnits(orderId, variantId, locationId, qty,
+                    decidedHere.getOrDefault(k, 0));
+                decidedHere.merge(k, qty, Integer::sum);
+                if (skip > 0) {
+                    jdbc.update("UPDATE receipt_lines SET shopify_restocked_units = ? WHERE id = ? AND tenant_id = ?",
+                        skip, line.get("id"), tenantId);
+                    shopifyRestocked.merge(variantId, skip, Integer::sum);
+                }
+            }
+        }
+
         // Mark session finalized — conditional on 'open', so a finalize that got past the check some other way
         // rolls back (pieces included) instead of finalizing twice.
         int finalized = jdbc.update(
@@ -266,7 +405,19 @@ public class ReceivingService {
             int  qty       = (Integer) line.get("quantity");
             variantDeltaMap.merge(variantId, qty, Integer::sum);
         }
-        if (shopifyInventory != null) {
+        // Shopify-restocked returned units leave the +N; a variant left with nothing to send is recorded as such.
+        for (Map.Entry<UUID, Integer> e : shopifyRestocked.entrySet()) {
+            int left = variantDeltaMap.getOrDefault(e.getKey(), 0) - e.getValue();
+            if (left > 0) {
+                variantDeltaMap.put(e.getKey(), left);
+            } else {
+                variantDeltaMap.remove(e.getKey());
+                if (isMainWarehouse(locationId, tenantId)) {
+                    shopifyInventory.recordReceivingShopifyRestocked(sessionId, locationId, e.getKey(), e.getValue());
+                }
+            }
+        }
+        if (shopifyInventory != null && !variantDeltaMap.isEmpty()) {
             ShopifyInventoryService.afterCommit(() ->
                 shopifyInventory.onReceivingSessionClose(tenantId, sessionId, locationId, variantDeltaMap));
         }
@@ -315,9 +466,14 @@ public class ReceivingService {
             "       SUM(delta)::int AS units " +
             "FROM shopify_inventory_adjustments " +
             "WHERE tenant_id = ? AND trigger_type = 'receiving_session' AND trigger_id = ? " +
+            "  AND status <> 'skipped_shopify_restocked' " +
             "GROUP BY 1",
             rs -> { out.put(rs.getString("outcome"), rs.getInt("units")); },
             tenantId, sessionId.toString());
+        // S1b: returned units Shopify had already restocked — not sent again (per line, partial or whole variant).
+        out.put("shopifyRestocked", jdbc.queryForObject(
+            "SELECT COALESCE(SUM(shopify_restocked_units), 0)::int FROM receipt_lines WHERE receipt_id = ? AND tenant_id = ?",
+            Integer.class, sessionId, tenantId));
         return out;
     }
 
@@ -372,7 +528,9 @@ public class ReceivingService {
     private List<Map<String, Object>> getLines(UUID sessionId, UUID tenantId) {
         return jdbc.queryForList(
             "SELECT rl.id, rl.variant_id, v.title AS variant_title, v.sku, " +
-            "       p.title AS product_title, rl.quantity, " +
+            "       p.title AS product_title, rl.quantity, rl.return_source, rl.shopify_restocked_units, " +
+            "       (SELECT o.number FROM orders o WHERE o.id = rl.return_order_id AND o.tenant_id = rl.tenant_id) " +
+            "         AS return_order_number, " +
             "       (SELECT COUNT(*) FROM pieces pc " +
             "        WHERE pc.receipt_id = rl.receipt_id " +
             "          AND pc.variant_id = rl.variant_id " +

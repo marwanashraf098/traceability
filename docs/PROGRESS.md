@@ -4,6 +4,52 @@
 
 ## Current state
 
+**S1b — restock double-count protection counts Shopify RETURN restocks, for every merchant (2026-11-05; branch
+`feat/s1b-restock-guard`, merged to main 2026-11-05, NOT deployed; migration V212 — after F2's V211).** Prod evidence: #1006-R1 (store
+marwan) restocked by a processed Shopify return = a RESTOCKED disposition; the V151/V201 guard read refund restock lines
+only, so Traced's inspection +1 (and Back to good, and Receiving of returned untracked units — no guard at all) could
+count the unit twice.
+- **Step 0 (dev store marwan-nnrumxdy, read-only GraphQL; orders made in the admin by Marawan):** B #1007 return with
+  refund + restock in one step → ONE unit has BOTH a refund line (restockType RETURN, restocked, Shop location) and a
+  RESTOCKED ×1 disposition on #1007-R1; Minimal Snowboard on_hand 50 → 50 (rose once). C #1008 refund with restock
+  from the order page → refund line only, no Return, no disposition; Hidden Snowboard 50 → 50. #1006 also carries both
+  (refund 11:35:57Z + disposition). Decision: **GREATEST per order + variant (+ location)**. The dev-store token is the
+  Traced app's (no write_orders) and IP-allowlisted; 102.40.200.80 was allowed temporarily for Step 0.
+- **V212:** `shopify_restocked_units(raw, tenant, order, variant_gid, main_gid)` = GREATEST(V201 refund restocks,
+  RESTOCKED dispositions at Main / no location; the disposition's variant via its return line's fulfillment line).
+  STABLE, INVOKER, tenant is an argument (correct on the owner pool and under RLS). Consumers: inspection +1 guard,
+  Back to good guard, restocked_twice, Main reconcile R_main (fulfilled_from_main + fulfilled_unpicked — approved),
+  Receiving guard. `receipt_lines.return_order_id` (composite FK) / `return_source`
+  ('shipment|untracked_unit|request_item:<id>') / `shopify_restocked_units` (CHECK ≤ quantity).
+- **Traced-counted units** (`ShopifyInventoryService.TRACED_COUNTED_SQL`, the one count): restock-type claim rows (any
+  status) + units of finalized Receiving lines linked to the order at the main warehouse.
+- **Receiving:** the three receive alerts carry `returnSource`; Exceptions / Overview append `?return=<key>`
+  (`receivingReturn.ts`; `actionUrl` itself unchanged — two tests pin it). Receiving shows a banner (order, item,
+  "Shopify already restocked N unit(s) … won't be added to Shopify again", EN + AR) and "Add 1 to this session"
+  inside an open non-factory session; linked lines live in a "Returned items" card (the product grid only manages
+  unlinked lines — it merges lines per variant). A unit-level source is one unit, linked once; updateLine refuses
+  changing it from 1. Finalize decides per linked line (before the receipt is marked finalized, under the restock
+  lock, lines of one receipt never claim the same restocked unit) and lowers the +N; a variant left with nothing →
+  receiving claim `skipped_shopify_restocked` (existing status), which `PieceShopifyRules.arrival` now counts as
+  Shopify-counted (so later departures still remove the unit). Count-only summary: `shopify.shopifyRestocked`.
+- **restocked_twice:** also counts linked Receiving units (pushed when the session claim applied; skipped units
+  offset), and a disposition arriving after Traced's +1 raises it (the expression now includes dispositions). Text:
+  "Shopify refund or return restocked them again". Never a decrement; no new named decrement.
+- **Tests:** ShopifyRestockedUnitsTest 10 (d1 disposition-only skip, d2 refund-only unchanged + disposition elsewhere
+  doesn't block, d3 both records → exactly one skip, d4 late disposition → restocked_twice, d5 Receiving fully
+  Shopify-restocked → nothing sent + arrival counted, d6 partial, d7 no restock → full +N then late disposition alert,
+  d8 cross-tenant + same-tenant control + another tenant's return can't be linked, g1 golden vs V201, s1 ops script);
+  PieceShopifySyncC2Test b3d (Back to good); MainReconcileTest t7 (disposition before Traced intake → in sync, no −1;
+  t3 refund cases unchanged); OrdersTableAccessGuardTest +4 MUST_INCLUDE entries; frontend receivingReturnLink 6.
+  Revert-to-confirm: function → refunds only ⇒ d1 d4 d5 d7 d8 b3d t7 RED (d2 d3 d6 g1 green); GREATEST → SUM ⇒ d3 RED
+  (2 vs 1); arrival line removed ⇒ d5 RED.
+- **Count gates (approved, bumped after F2's V211 merged):** MigrationSmokeTest 211 files (V1–V212), NotTracedBackfillTest
+  156. New endpoint `GET /receiving/return-source` classified in RlsCoverageTest (cross-tenant in d8) and
+  PortalOrderLeakTest (SKIP: one return source by id, portal orders included by design).
+- **Ops (read-only, Marawan runs):** `scripts/ops/2026-11-05-s1b-restock-double-count-candidates.sql` — Traced +1s since
+  2026-10-08 on order + variants that now have a RESTOCKED disposition at Main; `double_counted` = candidates for a
+  manual Shopify −1. Works before V212 is deployed.
+
 **Returns portal fees F2 — fees calculated, shown and frozen; the refund deduction (2026-11-05; branch
 `feat/portal-fees-f2` off main 4cc37883, NOT merged, NOT deployed; V211 — recheck main AND prod before merge).**
 Still behind `traced.portal-fees.settings-enabled` (off in prod): off = every answer byte-identical (PortalFeesOffGoldenTest).
