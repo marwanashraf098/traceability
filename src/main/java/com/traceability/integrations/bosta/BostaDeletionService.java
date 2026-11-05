@@ -98,7 +98,12 @@ public class BostaDeletionService {
         CLOSED,
         KEPT_PIECES_OUT,
         KEPT_DELIVERED,
-        KEPT_RETURN_HELD
+        KEPT_RETURN_HELD,
+        /** {@link #confirmOnFirstCheck}: no unresolved unlinked SEND of this order with the new waybill. */
+        NO_NEW_DELIVERY,
+        /** {@link #confirmOnFirstCheck}: a gate refused the fast path (frozen / pickup session / packed / return
+         *  leg); the leg stays suspected and goes the normal two-step way. */
+        FIRST_CHECK_REFUSED
     }
 
     private final JdbcTemplate         jdbc;
@@ -115,6 +120,15 @@ public class BostaDeletionService {
         this.gateway = gateway;
         this.ingestion = ingestion;
         this.maxSuspectsPerCycle = maxSuspectsPerCycle;
+    }
+
+    /** 2026-11-05: re-link the order's stranded deliveries after a forward leg is confirmed deleted. Setter-injected
+     *  so hand-built instances keep their constructor (null → no re-link). */
+    private org.springframework.beans.factory.ObjectProvider<BostaRelink> relinkProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRelink(org.springframework.beans.factory.ObjectProvider<BostaRelink> relink) {
+        this.relinkProvider = relink;
     }
 
     // ── The tenant key's positive control ─────────────────────────────────────
@@ -186,7 +200,97 @@ public class BostaDeletionService {
         if (c != Confirmation.NOT_READY && c != Confirmation.NOT_BOSTA && c != Confirmation.ALREADY_DELETED) {
             log.info("Bosta deletion: tenant {} shipment {} → {}", tenantId, shipmentId, c);
         }
+        if (c == Confirmation.CLOSED || c == Confirmation.KEPT_PIECES_OUT || c == Confirmation.KEPT_DELIVERED) {
+            relinkForwardLeg(tenantId, shipmentId, "deletion_confirmed");
+        }
         return c;
+    }
+
+    /** After a confirmed FORWARD leg (any branch): the order's stranded unlinked deliveries, once (BostaRelink). */
+    private void relinkForwardLeg(UUID tenantId, UUID shipmentId, String trigger) {
+        BostaRelink relink = relinkProvider != null ? relinkProvider.getIfAvailable() : null;
+        if (relink == null) return;
+        List<UUID> order = tx.execute(s -> jdbc.queryForList(
+            "SELECT order_id FROM shipments WHERE id = ? AND tenant_id = ? AND shipment_leg = 'forward' AND order_id IS NOT NULL",
+            UUID.class, shipmentId, tenantId));
+        if (order != null && !order.isEmpty()) relink.relinkAfterCommit(tenantId, order.get(0), trigger);
+    }
+
+    /**
+     * 2026-11-05 (BROEK BRK-47264-EG) — the fast path, for ONE case only: the order's live Bosta forward leg just
+     * answered "Delivery not found" (the caller observed it — {@link #observeNotFound}) AND an unresolved unlinked
+     * SEND / RETURN TO ORIGIN with {@code newTrackingNumber} exists whose reference resolves to exactly this order
+     * (the merchant re-booked it in Bosta). That second delivery stands in for the second, 30-minute-later 400:
+     * confirmed on this first check and closed exactly as {@link #tryConfirm} closes (cancelled, provider_deleted_at,
+     * no history row, no piece writes), then the order's stranded deliveries are re-linked (BostaRelink).
+     * Every other rule of the normal confirmation still holds — the tenant key's positive control, still 'created',
+     * not replaced — plus: forward leg only, the order not frozen, the leg not in an open pickup session, and no
+     * piece of the order packed or out (awaiting_pickup / with_courier / delivered). A refusal changes nothing: the
+     * leg stays suspected and the 4-h safety net / two-step confirmation decide as before. Caller inside runAs, no
+     * transaction open, no Bosta call here.
+     */
+    public Confirmation confirmOnFirstCheck(UUID tenantId, UUID shipmentId, String newTrackingNumber, String[] refusal) {
+        Confirmation c = tx.execute(s -> confirmFirstLocked(tenantId, shipmentId, newTrackingNumber, refusal));
+        log.info("Bosta deletion (first check, new waybill {}): tenant {} shipment {} → {}{}", newTrackingNumber,
+            tenantId, shipmentId, c, refusal != null && refusal[0] != null ? " (" + refusal[0] + ")" : "");
+        if (c == Confirmation.CLOSED) relinkForwardLeg(tenantId, shipmentId, "first_check");
+        return c;
+    }
+
+    private Confirmation confirmFirstLocked(UUID tenantId, UUID shipmentId, String newTn, String[] refusal) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT s.order_id, s.tracking_number, s.shipment_leg::text AS leg, s.internal_state::text AS state, " +
+            "       s.provider::text AS provider, s.provider_deleted_at, s.provider_not_found_at " +
+            "FROM shipments s WHERE s.id = ? AND s.tenant_id = ? FOR UPDATE",
+            shipmentId, tenantId);
+        if (rows.isEmpty() || !"bosta".equals(rows.get(0).get("provider"))) return Confirmation.NOT_BOSTA;
+        if (BostaSupersede.isReplaced(jdbc, shipmentId)) return Confirmation.NOT_BOSTA;
+        Map<String, Object> r = rows.get(0);
+        if (r.get("provider_deleted_at") != null) return Confirmation.ALREADY_DELETED;
+        if (r.get("provider_not_found_at") == null) return Confirmation.NOT_READY;   // the caller's 400 wasn't recorded
+        UUID orderId = (UUID) r.get("order_id");
+        if (!"forward".equals(r.get("leg")) || orderId == null) return refuse(refusal, "not_forward_leg");
+
+        List<Map<String, Object>> key = jdbc.queryForList(
+            "SELECT COALESCE(lookup_ok_at > now() - (? * INTERVAL '1 minute'), false) AS ok, " +
+            "       COALESCE(lookup_auth_failed_at > now() - (? * INTERVAL '1 minute'), false) AS paused " +
+            "FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
+            POSITIVE_CONTROL_MINUTES, POSITIVE_CONTROL_MINUTES, tenantId);
+        if (key.isEmpty() || !Boolean.TRUE.equals(key.get(0).get("ok"))) return Confirmation.NO_POSITIVE_CONTROL;
+        if (Boolean.TRUE.equals(key.get(0).get("paused"))) return Confirmation.AUTH_PAUSED;
+        if (!"created".equals(r.get("state"))) return Confirmation.NOT_CREATED;
+
+        // The second evidence: the re-booked delivery, unlinked, pointing at exactly this order.
+        List<Map<String, Object>> fresh = jdbc.queryForList(
+            "SELECT u.business_reference, u.raw #>> '{shopifyInfo,orderId}' AS shopify_id FROM unlinked_bosta_deliveries u " +
+            "WHERE u.tenant_id = ? AND u.tracking_number = ? AND u.resolved = false AND u.tracking_number <> ? " +
+            "  AND " + com.traceability.inventory.ShipmentLinkService.forwardLinkableTypeSql("u"),
+            tenantId, newTn, r.get("tracking_number"));
+        boolean evidence = fresh.stream().anyMatch(u -> {
+            List<UUID> to = OrderReference.resolve(jdbc, tenantId, (String) u.get("business_reference"), (String) u.get("shopify_id"));
+            return to.size() == 1 && to.get(0).equals(orderId);
+        });
+        if (!evidence) return Confirmation.NO_NEW_DELIVERY;
+
+        if (com.traceability.courier.TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId)) return refuse(refusal, "frozen");
+        if (com.traceability.courier.TrackingChanges.inOpenPickupSession(jdbc, tenantId, shipmentId)) return refuse(refusal, "pickup_session");
+        if (!jdbc.queryForList("SELECT status FROM (" + ORDER_PIECES_OUT_SQL + ") x", String.class, orderId, tenantId).isEmpty()) {
+            return refuse(refusal, "pieces_out");
+        }
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+                "  WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'packed')", Boolean.class, orderId, tenantId))) {
+            return refuse(refusal, "packed");
+        }
+        close(tenantId, shipmentId);
+        retryStrandedUnlinked(tenantId, orderId);
+        BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, orderId, (String) r.get("tracking_number"));
+        return Confirmation.CLOSED;
+    }
+
+    private static Confirmation refuse(String[] refusal, String why) {
+        if (refusal != null && refusal.length > 0) refusal[0] = why;
+        return Confirmation.FIRST_CHECK_REFUSED;
     }
 
     private Confirmation confirmLocked(UUID tenantId, UUID shipmentId) {

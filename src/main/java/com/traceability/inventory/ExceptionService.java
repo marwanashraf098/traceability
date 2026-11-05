@@ -951,6 +951,8 @@ public class ExceptionService {
             "SELECT 'unmatched_delivery' AS type, 'MEDIUM' AS severity, 'delivery' AS subject_type, " +
             "       u.id AS unlinked_id, u.tracking_number, u.business_reference, " +
             "       u.bosta_state_code, u.first_seen_at AS occurred_at, " +
+            // 2026-11-05: ACTIVE_FORWARD_LEG rows read "two Bosta waybills" once the instant check found the old one live.
+            "       u.match_reason, u.relink_outcome, " +
             "       'unmatched:' || u.id AS subject_key " +
             "FROM unlinked_bosta_deliveries u " +
             "WHERE u.tenant_id = ? AND u.resolved = false " +
@@ -2044,6 +2046,23 @@ public class ExceptionService {
             }
             case "unmatched_delivery" -> {
                 String t = str(item, "tracking_number");
+                String r = str(item, "business_reference");
+                if (ShipmentLinkService.REASON_ACTIVE_FORWARD_LEG.equals(item.get("match_reason"))) {
+                    if (com.traceability.integrations.bosta.ActiveForwardLegCheckJob.OLD_DELIVERY_LIVE.equals(item.get("relink_outcome"))) {
+                        item.put("descriptionEn", "Order " + r + " has two Bosta waybills: its linked waybill is still live in Bosta,"
+                            + " and the new one " + t + " isn't linked. Cancel the one that isn't shipping in Bosta");
+                        item.put("descriptionAr", "الطلب " + r + " له بوليصتان في بوسطة: البوليصة المربوطة ما زالت قائمة في بوسطة،"
+                            + " والجديدة " + t + " غير مربوطة. ألغِ في بوسطة البوليصة التي لن تُشحن");
+                    } else {
+                        item.put("descriptionEn", "Bosta delivery " + t + " belongs to order " + r
+                            + ", which already has another Bosta waybill — not linked");
+                        item.put("descriptionAr", "شحنة بوسطة " + t + " تخص الطلب " + r
+                            + "، وله بوليصة بوسطة أخرى بالفعل — لم تُربط");
+                    }
+                    item.put("suggestedAction", "check_in_bosta");
+                    item.put("actionUrl", "/shipments/unlinked");
+                    break;
+                }
                 item.put("descriptionEn", "Bosta delivery " + t + " could not be matched to an order");
                 item.put("descriptionAr", "شحنة بوسطة " + t + " لم يتم ربطها بطلب");
                 item.put("suggestedAction", "manual_link");
