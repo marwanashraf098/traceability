@@ -232,6 +232,10 @@ public class InventoryController {
                 WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                   AND event_type = 'received'
                   AND occurred_at >= ?::date
+                  -- a reversed receiving session "never arrived": its pieces' receipts aren't throughput
+                  AND NOT EXISTS (SELECT 1 FROM pieces p JOIN receipts r ON r.id = p.receipt_id AND r.tenant_id = p.tenant_id
+                                  WHERE p.id = piece_events.piece_id AND p.tenant_id = piece_events.tenant_id
+                                    AND r.status = 'reversed')
                 GROUP BY DATE(occurred_at)
             ),
             ship AS (
@@ -291,6 +295,7 @@ public class InventoryController {
             WHERE r.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
               AND r.kind = 'inbound'
               AND r.finalized_at IS NOT NULL
+              AND r.status <> 'reversed'   -- a reversed session "never arrived"
 
             UNION ALL
 

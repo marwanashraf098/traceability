@@ -219,6 +219,23 @@ public class PieceAdjustService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void voidPiece(String pieceId, String reason, String note, UUID actorUserId) {
+        Long claimId = voidAndClaim(pieceId, reason, note, actorUserId);
+        pushAfterCommit(TenantContext.require(), claimId);
+    }
+
+    /**
+     * ONE-OFF (Floe Wear PO-01 receipt reversal, 2026-11-05 — removed after the run): exactly
+     * {@link #voidPiece}, same guards, same ledger edge, same void_correction claim written in this
+     * transaction — but the claim is NOT sent on commit. Returns the claim id (null = skipped / nothing
+     * to send) so the ops runner can send it paced through ShopifyInventoryService.pushPieceClaimNow,
+     * the same single-attempt send voidPiece's after-commit hook uses. No new decrement path.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Long voidPieceSendLater(String pieceId, String reason, String note, UUID actorUserId) {
+        return voidAndClaim(pieceId, reason, note, actorUserId);
+    }
+
+    private Long voidAndClaim(String pieceId, String reason, String note, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
         if (!VOID_REASONS.contains(reason)) {
@@ -273,7 +290,6 @@ public class PieceAdjustService {
 
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.VOIDED, "voided", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
-        pushAfterCommit(tenantId, claimId);
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
         auditMeta.put("from",   current.db);
@@ -281,6 +297,7 @@ public class PieceAdjustService {
         auditMeta.put("reason", reason);
         if (note != null && !note.isBlank()) auditMeta.put("note", note);
         auditService.record(actorUserId, "piece_void", "piece", pieceId, auditMeta);
+        return claimId;
     }
 
     /**
