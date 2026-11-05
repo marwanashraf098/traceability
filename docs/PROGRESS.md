@@ -5,7 +5,7 @@
 ## Current state
 
 **JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
-2026-11-05, NOT deployed; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
+2026-11-05 as ac319156, DEPLOYED to prod 2026-11-05; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
 - **Root cause (JobRunr 7.3.0 OSS):** `ServerZooKeeper.run` catches ANY exception from the heartbeat
   (`signalBackgroundJobServerAlive` → StorageException on a failed connection / query) and calls
   `backgroundJobServer.stop()` — one failed heartbeat stops the whole server (zookeepers, steward, workers) for good;
@@ -97,7 +97,7 @@ decrement. Exposure by -R<digits> references: BROEK 60, overdue 7, HERNAMEIS JAM
   S1 shadow order are separate.
 
 **Shopify order webhooks — freshness under the row lock + shorter lock (2026-11-04; merged to main
-2026-11-05 from `fix/order-webhook-lock-hold`, NOT deployed; no migration).** Prod: order upserts waited 10–40 s
+2026-11-05 from `fix/order-webhook-lock-hold` as af0a974c, DEPLOYED to prod 2026-11-05; no migration).** Prod: order upserts waited 10–40 s
 (max 39 s) on each other's row lock ("while inserting index tuple … in relation orders"). Step 0 found no
 Shopify / Bosta HTTP inside any transaction that holds an order row; the generic-plan hypothesis was ruled out on
 prod by Marawan (shipments_order_idx, 1.1 ms). The DB was on Micro (1 GB, ~350 MB swap for a week) — upgraded to
