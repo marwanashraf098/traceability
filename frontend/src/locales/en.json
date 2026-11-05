@@ -2902,6 +2902,73 @@
         "savedOn": "Returns for other couriers' orders are on.",
         "savedOff": "Returns for other couriers' orders are off.",
         "saveFailed": "Couldn't save. Try again."
+      },
+      "fees": {
+        "title": "Customer fees",
+        "description": "Charge customers a fee when they exchange or return an item. The fee is shown in the returns portal before they submit.",
+        "ownerOnly": "Only the owner can change these.",
+        "currency": "EGP",
+        "save": "Save",
+        "saved": "Saved.",
+        "saveFailed": "Couldn't save. Try again.",
+        "amount": "Amount",
+        "percent": "Percentage of the item's price",
+        "min": "At least",
+        "max": "At most",
+        "fixedLabel": "EGP {{amount}}",
+        "percentLabel": "{{percent}}%",
+        "minLabel": "min EGP {{amount}}",
+        "maxLabel": "max EGP {{amount}}",
+        "mode": {
+          "fixed": "Fixed amount",
+          "percent": "Percentage"
+        },
+        "exchange": {
+          "title": "Exchange fee",
+          "short": "Exchange",
+          "description": "Charged when a customer swaps an item for another one."
+        },
+        "refund": {
+          "title": "Return fee",
+          "short": "Return",
+          "description": "Taken off the refund when a customer returns an item for their money back."
+        },
+        "waive": "No fee when it's the store's fault",
+        "waiveFixedHelp": "The fixed fee is dropped only when every item is returned for one of the reasons below.",
+        "waivePercentHelp": "Each item returned for one of the reasons below has no fee.",
+        "reasons": {
+          "title": "The store's fault",
+          "description": "Return reasons that count as the store's fault. Fees can be dropped for these."
+        },
+        "areas": {
+          "title": "Fees by area",
+          "description": "A different fee for customers in a city or one district. A district's fee wins over its city's, and a city's over the fee above.",
+          "empty": "No area fees. Every customer pays the fee above.",
+          "area": "Area",
+          "kind": "Fee for",
+          "fee": "Fee",
+          "city": "City",
+          "district": "District",
+          "wholeCity": "{{city}} (all districts)",
+          "chooseCity": "Choose a city",
+          "allDistricts": "All districts",
+          "add": "Add an area fee",
+          "save": "Add",
+          "cancel": "Cancel",
+          "remove": "Remove",
+          "zeroHelp": "Enter 0 for no fee in this area.",
+          "loadFailed": "Couldn't load the list of cities. Try again."
+        },
+        "pricing": {
+          "title": "Exchange pricing",
+          "description": "What customers can exchange to, and how a price difference is handled.",
+          "anyProduct": "Exchange for a different product",
+          "anyProductHelp": "Customers can pick any product in stock, not only another size or colour of the same one.",
+          "lowerOnly": "Same price or lower only",
+          "lowerOnlyHelp": "Customers can't pick an item that costs more than the one they're sending back.",
+          "maxDifference": "Most a customer can pay extra",
+          "maxDifferenceHelp": "Leave empty for no limit. The courier collects the difference on delivery."
+        }
       }
     },
     "pickPack": {

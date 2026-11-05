@@ -146,6 +146,8 @@ class RlsCoverageTest {
             "/api/v1/stock-takes/sessions/{sessionId}/untagged-counts",
             // Non-Bosta couriers G4a — otherCouriersReturns_crossTenantIsolated_withSameTenantPositiveControl below.
             "/api/v1/tenant/portal-settings/other-couriers",
+            // Returns portal fees F1 — customerFees_crossTenantIsolated_withSameTenantPositiveControl below.
+            "/api/v1/tenant/portal-settings/customer-fees",
             "/api/v1/fulfill/print-jobs/latest",
             "/api/v1/fulfill/print-jobs/{jobId}",
             "/api/v1/fulfill/print-jobs/{jobId}/pdf",
@@ -265,6 +267,9 @@ class RlsCoverageTest {
             entry("/api/v1/scan-helpers/{context}",
                     "capability-gated: 404 for every real tenant (the only kind this class seeds) — " +
                     "candidates, the gate and RLS are covered by ScanHelpersTest h2/h3/h6 (h6 on app_user)"),
+            entry("/api/v1/tenant/portal-settings/customer-fees/areas",
+                    "reference data only — Bosta city / district names from the global bosta_districts table, " +
+                    "no tenant rows (404 while the F1 settings are hidden)"),
             entry("/api/v1/health",
                     "no DB query — returns static UP status"),
             entry("/api/v1/portal/{slug}/config",
@@ -811,6 +816,33 @@ class RlsCoverageTest {
                 .containsEntry("available", true).containsEntry("enabled", false).containsEntry("since", null);
         } finally {
             jdbc.update("UPDATE tenants SET generic_courier_enabled = false WHERE id = ?", tenantId);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void customerFees_crossTenantIsolated_withSameTenantPositiveControl() {
+        // Returns portal fees F1: Customer fees reads the caller's rules, overrides and tenant settings only.
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name, portal_exchange_any_product, portal_merchant_fault_reasons) " +
+                    "VALUES (?, 'Cov F1 Other', true, ARRAY['other']::text[])", otherTenant);
+        jdbc.update("INSERT INTO portal_fee_rules (tenant_id, kind, enabled, mode, amount) VALUES (?, 'refund', true, 'fixed', 99)", otherTenant);
+        jdbc.update("INSERT INTO portal_fee_area_overrides (tenant_id, kind, city_id, mode, amount) VALUES (?, 'refund', 'CVF1-OTHER', 'fixed', 5)", otherTenant);
+        jdbc.update("INSERT INTO portal_fee_rules (tenant_id, kind, enabled, mode, percent) VALUES (?, 'exchange', false, 'percent', 10)", tenantId);
+        try {
+            ResponseEntity<Map> r = get("/api/v1/tenant/portal-settings/customer-fees", Map.class);
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            Map<String, Object> rules = (Map<String, Object>) r.getBody().get("rules");
+            assertThat(rules.get("refund")).as("the other tenant's refund rule never shows through").isNull();
+            assertThat((Map<String, Object>) rules.get("exchange")).as("same-tenant positive control: own exchange rule")
+                .containsEntry("mode", "percent").containsEntry("enabled", false);
+            assertThat((List<?>) r.getBody().get("overrides")).as("no override of the other tenant").isEmpty();
+            assertThat((List<Object>) r.getBody().get("merchantFaultReasons")).as("own default reasons")
+                .containsExactly("damaged", "not_as_pictured", "wrong_item");
+            assertThat((Map<String, Object>) r.getBody().get("exchangePricing")).containsEntry("anyProduct", false);
+        } finally {
+            jdbc.update("DELETE FROM portal_fee_rules WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM portal_fee_area_overrides WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

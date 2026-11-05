@@ -3607,6 +3607,110 @@ export function setOtherCouriersReturns(enabled: boolean) {
   })
 }
 
+// ── Returns portal fees F1: Customer fees + Exchange pricing (data only until F2 / F3) ──────────
+
+export type FeeKind = 'exchange' | 'refund'
+export type FeeMode = 'fixed' | 'percent'
+
+export interface FeeRule {
+  kind: FeeKind
+  enabled: boolean
+  mode: FeeMode
+  amount: number | null
+  percent: number | null
+  minAmount: number | null
+  maxAmount: number | null
+  waiveMerchantFault: boolean
+  updatedAt: string
+}
+
+export interface FeeRuleInput {
+  enabled: boolean
+  mode: FeeMode
+  amount: number | null
+  percent: number | null
+  minAmount: number | null
+  maxAmount: number | null
+  waiveMerchantFault: boolean
+}
+
+export interface FeeAreaOverride {
+  id: string
+  kind: FeeKind
+  cityId: string
+  cityName: string | null
+  cityNameAr: string | null
+  districtId: string | null
+  districtName: string | null
+  districtNameAr: string | null
+  mode: FeeMode
+  amount: number | null
+  percent: number | null
+  minAmount: number | null
+  maxAmount: number | null
+}
+
+export interface FeeAreaOverrideInput {
+  kind: FeeKind
+  cityId: string
+  districtId: string | null
+  mode: FeeMode
+  amount: number | null
+  percent: number | null
+  minAmount: number | null
+  maxAmount: number | null
+}
+
+export interface ExchangePricing {
+  anyProduct: boolean
+  sameOrLowerOnly: boolean
+  maxDifference: number | null
+}
+
+export interface CustomerFeeSettings {
+  /** False until fees are charged (F2): the section is hidden and every write answers 404. */
+  visible: boolean
+  rules: Record<FeeKind, FeeRule | null>
+  merchantFaultReasons: string[]
+  overrides: FeeAreaOverride[]
+  exchangePricing: ExchangePricing
+}
+
+export interface FeeArea { id: string; name: string; nameAr: string | null }
+
+const CUSTOMER_FEES = '/tenant/portal-settings/customer-fees'
+
+export function getCustomerFees() {
+  return request<CustomerFeeSettings>(CUSTOMER_FEES)
+}
+
+/** Bosta cities, or the districts of one city. */
+export function getFeeAreas(cityId?: string) {
+  return request<FeeArea[]>(`${CUSTOMER_FEES}/areas${cityId ? `?cityId=${encodeURIComponent(cityId)}` : ''}`)
+}
+
+export function saveFeeRule(kind: FeeKind, rule: FeeRuleInput) {
+  return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/rules/${kind}`, { method: 'PUT', body: JSON.stringify(rule) })
+}
+
+export function saveMerchantFaultReasons(reasons: string[]) {
+  return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/merchant-fault-reasons`, {
+    method: 'PUT', body: JSON.stringify({ reasons }),
+  })
+}
+
+export function saveExchangePricing(p: ExchangePricing) {
+  return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/exchange-pricing`, { method: 'PUT', body: JSON.stringify(p) })
+}
+
+export function addFeeAreaOverride(o: FeeAreaOverrideInput) {
+  return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/area-overrides`, { method: 'POST', body: JSON.stringify(o) })
+}
+
+export function deleteFeeAreaOverride(id: string) {
+  return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/area-overrides/${id}`, { method: 'DELETE' })
+}
+
 export function confirmBooking(id: string, trackingNumber: string) {
   return transferCommandRequest<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
 }
