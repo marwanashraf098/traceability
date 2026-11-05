@@ -8,6 +8,7 @@ import com.traceability.identity.JwtService;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.shopify.RegisterShopifyWebhooksJob;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyOAuthService;
 import com.traceability.integrations.shopify.ShopifyReturnsAccessDeniedException;
 import com.traceability.integrations.shopify.ShopifyReturnsBackfill;
 import com.traceability.integrations.shopify.ShopifyReturnsGateway;
@@ -67,6 +68,10 @@ import static org.mockito.Mockito.*;
  *       tenant) upserts and reads through the real store (positive control)
  *   n1  Settings → Connections: the owner sees "Approve Traced's new Shopify permissions" (open-app link) while the
  *       store hasn't granted the scopes; a manager never; gone once granted
+ *   t1  token re-exchange loop guard: while the store hasn't approved the new scopes, an embedded open re-exchanges
+ *       the token ONCE for the scope difference, then not again (logged as waiting for approval) — until 24 h pass,
+ *       the token gets close to expiry, or app/scopes_update clears the guard; once the token carries the scopes,
+ *       opens stop exchanging
  *   z1  GOLDEN: committed demand, the pick queue, the Orders list / counts / detail and the pick detail are
  *       byte-identical before and after ingesting a return with an exchange line (proves no behavior change)
  */
@@ -111,6 +116,7 @@ class ShopifyNativeReturnsMirrorTest {
     @Autowired JwtService                 jwt;
     @Autowired TestRestTemplate           rest;
     @Autowired PlatformTransactionManager txm;
+    @Autowired ShopifyOAuthService        oauth;
     @LocalServerPort int port;
 
     @MockBean ShopifyReturnsGateway returnsGateway;
@@ -793,4 +799,61 @@ class ShopifyNativeReturnsMirrorTest {
         assertThat(resp.getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
         return resp.getBody();
     }
+
+    // ── t1: token re-exchange loop guard ─────────────────────────────────────────────────────────
+
+    @Test
+    void t1_scopeDifferenceReexchangesOncePerScopeSet_notOnEveryOpen() {
+        Shop s = new Shop("t1");
+        jdbc.update("UPDATE stores SET access_token_expires_at = now() + interval '1 hour', " +
+                    "refresh_token_encrypted = 'enc-refresh' WHERE id = ?", s.f.store);
+        when(shopifyGateway.exchangeSessionToken(eq(s.domain), any()))
+            .thenReturn(new ShopifyGateway.TokenResponse("shpat_t1", "shprt_t1", 3600L, 7776000L, BASE_SCOPES));
+
+        // first open: the stored token lacks the new scopes → one re-exchange; Shopify still grants only the old ones
+        for (int i = 0; i < 5; i++) assertThat(oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st")).isTrue();
+        verify(shopifyGateway, times(1)).exchangeSessionToken(eq(s.domain), any());
+        Map<String, Object> g = jdbc.queryForMap(
+            "SELECT scopes_awaiting_approval, scopes_awaiting_since FROM stores WHERE id = ?", s.f.store);
+        assertThat((String) g.get("scopes_awaiting_approval")).contains("read_returns")
+            .contains("read_merchant_managed_fulfillment_orders");
+        assertThat(g.get("scopes_awaiting_since")).isNotNull();
+
+        // 24 h later (a missed app/scopes_update) → once more, then quiet again
+        jdbc.update("UPDATE stores SET scopes_awaiting_since = now() - interval '25 hours' WHERE id = ?", s.f.store);
+        for (int i = 0; i < 3; i++) oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        verify(shopifyGateway, times(2)).exchangeSessionToken(eq(s.domain), any());
+
+        // a token close to expiry still exchanges (normal refresh, guard or not)
+        jdbc.update("UPDATE stores SET access_token_expires_at = now() + interval '5 minutes' WHERE id = ?", s.f.store);
+        oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        verify(shopifyGateway, times(3)).exchangeSessionToken(eq(s.domain), any());
+
+        // a different declared scope set (the app added yet another scope) is not covered by the stored guard
+        jdbc.update("UPDATE stores SET scopes_awaiting_approval = 'read_orders' WHERE id = ?", s.f.store);
+        oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        verify(shopifyGateway, times(4)).exchangeSessionToken(eq(s.domain), any());
+
+        // the merchant approves → app/scopes_update clears the guard → the next open re-exchanges once, the new token
+        // carries the scopes → the guard is cleared and later opens don't exchange
+        when(shopifyGateway.fetchGrantedScopes(eq(s.domain), anyString())).thenReturn(BASE_SCOPES);
+        when(shopifyGateway.listWebhookSubscriptions(anyString(), anyString())).thenReturn(List.of());
+        ObjectNode payload = mapper.createObjectNode();
+        payload.putArray("previous").add("read_orders");
+        payload.putArray("current").add("read_orders").add("write_returns");
+        s.send("app/scopes_update", payload);
+        assertThat(jdbc.queryForObject("SELECT scopes_awaiting_approval FROM stores WHERE id = ?", String.class, s.f.store))
+            .isNull();
+        when(shopifyGateway.exchangeSessionToken(eq(s.domain), any()))
+            .thenReturn(new ShopifyGateway.TokenResponse("shpat_t1b", "shprt_t1b", 3600L, 7776000L, NEW_SCOPES));
+        for (int i = 0; i < 3; i++) oauth.acquireOrRefreshViaSessionToken(s.f.tenant, s.domain, "st");
+        verify(shopifyGateway, times(5)).exchangeSessionToken(eq(s.domain), any());
+        assertThat(jdbc.queryForMap(
+            "SELECT access_token_scopes, scopes_awaiting_approval, scopes_awaiting_since FROM stores WHERE id = ?", s.f.store))
+            .containsEntry("access_token_scopes", NEW_SCOPES)
+            .containsEntry("scopes_awaiting_approval", null).containsEntry("scopes_awaiting_since", null);
+    }
+
 }

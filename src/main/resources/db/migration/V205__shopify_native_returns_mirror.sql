@@ -34,7 +34,12 @@ ALTER TABLE stores
     ADD COLUMN returns_backfill_heartbeat_at timestamptz,
     ADD COLUMN returns_backfill_cursor      text,
     ADD COLUMN returns_backfill_done_at     timestamptz,
-    ADD COLUMN returns_backfill_error       text;
+    ADD COLUMN returns_backfill_error       text,
+    -- Token re-exchange guard: the app's declared scope set Traced last re-exchanged an embedded token for while the
+    -- store still hadn't approved all of it, and when. Until the set changes, app/scopes_update clears it, or 24 h
+    -- pass, an embedded open doesn't re-exchange again for the scope difference alone.
+    ADD COLUMN scopes_awaiting_approval     text,
+    ADD COLUMN scopes_awaiting_since        timestamptz;
 
 -- ── exchange line link (data only) ──────────────────────────────────────────────────────────────
 ALTER TABLE order_items ADD COLUMN shopify_exchange_line_gid text;

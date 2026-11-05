@@ -19,7 +19,8 @@ import java.util.UUID;
  * tenant, with no transaction open.
  *
  *   1. stores.access_token_scopes ← the token's live scopes (fetchGrantedScopes), else the payload's "current" list;
- *      the order-PII tier cache is dropped so the next import uses the new scopes;
+ *      the order-PII tier cache is dropped so the next import uses the new scopes; the token re-exchange guard
+ *      (scopes_awaiting_*) is cleared so the next embedded open may re-exchange once for the new grant;
  *   2. stores.returns_access ← granted / not_granted from those scopes;
  *   3. webhook registration re-runs for the store — ADDITIVE (addMissingTopics: only topics not yet subscribed, the
  *      returns / fulfillment-order topics now that their scope is there);
@@ -74,7 +75,8 @@ public class ShopifyScopesUpdateHandler {
         }
         String finalScopes = scopes;
         TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.update(
-            "UPDATE stores SET access_token_scopes = ? WHERE id = ? AND tenant_id = ?", finalScopes, storeId, tenantId)));
+            "UPDATE stores SET access_token_scopes = ?, scopes_awaiting_approval = NULL, scopes_awaiting_since = NULL " +
+            "WHERE id = ? AND tenant_id = ?", finalScopes, storeId, tenantId)));
         shopifyGateway.forgetOrderPiiTier(shopDomain);
         boolean granted = ShopifyReturnsScopes.granted(scopes);
         TenantContext.runAs(tenantId, () -> returnsStore.markAccess(storeId, granted));

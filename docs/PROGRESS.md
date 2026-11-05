@@ -5,7 +5,7 @@
 ## Current state
 
 **Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
-`feat/shopify-native-returns-s1`, NOT merged, NOT deployed; migration V205).** Data only: no reservation, no committed
+`feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V205).** Data only: no reservation, no committed
 demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
 untouched. No new SECURITY DEFINER hatch.
 - **Scopes:** + read_returns, write_returns (S5 only — no write call exists), read_merchant_managed_fulfillment_orders,
@@ -26,17 +26,25 @@ untouched. No new SECURITY DEFINER hatch.
   added, TOPICS_VERSION 2, scope topics DEFERRED — not attempted, not a failure — until granted), processor routing + the
   exchange-line link after an APPLIED order upsert, GDPR redact / export, Connections owner notice behind
   SHOPIFY_NEW_SCOPES_NOTICE (EN + AR).
-- **Tests:** ShopifyNativeReturnsMirrorTest (12): i1 idempotent, i2 thin payload → full fetch, d1 ACCESS_DENIED degrade
+- **Tests:** ShopifyNativeReturnsMirrorTest (13, incl. t1 below): i1 idempotent, i2 thin payload → full fetch, d1 ACCESS_DENIED degrade
   (webhook + backfill), s1 scopes_update → scopes / only-missing topics / backfill (Traced orders only, re-runnable), r1
   rollout deferral, p1 pre-connect ignored, l1 / l2 link race both orders, g1 GDPR redact + stays redacted + born redacted
   + export, x1 app_user cross-tenant + same-tenant control (+ composite FK, no DELETE), n1 owner notice, z1 GOLDEN
   (committed demand, pick queue, pick detail, Orders list / counts / detail byte-identical before vs after a return with an
   exchange line + an on-hold FO). Revert-to-confirm: degrade off → d1; order-side link off → l1; return-side link off → l2.
   Frontend shopifyNewPermissions.test.tsx (4). MigrationSmokeTest / NotTracedBackfillTest bumped (+5 tables).
-- **Existing tests needing approval (NOT edited):** ShopifyOAuthDay3Test #11 `times(8)` → 9 (app/scopes_update is
-  registered; returns / FO topics deferred), AnalyticsInventorySyncTest.topicBackfill (version 1 → TOPICS_VERSION, and the
-  second run now also adds app/scopes_update).
-- **Migration number:** V205 — fix/jobrunr-watchdog (unmerged) also has a V205; whichever merges second renumbers.
+- **Existing tests updated (approved 2026-11-05):** ShopifyOAuthDay3Test #11 `times(8)` → 9 (app/scopes_update is
+  registered; returns / FO topics deferred), AnalyticsInventorySyncTest.topicBackfill (version 1 → TOPICS_VERSION, the
+  second run registers 3 — it now also adds app/scopes_update).
+- **Token re-exchange loop guard (review item, 2026-11-05):** `ShopifyOAuthService.acquireOrRefreshViaSessionToken`'s
+  `scopesMatch` re-exchanged the token on EVERY embedded open while the merchant hadn't approved a newly declared scope
+  (managed install grants it only on approval). Now a scope difference alone re-exchanges at most once per declared scope
+  set (`stores.scopes_awaiting_approval` / `_since`, V205), again only after 24 h (`SCOPE_WAIT_RETRY`, a missed webhook);
+  app/scopes_update clears the guard; a token near expiry, a missing refresh token or a non-connected row still
+  exchange as before. Logged once per exchange as "waiting for the merchant to approve new scopes [...]". Test t1;
+  revert-to-confirm: guard off → 5 exchanges for 5 opens.
+- **Migration number (decided 2026-11-05):** S1 merges first and KEEPS V205. `fix/jobrunr-watchdog` (unmerged) also has
+  a V205 — it must be renumbered to the next free version (V206 or later) before it merges. That branch is untouched.
 
 **JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
 2026-11-05 as ac319156, DEPLOYED to prod 2026-11-05; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
