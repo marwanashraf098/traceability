@@ -422,6 +422,14 @@ class PortalOrderLeakTest {
         // Non-Bosta couriers G4a — the "accept returns for other couriers" switch: the tenant's own flags, no order rows.
         reg("GET /api/v1/tenant/portal-settings/other-couriers", skip("the tenant's own two switches (tenants row) — no order rows"));
         reg("PUT /api/v1/tenant/portal-settings/other-couriers", skip(R_CONFIG));
+        reg("GET /api/v1/tenant/portal-settings/customer-fees", skip("the tenant's own fee rules, area overrides and settings — no order rows"));
+        reg("GET /api/v1/tenant/portal-settings/customer-fees/areas", skip("Bosta city / district names (global reference data) — no order rows"));
+        reg("PUT /api/v1/tenant/portal-settings/customer-fees/rules/{kind}", skip(R_CONFIG));
+        reg("PUT /api/v1/tenant/portal-settings/customer-fees/merchant-fault-reasons", skip(R_CONFIG));
+        reg("PUT /api/v1/tenant/portal-settings/customer-fees/exchange-pricing", skip(R_CONFIG));
+        reg("POST /api/v1/tenant/portal-settings/customer-fees/area-overrides", skip(R_CONFIG));
+        reg("PUT /api/v1/tenant/portal-settings/customer-fees/area-overrides/{id}", skip(R_CONFIG));
+        reg("DELETE /api/v1/tenant/portal-settings/customer-fees/area-overrides/{id}", skip(R_CONFIG));
         reg("GET /api/v1/tenant/bosta/return-locations", skip("Bosta pickup locations (mocked v2 read) — no order rows"));
         reg("PUT /api/v1/variants/{id}/non-returnable",  skip(R_CONFIG));
 

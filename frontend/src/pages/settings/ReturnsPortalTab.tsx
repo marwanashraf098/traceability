@@ -12,6 +12,7 @@ import { Button, Input, Skeleton, Toggle, cn, useToast } from '../../components/
 import { writeToClipboard } from './connections/CopyRow'
 import { FontPicker, LogoUploader, PortalPreview, useUploadedLogoUrl } from './PortalBranding'
 import { PortalFont, portalFontOrDefault } from '../../portal/fonts'
+import CustomerFeesSection from './CustomerFeesSection'
 
 export const PORTAL_HOST = 'returns.tracedtech.com'
 export const LOGO_PREFIX = 'https://cdn.shopify.com/'
@@ -334,6 +335,9 @@ export default function ReturnsPortalTab() {
 
         <NonReturnableList />
       </section>
+
+      {/* Returns portal fees F1 — its own endpoints; renders nothing while hidden (until fees are charged). */}
+      <CustomerFeesSection />
 
       {/* P1: wider than the cards above so the live preview can sit beside the form (xl and up);
           narrower screens get the EN / AR previews side by side under the form. */}
