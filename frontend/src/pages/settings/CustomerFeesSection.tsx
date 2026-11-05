@@ -148,10 +148,11 @@ function ExchangePricingEditor({ value, owner, onSaved }: {
 }) {
   const { t } = useTranslation()
   const [anyProduct, setAnyProduct] = useState(value.anyProduct)
+  const [freeSwaps, setFreeSwaps] = useState(value.freeVariantSwaps)
   const [lowerOnly, setLowerOnly] = useState(value.sameOrLowerOnly)
   const [maxDiff, setMaxDiff] = useState(str(value.maxDifference))
   const { saving, error, run } = useSave(onSaved)
-  const dirty = anyProduct !== value.anyProduct || lowerOnly !== value.sameOrLowerOnly || num(maxDiff) !== value.maxDifference
+  const dirty = anyProduct !== value.anyProduct || freeSwaps !== value.freeVariantSwaps || lowerOnly !== value.sameOrLowerOnly || num(maxDiff) !== value.maxDifference
   const ro = !owner || saving
 
   return (
@@ -162,6 +163,13 @@ function ExchangePricingEditor({ value, owner, onSaved }: {
           <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.anyProductHelp')}</p>
         </div>
         <Toggle checked={anyProduct} onChange={setAnyProduct} ariaLabel={t('settings.portal.fees.pricing.anyProduct')} disabled={ro} />
+      </div>
+      <div className="flex items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <p className="text-body font-medium text-primary">{t('settings.portal.fees.pricing.freeSwaps')}</p>
+          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.freeSwapsHelp')}</p>
+        </div>
+        <Toggle checked={freeSwaps} onChange={setFreeSwaps} ariaLabel={t('settings.portal.fees.pricing.freeSwaps')} disabled={ro} />
       </div>
       <div className="flex items-start gap-4">
         <div className="flex-1 min-w-0">
@@ -183,6 +191,7 @@ function ExchangePricingEditor({ value, owner, onSaved }: {
           <Button size="sm" disabled={!dirty || saving}
             onClick={() => run(() => saveExchangePricing({
               anyProduct, sameOrLowerOnly: lowerOnly, maxDifference: lowerOnly ? null : num(maxDiff),
+              freeVariantSwaps: freeSwaps,
             }))}>
             {t('settings.portal.fees.save')}
           </Button>

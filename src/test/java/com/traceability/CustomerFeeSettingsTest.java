@@ -140,7 +140,8 @@ class CustomerFeeSettingsTest {
         assertThat((List<Object>) s.get("merchantFaultReasons")).containsExactly("damaged", "not_as_pictured", "wrong_item");
         assertThat((List<?>) s.get("overrides")).isEmpty();
         assertThat((Map<String, Object>) s.get("exchangePricing")).containsEntry("anyProduct", false)
-            .containsEntry("sameOrLowerOnly", false).containsEntry("maxDifference", null);
+            .containsEntry("sameOrLowerOnly", false).containsEntry("maxDifference", null)
+            .as("a tenant created after the migration uses the price difference").containsEntry("freeVariantSwaps", false);
     }
 
     @Test
@@ -208,11 +209,13 @@ class CustomerFeeSettingsTest {
     @Test
     void s4_exchangePricing() {
         T t = tenant();
-        Map<String, Object> on = new HashMap<>(Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 500));
+        Map<String, Object> on = new HashMap<>(Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 500,
+            "freeVariantSwaps", true));
         ResponseEntity<Map> r = put(t, BASE + "/exchange-pricing", on);
         assertThat(r.getStatusCode().value()).isEqualTo(200);
         assertThat((Map<String, Object>) r.getBody().get("exchangePricing")).containsEntry("anyProduct", true)
-            .containsEntry("sameOrLowerOnly", true).containsEntry("maxDifference", 500.0);
+            .containsEntry("sameOrLowerOnly", true).containsEntry("maxDifference", 500.0)
+            .containsEntry("freeVariantSwaps", true);
         put(t, BASE + "/exchange-pricing", on);
         assertThat(audits(t, "portal_exchange_pricing_update")).isEqualTo(1);
 
@@ -228,8 +231,14 @@ class CustomerFeeSettingsTest {
         off.put("sameOrLowerOnly", false);
         off.put("maxDifference", null);
         assertThat((Map<String, Object>) put(t, BASE + "/exchange-pricing", off).getBody().get("exchangePricing"))
-            .containsEntry("anyProduct", false).containsEntry("maxDifference", null);
+            .containsEntry("anyProduct", false).containsEntry("maxDifference", null)
+            .as("freeVariantSwaps left out = kept").containsEntry("freeVariantSwaps", true);
         assertThat(audits(t, "portal_exchange_pricing_update")).isEqualTo(2);
+        off.put("freeVariantSwaps", false);
+        assertThat((Map<String, Object>) put(t, BASE + "/exchange-pricing", off).getBody().get("exchangePricing"))
+            .containsEntry("freeVariantSwaps", false);
+        assertThat(jdbc.queryForObject("SELECT portal_free_variant_swaps FROM tenants WHERE id = ?", Boolean.class, t.id())).isFalse();
+        assertThat(audits(t, "portal_exchange_pricing_update")).isEqualTo(3);
     }
 
     @Test
@@ -419,7 +428,8 @@ class CustomerFeeSettingsTest {
         assertThat(put(t, BASE + "/rules/refund", rule(true, "fixed", 75, null, null, null, false)).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/rules/exchange", rule(true, "percent", null, "20", 10, 500, false)).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/merchant-fault-reasons", Map.of("reasons", List.of("wrong_size", "changed_mind"))).getStatusCode().value()).isEqualTo(200);
-        assertThat(put(t, BASE + "/exchange-pricing", Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 0))
+        assertThat(put(t, BASE + "/exchange-pricing", Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 0,
+                "freeVariantSwaps", true))
             .getStatusCode().value()).isEqualTo(200);
         assertThat(post(t, BASE + "/area-overrides", Map.of("kind", "refund", "cityId", CAIRO, "mode", "fixed", "amount", 200))
             .getStatusCode().value()).isEqualTo(200);

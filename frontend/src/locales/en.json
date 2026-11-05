@@ -2964,6 +2964,8 @@
           "description": "What customers can exchange to, and how a price difference is handled.",
           "anyProduct": "Exchange for a different product",
           "anyProductHelp": "Customers can pick any product in stock, not only another size or colour of the same one.",
+          "freeSwaps": "Free size and colour swaps",
+          "freeSwapsHelp": "Another size or colour of the same product costs the customer nothing extra, even if it's priced differently. Turn off to use the price difference, as for a different product.",
           "lowerOnly": "Same price or lower only",
           "lowerOnlyHelp": "Customers can't pick an item that costs more than the one they're sending back.",
           "maxDifference": "Most a customer can pay extra",

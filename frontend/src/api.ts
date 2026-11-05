@@ -3665,6 +3665,8 @@ export interface ExchangePricing {
   anyProduct: boolean
   sameOrLowerOnly: boolean
   maxDifference: number | null
+  /** Same-product exchanges ignore the price difference. Defaults to true for stores that existed before it. */
+  freeVariantSwaps: boolean
 }
 
 export interface CustomerFeeSettings {

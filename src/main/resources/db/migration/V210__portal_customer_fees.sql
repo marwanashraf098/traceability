@@ -23,6 +23,14 @@ ALTER TABLE tenants
         CHECK (portal_merchant_fault_reasons <@ ARRAY['wrong_size', 'damaged', 'not_as_pictured', 'wrong_item',
                                                       'changed_mind', 'other']::text[]);
 
+-- 1b. Free variant swaps (Marawan, 2026-11-05): a same-product exchange ignores the price difference — today's
+--     behaviour. TRUE for every tenant that exists when this migration runs (nothing changes for them), FALSE for
+--     every tenant created afterwards (the column default from here on). When FALSE (from F3) a same-product
+--     exchange shows and charges / owes the difference like a different-product one. Different-product exchanges
+--     always use the difference, whatever this says.
+ALTER TABLE tenants ADD COLUMN portal_free_variant_swaps boolean NOT NULL DEFAULT true;
+ALTER TABLE tenants ALTER COLUMN portal_free_variant_swaps SET DEFAULT false;
+
 -- 2. The default fee rule per kind. A tenant with no row has no fee of that kind. Amounts are whole EGP;
 --    a percent has at most 2 decimals. 'fixed' carries amount only; 'percent' carries percent and an
 --    optional min / max (min <= max). The row keeps its values while switched off.

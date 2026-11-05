@@ -7,7 +7,8 @@
 **Returns portal fees F1 — data model + Customer fees / Exchange pricing settings (2026-11-05; branch
 `feat/portal-fees-f1`, rebased on main 42924620, NOT merged, NOT deployed; V210).** No behaviour change: nothing reads these
 settings for a decision until F2 (fees) / F3 (price difference, different-product picker) / F4 (type 30 COD).
-- **V210:** `tenants.portal_exchange_any_product` / `_same_or_lower_only` (false) / `portal_exchange_max_difference`
+- **V210:** `tenants.portal_exchange_any_product` / `_same_or_lower_only` (false) / `portal_free_variant_swaps` (see
+  below) / `portal_exchange_max_difference`
   (NULL, whole EGP ≤ 30,000) / `portal_merchant_fault_reasons` (default damaged, wrong_item, not_as_pictured; ⊆ the six
   reason codes). `portal_fee_rules` (PK tenant + kind exchange|refund; fixed amount OR percent with optional min/max;
   whole EGP; `waive_merchant_fault` default true; no DELETE). `portal_fee_area_overrides` (Bosta city or one district —
@@ -27,15 +28,19 @@ settings for a decision until F2 (fees) / F3 (price difference, different-produc
 - **Tests:** CustomerFeeSettingsTest s1–s6, d1, d2 (app_user: override columns only, before approval only, cross-tenant
   + positive control), x1 (app_user isolation + positive control), g1 GOLDEN (every setting on → public config,
   merchant settings, lookup — the same order exact — and refund + exchange submit identical to off; no amounts row);
-  CustomerFeeSettingsHiddenTest h1; customerFees.test.tsx (8). RlsCoverageTest (new GET covered, `/areas` exempt),
+  CustomerFeeSettingsHiddenTest h1; customerFees.test.tsx (9). RlsCoverageTest (new GET covered, `/areas` exempt),
   PortalOrderLeakTest (8 endpoints classified), MigrationSmokeTest (3 tables; 208 → 209 files), NotTracedBackfillTest
   153 → 154 — standing approval.
 - **Migration number:** V210 — renumbered twice: main's Bosta forward-proof fix took V207 (F0 became V208, merged
   e969e007, deployed 17:11), then the Bosta relink fix took V209 (47b31cec, deployed 18:26). V210 checked free on
   origin/main and every remote / local branch 2026-11-05. Count gates 209 / 154. Re-check right before merge.
-- **Open for F3 (from the Step 0 decisions):** the same-product price difference is to apply from F3 for every store
-  ("a size that costs more shows the difference") — that changes today's behaviour for stores that never touch these
-  settings; confirm at F3's start whether it is gated by a setting.
+- **Free variant swaps (Marawan, 2026-11-05 — answers the F3 question):** `tenants.portal_free_variant_swaps` — a
+  same-product exchange ignores the price difference. TRUE for every tenant existing when the migration runs (today's
+  behaviour, nothing changes), FALSE for tenants created afterwards (column default). When TRUE (from F3) same-product
+  exchanges keep today's flow and copy; when FALSE they show and charge / owe the difference like a different-product
+  exchange. Different-product exchanges always use the difference. Exchange pricing card: "Free size and colour swaps"
+  (EN + AR); `PUT /exchange-pricing` field `freeVariantSwaps` (left out = kept). Tests: FreeVariantSwapsMigrationTest
+  m1 (existing → true, new → false), CustomerFeeSettingsTest s1 / s4 / g1, customerFees.test.tsx (+1).
 
 **Bosta re-booked delivery stranded behind a deleted leg — ACTIVE_FORWARD_LEG + instant check + relink (2026-11-05;
 branch `fix/bosta-active-forward-leg-relink` merged to main 47b31cec and DEPLOYED 2026-11-05, V209 applied 18:26;

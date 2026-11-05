@@ -9,7 +9,8 @@ import type { CustomerFeeSettings } from '../api'
 //   hidden   — visible:false (until fees are charged) or a failed load → nothing renders
 //   rules    — the owner saves a fee rule (the exact PUT body); a refusal shows the backend's message
 //   reasons  — merchant-fault reasons saved in the portal's order
-//   pricing  — "same price or lower" hides the max-difference field and sends null for it
+//   pricing  — "same price or lower" hides the max-difference field and sends null for it;
+//              "free size and colour swaps" is sent as stored unless changed, false when switched off
 //   areas    — add a district fee (city → districts → POST), remove a row (DELETE)
 //   manager  — read-only: no save buttons, owner-only note
 
@@ -24,7 +25,7 @@ const BASE: CustomerFeeSettings = {
   rules: { exchange: null, refund: null },
   merchantFaultReasons: ['damaged', 'not_as_pictured', 'wrong_item'],
   overrides: [],
-  exchangePricing: { anyProduct: false, sameOrLowerOnly: false, maxDifference: null },
+  exchangePricing: { anyProduct: false, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: true },
 }
 
 let settings: CustomerFeeSettings
@@ -128,13 +129,24 @@ describe('customer fees settings', () => {
     renderWithProviders(<CustomerFeesSection />)
     const box = await screen.findByTestId('exchange-pricing')
     expect(within(box).getByTestId('max-difference')).toHaveValue(300)
-    const [anyProduct, lowerOnly] = within(box).getAllByRole('switch')
-    await user.click(anyProduct)
-    await user.click(lowerOnly)
+    await user.click(within(box).getByRole('switch', { name: 'Exchange for a different product' }))
+    await user.click(within(box).getByRole('switch', { name: 'Same price or lower only' }))
     expect(within(box).queryByTestId('max-difference')).toBeNull()
     await user.click(within(box).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
-    expect(writes()[0].body).toEqual({ anyProduct: true, sameOrLowerOnly: true, maxDifference: null })
+    expect(writes()[0].body).toEqual({ anyProduct: true, sameOrLowerOnly: true, maxDifference: null, freeVariantSwaps: true })
+  })
+
+  test('pricing: switching free swaps off sends false', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<CustomerFeesSection />)
+    const box = await screen.findByTestId('exchange-pricing')
+    const swaps = within(box).getByRole('switch', { name: 'Free size and colour swaps' })
+    expect(swaps).toBeChecked()
+    await user.click(swaps)
+    await user.click(within(box).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(writes()[0].body).toEqual({ anyProduct: false, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: false })
   })
 
   test('areas: add a district fee, remove a row', async () => {
