@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *      the connection back with its own timeout (the next plain borrower isn't cut short)
  *   r4 the main Shopify Admin API client: connect 5 s, read 30 s
  *   r5 the watchdog is wired, with its own one-connection read-only pool — not a DataSource bean
+ *   r6 that pool is read-only AT THE DB (default_transaction_read_only = on: a write fails), statement_timeout
+ *      10 s; exit-on-escalation is off by default
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -158,5 +160,25 @@ class JobServerResilienceConfigTest {
             }
         }
         return null;
+    }
+
+    @Test
+    void r6_watchdogPool_readOnlyAtTheDb_exitOffByDefault() throws Exception {
+        JobServerWatchdogConfig.WatchdogPool pool = ctx.getBean(JobServerWatchdogConfig.WatchdogPool.class);
+        try (Connection c = pool.ds().getConnection(); Statement s = c.createStatement()) {
+            c.setReadOnly(false);                         // even with the JDBC flag cleared, the session refuses
+            try (var rs = s.executeQuery("SHOW default_transaction_read_only")) {
+                rs.next();
+                assertThat(rs.getString(1)).isEqualTo("on");
+            }
+            try (var rs = s.executeQuery("SHOW statement_timeout")) {
+                rs.next();
+                assertThat(rs.getString(1)).isEqualTo("10s");
+            }
+            assertThatThrownBy(() -> s.execute("CREATE TEMP TABLE watchdog_write_probe (x int)"))
+                .isInstanceOf(SQLException.class).hasMessageContaining("read-only");
+        }
+        JobServerWatchdog w = ctx.getBean(JobServerWatchdog.class);
+        assertThat(fieldOrNull(w, "exitOnEscalation")).isEqualTo(false);
     }
 }

@@ -56,7 +56,9 @@ public class JobServerWatchdogConfig {
         ds.setMinimumIdle(0);
         ds.setConnectionTimeout(5000);
         ds.setReadOnly(true);
-        ds.setConnectionInitSql("SET statement_timeout = '10s'");
+        // Read-only AT THE DB too (not only the JDBC flag): every transaction on these sessions is read-only,
+        // so no statement through this pool can write, whatever the code does.
+        ds.setConnectionInitSql("SET default_transaction_read_only = on; SET statement_timeout = '10s'");
         DataSourceConfig.applyNetworkSafety(ds, 15, 0);
         return new WatchdogPool(ds);
     }
@@ -75,7 +77,8 @@ public class JobServerWatchdogConfig {
             @Value("${traced.watchdog.heartbeat-max-age-seconds:60}") long heartbeatSeconds,
             @Value("${traced.watchdog.startup-grace-minutes:5}") long graceMinutes,
             @Value("${traced.watchdog.escalate-after-minutes:5}") long escalateMinutes,
-            @Value("${traced.watchdog.restart-timeout-seconds:120}") long restartTimeoutSeconds) {
+            @Value("${traced.watchdog.restart-timeout-seconds:120}") long restartTimeoutSeconds,
+            @Value("${traced.watchdog.exit-on-escalation:false}") boolean exitOnEscalation) {
         List<String> recipients = Arrays.stream(alertEmails.split(","))
             .map(String::trim).filter(s -> !s.isEmpty()).toList();
         if (recipients.isEmpty()) {
@@ -85,12 +88,14 @@ public class JobServerWatchdogConfig {
             () -> { BackgroundJobServer s = server.getIfAvailable(); return s == null ? null : s.getId(); },
             Duration.ofMinutes(staleMinutes), maxAttempts, livenessJobId, livenessCron,
             Duration.ofMinutes(livenessMinutes), Duration.ofSeconds(heartbeatSeconds));
-        log.info("JobRunr watchdog: liveness job '{}' window {} min", livenessJobId, probe.livenessWindow().toMinutes());
+        log.info("JobRunr watchdog: liveness job '{}' window {} min, exit on escalation: {}",
+            livenessJobId, probe.livenessWindow().toMinutes(), exitOnEscalation);
         return new JobServerWatchdog(probe,
             new JobRunrServerControl(server::getIfAvailable, Duration.ofSeconds(restartTimeoutSeconds)),
             new EmailWatchdogAlerter(email, recipients, Duration.ofSeconds(30)),
             new ThreadDumps(), Clock.systemUTC(),
-            Duration.ofMinutes(graceMinutes), Duration.ofMinutes(escalateMinutes));
+            Duration.ofMinutes(graceMinutes), Duration.ofMinutes(escalateMinutes),
+            exitOnEscalation, JobServerWatchdog.halting(Duration.ofSeconds(30)));
     }
 
     /** The watchdog's own scheduler thread — never shared with @Scheduled or JobRunr. */

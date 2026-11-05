@@ -24,6 +24,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   w4 one failed probe (DB blip) → nothing; the second in a row → incident
  *   w5 startup grace → no check at all
  *   w6 a probe that throws doesn't break the watchdog
+ *   w7 exit-on-escalation ON: the JVM exit is called exactly once, at the escalation, after its alert and with a
+ *      final thread dump — never when the incident opens, never before the 5 min, never on a recovered incident
+ *   w8 exit-on-escalation OFF (the default): never called, even at the escalation
  */
 class JobServerWatchdogTest {
 
@@ -160,5 +163,54 @@ class JobServerWatchdogTest {
         minutes(w, 1);
         assertThat(alerts).hasSize(1);
         assertThat(restarts.get()).isEqualTo(1);
+    }
+
+    final List<String> events = new ArrayList<>();
+
+    JobServerWatchdog exiting(boolean exitOnEscalation) {
+        return new JobServerWatchdog(
+            now -> health.get(),
+            () -> { events.add("restart"); return "restarted"; },
+            (subject, body) -> events.add("alert:" + subject),
+            () -> { events.add("dump"); return "dump"; },
+            clock, Duration.ZERO, Duration.ofMinutes(5),
+            exitOnEscalation, code -> events.add("exit:" + code));
+    }
+
+    @Test
+    void w7_exitOn_onlyAtEscalation_once_afterAlertAndFinalDump() {
+        JobServerWatchdog w = exiting(true);
+        health.set(JobServerWatchdog.Health.failing(List.of("stalled")));
+        minutes(w, 1);
+        assertThat(events).containsExactly("dump", "alert:HIGH · Traced job server stalled", "restart");
+
+        minutes(w, 4);
+        assertThat(events).doesNotContain("exit:1");
+
+        minutes(w, 1);
+        assertThat(events).containsExactly("dump", "alert:HIGH · Traced job server stalled", "restart",
+            "dump", "alert:HIGH · Traced job server still stalled after restart", "dump", "exit:1");
+
+        minutes(w, 30);
+        assertThat(events.stream().filter(e -> e.startsWith("exit")).count()).isEqualTo(1);
+    }
+
+    @Test
+    void w7b_exitOn_recoveredIncident_neverExits() {
+        JobServerWatchdog w = exiting(true);
+        health.set(JobServerWatchdog.Health.failing(List.of("stalled")));
+        minutes(w, 1);
+        health.set(JobServerWatchdog.Health.ok());
+        minutes(w, 20);
+        assertThat(events).noneMatch(e -> e.startsWith("exit"));
+    }
+
+    @Test
+    void w8_exitOff_neverExits_evenAtEscalation() {
+        JobServerWatchdog w = exiting(false);
+        health.set(JobServerWatchdog.Health.failing(List.of("stalled")));
+        minutes(w, 30);
+        assertThat(events).contains("alert:HIGH · Traced job server still stalled after restart");
+        assertThat(events).noneMatch(e -> e.startsWith("exit"));
     }
 }

@@ -459,10 +459,40 @@ public class BostaController {
                 return id;
             }));
 
-        // 4. Enqueue async processing (fire-and-forget; 200 already implicit)
-        jobScheduler.enqueue(() -> webhookJob.process(webhookEventId, fTenantId));
+        // 4. Enqueue async processing, waiting at most enqueueTimeoutMs (2026-11-05, same guard as the Shopify
+        //    endpoint). The row is already committed: a slow or failed enqueue still answers 200 and leaves the
+        //    row 'pending' for BostaWebhookPendingSweeper (> 10 min). Before, the enqueue ran unguarded on the
+        //    request thread — a hung owner pool held it, a failure answered 500.
+        enqueueWithin(webhookEventId, fTenantId);
 
         return ResponseEntity.ok().build();
+    }
+
+    private long enqueueTimeoutMs = 2000;
+    private static final java.util.concurrent.ExecutorService ENQUEUE_EXECUTOR =
+        java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setEnqueueTimeoutMs(@Value("${bosta.webhook.enqueue-timeout-ms:2000}") long enqueueTimeoutMs) {
+        this.enqueueTimeoutMs = enqueueTimeoutMs;
+    }
+
+    private void enqueueWithin(long eventId, UUID tenantId) {
+        java.util.concurrent.Future<?> f = ENQUEUE_EXECUTOR.submit(
+            () -> jobScheduler.enqueue(() -> webhookJob.process(eventId, tenantId)));
+        try {
+            f.get(enqueueTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.warn("Bosta webhook event {} (tenant {}): enqueue not done within {} ms — answered 200, event saved " +
+                "pending for the sweeper (the enqueue may still complete)", eventId, tenantId, enqueueTimeoutMs);
+        } catch (java.util.concurrent.ExecutionException e) {
+            log.warn("Bosta webhook event {} (tenant {}): enqueue failed — answered 200, event saved pending for " +
+                "the sweeper: {}", eventId, tenantId, String.valueOf(e.getCause()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Bosta webhook event {} (tenant {}): interrupted while enqueueing — answered 200, event saved " +
+                "pending for the sweeper", eventId, tenantId);
+        }
     }
 
     // ---- PUT /api/v1/bosta/settings ----------------------------------------

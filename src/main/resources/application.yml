@@ -144,6 +144,8 @@ traced:
     heartbeat-max-age-seconds: 60
     escalate-after-minutes: 5
     restart-timeout-seconds: 120
+    # Last resort: at the escalation, exit the JVM (code 1) so Docker restarts the container. Off unless set.
+    exit-on-escalation: ${TRACED_WATCHDOG_EXIT_ON_ESCALATION:false}
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
   # Feature A — address backfill for the Traced Main Warehouse Shopify location (LocationAddressBackfillJob).
@@ -286,6 +288,14 @@ bosta:
   # A rate-limited webhook event is rescheduled, never failed (V135): after max(retry-after, 60 s × 2^(n−1))
   # capped at max-delay, plus jitter up to jitter × min(n, 5) s; failed only after max-retries.
   webhook:
+    # The webhook endpoint waits at most this long for the JobRunr enqueue, then answers 200 anyway (2026-11-05).
+    enqueue-timeout-ms: 2000
+    # BostaWebhookPendingSweeper (V205): rows still 'pending' after stale-minutes, within window-hours,
+    # re-enqueued at most max-sweeps times, 30 min apart.
+    pending-sweep:
+      stale-minutes: 10
+      window-hours: 48
+      max-sweeps: 3
     rate-limit-max-retries: 8
     rate-limit-max-delay-seconds: 1800
     rate-limit-jitter-seconds: 60

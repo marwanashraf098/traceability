@@ -50,6 +50,26 @@ public final class JobServerWatchdog {
 
     public interface ThreadDumper { String dump(); }
 
+    /** Ends the JVM (prod: {@link #halting}) so Docker's restart policy restarts the container. */
+    public interface Exiter { void exit(int code); }
+
+    /**
+     * System.exit on its own thread (never inside the scheduler's tick, so no shutdown hook can wait on the
+     * caller), plus a daemon that halts the JVM {@code haltAfter} later in case a shutdown hook hangs — e.g.
+     * the BackgroundJobServer's stop() stuck on the very lock that stalled it.
+     */
+    public static Exiter halting(Duration haltAfter) {
+        return code -> {
+            Thread halt = new Thread(() -> {
+                try { Thread.sleep(haltAfter.toMillis()); } catch (InterruptedException ignored) { }
+                Runtime.getRuntime().halt(code);
+            }, "jobrunr-watchdog-halt");
+            halt.setDaemon(true);
+            halt.start();
+            new Thread(() -> System.exit(code), "jobrunr-watchdog-exit").start();
+        };
+    }
+
     private final Probe probe;
     private final ServerControl control;
     private final Alerter alerter;
@@ -58,6 +78,8 @@ public final class JobServerWatchdog {
     private final Instant startedAt;
     private final Duration startupGrace;
     private final Duration escalateAfter;
+    private final boolean exitOnEscalation;
+    private final Exiter exiter;
 
     private Instant incidentStart;
     private Instant restartedAt;
@@ -66,6 +88,19 @@ public final class JobServerWatchdog {
 
     public JobServerWatchdog(Probe probe, ServerControl control, Alerter alerter, ThreadDumper dumper,
                              Clock clock, Duration startupGrace, Duration escalateAfter) {
+        this(probe, control, alerter, dumper, clock, startupGrace, escalateAfter, false, code -> { });
+    }
+
+    /**
+     * {@code exitOnEscalation} (TRACED_WATCHDOG_EXIT_ON_ESCALATION, default false): at the escalation — and
+     * only there, once per incident — after the escalation alert, log a final line + a thread dump and end the
+     * JVM through {@code exiter}. Compose's {@code restart: unless-stopped} starts a fresh container.
+     */
+    public JobServerWatchdog(Probe probe, ServerControl control, Alerter alerter, ThreadDumper dumper,
+                             Clock clock, Duration startupGrace, Duration escalateAfter,
+                             boolean exitOnEscalation, Exiter exiter) {
+        this.exitOnEscalation = exitOnEscalation;
+        this.exiter = exiter;
         this.probe = probe;
         this.control = control;
         this.alerter = alerter;
@@ -132,8 +167,16 @@ public final class JobServerWatchdog {
             alerter.alert("HIGH · Traced job server still stalled after restart",
                 body("The job server is still stalled " + Duration.between(restartedAt, now).toMinutes()
                         + " minutes after the watchdog restarted it.", incidentStart, h.problems(),
-                    "No further automatic action. Restart the app container: "
-                        + "cd ~/traceability && docker compose -f deploy/docker-compose.yml restart app"));
+                    exitOnEscalation
+                        ? "The app now exits so Docker restarts the container."
+                        : "No further automatic action. Restart the app container: "
+                            + "cd ~/traceability && docker compose -f deploy/docker-compose.yml restart app"));
+            if (exitOnEscalation) {
+                log.error("JobRunr watchdog: EXITING THE JVM (code 1) — job server still stalled {} min after the restart "
+                        + "(incident since {}); Docker's restart policy restarts the container. Final thread dump:\n{}",
+                    Duration.between(restartedAt, now).toMinutes(), incidentStart, dumper.dump());
+                exiter.exit(1);
+            }
             return;
         }
 

@@ -4,8 +4,8 @@
 
 ## Current state
 
-**JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, NOT merged,
-NOT deployed; no migration).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
+**JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
+2026-11-05, NOT deployed; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
 - **Root cause (JobRunr 7.3.0 OSS):** `ServerZooKeeper.run` catches ANY exception from the heartbeat
   (`signalBackgroundJobServerAlive` → StorageException on a failed connection / query) and calls
   `backgroundJobServer.stop()` — one failed heartbeat stops the whole server (zookeepers, steward, workers) for good;
@@ -31,8 +31,11 @@ NOT deployed; no migration).** After the 2026-10-29 (DST fall-back 23:00 Cairo) 
   ONE HIGH email to `TRACED_WATCHDOG_ALERT_EMAILS` (EmailGateway, 30 s send cap — NOT the tenant exception system:
   its emails are sent by a JobRunr job), then `stop()` + `start()` (120 s cap). Still failing 5 min after → ONE
   escalation email + dump. Healthy tick closes the incident. A failed probe acts only on its 2nd consecutive time.
-  Kill switch `TRACED_WATCHDOG_ENABLED=false`. NOT built (needs OK): controlled JVM exit on escalation so Docker
-  restarts the container (compose `restart: unless-stopped` — an exit with any code is restarted).
+  Kill switch `TRACED_WATCHDOG_ENABLED=false`. **Last resort (approved, built):** `TRACED_WATCHDOG_EXIT_ON_ESCALATION=true`
+  (default false in code) — at the escalation only, after its alert: final ERROR line + thread dump, then
+  System.exit(1) on its own thread with a 30 s Runtime.halt backstop; compose `restart: unless-stopped` restarts it.
+  **Escape hatch #17 (approved 2026-11-05):** the watchdog pool is read-only AT THE DB
+  (`SET default_transaction_read_only = on` per session) — documented in CLAUDE.md and blueprint §16.1.
 - **Connections:** both pools `socketTimeout` (app 300 s, owner 600 s — Flyway runs there) + `tcpKeepAlive=true` +
   Hikari keepaliveTime 2 min; JobRunr's StorageProvider borrows through `NetworkTimeoutDataSource` (60 s per
   connection; Hikari resets it on return). Compose sets the container's net.ipv4.tcp_keepalive_* (60 s / 10 s × 6).
@@ -46,9 +49,17 @@ NOT deployed; no migration).** After the 2026-10-29 (DST fall-back 23:00 Cairo) 
   RecurringJobZonesTest z1–z3, ShopifyHttpTimeoutTest t1–t2, JobServerResilienceConfigTest r1–r5. Revert-to-confirm
   RED: restart without start() → e1 e2; no escalation guard → w2; network timeout 0 → r2 r3; Shopify factory removed
   → r4.
-- **FOLLOW-UP:** the Bosta webhook endpoint enqueues synchronously with no timeout and no try/catch after committing
-  the webhook_events row (Shopify's endpoint caps it at 2 s); a failed enqueue answers 500 and the stored 'pending'
-  row is never swept (no Bosta pending sweeper). Proposed: same 2 s guard + a pending-row sweep.
+- **Bosta webhook endpoint (V205):** the enqueue after the committed webhook_events row is now capped at 2 s
+  (`bosta.webhook.enqueue-timeout-ms`, same pattern as Shopify) — a slow / failed enqueue answers 200 and leaves the
+  row 'pending' (before: unguarded on the request thread, a failure answered 500). `BostaWebhookPendingSweeper`
+  (every 5 min UTC) re-enqueues rows pending > 10 min within 48 h, ≤ 3 times, 30-min lease (`sweep_count`,
+  `sweep_enqueued_at`), skipping rows waiting on a rate-limit reschedule; listed on the owner pool, claimed under
+  the tenant (ShopifyWebhookRetrySweeper's shape). Prod evidence (Marawan): Nov 4 stall window stored 3 Bosta rows
+  instead of ~470 and none are stuck pending today — the endpoint mostly failed BEFORE the INSERT (app pool), Bosta
+  redelivered after the restart. Tests BostaWebhookEnqueueAndSweepTest bd1–bd3, sw1–sw3; JobServerWatchdogTest w7,
+  w7b, w8 (exit); JobServerResilienceConfigTest r6 (read-only at the DB). Revert-to-confirm RED: unguarded enqueue →
+  bd1 bd2; no lease → sw1 sw2 sw3; exit not gated → w2 w8; no read-only SET → r6. MigrationSmokeTest 204,
+  NotTracedBackfillTest 149.
 - **Tooling gotcha:** the shell's `grep` function in this environment silently SKIPS files it thinks are binary —
   e.g. ExceptionImmediateAlertJob.java (a stray non-UTF-8 byte). Use `/usr/bin/grep -a` for code sweeps.
 
