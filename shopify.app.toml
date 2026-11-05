@@ -7,7 +7,7 @@ name = "Trace"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping"
+scopes = "read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping,read_returns,write_returns,read_merchant_managed_fulfillment_orders"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
@@ -17,11 +17,13 @@ redirect_urls = [ "https://app.tracedtech.com/auth/shopify/callback" ]
 [webhooks]
 api_version = "2026-04"
 # Business webhook subscriptions are registered programmatically by
-# RegisterShopifyWebhooksJob on each store install — required by
-# use_legacy_install_flow = true (app-specific toml subscriptions are incompatible
-# with the legacy install flow). Mandatory compliance (GDPR) webhooks below are the
-# one exception: Shopify requires these declared at the app-config level regardless
-# of install flow, not registered per-shop via the Admin API.
+# RegisterShopifyWebhooksJob on each store connect (and topics added later by
+# ShopifyWebhookTopicsBackfill / app/scopes_update), per shop via the Admin API —
+# the same code path serves OAuth and custom-app (client-credentials) stores, so
+# none are declared here. Install is MANAGED (use_legacy_install_flow = false,
+# since ad65a690): Shopify asks merchants to approve new [access_scopes] the next
+# time they open the app, then sends app/scopes_update. Mandatory compliance (GDPR)
+# webhooks below must be declared at the app-config level.
 
   [webhooks.privacy_compliance]
   customer_deletion_url = "https://app.tracedtech.com/webhooks/shopify/customers/redact"

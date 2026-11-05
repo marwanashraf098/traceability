@@ -125,6 +125,20 @@ public class ShopifyWebhookProcessorJob {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMainReconcileQueue(com.traceability.inventory.MainReconcileQueue q) { this.mainReconcileQueue = q; }
 
+    // Shopify-native returns S1 (V205): returns / fulfillment-order signals, app/scopes_update, and the exchange-line
+    // link after an order upsert. Data only — nothing here changes an order, a quantity or Shopify.
+    private ShopifyReturnsWebhooks returnsWebhooks;
+    private ShopifyScopesUpdateHandler scopesUpdate;
+    private ShopifyReturnsStore returnsStore;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setShopifyReturns(ShopifyReturnsWebhooks returnsWebhooks, ShopifyScopesUpdateHandler scopesUpdate,
+                                  ShopifyReturnsStore returnsStore) {
+        this.returnsWebhooks = returnsWebhooks;
+        this.scopesUpdate = scopesUpdate;
+        this.returnsStore = returnsStore;
+    }
+
     /** Analytics slice 10: inventory_items/update + inventory_levels/update refresh READ columns only. */
     private final com.traceability.analytics.AnalyticsInventoryWebhookHandler inventoryReads;
 
@@ -263,6 +277,13 @@ public class ShopifyWebhookProcessorJob {
             case "shop/redact"                      -> handleShopRedact(tenantId, shopDomain);
             case "inventory_levels/update"          -> inventoryReads.onInventoryLevelUpdate(payload);
             case "inventory_items/update"           -> inventoryReads.onInventoryItemUpdate(payload);
+            case "app/scopes_update"                -> scopesUpdate.handle(tenantId, shopDomain, payload);
+            case "returns/request", "returns/approve", "returns/decline", "returns/cancel", "returns/close",
+                 "returns/reopen", "returns/process", "returns/update", "reverse_fulfillment_orders/dispose",
+                 "fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released", "fulfillment_orders/cancelled",
+                 "fulfillment_orders/order_routing_complete", "fulfillment_orders/split", "fulfillment_orders/merged",
+                 "fulfillment_orders/moved"
+                                                    -> returnsWebhooks.handle(tenantId, shopDomain, topic, payload);
             default -> {
                 // Invariant #8: never a silent drop — log as exception so ops can see it.
                 log.error("Unhandled Shopify webhook topic={} shop={} — this topic has no registered handler",
@@ -271,11 +292,25 @@ public class ShopifyWebhookProcessorJob {
         }
         // A stale order payload: nothing after the upsert runs for this event (no tracking capture, no queue).
         if (ingest == ShopifySyncService.OrderIngest.STALE) return STALE_REASON;
+        // Shopify-native returns S1: an order line that came from a stored exchange line is marked (the
+        // orders/updated-first side of the race; a return upsert does the other side). Never fails the event.
+        if (ingest == ShopifySyncService.OrderIngest.APPLIED) linkExchangeLines(tenantId, shopDomain, payload);
         // Main reconcile (V201, report-only): queue the variants this event names. Never throws.
         if (mainReconcileQueue != null && MAIN_RECONCILE_TOPICS.contains(topic)) {
             mainReconcileQueue.onWebhook(tenantId, topic, payload);
         }
         return null;
+    }
+
+    private void linkExchangeLines(UUID tenantId, String shopDomain, JsonNode payload) {
+        String gid = payload.path("admin_graphql_api_id").asText("");
+        if (gid.isEmpty() || returnsStore == null) return;
+        try {
+            UUID storeId = syncService.resolveStore(tenantId, shopDomain);
+            if (storeId != null) returnsStore.linkExchangeLinesForOrderGid(storeId, gid);
+        } catch (RuntimeException e) {
+            log.warn("Exchange-line link after the order upsert failed for {} — the next return sync re-links: {}", gid, e.toString());
+        }
     }
 
     // ---- topic handlers -------------------------------------------------

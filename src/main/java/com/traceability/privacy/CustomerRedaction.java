@@ -21,6 +21,10 @@ import java.util.UUID;
  *   <li>blocklist (customers/redact only): rows for the customer's canonical phones ({@link CustomerSubject})
  *       get the free-text reason replaced by {@link #REDACTED_REASON}; phone_canonical, source, created_by,
  *       created_at and active stay, so the block keeps working.</li>
+ *   <li>Shopify-native returns mirror (V205): each return of those orders is stamped pii_redacted_at — the V205
+ *       triggers then drop the decline note, the lines' customer / reason notes and those keys from every raw
+ *       (shopify_return_raw_redacted), now and on every later write; stored returns/* webhooks of those orders are
+ *       stripped the same way. Fulfillment orders and dispositions hold no customer data.</li>
  * </ul>
  * Never touched: piece_events (INSERT-only, no customer PII), return_request_events (no PII copies),
  * Bosta webhook_events (status payloads, no PII).
@@ -40,12 +44,45 @@ public final class CustomerRedaction {
     public static final String REDACTED_REASON = "[redacted]";
 
     public record Result(int orders, int returnRequests, int shipments, int exchanges, int unlinked,
-                         int webhookEvents, int dataRequests, int blocklist) {}
+                         int webhookEvents, int dataRequests, int blocklist, int shopifyReturns) {
+        public Result(int orders, int returnRequests, int shipments, int exchanges, int unlinked,
+                      int webhookEvents, int dataRequests, int blocklist) {
+            this(orders, returnRequests, shipments, exchanges, unlinked, webhookEvents, dataRequests, blocklist, 0);
+        }
+    }
+
+    /**
+     * V205: the Shopify returns mirror of the given orders (null = every order of the tenant). Returns the number of
+     * returns redacted; the stored returns/* webhooks of those returns / orders are stripped too.
+     */
+    int redactShopifyReturns(UUID tenantId, Object[] orderIds, Object[] orderGids) {
+        String scope = orderIds == null ? "" : " AND order_id = ANY(?::uuid[])";
+        Object[] args = orderIds == null ? new Object[]{tenantId} : new Object[]{tenantId, orderIds};
+        int returns = jdbc.update("UPDATE shopify_returns SET pii_redacted_at = COALESCE(pii_redacted_at, now()) " +
+            "WHERE tenant_id = ?" + scope, args);
+        // Touch the children so their trigger re-applies the redaction (notes NULL, raw stripped).
+        for (String child : new String[]{"shopify_return_lines", "shopify_exchange_lines", "shopify_rfo_dispositions"}) {
+            jdbc.update("UPDATE " + child + " c SET updated_at = now() FROM shopify_returns r " +
+                "WHERE r.id = c.return_id AND r.tenant_id = c.tenant_id AND c.tenant_id = ? AND r.pii_redacted_at IS NOT NULL" +
+                (orderIds == null ? "" : " AND r.order_id = ANY(?::uuid[])"), args);
+        }
+        if (orderIds == null) {
+            jdbc.update("UPDATE shopify_webhook_events SET payload_raw = shopify_return_raw_redacted(payload_raw) " +
+                "WHERE tenant_id = ? AND topic LIKE 'returns/%'", tenantId);
+        } else {
+            jdbc.update("UPDATE shopify_webhook_events SET payload_raw = shopify_return_raw_redacted(payload_raw) " +
+                "WHERE tenant_id = ? AND topic LIKE 'returns/%' AND (payload_raw #>> '{order,admin_graphql_api_id}' = ANY(?::text[]) " +
+                "  OR payload_raw ->> 'admin_graphql_api_id' IN (SELECT return_gid FROM shopify_returns " +
+                "       WHERE tenant_id = ? AND order_id = ANY(?::uuid[])))",
+                tenantId, orderGids, tenantId, orderIds);
+        }
+        return returns;
+    }
 
     /** customers/redact: orders_to_redact (as GIDs) plus the customer-keyed stores. */
     public Result redactCustomer(UUID tenantId, Collection<String> orderGids, String shopifyCustomerId,
                                  String payloadPhone) {
-        int orders = 0, requests = 0, shipments = 0, exchanges = 0, unlinked = 0, events = 0, blocked = 0;
+        int orders = 0, requests = 0, shipments = 0, exchanges = 0, unlinked = 0, events = 0, blocked = 0, shopifyReturns = 0;
         if (!orderGids.isEmpty() || (payloadPhone != null && !payloadPhone.isBlank())) {
             // Resolve BEFORE clearing — the orders' phones and numbers find the unlinked Bosta copies and
             // the customer's blocklist rows.
@@ -74,6 +111,7 @@ public final class CustomerRedaction {
                     "UPDATE shopify_webhook_events SET payload_raw = shopify_order_raw_redacted(payload_raw) " +
                     "WHERE tenant_id = ? AND topic LIKE 'orders/%' AND payload_raw ->> 'admin_graphql_api_id' = ANY(?::text[])",
                     tenantId, s.gidArray());
+                shopifyReturns = redactShopifyReturns(tenantId, s.orderIdArray(), s.gidArray());
             }
         }
         int dataRequests = 0;
@@ -86,7 +124,7 @@ public final class CustomerRedaction {
                 "UPDATE customer_data_requests SET customer_phone = NULL, pii_redacted_at = COALESCE(pii_redacted_at, now()) " +
                 "WHERE tenant_id = ? AND shopify_customer_id = ?", tenantId, shopifyCustomerId);
         }
-        return new Result(orders, requests, shipments, exchanges, unlinked, events, dataRequests, blocked);
+        return new Result(orders, requests, shipments, exchanges, unlinked, events, dataRequests, blocked, shopifyReturns);
     }
 
     /** shop/redact (~48 h after uninstall): every customer of the tenant. */
@@ -110,7 +148,8 @@ public final class CustomerRedaction {
         int dataRequests = jdbc.update(
             "UPDATE customer_data_requests SET customer_phone = NULL, pii_redacted_at = COALESCE(pii_redacted_at, now()) " +
             "WHERE tenant_id = ?", tenantId);
-        return new Result(orders, requests, shipments, exchanges, unlinked, events, dataRequests, 0);
+        int shopifyReturns = redactShopifyReturns(tenantId, null, null);
+        return new Result(orders, requests, shipments, exchanges, unlinked, events, dataRequests, 0, shopifyReturns);
     }
 
     // Orders: the same column list the pre-V143 handlers cleared; raw through the shared V143 function.

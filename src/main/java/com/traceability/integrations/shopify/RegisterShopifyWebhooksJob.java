@@ -36,8 +36,12 @@ public class RegisterShopifyWebhooksJob {
      * The version of TOPICS. Bump it whenever a topic is added: stores stamped with an older version get
      * the missing topics from ShopifyWebhookTopicsBackfill at the next startup (stores.webhook_topics_version).
      * 1 = slice 10's inventory_items/update + inventory_levels/update.
+     * 2 = Shopify-native returns S1: returns/*, reverse_fulfillment_orders/dispose, fulfillment_orders/*,
+     *     app/scopes_update. The returns / fulfillment-order topics need their scope (ShopifyReturnsScopes) — a store
+     *     that hasn't approved it yet gets them DEFERRED (not attempted, not a failure); app/scopes_update adds them
+     *     once it does.
      */
-    public static final int TOPICS_VERSION = 1;
+    public static final int TOPICS_VERSION = 2;
 
     static final List<String> TOPICS = List.of(
         "orders/create",
@@ -48,8 +52,52 @@ public class RegisterShopifyWebhooksJob {
         // Analytics slice 10: Shopify cost + stock, READ columns only (needs read_inventory, implied by write_inventory)
         "inventory_items/update",
         "inventory_levels/update",
-        "app/uninstalled"
+        "app/uninstalled",
+        // Shopify-native returns S1 (handlers in ShopifyReturnsWebhooks / ShopifyScopesUpdateHandler — they shipped
+        // with these topics: an unknown topic would be marked processed with nothing done).
+        "app/scopes_update",
+        "returns/request",
+        "returns/approve",
+        "returns/decline",
+        "returns/cancel",
+        "returns/close",
+        "returns/reopen",
+        "returns/process",
+        "returns/update",
+        "reverse_fulfillment_orders/dispose",
+        "fulfillment_orders/placed_on_hold",
+        "fulfillment_orders/hold_released",
+        "fulfillment_orders/cancelled",
+        "fulfillment_orders/order_routing_complete",
+        "fulfillment_orders/split",
+        "fulfillment_orders/merged",
+        "fulfillment_orders/moved"
     );
+
+    /**
+     * The topics this store can't subscribe yet: their scope (ShopifyReturnsScopes.requiredScope) isn't granted.
+     * Decided on the token's LIVE scopes when they can be read, else the stored access_token_scopes.
+     */
+    static java.util.Set<String> deferredTopics(String grantedScopesCsv) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (String topic : TOPICS) {
+            String scope = ShopifyReturnsScopes.requiredScope(topic);
+            if (scope != null && !ShopifyGateway.isScopeGranted(scope, grantedScopesCsv)) out.add(topic);
+        }
+        return out;
+    }
+
+    private String grantedScopes(UUID storeId, String shopDomain, String rawToken) {
+        String live = null;
+        try {
+            live = shopifyGateway.fetchGrantedScopes(shopDomain, rawToken);
+        } catch (RuntimeException e) {
+            log.debug("Could not read live scopes for {}: {}", shopDomain, e.getMessage());
+        }
+        if (live != null) return live;
+        return tx.execute(s -> jdbc.query("SELECT access_token_scopes FROM stores WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, storeId));
+    }
 
     private final JdbcTemplate jdbc;
     private final ShopifyGateway shopifyGateway;
@@ -122,7 +170,13 @@ public class RegisterShopifyWebhooksJob {
             }
 
             boolean allRegistered = true;
+            java.util.Set<String> deferred = deferredTopics(grantedScopes(storeId, shopDomain, rawToken));
+            if (!deferred.isEmpty()) {
+                log.info("Webhook registration for store {}: {} topic(s) deferred until their scope is approved",
+                    storeId, deferred.size());
+            }
             for (String topic : TOPICS) {
+                if (deferred.contains(topic)) continue;
                 String callbackUrl = callbackBase + topic;
                 try {
                     shopifyGateway.registerWebhook(shopDomain, rawToken, topic, callbackUrl);
@@ -138,8 +192,16 @@ public class RegisterShopifyWebhooksJob {
         });
     }
 
-    /** What {@link #addMissingTopics} did for one store. {@code skipped} is set when nothing was attempted. */
-    public record TopicsOutcome(List<String> added, List<String> present, List<String> failed, String skipped) {}
+    /**
+     * What {@link #addMissingTopics} did for one store. {@code skipped} is set when nothing was attempted;
+     * {@code deferred} = topics whose scope the store hasn't approved yet (not attempted, not a failure).
+     */
+    public record TopicsOutcome(List<String> added, List<String> present, List<String> failed, String skipped,
+                                List<String> deferred) {
+        public TopicsOutcome(List<String> added, List<String> present, List<String> failed, String skipped) {
+            this(added, present, failed, skipped, List.of());
+        }
+    }
 
     /**
      * ADDITIVE registration (the one-time topic backfill): lists the store's subscriptions and registers
@@ -174,7 +236,9 @@ public class RegisterShopifyWebhooksJob {
                     storeId, e.getMessage());
             }
             List<String> added = new ArrayList<>(), present = new ArrayList<>(), failed = new ArrayList<>();
+            java.util.Set<String> deferred = deferredTopics(grantedScopes(storeId, shopDomain, rawToken));
             for (String topic : TOPICS) {
+                if (deferred.contains(topic)) continue;
                 if (subscribed.contains(topic.replace("/", "_").toUpperCase(Locale.ROOT))) {
                     present.add(topic);
                     continue;
@@ -187,7 +251,7 @@ public class RegisterShopifyWebhooksJob {
                 }
             }
             if (failed.isEmpty()) stampTopicsVersion(storeId);
-            return new TopicsOutcome(added, present, failed, null);
+            return new TopicsOutcome(added, present, failed, null, List.copyOf(deferred));
         });
     }
 

@@ -922,6 +922,8 @@ export interface ConnectionsStatus {
     locationState?: 'active' | 'inactive' | 'deleted' | null
     /** Updates that used up their attempts while the location wasn't active — the owner's "Re-send failed updates". */
     resendableFailed?: number
+    /** Shopify-native returns S1: owner only, while the store hasn't approved Traced's new Shopify permissions. */
+    newPermissions?: { openAppUrl: string }
   }
   bosta: {
     connected: boolean

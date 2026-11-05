@@ -72,7 +72,12 @@ class MigrationSmokeTest {
             "label_code_batches",
             "label_codes",
             "tag_sessions",
-            "stock_take_untagged_counts"
+            "stock_take_untagged_counts",
+            "shopify_returns",
+            "shopify_return_lines",
+            "shopify_exchange_lines",
+            "shopify_fulfillment_orders",
+            "shopify_rfo_dispositions"
     );
 
     @Test

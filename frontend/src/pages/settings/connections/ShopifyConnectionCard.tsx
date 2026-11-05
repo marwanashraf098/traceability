@@ -152,6 +152,29 @@ function LocationStateNotice({ shopify, reload }: {
   return note
 }
 
+// ── New Shopify permissions (Shopify-native returns S1) ─────────────────────────
+// Owner only (the backend sends `newPermissions` only to an owner, only while the store hasn't granted the
+// returns / fulfillment-order scopes). Shopify shows its own approval prompt when the app is opened in the admin.
+
+export function NewPermissionsNotice({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
+  const { t } = useTranslation()
+  const url = shopify.newPermissions?.openAppUrl
+  if (!url || getRoleFromToken() !== 'owner') return null
+  return (
+    <div data-testid="shopify-new-permissions" className="rounded-xl border border-line bg-elevated p-4 space-y-3">
+      <div className="space-y-1">
+        <h4 className="text-body font-semibold text-primary">{t('connections.shopify.newPermissions.title')}</h4>
+        <p className="text-small text-muted">{t('connections.shopify.newPermissions.body')}</p>
+      </div>
+      <a href={url} target="_blank" rel="noopener noreferrer"
+         className="inline-flex items-center gap-1.5 text-small font-medium text-accent hover:underline">
+        {t('connections.shopify.newPermissions.cta')}
+        <ArrowUpRight size={14} />
+      </a>
+    </div>
+  )
+}
+
 // ── Fulfillment activation checklist item (FR-17 v2) ───────────────────────────
 //
 // Shown only once Part A has already linked the Traced Main Warehouse to Shopify
@@ -681,6 +704,8 @@ export default function ShopifyConnectionCard({
               </div>
             )}
           </div>
+
+          <NewPermissionsNotice shopify={shopify} />
 
           <LocationStateNotice shopify={shopify} reload={reload} />
 
