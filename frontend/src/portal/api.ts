@@ -38,6 +38,8 @@ export interface ExchangeOption {
   title: string
   options: string[]
   inStock: boolean
+  /** F3 — present only with lookup.exchangePricing: the current price. */
+  price?: string | null
 }
 
 export interface LookupLine {
@@ -109,6 +111,41 @@ export interface LookupResult {
   exchangesOffered?: false
   /** Returns portal fees F2 — present only when a fee applies to this order; the amount comes from quote(). */
   fees?: { refund: boolean; exchange: boolean }
+  /**
+   * F3 — present only when this order can be exchanged and a price difference can apply: anyProduct = the catalogue of
+   * other products is offered; freeVariantSwaps false = a same-product swap also pays / gets back the difference.
+   */
+  exchangePricing?: { anyProduct: boolean; freeVariantSwaps: boolean }
+}
+
+/** F3 — one product the customer can exchange for, with its in-stock variants (GET /catalogue). */
+export interface CatalogueProduct {
+  productId: string
+  title: string
+  imageUrl: string | null
+  variants: Array<{ variantId: string; title: string; options: string[]; price: string; priceDifference: string }>
+}
+
+export type CatalogueAnswer = { products: CatalogueProduct[]; paidPrice: string } | { blocked: 'approximate_price' } | null
+
+/** F3 — the other products a line can be exchanged for; null when unavailable (the section then says so). */
+export async function getCatalogue(slug: string, token: string, line: { variantId?: string; orderItemId?: string },
+                                   q?: string): Promise<CatalogueAnswer> {
+  const params = new URLSearchParams()
+  if (line.orderItemId) params.set('orderItemId', line.orderItemId)
+  else if (line.variantId) params.set('variantId', line.variantId)
+  if (q) params.set('q', q)
+  try {
+    const { status, body } = await call(`/${encodeURIComponent(slug)}/catalogue?${params}`, {
+      method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    })
+    if (status === 200 && isObject(body) && (Array.isArray(body.products) || body.blocked === 'approximate_price')) {
+      return body as unknown as CatalogueAnswer
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /** Returns portal fees F2 — the fee and what is due for the customer's current choices (POST /quote). */
@@ -125,9 +162,17 @@ export interface FeeQuote {
   percent: string | null
   /** Refunds only: what the customer receives (item value − fee, never below 0). */
   refundDue: string | null
-  /** Exchanges only: what the customer pays (the exchange fee). */
+  /** Exchanges only: what the customer pays (the price difference + the exchange fee, when positive). */
   collect: string | null
   nothingOwed: boolean
+  /** F3 — exchanges priced by their difference only. */
+  paidPrice?: string | null
+  replacementPrice?: string | null
+  priceDifference?: string | null
+  /** What the store owes the customer (the replacement costs less than they paid, after the fee). */
+  customerOwed?: string | null
+  /** Why this exchange can't be sent as chosen. */
+  blocked?: 'approximate_price' | 'same_or_lower_only' | 'max_difference' | 'cod_limit'
 }
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */

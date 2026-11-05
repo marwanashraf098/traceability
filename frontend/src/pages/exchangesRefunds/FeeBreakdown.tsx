@@ -22,6 +22,9 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
   if (!a) return null
   const k = 'exchangesRefunds.requests.fees'
   const refund = a.kind === 'refund'
+  // F3: an exchange priced by its difference (different product, or free swaps off).
+  const diff = !refund && a.priceDifference != null ? Number(a.priceDifference) : null
+  const signed = (n: number) => `${n > 0 ? '+ ' : n < 0 ? '− ' : ''}${money(String(Math.abs(n)))}`
   const money = (v: string | null) => formatMoney(v, a.currency)
 
   async function save(body: { waived: true } | { fee: number }) {
@@ -54,14 +57,33 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
   return (
     <section className="rounded-xl border border-line p-4 space-y-2" data-testid="fee-breakdown" aria-labelledby={`${id}-title`}>
       <div className="flex items-center justify-between gap-2">
-        <h3 id={`${id}-title`} className="text-body font-semibold text-primary">{t(refund ? `${k}.titleRefund` : `${k}.titleExchange`)}</h3>
+        <h3 id={`${id}-title`} className="text-body font-semibold text-primary">
+          {t(refund ? `${k}.titleRefund` : diff != null ? `${k}.titleExchangePrice` : `${k}.titleExchange`)}
+        </h3>
         {a.approximate && <Badge tone="warning" label={t(`${k}.approximate`)} />}
       </div>
       <dl className="space-y-1 text-body">
-        <div className="flex justify-between gap-4">
-          <dt className="text-secondary">{t(`${k}.itemValue`)}</dt>
-          <dd dir="ltr" data-testid="fee-item-value">{money(a.itemValue)}</dd>
-        </div>
+        {diff == null ? (
+          <div className="flex justify-between gap-4">
+            <dt className="text-secondary">{t(`${k}.itemValue`)}</dt>
+            <dd dir="ltr" data-testid="fee-item-value">{money(a.itemValue)}</dd>
+          </div>
+        ) : (
+          <>
+            <div className="flex justify-between gap-4">
+              <dt className="text-secondary">{t(`${k}.paidPrice`)}</dt>
+              <dd dir="ltr" data-testid="fee-paid-price">{money(a.paidPrice ?? a.itemValue)}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-secondary">{t(`${k}.newPrice`)}</dt>
+              <dd dir="ltr" data-testid="fee-new-price">{money(a.replacementPrice ?? null)}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-secondary">{t(`${k}.priceDifference`)}</dt>
+              <dd dir="ltr" data-testid="fee-difference">{signed(diff)}</dd>
+            </div>
+          </>
+        )}
         <div className="flex justify-between gap-4">
           <dt className="text-secondary">
             {t(refund ? `${k}.returnFee` : `${k}.exchangeFee`)}
@@ -84,6 +106,9 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
       {refund && a.nothingOwed && <p className="text-small text-secondary" data-testid="fee-nothing-owed">{t(`${k}.nothingOwed`)}</p>}
       {!refund && Number(a.collect ?? 0) > 0 && (
         <p className="text-small text-secondary" data-testid="fee-collect">{t(`${k}.collect`, { amount: money(a.collect) })}</p>
+      )}
+      {!refund && Number(a.customerOwed ?? 0) > 0 && (
+        <p className="text-small text-secondary" data-testid="fee-owed">{t(`${k}.owed`, { amount: money(a.customerOwed ?? null) })}</p>
       )}
       {a.canOverride && !editing && (
         <div className="flex flex-wrap gap-2 pt-1">

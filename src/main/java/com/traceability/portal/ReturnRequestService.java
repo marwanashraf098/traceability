@@ -499,6 +499,8 @@ public class ReturnRequestService {
         jdbc.update("UPDATE return_request_items SET replacement_variant_id = NULL WHERE request_id = ? AND tenant_id = ?",
             id, tenantId);
         requests.event(tenantId, id, "switched_to_refund", actorUserId, null);
+        // F3: frozen exchange amounts are recalculated as a refund (still 'requested' — before the approval below).
+        new RequestAmounts(jdbc).recalculateAsRefund(tenantId, id, actorUserId);
         approve(id, actorUserId);
     }
 

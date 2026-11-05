@@ -3436,8 +3436,13 @@ export interface RequestAmounts {
   percent: string | null
   areaSource: 'rule' | 'city' | 'district' | null
   refundDue: string | null
-  /** Exchange: what the customer owes (the fee). Shown as an instruction — no courier collects it yet. */
+  /** Exchange: what the customer pays (price difference + fee). Shown as an instruction — no courier collects it yet. */
   collect: string | null
+  /** F3 — an exchange's price difference (null when it didn't apply) and what the customer is owed. */
+  paidPrice?: string | null
+  replacementPrice?: string | null
+  priceDifference?: string | null
+  customerOwed?: string | null
   nothingOwed: boolean
   overriddenAt: string | null
   overriddenByName: string | null

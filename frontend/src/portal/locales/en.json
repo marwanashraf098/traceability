@@ -159,7 +159,17 @@
     "yours": "yours",
     "outOfStock": "out of stock",
     "inStockSamePrice": "In stock · same price, nothing extra to pay",
-    "fallback": "If my new size sells out before approval, I'm happy to get a refund instead."
+    "fallback": "If my new size sells out before approval, I'm happy to get a refund instead.",
+    "inStock": "In stock",
+    "inStockPrice": "In stock · {{price}}",
+    "differenceLater": "you'll see any price difference before you send",
+    "otherProduct": "Choose a different product",
+    "otherProductTitle": "Other products",
+    "otherProductBlocked": "This item can only be swapped for another size or colour online. Contact the store to exchange it for a different product.",
+    "otherProductUnavailable": "We can't show other products right now. Try again in a moment.",
+    "noProducts": "No other products in stock match.",
+    "search": "Search products",
+    "loading": "Loading…"
   },
   "x3": {
     "exchanging": "Exchanging",
@@ -224,7 +234,9 @@
       "walletInvalid": "Enter an Egyptian mobile number, like 010 1234 5678."
     },
     "summary": "Refund to",
-    "summaryLabel": "Refund"
+    "summaryLabel": "Refund",
+    "titleOwed": "How should we pay you back?",
+    "leadOwed": "{{store}} owes you {{amount}} for this exchange. How should they send it?"
   },
   "ph": {
     "label": "Photos",
@@ -266,6 +278,17 @@
     "waivedNote": "No fee, because of the reason you chose.",
     "nothingOwed": "The return fee is more than the item value, so you'd receive EGP 0. You can still send this request.",
     "exchangePayNote": "The store will tell you how to pay this fee.",
-    "approximate": "Based on today's prices — the final amount may differ slightly."
+    "approximate": "Based on today's prices — the final amount may differ slightly.",
+    "exchangePriceTitle": "Price difference",
+    "priceDifference": "New item vs. what you paid",
+    "youGetBack": "You'll get back",
+    "nothingToPay": "Nothing to pay",
+    "owedNote": "The store will pay you back. We'll ask how you'd like to receive it.",
+    "blocked": {
+      "approximate_price": "This item can only be swapped for another size or colour online.",
+      "same_or_lower_only": "This store only exchanges for items at the same price or lower.",
+      "max_difference": "The price difference is more than this store allows. Choose another item.",
+      "cod_limit": "The amount to pay is more than a courier can collect. Choose another item."
+    }
   }
 }

@@ -415,6 +415,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/portal/{slug}/config",          skip(R_PORTAL));
         reg("GET /api/v1/portal/{slug}/logo",            skip(R_PORTAL));
         reg("GET /api/v1/portal/{slug}/districts",       skip(R_PORTAL));
+        reg("GET /api/v1/portal/{slug}/catalogue",       skip(R_PORTAL));        // F3: other products
         reg("POST /api/v1/portal/{slug}/lookup",         skip(R_PORTAL));
         reg("POST /api/v1/portal/{slug}/photos",         skip(R_PORTAL));
         reg("POST /api/v1/portal/{slug}/requests",       skip(R_PORTAL));

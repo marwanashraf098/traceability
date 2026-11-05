@@ -58,6 +58,11 @@ public class RequestAmounts {
             // F2: an exchange's fee is what the customer owes. Bosta COD stays 0 until F4 — the drawer shows it as
             // an instruction to collect, nothing is sent to any courier.
             m.put("collect", plain(a.get("collect_cod")));
+            // F3: an exchange's price difference (null when it didn't apply) and what the customer is owed.
+            m.put("paidPrice", plain(a.get("original_unit_price")));
+            m.put("replacementPrice", plain(a.get("replacement_unit_price")));
+            m.put("priceDifference", plain(a.get("price_difference")));
+            m.put("customerOwed", plain(a.get("customer_owed")));
             m.put("nothingOwed", a.get("refund_due") != null && ((BigDecimal) a.get("refund_due")).signum() == 0);
             m.put("overriddenAt", a.get("overridden_at") == null ? null : a.get("overridden_at").toString());
             m.put("overriddenByName", a.get("overridden_by_name"));
@@ -95,11 +100,15 @@ public class RequestAmounts {
         BigDecimal value = (BigDecimal) a.get("item_value");
         boolean refund = "refund".equals(a.get("fee_kind"));
         BigDecimal due = refund ? value.subtract(newFee).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP) : null;
-        BigDecimal collect = refund ? BigDecimal.ZERO : newFee;
+        // F3: an exchange's net = its frozen price difference + the fee → collect or owed (PortalAmounts.split).
+        BigDecimal diff = (BigDecimal) a.get("price_difference");
+        BigDecimal[] split = PortalAmounts.split(refund, newFee,
+            diff == null ? null : new PortalAmounts.Difference(BigDecimal.ZERO, diff));
         jdbc.update(
             "UPDATE return_request_amounts SET fee_amount = ?, fee_waived = ?, waive_reason = ?, collect_cod = ?, " +
-            "    refund_due = ?, overridden_at = now(), overridden_by = ? WHERE request_id = ? AND tenant_id = ?",
-            newFee, waive, reason, collect, due, actor, requestId, tenantId);
+            "    customer_owed = ?, refund_due = ?, overridden_at = now(), overridden_by = ? " +
+            "WHERE request_id = ? AND tenant_id = ?",
+            newFee, waive, reason, split[0], split[1], due, actor, requestId, tenantId);
         Map<String, Object> from = new LinkedHashMap<>();
         from.put("fee", oldFee.setScale(2, RoundingMode.HALF_UP).toPlainString());
         from.put("waived", oldWaived);
@@ -140,6 +149,70 @@ public class RequestAmounts {
         BigDecimal fee = ((BigDecimal) a.get("fee_amount")).setScale(2, RoundingMode.HALF_UP);
         return new Net(value, fee, Boolean.TRUE.equals(a.get("fee_waived")),
             value.subtract(fee).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP), approx, unit);
+    }
+
+    /**
+     * F3 — an exchange switched to a refund (before approval): its frozen amounts are recalculated as a REFUND through
+     * THE calculator — the same items and frozen paid prices, the refund fee rule (if on) in the request's area, the
+     * merchant-fault reasons — and the exchange's difference / collect / owed are cleared. A previous override is reset
+     * (the fee is a new one). No row (no fee or difference when it was submitted) → nothing to do. Event
+     * amounts_recalculated {from, to}. Only while 'requested' (the V210 trigger refuses anything later).
+     */
+    public void recalculateAsRefund(UUID tenantId, UUID requestId, UUID actor) {
+        Optional<Map<String, Object>> o = row(tenantId, requestId);
+        if (o.isEmpty() || !"exchange".equals(o.get().get("fee_kind"))) return;
+        Map<String, Object> a = o.get();
+        List<PortalAmounts.Item> items = new ArrayList<>();
+        for (Map<String, Object> l : parseList((String) a.get("lines_json"))) {
+            items.add(new PortalAmounts.Item(String.valueOf(l.get("key")), uuid(l.get("variantId")), uuid(l.get("orderItemId")),
+                l.get("unitPrice") == null ? null : new BigDecimal(l.get("unitPrice").toString()),
+                (String) l.get("priceSource"), (String) l.get("reason")));
+        }
+        Map<String, Object> rr = jdbc.queryForMap(
+            "SELECT order_id, pickup_city_id, pickup_district_id FROM return_requests WHERE id = ? AND tenant_id = ?",
+            requestId, tenantId);
+        UUID orderId = (UUID) rr.get("order_id");
+        String[] area = com.traceability.courier.GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId)
+            ? new String[]{null, null}
+            : rr.get("pickup_city_id") != null ? new String[]{(String) rr.get("pickup_city_id"), (String) rr.get("pickup_district_id")}
+            : new PickupAreaService(jdbc).storedDeliveryArea(tenantId, orderId);
+        PortalAmounts.Quote q = PortalAmounts.calculate("refund",
+            PortalAmounts.terms(jdbc, tenantId, "refund", area[0], area[1]).orElse(null),
+            PortalAmounts.merchantFaultReasons(jdbc, tenantId), items, null);
+        Map<String, Object> snapshot = q.terms() == null ? new LinkedHashMap<>() : q.terms().toJson();
+        snapshot.put("calculatedFee", PortalAmounts.plain(q.fee()));
+        snapshot.put("calculatedWaived", q.feeWaived());
+        snapshot.put("switchedFromExchange", true);
+        List<Map<String, Object>> lines = new ArrayList<>();
+        for (PortalAmounts.Line l : q.lines()) lines.add(l.toJson());
+        jdbc.update(
+            "UPDATE return_request_amounts SET fee_kind = 'refund', fee_amount = ?, fee_waived = ?, waive_reason = ?, " +
+            "    fee_rule_snapshot = ?::jsonb, lines = ?::jsonb, collect_cod = 0, customer_owed = 0, refund_due = ?, " +
+            "    price_difference = NULL, replacement_unit_price = NULL, fee_effective_percent = ?, " +
+            "    overridden_at = NULL, overridden_by = NULL " +
+            "WHERE request_id = ? AND tenant_id = ?",
+            q.fee(), q.feeWaived(), q.waiveReason(), PortalAmounts.toJson(snapshot), PortalAmounts.toJson(lines),
+            q.refundDue(), q.effectivePercent(), requestId, tenantId);
+        Map<String, Object> from = new LinkedHashMap<>();
+        from.put("kind", "exchange");
+        from.put("fee", plain(a.get("fee_amount")));
+        from.put("collect", plain(a.get("collect_cod")));
+        from.put("owed", plain(a.get("customer_owed")));
+        Map<String, Object> to = new LinkedHashMap<>();
+        to.put("kind", "refund");
+        to.put("fee", PortalAmounts.plain(q.fee()));
+        to.put("refund_due", PortalAmounts.plain(q.refundDue()));
+        new ReturnRequestLifecycle(jdbc).event(tenantId, requestId, "amounts_recalculated", actor,
+            ReturnRequestLifecycle.meta("from", from, "to", to));
+    }
+
+    private static UUID uuid(Object v) { return v == null ? null : UUID.fromString(v.toString()); }
+
+    /** F3: what the request's frozen amounts say the customer is owed (0 without a row). */
+    public BigDecimal customerOwed(UUID tenantId, UUID requestId) {
+        return jdbc.queryForList(
+            "SELECT customer_owed FROM return_request_amounts WHERE request_id = ? AND tenant_id = ?",
+            BigDecimal.class, requestId, tenantId).stream().findFirst().orElse(BigDecimal.ZERO);
     }
 
     /** True when the request's frozen refund due is exactly 0 (fee ≥ item value) — it may close as nothing_owed. */

@@ -368,11 +368,12 @@ public class ExchangeService {
     public AttachOutcome attachForRequest(UUID tenantId, UUID requestId, String trackingNumber) {
         Map<String, Object> rq = jdbc.queryForList(
             "SELECT rr.order_id, rr.reference, i.variant_id, i.replacement_variant_id, " +
-            "       pr.title AS product, v.title AS variant, rv.title AS replacement " +
+            "       pr.title AS product, v.title AS variant, rv.title AS replacement, rpr.title AS replacement_product " +
             "FROM return_requests rr " +
             "JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
             "JOIN variants v ON v.id = i.variant_id JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id " +
+            "LEFT JOIN products rpr ON rpr.id = rv.product_id " +
             "WHERE rr.id = ? AND rr.tenant_id = ? AND rr.type = 'exchange' AND rr.bosta_tracking_number = ? " +
             "  AND rr.booking_status IN ('booked', 'needs_review') " +
             "ORDER BY i.created_at, i.id LIMIT 1",
@@ -383,7 +384,10 @@ public class ExchangeService {
         UUID inboundVariantId = (UUID) rq.get("variant_id");
         UUID outboundVariantId = (UUID) rq.get("replacement_variant_id");
         String outboundDesc = com.traceability.portal.ReturnPickupBookingService.exchangeOutboundDescription(
-            (String) rq.get("reference"), (String) rq.get("product"), (String) rq.get("replacement"));
+            // F3: what goes out is the replacement's own product (same title as before for a same-product exchange).
+            (String) rq.get("reference"),
+            (String) (rq.get("replacement_product") != null ? rq.get("replacement_product") : rq.get("product")),
+            (String) rq.get("replacement"));
         String inboundDesc = com.traceability.portal.ReturnPickupBookingService.exchangeReturnDescription(
             (String) rq.get("product"), (String) rq.get("variant"));
 

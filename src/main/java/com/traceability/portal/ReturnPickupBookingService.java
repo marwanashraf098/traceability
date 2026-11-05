@@ -607,6 +607,8 @@ public class ReturnPickupBookingService {
         // Step 5c (exchange): the switch, drop-off availability and the one item each way.
         boolean exchangesOn; Boolean dropoffAvailable; boolean replacementInStock; boolean replacementActive;
         String product; String originalVariant; String replacementVariant; UUID replacementVariantId;
+        /** F3: the replacement's OWN product title (a different-product exchange goes out as that product). */
+        String replacementProduct;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
         JsonNode drop; JsonNode receiver; String customerName; String customerPhone;
@@ -706,19 +708,14 @@ public class ReturnPickupBookingService {
         if (c.exchange) {
             // Step 5c: the one exchanged item — what comes back and what goes out — and whether
             // the replacement is still in stock (VariantStockService, the one stock derivation).
-            jdbc.query(
-                "SELECT pr.title AS product, v.title AS variant, rv.id AS replacement_id, rv.title AS replacement " +
-                "FROM return_request_items i JOIN variants v ON v.id = i.variant_id " +
-                "JOIN products pr ON pr.id = v.product_id " +
-                "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
-                "WHERE i.request_id = ? AND i.tenant_id = ? AND i.active ORDER BY i.created_at, i.id LIMIT 1",
-                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
-                    c.product = rs.getString("product");
-                    c.originalVariant = rs.getString("variant");
-                    c.replacementVariantId = rs.getObject("replacement_id", UUID.class);
-                    c.replacementVariant = rs.getString("replacement");
-                },
-                requestId, tenantId);
+            ExchangeItem item = exchangeItem(jdbc, requestId, tenantId);
+            if (item != null) {
+                c.product = item.product();
+                c.originalVariant = item.originalVariant();
+                c.replacementVariantId = item.replacementVariantId();
+                c.replacementVariant = item.replacementVariant();
+                c.replacementProduct = item.replacementProduct();
+            }
             if (c.replacementVariantId != null) {
                 com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
                 c.replacementInStock = stock.forVariant(stock.computeAll(), c.replacementVariantId).available() > 0;
@@ -780,7 +777,10 @@ public class ReturnPickupBookingService {
         return null;
     }
 
-    /** "RR-XXXXXX: {product} / {replacement variant}" — what goes out (specs). Shared with ExchangeService. */
+    /**
+     * "RR-XXXXXX: {replacement's product} / {replacement variant}" — what goes out (specs). Shared with ExchangeService.
+     * F3 fix: callers pass the REPLACEMENT's product title (a same-product exchange: the same title as before).
+     */
     public static String exchangeOutboundDescription(String reference, String product, String replacementVariant) {
         return truncate(reference + ": " + titled(product, replacementVariant));
     }
@@ -798,6 +798,29 @@ public class ReturnPickupBookingService {
         return s.length() > DESCRIPTION_MAX ? s.substring(0, DESCRIPTION_MAX) : s;
     }
 
+    /** The one exchanged item of an exchange request: what comes back and what goes out (F3: the replacement's OWN product). */
+    public record ExchangeItem(String product, String originalVariant, UUID replacementVariantId, String replacementVariant,
+                        String replacementProduct) {
+        /** The type 30 specs description — what goes out. */
+        public String outbound(String reference) {
+            return exchangeOutboundDescription(reference, replacementProduct != null ? replacementProduct : product, replacementVariant);
+        }
+    }
+
+    public static ExchangeItem exchangeItem(JdbcTemplate jdbc, UUID requestId, UUID tenantId) {
+        return jdbc.query(
+            "SELECT pr.title AS product, v.title AS variant, rv.id AS replacement_id, rv.title AS replacement, " +
+            "       rpr.title AS replacement_product " +
+            "FROM return_request_items i JOIN variants v ON v.id = i.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
+            "LEFT JOIN products rpr ON rpr.id = rv.product_id AND rpr.tenant_id = rv.tenant_id " +
+            "WHERE i.request_id = ? AND i.tenant_id = ? AND i.active ORDER BY i.created_at, i.id LIMIT 1",
+            (rs, n) -> new ExchangeItem(rs.getString("product"), rs.getString("variant"),
+                rs.getObject("replacement_id", UUID.class), rs.getString("replacement"), rs.getString("replacement_product")),
+            requestId, tenantId).stream().findFirst().orElse(null);
+    }
+
     private BostaV2Client.Exchange exchangePayload(Context c) {
         String[] name = receiverName(c);
         return new BostaV2Client.Exchange(
@@ -805,7 +828,8 @@ public class ReturnPickupBookingService {
             c.drop.path("firstLine").asText().trim(), opt(c.drop, "secondLine"), opt(c.drop, "buildingNumber"),
             opt(c.drop, "floor"), opt(c.drop, "apartment"), c.cityName, c.districtId,
             name[0], name[1], receiverPhone(c),
-            exchangeOutboundDescription(c.reference, c.product, c.replacementVariant),
+            exchangeOutboundDescription(c.reference, c.replacementProduct != null ? c.replacementProduct : c.product,
+                c.replacementVariant),
             exchangeReturnDescription(c.product, c.originalVariant),
             "Traced exchange request " + c.reference);
     }
