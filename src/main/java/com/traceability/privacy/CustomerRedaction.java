@@ -21,7 +21,7 @@ import java.util.UUID;
  *   <li>blocklist (customers/redact only): rows for the customer's canonical phones ({@link CustomerSubject})
  *       get the free-text reason replaced by {@link #REDACTED_REASON}; phone_canonical, source, created_by,
  *       created_at and active stay, so the block keeps working.</li>
- *   <li>Shopify-native returns mirror (V205): each return of those orders is stamped pii_redacted_at — the V205
+ *   <li>Shopify-native returns mirror (V206): each return of those orders is stamped pii_redacted_at — the V206
  *       triggers then drop the decline note, the lines' customer / reason notes and those keys from every raw
  *       (shopify_return_raw_redacted), now and on every later write; stored returns/* webhooks of those orders are
  *       stripped the same way. Fulfillment orders and dispositions hold no customer data.</li>
@@ -52,7 +52,7 @@ public final class CustomerRedaction {
     }
 
     /**
-     * V205: the Shopify returns mirror of the given orders (null = every order of the tenant). Returns the number of
+     * V206: the Shopify returns mirror of the given orders (null = every order of the tenant). Returns the number of
      * returns redacted; the stored returns/* webhooks of those returns / orders are stripped too.
      */
     int redactShopifyReturns(UUID tenantId, Object[] orderIds, Object[] orderGids) {

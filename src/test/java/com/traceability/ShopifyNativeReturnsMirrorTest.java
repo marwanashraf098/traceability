@@ -48,7 +48,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (V205). Data only: no reservation,
+ * Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (V206). Data only: no reservation,
  * no committed demand, no Pick &amp; Pack change, no stock write, nothing on a warehouse screen.
  *
  *   i1  idempotent upsert: the same returns webhook twice → the same rows

@@ -262,7 +262,7 @@ public class CustomerDataRequestService {
             }
             out.put("return_request_photos", photos);
 
-            // V205: Shopify's own returns of these orders as Traced mirrors them (return name, status, the lines with
+            // V206: Shopify's own returns of these orders as Traced mirrors them (return name, status, the lines with
             // the customer's notes while they exist, exchange lines). Raw copies are the same fields.
             out.put("shopify_returns", rows(
                 "SELECT r.return_gid, r.name, o.number AS order_number, r.status, r.decline_reason, r.decline_note, " +

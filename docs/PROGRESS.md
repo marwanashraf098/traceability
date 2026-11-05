@@ -5,7 +5,7 @@
 ## Current state
 
 **Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
-`feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V205).** Data only: no reservation, no committed
+`feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V206).** Data only: no reservation, no committed
 demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
 untouched. No new SECURITY DEFINER hatch.
 - **Scopes:** + read_returns, write_returns (S5 only — no write call exists), read_merchant_managed_fulfillment_orders,
@@ -14,7 +14,7 @@ untouched. No new SECURITY DEFINER hatch.
   part 3 counts app-fulfilled lines per store on prod. Scope review (docs, 2026-11-05): none of the four scopes is
   "Shopify approval required" (only marketplace ones are); the docs are silent on re-review for added scopes on a
   listed app; merchants are prompted on next app open, then app/scopes_update fires.
-- **V205:** shopify_returns / shopify_return_lines / shopify_exchange_lines / shopify_fulfillment_orders /
+- **V206:** shopify_returns / shopify_return_lines / shopify_exchange_lines / shopify_fulfillment_orders /
   shopify_rfo_dispositions (GID-keyed, upsert-only, app_user no DELETE, RLS NULLIF, composite order FKs); stores.returns_access
   + returns_backfill_*; order_items.shopify_exchange_line_gid; raw email-stripped; notes redacted by triggers
   (`shopify_return_raw_redacted`), born redacted for a redacted order.
@@ -39,12 +39,13 @@ untouched. No new SECURITY DEFINER hatch.
 - **Token re-exchange loop guard (review item, 2026-11-05):** `ShopifyOAuthService.acquireOrRefreshViaSessionToken`'s
   `scopesMatch` re-exchanged the token on EVERY embedded open while the merchant hadn't approved a newly declared scope
   (managed install grants it only on approval). Now a scope difference alone re-exchanges at most once per declared scope
-  set (`stores.scopes_awaiting_approval` / `_since`, V205), again only after 24 h (`SCOPE_WAIT_RETRY`, a missed webhook);
+  set (`stores.scopes_awaiting_approval` / `_since`, V206), again only after 24 h (`SCOPE_WAIT_RETRY`, a missed webhook);
   app/scopes_update clears the guard; a token near expiry, a missing refresh token or a non-connected row still
   exchange as before. Logged once per exchange as "waiting for the merchant to approve new scopes [...]". Test t1;
   revert-to-confirm: guard off → 5 exchanges for 5 opens.
-- **Migration number (decided 2026-11-05):** S1 merges first and KEEPS V205. `fix/jobrunr-watchdog` (unmerged) also has
-  a V205 — it must be renumbered to the next free version (V206 or later) before it merges. That branch is untouched.
+- **Migration number:** V206. The review decision was "S1 keeps V206, the watchdog renumbers", but by merge time
+  `fix/jobrunr-watchdog` was already on origin/main (ac319156) with V206__bosta_webhook_pending_sweep — renumbering a
+  merged (possibly deployed) migration would break Flyway history, so S1 moved to V206 instead (2026-11-05).
 
 **JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
 2026-11-05 as ac319156, DEPLOYED to prod 2026-11-05; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.

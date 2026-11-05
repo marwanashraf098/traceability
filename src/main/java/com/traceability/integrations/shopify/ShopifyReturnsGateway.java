@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Shopify-native returns S1 — READ-ONLY GraphQL for the returns mirror (V205). No mutation exists here, and no
+ * Shopify-native returns S1 — READ-ONLY GraphQL for the returns mirror (V206). No mutation exists here, and no
  * customer / address / email field is ever requested.
  *
  * Every method throws {@link ShopifyReturnsAccessDeniedException} when Shopify answers ACCESS_DENIED (the store

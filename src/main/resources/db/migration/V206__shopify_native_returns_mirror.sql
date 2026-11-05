@@ -1,4 +1,4 @@
--- V205 — Shopify-native returns / exchanges, S1: MIRROR ONLY (approved 2026-11-05; Step 0 + Q1–Q8 + C1–C3).
+-- V206 — Shopify-native returns / exchanges, S1: MIRROR ONLY (approved 2026-11-05; Step 0 + Q1–Q8 + C1–C3).
 --
 -- Traced stores what Shopify knows about its own returns, exchanges and fulfillment orders. Nothing reads these
 -- tables for a decision yet: no reservation, no committed demand, no Pick & Pack change, no stock write, nothing on

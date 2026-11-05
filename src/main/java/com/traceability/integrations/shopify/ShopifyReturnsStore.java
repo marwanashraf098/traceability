@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Shopify-native returns S1 — the ONLY writer of the V205 mirror tables and of order_items.shopify_exchange_line_gid.
+ * Shopify-native returns S1 — the ONLY writer of the V206 mirror tables and of order_items.shopify_exchange_line_gid.
  * Every write is an upsert keyed by the Shopify GID (same input twice → same rows). Every method runs under the
  * caller's tenant (app_user + RLS) in its own transaction; no Shopify call happens here.
  *

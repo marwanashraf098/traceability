@@ -125,7 +125,7 @@ public class ShopifyWebhookProcessorJob {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMainReconcileQueue(com.traceability.inventory.MainReconcileQueue q) { this.mainReconcileQueue = q; }
 
-    // Shopify-native returns S1 (V205): returns / fulfillment-order signals, app/scopes_update, and the exchange-line
+    // Shopify-native returns S1 (V206): returns / fulfillment-order signals, app/scopes_update, and the exchange-line
     // link after an order upsert. Data only — nothing here changes an order, a quantity or Shopify.
     private ShopifyReturnsWebhooks returnsWebhooks;
     private ShopifyScopesUpdateHandler scopesUpdate;

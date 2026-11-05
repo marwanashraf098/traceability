@@ -166,7 +166,7 @@ traced:
   # Shopify Main-location reconciler ("check-up", V201) — R1 is REPORT-ONLY: reads Shopify, records differences on
   # main_reconcile_runs / main_reconcile_diffs and Part 1's would-be subtracts; never writes to Shopify. report-only
   # must stay true (false refuses to start — write mode is R2). shops: comma-separated shop domains, empty = every store.
-  # Shopify-native returns S1 (V205): per-store backfill of the returns mirror (read-only). Runs on scopes grant
+  # Shopify-native returns S1 (V206): per-store backfill of the returns mirror (read-only). Runs on scopes grant
   # and once after deploy for stores already granted; pause between batches of 50 orders.
   shopify-returns:
     backfill:
