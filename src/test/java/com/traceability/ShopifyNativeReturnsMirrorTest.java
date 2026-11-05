@@ -857,7 +857,7 @@ class ShopifyNativeReturnsMirrorTest {
     }
 
 
-    // ── f1 / f2 / f3 fulfillment-order refresh (S1 follow-up, prod #1006) ───────────────────────
+    // ── f1 / f2 fulfillment-order refresh (S1 follow-up, prod #1006) ───────────────────────
 
     /**
      * Shopify sends no fulfillment_orders/* webhook when an FO is fulfilled: the FO is released (hold_released →
@@ -895,7 +895,7 @@ class ShopifyNativeReturnsMirrorTest {
         assertThat(s.count("shopify_fulfillment_orders")).isEqualTo(1);
     }
 
-    /** A normal order (no mirrored FO): orders/updated and fulfillments/* make zero Shopify returns / FO calls. */
+    /** A normal order (no mirrored FO): orders/updated makes zero Shopify returns / FO calls. */
     @Test
     void f2_orderWithNoMirroredFo_zeroShopifyCalls() {
         Shop s = new Shop("f2");
@@ -914,42 +914,12 @@ class ShopifyNativeReturnsMirrorTest {
         reset(returnsGateway, tokenProvider);
         when(tokenProvider.getValidToken(any())).thenReturn("tok");
         UUID e1 = s.send("orders/updated", order(o, T0.plusSeconds(60), line(lineM, s.restM, 1)));
-        ObjectNode ful = mapper.createObjectNode();
-        ful.put("id", IDS.incrementAndGet());
-        ful.put("order_id", Long.parseLong(o.substring(o.lastIndexOf('/') + 1)));
-        ful.put("status", "success");
-        UUID e2 = s.send("fulfillments/create", ful);
-        UUID e3 = s.send("fulfillments/update", ful);
+        UUID e2 = s.send("orders/updated", order(o, T0.plusSeconds(120), line(lineM, s.restM, 1)));
         verifyNoInteractions(returnsGateway);
         verify(tokenProvider, never()).getValidToken(any());
-        for (UUID e : List.of(e1, e2, e3)) {
+        for (UUID e : List.of(e1, e2)) {
             assertThat(s.event(e).get("processed_at")).isNotNull();
             assertThat(s.event(e).get("process_error")).isNull();
         }
-    }
-
-    /** fulfillments/create (handler ready ahead of registration) closes the mirrored FO the same way. */
-    @Test
-    void f3_fulfillmentsCreate_refreshesOpenFo() {
-        Shop s = new Shop("f3");
-        long lineM = IDS.incrementAndGet();
-        String o = tracedOrder(s, lineM);
-        String fo = gid("FulfillmentOrder");
-        when(returnsGateway.fetchFulfillmentOrder(anyString(), anyString(), eq(fo)))
-            .thenReturn(fulfillmentOrder(fo, o, "OPEN", null, lineM, s.restM));
-        ObjectNode released = mapper.createObjectNode();
-        released.putObject("fulfillment_order").put("id", fo);
-        s.send("fulfillment_orders/hold_released", released);
-
-        when(returnsGateway.fetchFulfillmentOrder(anyString(), anyString(), eq(fo)))
-            .thenReturn(fulfillmentOrder(fo, o, "CLOSED", null, lineM, s.restM));
-        ObjectNode ful = mapper.createObjectNode();
-        ful.put("id", IDS.incrementAndGet());
-        ful.put("order_id", Long.parseLong(o.substring(o.lastIndexOf('/') + 1)));
-        ful.put("status", "success");
-        UUID e = s.send("fulfillments/create", ful);
-        assertThat(s.event(e).get("process_error")).isNull();
-        assertThat(jdbc.queryForObject("SELECT status FROM shopify_fulfillment_orders WHERE fo_gid = ?", String.class, fo))
-            .isEqualTo("CLOSED");
     }
 }

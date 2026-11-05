@@ -76,8 +76,10 @@ public class ShopifyReturnsWebhooks {
     }
 
     /**
-     * orders/updated, fulfillments/create, fulfillments/update: Shopify sends no fulfillment_orders/* webhook when a
-     * fulfillment order is fulfilled (it just closes), so the mirror would keep it OPEN. When the order has a mirrored
+     * orders/updated: Shopify sends no fulfillment_orders/* webhook when a fulfillment order is fulfilled (it just
+     * closes), but orders/updated fires on fulfillment (verified prod 2026-11-05), so it is the signal — fulfillments/*
+     * are deliberately not subscribed (their payloads carry the customer address, not covered by GDPR redaction).
+     * Without it the mirror would keep a fulfilled FO OPEN. When the order has a mirrored
      * fulfillment order that isn't final (CLOSED / CANCELLED / INCOMPLETE), each one is re-fetched by GID and upserted.
      * An order with none — every normal order — makes no Shopify call. Signal only: no transaction is open during
      * the fetch, every DB touch runs in TenantContext.runAs, the upsert is idempotent. Never throws (a failure leaves
@@ -100,12 +102,6 @@ public class ShopifyReturnsWebhooks {
             log.warn("Fulfillment-order refresh for {} on {} failed — the mirror stays as it was until the next signal: {}",
                 orderGid, shopDomain, e.toString());
         }
-    }
-
-    /** The order GID a fulfillments/* payload names (numeric order_id), or null. */
-    static String orderGidOfFulfillment(JsonNode payload) {
-        JsonNode id = payload.path("order_id");
-        return id.canConvertToLong() ? "gid://shopify/Order/" + id.asLong() : null;
     }
 
     /** Every string value anywhere in the payload that is a GID of this kind, in payload order, once each. */

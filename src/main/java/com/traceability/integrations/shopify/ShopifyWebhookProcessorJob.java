@@ -284,9 +284,6 @@ public class ShopifyWebhookProcessorJob {
                  "fulfillment_orders/order_routing_complete", "fulfillment_orders/split", "fulfillment_orders/merged",
                  "fulfillment_orders/moved"
                                                     -> returnsWebhooks.handle(tenantId, shopDomain, topic, payload);
-            // S1 follow-up: a fulfillment is the only signal that a mirrored fulfillment order closed.
-            case "fulfillments/create", "fulfillments/update" -> refreshFulfillmentOrders(tenantId, shopDomain,
-                ShopifyReturnsWebhooks.orderGidOfFulfillment(payload));
             default -> {
                 // Invariant #8: never a silent drop — log as exception so ops can see it.
                 log.error("Unhandled Shopify webhook topic={} shop={} — this topic has no registered handler",
