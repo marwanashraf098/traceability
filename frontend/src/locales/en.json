@@ -946,6 +946,7 @@
       "PIECE_NOT_FOUND": "Barcode not found in inventory",
       "DUPLICATE_SCAN": "Already scanned for this order",
       "ALREADY_RESERVED": "Piece is reserved for another order",
+      "RETURNED_NEEDS_INSPECTION": "This piece came back from the courier — run it through Scan returns first",
       "WRONG_VARIANT": "This item is not on this order",
       "LINE_FILLED": "This line is already complete — no more units needed",
       "REMOVED_IN_SHOPIFY": "This item was removed from the order in Shopify",

@@ -552,6 +552,15 @@ public class FulfillService {
             return ScanResult.rejected("DUPLICATE_SCAN", "Piece already scanned for this order");
         }
 
+        // 2b. RETURNED_NEEDS_INSPECTION: the piece came back from the courier and still waits for its return
+        //     verdict. Its allocation on the old order is released only by Scan returns (ReturnService.restock),
+        //     so without this the packer saw ALREADY_RESERVED ("reserved for another order") and didn't know what
+        //     to do (BROEK, 2026-11-05). Message only — the piece is refused exactly as before.
+        if ("return_pending_inspection".equals(status)) {
+            return ScanResult.rejectedLocalized("RETURNED_NEEDS_INSPECTION", RETURNED_NEEDS_INSPECTION_EN,
+                RETURNED_NEEDS_INSPECTION_AR);
+        }
+
         // 3. ALREADY_RESERVED: piece has an active allocation on any other order
         Integer reservedCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM allocations WHERE piece_id = ? AND status IN ('active','packed')",
@@ -1729,6 +1738,11 @@ public class FulfillService {
 
     static final String UNTAGGED_SCAN_MESSAGE =
         "This piece has no barcode yet (untagged) — it gets one when a label is stuck on and scanned";
+
+    static final String RETURNED_NEEDS_INSPECTION_EN =
+        "This piece came back from the courier — run it through Scan returns first";
+    static final String RETURNED_NEEDS_INSPECTION_AR =
+        "هذه القطعة رجعت من شركة الشحن — مرّرها على مسح المرتجعات أولاً";
 
     /**
      * {@code messageAr}: set only on the flexible-labeling refusals whose text the server words (a label for

@@ -4,6 +4,25 @@
 
 ## Current state
 
+**BROEK pack-scan block — returned pieces (2026-11-05; branch `fix/pack-scan-returned-piece-message`, NOT committed, NOT deployed; no migration).**
+- **Incident:** packers' scans refused "Piece is already reserved for another order" for 86 BROEK pieces in
+  `return_pending_inspection` with a live `packed` allocation (54 orders, 48 cancelled in Shopify). The proposed
+  SQL repair was NOT written: prod history shows every one of those waybills really went out with Bosta (24 / 30 / 41
+  out for delivery, then 46) — Shopify cancelled them after they bounced. No `with_courier` piece event because
+  only state 21 moves pieces to with_courier and these parcels skipped 21 (10 → 24) with no pickup session.
+  Decision (Marawan): BROEK runs them through Scan returns → Sellable / Damaged (`ReturnService.restock` releases the
+  allocation and sends the guarded +1). No batch, no script.
+- **Fix #3 (built):** `FulfillService.scan` refuses a `return_pending_inspection` piece with
+  `RETURNED_NEEDS_INSPECTION` "This piece came back from the courier — run it through Scan returns first" (EN + AR,
+  locale keys `fulfill.rejection.RETURNED_NEEDS_INSPECTION`), checked before ALREADY_RESERVED. Message only — the
+  piece is refused exactly as before. Test PackScanReturnedPieceTest r1 / r2 (r1 RED with the check disabled);
+  Day9Test 18/18, fulfill.test.tsx 15/15.
+- **Fix #1 (design approved, NOT built):** pieces still awaiting_pickup / packed move to with_courier on the first
+  forward state proving Bosta has the parcel (24 / 30 / 41). Prod today: 52 BROEK + 1 Nuvira pieces sit at
+  awaiting_pickup on waybills with 24/30/41 history. Design in the 2026-11-05 session reply; awaiting approval.
+- **Cancel webhook:** not the cause for BRK-46696 — the cancel (11-04) came after state 46 (11-03), so
+  `cancelOrder` 409'd on courier history and stamped `shopify_cancel_requested_at`.
+
 **Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
 `feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V206).** Data only: no reservation, no committed
 demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
