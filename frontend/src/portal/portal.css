@@ -504,3 +504,7 @@ img.pp-thumb--muted { opacity: 0.6; }
 }
 .pp-photo-add--need { border-color: var(--brand); background: var(--accent-soft); }
 .pp-photo__remove:focus-visible, .pp-photo__retry:focus-visible, .pp-photo-add:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Returns portal fees F2 — the fee summary on the review step. */
+.pp-fee__row { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; padding: 4px 0; }
+.pp-fee__total { font-weight: 600; border-top: 1px solid #E4E7EC; margin-top: 4px; padding-top: 8px; }

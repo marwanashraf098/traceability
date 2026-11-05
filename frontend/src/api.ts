@@ -3280,7 +3280,7 @@ export type ReturnRequestStatus =
   | 'refund_pending' | 'refunded' | 'cancelled' | 'closed' | 'exchanged'
 
 /** Step 4d-1 — why a request was closed without a refund. */
-export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other' | 'exchange_failed'
+export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other' | 'exchange_failed' | 'nothing_owed'
 
 /** Step 4c-3 — the Bosta return pickup booking (null = never attempted). */
 export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous' | 'needs_review'
@@ -3401,8 +3401,13 @@ export interface LinkableParcel {
 export interface RefundSuggestion {
   amount: string | null
   currency: string
-  source: 'shopify' | 'stored_order' | 'catalog' | null
+  /** F2: 'frozen' = the price paid frozen at submit, less the request's fee. */
+  source: 'shopify' | 'stored_order' | 'catalog' | 'frozen' | null
   approximate: boolean
+  /** F2, source 'frozen' only. */
+  itemValue?: string
+  fee?: string
+  feeWaived?: boolean
   lines: Array<{ variantId: string; productTitle: string; variantTitle: string | null; quantity: number;
     unitPrice: string | null; lineTotal: string | null }>
 }
@@ -3417,7 +3422,31 @@ export interface CustomPickupAddress {
   redacted: boolean
 }
 
+/** Returns portal fees F2 — a request's frozen fee breakdown (present only when a fee rule was on at submit). */
+export interface RequestAmounts {
+  kind: 'refund' | 'exchange'
+  currency: string
+  itemValue: string
+  approximate: boolean
+  fee: string
+  feeWaived: boolean
+  waiveReason: 'merchant_fault' | 'merchant_override' | null
+  calculatedFee: string | null
+  mode: 'fixed' | 'percent' | null
+  percent: string | null
+  areaSource: 'rule' | 'city' | 'district' | null
+  refundDue: string | null
+  /** Exchange: what the customer owes (the fee). Shown as an instruction — no courier collects it yet. */
+  collect: string | null
+  nothingOwed: boolean
+  overriddenAt: string | null
+  overriddenByName: string | null
+  canOverride: boolean
+}
+
 export interface ReturnRequestDetail {
+  /** F2 — absent when the request has no fee. */
+  amounts?: RequestAmounts
   id: string
   reference: string
   orderId: string
@@ -3757,8 +3786,13 @@ export function undoRequestItemArrived(id: string, itemId: string) {
   return request<void>(`/return-requests/${id}/items/${itemId}/arrived/undo`, { method: 'POST' })
 }
 
-export function closeReturnRequest(id: string, reason: 'no_refund' | 'other' | 'exchange_failed', note?: string) {
+export function closeReturnRequest(id: string, reason: 'no_refund' | 'other' | 'exchange_failed' | 'nothing_owed', note?: string) {
   return request<void>(`/return-requests/${id}/close`, { method: 'POST', body: JSON.stringify({ reason, note }) })
+}
+
+/** Returns portal fees F2 — waive the fee, or set it (whole EGP); before approval only. */
+export function overrideRequestAmounts(id: string, body: { waived: true } | { fee: number }) {
+  return request<void>(`/return-requests/${id}/amounts`, { method: 'PUT', body: JSON.stringify(body) })
 }
 
 export function markRestNotComing(id: string) {

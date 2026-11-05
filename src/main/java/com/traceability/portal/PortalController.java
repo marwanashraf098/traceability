@@ -123,6 +123,29 @@ public class PortalController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * Returns portal fees F2 — the fee and what is due for the customer's current choices (same body as submit;
+     * nothing is written). 200 {applies:false} or {applies:true, fee, refundDue | collect, …}; 401 / 400 with the
+     * generic messages; 404 when fees are off. Auth = the lookup token as a Bearer header.
+     */
+    @PostMapping("/{slug}/quote")
+    public ResponseEntity<Map<String, Object>> quote(@PathVariable String slug,
+                                                     @RequestHeader(value = "Authorization", required = false) String authorization,
+                                                     @RequestBody(required = false) String rawBody) {
+        String token = authorization != null && authorization.startsWith("Bearer ")
+            ? authorization.substring("Bearer ".length()).trim() : null;
+        PortalService.SubmitRequest req = parseSubmitBody(rawBody);
+        return portal.quote(slug, token, req)
+            .map(r -> switch (r.outcome()) {
+                case OK           -> ResponseEntity.ok(r.body());
+                case UNAUTHORIZED -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                        .body(Map.<String, Object>of("message", UNAUTHORIZED_MESSAGE));
+                case INVALID      -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                        .body(Map.<String, Object>of("message", INVALID_MESSAGE));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     /** Null when unparseable — PortalService then answers INVALID (after the token check). */
     private PortalService.SubmitRequest parseSubmitBody(String raw) {
         if (raw == null || raw.isBlank()) return null;

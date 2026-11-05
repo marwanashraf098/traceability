@@ -1,5 +1,6 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import FeeBreakdown from './FeeBreakdown'
 import { X } from 'lucide-react'
 import {
   approveReturnRequest, confirmBooking, getPortalSettings, getRefundSuggestion, getReturnRequest, getReturnRequestPickupAreas,
@@ -463,6 +464,9 @@ function DrawerContent({
 
           <LinkParcelPrompt detail={detail} onLink={setLinking} />
 
+          {/* F2: the frozen fee breakdown (absent without a fee). */}
+          <FeeBreakdown detail={detail} onChanged={reloadAll} />
+
           {/* P2: what the customer asked for — above the refund form. */}
           <CustomerRefundChoice detail={detail} />
 
@@ -638,6 +642,9 @@ function DrawerContent({
             ))}
           </ul>
         </section>
+
+        {/* F2: the frozen fee breakdown — waive or change it here, before approval. */}
+        <FeeBreakdown detail={detail} onChanged={reloadAll} />
 
         {/* What the customer asked for — in every state, not only next to the refund form (RR-AK9HPN). */}
         <CustomerRefundChoice detail={detail} />

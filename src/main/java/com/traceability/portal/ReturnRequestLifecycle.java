@@ -51,7 +51,9 @@ public class ReturnRequestLifecycle {
     public static final Set<String> OPEN_STATUSES = Set.of("approved", "pickup_booked", "received");
     /** Statuses the merchant may close from. */
     static final Set<String> CLOSABLE = Set.of("approved", "pickup_booked", "received", "refund_pending");
-    static final Set<String> CLOSE_REASONS = Set.of("no_refund", "other", "exchange_failed");
+    static final Set<String> CLOSE_REASONS = Set.of("no_refund", "other", "exchange_failed", "nothing_owed");
+    /** Returns portal fees F2: 'nothing_owed' closes a refund whose frozen due is 0 (the fee was ≥ the item value). */
+    static final String NOTHING_OWED = "nothing_owed";
     /** Step 5c: 'exchange_failed' closes exchange requests only. */
     static final String EXCHANGE_FAILED = "exchange_failed";
     static final int CLOSE_NOTE_MAX = 300;
@@ -519,7 +521,7 @@ public class ReturnRequestLifecycle {
     /** POST /return-requests/{id}/close {reason: no_refund|other, note}. */
     public void close(UUID tenantId, UUID requestId, String reason, String note, UUID actor) {
         if (reason == null || !CLOSE_REASONS.contains(reason)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reason must be no_refund, other or exchange_failed");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reason must be no_refund, other, exchange_failed or nothing_owed");
         }
         String n = note == null || note.isBlank() ? null : note.trim();
         if (n != null && n.length() > CLOSE_NOTE_MAX) {
@@ -531,6 +533,9 @@ public class ReturnRequestLifecycle {
         }
         if (EXCHANGE_FAILED.equals(reason) && !"exchange".equals(rr.get("type"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only an exchange can be closed as a failed exchange.");
+        }
+        if (NOTHING_OWED.equals(reason) && !new RequestAmounts(jdbc).nothingOwed(tenantId, requestId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only a return with nothing to refund can be closed as nothing owed.");
         }
         closeInternal(tenantId, requestId, reason, n, actor);
     }

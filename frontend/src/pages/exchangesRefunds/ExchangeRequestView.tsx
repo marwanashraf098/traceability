@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import FeeBreakdown from './FeeBreakdown'
 import ItemPhotos from './ItemPhotos'
 import { AlertCircle, ArrowRight } from 'lucide-react'
 import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } from '../../api'
@@ -152,6 +153,9 @@ export default function ExchangeRequestView({
             {t('exchangesRefunds.requests.exchange.fallback')}
           </p>
         )}
+
+        {/* F2: the exchange fee the customer owes (absent without a fee). */}
+        <FeeBreakdown detail={detail} onChanged={onReload} />
 
         {/* The refund fallback's method — what the customer asked for if it becomes a refund. */}
         <CustomerRefundChoice detail={detail} />

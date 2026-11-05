@@ -264,6 +264,18 @@ public class ReturnsPortalAdminController {
         requests.undoItemArrived(id, itemId, principal.userId());
     }
 
+    public record AmountsRequest(Boolean waived, java.math.BigDecimal fee) {}
+
+    /** Returns portal fees F2 — override or waive the request's frozen fee (before approval only). */
+    @PutMapping("/return-requests/{id}/amounts")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void overrideAmounts(@PathVariable UUID id, @RequestBody(required = false) AmountsRequest body,
+                                @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.overrideAmounts(id, body == null ? null : body.waived(), body == null ? null : body.fee(),
+            principal.userId());
+    }
+
     public record CloseRequest(String reason, String note) {}
 
     /** Close without a refund: reason no_refund | other, optional note (≤ 300). */

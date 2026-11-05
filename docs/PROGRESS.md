@@ -4,6 +4,47 @@
 
 ## Current state
 
+**Returns portal fees F2 — fees calculated, shown and frozen; the refund deduction (2026-11-05; branch
+`feat/portal-fees-f2` off main 4cc37883, NOT merged, NOT deployed; V211 — recheck main AND prod before merge).**
+Still behind `traced.portal-fees.settings-enabled` (off in prod): off = every answer byte-identical (PortalFeesOffGoldenTest).
+On, a store with no fee rule switched on also sees no change (no fees key, no amounts row — PortalFeesTest.k1).
+- **ONE calculator — `portal.PortalAmounts`:** terms = the kind's ENABLED rule, amounts replaced by the most specific
+  area override (district > city > rule); fixed = once per request unless every item is merchant-fault (when waiving);
+  percent = Σ paid price of the non-fault items × % clamped to min / max; whole EGP HALF_UP; refund due = value − fee
+  floored at 0; exchange (F2, same product, no difference yet) → collect = fee. Item prices from F0's
+  `OrderLinePaidPrices` (resolved BEFORE the submit / quote transaction; tracked pieces by variant, untracked units by
+  order line). Area = the pickup district chosen, else the order's stored delivery area (`PickupAreaService
+  .storedDeliveryArea`, no Bosta call); another-courier orders: the rule alone.
+- **Portal:** lookup carries `fees: {refund, exchange}` only when a fee applies. The amount depends on items, reasons
+  and area chosen after lookup, so the review step calls `POST /api/v1/portal/{slug}/quote` (same body as submit,
+  token-gated, writes nothing, 404 while off) — same calculator, same prices as submit. EN + AR fee summary
+  (items, fee / Waived, "You'll receive" or "You'll pay", EGP 0 warning, approximate note).
+- **Frozen at submit:** `PortalAmounts.freeze` → `return_request_amounts` in the submit transaction, lines keyed by
+  item id, calculated fee kept in `fee_rule_snapshot.calculatedFee`. Settings changes never rewrite it.
+- **Merchant:** `RequestAmounts` (not a bean) — drawer `amounts` block in GET /return-requests/{id} (absent without a
+  row); `PUT /return-requests/{id}/amounts {waived:true | fee:N}` owner / manager, only while 'requested' (409 after;
+  the V210 trigger is the backstop), event `amounts_overridden` {from, to} via ReturnRequestLifecycle; no change →
+  no event. Refund suggestion = frozen paid prices of the items in scope − the fee, floored at 0, source 'frozen'
+  (no Shopify read); requests without amounts unchanged. return_refunds records what the merchant actually paid.
+  Exchange: the drawer shows "The customer owes EGP X … collect it yourself" — Bosta COD stays 0 until F4.
+- **V211:** close reason `nothing_owed` (CHECK); allowed only when the frozen refund due is 0. Drawer close dialog
+  offers it (pre-selected) for such requests.
+- **Tests:** PortalFeesTest c1 (calculator), q1 (quote = frozen; settings change never rewrites; no Shopify read), a1
+  (district > city > rule), o1 (override / waive, roles, event, 409 after approval), n1 (nothing owed + refused when
+  owed), r1 (suggestion frozen − fee; no amounts → as before), e1 (exchange collect; booking unchanged), k1 (no rule on
+  → nothing changes), x1 (app_user cross-tenant + positive control); PortalFeesOffGoldenTest g1 (flag off, rules stored:
+  config / lookup / quote 404 / refund + exchange submit / detail / suggestion identical; no amounts row);
+  portalFees.test.tsx (5), feeBreakdown.test.tsx (6). PortalOrderLeakTest (2 endpoints), MigrationSmokeTest 209 → 210,
+  NotTracedBackfillTest 154 → 155 — standing approval.
+- **CustomerFeeSettingsTest.g1 edited (approved 2026-11-05):** its fee rules are saved but switched OFF — it keeps
+  proving the other F1 settings inert; F2's own tests cover the rules.
+- **F3 list (approved 2026-11-05):** a switched-to-refund exchange keeps its exchange amounts (fee_kind 'exchange'), so
+  its refund suggestion is today's and no refund fee applies — F3 recalculates it under the refund rule.
+- **Watch list:** PortalOnDemandLookupTest.e1 (two concurrent lookups → one row) failed once in the F2 full suite
+  (NOT_FOUND), passed 3/3 alone, runs with fees off — possible flake; watch it.
+- **Migration:** V211 checked free on main (835a8e2e) and every branch; prod at V210 (Marawan, 20:26). The S1b session
+  planned V211 too — it becomes V212 once F2 is merged.
+
 **Returns portal fees F1 — data model + Customer fees / Exchange pricing settings (2026-11-05; branch
 `feat/portal-fees-f1`, rebased on main 42924620, NOT merged, NOT deployed; V210).** No behaviour change: nothing reads these
 settings for a decision until F2 (fees) / F3 (price difference, different-product picker) / F4 (type 30 COD).

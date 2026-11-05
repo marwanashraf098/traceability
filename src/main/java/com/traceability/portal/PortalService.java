@@ -61,6 +61,21 @@ public class PortalService {
         this.onDemandMinMillis = minMillis;
     }
 
+    /**
+     * Returns portal fees F2 — on only with {@code traced.portal-fees.settings-enabled} AND the paid-price resolver
+     * wired (absent on hand-built instances: today's behaviour). Off = every lookup / submit exactly as before.
+     */
+    private boolean feesOn;
+    private OrderLinePaidPrices paidPrices;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFees(OrderLinePaidPrices paidPrices,
+                        @org.springframework.beans.factory.annotation.Value("${traced.portal-fees.settings-enabled:false}")
+                        boolean enabled) {
+        this.paidPrices = paidPrices;
+        this.feesOn = enabled && paidPrices != null;
+    }
+
     private final JdbcTemplate        jdbc;
     private final TransactionTemplate tx;
     private final PortalTokenService  tokens;
@@ -305,6 +320,19 @@ public class PortalService {
             Map<String, Object> other = new LinkedHashMap<>();
             other.put("carrierName", GenericPortalReturns.forwardCarrier(jdbc, tenantId, orderId));
             body.put("otherCourier", other);
+        }
+        // Returns portal fees F2: which fees apply to this order — present only when fees are on and at least one
+        // applies (absent otherwise: every other lookup is unchanged). The amount depends on the items, reasons and
+        // pickup area the customer chooses next, so the portal asks POST /quote for it (the same calculator as submit).
+        if (feesOn) {
+            boolean refundFee = PortalAmounts.ruleEnabled(jdbc, tenantId, "refund");
+            boolean exchangeFee = orderExchanges && PortalAmounts.ruleEnabled(jdbc, tenantId, "exchange");
+            if (refundFee || exchangeFee) {
+                Map<String, Object> fees = new LinkedHashMap<>();
+                fees.put("refund", refundFee);
+                fees.put("exchange", exchangeFee);
+                body.put("fees", fees);
+            }
         }
         return new Attempt(new LookupResult(Outcome.SUCCESS, body), false, raw, stripped, orderKey, ipHash);
     }
@@ -599,10 +627,13 @@ public class PortalService {
         Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
         if (claims.isEmpty()) return Optional.of(new SubmitResult(SubmitOutcome.UNAUTHORIZED, null));
         UUID orderId = claims.get().orderId();
+        // Returns portal fees F2: the paid prices may need a live Shopify read — resolved BEFORE the submit
+        // transaction opens (never a call inside one). Null = no fee of this kind = nothing frozen.
+        PortalAmounts.Prices prices = feePrices(tenantId, orderId, req);
 
         try {
             Map<String, Object> body = TenantContext.runAs(tenantId,
-                () -> tx.execute(s -> submitInTenant(tenantId, orderId, req)));
+                () -> tx.execute(s -> submitInTenant(tenantId, orderId, req, prices)));
             // Step 4c-3: the transaction above has committed. An auto-approved request of a tenant
             // that books Bosta pickups gets its booking job now (the client never sees the id).
             UUID bookRequestId = (UUID) body.remove("_bookRequestId");
@@ -620,7 +651,107 @@ public class PortalService {
         }
     }
 
-    private Map<String, Object> submitInTenant(UUID tenantId, UUID orderId, SubmitRequest req) {
+    public enum QuoteOutcome { OK, UNAUTHORIZED, INVALID }
+
+    public record QuoteResult(QuoteOutcome outcome, Map<String, Object> body) {}
+
+    /**
+     * Returns portal fees F2 — POST /api/v1/portal/{slug}/quote: the fee and what is due for the customer's current
+     * choices (the submit body's lines, reasons, mode and pickup area), through the same calculator and the same
+     * prices as {@link #submit} — the amount shown before submit is the amount frozen at submit. Empty (404) when
+     * fees are off or the slug is unknown; {applies:false} when no fee of this kind applies. Writes nothing.
+     */
+    public Optional<QuoteResult> quote(String slug, String bearerToken, SubmitRequest req) {
+        if (!feesOn) return Optional.empty();
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
+        if (claims.isEmpty()) return Optional.of(new QuoteResult(QuoteOutcome.UNAUTHORIZED, null));
+        UUID orderId = claims.get().orderId();
+        if (req == null || req.lines() == null || req.lines().isEmpty()) {
+            return Optional.of(new QuoteResult(QuoteOutcome.INVALID, null));
+        }
+        PortalAmounts.Prices prices = feePrices(tenantId, orderId, req);
+        if (prices == null) return Optional.of(new QuoteResult(QuoteOutcome.OK, Map.of("applies", false)));
+        try {
+            return Optional.of(new QuoteResult(QuoteOutcome.OK, TenantContext.runAs(tenantId,
+                () -> tx.execute(s -> quoteInTenant(tenantId, orderId, req, prices)))));
+        } catch (InvalidSubmission e) {
+            return Optional.of(new QuoteResult(QuoteOutcome.INVALID, null));
+        }
+    }
+
+    private Map<String, Object> quoteInTenant(UUID tenantId, UUID orderId, SubmitRequest req, PortalAmounts.Prices prices) {
+        // The token's order, still delivered within the window. (No redaction re-check: the token was issued by a lookup
+        // that checked it, a quote writes nothing, and submit re-checks everything from scratch.)
+        if (deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
+        if (req.exchange() && (req.lines().size() != 1 || req.lines().get(0) == null
+                || !Integer.valueOf(1).equals(req.lines().get(0).quantity()))) {
+            throw new InvalidSubmission();
+        }
+        List<PortalAmounts.Item> items = new ArrayList<>();
+        for (int i = 0; i < req.lines().size(); i++) {
+            SubmitLine line = req.lines().get(i);
+            if (line == null || line.quantity() == null || line.quantity() < 1 || line.quantity() > 100
+                    || !REASON_CODES.contains(line.reasonCode())) {
+                throw new InvalidSubmission();
+            }
+            UUID variant = line.orderItemId() != null ? untrackedLineVariant(tenantId, orderId, line.orderItemId())
+                                                      : line.variantId();
+            if (variant == null) throw new InvalidSubmission();
+            for (int u = 0; u < line.quantity(); u++) {
+                items.add(prices.item(String.valueOf(i), variant, line.orderItemId(), line.reasonCode()));
+            }
+        }
+        boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
+        String[] area;
+        if (generic) {
+            area = new String[]{null, null};
+        } else if (req.customAddressChosen()) {
+            CustomAddress a = req.customAddress();
+            if (a == null || a.cityId() == null) throw new InvalidSubmission();
+            area = new String[]{a.cityId().trim(), a.districtId() == null ? null : a.districtId().trim()};
+        } else {
+            Optional<PickupAreaService.CityAreas> offer = pickupOffer(tenantId, orderId);
+            Optional<PickupAreaService.District> d = offer.flatMap(o -> o.find(req.districtId()));
+            area = d.isPresent() ? new String[]{offer.get().cityId(), d.get().id()}
+                                 : pickupAreas.storedDeliveryArea(tenantId, orderId);
+        }
+        Optional<PortalAmounts.Terms> terms = PortalAmounts.terms(jdbc, tenantId, feeKind(req), area[0], area[1]);
+        if (terms.isEmpty()) return Map.of("applies", false);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("applies", true);
+        body.putAll(PortalAmounts.calculate(terms.get(), PortalAmounts.merchantFaultReasons(jdbc, tenantId), items)
+            .toPortalJson());
+        return body;
+    }
+
+    /** F2 — the fee kind of a submission (or quote): exchange when it asks for one, else refund. */
+    private static String feeKind(SubmitRequest req) {
+        return req != null && req.exchange() ? "exchange" : "refund";
+    }
+
+    /**
+     * F2 — the order's paid prices when fees are on and the submission's kind has an enabled rule; null otherwise
+     * (and on a malformed request: submit then answers as before). Runs with NO transaction open.
+     */
+    private PortalAmounts.Prices feePrices(UUID tenantId, UUID orderId, SubmitRequest req) {
+        if (!feesOn || req == null) return null;
+        Boolean on = TenantContext.runAs(tenantId,
+            () -> tx.execute(s -> PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))));
+        if (!Boolean.TRUE.equals(on)) return null;
+        return PortalAmounts.Prices.of(paidPrices.resolve(tenantId, orderId));
+    }
+
+    /** F2 — the fee's area: the pickup district the customer chose, else the order's stored delivery area. */
+    private String[] feeArea(UUID tenantId, UUID orderId, boolean generic, Optional<PickupAreaService.CityAreas> offer,
+                             PickupAreaService.District district) {
+        if (generic) return new String[]{null, null};   // another courier: no Bosta area — the rule alone
+        if (district != null) return new String[]{offer.get().cityId(), district.id()};
+        return pickupAreas.storedDeliveryArea(tenantId, orderId);
+    }
+
+    private Map<String, Object> submitInTenant(UUID tenantId, UUID orderId, SubmitRequest req, PortalAmounts.Prices prices) {
         if (req == null || req.lines() == null || req.lines().isEmpty()) throw new InvalidSubmission();
         // P3: 1–3 photos per line when the store requires them, at most 3 otherwise; no id twice.
         boolean requirePhotos = Boolean.TRUE.equals(jdbc.queryForObject(
@@ -738,12 +869,22 @@ public class PortalService {
             refund == null ? null : refund.hint());
         // P3: a line's photos attach to the request + the line's FIRST item row.
         Map<SubmitLine, UUID> firstItem = new IdentityHashMap<>();
+        List<PortalAmounts.Item> feeItems = new ArrayList<>();
         for (Object[] it : items) {
             UUID itemId = jdbc.queryForObject(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
                 "    replacement_variant_id, order_item_id, unit_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 UUID.class, tenantId, requestId, it[0], it[1], it[2], replacement, it[3], it[4]);
             firstItem.putIfAbsent((SubmitLine) it[5], itemId);
+            if (prices != null) feeItems.add(prices.item(itemId.toString(), (UUID) it[1], (UUID) it[3], (String) it[2]));
+        }
+        // Returns portal fees F2: the amounts are frozen now, with this submission — settings changed later never
+        // rewrite them. Only when the kind's rule is (still) on; no rule = no row = exactly as before.
+        if (prices != null) {
+            String[] area = feeArea(tenantId, orderId, generic, offer, district);
+            PortalAmounts.terms(jdbc, tenantId, feeKind(req), area[0], area[1]).ifPresent(terms ->
+                PortalAmounts.freeze(jdbc, tenantId, requestId,
+                    PortalAmounts.calculate(terms, PortalAmounts.merchantFaultReasons(jdbc, tenantId), feeItems)));
         }
         ReturnPhotos photos = new ReturnPhotos(jdbc);
         for (SubmitLine line : req.lines()) {

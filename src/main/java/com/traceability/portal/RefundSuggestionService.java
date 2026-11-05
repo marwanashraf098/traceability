@@ -65,8 +65,14 @@ public class RefundSuggestionService {
         if ("exchange".equals(rr.get("type"))) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
 
         // Items that came back; before anything arrived, the items still expected.
-        List<Line> lines = lines(tenantId, requestId, "('arrived', 'done')");
-        if (lines.isEmpty()) lines = lines(tenantId, requestId, "('awaiting')");
+        String scope = "('arrived', 'done')";
+        List<Line> lines = lines(tenantId, requestId, scope);
+        if (lines.isEmpty()) lines = lines(tenantId, requestId, scope = "('awaiting')");
+
+        // Returns portal fees F2: a request with frozen refund amounts is suggested from them — the paid prices
+        // frozen at submit minus the request's fee, floored at 0. No Shopify read. Every other request: as before.
+        Map<String, Object> frozen = frozen(tenantId, requestId, scope);
+        if (frozen != null) return frozen;
 
         JsonNode raw = parse((String) rr.get("raw"));
         String storedCurrency = raw == null ? null : text(raw.path("currency"));
@@ -100,6 +106,47 @@ public class RefundSuggestionService {
     }
 
     private record Priced(String source, String currency, List<BigDecimal> units, BigDecimal total) {}
+
+    /** F2 — the suggestion from the request's frozen amounts, or null when it has none (or they are an exchange's). */
+    private Map<String, Object> frozen(UUID tenantId, UUID requestId, String statuses) {
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT i.id, i.variant_id, pr.title AS product_title, v.title AS variant_title " +
+            "FROM return_request_items i JOIN variants v ON v.id = i.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE i.request_id = ? AND i.tenant_id = ? AND i.item_status IN " + statuses + " " +
+            "ORDER BY pr.title, v.title, i.id", requestId, tenantId);
+        RequestAmounts.Net net = new RequestAmounts(jdbc).net(tenantId, requestId,
+            items.stream().map(m -> (UUID) m.get("id")).toList());
+        if (net == null) return null;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("amount", net.amount().toPlainString());
+        body.put("currency", PortalAmounts.CURRENCY);
+        body.put("source", "frozen");
+        body.put("approximate", net.approximate());
+        body.put("itemValue", net.itemValue().toPlainString());
+        body.put("fee", net.fee().toPlainString());
+        body.put("feeWaived", net.feeWaived());
+        Map<UUID, Map<String, Object>> byVariant = new LinkedHashMap<>();
+        for (Map<String, Object> it : items) {
+            BigDecimal unit = net.unitByItem().get(it.get("id").toString());
+            Map<String, Object> m = byVariant.computeIfAbsent((UUID) it.get("variant_id"), v -> {
+                Map<String, Object> l = new LinkedHashMap<>();
+                l.put("variantId", v.toString());
+                l.put("productTitle", it.get("product_title"));
+                l.put("variantTitle", it.get("variant_title"));
+                l.put("quantity", 0);
+                l.put("unitPrice", unit == null ? null : unit.setScale(2, RoundingMode.HALF_UP).toPlainString());
+                l.put("lineTotal", BigDecimal.ZERO);
+                return l;
+            });
+            m.put("quantity", (Integer) m.get("quantity") + 1);
+            if (unit != null) m.put("lineTotal", ((BigDecimal) m.get("lineTotal")).add(unit));
+        }
+        for (Map<String, Object> m : byVariant.values()) {
+            m.put("lineTotal", ((BigDecimal) m.get("lineTotal")).setScale(2, RoundingMode.HALF_UP).toPlainString());
+        }
+        body.put("lines", new ArrayList<>(byVariant.values()));
+        return body;
+    }
 
     private List<Line> lines(UUID tenantId, UUID requestId, String statuses) {
         return jdbc.query(
