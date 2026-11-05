@@ -1,7 +1,8 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  BUSY_DEFAULT_SECONDS, getConfig, getDistricts, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
+  BUSY_DEFAULT_SECONDS, getConfig, getDistricts, lookup, quote, submit, ExchangeOption, FeeQuote, LookupLine, LookupResult,
+  PickupDistrict, PortalConfig, SubmitBody, SubmitResult,
 } from './api'
 import { palette } from './brand'
 import { fontVars, loadPortalFont, portalFontOrDefault } from './fonts'
@@ -511,6 +512,44 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const customIncomplete = customChosen && (!customCityId || !customArea || streetError != null)
   const addressMissing = customChosen ? customIncomplete : areaMissing
 
+  // Returns portal fees F2 — the items / mode / area part of the submission (no email, note, street or refund
+  // details): what the fee depends on. Sent to /quote on the review step, and the base of the real submission.
+  function choiceBody(): SubmitBody {
+    const linesPart: SubmitBody = exchangeMode && exchangeLine && exchangeTarget
+      ? {
+          mode: 'exchange' as const,
+          lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason,
+            ...(donePhotoIds(lineKey(exchangeLine)).length ? { photoIds: donePhotoIds(lineKey(exchangeLine)) } : {}) }],
+          replacementVariantId: exchangeTarget.variantId,
+          refundFallbackOk: fallbackOk,
+        }
+      : {
+          lines: selectedLines.map(l => ({
+            ...lineRef(l), quantity: selections[lineKey(l)].qty, reasonCode: selections[lineKey(l)].reason,
+            ...(donePhotoIds(lineKey(l)).length ? { photoIds: donePhotoIds(lineKey(l)) } : {}),
+          })),
+        }
+    return linesPart
+  }
+
+  const feeApplies = !!order?.fees && (exchangeMode ? order.fees.exchange : order.fees.refund)
+  const [feeQuote, setFeeQuote] = useState<{ key: string; quote: FeeQuote | null } | null>(null)
+  const quoteBody: SubmitBody | null = step === 'details' && feeApplies && order
+    ? { ...choiceBody(), ...(customChosen
+        ? (customCityId ? { addressSource: 'custom' as const, cityId: customCityId, ...(customArea ? { districtId: customArea } : {}) } : {})
+        : pickup && chosenArea ? { districtId: chosenArea } : {}) }
+    : null
+  const quoteKey = quoteBody ? JSON.stringify(quoteBody) : null
+  useEffect(() => {
+    if (!quoteKey || !slug || !order) return
+    let live = true
+    quote(slug, order.token, JSON.parse(quoteKey) as SubmitBody).then(q => { if (live) setFeeQuote({ key: quoteKey, quote: q }) })
+    return () => { live = false }
+    // quoteKey carries every input of the quote.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey, slug, order?.token])
+  const shownQuote = feeQuote && feeQuote.key === quoteKey ? feeQuote.quote : null
+
   /** "Nasr City, Cairo" — the delivery area when one is chosen, else just the city. */
   function samePlace(): string {
     if (!pickup) return ''
@@ -531,20 +570,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setSending(true)
     setSendBanner(null)
     const res = await submit(slug, order.token, {
-      ...(exchangeMode && exchangeLine && exchangeTarget
-        ? {
-            mode: 'exchange' as const,
-            lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason,
-              ...(donePhotoIds(lineKey(exchangeLine)).length ? { photoIds: donePhotoIds(lineKey(exchangeLine)) } : {}) }],
-            replacementVariantId: exchangeTarget.variantId,
-            refundFallbackOk: fallbackOk,
-          }
-        : {
-            lines: selectedLines.map(l => ({
-              ...lineRef(l), quantity: selections[lineKey(l)].qty, reasonCode: selections[lineKey(l)].reason,
-              ...(donePhotoIds(lineKey(l)).length ? { photoIds: donePhotoIds(lineKey(l)) } : {}),
-            })),
-          }),
+      ...choiceBody(),
       ...(refundAsked && chosenRefund
         ? { refundMethod: chosenRefund, ...(refundDetailsBody(chosenRefund, refundFields)
             ? { refundDetails: refundDetailsBody(chosenRefund, refundFields) } : {}) }
@@ -1151,6 +1177,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           {emailError && <p id="pp-email-error" className="pp-fielderror" role="alert">{t('p3.emailInvalid')}</p>}
         </div>
 
+        {shownQuote && <FeeSummary quote={shownQuote} lang={lang} />}
+
         {sendBanner && (
           <div className="pp-banner pp-banner--error" role="alert" data-testid="send-banner">
             <p>{t(`errors.${sendBanner}`)}</p>
@@ -1274,6 +1302,49 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 }
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
+
+/**
+ * Returns portal fees F2 — the fee and what the customer receives (refund) or pays (exchange), before they submit.
+ * Amounts in EGP with Latin digits (as everywhere in the portal); approximate prices say so.
+ */
+function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
+  const { t } = useTranslation()
+  const money = (v: string | null) => {
+    const n = Number(v ?? 0)
+    return t('fees.money', { amount: n.toLocaleString(lang === 'ar' ? 'ar-EG-u-nu-latn' : 'en-EG',
+      { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }) })
+  }
+  const refund = q.kind === 'refund'
+  return (
+    <section className="pp-card" data-testid="fee-summary" aria-labelledby="pp-fee-title">
+      <div className="pp-eyebrow" id="pp-fee-title">{t(refund ? 'fees.refundTitle' : 'fees.exchangeTitle')}</div>
+      {refund && (
+        <div className="pp-fee__row">
+          <span>{t('fees.itemValue')}</span><span dir="ltr" data-testid="fee-item-value">{money(q.itemValue)}</span>
+        </div>
+      )}
+      <div className="pp-fee__row">
+        <span>{t(refund ? 'fees.returnFee' : 'fees.exchangeFee')}</span>
+        <span dir="ltr" data-testid="fee-amount">
+          {q.feeWaived ? t('fees.waived') : refund ? `− ${money(q.fee)}` : money(q.fee)}
+        </span>
+      </div>
+      {refund ? (
+        <div className="pp-fee__row pp-fee__total">
+          <span>{t('fees.youReceive')}</span><span dir="ltr" data-testid="fee-due">{money(q.refundDue)}</span>
+        </div>
+      ) : (
+        <div className="pp-fee__row pp-fee__total">
+          <span>{t('fees.youPay')}</span><span dir="ltr" data-testid="fee-collect">{money(q.collect)}</span>
+        </div>
+      )}
+      {q.feeWaived && <p className="pp-item__sub">{t('fees.waivedNote')}</p>}
+      {refund && q.nothingOwed && <p className="pp-item__sub" data-testid="fee-nothing-owed">{t('fees.nothingOwed')}</p>}
+      {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub">{t('fees.exchangePayNote')}</p>}
+      {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
+    </section>
+  )
+}
 
 function Shell({
   style, header, footer, children, hidePowered,

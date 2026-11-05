@@ -385,6 +385,7 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived",      skip(R_RETURNS));
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived/undo", skip(R_RETURNS));
         reg("PUT /api/v1/return-requests/{id}/pickup-area", skip(R_RETURNS));
+        reg("PUT /api/v1/return-requests/{id}/amounts", skip(R_RETURNS));          // F2: fee override
         // C2 (2026-10-28): Lookup Exchange — the original-order search reads merchant_orders minus internal orders;
         // what can come back is by order id; the create takes the order in its body (merchant_orders → ORDER_NOT_FOUND
         // for a portal order — LookupExchangeTest).
@@ -414,6 +415,7 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/portal/{slug}/lookup",         skip(R_PORTAL));
         reg("POST /api/v1/portal/{slug}/photos",         skip(R_PORTAL));
         reg("POST /api/v1/portal/{slug}/requests",       skip(R_PORTAL));
+        reg("POST /api/v1/portal/{slug}/quote",          skip(R_PORTAL));        // F2: fee quote
         reg("GET /api/v1/tenant/portal-settings",        list());
         reg("PUT /api/v1/tenant/portal-settings",        skip(R_CONFIG));
         reg("GET /api/v1/tenant/portal-settings/logo",   list());

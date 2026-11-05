@@ -274,6 +274,9 @@ public class ReturnRequestService {
             }
         }
         d.put("refundFallbackOk", Boolean.TRUE.equals(r.get("refund_fallback_ok")));
+        // Returns portal fees F2: the frozen fee breakdown — present only when the request has amounts (a fee rule
+        // was on at submit); absent otherwise, so every other request's detail is unchanged.
+        new RequestAmounts(jdbc).forDetail(tenantId, id, (String) r.get("status")).ifPresent(am -> d.put("amounts", am));
         // P2: the customer's refund choice — method + hint + flags ONLY; the details themselves come
         // from GET /return-requests/{id}/refund-details.
         d.put("refundMethod", r.get("refund_method"));
@@ -818,6 +821,15 @@ public class ReturnRequestService {
     @Transactional
     public void markRefunded(UUID id, UUID actorUserId) {
         requests.markRefunded(TenantContext.require(), id, actorUserId);
+    }
+
+    /**
+     * Returns portal fees F2 — PUT /return-requests/{id}/amounts {waived | fee}: owner / manager override or waiver
+     * of the frozen fee, before approval only. Recorded as an amounts_overridden request event.
+     */
+    @Transactional
+    public void overrideAmounts(UUID id, Boolean waived, java.math.BigDecimal fee, UUID actorUserId) {
+        new RequestAmounts(jdbc).override(TenantContext.require(), id, waived, fee, actorUserId);
     }
 
     /** POST /return-requests/{id}/close {reason, note}. */

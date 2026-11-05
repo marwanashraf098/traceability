@@ -1862,7 +1862,8 @@
         "no_refund": "Closed without a refund",
         "rest_not_coming": "Nothing came back",
         "other": "Other",
-        "exchange_failed": "Exchange failed"
+        "exchange_failed": "Exchange failed",
+        "nothing_owed": "Closed — nothing owed"
       },
       "reasons": {
         "wrong_size": "Wrong size",
@@ -1997,7 +1998,8 @@
         "no_refund": "no refund",
         "rest_not_coming": "nothing came back",
         "other": "other",
-        "exchange_failed": "exchange failed"
+        "exchange_failed": "exchange failed",
+        "nothing_owed": "nothing owed"
       },
       "awaitingRefundBadge": "{{count}} awaiting refund",
       "awaitingRefundBadge_other": "{{count}} awaiting refund",
@@ -2015,7 +2017,8 @@
         "source": {
           "shopify": "after discounts. Prices from Shopify.",
           "stored_order": "after discounts. Prices from the order saved in Traced.",
-          "catalog": "today's catalog prices, before any discount."
+          "catalog": "today's catalog prices, before any discount.",
+          "frozen": "price paid when the request was sent, less the fee."
         },
         "approximate": "Approximate",
         "method": "Method",
@@ -2077,7 +2080,8 @@
         "traced": "Traced",
         "automatically": "approved automatically",
         "itemsDecided": "the item decided",
-        "itemsDecided_other": "{{count}} items decided"
+        "itemsDecided_other": "{{count}} items decided",
+        "amounts_overridden": "Fee changed"
       },
       "close": {
         "title": "Close",
@@ -2092,7 +2096,9 @@
         "conflict": "This request can't be closed any more.",
         "bodyExchange": "The exchange ends here. Any items still reserved are released.",
         "exchangeFailed": "Exchange failed",
-        "exchangeFailedHint": "For example, the customer refused the new size at the door."
+        "exchangeFailedHint": "For example, the customer refused the new size at the door.",
+        "nothingOwed": "Nothing owed",
+        "nothingOwedHint": "The return fee was more than the item value, so there is nothing to refund."
       },
       "link": {
         "title": "Which request is this parcel for?",
@@ -2200,6 +2206,33 @@
         "unavailable": "Photo unavailable",
         "removed": "Photos removed on {{date}} — 90 days after the request ended.",
         "removedPrivacy": "Photos removed (privacy request)."
+      },
+      "fees": {
+        "titleRefund": "Return fee",
+        "titleExchange": "Exchange fee",
+        "approximate": "Approximate price",
+        "itemValue": "Item value",
+        "returnFee": "Return fee",
+        "exchangeFee": "Exchange fee",
+        "percentOf": "{{percent}}%",
+        "refundDue": "Refund due",
+        "waivedByYou": "Waived by you",
+        "waivedFault": "Waived — the store's fault",
+        "overridden": "Changed by {{name}} (was {{amount}}).",
+        "nothingOwed": "The fee is more than the item value: nothing to refund. Close it as \"Nothing owed\" when it comes back.",
+        "collect": "The customer owes {{amount}} for this exchange. Traced doesn't add it to the courier's collection yet — collect it yourself.",
+        "waive": "Waive fee",
+        "change": "Change fee",
+        "newFee": "New fee (EGP, whole number)",
+        "save": "Save",
+        "cancel": "Cancel",
+        "beforeApproval": "You can change the fee until you approve the request.",
+        "saved": "Fee updated.",
+        "locked": "The fee can only be changed before the request is approved.",
+        "failed": "Couldn't update the fee. Try again.",
+        "feeInvalid": "Enter a whole amount from 0 to 30,000.",
+        "suggestionParts": "items {{items}} − fee {{fee}}",
+        "waivedShort": "waived"
       }
     }
   },

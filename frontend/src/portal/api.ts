@@ -107,6 +107,27 @@ export interface LookupResult {
   otherCourier?: { carrierName: string | null }
   /** G4b fix: false only when the store offers exchanges but not for this order; absent otherwise. */
   exchangesOffered?: false
+  /** Returns portal fees F2 — present only when a fee applies to this order; the amount comes from quote(). */
+  fees?: { refund: boolean; exchange: boolean }
+}
+
+/** Returns portal fees F2 — the fee and what is due for the customer's current choices (POST /quote). */
+export interface FeeQuote {
+  applies: true
+  kind: 'refund' | 'exchange'
+  currency: string
+  itemValue: string
+  approximate: boolean
+  fee: string
+  feeWaived: boolean
+  waiveReason: 'merchant_fault' | null
+  mode: 'fixed' | 'percent'
+  percent: string | null
+  /** Refunds only: what the customer receives (item value − fee, never below 0). */
+  refundDue: string | null
+  /** Exchanges only: what the customer pays (the exchange fee). */
+  collect: string | null
+  nothingOwed: boolean
 }
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */
@@ -230,6 +251,31 @@ export async function getDistricts(
     return fail('error', status)
   } catch {
     return fail('error', 0)
+  }
+}
+
+export type SubmitBody = {
+  lines: SubmitLine[]; email?: string; note?: string; districtId?: string
+  mode?: 'refund' | 'exchange'; replacementVariantId?: string; refundFallbackOk?: boolean
+  /** P2 — how the customer wants their refund, when the store asks. */
+  refundMethod?: string; refundDetails?: Record<string, string>
+} & (Partial<CustomAddressRequest>)
+
+/**
+ * Returns portal fees F2 — the quote for the current choices (same body as submit; writes nothing). null when no fee
+ * applies or the quote can't be had — the portal then shows no fee line (submit still freezes the real amounts).
+ */
+export async function quote(slug: string, token: string, request: SubmitBody): Promise<FeeQuote | null> {
+  try {
+    const { status, body } = await call(`/${encodeURIComponent(slug)}/quote`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(request),
+    })
+    if (status === 200 && isObject(body) && body.applies === true) return body as unknown as FeeQuote
+    return null
+  } catch {
+    return null
   }
 }
 

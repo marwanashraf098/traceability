@@ -174,7 +174,14 @@ export function UnexpectedItems({ detail }: { detail: ReturnRequestDetail }) {
 }
 
 /** "Linen Shirt EGP 850 + Flipped Pants ×2 EGP 600". */
-function suggestionParts(s: RefundSuggestion): string {
+function suggestionParts(s: RefundSuggestion, t: ReturnType<typeof useTranslation>['t']): string {
+  // F2: from the frozen amounts — "items EGP 500 − return fee EGP 50".
+  if (s.source === 'frozen') {
+    return t('exchangesRefunds.requests.fees.suggestionParts', {
+      items: formatMoney(s.itemValue ?? null, s.currency),
+      fee: s.feeWaived ? t('exchangesRefunds.requests.fees.waivedShort') : formatMoney(s.fee ?? null, s.currency),
+    })
+  }
   return s.lines
     .filter(l => l.lineTotal != null)
     .map(l => `${l.productTitle}${l.quantity > 1 ? ` ×${l.quantity}` : ''} ${formatMoney(l.lineTotal, s.currency)}`)
@@ -248,7 +255,7 @@ export function RefundForm({
           <p className="text-body text-secondary" data-testid="refund-suggestion">
             {t('exchangesRefunds.requests.refund.suggested')}{' '}
             <strong className="text-primary" dir="ltr">{formatMoney(suggestion.amount, currency)}</strong>
-            {suggestionParts(suggestion) && <>: <bdi>{suggestionParts(suggestion)}</bdi></>}
+            {suggestionParts(suggestion, t) && <>: <bdi>{suggestionParts(suggestion, t)}</bdi></>}
             {t('exchangesRefunds.requests.reasonSeparator')}{t(`exchangesRefunds.requests.refund.source.${suggestion.source}`)}
             {suggestion.approximate && (
               <span className="ms-2" data-testid="refund-approximate">
@@ -465,6 +472,13 @@ function eventTitle(t: ReturnType<typeof useTranslation>['t'], e: ReturnRequestE
       return <>{t(k)} · <span dir="ltr">{formatMoney(m.amount as string, (m.currency as string) ?? 'EGP')}</span></>
     case 'closed':
       return m.reason ? `${t(k)} · ${t(`exchangesRefunds.requests.closeReasonsShort.${m.reason}`)}` : t(k)
+    case 'amounts_overridden': {
+      // F2: the fee before → after (metadata.from / .to: { fee, waived }).
+      const meta = (e.metadata ?? {}) as Record<string, { fee?: string; waived?: boolean } | undefined>
+      const show = (v?: { fee?: string; waived?: boolean }) =>
+        v?.waived ? t('exchangesRefunds.requests.fees.waivedShort') : formatMoney(v?.fee ?? null, 'EGP')
+      return <>{t(k)} · <span dir="ltr">{show(meta.from)} → {show(meta.to)}</span></>
+    }
     default:
       return t(k, { defaultValue: e.type.replace(/_/g, ' ') })
   }
@@ -544,7 +558,10 @@ export function CloseDialog({ detail, onClose, onDone }: { detail: ReturnRequest
   const id = useId()
   // Step 5c: an exchange closes as "Exchange failed" (or Other) — it never has a refund.
   const exchange = detail.type === 'exchange'
-  const [reason, setReason] = useState<'no_refund' | 'other' | 'exchange_failed'>(exchange ? 'exchange_failed' : 'no_refund')
+  // F2: a refund whose frozen due is 0 (fee ≥ item value) closes as "Nothing owed".
+  const nothingOwed = !exchange && !!detail.amounts?.nothingOwed
+  const [reason, setReason] = useState<'no_refund' | 'other' | 'exchange_failed' | 'nothing_owed'>(
+    exchange ? 'exchange_failed' : nothingOwed ? 'nothing_owed' : 'no_refund')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -574,6 +591,10 @@ export function CloseDialog({ detail, onClose, onDone }: { detail: ReturnRequest
         </div>
         <fieldset className="space-y-2">
           <legend className="text-body font-semibold text-primary mb-2">{t('exchangesRefunds.requests.close.reason')}</legend>
+          {nothingOwed && (
+            <ChoiceCard name={`${id}-reason`} checked={reason === 'nothing_owed'} onChange={() => setReason('nothing_owed')}
+              title={t('exchangesRefunds.requests.close.nothingOwed')} hint={t('exchangesRefunds.requests.close.nothingOwedHint')} />
+          )}
           {exchange ? (
             <ChoiceCard name={`${id}-reason`} checked={reason === 'exchange_failed'} onChange={() => setReason('exchange_failed')}
               title={t('exchangesRefunds.requests.close.exchangeFailed')} hint={t('exchangesRefunds.requests.close.exchangeFailedHint')} />

@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import FeeBreakdown from './FeeBreakdown'
 import ItemPhotos from './ItemPhotos'
 import { Check } from 'lucide-react'
 import { bookExchangeNow, ReturnRequestDetail, TransferCommandError } from '../../api'
@@ -188,6 +189,8 @@ export default function ExchangeProgressView({
             {detail.closeNote && <p className="text-body text-secondary whitespace-pre-wrap mt-1" dir="auto">{detail.closeNote}</p>}
           </section>
         )}
+
+        <FeeBreakdown detail={detail} onChanged={onReload} />
 
         <CustomerRefundChoice detail={detail} />
 

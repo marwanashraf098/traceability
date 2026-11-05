@@ -252,5 +252,20 @@
       "unreadable": "This photo couldn't be read. Try another one.",
       "failed": "Couldn't upload this photo. Check your connection and tap Retry."
     }
+  },
+  "fees": {
+    "money": "EGP {{amount}}",
+    "refundTitle": "Your refund",
+    "exchangeTitle": "Exchange fee",
+    "itemValue": "Items",
+    "returnFee": "Return fee",
+    "exchangeFee": "Exchange fee",
+    "waived": "Waived",
+    "youReceive": "You'll receive",
+    "youPay": "You'll pay",
+    "waivedNote": "No fee, because of the reason you chose.",
+    "nothingOwed": "The return fee is more than the item value, so you'd receive EGP 0. You can still send this request.",
+    "exchangePayNote": "The store will tell you how to pay this fee.",
+    "approximate": "Based on today's prices — the final amount may differ slightly."
   }
 }

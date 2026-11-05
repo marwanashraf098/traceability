@@ -116,6 +116,18 @@ public class PickupAreaService {
         return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
     }
 
+    /**
+     * Returns portal fees F2 — the order's delivery city and district ids AS STORED (portal_delivery, else the newest
+     * delivered forward leg's raw), for the fee's area when the customer chose no pickup district. Never calls Bosta
+     * (no raw refresh); {city, district} with either null when unknown.
+     */
+    public String[] storedDeliveryArea(UUID tenantId, UUID orderId) {
+        List<Map<String, Object>> rows = portalDropOff(tenantId, orderId);
+        if (rows.isEmpty()) rows = forwardLeg(tenantId, orderId);
+        if (rows.isEmpty()) return new String[]{null, null};
+        return new String[]{(String) rows.get(0).get("city_id"), (String) rows.get(0).get("district_id")};
+    }
+
     private List<Map<String, Object>> portalDropOff(UUID tenantId, UUID orderId) {
         return jdbc.queryForList(
             "SELECT o.portal_delivery->'dropOffAddress'->'city'->>'_id' AS city_id, " +
