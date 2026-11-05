@@ -51,6 +51,16 @@ public class ShipmentLinkService {
     public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
     /** V169 (non-Bosta couriers G1): the order's generic forward leg is past 'created' — Bosta not linked. */
     public static final String REASON_GENERIC_CONFLICT = "GENERIC_CONFLICT";
+    /**
+     * 2026-11-05 (BROEK BRK-47264-EG): the delivery's order WAS found, but it already has a live Bosta forward leg
+     * (a different waybill, not terminated / cancelled) — the V104 one-live-forward-leg rule, so nothing was linked.
+     * Was NO_MATCH before. The webhook job then enqueues ActiveForwardLegCheckJob (one not-found check of the old
+     * leg); BostaRelink re-tries such rows from their stored raw once the old leg ends.
+     */
+    public static final String REASON_ACTIVE_FORWARD_LEG = "ACTIVE_FORWARD_LEG";
+
+    /** The V104 partial unique index behind {@link #REASON_ACTIVE_FORWARD_LEG}. */
+    static final String ACTIVE_FORWARD_INDEX = "ux_active_forward_shipment_per_order";
 
     /**
      * V169: thrown by createOrFindShipment when the order's generic forward leg is past 'created'
@@ -59,6 +69,17 @@ public class ShipmentLinkService {
     static class GenericLegBlocksBostaException extends RuntimeException {
         GenericLegBlocksBostaException(UUID orderId) {
             super("Order " + orderId + " is already shipped with another carrier");
+        }
+    }
+
+    /**
+     * 2026-11-05: thrown by createOrFindShipment BEFORE any write when the order already has a live Bosta forward
+     * leg with another waybill (the V104 index would refuse the INSERT). Nothing was written; the caller must not
+     * link. Checked up front so the caller's transaction is never aborted by the unique-index error.
+     */
+    static class ActiveForwardLegException extends RuntimeException {
+        ActiveForwardLegException(UUID orderId) {
+            super("Order " + orderId + " already has a live Bosta forward leg");
         }
     }
 
@@ -412,7 +433,7 @@ public class ShipmentLinkService {
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
-        clearReconcileFlag(orderId, tenantId);
+        clearReconcileFlag(orderId, tenantId, true);
         resolveUnlinked(tenantId, trackingNumber);
 
         log.info("Order {} AWB-linked to {} ({} pieces)", orderNumber, trackingNumber, linked);
@@ -603,12 +624,19 @@ public class ShipmentLinkService {
                 // V169 Bosta wins — except over a generic leg past 'created': never guess, route to unlinked
                 // (generic_bosta_conflict, HIGH).
                 return new LinkResult(null, REASON_GENERIC_CONFLICT);
+            } catch (ActiveForwardLegException e) {
+                // 2026-11-05: the order was found but already has a live Bosta forward leg (another waybill).
+                log.info("tryMatchDelivery: tracking={} order {} already has a live Bosta forward leg → {}",
+                         trackingNumber, orderId, REASON_ACTIVE_FORWARD_LEG);
+                return new LinkResult(null, REASON_ACTIVE_FORWARD_LEG);
             } catch (DuplicateKeyException e) {
-                // ux_active_forward_shipment_per_order (V104) fired: order already has an active forward
-                // shipment (concurrent double-link race). Route to unlinked.
-                log.warn("Active-forward-shipment constraint prevented double-link for order {} tracking {}",
-                         orderId, trackingNumber);
-                return new LinkResult(null, REASON_NO_MATCH);
+                // ux_active_forward_shipment_per_order (V104) fired in a race (another link won between the
+                // pre-check and the INSERT): the order has a live forward leg — ACTIVE_FORWARD_LEG. Any other
+                // unique key (the global tracking number) stays NO_MATCH, as before.
+                boolean activeLeg = String.valueOf(e.getMessage()).contains(ACTIVE_FORWARD_INDEX);
+                log.warn("Unique constraint prevented double-link for order {} tracking {} ({})",
+                         orderId, trackingNumber, activeLeg ? ACTIVE_FORWARD_INDEX : "other key");
+                return new LinkResult(null, activeLeg ? REASON_ACTIVE_FORWARD_LEG : REASON_NO_MATCH);
             }
         }
 
@@ -700,7 +728,7 @@ public class ShipmentLinkService {
         } catch (GenericLegBlocksBostaException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order is already shipped with another carrier — Traced won't link a Bosta delivery to it");
-        } catch (DuplicateKeyException e) {
+        } catch (ActiveForwardLegException | DuplicateKeyException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order already has an active shipment — resolve it before manually linking");
         }
@@ -943,8 +971,18 @@ public class ShipmentLinkService {
                         bostaId, existing);
                 }
             }
-            clearReconcileFlag(orderId, tenantId);
+            clearReconcileFlag(orderId, tenantId, true);
             return existing;
+        }
+
+        // 2026-11-05: a live Bosta forward leg with another waybill → refuse before any write (V104 would refuse
+        // the INSERT and abort the caller's transaction). Checked before yieldToBosta so a refusal never cancels
+        // a generic leg first.
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM shipments WHERE order_id = ? AND tenant_id = ? AND provider = 'bosta' " +
+                "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled'))",
+                Boolean.class, orderId, tenantId))) {
+            throw new ActiveForwardLegException(orderId);
         }
 
         // V169 Bosta wins: a still-cancellable generic leg is cancelled first; past 'created' → refuse.
@@ -979,17 +1017,28 @@ public class ShipmentLinkService {
             rawJson, bostaId);
         com.traceability.integrations.bosta.ShipmentSettlement.apply(
             jdbc, id, delivery != null ? delivery.raw() : null);
-        clearReconcileFlag(orderId, tenantId);
+        clearReconcileFlag(orderId, tenantId, true);
         return id;
     }
 
     private void clearReconcileFlag(UUID orderId, UUID tenantId) {
-        // Idempotent: WHERE bosta_link_status IS NOT NULL makes this a no-op for
-        // orders that were never flagged (the common case).
+        clearReconcileFlag(orderId, tenantId, false);
+    }
+
+    /**
+     * {@code bostaForwardLeg} (2026-11-05): a Bosta FORWARD leg was just linked / found for the order — the
+     * reconcile job's attempt counter also goes back to 0 (it never did since V139 stopped setting
+     * bosta_link_status, so an order that had used its 10 attempts before its first link was never reconciled
+     * again after that leg died — BROEK BRK-47264-EG). Generic and return-leg links keep the old rule (only a set
+     * flag is cleared). No backfill: orders already at the limit change only when a Bosta leg links.
+     */
+    private void clearReconcileFlag(UUID orderId, UUID tenantId, boolean bostaForwardLeg) {
+        // Idempotent: a no-op for orders never flagged and (for a Bosta forward leg) with no attempts counted.
         jdbc.update(
             "UPDATE orders SET bosta_link_status = NULL, bosta_link_attempts = 0, " +
             "    bosta_link_last_check = NULL " +
-            "WHERE id = ? AND tenant_id = ? AND bosta_link_status IS NOT NULL",
+            "WHERE id = ? AND tenant_id = ? AND (bosta_link_status IS NOT NULL" +
+            (bostaForwardLeg ? " OR bosta_link_attempts > 0)" : ")"),
             orderId, tenantId);
         // V139: a linked Bosta shipment makes the order's carrier Bosta (it wins over any other).
         com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);

@@ -121,6 +121,19 @@ public class BostaWebhookJob {
         this.jobScheduler = jobScheduler;
     }
 
+    // 2026-11-05 (BROEK BRK-47264-EG): the instant old-waybill check and the re-link after a forward leg ends.
+    // Setter-injected so hand-built instances keep their constructor (null → neither runs).
+    // Lazy (ObjectProvider): ActiveForwardLegCheckJob → BostaDeletionService → BostaIngestionHelper → this.
+    private org.springframework.beans.factory.ObjectProvider<ActiveForwardLegCheckJob> activeLegCheckProvider;
+    private org.springframework.beans.factory.ObjectProvider<BostaRelink> relinkProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setActiveLegCheck(org.springframework.beans.factory.ObjectProvider<ActiveForwardLegCheckJob> activeLegCheck,
+                                  org.springframework.beans.factory.ObjectProvider<BostaRelink> relink) {
+        this.activeLegCheckProvider = activeLegCheck;
+        this.relinkProvider = relink;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public void setRateLimitRetry(
             @org.springframework.beans.factory.annotation.Value("${bosta.webhook.rate-limit-max-retries:8}") int maxRetries,
@@ -490,6 +503,13 @@ public class BostaWebhookJob {
                     recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
                                    linkResult.unlinkedReason());
                     markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                    // The order was found but still has a live Bosta forward leg: check that old waybill now.
+                    ActiveForwardLegCheckJob activeLegCheck =
+                        activeLegCheckProvider != null ? activeLegCheckProvider.getIfAvailable() : null;
+                    if (ShipmentLinkService.REASON_ACTIVE_FORWARD_LEG.equals(linkResult.unlinkedReason())
+                            && activeLegCheck != null) {
+                        activeLegCheck.enqueue(tenantId, trackingNumber);
+                    }
                     return;
                 }
             }
@@ -592,6 +612,7 @@ public class BostaWebhookJob {
         final String  fExceptionReason = exceptionReason;
         final BostaAttentionExtractor.AttentionFields af =
             BostaAttentionExtractor.extract(delivery.raw());
+        final UUID[] endedLegOrder = {null};   // a forward leg Bosta ended (48 / 49 / 104) → re-link after commit
         tx.execute(s -> {
             // Custody-lock guard (FR-16):
             //   - HOLD: shipment_leg='forward', custody_locked_by_scan=true, incoming='created'
@@ -684,8 +705,11 @@ public class BostaWebhookJob {
                 List<java.util.Map<String, Object>> leg = jdbc.queryForList(
                     "SELECT tracking_number FROM shipments WHERE id = ? AND provider = 'bosta' AND shipment_leg = 'forward' " +
                     "  AND internal_state IN ('terminated', 'cancelled')", resolvedShipment.id());
-                if (!leg.isEmpty()) BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, resolvedShipment.orderId(),
-                    (String) leg.get(0).get("tracking_number"));
+                if (!leg.isEmpty()) {
+                    BostaSupersede.requeueAfterLegEnded(jdbc, tenantId, resolvedShipment.orderId(),
+                        (String) leg.get(0).get("tracking_number"));
+                    endedLegOrder[0] = resolvedShipment.orderId();
+                }
             }
 
             // 9.2 — Returns portal (V100): the forward leg's delivered timestamp, set ONCE —
@@ -714,6 +738,9 @@ public class BostaWebhookJob {
                 webhookEventId);
             return null;
         });
+        // 2026-11-05: the order's stranded Bosta deliveries, re-matched from their stored raw (committed above).
+        BostaRelink relink = endedLegOrder[0] != null && relinkProvider != null ? relinkProvider.getIfAvailable() : null;
+        if (relink != null) relink.relinkAfterCommit(tenantId, endedLegOrder[0], "bosta_ended");
 
         // 9.6 — Populate consignee PII from Bosta receiver on every event that
         //       reaches this path (shipment already existed — tryMatchDelivery was
