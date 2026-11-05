@@ -290,6 +290,12 @@ public class ShopifyWebhookProcessorJob {
                     topic, shopDomain);
             }
         }
+        // S1 follow-up: orders/updated also fires when the order is fulfilled — re-fetch its mirrored fulfillment
+        // orders that aren't final (none mirrored → no Shopify call). Runs for a stale payload too: the fetch reads
+        // Shopify's current state, never the payload. Never throws.
+        if ("orders/updated".equals(topic)) {
+            refreshFulfillmentOrders(tenantId, shopDomain, payload.path("admin_graphql_api_id").asText(""));
+        }
         // A stale order payload: nothing after the upsert runs for this event (no tracking capture, no queue).
         if (ingest == ShopifySyncService.OrderIngest.STALE) return STALE_REASON;
         // Shopify-native returns S1: an order line that came from a stored exchange line is marked (the
@@ -300,6 +306,10 @@ public class ShopifyWebhookProcessorJob {
             mainReconcileQueue.onWebhook(tenantId, topic, payload);
         }
         return null;
+    }
+
+    private void refreshFulfillmentOrders(UUID tenantId, String shopDomain, String orderGid) {
+        if (returnsWebhooks != null) returnsWebhooks.refreshOpenFulfillmentOrders(tenantId, shopDomain, orderGid);
     }
 
     private void linkExchangeLines(UUID tenantId, String shopDomain, JsonNode payload) {

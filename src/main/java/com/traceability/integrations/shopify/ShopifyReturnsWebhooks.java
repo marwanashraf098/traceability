@@ -1,12 +1,14 @@
 package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -30,10 +32,12 @@ public class ShopifyReturnsWebhooks {
 
     private final ShopifyReturnsSync sync;
     private final ShopifySyncService syncService;
+    private final ShopifyReturnsStore store;
 
-    public ShopifyReturnsWebhooks(ShopifyReturnsSync sync, ShopifySyncService syncService) {
+    public ShopifyReturnsWebhooks(ShopifyReturnsSync sync, ShopifySyncService syncService, ShopifyReturnsStore store) {
         this.sync = sync;
         this.syncService = syncService;
+        this.store = store;
     }
 
     public static boolean handles(String topic) {
@@ -68,6 +72,35 @@ public class ShopifyReturnsWebhooks {
                 if (sync.syncFulfillmentOrder(tenantId, storeId, shopDomain, gid)
                         == ShopifyReturnsSync.Outcome.ACCESS_DENIED) return;
             }
+        }
+    }
+
+    /**
+     * orders/updated: Shopify sends no fulfillment_orders/* webhook when a fulfillment order is fulfilled (it just
+     * closes), but orders/updated fires on fulfillment (verified prod 2026-11-05), so it is the signal — fulfillments/*
+     * are deliberately not subscribed (their payloads carry the customer address, not covered by GDPR redaction).
+     * Without it the mirror would keep a fulfilled FO OPEN. When the order has a mirrored
+     * fulfillment order that isn't final (CLOSED / CANCELLED / INCOMPLETE), each one is re-fetched by GID and upserted.
+     * An order with none — every normal order — makes no Shopify call. Signal only: no transaction is open during
+     * the fetch, every DB touch runs in TenantContext.runAs, the upsert is idempotent. Never throws (a failure leaves
+     * the mirror as it was until the next signal; the order event itself is unaffected).
+     */
+    public void refreshOpenFulfillmentOrders(UUID tenantId, String shopDomain, String orderGid) {
+        if (orderGid == null || orderGid.isBlank()) return;
+        try {
+            UUID storeId = TenantContext.runAs(tenantId, () -> syncService.resolveStore(tenantId, shopDomain));
+            if (storeId == null) return;
+            List<String> open = TenantContext.runAs(tenantId, () -> store.openFulfillmentOrderGids(storeId, orderGid));
+            if (open.isEmpty()) return;
+            String token = sync.token(tenantId, storeId);
+            if (token == null) return;
+            for (String gid : open) {
+                if (sync.syncFulfillmentOrder(tenantId, storeId, shopDomain, token, gid)
+                        == ShopifyReturnsSync.Outcome.ACCESS_DENIED) return;
+            }
+        } catch (RuntimeException e) {
+            log.warn("Fulfillment-order refresh for {} on {} failed — the mirror stays as it was until the next signal: {}",
+                orderGid, shopDomain, e.toString());
         }
     }
 

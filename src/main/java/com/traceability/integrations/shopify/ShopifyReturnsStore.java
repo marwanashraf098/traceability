@@ -48,6 +48,28 @@ public class ShopifyReturnsStore {
         return ids.isEmpty() ? null : ids.get(0);
     }
 
+    /** A FulfillmentOrder in one of these states never changes again — never re-fetched. */
+    public static final List<String> FO_FINAL_STATUSES = List.of("CLOSED", "CANCELLED", "INCOMPLETE");
+
+    /**
+     * The mirrored fulfillment orders of this Shopify order that aren't final yet (empty for an order with none —
+     * the caller makes no Shopify call then). Shopify sends no fulfillment_orders/* webhook when an FO is fulfilled,
+     * so an order / fulfillment webhook is the signal to re-fetch these.
+     */
+    @Transactional(readOnly = true)
+    public List<String> openFulfillmentOrderGids(UUID storeId, String orderGid) {
+        UUID tenantId = TenantContext.require();
+        if (orderGid == null || orderGid.isBlank()) return List.of();
+        return jdbc.queryForList("""
+            SELECT f.fo_gid FROM shopify_fulfillment_orders f
+            WHERE f.tenant_id = ? AND f.store_id = ?
+              AND f.order_id = (SELECT o.id FROM merchant_orders o
+                                WHERE o.tenant_id = ? AND o.store_id = ? AND o.external_id = ?)
+              AND f.status <> ALL (?::text[])
+            ORDER BY f.fo_gid""",
+            String.class, tenantId, storeId, tenantId, storeId, orderGid, FO_FINAL_STATUSES.toArray(new String[0]));
+    }
+
     /** The store's returns access state, or null (never decided). */
     @Transactional(readOnly = true)
     public String returnsAccess(UUID storeId) {

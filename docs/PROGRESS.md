@@ -171,6 +171,25 @@ one branch per slice, each stops before merge with a report.
 - **Cancel webhook:** not the cause for BRK-46696 — the cancel (11-04) came after state 46 (11-03), so
   `cancelOrder` 409'd on courier history and stamped `shopify_cancel_requested_at`.
 
+**S1 follow-up — fulfillment-order mirror goes stale on fulfillment (2026-11-05; branch `fix/s1-fo-mirror-refresh`,
+merged to main 2026-11-05, NOT deployed; no migration — can deploy any time).** Prod test (store marwan, order #1006): the exchange FO was released
+(hold_released → OPEN, correct), then fulfilled in Shopify, but `shopify_fulfillment_orders` kept OPEN — Shopify sends
+no fulfillment_orders/* webhook when an FO is fulfilled.
+- **Fix:** orders/updated (any outcome, stale included — the fetch reads Shopify's current state) re-fetches, by GID, the order's mirrored FOs that aren't final
+  (`ShopifyReturnsStore.FO_FINAL_STATUSES` = CLOSED / CANCELLED / INCOMPLETE; `openFulfillmentOrderGids`) and upsert
+  them (`ShopifyReturnsWebhooks.refreshOpenFulfillmentOrders`). An order with no mirrored FO makes no Shopify call
+  (and no token read). No transaction during the call, every DB touch in TenantContext.runAs, idempotent upsert,
+  never throws (a failure leaves the mirror as it was; the order event is unaffected).
+- **Tests (ShopifyNativeReturnsMirrorTest, 15/15):** f1 fulfilled-after-release → CLOSED, then a final FO is not
+  fetched again; f2 order with no mirrored FO → orders/updated makes zero returns/FO gateway calls, no token read.
+  Revert-to-confirm: refresh disabled → f1 fails ("Wanted but not invoked", expected CLOSED). z1 golden
+  unchanged. Neighbours green: AnalyticsInventorySync 12, OrderWebhookFreshness 5, OrdersTableAccessGuard 3,
+  ShopifyOAuthDay3 12, ShopifyWebhookEnqueueDeadline 3, ShopifyWebhookRetention 9, ShopifyWebhookRetry 10,
+  PortalOrderLeak 9. Full suite not run.
+- **fulfillments/* deliberately not subscribed: orders/updated fires on fulfillment (verified prod 2026-11-05); their payloads carry customer address and are not covered by GDPR redaction.** No fulfillments/* handler either (dead wiring would reopen the gap if someone registered the
+  topics). TOPICS / TOPICS_VERSION (2) and the existing assertions unchanged. Prod check: #1006 fulfilled 13:37:55
+  Cairo, orders/updated at 13:37:58 and 13:38:08, both processed.
+
 **Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
 `feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V206).** Data only: no reservation, no committed
 demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
