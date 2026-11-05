@@ -2489,6 +2489,11 @@
         "resendDone": "Sent {{applied}} of {{total}} updates to Shopify.",
         "resendFailed": "Couldn't re-send the updates — try again."
       },
+      "newPermissions": {
+        "title": "Approve Traced's new Shopify permissions",
+        "body": "Traced now asks Shopify for read access to returns and fulfillment orders, so it can follow returns and exchanges made in Shopify. Open Traced in your Shopify admin and approve the new permissions — nothing changes until you do.",
+        "cta": "Open Traced in Shopify"
+      },
       "attention": {
         "title": "Reconnect your store",
         "body": "Shopify access expired, so syncing has paused. Reconnect to pick up where it left off.",

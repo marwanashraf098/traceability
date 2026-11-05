@@ -4,6 +4,49 @@
 
 ## Current state
 
+**Shopify-native returns S1 — the returns / exchanges / fulfillment-order MIRROR (2026-11-05; branch
+`feat/shopify-native-returns-s1`, merged to main 2026-11-05, NOT deployed; migration V206).** Data only: no reservation, no committed
+demand, no pick gate, no quantity, no stock write, nothing on a worker screen (S2+). Bosta / generic / portal flows
+untouched. No new SECURITY DEFINER hatch.
+- **Scopes:** + read_returns, write_returns (S5 only — no write call exists), read_merchant_managed_fulfillment_orders,
+  in shopify.app.toml AND application.yml (stale legacy-install comments fixed: install is managed since ad65a690).
+  read_third_party_fulfillment_orders NOT added — no evidence in code; `scripts/ops/2026-11-05-shopify-returns-s1-check.sql`
+  part 3 counts app-fulfilled lines per store on prod. Scope review (docs, 2026-11-05): none of the four scopes is
+  "Shopify approval required" (only marketplace ones are); the docs are silent on re-review for added scopes on a
+  listed app; merchants are prompted on next app open, then app/scopes_update fires.
+- **V206:** shopify_returns / shopify_return_lines / shopify_exchange_lines / shopify_fulfillment_orders /
+  shopify_rfo_dispositions (GID-keyed, upsert-only, app_user no DELETE, RLS NULLIF, composite order FKs); stores.returns_access
+  + returns_backfill_*; order_items.shopify_exchange_line_gid; raw email-stripped; notes redacted by triggers
+  (`shopify_return_raw_redacted`), born redacted for a redacted order.
+- **Code:** ShopifyReturnsGateway(+Impl, read-only GraphQL validated vs 2026-04: Return has no updatedAt / cancelledAt —
+  cancelled_seen_at stamped by Traced; returnReasonDefinition.handle, not the deprecated returnReason), ShopifyReturnsSync
+  (fetch → upsert, no tx during the call, runAs everywhere, ACCESS_DENIED → not_granted quietly), ShopifyReturnsStore (only
+  writer), ShopifyReturnsWebhooks (every GID in the payload), ShopifyScopesUpdateHandler, ShopifyReturnsBackfill (resumable,
+  50 orders per nodes() call, Traced's orders only, startup + on grant, no endpoint), RegisterShopifyWebhooksJob (17 topics
+  added, TOPICS_VERSION 2, scope topics DEFERRED — not attempted, not a failure — until granted), processor routing + the
+  exchange-line link after an APPLIED order upsert, GDPR redact / export, Connections owner notice behind
+  SHOPIFY_NEW_SCOPES_NOTICE (EN + AR).
+- **Tests:** ShopifyNativeReturnsMirrorTest (13, incl. t1 below): i1 idempotent, i2 thin payload → full fetch, d1 ACCESS_DENIED degrade
+  (webhook + backfill), s1 scopes_update → scopes / only-missing topics / backfill (Traced orders only, re-runnable), r1
+  rollout deferral, p1 pre-connect ignored, l1 / l2 link race both orders, g1 GDPR redact + stays redacted + born redacted
+  + export, x1 app_user cross-tenant + same-tenant control (+ composite FK, no DELETE), n1 owner notice, z1 GOLDEN
+  (committed demand, pick queue, pick detail, Orders list / counts / detail byte-identical before vs after a return with an
+  exchange line + an on-hold FO). Revert-to-confirm: degrade off → d1; order-side link off → l1; return-side link off → l2.
+  Frontend shopifyNewPermissions.test.tsx (4). MigrationSmokeTest / NotTracedBackfillTest bumped (+5 tables).
+- **Existing tests updated (approved 2026-11-05):** ShopifyOAuthDay3Test #11 `times(8)` → 9 (app/scopes_update is
+  registered; returns / FO topics deferred), AnalyticsInventorySyncTest.topicBackfill (version 1 → TOPICS_VERSION, the
+  second run registers 3 — it now also adds app/scopes_update).
+- **Token re-exchange loop guard (review item, 2026-11-05):** `ShopifyOAuthService.acquireOrRefreshViaSessionToken`'s
+  `scopesMatch` re-exchanged the token on EVERY embedded open while the merchant hadn't approved a newly declared scope
+  (managed install grants it only on approval). Now a scope difference alone re-exchanges at most once per declared scope
+  set (`stores.scopes_awaiting_approval` / `_since`, V206), again only after 24 h (`SCOPE_WAIT_RETRY`, a missed webhook);
+  app/scopes_update clears the guard; a token near expiry, a missing refresh token or a non-connected row still
+  exchange as before. Logged once per exchange as "waiting for the merchant to approve new scopes [...]". Test t1;
+  revert-to-confirm: guard off → 5 exchanges for 5 opens.
+- **Migration number:** V206. The review decision was "S1 keeps V206, the watchdog renumbers", but by merge time
+  `fix/jobrunr-watchdog` was already on origin/main (ac319156) with V206__bosta_webhook_pending_sweep — renumbering a
+  merged (possibly deployed) migration would break Flyway history, so S1 moved to V206 instead (2026-11-05).
+
 **JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
 2026-11-05 as ac319156, DEPLOYED to prod 2026-11-05; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
 - **Root cause (JobRunr 7.3.0 OSS):** `ServerZooKeeper.run` catches ANY exception from the heartbeat

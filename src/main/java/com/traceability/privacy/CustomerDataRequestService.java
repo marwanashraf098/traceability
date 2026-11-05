@@ -262,6 +262,22 @@ public class CustomerDataRequestService {
             }
             out.put("return_request_photos", photos);
 
+            // V206: Shopify's own returns of these orders as Traced mirrors them (return name, status, the lines with
+            // the customer's notes while they exist, exchange lines). Raw copies are the same fields.
+            out.put("shopify_returns", rows(
+                "SELECT r.return_gid, r.name, o.number AS order_number, r.status, r.decline_reason, r.decline_note, " +
+                "       r.shopify_created_at, r.closed_at, r.pii_redacted_at, " +
+                "       (SELECT jsonb_agg(jsonb_build_object('line', l.line_gid, 'quantity', l.quantity, " +
+                "               'processed_quantity', l.processed_quantity, 'reason', l.reason, " +
+                "               'reason_note', l.reason_note, 'customer_note', l.customer_note) ORDER BY l.line_gid)::text " +
+                "          FROM shopify_return_lines l WHERE l.return_id = r.id AND l.tenant_id = r.tenant_id) AS return_lines, " +
+                "       (SELECT jsonb_agg(jsonb_build_object('line', x.line_gid, 'variant', x.variant_gid, " +
+                "               'quantity', x.quantity, 'processed_quantity', x.processed_quantity) ORDER BY x.line_gid)::text " +
+                "          FROM shopify_exchange_lines x WHERE x.return_id = r.id AND x.tenant_id = r.tenant_id) AS exchange_lines " +
+                "FROM shopify_returns r JOIN orders o ON o.id = r.order_id AND o.tenant_id = r.tenant_id " +
+                "WHERE r.tenant_id = ? AND r.order_id = ANY(?::uuid[]) ORDER BY r.shopify_created_at, r.return_gid",
+                List.of("return_lines", "exchange_lines"), tenantId, subject.orderIdArray()));
+
             out.put("shipments", rows(
                 "SELECT s.tracking_number, o.number AS order_number, s.shipment_leg::text AS shipment_leg, " +
                 "       s.internal_state::text AS internal_state, s.created_at, s.pii_redacted_at, " +
@@ -294,9 +310,10 @@ public class CustomerDataRequestService {
                 "SELECT id, topic, received_at, payload_raw::text AS payload " +
                 "FROM shopify_webhook_events WHERE tenant_id = ? AND (" +
                 "  (topic LIKE 'orders/%' AND payload_raw ->> 'admin_graphql_api_id' = ANY(?::text[])) " +
+                "  OR (topic LIKE 'returns/%' AND payload_raw #>> '{order,admin_graphql_api_id}' = ANY(?::text[])) " +
                 "  OR (topic LIKE 'customers/%' AND ?::text IS NOT NULL AND payload_raw #>> '{customer,id}' = ?::text)) " +
                 "ORDER BY received_at",
-                List.of("payload"), tenantId, subject.gidArray(), customerId, customerId));
+                List.of("payload"), tenantId, subject.gidArray(), subject.gidArray(), customerId, customerId));
 
             jdbc.update(
                 "UPDATE customer_data_requests SET status = 'downloaded', downloaded_at = COALESCE(downloaded_at, now()), " +

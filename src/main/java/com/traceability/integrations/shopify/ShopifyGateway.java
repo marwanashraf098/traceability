@@ -655,6 +655,15 @@ public interface ShopifyGateway {
     // Strips the outer "data" envelope — callers must NOT path into ".data" on the result.
     JsonNode executeGraphQLPublic(String shopDomain, String token, String query, JsonNode variables);
 
+    /**
+     * Shopify-native returns S1 (read-only): the WHOLE GraphQL response (data + errors) — throttle / HTTP handling as
+     * every other call — so the caller can tell ACCESS_DENIED (a scope the store hasn't approved yet) from any other
+     * error. Used only by ShopifyReturnsGatewayImpl.
+     */
+    default JsonNode executeGraphQLResponsePublic(String shopDomain, String token, String query, JsonNode variables) {
+        throw new UnsupportedOperationException("executeGraphQLResponsePublic");
+    }
+
     static boolean isScopeGranted(String required, String grantedScopeCsv) {
         if (grantedScopeCsv == null || grantedScopeCsv.isBlank()) return false;
         for (String s : grantedScopeCsv.split(",")) {

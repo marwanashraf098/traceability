@@ -41,6 +41,9 @@ public class ShopifyOAuthService {
 
     private static final Logger log = LoggerFactory.getLogger(ShopifyOAuthService.class);
 
+    /** Re-exchange loop guard: after this long a store still waiting for scope approval may re-exchange once more. */
+    static final java.time.Duration SCOPE_WAIT_RETRY = java.time.Duration.ofHours(24);
+
     private static final String INSERT_STORE = """
             INSERT INTO stores (tenant_id, shop_domain, platform,
                                 access_token_encrypted, access_token_expires_at,
@@ -96,7 +99,9 @@ public class ShopifyOAuthService {
                        WHEN status = 'needs_reauth' OR import_status IN ('idle','failed')
                            THEN 'pending'::store_import_status
                        ELSE import_status
-                   END
+                   END,
+                   scopes_awaiting_approval = ?,
+                   scopes_awaiting_since    = CASE WHEN ?::text IS NULL THEN NULL ELSE now() END
              WHERE shop_domain = ?
                AND tenant_id   = ?
             RETURNING id
@@ -639,13 +644,15 @@ public class ShopifyOAuthService {
     public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
         // Step 1: freshness check — needs TenantContext for RLS
         record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus,
-                         String accessTokenScopes, String connectionType, boolean hasRefreshToken) {}
+                         String accessTokenScopes, String connectionType, boolean hasRefreshToken,
+                         String scopesAwaitingApproval, Instant scopesAwaitingSince) {}
         StoreSnap snap;
         snap = TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(
                     "SELECT id, access_token_expires_at, status::text, import_status::text, " +
                     "       access_token_scopes, connection_type, " +
-                    "       (refresh_token_encrypted IS NOT NULL) AS has_refresh " +
+                    "       (refresh_token_encrypted IS NOT NULL) AS has_refresh, " +
+                    "       scopes_awaiting_approval, scopes_awaiting_since " +
                     "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
                     rs -> rs.next() ? new StoreSnap(
                         rs.getObject("id", UUID.class),
@@ -655,7 +662,10 @@ public class ShopifyOAuthService {
                         rs.getString("import_status"),
                         rs.getString("access_token_scopes"),
                         rs.getString("connection_type"),
-                        rs.getBoolean("has_refresh")) : null,
+                        rs.getBoolean("has_refresh"),
+                        rs.getString("scopes_awaiting_approval"),
+                        rs.getTimestamp("scopes_awaiting_since") != null
+                            ? rs.getTimestamp("scopes_awaiting_since").toInstant() : null) : null,
                     tenantId, shopDomain)));
 
         if (snap == null) {
@@ -711,6 +721,21 @@ public class ShopifyOAuthService {
             log.debug("Token exchange skipped: token fresh and scopes match for shop={}", shopDomain);
             return true;
         }
+        // Re-exchange loop guard (S1, 2026-11-05). Under managed install a new declared scope is granted only when the
+        // merchant approves it in Shopify; until then every exchanged token still lacks it, so "scopes don't match"
+        // would re-exchange on EVERY embedded open. A scope difference alone re-exchanges at most once per declared
+        // scope set, then again only after SCOPE_WAIT_RETRY (a missed app/scopes_update) — app/scopes_update clears
+        // the guard. An expiring token, a missing refresh token or a non-connected row still exchanges as before.
+        String declaredSet = normalizedScopes(this.scopes);
+        if (timeFresh && !scopesFresh && !repairing && "connected".equals(snap.status())
+                && snap.accessTokenScopes() != null
+                && declaredSet.equals(snap.scopesAwaitingApproval())
+                && snap.scopesAwaitingSince() != null
+                && snap.scopesAwaitingSince().isAfter(Instant.now().minus(SCOPE_WAIT_RETRY))) {
+            log.debug("Token exchange skipped: shop={} is waiting for the merchant to approve [{}] (since {})",
+                      shopDomain, missingScopes(snap.accessTokenScopes(), this.scopes), snap.scopesAwaitingSince());
+            return true;
+        }
         if (timeFresh && !scopesFresh) {
             log.info("Token exchange forced: scope mismatch for shop={} stored=[{}] declared=[{}]",
                      shopDomain, snap.accessTokenScopes(), this.scopes);
@@ -748,12 +773,21 @@ public class ShopifyOAuthService {
     private UUID applyExchangedToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
         ShopifyStoredToken t = ShopifyStoredToken.of(shop, tokens, encryptionService);   // refuses a non-expiring token
         shopifyGateway.forgetOrderPiiTier(shop);   // Build C: new token, possibly new scopes
+        // The new token still lacks part of the declared set → the merchant hasn't approved it yet: remember the set
+        // (the re-exchange loop guard above); it covers everything → clear it.
+        String awaiting = scopesMatch(t.scopes(), this.scopes) ? null : normalizedScopes(this.scopes);
+        if (awaiting != null) {
+            log.info("Shopify store {} is waiting for the merchant to approve new scopes [{}] — no further token " +
+                     "re-exchange for them until app/scopes_update (or {} h)", shop,
+                     missingScopes(t.scopes(), this.scopes), SCOPE_WAIT_RETRY.toHours());
+        }
         return TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(EXCHANGE_SESSION_TOKEN_UPDATE,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     t.accessTokenEncrypted(), t.accessTokenExpiresAt(),
                     t.refreshTokenEncrypted(), t.refreshTokenExpiresAt(),
                     t.scopes(),
+                    awaiting, awaiting,
                     shop, tenantId)));
     }
 
@@ -776,6 +810,20 @@ public class ShopifyOAuthService {
             if (!r.isEmpty() && !ShopifyGateway.isScopeGranted(r, storedScopes)) return false;
         }
         return true;
+    }
+
+    /** The declared scope list as a canonical set string (sorted, trimmed, comma-joined) — the guard's key. */
+    static String normalizedScopes(String csv) {
+        if (csv == null) return "";
+        return java.util.Arrays.stream(csv.split(",")).map(String::strip).filter(x -> !x.isEmpty())
+            .distinct().sorted().collect(java.util.stream.Collectors.joining(","));
+    }
+
+    /** Declared scopes the stored list doesn't cover (implied-scope rule included) — for the log only. */
+    private static String missingScopes(String storedScopes, String declaredScopes) {
+        return java.util.Arrays.stream(declaredScopes.split(",")).map(String::strip).filter(x -> !x.isEmpty())
+            .filter(x -> storedScopes == null || !ShopifyGateway.isScopeGranted(x, storedScopes))
+            .collect(java.util.stream.Collectors.joining(","));
     }
 
     private static ShopifyOAuthException stateInvalid() {

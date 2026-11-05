@@ -2374,6 +2374,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
         return executeGraphQL(shopDomain, token, query, variables);
     }
 
+    @Override
+    public JsonNode executeGraphQLResponsePublic(String shopDomain, String token, String query, JsonNode variables) {
+        return postGraphQL(shopDomain, token, query, variables);
+    }
+
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {
         JsonNode response = postGraphQL(shopDomain, token, query, variables);
         JsonNode errors = response.get("errors");

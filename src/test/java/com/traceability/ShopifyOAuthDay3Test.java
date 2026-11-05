@@ -519,7 +519,8 @@ class ShopifyOAuthDay3Test {
 
         // First run
         assertThatNoException().isThrownBy(() -> webhooksJob.run(storeId, tenantId));
-        verify(shopifyGateway, times(8)).registerWebhook(eq(shopDomain), anyString(), anyString(), anyString());
+        // 9 = the 8 base topics + app/scopes_update (S1); the returns / FO topics are deferred without their scope
+        verify(shopifyGateway, times(9)).registerWebhook(eq(shopDomain), anyString(), anyString(), anyString());
 
         reset(shopifyGateway);
 

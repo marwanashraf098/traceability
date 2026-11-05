@@ -166,6 +166,12 @@ traced:
   # Shopify Main-location reconciler ("check-up", V201) — R1 is REPORT-ONLY: reads Shopify, records differences on
   # main_reconcile_runs / main_reconcile_diffs and Part 1's would-be subtracts; never writes to Shopify. report-only
   # must stay true (false refuses to start — write mode is R2). shops: comma-separated shop domains, empty = every store.
+  # Shopify-native returns S1 (V206): per-store backfill of the returns mirror (read-only). Runs on scopes grant
+  # and once after deploy for stores already granted; pause between batches of 50 orders.
+  shopify-returns:
+    backfill:
+      enabled: ${TRACED_SHOPIFY_RETURNS_BACKFILL_ENABLED:true}
+      batch-pause-ms: 250
   main-reconcile:
     enabled: ${TRACED_MAIN_RECONCILE_ENABLED:false}
     report-only: ${TRACED_MAIN_RECONCILE_REPORT_ONLY:true}
@@ -213,16 +219,22 @@ shopify:
   # stores; EMPTY (the default) = every custom-app store. Add one shop, verify the upgrade, then the next
   # (docs/runbooks/upgrade-store-to-oauth.md). Banner only — /oauth/initiate is not gated by it.
   oauth-upgrade-shops: ${SHOPIFY_OAUTH_UPGRADE_SHOPS:}
-  # ShopifyOAuthService.buildConsentUrl() sends this verbatim as the &scope= param — this is
-  # the list Shopify actually requests/grants (use_legacy_install_flow=true in shopify.app.toml
-  # means the toml's [access_scopes] does not itself drive the consent screen; keep both lists
-  # in sync manually). write_X implies read_X (see ShopifyGateway.isScopeGranted) so the
-  # corresponding read_inventory/read_locations aren't listed separately.
+  # ShopifyOAuthService.buildConsentUrl() sends this verbatim as the &scope= param of the
+  # authorize-URL path (Settings → Connections "find your store"). Install is MANAGED
+  # (use_legacy_install_flow = false in shopify.app.toml): for App Store / admin installs the
+  # toml's [access_scopes] is what Shopify asks the merchant to approve. Keep both lists
+  # identical. write_X implies read_X (see ShopifyGateway.isScopeGranted) so the
+  # corresponding read_inventory/read_locations/read_returns aren't listed separately where
+  # the write is. Shopify-native returns S1 added read_returns + write_returns (write used from
+  # S5 only — no write call exists before then) + read_merchant_managed_fulfillment_orders.
   # write_shipping (added for deliveryProfileUpdate / fulfillment activation, FR-17 v2)
   # is the correct APP access scope per Shopify's per-mutation docs ("Requires Any of shipping
   # access scopes or manage_delivery_settings user permission") — manage_delivery_settings is
   # a merchant STAFF user permission, not an app-installable scope, and does not belong here.
-  scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping}
+  scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping,read_returns,write_returns,read_merchant_managed_fulfillment_orders}
+  # Shopify-native returns S1: the owner's "Approve Traced's new Shopify permissions" notice (Settings →
+  # Connections). Turn on only after `shopify app deploy` has released the new scopes.
+  new-scopes-notice: ${SHOPIFY_NEW_SCOPES_NOTICE:false}
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
   # App handle from the Partner Dashboard (Apps > this app > the URL slug in

@@ -72,7 +72,12 @@ class MigrationSmokeTest {
             "label_code_batches",
             "label_codes",
             "tag_sessions",
-            "stock_take_untagged_counts"
+            "stock_take_untagged_counts",
+            "shopify_returns",
+            "shopify_return_lines",
+            "shopify_exchange_lines",
+            "shopify_fulfillment_orders",
+            "shopify_rfo_dispositions"
     );
 
     @Test
@@ -90,8 +95,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V205 must execute (V38 was never used — 204 files, not 205)")
-                .isEqualTo(204);
+                .as("all migrations V1–V206 must execute (V38 was never used — 205 files, not 206)")
+                .isEqualTo(205);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),

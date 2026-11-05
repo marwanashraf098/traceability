@@ -56,6 +56,32 @@ public class ConnectionsController {
     @Value("${shopify.scopes}")
     private String shopifyScopesCsv;
 
+    /**
+     * Shopify-native returns S1: show the owner "Approve Traced's new Shopify permissions" while the connected store
+     * hasn't granted the returns / fulfillment-order scopes. OFF until `shopify app deploy` has released them — before
+     * that a merchant has nothing to approve.
+     */
+    @Value("${shopify.new-scopes-notice:false}")
+    private boolean newScopesNotice;
+
+    private com.traceability.integrations.shopify.ShopifyOAuthService oauthService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setOauthService(com.traceability.integrations.shopify.ShopifyOAuthService oauthService) {
+        this.oauthService = oauthService;
+    }
+
+    /**
+     * The owner's notice (null = none): the store is a connected OAuth (App Store) store whose stored scopes lack
+     * read_returns / read_merchant_managed_fulfillment_orders. Opening the app in Shopify admin shows Shopify's own
+     * approval prompt. Custom-app stores configure scopes on their own app — never offered.
+     */
+    static boolean newPermissionsNeeded(boolean noticeOn, String role, StoreRepository.Store store) {
+        return noticeOn && "owner".equalsIgnoreCase(role) && store != null
+            && "connected".equals(store.status()) && "oauth".equals(store.connectionType())
+            && !com.traceability.integrations.shopify.ShopifyReturnsScopes.granted(store.accessTokenScopes());
+    }
+
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
     private final StoreRepository    storeRepository;
@@ -151,6 +177,9 @@ public class ConnectionsController {
                 shopify.put("status",         store.status());
                 shopify.put("importStatus",   store.importStatus());
                 shopify.put("lastSyncAt",     store.lastSyncAt() != null ? Timestamp.from(store.lastSyncAt()) : null);
+                if (newPermissionsNeeded(newScopesNotice, principal.role(), store) && oauthService != null) {
+                    shopify.put("newPermissions", Map.of("openAppUrl", oauthService.buildAdminAppUrl(store.shopDomain(), null)));
+                }
             }
             // The Traced location in Shopify (2026-10-30): its state (null without a linked main warehouse) and the
             // updates that used up their attempts on it — the card's warning and its owner "Re-send failed updates".

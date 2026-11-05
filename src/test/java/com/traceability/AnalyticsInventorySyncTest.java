@@ -567,8 +567,11 @@ class AnalyticsInventorySyncTest {
         reset(gateway);
         when(gateway.listWebhookSubscriptions(anyString(), anyString())).thenReturn(existing);
         topicsBackfill.runAll();                                                                      // next startup: both added
-        verify(gateway, times(2)).registerWebhook(anyString(), anyString(), anyString(), anyString());
-        assertThat(jdbc.queryForObject("SELECT webhook_topics_version FROM stores WHERE id = ?", Integer.class, t.store)).isEqualTo(1);
+        // 3 = the two inventory topics + app/scopes_update (S1, TOPICS_VERSION 2; the returns / FO topics are deferred
+        // while their scope isn't granted)
+        verify(gateway, times(3)).registerWebhook(anyString(), anyString(), anyString(), anyString());
+        assertThat(jdbc.queryForObject("SELECT webhook_topics_version FROM stores WHERE id = ?", Integer.class, t.store))
+            .isEqualTo(com.traceability.integrations.shopify.RegisterShopifyWebhooksJob.TOPICS_VERSION);
 
         reset(gateway);
         topicsBackfill.runAll();                                                                      // stamped: skipped
