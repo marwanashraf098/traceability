@@ -40,7 +40,9 @@ public class DataSourceConfig {
             @Value("${spring.datasource.hikari.maximum-pool-size:5}") int poolSize,
             @Value("${spring.datasource.hikari.minimum-idle:1}") int minIdle,
             @Value("${spring.datasource.hikari.connection-timeout:5000}") long timeoutMs,
-            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs) {
+            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs,
+            @Value("${traced.datasource.app-socket-timeout-seconds:300}") int socketTimeoutSeconds,
+            @Value("${traced.datasource.keepalive-ms:120000}") long keepaliveMs) {
 
         rejectTransactionPooler(url);
 
@@ -54,6 +56,7 @@ public class DataSourceConfig {
         raw.setConnectionTimeout(timeoutMs);
         raw.setLeakDetectionThreshold(leakDetectionMs);
         raw.setPoolName("app-pool");
+        applyNetworkSafety(raw, socketTimeoutSeconds, keepaliveMs);
         return new TenantAwareDataSource(raw);
     }
 
@@ -73,7 +76,9 @@ public class DataSourceConfig {
             @Value("${spring.flyway.password}") String password,
             @Value("${traced.owner-pool.size:4}") int poolSize,
             @Value("${traced.owner-pool.connection-timeout-ms:3000}") long timeoutMs,
-            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs) {
+            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs,
+            @Value("${traced.owner-pool.socket-timeout-seconds:600}") int socketTimeoutSeconds,
+            @Value("${traced.datasource.keepalive-ms:120000}") long keepaliveMs) {
         HikariDataSource ds = new HikariDataSource();
         ds.setJdbcUrl(url);
         ds.setUsername(user);
@@ -84,7 +89,30 @@ public class DataSourceConfig {
         ds.setConnectionTimeout(timeoutMs);
         ds.setLeakDetectionThreshold(leakDetectionMs);
         ds.setPoolName("owner-pool");
+        applyNetworkSafety(ds, socketTimeoutSeconds, keepaliveMs);
         return ds;
+    }
+
+    /**
+     * Network safety for every pool (2026-11-05, after the 2026-11-04 stall where the pooler dropped ~12 app
+     * connections mid-query). pgjdbc's defaults are socketTimeout=0 (a read on a dead socket waits FOREVER —
+     * the thread and its connection are lost for good) and no TCP keep-alive.
+     * <ul>
+     *   <li>{@code socketTimeout} (seconds): the longest a single read from the DB may block. Not a query
+     *       timeout on the server — it bounds a dead connection. Set above the longest legitimate statement on
+     *       that pool (app 300 s; owner 600 s because Flyway migrations run there; JobRunr's own calls get 60 s
+     *       on top, {@code JobRunrConfig}; watchdog 15 s).</li>
+     *   <li>{@code tcpKeepAlive=true}: the kernel probes an idle-looking connection, so a peer that vanished
+     *       is noticed (timing comes from the container's net.ipv4.tcp_keepalive_* sysctls,
+     *       deploy/docker-compose.yml: first probe after 60 s, dead after ~2 min).</li>
+     *   <li>Hikari {@code keepaliveTime} (0 = off): idle pool connections are pinged so one silently dropped by
+     *       the pooler / NAT is replaced before a request borrows it.</li>
+     * </ul>
+     */
+    public static void applyNetworkSafety(HikariDataSource ds, int socketTimeoutSeconds, long keepaliveMs) {
+        ds.addDataSourceProperty("socketTimeout", String.valueOf(socketTimeoutSeconds));
+        ds.addDataSourceProperty("tcpKeepAlive", "true");
+        if (keepaliveMs > 0) ds.setKeepaliveTime(keepaliveMs);
     }
 
     // Port 6543 = Supabase transaction-mode pooler. SET LOCAL app.current_tenant is

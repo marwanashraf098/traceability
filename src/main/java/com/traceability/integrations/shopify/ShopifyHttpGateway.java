@@ -162,14 +162,38 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private final String clientSecret;
     private final Retry retry;
 
+    /**
+     * Spring's constructor (2026-11-05): explicit HTTP timeouts on the main Admin API client — connect
+     * {@code shopify.http.connect-timeout} (5 s), read {@code shopify.http.read-timeout} (30 s). Before, the
+     * builder's default factory had NO read timeout: a Shopify call that never answered held its JobRunr worker
+     * (and any DB connection / row lock its caller held) forever. Same factory type Spring Boot picks by default
+     * (ClientHttpRequestFactories), only the timeouts added. A timeout is a ResourceAccessException: retried by
+     * the read path's Resilience4j retry (≤ 3 × (connect + read) + 2 s), and classified ambiguous — never
+     * re-sent — by the single-attempt named writes, exactly like any other no-answer.
+     */
     @org.springframework.beans.factory.annotation.Autowired
     ShopifyHttpGateway(
             RestClient.Builder builder,
             ObjectMapper mapper,
             @Value("${shopify.api-version}") String apiVersion,
             @Value("${shopify.client-id}") String clientId,
-            @Value("${shopify.client-secret}") String clientSecret) {
+            @Value("${shopify.client-secret}") String clientSecret,
+            @Value("${shopify.http.connect-timeout:5s}") Duration connectTimeout,
+            @Value("${shopify.http.read-timeout:30s}") Duration readTimeout) {
+        this(builder.requestFactory(timeoutFactory(connectTimeout, readTimeout)), null, mapper, apiVersion,
+             clientId, clientSecret);
+    }
+
+    /** Hand-wired (tests): the builder as given (e.g. with an interceptor), no extra timeouts. */
+    ShopifyHttpGateway(RestClient.Builder builder, ObjectMapper mapper, String apiVersion,
+                       String clientId, String clientSecret) {
         this(builder, null, mapper, apiVersion, clientId, clientSecret);
+    }
+
+    static org.springframework.http.client.ClientHttpRequestFactory timeoutFactory(Duration connect, Duration read) {
+        return org.springframework.boot.web.client.ClientHttpRequestFactories.get(
+            org.springframework.boot.web.client.ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(connect).withReadTimeout(read));
     }
 
     /**

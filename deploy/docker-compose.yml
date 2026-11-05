@@ -17,6 +17,20 @@ services:
         VITE_SCAN_KEY_CAPTURE: "${VITE_SCAN_KEY_CAPTURE:-false}"
     image: traceability-app:latest
     env_file: ../.env
+    environment:
+      # App logs also go to a rolling file (7 days / 500 MB cap, application.yml) on the named volume
+      # below, so they survive container recreation by a deploy. Read them:
+      #   docker compose -f deploy/docker-compose.yml exec app ls -l /app/logs  (host: /var/lib/docker/volumes/deploy_app_logs/_data)
+      TRACED_LOG_FILE: /app/logs/traced.log
+    volumes:
+      - app_logs:/app/logs
+    # TCP keep-alive timing for this container's network namespace (the JDBC pools set tcpKeepAlive=true):
+    # first probe after 60 s idle, every 10 s, dead after 6 misses — a vanished DB peer is noticed in ~2 min
+    # instead of the kernel default 2 h 11 min.
+    sysctls:
+      net.ipv4.tcp_keepalive_time: 60
+      net.ipv4.tcp_keepalive_intvl: 10
+      net.ipv4.tcp_keepalive_probes: 6
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
@@ -56,3 +70,6 @@ services:
 networks:
   internal:
     driver: bridge
+
+volumes:
+  app_logs:

@@ -4,6 +4,65 @@
 
 ## Current state
 
+**JobRunr stall hardening — watchdog, connection timeouts, DST (2026-11-05; branch `fix/jobrunr-watchdog`, merged to main
+2026-11-05, NOT deployed; V205).** After the 2026-10-29 (DST fall-back 23:00 Cairo) and 2026-11-04 11:43 Cairo stalls.
+- **Root cause (JobRunr 7.3.0 OSS):** `ServerZooKeeper.run` catches ANY exception from the heartbeat
+  (`signalBackgroundJobServerAlive` → StorageException on a failed connection / query) and calls
+  `backgroundJobServer.stop()` — one failed heartbeat stops the whole server (zookeepers, steward, workers) for good;
+  `JobHandler.run` does the same after > 5 net task exceptions ("FATAL - JobRunr encountered too many storage
+  exceptions"). Nothing ever starts it again. Web enqueues keep writing jobrunr_jobs rows (JobScheduler writes storage
+  directly), which sit ENQUEUED. Reproduced on a real JobRunr server (JobServerWatchdogEndToEndTest.e1: a few seconds
+  without connections → "An unrecoverable error occurred. Shutting server down...", never recovers by itself).
+  Second hang class: pgjdbc socketTimeout=0 and no TCP keep-alive → a read on a dead socket blocks forever; inside
+  `stop()` that also holds the lifecycle write lock every JobRunr thread needs.
+- **DST:** JobRunr's `CronExpression.next()` converts the next LOCAL time with `atZone()` (earlier offset in an
+  overlap), so in Cairo's repeated hour every minute-based job's next run is an hour in the past → a burst every 5 s
+  poll. The JVM default zone is Africa/Cairo (Dockerfile), so every zone-less cron was Cairo. Fix: all 24 interval /
+  hourly jobs now `zoneId = "UTC"` (incl. demo-tenant-reseed and bosta-settlement-refresh, which were explicit Cairo);
+  the 7 daily wall-clock jobs stay Africa/Cairo. `RecurringJobZonesTest` enforces the rule for every @Recurring.
+  Phase shift: `0 */3` / `17 */3` / `15 */4` jobs now fire on UTC hours (2–3 h shift in Cairo terms); minute-based
+  ones are unchanged in effect (Cairo's offset is whole hours).
+- **Watchdog** (`com.traceability.jobs.watchdog`): own one-thread TaskScheduler, own one-connection read-only pool
+  on the OWNER credentials ("watchdog-pool", statement_timeout 10 s, socketTimeout 15 s; held in a `WatchdogPool`
+  record, not a DataSource bean — kept out of autowiring and health). Every 60 s after a 5 min startup grace:
+  Shopify events unprocessed > 3 min (48 h window, below the retry cap); a `bosta-discovery-poll` job created within
+  max(5 min, 2 × its cron interval + 1 min) or one PROCESSING with a fresh updatedAt; this server's heartbeat < 60 s.
+  Failure → full thread dump (platform threads with JobRunr's first + virtual threads via HotSpotDiagnosticMXBean),
+  ONE HIGH email to `TRACED_WATCHDOG_ALERT_EMAILS` (EmailGateway, 30 s send cap — NOT the tenant exception system:
+  its emails are sent by a JobRunr job), then `stop()` + `start()` (120 s cap). Still failing 5 min after → ONE
+  escalation email + dump. Healthy tick closes the incident. A failed probe acts only on its 2nd consecutive time.
+  Kill switch `TRACED_WATCHDOG_ENABLED=false`. **Last resort (approved, built):** `TRACED_WATCHDOG_EXIT_ON_ESCALATION=true`
+  (default false in code) — at the escalation only, after its alert: final ERROR line + thread dump, then
+  System.exit(1) on its own thread with a 30 s Runtime.halt backstop; compose `restart: unless-stopped` restarts it.
+  **Escape hatch #17 (approved 2026-11-05):** the watchdog pool is read-only AT THE DB
+  (`SET default_transaction_read_only = on` per session) — documented in CLAUDE.md and blueprint §16.1.
+- **Connections:** both pools `socketTimeout` (app 300 s, owner 600 s — Flyway runs there) + `tcpKeepAlive=true` +
+  Hikari keepaliveTime 2 min; JobRunr's StorageProvider borrows through `NetworkTimeoutDataSource` (60 s per
+  connection; Hikari resets it on return). Compose sets the container's net.ipv4.tcp_keepalive_* (60 s / 10 s × 6).
+- **HTTP timeouts:** the main Shopify Admin API RestClient had NO read timeout — now connect 5 s / read 30 s
+  (`shopify.http.*`, Spring constructor only; the hand-wired test constructor is unchanged). SMTP (JavaMail) had none
+  either — now 10 s connect / 20 s read+write. Bosta (v0 5/20 s, v2 5/30 s, create 5/20 s), Shopify token 5/10 s,
+  store check 3 s, bulk download 10 s / 5 min already had them.
+- **Logs:** `TRACED_LOG_FILE` → rolling file (daily + 50 MB, 7 days, 500 MB cap) besides stdout; compose mounts the
+  named volume `app_logs` at /app/logs (host: /var/lib/docker/volumes/deploy_app_logs/_data).
+- **Tests:** JobServerWatchdogTest w1–w6, WatchdogDbProbeTest p1–p5, JobServerWatchdogEndToEndTest e1–e2,
+  RecurringJobZonesTest z1–z3, ShopifyHttpTimeoutTest t1–t2, JobServerResilienceConfigTest r1–r5. Revert-to-confirm
+  RED: restart without start() → e1 e2; no escalation guard → w2; network timeout 0 → r2 r3; Shopify factory removed
+  → r4.
+- **Bosta webhook endpoint (V205):** the enqueue after the committed webhook_events row is now capped at 2 s
+  (`bosta.webhook.enqueue-timeout-ms`, same pattern as Shopify) — a slow / failed enqueue answers 200 and leaves the
+  row 'pending' (before: unguarded on the request thread, a failure answered 500). `BostaWebhookPendingSweeper`
+  (every 5 min UTC) re-enqueues rows pending > 10 min within 48 h, ≤ 3 times, 30-min lease (`sweep_count`,
+  `sweep_enqueued_at`), skipping rows waiting on a rate-limit reschedule; listed on the owner pool, claimed under
+  the tenant (ShopifyWebhookRetrySweeper's shape). Prod evidence (Marawan): Nov 4 stall window stored 3 Bosta rows
+  instead of ~470 and none are stuck pending today — the endpoint mostly failed BEFORE the INSERT (app pool), Bosta
+  redelivered after the restart. Tests BostaWebhookEnqueueAndSweepTest bd1–bd3, sw1–sw3; JobServerWatchdogTest w7,
+  w7b, w8 (exit); JobServerResilienceConfigTest r6 (read-only at the DB). Revert-to-confirm RED: unguarded enqueue →
+  bd1 bd2; no lease → sw1 sw2 sw3; exit not gated → w2 w8; no read-only SET → r6. MigrationSmokeTest 204,
+  NotTracedBackfillTest 149.
+- **Tooling gotcha:** the shell's `grep` function in this environment silently SKIPS files it thinks are binary —
+  e.g. ExceptionImmediateAlertJob.java (a stray non-UTF-8 byte). Use `/usr/bin/grep -a` for code sweeps.
+
 **Finding 2 — Shopify-native exchanges no longer decrement Shopify (2026-11-04; branch
 `fix/shopify-native-exchange-dispatch-skip`, merged to main 2026-11-05, NOT deployed; no migration).** Prod (read-only, 2026-11-03):
 6 exchange_dispatch claims ever, 5 legit (portal / Lookup); BROEK claim for piece 01M4JQ870VCJ9BZGV7D5SB82SA is

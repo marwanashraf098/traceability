@@ -37,7 +37,7 @@ public class PlaceCountIdleCancelJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "place-count-idle-cancel", cron = "25 * * * *")
+    @Recurring(id = "place-count-idle-cancel", cron = "25 * * * *", zoneId = "UTC")
     @Job(name = "Cancel idle place counts")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(

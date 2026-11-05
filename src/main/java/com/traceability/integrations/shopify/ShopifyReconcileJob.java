@@ -69,7 +69,7 @@ public class ShopifyReconcileJob {
         this.tx             = new TransactionTemplate(txm);
     }
 
-    @Recurring(id = "shopify-reconcile", cron = "*/15 * * * *")
+    @Recurring(id = "shopify-reconcile", cron = "*/15 * * * *", zoneId = "UTC")
     @Job(name = "Shopify reconciliation poll")
     public void reconcile() {
         List<Map<String, Object>> stores = ownerJdbc.queryForList(LIST_CONNECTED_STORES);

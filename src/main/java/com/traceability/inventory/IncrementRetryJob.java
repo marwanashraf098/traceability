@@ -38,7 +38,7 @@ public class IncrementRetryJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "shopify-increment-retry", cron = "*/10 * * * *")
+    @Recurring(id = "shopify-increment-retry", cron = "*/10 * * * *", zoneId = "UTC")
     @Job(name = "Shopify increment retry")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(

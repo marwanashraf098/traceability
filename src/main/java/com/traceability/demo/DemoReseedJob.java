@@ -32,7 +32,7 @@ public class DemoReseedJob {
         this.demoSeeder = demoSeeder;
     }
 
-    @Recurring(id = "demo-tenant-reseed", cron = "0 * * * *", zoneId = "Africa/Cairo")
+    @Recurring(id = "demo-tenant-reseed", cron = "0 * * * *", zoneId = "UTC")
     @Job(name = "Demo tenant re-seed")
     public void run() {
         demoSeeder.ensureBootstrapped();

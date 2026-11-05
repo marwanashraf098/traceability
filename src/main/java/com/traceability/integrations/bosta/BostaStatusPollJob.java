@@ -145,7 +145,7 @@ public class BostaStatusPollJob {
     // Setting bosta.poll.status-enabled=false makes pollAll() a no-op WITHOUT removing the
     // bean — keeping the bean present ensures JobRunr's recurring-job registry stays up-to-date
     // and doesn't re-fire stale entries from its own database with a different cron.
-    @Recurring(id = "bosta-status-poll", cron = "*/3 * * * *")
+    @Recurring(id = "bosta-status-poll", cron = "*/3 * * * *", zoneId = "UTC")
     @Job(name = "Bosta status poll")
     public void pollAll() {
         if (!statusEnabled) {

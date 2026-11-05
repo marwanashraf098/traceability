@@ -40,7 +40,7 @@ public class PutAwayIdleCloseJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "put-away-idle-close", cron = "20 * * * *")
+    @Recurring(id = "put-away-idle-close", cron = "20 * * * *", zoneId = "UTC")
     @Job(name = "Close idle put-away sessions")
     public void run() {
         List<UUID> tenants = ownerJdbc.queryForList(

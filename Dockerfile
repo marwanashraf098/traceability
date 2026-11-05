@@ -53,7 +53,9 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 
 COPY --from=jar-build /app/target/*.jar app.jar
-RUN chown appuser:appgroup app.jar
+# /app/logs: the rolling log file (TRACED_LOG_FILE). Owned by appuser so a new named volume mounted here
+# starts with that owner (deploy/docker-compose.yml app_logs).
+RUN chown appuser:appgroup app.jar && mkdir -p /app/logs && chown appuser:appgroup /app/logs
 
 USER appuser
 

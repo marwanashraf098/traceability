@@ -37,7 +37,7 @@ public class MainReconcileJob {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
     }
 
-    @Recurring(id = "main-reconcile-queue", cron = "${traced.main-reconcile.queue-cron:* * * * *}")
+    @Recurring(id = "main-reconcile-queue", cron = "${traced.main-reconcile.queue-cron:* * * * *}", zoneId = "UTC")
     @Job(name = "Main reconcile — queued variants (report-only)")
     public void runQueue() {
         if (!service.enabled()) return;
@@ -53,7 +53,7 @@ public class MainReconcileJob {
         }
     }
 
-    @Recurring(id = "main-reconcile-sweep", cron = "${traced.main-reconcile.sweep-cron:15 */4 * * *}")
+    @Recurring(id = "main-reconcile-sweep", cron = "${traced.main-reconcile.sweep-cron:15 */4 * * *}", zoneId = "UTC")
     @Job(name = "Main reconcile — full sweep (report-only)")
     public void runSweep() {
         purgeOld();

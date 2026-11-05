@@ -70,7 +70,7 @@ public class ShopifyWebhookRetrySweeper {
         this.windowHours = windowHours;
     }
 
-    @Recurring(id = "shopify-webhook-retry", cron = "*/2 * * * *")
+    @Recurring(id = "shopify-webhook-retry", cron = "*/2 * * * *", zoneId = "UTC")
     @Job(name = "Shopify webhook retry sweep")
     public void sweep() {
         List<Map<String, Object>> due = ownerJdbc.queryForList(
