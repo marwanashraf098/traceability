@@ -219,6 +219,9 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/preview", skip("receiving import: variants and receipt lines only, no order data"));
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/apply",   skip("receiving import: variants and receipt lines only, no order data"));
         reg("GET /api/v1/receiving/import/template",                     skip("receiving import: variants and receipt lines only, no order data"));
+        // S1b: one Return To Receive source by its own id (return leg / untracked unit / request item) — a return of a
+        // portal pre-connect order must resolve too (returns MUST include them); never a list of orders.
+        reg("GET /api/v1/receiving/return-source",                       skip("returns: one return source by its own id, portal orders included by design"));
         for (String k : List.of("GET /api/v1/tag-stock", "POST /api/v1/tag-stock/sessions", "GET /api/v1/tag-stock/sessions/{id}",
                 "POST /api/v1/tag-stock/sessions/{id}/print", "POST /api/v1/tag-stock/sessions/{id}/replacement",
                 "POST /api/v1/tag-stock/sessions/{id}/scan", "POST /api/v1/tag-stock/sessions/{id}/end",

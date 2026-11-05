@@ -333,6 +333,8 @@ class RlsCoverageTest {
                     "scoped to session; uses tx.execute()"),
             entry("/api/v1/receiving/variants/search",
                     "search requires ?q= param; empty result is valid"),
+            entry("/api/v1/receiving/return-source",
+                    "S1b: requires ?key=; single source by id — cross-tenant 404 + same-tenant positive control in ShopifyRestockedUnitsTest.d8"),
             entry("/api/v1/pickup-sessions",
                     "uses tx.execute(); empty valid for new tenant"),
             entry("/api/v1/pickup-sessions/{id}",

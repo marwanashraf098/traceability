@@ -5,7 +5,7 @@
 ## Current state
 
 **S1b — restock double-count protection counts Shopify RETURN restocks, for every merchant (2026-11-05; branch
-`feat/s1b-restock-guard`, NOT merged, NOT deployed; migration V212 — F2 takes V211).** Prod evidence: #1006-R1 (store
+`feat/s1b-restock-guard`, merged to main 2026-11-05, NOT deployed; migration V212 — after F2's V211).** Prod evidence: #1006-R1 (store
 marwan) restocked by a processed Shopify return = a RESTOCKED disposition; the V151/V201 guard read refund restock lines
 only, so Traced's inspection +1 (and Back to good, and Receiving of returned untracked units — no guard at all) could
 count the unit twice.
@@ -43,8 +43,9 @@ count the unit twice.
   t3 refund cases unchanged); OrdersTableAccessGuardTest +4 MUST_INCLUDE entries; frontend receivingReturnLink 6.
   Revert-to-confirm: function → refunds only ⇒ d1 d4 d5 d7 d8 b3d t7 RED (d2 d3 d6 g1 green); GREATEST → SUM ⇒ d3 RED
   (2 vs 1); arrival line removed ⇒ d5 RED.
-- **PENDING approval:** MigrationSmokeTest (file count 209 → 210 on this branch) and NotTracedBackfillTest (154 → 155)
-  count gates — existing assertions, not edited. Once F2's V211 lands they move again (+1 each).
+- **Count gates (approved, bumped after F2's V211 merged):** MigrationSmokeTest 211 files (V1–V212), NotTracedBackfillTest
+  156. New endpoint `GET /receiving/return-source` classified in RlsCoverageTest (cross-tenant in d8) and
+  PortalOrderLeakTest (SKIP: one return source by id, portal orders included by design).
 - **Ops (read-only, Marawan runs):** `scripts/ops/2026-11-05-s1b-restock-double-count-candidates.sql` — Traced +1s since
   2026-10-08 on order + variants that now have a RESTOCKED disposition at Main; `double_counted` = candidates for a
   manual Shopify −1. Works before V212 is deployed.
