@@ -352,6 +352,8 @@ class PortalFeesTest {
             .getStatusCode().value()).isEqualTo(200);
         assertThat(putPortalSettings(t, Map.of("exchangesEnabled", true)).getStatusCode().value()).isEqualTo(200);
         stockPiece(t, t.l());
+        // F3 (approved 2026-11-06): free swaps on, so this keeps testing the fee alone (no price difference).
+        jdbc.update("UPDATE tenants SET portal_free_variant_swaps = true WHERE id = ?", t.id());
         setRule(t, "exchange", rule(true, "fixed", 40, null, null, null, true));
         O o = deliveredGeneric(t, "#9601", 1);
         Map<String, Object> lookup = lookup(t, o);

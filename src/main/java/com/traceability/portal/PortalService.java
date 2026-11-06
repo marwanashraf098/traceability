@@ -333,6 +333,17 @@ public class PortalService {
                 fees.put("exchange", exchangeFee);
                 body.put("fees", fees);
             }
+            // F3: present only when this order can be exchanged AND a price difference can apply (a different product
+            // allowed, or free variant swaps off). Then each same-product option also carries its current price — the
+            // difference itself comes from POST /quote (it needs the price paid).
+            PortalAmounts.ExchangePricing pricing = orderExchanges ? PortalAmounts.exchangePricing(jdbc, tenantId) : null;
+            if (pricing != null && pricing.active()) {
+                Map<String, Object> ep = new LinkedHashMap<>();
+                ep.put("anyProduct", pricing.anyProduct());
+                ep.put("freeVariantSwaps", pricing.freeSwaps());
+                body.put("exchangePricing", ep);
+                addOptionPrices(tenantId, lines);
+            }
         }
         return new Attempt(new LookupResult(Outcome.SUCCESS, body), false, raw, stripped, orderKey, ipHash);
     }
@@ -717,13 +728,114 @@ public class PortalService {
             area = d.isPresent() ? new String[]{offer.get().cityId(), d.get().id()}
                                  : pickupAreas.storedDeliveryArea(tenantId, orderId);
         }
-        Optional<PortalAmounts.Terms> terms = PortalAmounts.terms(jdbc, tenantId, feeKind(req), area[0], area[1]);
-        if (terms.isEmpty()) return Map.of("applies", false);
+        Swap swap = req.exchange() ? swapOf(tenantId, items.get(0).variantId(), req.replacementVariantId()) : null;
+        if (req.exchange() && swap == null) throw new InvalidSubmission();
+        Priced priced = price(tenantId, feeKind(req), items, area, swap);
+        if (priced == null) return Map.of("applies", false);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("applies", true);
-        body.putAll(PortalAmounts.calculate(terms.get(), PortalAmounts.merchantFaultReasons(jdbc, tenantId), items)
-            .toPortalJson());
+        body.putAll(priced.quote().toPortalJson());
+        // F3: why this exchange can't be sent as quoted (absent when it can).
+        if (priced.block() != null) body.put("blocked", priced.block());
         return body;
+    }
+
+    public enum CatalogueOutcome { OK, UNAUTHORIZED, INVALID }
+
+    public record CatalogueResult(CatalogueOutcome outcome, Map<String, Object> body) {}
+
+    /**
+     * Returns portal fees F3 — GET /api/v1/portal/{slug}/catalogue?variantId=…|orderItemId=…[&q=…]: what the token's order
+     * line can be exchanged for when the store allows a different product (ExchangeCatalogue). Empty (404) when fees
+     * are off or the store / order doesn't allow it. {blocked: approximate_price} when only today's catalogue price is
+     * known for the item (a different product needs the price actually paid — same-product swaps stay open).
+     * The paid price may need a live Shopify read: resolved with NO transaction open.
+     */
+    public Optional<CatalogueResult> catalogue(String slug, String bearerToken, UUID variantId, UUID orderItemId, String query) {
+        if (!feesOn) return Optional.empty();
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
+        if (claims.isEmpty()) return Optional.of(new CatalogueResult(CatalogueOutcome.UNAUTHORIZED, null));
+        UUID orderId = claims.get().orderId();
+        // The line's variant on this order, and whether this order may be exchanged for another product.
+        Object[] line = TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            if (!exchangesForOrder(tenantId, orderId) || !PortalAmounts.exchangePricing(jdbc, tenantId).anyProduct()) return null;
+            UUID v = orderItemId != null ? untrackedLineVariant(tenantId, orderId, orderItemId)
+                : variantId != null && Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM order_items WHERE order_id = ? AND tenant_id = ? AND variant_id = ?)",
+                    Boolean.class, orderId, tenantId, variantId)) ? variantId : null;
+            return new Object[]{v};
+        }));
+        if (line == null) return Optional.empty();
+        if (line[0] == null) return Optional.of(new CatalogueResult(CatalogueOutcome.INVALID, null));
+        UUID original = (UUID) line[0];
+        PortalAmounts.Item paid = PortalAmounts.Prices.of(paidPrices.resolve(tenantId, orderId))
+            .item("0", original, orderItemId, null);
+        if (paid.unitPrice() == null || !("stored".equals(paid.priceSource()) || "shopify".equals(paid.priceSource()))) {
+            return Optional.of(new CatalogueResult(CatalogueOutcome.OK, Map.of("blocked", "approximate_price")));
+        }
+        List<Map<String, Object>> products = TenantContext.runAs(tenantId, () -> tx.execute(s ->
+            new ExchangeCatalogue(jdbc).list(tenantId, original, paid.unitPrice(),
+                PortalAmounts.exchangePricing(jdbc, tenantId), query)));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("paidPrice", paid.unitPrice().toPlainString());
+        body.put("products", products);
+        return Optional.of(new CatalogueResult(CatalogueOutcome.OK, body));
+    }
+
+    /** F3 — each exchange option of each line gets its variant's current price ("price", null when unpriced). */
+    @SuppressWarnings("unchecked")
+    private void addOptionPrices(UUID tenantId, List<Map<String, Object>> lines) {
+        Map<String, java.math.BigDecimal> price = new HashMap<>();
+        jdbc.query("SELECT v.id, v.price FROM variants v WHERE v.tenant_id = ?",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs ->
+                price.put(rs.getString("id"), rs.getBigDecimal("price")), tenantId);
+        for (Map<String, Object> line : lines) {
+            Object opts = line.get("exchangeOptions");
+            if (!(opts instanceof List<?> list)) continue;
+            for (Object o : list) {
+                if (!(o instanceof Map<?, ?>)) continue;
+                Map<String, Object> m = (Map<String, Object>) o;
+                java.math.BigDecimal p = price.get(String.valueOf(m.get("variantId")));
+                m.put("price", p == null ? null : p.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+            }
+        }
+    }
+
+    /** F3 — what an exchange swaps: same product or not, and the replacement's current price (null = unpriced). */
+    private record Swap(UUID original, UUID replacement, boolean sameProduct, java.math.BigDecimal replacementPrice) {}
+
+    /** F3 — null when the replacement isn't one of the tenant's variants. */
+    private Swap swapOf(UUID tenantId, UUID originalVariant, UUID replacement) {
+        if (originalVariant == null || replacement == null) return null;
+        return jdbc.query(
+            "SELECT r.product_id = o.product_id AS same, r.price FROM variants r JOIN variants o ON o.tenant_id = r.tenant_id " +
+            "WHERE r.id = ? AND o.id = ? AND r.tenant_id = ?",
+            (rs, i) -> new Swap(originalVariant, replacement, rs.getBoolean("same"), rs.getBigDecimal("price")),
+            replacement, originalVariant, tenantId).stream().findFirst().orElse(null);
+    }
+
+    /** F3 — a priced submission: the quote, and why an exchange can't be sent as quoted (null = it can). */
+    private record Priced(PortalAmounts.Quote quote, String block) {}
+
+    /**
+     * F2 + F3 — prices a submission through THE calculator, or null when nothing applies (no fee rule on and no price
+     * difference): a refund by its fee rule; an exchange by its fee rule AND, when it applies (a different product, or
+     * the same product while free variant swaps are off), the price difference — then the exchange blocks are checked.
+     */
+    private Priced price(UUID tenantId, String kind, List<PortalAmounts.Item> items, String[] area, Swap swap) {
+        Optional<PortalAmounts.Terms> terms = PortalAmounts.terms(jdbc, tenantId, kind, area[0], area[1]);
+        java.util.Set<String> fault = PortalAmounts.merchantFaultReasons(jdbc, tenantId);
+        if (swap == null) {
+            return terms.map(t -> new Priced(PortalAmounts.calculate(kind, t, fault, items, null), null)).orElse(null);
+        }
+        PortalAmounts.ExchangePricing pricing = PortalAmounts.exchangePricing(jdbc, tenantId);
+        PortalAmounts.Difference diff = pricing.differenceApplies(swap.sameProduct()) && swap.replacementPrice() != null
+            ? new PortalAmounts.Difference(items.get(0).unitPrice(), swap.replacementPrice()) : null;
+        if (terms.isEmpty() && diff == null) return null;
+        PortalAmounts.Quote q = PortalAmounts.calculate("exchange", terms.orElse(null), fault, items, diff);
+        return new Priced(q, PortalAmounts.exchangeBlock(pricing, swap.sameProduct(), q));
     }
 
     /** F2 — the fee kind of a submission (or quote): exchange when it asks for one, else refund. */
@@ -737,8 +849,10 @@ public class PortalService {
      */
     private PortalAmounts.Prices feePrices(UUID tenantId, UUID orderId, SubmitRequest req) {
         if (!feesOn || req == null) return null;
+        // F3: an exchange is also priced when a price difference can apply (any product, or free swaps off).
         Boolean on = TenantContext.runAs(tenantId,
-            () -> tx.execute(s -> PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))));
+            () -> tx.execute(s -> PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))
+                || req.exchange() && PortalAmounts.exchangePricing(jdbc, tenantId).active()));
         if (!Boolean.TRUE.equals(on)) return null;
         return PortalAmounts.Prices.of(paidPrices.resolve(tenantId, orderId));
     }
@@ -834,7 +948,22 @@ public class PortalService {
         // P2: the refund method — asked (and then required) only when the store offers methods and
         // this is a refund, or an exchange the customer is happy to have refunded instead. Re-checked
         // against the tenant's methods NOW; anything sent when it wasn't asked is refused.
-        RefundDetails refund = refundChoice(tenantId, req, replacement != null);
+        // Returns portal fees F2 / F3: priced through THE calculator now (the quote the customer saw); an exchange the
+        // pricing refuses (approximate price for another product, a cap, the COD limit) is the generic invalid 400.
+        Priced priced = null;
+        if (prices != null) {
+            List<PortalAmounts.Item> feeItems = new ArrayList<>();
+            for (int i = 0; i < items.size(); i++) {
+                Object[] it = items.get(i);
+                feeItems.add(prices.item(String.valueOf(i), (UUID) it[1], (UUID) it[3], (String) it[2]));
+            }
+            Swap swap = replacement == null ? null : swapOf(tenantId, (UUID) items.get(0)[1], replacement);
+            priced = price(tenantId, feeKind(req), feeItems, feeArea(tenantId, orderId, generic, offer, district), swap);
+            if (priced != null && priced.block() != null) throw new InvalidSubmission();
+        }
+        // F3: an exchange that leaves the customer owed money asks how to pay them back (the store's methods).
+        boolean owed = priced != null && priced.quote().customerOwed().signum() > 0;
+        RefundDetails refund = refundChoice(tenantId, req, replacement != null, owed);
 
         // Step 5b: exchanges always wait for the merchant — auto-approve applies to refunds only.
         boolean autoApprove = replacement == null && Boolean.TRUE.equals(jdbc.queryForObject(
@@ -869,23 +998,18 @@ public class PortalService {
             refund == null ? null : refund.hint());
         // P3: a line's photos attach to the request + the line's FIRST item row.
         Map<SubmitLine, UUID> firstItem = new IdentityHashMap<>();
-        List<PortalAmounts.Item> feeItems = new ArrayList<>();
+        List<String> itemIds = new ArrayList<>();
         for (Object[] it : items) {
             UUID itemId = jdbc.queryForObject(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
                 "    replacement_variant_id, order_item_id, unit_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 UUID.class, tenantId, requestId, it[0], it[1], it[2], replacement, it[3], it[4]);
             firstItem.putIfAbsent((SubmitLine) it[5], itemId);
-            if (prices != null) feeItems.add(prices.item(itemId.toString(), (UUID) it[1], (UUID) it[3], (String) it[2]));
+            itemIds.add(itemId.toString());
         }
         // Returns portal fees F2: the amounts are frozen now, with this submission — settings changed later never
         // rewrite them. Only when the kind's rule is (still) on; no rule = no row = exactly as before.
-        if (prices != null) {
-            String[] area = feeArea(tenantId, orderId, generic, offer, district);
-            PortalAmounts.terms(jdbc, tenantId, feeKind(req), area[0], area[1]).ifPresent(terms ->
-                PortalAmounts.freeze(jdbc, tenantId, requestId,
-                    PortalAmounts.calculate(terms, PortalAmounts.merchantFaultReasons(jdbc, tenantId), feeItems)));
-        }
+        if (priced != null) PortalAmounts.freeze(jdbc, tenantId, requestId, priced.quote().rekey(itemIds));
         ReturnPhotos photos = new ReturnPhotos(jdbc);
         for (SubmitLine line : req.lines()) {
             List<UUID> ids = line.photos();
@@ -922,10 +1046,10 @@ public class PortalService {
      * method must be one the tenant offers right now and its details must pass RefundDetails.
      * A method sent when it isn't asked is refused (never store details we didn't ask for).
      */
-    private RefundDetails refundChoice(UUID tenantId, SubmitRequest req, boolean exchange) {
+    private RefundDetails refundChoice(UUID tenantId, SubmitRequest req, boolean exchange, boolean owed) {
         List<String> offered = PortalSettingsService.textArray(jdbc.queryForObject(
             "SELECT portal_refund_methods FROM tenants WHERE id = ?", Object.class, tenantId));
-        boolean asked = !offered.isEmpty() && (!exchange || Boolean.TRUE.equals(req.refundFallbackOk()));
+        boolean asked = !offered.isEmpty() && (!exchange || Boolean.TRUE.equals(req.refundFallbackOk()) || owed);
         if (!asked) {
             if (req.refundMethod() != null || req.refundDetails() != null) throw new InvalidSubmission();
             return null;
@@ -1000,7 +1124,15 @@ public class PortalService {
             "               WHERE r.id = ? AND o.id = ? AND r.tenant_id = ? AND o.tenant_id = ? " +
             "                 AND p.status = 'active')",
             Boolean.class, replacement, lineVariant, tenantId, tenantId);
-        if (!Boolean.TRUE.equals(sameProduct)) throw new InvalidSubmission();
+        // F3: another product only when fees are on and the store allows it — an ACTIVE product, a priced variant.
+        // (The price paid is checked by the pricing: only an approximate price → refused.)
+        if (!Boolean.TRUE.equals(sameProduct) && !(feesOn && PortalAmounts.exchangePricing(jdbc, tenantId).anyProduct()
+                && Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM variants r JOIN products p ON p.id = r.product_id AND p.tenant_id = r.tenant_id " +
+                    "               WHERE r.id = ? AND r.tenant_id = ? AND p.status = 'active' AND r.price IS NOT NULL)",
+                    Boolean.class, replacement, tenantId)))) {
+            throw new InvalidSubmission();
+        }
         com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
         if (stock.forVariant(stock.computeAll(), replacement).available() <= 0) throw new InvalidSubmission();
         return replacement;

@@ -2250,7 +2250,12 @@
         "failed": "Couldn't update the fee. Try again.",
         "feeInvalid": "Enter a whole amount from 0 to 30,000.",
         "suggestionParts": "items {{items}} − fee {{fee}}",
-        "waivedShort": "waived"
+        "waivedShort": "waived",
+        "titleExchangePrice": "Exchange price",
+        "paidPrice": "Price paid",
+        "newPrice": "New item",
+        "priceDifference": "Price difference",
+        "owed": "Owed to the customer: {{amount}}. Record the payment once the old item is back."
       }
     }
   },

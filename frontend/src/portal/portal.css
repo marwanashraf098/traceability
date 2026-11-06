@@ -508,3 +508,5 @@ img.pp-thumb--muted { opacity: 0.6; }
 /* Returns portal fees F2 — the fee summary on the review step. */
 .pp-fee__row { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; padding: 4px 0; }
 .pp-fee__total { font-weight: 600; border-top: 1px solid #E4E7EC; margin-top: 4px; padding-top: 8px; }
+/* Returns portal fees F3 — "Or choose a different product". */
+.pp-search { margin: 4px 0 8px; }

@@ -1,7 +1,7 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  BUSY_DEFAULT_SECONDS, getConfig, getDistricts, lookup, quote, submit, ExchangeOption, FeeQuote, LookupLine, LookupResult,
+  BUSY_DEFAULT_SECONDS, getCatalogue, getConfig, getDistricts, lookup, quote, submit, CatalogueAnswer, ExchangeOption, FeeQuote, LookupLine, LookupResult,
   PickupDistrict, PortalConfig, SubmitBody, SubmitResult,
 } from './api'
 import { palette } from './brand'
@@ -197,6 +197,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [exchangeReason, setExchangeReason] = useState('')
   const [exchangeValues, setExchangeValues] = useState<string[]>([])
   const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
+  // F3 — a replacement from ANOTHER product (the catalogue), when the store allows it; null = none chosen.
+  const [otherTarget, setOtherTarget] = useState<OtherTarget | null>(null)
   const [fallbackOk, setFallbackOk] = useState(true)
 
   // P3 — photos per line (keyed by lineKey), uploaded as soon as they're picked.
@@ -303,6 +305,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       setExchangeLineId(null)
       setExchangeReason('')
       setExchangeTargetId(null)
+      setOtherTarget(null)
       setFallbackOk(true)
       setAreaId(res.data.pickup?.preselectedDistrictId ?? '')
       setAddressSource('order')
@@ -361,7 +364,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   // P2: the refund-method step — asked when the store offers methods AND this is a refund, or an
   // exchange the customer is happy to have refunded instead. Then it's required (the backend agrees).
   const offeredRefundMethods = (config?.refundMethods ?? []).filter(isRefundMethod)
-  const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || fallbackOk)
+  // F2 / F3 — the latest quote (declared here: an exchange that leaves the customer owed money asks how to pay them).
+  const [feeQuote, setFeeQuote] = useState<{ key: string; quote: FeeQuote | null } | null>(null)
+  const replacementId = exchangeTarget?.variantId ?? otherTarget?.variantId ?? null
+  const owedNow = exchangeMode && Number(feeQuote?.quote?.customerOwed ?? 0) > 0
+  const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || fallbackOk || owedNow)
   const chosenRefund = refundMethod && offeredRefundMethods.includes(refundMethod) ? refundMethod : null
   const refundFieldErrors = chosenRefund ? refundErrors(chosenRefund, refundFields) : {}
   const afterChoice: Step = refundAsked ? 'refund' : 'details'
@@ -453,6 +460,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setExchangeLineId(lineKey(line))
     setExchangeValues(initialValues(line))
     setExchangeTargetId(null)
+    setOtherTarget(null)
   }
 
   function pickValue(axis: number, value: string) {
@@ -462,6 +470,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setExchangeValues(next)
     const option = findOption(exchangeLine, next)
     setExchangeTargetId(option && option.inStock ? option.variantId : null)
+    setOtherTarget(null)
   }
 
   // ── P3 ────────────────────────────────────────────────────────────────────
@@ -515,12 +524,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   // Returns portal fees F2 — the items / mode / area part of the submission (no email, note, street or refund
   // details): what the fee depends on. Sent to /quote on the review step, and the base of the real submission.
   function choiceBody(): SubmitBody {
-    const linesPart: SubmitBody = exchangeMode && exchangeLine && exchangeTarget
+    const linesPart: SubmitBody = exchangeMode && exchangeLine && replacementId
       ? {
           mode: 'exchange' as const,
           lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason,
             ...(donePhotoIds(lineKey(exchangeLine)).length ? { photoIds: donePhotoIds(lineKey(exchangeLine)) } : {}) }],
-          replacementVariantId: exchangeTarget.variantId,
+          replacementVariantId: replacementId,
           refundFallbackOk: fallbackOk,
         }
       : {
@@ -532,9 +541,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     return linesPart
   }
 
-  const feeApplies = !!order?.fees && (exchangeMode ? order.fees.exchange : order.fees.refund)
-  const [feeQuote, setFeeQuote] = useState<{ key: string; quote: FeeQuote | null } | null>(null)
-  const quoteBody: SubmitBody | null = step === 'details' && feeApplies && order
+  const feeApplies = !!order && (exchangeMode ? !!order.fees?.exchange || !!order.exchangePricing : !!order.fees?.refund)
+  const quoteBody: SubmitBody | null = (step === 'details' || step === 'refund') && feeApplies && order
     ? { ...choiceBody(), ...(customChosen
         ? (customCityId ? { addressSource: 'custom' as const, cityId: customCityId, ...(customArea ? { districtId: customArea } : {}) } : {})
         : pickup && chosenArea ? { districtId: chosenArea } : {}) }
@@ -729,7 +737,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         header={header(() => setStep('items'))}
         footer={(
           <div className="pp-bar">
-            <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!exchangeTarget}
+            <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!replacementId}
               onClick={() => setStep(afterChoice)}>
               {t('p2.continue')}
             </button>
@@ -753,13 +761,33 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           </div>
         </section>
         <VariantPicker line={exchangeLine} values={exchangeValues} targetId={exchangeTargetId}
-          onPickValue={pickValue} onPickOption={o => setExchangeTargetId(o.variantId)} />
+          onPickValue={pickValue} onPickOption={o => { setExchangeTargetId(o.variantId); setOtherTarget(null) }} />
         {exchangeTarget && (
           <section className="pp-card" data-testid="exchange-summary">
             <div className="pp-item__title pp-item__title--sm">
               <bdi>{exchangeLine.productTitle} · {optionLabel(exchangeTarget.options, exchangeTarget.title)}</bdi>
             </div>
-            <div className="pp-success-text pp-small">{t('x2.inStockSamePrice')}</div>
+            {/* F3: "same price" is promised only while same-product swaps are free (today's copy). */}
+            {!order.exchangePricing || order.exchangePricing.freeVariantSwaps ? (
+              <div className="pp-success-text pp-small">{t('x2.inStockSamePrice')}</div>
+            ) : (
+              <div className="pp-success-text pp-small" data-testid="exchange-summary-price">
+                {exchangeTarget.price != null ? t('x2.inStockPrice', { price: portalMoney(exchangeTarget.price, lang) }) : t('x2.inStock')}
+                {' · '}{t('x2.differenceLater')}
+              </div>
+            )}
+          </section>
+        )}
+        {order.exchangePricing?.anyProduct && slug && (
+          <OtherProducts slug={slug} token={order.token} line={exchangeLine} lang={lang} selectedId={otherTarget?.variantId ?? null}
+            onPick={target => { setOtherTarget(target); setExchangeTargetId(null) }} />
+        )}
+        {otherTarget && (
+          <section className="pp-card" data-testid="exchange-summary-other">
+            <div className="pp-item__title pp-item__title--sm"><bdi>{otherTarget.productTitle} · {otherTarget.title}</bdi></div>
+            <div className="pp-success-text pp-small">
+              {t('x2.inStockPrice', { price: portalMoney(otherTarget.price, lang) })}{' · '}{t('x2.differenceLater')}
+            </div>
           </section>
         )}
         <label className="pp-check">
@@ -899,8 +927,15 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       >
         <div className="pp-stephead">
           <div className="pp-eyebrow">{stepLabel(exchangeMode ? 3 : 2)}</div>
-          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t(exchangeMode ? 'rf.titleFallback' : 'rf.title')}</h1>
-          <p className="pp-lead">{t(exchangeMode ? 'rf.leadFallback' : 'rf.lead', { store })}</p>
+          {/* F3: an exchange that leaves the customer owed money asks how to pay them back. */}
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>
+            {t(owedNow ? 'rf.titleOwed' : exchangeMode ? 'rf.titleFallback' : 'rf.title')}
+          </h1>
+          <p className="pp-lead">
+            {owedNow
+              ? t('rf.leadOwed', { store, amount: portalMoney(feeQuote?.quote?.customerOwed ?? '0', lang) })
+              : t(exchangeMode ? 'rf.leadFallback' : 'rf.lead', { store })}
+          </p>
         </div>
         <fieldset className="pp-methods" data-testid="refund-methods">
           <legend className="pp-visually-hidden">{t('rf.legend')}</legend>
@@ -970,7 +1005,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('p3.title')}</h1>
         </div>
 
-        {exchangeMode && exchangeLine && exchangeTarget ? (
+        {exchangeMode && exchangeLine && replacementId ? (
           <section className="pp-card">
             <div className="pp-card__head">
               <div className="pp-eyebrow">{t('x3.exchanging')}</div>
@@ -981,7 +1016,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               <div className="pp-item__text">
                 <div className="pp-item__title pp-item__title--sm">
                   <bdi>{exchangeLine.productTitle} · {optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle)}</bdi>
-                  {' → '}<bdi>{optionLabel(exchangeTarget.options, exchangeTarget.title)}</bdi>
+                  {' → '}<bdi>{exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
+                    : `${otherTarget?.productTitle ?? ''} · ${otherTarget?.title ?? ''}`}</bdi>
                 </div>
                 <div className="pp-item__sub">{t(`reasons.${exchangeReason}`)}</div>
               </div>
@@ -1185,7 +1221,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           </div>
         )}
 
-        <button type="button" className="pp-btn pp-btn--primary" disabled={sending || addressMissing} aria-busy={sending} onClick={send}>
+        <button type="button" className="pp-btn pp-btn--primary" disabled={sending || addressMissing || !!shownQuote?.blocked}
+          aria-busy={sending} onClick={send}>
           {sending ? t('p3.sending') : t('p3.send')}
         </button>
 
@@ -1204,10 +1241,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           email={sentEmail}
           pickupBooking={config.pickupBooking && otherCourier == null}
           otherCourier={otherCourier != null}
-          exchange={exchangeMode && exchangeLine && exchangeTarget ? {
+          exchange={exchangeMode && exchangeLine && replacementId ? {
             product: exchangeLine.productTitle,
             from: optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle),
-            to: optionLabel(exchangeTarget.options, exchangeTarget.title),
+            to: exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
+              : `${otherTarget?.productTitle ?? ''} · ${otherTarget?.title ?? ''}`,
           } : null}
         />
       </Shell>
@@ -1309,12 +1347,42 @@ export default function PortalApp({ slug }: { slug: string | null }) {
  */
 function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
   const { t } = useTranslation()
-  const money = (v: string | null) => {
-    const n = Number(v ?? 0)
-    return t('fees.money', { amount: n.toLocaleString(lang === 'ar' ? 'ar-EG-u-nu-latn' : 'en-EG',
-      { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }) })
-  }
+  const money = (v: string | null | undefined) => portalMoney(v ?? '0', lang)
   const refund = q.kind === 'refund'
+  // F3: an exchange priced by its difference — paid vs new price; the customer pays or gets back the net.
+  const diff = !refund && q.priceDifference != null ? Number(q.priceDifference) : null
+  const owed = Number(q.customerOwed ?? 0)
+  if (!refund && diff != null) {
+    return (
+      <section className="pp-card" data-testid="fee-summary" aria-labelledby="pp-fee-title">
+        <div className="pp-eyebrow" id="pp-fee-title">{t('fees.exchangePriceTitle')}</div>
+        <div className="pp-fee__row">
+          <span>{t('fees.priceDifference')}</span>
+          <span dir="ltr" data-testid="fee-difference">
+            {diff > 0 ? `+ ${money(String(diff))}` : diff < 0 ? `− ${money(String(-diff))}` : money('0')}
+          </span>
+        </div>
+        {(q.mode != null || Number(q.fee) > 0) && (
+          <div className="pp-fee__row">
+            <span>{t('fees.exchangeFee')}</span>
+            <span dir="ltr" data-testid="fee-amount">{q.feeWaived ? t('fees.waived') : money(q.fee)}</span>
+          </div>
+        )}
+        <div className="pp-fee__row pp-fee__total">
+          <span>{Number(q.collect ?? 0) > 0 ? t('fees.youPay') : owed > 0 ? t('fees.youGetBack') : t('fees.nothingToPay')}</span>
+          <span dir="ltr" data-testid={owed > 0 ? 'fee-owed' : 'fee-collect'}>{money(owed > 0 ? q.customerOwed : q.collect)}</span>
+        </div>
+        {Number(q.collect ?? 0) > 0 && <p className="pp-item__sub">{t('fees.exchangePayNote')}</p>}
+        {owed > 0 && <p className="pp-item__sub">{t('fees.owedNote')}</p>}
+        {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
+        {q.blocked && (
+          <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">
+            <p>{t(`fees.blocked.${q.blocked}`)}</p>
+          </div>
+        )}
+      </section>
+    )
+  }
   return (
     <section className="pp-card" data-testid="fee-summary" aria-labelledby="pp-fee-title">
       <div className="pp-eyebrow" id="pp-fee-title">{t(refund ? 'fees.refundTitle' : 'fees.exchangeTitle')}</div>
@@ -1342,6 +1410,97 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       {refund && q.nothingOwed && <p className="pp-item__sub" data-testid="fee-nothing-owed">{t('fees.nothingOwed')}</p>}
       {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub">{t('fees.exchangePayNote')}</p>}
       {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
+      {q.blocked && (
+        <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">
+          <p>{t(`fees.blocked.${q.blocked}`)}</p>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** EGP with Latin digits (as everywhere in the portal); whole pounds without decimals. */
+function portalMoney(v: string, lang: PortalLang): string {
+  const n = Number(v)
+  return i18nMoney(n.toLocaleString(lang === 'ar' ? 'ar-EG-u-nu-latn' : 'en-EG',
+    { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }), lang)
+}
+
+function i18nMoney(amount: string, lang: PortalLang): string {
+  return lang === 'ar' ? `${amount} ج.م` : `EGP ${amount}`
+}
+
+/** F3 — the replacement chosen from another product. */
+interface OtherTarget { variantId: string; productTitle: string; title: string; price: string }
+
+/**
+ * F3 — "Or choose a different product": loads the catalogue for this line on demand (GET /catalogue), with a title
+ * search; each in-stock variant is a choice showing its price. Only today's catalogue price known for the item →
+ * the store can't price another product, so only other sizes / colours are offered (the section says so).
+ */
+function OtherProducts({ slug, token, line, lang, selectedId, onPick }: {
+  slug: string; token: string; line: LookupLine; lang: PortalLang; selectedId: string | null
+  onPick: (target: OtherTarget) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [answer, setAnswer] = useState<{ q: string; data: CatalogueAnswer } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const ref = line.orderItemId ? { orderItemId: line.orderItemId } : { variantId: line.variantId }
+
+  async function load(q: string) {
+    setLoading(true)
+    const data = await getCatalogue(slug, token, ref, q || undefined)
+    setAnswer({ q, data })
+    setLoading(false)
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="pp-btn pp-btn--secondary pp-btn--block" data-testid="other-products-open"
+        onClick={() => { setOpen(true); void load('') }}>
+        {t('x2.otherProduct')}
+      </button>
+    )
+  }
+  const data = answer?.data
+  return (
+    <section className="pp-card" data-testid="other-products" aria-labelledby="pp-other-title">
+      <div className="pp-eyebrow" id="pp-other-title">{t('x2.otherProductTitle')}</div>
+      {data && 'blocked' in data ? (
+        <p className="pp-item__sub" data-testid="other-products-blocked">{t('x2.otherProductBlocked')}</p>
+      ) : (
+        <>
+          <form className="pp-search" role="search" onSubmit={e => { e.preventDefault(); void load(query.trim()) }}>
+            <label htmlFor="pp-other-q" className="pp-visually-hidden">{t('x2.search')}</label>
+            <input id="pp-other-q" className="pp-input" type="search" dir="auto" placeholder={t('x2.search')}
+              value={query} onChange={e => setQuery(e.target.value)} />
+          </form>
+          {loading && <p className="pp-item__sub">{t('x2.loading')}</p>}
+          {!loading && data === null && <p className="pp-item__sub">{t('x2.otherProductUnavailable')}</p>}
+          {!loading && data && 'products' in data && data.products.length === 0 && (
+            <p className="pp-item__sub">{t('x2.noProducts')}</p>
+          )}
+          {!loading && data && 'products' in data && data.products.map(p => (
+            <fieldset key={p.productId} className="pp-fieldset" data-testid="other-product">
+              <legend className="pp-item__head">
+                <Thumb src={p.imageUrl} small />
+                <span className="pp-item__title pp-item__title--sm"><bdi>{p.title}</bdi></span>
+              </legend>
+              <div className="pp-chips">
+                {p.variants.map(v => (
+                  <label key={v.variantId} className={'pp-chip' + (selectedId === v.variantId ? ' pp-chip--selected' : '')}>
+                    <input type="radio" name="pp-other-variant" checked={selectedId === v.variantId}
+                      onChange={() => onPick({ variantId: v.variantId, productTitle: p.title, title: v.title, price: v.price })} />
+                    <span><bdi>{v.title}</bdi> · <span dir="ltr">{portalMoney(v.price, lang)}</span></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </>
+      )}
     </section>
   )
 }

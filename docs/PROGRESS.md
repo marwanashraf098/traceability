@@ -4,6 +4,44 @@
 
 ## Current state
 
+**Returns portal fees F3 — exchange to a different product + price difference (2026-11-05; branch `feat/portal-fees-f3`
+rebased on main fbea5414 (S1b's V212 merged), NOT merged, NOT deployed; V213 — check main AND ask Marawan about prod
+before merge).** Behind
+`traced.portal-fees.settings-enabled` (off in prod): off = byte-identical (PortalExchangePricingOffGoldenTest).
+- **Calculator (`PortalAmounts`, still the ONE):** `calculate(kind, terms|null, fault, items, Difference|null)` — an
+  exchange's difference = replacement's current `variants.price` − price paid (F0); net = difference + fee → `collect`
+  = max(net, 0) / `customerOwed` = max(−net, 0) (`split`, shared with the override). Applies when the replacement is
+  another product, or the same product while `portal_free_variant_swaps` is off (`ExchangePricing.differenceApplies`).
+  `exchangeBlock`: approximate paid price (catalogue / none) blocks ANOTHER product only; "same price or lower only";
+  max difference; Bosta's COD limit 30,000. Frozen when a fee rule is on OR a difference applies.
+- **Portal:** lookup `exchangePricing {anyProduct, freeVariantSwaps}` (only when the order can be exchanged and a
+  difference can apply) + `price` on same-product options; free swaps OFF → no "same price" copy, the size shows its
+  price. `GET /portal/{slug}/catalogue?variantId|orderItemId[&q]` (`ExchangeCatalogue`, token-gated, 404 unless fees on
+  + any product on): other ACTIVE products' in-stock priced variants with image, price and difference, caps applied;
+  `{blocked: approximate_price}` when only the catalogue price is known (resolved with no transaction open). The quote
+  carries priceDifference / customerOwed / blocked; Send disabled when blocked. Owed → the store's refund method is
+  asked ("How should we pay you back?"), and submit requires it. EN + AR.
+- **Submit:** `validExchange` allows another product only with fees on + any product on + an ACTIVE priced variant;
+  priced before the refund-method check; a blocked exchange is the generic 400.
+- **Merchant:** drawer shows paid / new price / difference, "The customer owes … collect it yourself" (COD 0 until F4)
+  or "Owed to the customer"; an owed exchange records the payment in `return_refunds` once received / exchanged
+  (`OWED_PAYABLE`; suggestion = owed, source frozen; never `refunded` — it ends `exchanged`). Override recomputes
+  collect / owed from the frozen difference.
+- **Switched-to-refund fixed:** `RequestAmounts.recalculateAsRefund` (before the approval, still 'requested') —
+  refund rule in the request's area, frozen paid prices, difference cleared, event `amounts_recalculated`. V213 grants
+  app_user UPDATE on fee_kind / fee_rule_snapshot / lines / price_difference / replacement_unit_price /
+  fee_effective_percent (the V210 trigger still refuses after 'requested').
+- **Booking description fixed:** what goes out is the replacement's own product (`ReturnPickupBookingService
+  .exchangeItem` → `outbound`, and `ExchangeService.attachForRequest`); same-product exchanges unchanged.
+- **Tests:** PortalExchangePricingTest c1, d1–d3, s1, o1, w1, b1, x1 (app_user catalogue + owed, positive control);
+  PortalExchangePricingOffGoldenTest g1; portalExchangePricing.test.tsx (6), exchangePricingDrawer.test.tsx (3).
+  RlsCoverageTest (catalogue entry), PortalOrderLeakTest (catalogue), MigrationSmokeTest 211 → 212,
+  NotTracedBackfillTest 156 → 157 — standing approval.
+- **Needs approval:** CustomerFeeSettingsTest.g1 and PortalFeesTest.e1 (on main) fail by design — see the report.
+- **Follow-ups:** an overdue alert for owed exchange payments (ReturnCaseRules) is not built; a switched exchange that
+  had NO amounts row stays without one (prices can't be read inside the approval transaction); drawer doesn't show
+  price drift since submit.
+
 **S1b — restock double-count protection counts Shopify RETURN restocks, for every merchant (2026-11-05; branch
 `feat/s1b-restock-guard`, merged to main 2026-11-05, NOT deployed; migration V212 — after F2's V211).** Prod evidence: #1006-R1 (store
 marwan) restocked by a processed Shopify return = a RESTOCKED disposition; the V151/V201 guard read refund restock lines
@@ -85,7 +123,7 @@ On, a store with no fee rule switched on also sees no change (no fees key, no am
 - **CustomerFeeSettingsTest.g1 edited (approved 2026-11-05):** its fee rules are saved but switched OFF — it keeps
   proving the other F1 settings inert; F2's own tests cover the rules.
 - **F3 list (approved 2026-11-05):** a switched-to-refund exchange keeps its exchange amounts (fee_kind 'exchange'), so
-  its refund suggestion is today's and no refund fee applies — F3 recalculates it under the refund rule.
+  its refund suggestion is today's and no refund fee applies — F3 recalculates it under the refund rule (DONE in F3).
 - **Watch list:** PortalOnDemandLookupTest.e1 (two concurrent lookups → one row) failed once in the F2 full suite
   (NOT_FOUND), passed 3/3 alone, runs with fees off — possible flake; watch it.
 - **Migration:** V211 checked free on main (835a8e2e) and every branch; prod at V210 (Marawan, 20:26). The S1b session

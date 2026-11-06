@@ -2342,7 +2342,12 @@
         "failed": "تعذّر تحديث الرسوم. حاول مرة أخرى.",
         "feeInvalid": "أدخل مبلغًا صحيحًا من 0 إلى 30,000.",
         "suggestionParts": "المنتجات {{items}} − الرسوم {{fee}}",
-        "waivedShort": "ملغاة"
+        "waivedShort": "ملغاة",
+        "titleExchangePrice": "سعر الاستبدال",
+        "paidPrice": "السعر المدفوع",
+        "newPrice": "المنتج الجديد",
+        "priceDifference": "فرق السعر",
+        "owed": "مستحق للعميل: {{amount}}. سجّل الدفع بعد وصول المنتج القديم."
       }
     }
   },

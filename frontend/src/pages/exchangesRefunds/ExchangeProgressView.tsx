@@ -1,6 +1,7 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import FeeBreakdown from './FeeBreakdown'
+import OwedPayment from './OwedPayment'
 import ItemPhotos from './ItemPhotos'
 import { Check } from 'lucide-react'
 import { bookExchangeNow, ReturnRequestDetail, TransferCommandError } from '../../api'
@@ -191,6 +192,7 @@ export default function ExchangeProgressView({
         )}
 
         <FeeBreakdown detail={detail} onChanged={onReload} />
+        <OwedPayment detail={detail} onChanged={onReload} />
 
         <CustomerRefundChoice detail={detail} />
 

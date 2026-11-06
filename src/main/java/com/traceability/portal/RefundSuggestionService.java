@@ -62,7 +62,19 @@ public class RefundSuggestionService {
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
         // Step 5c: an exchange has no refund.
-        if ("exchange".equals(rr.get("type"))) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
+        if ("exchange".equals(rr.get("type"))) {
+            // F3: an exchange that leaves the customer owed money suggests exactly that (frozen at submit).
+            BigDecimal owed = new RequestAmounts(jdbc).customerOwed(tenantId, requestId);
+            if (owed.signum() <= 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("amount", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
+            body.put("currency", PortalAmounts.CURRENCY);
+            body.put("source", "frozen");
+            body.put("approximate", false);
+            body.put("customerOwed", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
+            body.put("lines", List.of());
+            return body;
+        }
 
         // Items that came back; before anything arrived, the items still expected.
         String scope = "('arrived', 'done')";

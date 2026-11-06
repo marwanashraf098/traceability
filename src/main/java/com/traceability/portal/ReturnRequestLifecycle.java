@@ -571,6 +571,13 @@ public class ReturnRequestLifecycle {
 
     public static final Set<String> REFUND_METHODS = Set.of("cash", "instapay", "wallet", "bank_transfer", "other");
     static final Set<String> REFUNDABLE = Set.of("received", "refund_pending");
+    /** F3: an exchange that leaves the customer owed money is paid once the old item is back. */
+    static final Set<String> OWED_PAYABLE = Set.of("received", "exchanged");
+
+    /** F3: an exchange whose frozen amounts leave the customer owed money. */
+    private boolean owedExchange(UUID tenantId, UUID requestId, Map<String, Object> rr) {
+        return "exchange".equals(rr.get("type")) && new RequestAmounts(jdbc).customerOwed(tenantId, requestId).signum() > 0;
+    }
     static final int REFUND_REFERENCE_MAX = 100;
     static final int REFUND_NOTE_MAX = 300;
     static final BigDecimal REFUND_AMOUNT_MAX = new BigDecimal("9999999999.99");
@@ -637,8 +644,11 @@ public class ReturnRequestLifecycle {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
         }
         Map<String, Object> rr = lockRequest(tenantId, requestId);
-        rejectExchange(rr);
-        if (!REFUNDABLE.contains((String) rr.get("status"))) {
+        // F3: an exchange that leaves the customer owed money (frozen customer_owed > 0) records what the merchant paid
+        // them, once the old item is back — the same ledger; it never becomes 'refunded' (it ends 'exchanged').
+        boolean owedExchange = owedExchange(tenantId, requestId, rr);
+        if (!owedExchange) rejectExchange(rr);
+        if (!(owedExchange ? OWED_PAYABLE : REFUNDABLE).contains((String) rr.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A refund can be recorded once the return has been received.");
         }
         String currency = jdbc.queryForObject(
@@ -664,12 +674,13 @@ public class ReturnRequestLifecycle {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
         }
         Map<String, Object> rr = lockRequest(tenantId, requestId);
-        rejectExchange(rr);
+        boolean owedExchange = owedExchange(tenantId, requestId, rr);
+        if (!owedExchange) rejectExchange(rr);
         List<Map<String, Object>> refund = jdbc.queryForList(
             "SELECT id, amount, currency FROM return_refunds WHERE id = ? AND request_id = ? AND tenant_id = ? AND kind = 'refund'",
             refundId, requestId, tenantId);
         if (refund.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Refund not found");
-        if (!REFUNDABLE.contains((String) rr.get("status"))) {
+        if (!(owedExchange ? OWED_PAYABLE : REFUNDABLE).contains((String) rr.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Refunds can't be changed once the request is closed.");
         }
         Boolean voided = jdbc.queryForObject(

@@ -146,6 +146,37 @@ public class PortalController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * Returns portal fees F3 — the products a line can be exchanged for when the store allows a different product
+     * (variantId or orderItemId of the line; optional q searches titles). 200 {paidPrice, products} or
+     * {blocked: approximate_price}; 401 / 400 with the generic messages; 404 when fees or the setting are off.
+     */
+    @GetMapping("/{slug}/catalogue")
+    public ResponseEntity<Map<String, Object>> catalogue(@PathVariable String slug,
+                                                         @RequestHeader(value = "Authorization", required = false) String authorization,
+                                                         @RequestParam(value = "variantId", required = false) String variantId,
+                                                         @RequestParam(value = "orderItemId", required = false) String orderItemId,
+                                                         @RequestParam(value = "q", required = false) String q) {
+        String token = authorization != null && authorization.startsWith("Bearer ")
+            ? authorization.substring("Bearer ".length()).trim() : null;
+        UUID variant, item;
+        try {
+            variant = variantId == null ? null : UUID.fromString(variantId);
+            item = orderItemId == null ? null : UUID.fromString(orderItemId);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.<String, Object>of("message", INVALID_MESSAGE));
+        }
+        return portal.catalogue(slug, token, variant, item, q)
+            .map(r -> switch (r.outcome()) {
+                case OK           -> ResponseEntity.ok(r.body());
+                case UNAUTHORIZED -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                        .body(Map.<String, Object>of("message", UNAUTHORIZED_MESSAGE));
+                case INVALID      -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                        .body(Map.<String, Object>of("message", INVALID_MESSAGE));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     /** Null when unparseable — PortalService then answers INVALID (after the token check). */
     private PortalService.SubmitRequest parseSubmitBody(String raw) {
         if (raw == null || raw.isBlank()) return null;

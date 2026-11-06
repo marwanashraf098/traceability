@@ -40,7 +40,7 @@ public final class PortalAmounts {
     /** The fee terms that apply: the rule's mode / amounts, or an area override's. {@code source}: rule | city | district. */
     public record Terms(String kind, String mode, BigDecimal amount, BigDecimal percent, BigDecimal min, BigDecimal max,
                         boolean waiveMerchantFault, String source, String cityId, String districtId) {
-        Map<String, Object> toJson() {
+        public Map<String, Object> toJson() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("kind", kind);
             m.put("mode", mode);
@@ -63,7 +63,7 @@ public final class PortalAmounts {
     public record Item(String key, UUID variantId, UUID orderItemId, BigDecimal unitPrice, String priceSource, String reason) {}
 
     public record Line(Item item, boolean merchantFault, boolean waived) {
-        Map<String, Object> toJson() {
+        public Map<String, Object> toJson() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", item.key());
             m.put("variantId", item.variantId() == null ? null : item.variantId().toString());
@@ -78,11 +78,39 @@ public final class PortalAmounts {
     }
 
     /**
-     * The result. {@code fee} is what is charged (0 when waived). {@code refundDue} null for an exchange;
-     * {@code collect} 0 for a refund.
+     * F3 — an exchange's price difference: the replacement's current price − the price paid for the item (signed;
+     * positive = the customer pays). Present only when the difference applies: a different product, or the same
+     * product while free variant swaps are off.
+     */
+    public record Difference(BigDecimal paidPrice, BigDecimal replacementPrice) {
+        BigDecimal amount() {
+            return replacementPrice.subtract(paidPrice == null ? BigDecimal.ZERO : paidPrice).setScale(2, RoundingMode.HALF_UP);
+        }
+    }
+
+    /**
+     * The result. {@code fee} is what is charged (0 when waived). {@code terms} null = no fee rule on (an exchange
+     * priced only by its difference). {@code refundDue} null for an exchange; {@code collect} 0 for a refund.
+     * F3: an exchange's {@code priceDifference} (null when it doesn't apply) and fee combine — net = difference + fee;
+     * the customer pays {@code collect} = max(net, 0) or is owed {@code customerOwed} = max(−net, 0).
      */
     public record Quote(String kind, Terms terms, BigDecimal itemValue, boolean approximate, BigDecimal fee,
-                        boolean feeWaived, String waiveReason, BigDecimal refundDue, BigDecimal collect, List<Line> lines) {
+                        boolean feeWaived, String waiveReason, BigDecimal refundDue, BigDecimal collect, List<Line> lines,
+                        Difference difference, BigDecimal customerOwed) {
+
+        public BigDecimal priceDifference() { return difference == null ? null : difference.amount(); }
+
+        /** The same quote with its lines keyed by {@code keys} (in order) — the item ids, once stored. */
+        public Quote rekey(List<String> keys) {
+            List<Line> out = new ArrayList<>(lines.size());
+            for (int i = 0; i < lines.size(); i++) {
+                Item it = lines.get(i).item();
+                out.add(new Line(new Item(keys.get(i), it.variantId(), it.orderItemId(), it.unitPrice(), it.priceSource(),
+                    it.reason()), lines.get(i).merchantFault(), lines.get(i).waived()));
+            }
+            return new Quote(kind, terms, itemValue, approximate, fee, feeWaived, waiveReason, refundDue, collect, out,
+                difference, customerOwed);
+        }
 
         public boolean nothingOwed() { return refundDue != null && refundDue.signum() == 0; }
 
@@ -106,11 +134,18 @@ public final class PortalAmounts {
             m.put("fee", plain(fee));
             m.put("feeWaived", feeWaived);
             m.put("waiveReason", waiveReason);
-            m.put("mode", terms.mode());
-            m.put("percent", plain(terms.percent()));
+            m.put("mode", terms == null ? null : terms.mode());
+            m.put("percent", terms == null ? null : plain(terms.percent()));
             m.put("refundDue", plain(refundDue));
             m.put("collect", plain(collect));
             m.put("nothingOwed", nothingOwed());
+            // F3: present only when an exchange's price difference applies (F2's quotes keep their exact shape).
+            if (difference != null) {
+                m.put("paidPrice", plain(difference.paidPrice()));
+                m.put("replacementPrice", plain(difference.replacementPrice()));
+                m.put("priceDifference", plain(priceDifference()));
+                m.put("customerOwed", plain(customerOwed));
+            }
             List<Map<String, Object>> ls = new ArrayList<>();
             for (Line l : lines) {
                 Map<String, Object> lm = new LinkedHashMap<>();
@@ -126,10 +161,19 @@ public final class PortalAmounts {
 
     // ── the calculation ──────────────────────────────────────────────────────
 
-    /** THE calculation. {@code terms} non-null (no terms = no fee = no quote). */
+    /** THE calculation, fee only (F2). {@code terms} non-null. */
     public static Quote calculate(Terms terms, Set<String> merchantFaultReasons, List<Item> items) {
         Objects.requireNonNull(terms, "terms");
-        boolean waive = terms.waiveMerchantFault();
+        return calculate(terms.kind(), terms, merchantFaultReasons, items, null);
+    }
+
+    /**
+     * THE calculation. {@code terms} null = no fee (an exchange priced by its difference only). {@code difference}
+     * null = no price difference (refunds; same-product exchanges while free variant swaps are on).
+     */
+    public static Quote calculate(String kind, Terms terms, Set<String> merchantFaultReasons, List<Item> items,
+                                  Difference difference) {
+        boolean waive = terms != null && terms.waiveMerchantFault();
         List<Line> lines = new ArrayList<>(items.size());
         BigDecimal value = BigDecimal.ZERO, chargeable = BigDecimal.ZERO;
         boolean approximate = false, allFault = !items.isEmpty();
@@ -147,7 +191,10 @@ public final class PortalAmounts {
 
         BigDecimal fee;
         boolean feeWaived;
-        if ("fixed".equals(terms.mode())) {
+        if (terms == null) {
+            fee = BigDecimal.ZERO;
+            feeWaived = false;
+        } else if ("fixed".equals(terms.mode())) {
             feeWaived = waive && allFault;
             fee = feeWaived ? BigDecimal.ZERO : whole(terms.amount());
             // A fixed fee is charged once — the per-item "waived" marks only say which items were merchant-fault.
@@ -165,17 +212,69 @@ public final class PortalAmounts {
             }
         }
         String waiveReason = feeWaived ? "merchant_fault" : null;
-        return withFee(terms, value, approximate, fee, feeWaived, waiveReason, lines);
+        boolean refund = "refund".equals(kind);
+        BigDecimal due = refund ? value.subtract(fee).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP) : null;
+        Difference diff = refund ? null : difference;
+        if (diff != null && (diff.paidPrice() == null || "catalog".equals(lines.isEmpty() ? null : lines.get(0).item().priceSource()))) {
+            approximate = true;
+        }
+        BigDecimal[] split = split(refund, fee, diff);
+        return new Quote(kind, terms, value, approximate, fee.setScale(2, RoundingMode.HALF_UP), feeWaived, waiveReason,
+                         due, split[0], List.copyOf(lines), diff, split[1]);
     }
 
-    /** Re-derives due / collect for a given fee (the merchant's override uses this too). */
-    static Quote withFee(Terms terms, BigDecimal value, boolean approximate, BigDecimal fee, boolean feeWaived,
-                         String waiveReason, List<Line> lines) {
-        boolean refund = "refund".equals(terms.kind());
-        BigDecimal due = refund ? value.subtract(fee).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP) : null;
-        BigDecimal collect = refund ? BigDecimal.ZERO.setScale(2) : fee.setScale(2, RoundingMode.HALF_UP);
-        return new Quote(terms.kind(), terms, value, approximate, fee.setScale(2, RoundingMode.HALF_UP), feeWaived,
-                         waiveReason, due, collect, List.copyOf(lines));
+    /**
+     * {collect, customerOwed} — a refund collects nothing and owes nothing here (its due is refundDue); an exchange's
+     * net = price difference + fee: positive → the customer pays it, negative → the customer is owed it.
+     */
+    static BigDecimal[] split(boolean refund, BigDecimal fee, Difference diff) {
+        if (refund) return new BigDecimal[]{BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2)};
+        BigDecimal net = fee.add(diff == null ? BigDecimal.ZERO : diff.amount());
+        return new BigDecimal[]{net.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
+                                net.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)};
+    }
+
+    // ── F3: exchange pricing ─────────────────────────────────────────────────
+
+    /** Bosta's COD limit — what a courier can collect on the replacement (F4 sends it; F3 refuses more). */
+    public static final BigDecimal COD_LIMIT = new BigDecimal("30000");
+
+    /** The tenant's exchange pricing settings (F1). {@link #active}: a price difference can apply at all. */
+    public record ExchangePricing(boolean anyProduct, boolean sameOrLowerOnly, BigDecimal maxDifference, boolean freeSwaps) {
+        public boolean active() { return anyProduct || !freeSwaps; }
+
+        /** Whether a price difference applies to this exchange. */
+        public boolean differenceApplies(boolean sameProduct) { return !sameProduct || !freeSwaps; }
+    }
+
+    public static ExchangePricing exchangePricing(JdbcTemplate jdbc, UUID tenantId) {
+        Map<String, Object> t = jdbc.queryForMap(
+            "SELECT portal_exchange_any_product, portal_exchange_same_or_lower_only, portal_exchange_max_difference, " +
+            "       portal_free_variant_swaps FROM tenants WHERE id = ?", tenantId);
+        return new ExchangePricing(Boolean.TRUE.equals(t.get("portal_exchange_any_product")),
+            Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")),
+            (BigDecimal) t.get("portal_exchange_max_difference"),
+            Boolean.TRUE.equals(t.get("portal_free_variant_swaps")));
+    }
+
+    /**
+     * Why an exchange can't be sent as quoted, or null: {@code approximate_price} (a different product needs the price
+     * actually paid — only today's catalogue price is known), {@code same_or_lower_only}, {@code max_difference}, or
+     * {@code cod_limit} (more than a courier can collect).
+     */
+    public static String exchangeBlock(ExchangePricing p, boolean sameProduct, Quote q) {
+        if (!sameProduct) {
+            Item original = q.lines().isEmpty() ? null : q.lines().get(0).item();
+            if (original == null || original.unitPrice() == null
+                    || !("stored".equals(original.priceSource()) || "shopify".equals(original.priceSource()))) {
+                return "approximate_price";
+            }
+        }
+        BigDecimal diff = q.priceDifference();
+        if (diff != null && p.sameOrLowerOnly() && diff.signum() > 0) return "same_or_lower_only";
+        if (diff != null && p.maxDifference() != null && diff.compareTo(p.maxDifference()) > 0) return "max_difference";
+        if (q.collect().compareTo(COD_LIMIT) > 0) return "cod_limit";
+        return null;
     }
 
     /** Whole EGP, half up (Q5). */
@@ -257,7 +356,7 @@ public final class PortalAmounts {
     public static void freeze(JdbcTemplate jdbc, UUID tenantId, UUID requestId, Quote q) {
         BigDecimal originalUnit = q.lines().size() == 1 ? q.lines().get(0).item().unitPrice() : null;
         String originalSource = q.lines().size() == 1 ? q.lines().get(0).item().priceSource() : null;
-        Map<String, Object> snapshot = q.terms().toJson();
+        Map<String, Object> snapshot = q.terms() == null ? new LinkedHashMap<>() : q.terms().toJson();
         snapshot.put("calculatedFee", plain(q.fee()));
         snapshot.put("calculatedWaived", q.feeWaived());
         List<Map<String, Object>> lines = new ArrayList<>();
@@ -265,16 +364,16 @@ public final class PortalAmounts {
         jdbc.update(
             "INSERT INTO return_request_amounts (request_id, tenant_id, currency, original_unit_price, original_price_source, " +
             "    item_value, fee_kind, fee_amount, fee_rule_snapshot, fee_waived, waive_reason, collect_cod, customer_owed, " +
-            "    refund_due, lines, fee_shopify_kind, fee_effective_percent) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, 0, ?, ?::jsonb, 'return_shipping', ?)",
+            "    refund_due, lines, fee_shopify_kind, fee_effective_percent, replacement_unit_price, price_difference) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?::jsonb, 'return_shipping', ?, ?, ?)",
             requestId, tenantId, CURRENCY, originalUnit, originalSource, q.itemValue(), q.kind(), q.fee(),
-            toJson(snapshot), q.feeWaived(), q.waiveReason(), q.collect(), q.refundDue(), toJson(lines),
-            q.effectivePercent());
+            toJson(snapshot), q.feeWaived(), q.waiveReason(), q.collect(), q.customerOwed(), q.refundDue(), toJson(lines),
+            q.effectivePercent(), q.difference() == null ? null : q.difference().replacementPrice(), q.priceDifference());
     }
 
-    static String plain(BigDecimal v) { return v == null ? null : v.toPlainString(); }
+    public static String plain(BigDecimal v) { return v == null ? null : v.toPlainString(); }
 
-    static String toJson(Object o) {
+    public static String toJson(Object o) {
         try {
             return JSON.writeValueAsString(o);
         } catch (JsonProcessingException e) {

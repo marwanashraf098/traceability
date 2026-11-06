@@ -295,6 +295,10 @@ class RlsCoverageTest {
                     "public returns portal, token-gated (the lookup token must carry the slug's tenant, " +
                     "else 401); returns reference data only — Bosta districts of one city from the global " +
                     "bosta_districts table, no tenant rows and no street address (covered by PortalCustomAddressTest)"),
+            entry("/api/v1/portal/{slug}/catalogue",
+                    "public returns portal, token-gated (the lookup token must carry the slug's tenant, else 401); " +
+                    "404 unless fees are on and the store allows a different product; reads run under the token's " +
+                    "tenant (runAs + RLS) — another tenant's products are never offered (PortalExchangePricingTest.x1)"),
             entry("/api/v1/orders",
                     "uses tx.execute(); empty valid for new tenant; covered by FulfillTest"),
             entry("/api/v1/orders/{orderId}",

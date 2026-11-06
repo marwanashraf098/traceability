@@ -131,7 +131,7 @@ public class ExchangeOptions {
         return null;
     }
 
-    private static JsonNode parse(String json) {
+    static JsonNode parse(String json) {
         if (json == null) return null;
         try { return JSON.readTree(json); } catch (Exception e) { return null; }
     }
