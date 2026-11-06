@@ -126,8 +126,7 @@ public final class MainReconcileRules {
         "               AND so.external_id LIKE 'internal:shopify-exchange:%' " +
         "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost') " +
         // S3b: a shadow whose reservation ended (V219 state 'ended': every line 0) holds nothing.
-        "               AND NOT EXISTS (SELECT 1 FROM shopify_exchange_shadows sx WHERE sx.order_id = so.id " +
-        "                               AND sx.tenant_id = so.tenant_id AND sx.state = 'ended')) " +
+        "               AND NOT " + ShopifyShadowOrders.endedShadowSql("so") + ") " +
         "    OR EXISTS (SELECT 1 FROM exchanges e " +
         "               JOIN merchant_orders xo ON xo.id = e.outbound_order_id AND xo.tenant_id = e.tenant_id " +
         "               JOIN order_items xi ON xi.order_id = xo.id AND xi.tenant_id = xo.tenant_id " +

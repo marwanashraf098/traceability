@@ -56,7 +56,10 @@ import static org.mockito.Mockito.*;
  *   p1  never packable before S3c: not in the pick queue, scan() NOT_PICKABLE, complete() 409
  *   e1  declined → ends; e2 cancelled → ends (committed back each time)
  *   e3  FO cancelled with no replacement → ends 'fo_cancelled'; with a replacement FO → still reserved (re-keyed)
- *   e4  FO CLOSED while unpacked → ends 'shipped_in_shopify' + MEDIUM alert while a piece is available
+ *   e4  FO CLOSED while unpacked → ends 'shipped_in_shopify'; the MEDIUM alert (while a piece is available) only with
+ *       traced.shopify-exchange.shipped-alert-enabled on (S3c turns it on; off now — Traced can't pack shadows yet)
+ *   n1  an ENDED shadow (status 'confirmed', every line 0) is in no late-to-pack (normal + embedded), no Overview count,
+ *       no alert of any type (shipped alert on too), no committed demand
  *   e5  partial: 2 units, Shopify fulfilled 1 → 1 still reserved (per line)
  *   e6  held → released → re-held keeps the reservation
  *   d1  stand-down: a Shopify-native internal:exchange: replacement for the original + variant → no shadow / line 0
@@ -103,6 +106,8 @@ class ShopifyShadowOrdersTest {
     @Autowired ShopifySyncService syncService;
     @Autowired FulfillService fulfill;
     @Autowired ExceptionService exceptions;
+    @Autowired com.traceability.overview.OverviewService overview;
+    @Autowired com.traceability.embedded.EmbeddedController embedded;
     @MockBean ShopifyReturnsGateway returnsGateway;
     @MockBean ShopifyGateway shopifyGateway;
     @MockBean ShopifyTokenProvider tokenProvider;
@@ -129,7 +134,10 @@ class ShopifyShadowOrdersTest {
     }
 
     @AfterEach
-    void clear() { TenantContext.clear(); }
+    void clear() {
+        TenantContext.clear();
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -388,11 +396,14 @@ class ShopifyShadowOrdersTest {
         s.ret(rg, "OPEN", new Object[]{x, s.restV, 1, li});
         String fo = gid("FulfillmentOrder");
         s.fo(fo, "OPEN", null, li, 1, 1);
-        assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).isEmpty();
         s.fo(fo, "CLOSED", null, li, 0, 1);
+        // The reservation ends exactly the same with the alert off or on.
         assertThat(s.line(x)).containsEntry("live_quantity", 0).containsEntry("stop_reason", "shipped_in_shopify")
             .containsEntry("shipped_in_shopify", 1);
         assertThat(s.committed(s.v)).isZero();
+        assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).as("flag off (default until S3c): no alert").isEmpty();
+        exceptions.setShippedInShopifyAlertEnabled(true);
+        try {
         List<Map<String, Object>> a = s.alerts("shopify_exchange_shipped_in_shopify");
         assertThat(a).hasSize(1);
         assertThat(a.get(0)).containsEntry("severity", "MEDIUM").containsEntry("order_id", s.original)
@@ -401,6 +412,47 @@ class ShopifyShadowOrdersTest {
         // no piece on the shelf → nothing "still available" → no alert
         jdbc.update("UPDATE pieces SET status = 'lost' WHERE tenant_id = ?", s.tenant);
         assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).isEmpty();
+        } finally {
+            exceptions.setShippedInShopifyAlertEnabled(false);
+        }
+    }
+
+    @Test
+    void n1_endedShadow_inNoLateToPack_noOverviewCount_noAlert_noCommitted() {
+        Shop s = new Shop("n1");
+        s.pieces(s.v, 1);
+        var lateBefore = s.as(() -> overview.lateToPack());
+        // The embedded app's endpoint (role SHOPIFY_EMBEDDED) delegates to the same lateToPack — called through the bean.
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+            new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("shop", "n/a",
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SHOPIFY_EMBEDDED"))));
+        var embeddedBefore = s.as(() -> embedded.lateToPack());
+        String trendsBefore = s.as(() -> String.valueOf(overview.trends(null, null)));
+
+        String rg = gid("Return"), x = gid("ExchangeLineItem");
+        s.ret(rg, "OPEN", new Object[]{x, s.restV, 1});           // approved 2026-11-04 → older than 48 h
+        s.ret(rg, "DECLINED", new Object[]{x, s.restV, 1});
+        Map<String, Object> shadow = s.onlyShadow();
+        assertThat(shadow).containsEntry("state", "ended");
+        assertThat(String.valueOf(shadow.get("status"))).isEqualTo("confirmed");
+
+        assertThat(s.as(() -> overview.lateToPack())).as("late to pack").isEqualTo(lateBefore);
+        assertThat(s.as(() -> embedded.lateToPack())).as("late to pack, embedded app").isEqualTo(embeddedBefore);
+        assertThat(s.as(() -> String.valueOf(overview.trends(null, null)))).as("Overview counts").isEqualTo(trendsBefore);
+        assertThat(s.committed(s.v)).isZero();
+        exceptions.setShippedInShopifyAlertEnabled(true);
+        try {
+            List<Map<String, Object>> all = s.as(() -> exceptions.detectAllOpen());
+            String id = shadow.get("id").toString();
+            assertThat(all).as("no alert of any type names the ended shadow")
+                .noneMatch(a -> a.toString().contains(id) || a.toString().contains("#S3Bn1-X1"));
+        } finally {
+            exceptions.setShippedInShopifyAlertEnabled(false);
+        }
+
+        // Positive control: the same shadow while LIVE does show in late to pack (status 'confirmed' is pre-pack).
+        s.ret(gid("Return"), "OPEN", new Object[]{gid("ExchangeLineItem"), s.restV, 1});
+        assertThat(s.as(() -> overview.lateToPack()).overdue()).isEqualTo(lateBefore.overdue() + 1);
     }
 
     @Test

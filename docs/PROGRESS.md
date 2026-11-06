@@ -10,6 +10,11 @@ AND confirmed for prod by Marawan right before merge).** See CLAUDE.md (S3b para
 - **Not in S3b:** Pick & Pack gating / Waiting for release (S3c), courier attach (S3d). Until S3c a shadow is never
   packable: status 'confirmed' keeps it out of the queue; scan() → NOT_PICKABLE, complete() → 409.
 - **Main reconcile hold:** an ENDED shadow (V219 state 'ended') no longer holds the store.
+- **Review changes (2026-11-06):** the "Exchange shipped in Shopify, piece still available" alert is OFF until S3c
+  (`traced.shopify-exchange.shipped-alert-enabled`, default false; the reservation still ends); an ended shadow
+  (status 'confirmed', every line 0) was counted in late-to-pack — now excluded (`endedShadowSql`); n1 proves it is in
+  no late-to-pack (normal + embedded), no Overview count, no alert of any type, no committed demand. NOTE: a LIVE
+  shadow older than 24 h does count in late-to-pack (Q8), though Traced can't pack it until S3c.
 - **Backfill at deploy (Marawan runs):** `POST /api/v1/ops/shopify-shadows/backfill {"tenantId": …}` → dry-run counts
   (originalOrders / shadowsToCreate / unitsToKeepAside), then `{"tenantId": …, "apply": true}`. Only the 2 stores with
   returns access granted have mirror rows.

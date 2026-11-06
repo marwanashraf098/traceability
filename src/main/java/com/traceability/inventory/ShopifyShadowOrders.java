@@ -62,6 +62,16 @@ public class ShopifyShadowOrders {
     /** Shadow order statuses that reserve stock (S3b writes 'confirmed'; S3c's released states included). */
     public static final String LIVE_STATUSES_SQL = "('confirmed', 'new', 'ready_to_pick', 'self_pickup_pending')";
 
+    /**
+     * THE "this shadow's reservation ended" test (V219 state 'ended': every line 0). An ended shadow keeps status
+     * 'confirmed' in S3b (never written backward), so every reader that treats 'confirmed' as work to do must exclude it
+     * with this: late-to-pack, Main reconcile's exchange hold. {@code o} = the order alias.
+     */
+    public static String endedShadowSql(String o) {
+        return "EXISTS (SELECT 1 FROM shopify_exchange_shadows sx_end WHERE sx_end.order_id = " + o + ".id " +
+               "AND sx_end.tenant_id = " + o + ".tenant_id AND sx_end.state = 'ended')";
+    }
+
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;

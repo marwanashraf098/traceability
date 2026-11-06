@@ -43,6 +43,19 @@ public class ExceptionService {
     private final Clock               clock;
     private final ShipmentLinkService shipmentLinkService;
 
+    /**
+     * S3b: "Exchange shipped in Shopify, piece still available in Traced" stays OFF until S3c lets Traced pack shadows —
+     * before that every Shopify-fulfilled exchange would raise it. The reservation still ends either way.
+     * {@code traced.shopify-exchange.shipped-alert-enabled} (default false); S3c turns it on.
+     */
+    private boolean shippedInShopifyAlertEnabled = false;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShippedInShopifyAlertEnabled(
+            @org.springframework.beans.factory.annotation.Value("${traced.shopify-exchange.shipped-alert-enabled:false}") boolean on) {
+        this.shippedInShopifyAlertEnabled = on;
+    }
+
     public ExceptionService(JdbcTemplate jdbc, Clock clock, ShipmentLinkService shipmentLinkService) {
         this.jdbc                = jdbc;
         this.clock               = clock;
@@ -215,7 +228,7 @@ public class ExceptionService {
         // Shopify-native returns S3b — exchange shadow orders (V219): stock short for a kept-aside replacement, and a
         // replacement Shopify fulfilled while Traced still had it on the shelf.
         all.addAll(detectShopifyExchangeShort(tenantId));
-        all.addAll(detectShopifyExchangeShippedInShopify(tenantId));
+        if (shippedInShopifyAlertEnabled) all.addAll(detectShopifyExchangeShippedInShopify(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
