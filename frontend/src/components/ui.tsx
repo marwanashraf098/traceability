@@ -873,8 +873,9 @@ export function Checkbox({
   }, [indeterminate, checked])
 
   return (
+    // `relative` anchors the sr-only input to its label — see Radio.
     <label className={cn(
-      'inline-flex items-start gap-2 cursor-pointer select-none',
+      'relative inline-flex items-start gap-2 cursor-pointer select-none',
       disabled && 'opacity-40 cursor-not-allowed',
       className
     )}>
@@ -915,7 +916,9 @@ export function Radio({
   disabled?: boolean
 }) {
   return (
-    <label className={cn('inline-flex items-center gap-2 cursor-pointer select-none', disabled && 'opacity-40 cursor-not-allowed')}>
+    // `relative`: the sr-only input is position:absolute. Without a positioned label it is laid out against a far
+    // ancestor and focusing it on click scrolls the page to it (prod 2026-11-06, Settings › Customer fees).
+    <label className={cn('relative inline-flex items-center gap-2 cursor-pointer select-none', disabled && 'opacity-40 cursor-not-allowed')}>
       <input
         type="radio"
         checked={checked}

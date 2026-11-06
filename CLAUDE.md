@@ -460,6 +460,13 @@ Implementation (2026-07-30, local/Testcontainers build — not yet run against p
 
 **Recurring job zones (2026-11-05, DST stall): every interval / hourly `@Recurring` runs `zoneId = "UTC"`; only fixed daily wall-clock jobs (minute + hour fixed) use `"Africa/Cairo"`.** The JVM default zone is Cairo, and JobRunr 7.3.0's cron maps an ambiguous local time to the earlier offset, so in Cairo's repeated fall-back hour a minute-based job's next run is in the past and fires every poll. `RecurringJobZonesTest` fails for a new job on the wrong zone. The JobRunr server is watched by `JobServerWatchdog` (own thread + own one-connection owner pool, never on JobRunr) — keep it off JobRunr.
 
+## Pre-merge checklist
+
+- **Any change to a shared component in `frontend/src/components/ui.tsx`:** run `npm run test:browser` (from
+  `frontend/`; Vitest browser mode, Chromium + WebKit) as well as `npm test`. jsdom has no layout, so a CSS / positioning
+  change there can pass every jsdom test and still break real pages — 2026-11-06: an unpositioned label around an
+  `sr-only` input scrolled Settings ~3,500 px on click (`srOnlyLabelScroll.browser.test.tsx`).
+
 ## Backend test rules
 
 The suite runs ~19 min with test classes in 3 parallel Surefire JVMs (`surefire.forkCount=3` in pom.xml; `-Dsurefire.forkCount=1` to run serially). Every new or edited test class must keep to these rules:
