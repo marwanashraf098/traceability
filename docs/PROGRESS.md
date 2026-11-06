@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Returns portal fees F4 — type 30 COD + analytics (2026-11-06; branch `feat/portal-fees-f4` rebased on main 5ff71c98, NOT
-merged, NOT deployed; V215 (V214 is main reconcile) — check main AND ask Marawan about prod before merge).** Mode B amendment #3's COD clause,
+**Returns portal fees F4 — type 30 COD + analytics (2026-11-06; branch `feat/portal-fees-f4` on main 5ff71c98, MERGED
+2026-11-06, NOT deployed; V215 — free on main and prod (prod ends at V214, checked 10:44)).** Mode B amendment #3's COD clause,
 built. Behind `traced.portal-fees.settings-enabled` (off in prod): off = cod 0 and nothing stored, exactly as before.
 - **The rule (`portal.ExchangeCod`, the ONE):** cod = the frozen `return_request_amounts.collect_cod` (fee_kind
   exchange); 0 when fees off, a refund (type 25 always 0), a portal pre-connect order, or nothing frozen. G4 ('manual')
@@ -23,8 +23,9 @@ built. Behind `traced.portal-fees.settings-enabled` (off in prod): off = cod 0 a
   type 30 legs that were booked with a COD (by `bosta_tracking_number`); never in total (not a sale — internal EXC-
   orders stay out of soldLines) or net; JSON key omitted when null. The Bosta money views are unchanged: each leg counts
   once by its own `raw_cod` (Awaiting payout's unsettled estimate, In bank, payouts).
-- **Not changed (decide later):** Money "In transit" still excludes type 30 legs (pre-existing, so dashboard exchanges
-  with COD aren't in it either); an exchange leg's Bosta fee is still on the internal order, not the original's row.
+- **Later list (Marawan 2026-11-06: leave both for now):** (1) Money "In transit" still excludes type 30 legs
+  (pre-existing, so dashboard exchanges with COD aren't in it either); (2) an exchange leg's Bosta fee is still on the
+  internal order, not the original order's row.
 - **Tests:** PortalExchangeCodTest (14: c1–c3, m1–m2, n1, l1, r1, f1, p1, g1, a1, d1, x1); exchangeCod.test.tsx (10).
   MigrationSmokeTest / NotTracedBackfillTest counts — standing approval.
 
