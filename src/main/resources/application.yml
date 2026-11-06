@@ -114,6 +114,10 @@ portal:
 # One-time all-statuses catalog re-import for stores connected before 2026-09-29
 # (CatalogBackfillJob). Kill switch: TRACED_CATALOG_BACKFILL_ENABLED=false.
 traced:
+  # Returns portal fees per-store rollout (PortalFeesRollout): comma-separated tenant ids that get fees while
+  # traced.portal-fees.settings-enabled stays false. Empty = no store (today's behaviour).
+  portal-fees:
+    tenants: ${TRACED_PORTAL_FEES_TENANTS:}
   # Owner (postgres) pool — Flyway, JobRunr storage, owner-connection jobs (DataSourceConfig).
   owner-pool:
     size: 4

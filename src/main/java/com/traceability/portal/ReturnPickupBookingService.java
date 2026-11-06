@@ -115,13 +115,18 @@ public class ReturnPickupBookingService {
         this.requests   = new ReturnRequestLifecycle(jdbc);
     }
 
-    /** F4: traced.portal-fees.settings-enabled — off (the default, and every hand-built instance) = cod 0 as before. */
-    private boolean portalFeesEnabled;
+    /** F4: fees on for the request's tenant ({@link PortalFeesRollout}) — off (the default, and every hand-built
+     *  instance) = cod 0 as before. */
+    private PortalFeesRollout portalFees = PortalFeesRollout.of(false);
 
     @org.springframework.beans.factory.annotation.Autowired
-    public void setPortalFeesEnabled(
-            @org.springframework.beans.factory.annotation.Value("${traced.portal-fees.settings-enabled:false}") boolean on) {
-        this.portalFeesEnabled = on;
+    public void setPortalFees(PortalFeesRollout rollout) {
+        this.portalFees = rollout;
+    }
+
+    /** Hand-built instances (tests): fees on or off for every tenant. */
+    public void setPortalFeesEnabled(boolean on) {
+        this.portalFees = PortalFeesRollout.of(on);
     }
 
     // ── The job ───────────────────────────────────────────────────────────────
@@ -184,7 +189,7 @@ public class ReturnPickupBookingService {
 
         // F4 (Mode B amendment #3, COD): an exchange carries its frozen collect amount as cod; a type 25 never does.
         // What is sent is recorded on booking_cod by the claim itself, so the read-back compares with exactly that.
-        BigDecimal cod = ExchangeCod.toSend(portalFeesEnabled, c.exchange, c.portalOrder, c.frozenCollect);
+        BigDecimal cod = ExchangeCod.toSend(portalFees.on(tenantId), c.exchange, c.portalOrder, c.frozenCollect);
         Integer claimed = tx.execute(s -> jdbc.update(
             "UPDATE return_requests SET booking_status = 'pending', booking_attempted_at = now(), booking_error = NULL, " +
             "       booking_cod = ? " +
