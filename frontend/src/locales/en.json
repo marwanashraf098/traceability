@@ -2738,7 +2738,7 @@
       "portal": "Returns portal",
       "privacy": "Privacy",
       "couriers": "Couriers",
-      "labels": "Labels",
+      "labels": "Labels & printing",
       "places": "Places"
     },
     "sections": {
@@ -2868,12 +2868,19 @@
         "fontLabel": "Font",
         "fontHelp": "Used on your returns page in English and Arabic.",
         "fontDefault": "Default",
-        "colorHelp": "Buttons and links. If the colour is too light to read, the default blue is used.",
+        "colorHelp": "Buttons and links on your returns page.",
         "preview": "Preview",
         "previewNote": "Updates as you edit",
         "previewEn": "English preview",
         "previewAr": "Arabic preview",
-        "saveNote": "Font, colour and policy save with “Save changes”. The logo saves on upload or remove."
+        "saveNote": "Font, colour and policy save with “Save changes”. The logo saves on upload or remove.",
+        "previewLanguage": "Preview language",
+        "previewEnShort": "EN",
+        "previewArShort": "عربي",
+        "lightColour": "Light colour — button text switches to dark so it stays readable.",
+        "fallbackColour": "This colour is hard to read with white or dark text, so the portal uses the default blue instead.",
+        "policyMismatch_one": "Your policy text says “{{quote}}”, but the return window is {{count}} day. Customers see both — make them match.",
+        "policyMismatch_other": "Your policy text says “{{quote}}”, but the return window is {{count}} days. Customers see both — make them match."
       },
       "save": "Save changes",
       "saved": "Returns portal settings saved",
@@ -2928,7 +2935,8 @@
         "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first.",
         "descriptionOtherCouriers": "Customers can ask for another size or colour of the same product. Orders shipped with Bosta: approving books one Bosta exchange trip — the courier brings the new item and collects the old one (needs Bosta pickup booking on). Orders shipped with other couriers: you book the exchange with your courier.",
         "needsBostaOrOtherCouriers": "Connect Bosta, or turn on \"Accept returns for orders shipped with other couriers\" below.",
-        "noOrdersEligible": "No order can be exchanged right now. Turn on Bosta pickup booking, or returns for orders shipped with other couriers."
+        "noOrdersEligible": "No order can be exchanged right now. Turn on Bosta pickup booking, or returns for orders shipped with other couriers.",
+        "off": "Exchanges are off. Customers can only ask for a refund."
       },
       "refundMethods": {
         "title": "Refund methods",
@@ -3035,7 +3043,101 @@
           "maxDifferenceHelp": "Leave empty for no limit. The courier collects the difference on delivery."
         },
         "crashed": "Something went wrong showing customer fees.",
-        "reload": "Reload"
+        "reload": "Reload",
+        "swapTo": {
+          "title": "What they can swap to",
+          "same": "Another size or colour",
+          "sameDesc": "Same product only.",
+          "any": "Any product in stock",
+          "anyDesc": "Including a different product."
+        },
+        "table": {
+          "fee": "Fee",
+          "type": "Type",
+          "amount": "Amount",
+          "on": "On",
+          "help": "Shown to the customer in the portal before they submit."
+        }
+      },
+      "page": {
+        "title": "Returns portal",
+        "subtitle": "The page your customers use to return or exchange an order.",
+        "live": "Live",
+        "off": "Off",
+        "openPortal": "Open portal",
+        "offNote": "Your portal link shows “This returns page isn't available”. Your settings are kept.",
+        "savesRightAway": "Saves right away",
+        "jumpLabel": "On this page"
+      },
+      "sections": {
+        "eligibility": {
+          "title": "Eligibility",
+          "jump": "Eligibility",
+          "description": "Which orders and products customers can send back."
+        },
+        "approval": {
+          "title": "Approval & pickup",
+          "jump": "Approval & pickup",
+          "description": "What happens after a customer sends a request."
+        },
+        "exchanges": {
+          "title": "Exchanges",
+          "jump": "Exchanges",
+          "description": "Let customers swap an item instead of asking for their money back."
+        },
+        "refunds": {
+          "title": "Refunds & fees",
+          "jump": "Refunds & fees",
+          "description": "Traced never sends money — you refund the customer yourself, using the details they give."
+        },
+        "branding": {
+          "title": "Branding & policy",
+          "jump": "Branding",
+          "description": "How the portal looks, and the policy text customers read."
+        }
+      },
+      "approval": {
+        "title": "How requests are approved",
+        "manual": "I review each request",
+        "manualDesc": "You approve or reject each one in Returns & exchanges.",
+        "auto": "Approve automatically",
+        "autoDesc": "Every request is approved as soon as it's sent. You still book the pickup in Bosta.",
+        "autoDescBooking": "Every request is approved as soon as it's sent, and the Bosta pickup is booked right away."
+      },
+      "summary": {
+        "title": "Your policy in plain words",
+        "subtitle": "Updates as you change settings",
+        "off": "The portal is off — customers can't start a return. Your settings are kept for when you turn it back on.",
+        "window_one": "Customers can start a return within {{count}} day of delivery.",
+        "window_other": "Customers can start a return within {{count}} days of delivery.",
+        "windowOtherCouriers_one": "Customers can start a return within {{count}} day of delivery, including orders shipped with other couriers.",
+        "windowOtherCouriers_other": "Customers can start a return within {{count}} days of delivery, including orders shipped with other couriers.",
+        "photos": "Customers add 1–3 photos of each item.",
+        "manual": "You review every request and arrange the pickup yourself.",
+        "manualBooking": "You review every request, and Traced books a Bosta pickup when you approve.",
+        "auto": "Requests are approved automatically, and you arrange the pickup yourself.",
+        "autoBooking": "Requests are approved automatically, and Traced books a Bosta pickup straight away.",
+        "exchangesOff": "Exchanges are off — customers can only ask for a refund.",
+        "exchangeSame": "Customers can exchange for another size or colour of the same product.",
+        "exchangeSameFree": "Customers can exchange for another size or colour of the same product, at no extra cost.",
+        "exchangeAny": "Customers can exchange for any product in stock.",
+        "swapsFree": "Size and colour swaps of the same product are free.",
+        "priceNoLimit": "When the new item costs more, they pay the difference on delivery.",
+        "priceCap": "When the new item costs more, they pay the difference on delivery — up to {{amount}} EGP.",
+        "priceLower": "They can only pick an item that costs the same or less.",
+        "refundMethods": "Customers choose how to get their money back: {{methods}}.",
+        "refundMethodsNone": "Customers aren't asked how they want their refund.",
+        "methodNames": {
+          "bank_transfer": "bank transfer",
+          "instapay": "InstaPay",
+          "wallet": "mobile wallet",
+          "cash": "cash"
+        },
+        "feeExchange": "An exchange fee of {{fee}} applies.",
+        "feeExchangeWaived": "An exchange fee of {{fee}} applies, except when it's the store's fault.",
+        "feeRefund": "A return fee of {{fee}} is taken off the refund.",
+        "feeRefundWaived": "A return fee of {{fee}} is taken off the refund, except when it's the store's fault.",
+        "noFees": "Customers pay no fees."
       }
     },
     "pickPack": {
@@ -3112,6 +3214,15 @@
       "defaultMode": "Default receiving mode",
       "note": "Receiving still asks every time — this only picks the card that's already selected. Anyone can choose the other one.",
       "error": "Couldn't save. Try again."
+    },
+    "nav": {
+      "label": "Settings sections",
+      "groups": {
+        "store": "Store",
+        "operations": "Operations",
+        "returns": "Returns",
+        "account": "Account"
+      }
     }
   },
   "users": {

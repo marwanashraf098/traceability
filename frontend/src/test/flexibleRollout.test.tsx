@@ -158,7 +158,7 @@ describe('Flexible labeling on, no untagged stock — today\'s flows', () => {
   test('ro4 — Settings → Labels is there with "Print & stick" as the default', async () => {
     setup()
     renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=labels'] })
-    expect(await screen.findByRole('button', { name: 'Labels' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Labels & printing' })).toBeTruthy()
     const tab = await screen.findByTestId('labels-settings')
     await waitFor(() => expect(within(tab).getByTestId('labels-mode-print_stick').querySelector('input')!.checked).toBe(true))
   })

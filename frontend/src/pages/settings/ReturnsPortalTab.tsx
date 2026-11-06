@@ -1,36 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Search } from 'lucide-react'
 import {
-  getPortalSettings, getPortalVariants, getReturnLocations, savePortalSettings, setVariantNonReturnable,
-  BostaReturnLocation, PortalSettings, PortalSettingsError, PortalSettingsInput, PortalVariantRow,
-  ReturnLocationsError, OtherCouriersReturnsSetting, TransferCommandError, getOtherCouriersReturns, getRoleFromToken,
-  setOtherCouriersReturns,
+  CustomerFeeSettings, PortalSettings, PortalSettingsError, PortalSettingsInput, OtherCouriersReturnsSetting,
+  getOtherCouriersReturns, getPortalSettings, savePortalSettings,
 } from '../../api'
 import { useCapabilities } from '../../capabilities'
-import { Button, Input, Skeleton, Toggle, cn, useToast } from '../../components/ui'
+import { Button, Skeleton, useToast } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
-import { FontPicker, LogoUploader, PortalPreview, useUploadedLogoUrl } from './PortalBranding'
+import { useUploadedLogoUrl } from './PortalBranding'
 import { PortalFont, portalFontOrDefault } from '../../portal/fonts'
-import CustomerFeesSection from './CustomerFeesSection'
+import { FeeDraft, useCustomerFeeSettings } from './CustomerFeesSection'
+import PortalHeaderCard, { PORTAL_HOST } from './portal/PortalHeaderCard'
+import PolicySummaryCard from './portal/PolicySummaryCard'
+import JumpLinks from './portal/JumpLinks'
+import EligibilitySection from './portal/EligibilitySection'
+import ApprovalSection from './portal/ApprovalSection'
+import ExchangesSection from './portal/ExchangesSection'
+import RefundsFeesSection, { orderedMethods, sameMethods } from './portal/RefundsFeesSection'
+import BrandingSection from './portal/BrandingSection'
+import { PolicyInput } from './portal/policySummary'
 
-export const PORTAL_HOST = 'returns.tracedtech.com'
-export const LOGO_PREFIX = 'https://cdn.shopify.com/'
-export const POLICY_MAX = 2000
-const VARIANTS_PAGE = 25
-
-/** Same rule as the backend (and V103's CHECK): a Shopify Files CDN link. */
-export function isValidLogoUrl(url: string): boolean {
-  if (!url.startsWith(LOGO_PREFIX)) return false
-  try {
-    new URL(url)
-    return true
-  } catch {
-    return false
-  }
-}
-
-const HEX = /^#[0-9A-Fa-f]{6}$/
+export { PORTAL_HOST } from './portal/PortalHeaderCard'
+export { LOGO_PREFIX, POLICY_MAX, isValidLogoUrl } from './portal/BrandingSection'
 
 type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
   | 'exchangesEnabled' | 'font' | 'refundMethods'
@@ -43,13 +34,19 @@ type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policy
  * The non-returnable switches are separate: each saves immediately through
  * PUT /variants/{id}/non-returnable, as in the mockup (they are not part of the form).
  *
- * Step 4c-2: "Returns go back to" — the tenant's Bosta pickup locations, fetched live. Not in
- * the M4 mockup; it is a row of the first card styled like the return-window row. With nothing
+ * Step 4c-2: "Returns go back to" — the tenant's Bosta pickup locations, fetched live. With nothing
  * saved yet, Bosta's default location is preselected (so Save becomes available to store it).
  *
  * Step 4c-3: "Book Bosta pickups when I approve" (tenants.portal_pickup_booking). It can only be
  * switched ON once Bosta is connected and a return location is SAVED (the backend enforces the
  * same); the reason is shown under it. Sent in the PUT only when it changed.
+ *
+ * Redesign Pass A (design/returns-portal-settings.html) — appearance only. The tab is now a header (Live / Off, Open
+ * portal, the switch and the link), "Your policy in plain words", jump links and five sections: Eligibility, Approval
+ * & pickup, Exchanges, Refunds & fees, Branding & policy (components in ./portal). What saves when is UNCHANGED: this
+ * form with "Save changes"; the logo, the non-returnable switches, the other-couriers switch and area fees the moment
+ * they're used ("Saves right away"); exchange pricing, each fee and the store's-fault reasons with their own Save.
+ * The customer-fee settings are loaded once here for both places they show and for the summary.
  */
 export default function ReturnsPortalTab() {
   const { t } = useTranslation()
@@ -84,6 +81,22 @@ export default function ReturnsPortalTab() {
   const otherCouriersOn = !!otherCouriers?.enabled
   /** Bosta orders can be exchanged: pickup booking on with Bosta connected (saved state). */
   const bostaExchangePath = !!saved?.portalPickupBooking && !!saved?.bostaConnected
+  // Returns portal fees: loaded once for the Exchanges and Refunds & fees sections and the summary. What the fee
+  // editors show (saved or not) feeds the summary through feeDraft; their saves update `fees`.
+  const [fees, setFeesState] = useState<CustomerFeeSettings | null>(null)
+  const [loadedFees] = useCustomerFeeSettings()
+  useEffect(() => { if (loadedFees) setFeesState(loadedFees) }, [loadedFees])
+  const [feeDraft, setFeeDraft] = useState<FeeDraft>({})
+  const setFees = useCallback((s: CustomerFeeSettings) => setFeesState(s), [])
+  const onFeeDraft = useCallback((d: FeeDraft) => setFeeDraft(prev => ({
+    pricing: d.pricing ?? prev.pricing,
+    rules: d.rules ? { ...prev.rules, ...d.rules } : prev.rules,
+  })), [])
+  // Stable: ReturnLocationRow preselects Bosta's default through it from an effect.
+  const onLocation = useCallback((id: string | null) => {
+    setForm(f => (f ? { ...f, returnLocationId: id } : f))
+    setErrors(e => (e.returnLocationId ? { ...e, returnLocationId: undefined } : e))
+  }, [])
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -191,542 +204,127 @@ export default function ReturnsPortalTab() {
     }
   }
 
-  const logo = form.logoUrl?.trim() ?? ''
-  const color = form.brandColor?.trim() ?? ''
-  const policyLength = (form.policyText ?? '').length
+  const windowNum = Number(windowText)
+  const windowDays = windowText.trim() !== '' && Number.isInteger(windowNum) && windowNum >= 1 && windowNum <= 90 ? windowNum : null
+
+  const summaryInput: PolicyInput = {
+    enabled: form.enabled,
+    windowDays,
+    otherCouriers: otherCouriersShown ? otherCouriersOn : null,
+    requirePhotos,
+    autoApprove: form.autoApprove,
+    pickupBooking: bookingOn,
+    exchanges: exchangesOn,
+    refundMethods,
+    fees: fees?.visible ? {
+      ...(feeDraft.pricing ?? fees.exchangePricing),
+      rules: {
+        exchange: feeDraft.rules?.exchange ?? fees.rules.exchange,
+        refund: feeDraft.rules?.refund ?? fees.rules.refund,
+      },
+    } : null,
+  }
 
   return (
-    <div className="space-y-4" data-testid="returns-portal-settings">
-      <section className="card divide-y divide-line max-w-3xl">
-        <SwitchRow
-          title={t('settings.portal.enabled.title')}
-          description={t('settings.portal.enabled.description')}
-          checked={form.enabled}
-          onChange={v => update('enabled', v)}
-        />
+    <div className="space-y-5 max-w-5xl" data-testid="returns-portal-settings">
+      <PortalHeaderCard
+        savedLive={saved.enabled && !!saved.slug}
+        savedSlug={saved.slug}
+        enabled={form.enabled}
+        onEnabled={v => update('enabled', v)}
+        slug={form.slug ?? ''}
+        onSlug={v => update('slug', v)}
+        slugError={errors.slug}
+        copied={copied}
+        onCopy={copyLink}
+      />
 
-        <div className="p-6 space-y-2">
-          <label htmlFor="portal-slug" className="text-body font-medium text-primary block">
-            {t('settings.portal.link.label')}
-          </label>
-          <div className="flex flex-wrap items-start gap-2">
-            <div
-              dir="ltr"
-              className={cn(
-                'flex flex-1 min-w-[240px] items-stretch rounded-xl border bg-surface overflow-hidden',
-                errors.slug ? 'border-critical' : 'border-line focus-within:border-trace-blue'
-              )}
-            >
-              <span className="flex items-center px-3 text-body text-muted bg-elevated border-e border-line whitespace-nowrap">
-                {PORTAL_HOST}/
-              </span>
-              <input
-                id="portal-slug"
-                type="text"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={!!errors.slug}
-                aria-describedby="portal-slug-help"
-                className="flex-1 min-w-0 px-3 py-2 bg-transparent text-body text-primary outline-none font-mono"
-                value={form.slug ?? ''}
-                onChange={e => update('slug', e.target.value)}
-              />
-            </div>
-            <Button variant="outline" onClick={copyLink} disabled={!slug}>
-              {copied ? t('settings.portal.link.copied') : t('settings.portal.link.copy')}
-            </Button>
-          </div>
-          {errors.slug && <p className="text-small text-critical" role="alert" data-testid="error-slug">{errors.slug}</p>}
-          {slug && (
-            <p className="text-small text-primary font-mono break-all" dir="ltr" data-testid="portal-url">{portalUrl}</p>
-          )}
-          <p id="portal-slug-help" className="text-small text-muted">{t('settings.portal.link.help')}</p>
-        </div>
+      <PolicySummaryCard input={summaryInput} />
+      <JumpLinks />
 
-        <div className="p-6 space-y-2">
-          <label htmlFor="portal-window" className="text-body font-medium text-primary block">
-            {t('settings.portal.window.label')}
-          </label>
-          <div className="flex items-center gap-3">
-            <div className="w-24">
-              <Input
-                id="portal-window"
-                type="number"
-                min={1}
-                max={90}
-                inputMode="numeric"
-                invalid={!!errors.returnWindowDays}
-                aria-invalid={!!errors.returnWindowDays}
-                value={windowText}
-                onChange={e => { setWindowText(e.target.value); setErrors(er => ({ ...er, returnWindowDays: undefined })) }}
-              />
-            </div>
-            <span className="text-body text-muted">{t('settings.portal.window.suffix')}</span>
-          </div>
-          {errors.returnWindowDays && (
-            <p className="text-small text-critical" role="alert" data-testid="error-returnWindowDays">{errors.returnWindowDays}</p>
-          )}
-        </div>
+      <EligibilitySection
+        windowText={windowText}
+        onWindow={v => { setWindowText(v); setErrors(er => ({ ...er, returnWindowDays: undefined })) }}
+        windowError={errors.returnWindowDays}
+        otherCouriers={otherCouriers && otherCouriersShown ? otherCouriers : null}
+        onOtherCouriers={setOtherCouriers}
+        offKeepsExchanges={!!saved.exchangesEnabled && !bostaExchangePath}
+        requirePhotos={requirePhotos}
+        onRequirePhotos={setRequirePhotos}
+      />
 
-        <SwitchRow
-          title={t('settings.portal.autoApprove.title')}
-          description={t(saved.pickupBooking ? 'settings.portal.autoApprove.descriptionBooking' : 'settings.portal.autoApprove.description')}
-          checked={form.autoApprove}
-          onChange={v => update('autoApprove', v)}
-        />
+      <ApprovalSection
+        autoApprove={form.autoApprove}
+        onAutoApprove={v => update('autoApprove', v)}
+        savedPickupBooking={!!saved.pickupBooking}
+        bookingOn={bookingOn}
+        bookingDisabled={!bookingOn && !(saved.bostaConnected && saved.returnLocationId)}
+        bookingNote={!bookingOn && !saved.bostaConnected
+          ? t('settings.portal.booking.needsBosta')
+          : !bookingOn && !saved.returnLocationId ? t('settings.portal.booking.needsLocation') : undefined}
+        bookingError={errors.pickupBooking}
+        onBooking={v => {
+          setBookingOn(v)
+          // Exchanges are booked through pickup booking — switching it off switches them off,
+          // unless they're on for other couriers' orders too (G4b fix; the backend agrees).
+          if (!v && !otherCouriersOn) setExchangesOn(false)
+          setErrors(e => ({ ...e, pickupBooking: undefined }))
+        }}
+        savedLocationName={saved.returnLocationName}
+        locationId={form.returnLocationId}
+        onLocation={onLocation}
+        locationError={errors.returnLocationId}
+      />
 
-        <ReturnLocationRow
-          savedName={saved.returnLocationName}
-          value={form.returnLocationId}
-          onChange={id => update('returnLocationId', id)}
-          error={errors.returnLocationId}
-        />
+      {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location —
+          or (G4b fix) with returns for other couriers' orders on. */}
+      <ExchangesSection
+        exchangesOn={exchangesOn}
+        onExchanges={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
+        description={t(otherCouriersOn ? 'settings.portal.exchanges.descriptionOtherCouriers' : 'settings.portal.exchanges.description')}
+        disabled={!exchangesOn && !otherCouriersOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
+        note={exchangesOn
+          ? (otherCouriersShown && !otherCouriersOn && !bostaExchangePath ? t('settings.portal.exchanges.noOrdersEligible') : undefined)
+          : otherCouriersOn ? undefined
+          : !saved.bostaConnected ? t(otherCouriersShown ? 'settings.portal.exchanges.needsBostaOrOtherCouriers' : 'settings.portal.exchanges.needsBosta')
+            : !saved.returnLocationId ? t('settings.portal.exchanges.needsLocation')
+              : !bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
+        error={errors.exchangesEnabled}
+        fees={fees}
+        onFees={setFees}
+        onFeeDraft={onFeeDraft}
+      />
 
-        <SwitchRow
-          title={t('settings.portal.booking.title')}
-          description={t('settings.portal.booking.description')}
-          checked={bookingOn}
-          disabled={!bookingOn && !(saved.bostaConnected && saved.returnLocationId)}
-          note={!bookingOn && !saved.bostaConnected
-            ? t('settings.portal.booking.needsBosta')
-            : !bookingOn && !saved.returnLocationId ? t('settings.portal.booking.needsLocation') : undefined}
-          error={errors.pickupBooking}
-          onChange={v => {
-            setBookingOn(v)
-            // Exchanges are booked through pickup booking — switching it off switches them off,
-            // unless they're on for other couriers' orders too (G4b fix; the backend agrees).
-            if (!v && !otherCouriersOn) setExchangesOn(false)
-            setErrors(e => ({ ...e, pickupBooking: undefined }))
-          }}
-        />
+      <RefundsFeesSection
+        refundMethods={refundMethods}
+        onRefundMethods={setRefundMethods}
+        fees={fees}
+        onFees={setFees}
+        onFeeDraft={onFeeDraft}
+      />
 
-        {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location —
-            or (G4b fix) with returns for other couriers' orders on. */}
-        <SwitchRow
-          title={t('settings.portal.exchanges.title')}
-          description={t(otherCouriersOn ? 'settings.portal.exchanges.descriptionOtherCouriers' : 'settings.portal.exchanges.description')}
-          checked={exchangesOn}
-          disabled={!exchangesOn && !otherCouriersOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
-          note={exchangesOn
-            ? (otherCouriersShown && !otherCouriersOn && !bostaExchangePath ? t('settings.portal.exchanges.noOrdersEligible') : undefined)
-            : otherCouriersOn ? undefined
-            : !saved.bostaConnected ? t(otherCouriersShown ? 'settings.portal.exchanges.needsBostaOrOtherCouriers' : 'settings.portal.exchanges.needsBosta')
-              : !saved.returnLocationId ? t('settings.portal.exchanges.needsLocation')
-                : !bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
-          noteTestId="exchanges-note"
-          error={errors.exchangesEnabled}
-          errorTestId="error-exchangesEnabled"
-          onChange={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
-        />
+      <BrandingSection
+        saved={saved}
+        uploadedLogoUrl={uploadedLogoUrl}
+        onLogoSaved={s => setSaved(prev => (prev ? { ...prev, logo: s.logo ?? null } : s))}
+        logoUrl={form.logoUrl ?? ''}
+        onLogoUrl={v => update('logoUrl', v)}
+        font={font}
+        onFont={f => { setFont(f); setErrors(e => ({ ...e, font: undefined })) }}
+        brandColor={form.brandColor ?? ''}
+        onBrandColor={v => update('brandColor', v)}
+        policyText={form.policyText ?? ''}
+        onPolicyText={v => update('policyText', v)}
+        windowDays={windowDays}
+        errors={errors}
+      />
 
-        {otherCouriers && otherCouriersShown && (
-          <OtherCouriersRow setting={otherCouriers} onSaved={setOtherCouriers}
-            offKeepsExchanges={!!saved.exchangesEnabled && !bostaExchangePath} />
-        )}
-
-        <RefundMethodsRow value={refundMethods} onChange={setRefundMethods} />
-
-        <SwitchRow
-          title={t('settings.portal.requirePhotos.title')}
-          description={t('settings.portal.requirePhotos.description')}
-          checked={requirePhotos}
-          onChange={setRequirePhotos}
-        />
-
-        <NonReturnableList />
-      </section>
-
-      {/* Returns portal fees F1 — its own endpoints; renders nothing while hidden (until fees are charged). */}
-      <CustomerFeesSection />
-
-      {/* P1: wider than the cards above so the live preview can sit beside the form (xl and up);
-          narrower screens get the EN / AR previews side by side under the form. */}
-      <section className="card grid max-w-3xl xl:max-w-6xl xl:grid-cols-[minmax(0,1fr)_380px]" aria-labelledby="portal-branding-title">
-        <div className="p-6 space-y-7 xl:border-e border-b xl:border-b-0 border-line min-w-0">
-        <div>
-          <h2 id="portal-branding-title" className="text-h3 text-primary">{t('settings.portal.branding.title')}</h2>
-          <p className="text-small text-muted mt-1">{t('settings.portal.branding.description')}</p>
-        </div>
-
-        <div className="space-y-2">
-          <LogoUploader
-            settings={saved}
-            logoUrl={uploadedLogoUrl}
-            onChange={s => setSaved(prev => (prev ? { ...prev, logo: s.logo ?? null } : s))}
-          />
-          {/* The Shopify Files link (V103) — kept for stores already using it; an upload wins. */}
-          <details className="group" open={!!saved.logoUrl} data-testid="logo-link-details">
-            <summary className="text-small font-medium text-trace-blue cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-              {t('settings.portal.branding.useLink')}
-            </summary>
-            <div className="space-y-2 mt-2 max-w-xl">
-              <label htmlFor="portal-logo" className="text-small font-medium text-primary block">
-                {t('settings.portal.branding.logoLabel')}
-              </label>
-              <div className="flex items-center gap-3">
-                <div className="flex-1" dir="ltr">
-                  <Input
-                    id="portal-logo"
-                    type="url"
-                    placeholder={`${LOGO_PREFIX}…`}
-                    invalid={!!errors.logoUrl}
-                    aria-invalid={!!errors.logoUrl}
-                    value={form.logoUrl ?? ''}
-                    onChange={e => update('logoUrl', e.target.value)}
-                  />
-                </div>
-                {isValidLogoUrl(logo) && (
-                  <img
-                    src={logo}
-                    alt={t('settings.portal.branding.logoPreview')}
-                    data-testid="logo-preview"
-                    className="h-10 w-auto max-w-[120px] object-contain rounded-lg border border-line bg-surface p-1"
-                  />
-                )}
-              </div>
-              {errors.logoUrl && <p className="text-small text-critical" role="alert" data-testid="error-logoUrl">{errors.logoUrl}</p>}
-              <p className="text-small text-muted">{t('settings.portal.branding.logoHelp')} {t('settings.portal.branding.linkNote')}</p>
-            </div>
-          </details>
-        </div>
-
-        <div className="space-y-2">
-          <FontPicker value={font} onChange={f => { setFont(f); setErrors(e => ({ ...e, font: undefined })) }} />
-          {errors.font && <p className="text-small text-critical" role="alert" data-testid="error-font">{errors.font}</p>}
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor="portal-color" className="text-body font-medium text-primary block">
-            {t('settings.portal.branding.colorLabel')}
-          </label>
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              aria-label={t('settings.portal.branding.colorPicker')}
-              className="h-10 w-12 rounded-lg border border-line bg-surface p-1 cursor-pointer"
-              value={HEX.test(color) ? color.toLowerCase() : '#000000'}
-              onChange={e => update('brandColor', e.target.value.toUpperCase())}
-            />
-            <div className="w-36">
-              <Input
-                id="portal-color"
-                type="text"
-                placeholder="#1A2B3C"
-                dir="ltr"
-                className="font-mono"
-                maxLength={7}
-                invalid={!!errors.brandColor}
-                aria-invalid={!!errors.brandColor}
-                value={form.brandColor ?? ''}
-                onChange={e => update('brandColor', e.target.value)}
-              />
-            </div>
-          </div>
-          {errors.brandColor && <p className="text-small text-critical" role="alert" data-testid="error-brandColor">{errors.brandColor}</p>}
-          <p className="text-small text-muted">{t('settings.portal.branding.colorHelp')}</p>
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor="portal-policy" className="text-body font-medium text-primary block">
-            {t('settings.portal.branding.policyLabel')}
-          </label>
-          <textarea
-            id="portal-policy"
-            rows={5}
-            dir="auto"
-            maxLength={POLICY_MAX}
-            aria-invalid={!!errors.policyText}
-            aria-describedby="portal-policy-count"
-            className={cn('input resize-y w-full', errors.policyText && 'border-critical')}
-            value={form.policyText ?? ''}
-            onChange={e => update('policyText', e.target.value)}
-          />
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-small text-critical" role={errors.policyText ? 'alert' : undefined} data-testid="error-policyText">
-              {errors.policyText ?? ''}
-            </span>
-            <span id="portal-policy-count" className="text-small text-muted tabular-nums" dir="ltr">
-              {policyLength} / {POLICY_MAX}
-            </span>
-          </div>
-        </div>
-        </div>
-
-        <div className="p-6 bg-elevated rounded-b-xl xl:rounded-b-none xl:rounded-e-xl">
-          <PortalPreview
-            font={font}
-            brandColor={HEX.test(color) ? color : null}
-            logoSrc={saved.logo ? uploadedLogoUrl : isValidLogoUrl(logo) ? logo : null}
-            storeName={saved.storeName ?? ''}
-          />
-        </div>
-      </section>
-
-      <div className="flex flex-col items-end gap-1.5 max-w-3xl xl:max-w-6xl">
+      <div className="flex flex-col items-end gap-1.5">
         <Button onClick={save} loading={saving} disabled={!dirty || saving}>
           {t('settings.portal.save')}
         </Button>
         <p className="text-small text-muted text-end">{t('settings.portal.branding.saveNote')}</p>
       </div>
-    </div>
-  )
-}
-
-/** "Returns go back to" — the tenant's Bosta pickup locations, loaded live. */
-function ReturnLocationRow({
-  savedName, value, onChange, error,
-}: { savedName: string | null; value: string | null; onChange: (id: string | null) => void; error?: string }) {
-  const { t } = useTranslation()
-  const [locations, setLocations] = useState<BostaReturnLocation[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoadError(null)
-    setLocations(null)
-    try {
-      setLocations(await getReturnLocations())
-    } catch (e) {
-      setLoadError(e instanceof ReturnLocationsError && e.code ? e.code : 'generic')
-    }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  // Nothing saved yet → preselect Bosta's default location.
-  useEffect(() => {
-    if (!locations || value) return
-    const def = locations.find(l => l.isDefault)
-    if (def) onChange(def.id)
-  }, [locations, value, onChange])
-
-  const label = (l: BostaReturnLocation) => {
-    const name = l.cityName ? `${l.name} · ${l.cityName}` : l.name
-    return l.isDefault ? t('settings.portal.returnLocation.default', { name }) : name
-  }
-
-  return (
-    <div className="p-6 space-y-2" data-testid="return-location-row">
-      <label htmlFor="portal-return-location" className="text-body font-medium text-primary block">
-        {t('settings.portal.returnLocation.label')}
-      </label>
-      {loadError ? (
-        <div className="space-y-2">
-          <p className="text-small text-critical" role="alert" data-testid="return-location-error">
-            {t(`settings.portal.returnLocation.errors.${loadError}`, {
-              defaultValue: t('settings.portal.returnLocation.errors.generic'),
-            })}
-          </p>
-          {savedName && (
-            <p className="text-small text-muted"><bdi>{t('settings.portal.returnLocation.saved', { name: savedName })}</bdi></p>
-          )}
-          {loadError !== 'NO_BOSTA_ACCOUNT' && (
-            <Button variant="outline" size="sm" onClick={load}>{t('settings.portal.returnLocation.retry')}</Button>
-          )}
-        </div>
-      ) : locations === null ? (
-        <p className="text-small text-muted" aria-busy="true">{t('settings.portal.returnLocation.loading')}</p>
-      ) : locations.length === 0 ? (
-        <p className="text-small text-muted">{t('settings.portal.returnLocation.empty')}</p>
-      ) : (
-        <select
-          id="portal-return-location"
-          className={cn('input w-full max-w-md', error && 'border-critical')}
-          aria-invalid={!!error}
-          aria-describedby="portal-return-location-help"
-          value={value ?? ''}
-          onChange={e => onChange(e.target.value || null)}
-        >
-          {!value && <option value="" disabled>{t('settings.portal.returnLocation.label')}</option>}
-          {locations.map(l => <option key={l.id} value={l.id}>{label(l)}</option>)}
-        </select>
-      )}
-      {error && <p className="text-small text-critical" role="alert" data-testid="error-returnLocationId">{error}</p>}
-      <p id="portal-return-location-help" className="text-small text-muted">{t('settings.portal.returnLocation.help')}</p>
-    </div>
-  )
-}
-
-/**
- * Non-Bosta couriers G4a — "Accept returns for orders shipped with other couriers": shown only to a store that
- * ships with other couriers (or has it switched on). Saved at once on its own endpoint (owner only, audit-logged),
- * not with "Save changes"; a manager sees it read-only.
- */
-function OtherCouriersRow({ setting, onSaved, offKeepsExchanges }: {
-  setting: OtherCouriersReturnsSetting
-  onSaved: (s: OtherCouriersReturnsSetting) => void
-  /** G4b fix: exchanges are on and Bosta can't take them — say that switching this off leaves them on. */
-  offKeepsExchanges: boolean
-}) {
-  const { t, i18n } = useTranslation()
-  const { toast } = useToast()
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | undefined>()
-  const owner = getRoleFromToken() === 'owner'
-
-  async function change(v: boolean) {
-    setSaving(true)
-    setError(undefined)
-    try {
-      const s = await setOtherCouriersReturns(v)
-      onSaved(s)
-      toast({ tone: 'success', message: t(v ? 'settings.portal.otherCouriers.savedOn' : 'settings.portal.otherCouriers.savedOff') })
-    } catch (e) {
-      setError(e instanceof TransferCommandError ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
-        : t('settings.portal.otherCouriers.saveFailed'))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div data-testid="other-couriers-row">
-      <SwitchRow
-        title={t('settings.portal.otherCouriers.title')}
-        description={t('settings.portal.otherCouriers.description')}
-        checked={setting.enabled}
-        disabled={saving || !owner || (!setting.enabled && !setting.available)}
-        note={!owner ? t('settings.portal.otherCouriers.ownerOnly')
-          : setting.enabled && offKeepsExchanges ? t('settings.portal.otherCouriers.offKeepsExchanges') : undefined}
-        noteTestId="other-couriers-note"
-        error={error}
-        errorTestId="error-otherCouriers"
-        onChange={change}
-      />
-    </div>
-  )
-}
-
-function SwitchRow({
-  title, description, checked, onChange, disabled, note, error, noteTestId = 'switch-note', errorTestId = 'error-pickupBooking',
-}: {
-  title: string; description: string; checked: boolean; onChange: (v: boolean) => void
-  disabled?: boolean; note?: string; error?: string; noteTestId?: string; errorTestId?: string
-}) {
-  const { t } = useTranslation()
-  return (
-    <div className="p-6 flex items-start gap-4">
-      <div className="flex-1 min-w-0">
-        <p className="text-body font-medium text-primary">{title}</p>
-        <p className="text-small text-muted mt-0.5">{description}</p>
-        {note && <p className="text-small text-warning-text mt-1.5" data-testid={noteTestId}>{note}</p>}
-        {error && <p className="text-small text-critical mt-1.5" role="alert" data-testid={errorTestId}>{error}</p>}
-      </div>
-      <span className={cn('text-small font-medium mt-0.5', checked ? 'text-primary' : 'text-muted')} aria-hidden="true">
-        {checked ? t('settings.portal.on') : t('settings.portal.off')}
-      </span>
-      <Toggle checked={checked} onChange={onChange} ariaLabel={title} disabled={disabled} />
-    </div>
-  )
-}
-
-/** Search + per-variant switch; each switch saves immediately. */
-function NonReturnableList() {
-  const { t } = useTranslation()
-  const { toast } = useToast()
-  const [search, setSearch] = useState('')
-  const [query, setQuery] = useState('')
-  const [items, setItems] = useState<PortalVariantRow[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
-  const [pending, setPending] = useState<Set<string>>(new Set())
-
-  // Debounce typing into the query that is actually fetched.
-  useEffect(() => {
-    const id = setTimeout(() => setQuery(search), 250)
-    return () => clearTimeout(id)
-  }, [search])
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(false)
-    getPortalVariants(query, 0, VARIANTS_PAGE)
-      .then(res => { if (!cancelled) { setItems(res.items); setTotal(res.total) } })
-      .catch(() => { if (!cancelled) setError(true) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [query])
-
-  async function loadMore() {
-    try {
-      const res = await getPortalVariants(query, Math.floor(items.length / VARIANTS_PAGE), VARIANTS_PAGE)
-      setItems(prev => [...prev, ...res.items.filter(v => !prev.some(p => p.id === v.id))])
-      setTotal(res.total)
-    } catch {
-      toast({ tone: 'error', message: t('settings.portal.products.loadFailed') })
-    }
-  }
-
-  async function toggle(v: PortalVariantRow, value: boolean) {
-    setPending(p => new Set(p).add(v.id))
-    try {
-      await setVariantNonReturnable(v.id, value)
-      setItems(prev => prev.map(x => (x.id === v.id ? { ...x, nonReturnable: value } : x)))
-    } catch {
-      toast({ tone: 'error', message: t('settings.portal.products.saveFailed') })
-    } finally {
-      setPending(p => { const n = new Set(p); n.delete(v.id); return n })
-    }
-  }
-
-  return (
-    <div className="p-6 space-y-3">
-      <div>
-        <p className="text-body font-medium text-primary">{t('settings.portal.products.title')}</p>
-        <p className="text-small text-muted mt-0.5">{t('settings.portal.products.description')}</p>
-      </div>
-      <label htmlFor="portal-product-search" className="sr-only">{t('settings.portal.products.searchLabel')}</label>
-      <Input
-        id="portal-product-search"
-        type="search"
-        iconStart={Search}
-        placeholder={t('settings.portal.products.searchPlaceholder')}
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-      />
-      {error ? (
-        <p className="text-small text-critical">{t('settings.portal.products.loadFailed')}</p>
-      ) : loading ? (
-        <div className="space-y-2"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div>
-      ) : items.length === 0 ? (
-        <p className="text-small text-muted py-2">{t('settings.portal.products.empty')}</p>
-      ) : (
-        <ul className="rounded-xl border border-line divide-y divide-line" data-testid="variant-list">
-          {items.map(v => {
-            const name = [v.productTitle, v.variantTitle].filter(Boolean).join(', ')
-            return (
-              <li key={v.id} className="flex items-center gap-3 px-4 py-3" data-testid="variant-row">
-                <div className="flex-1 min-w-0">
-                  <p className="text-body text-primary truncate">
-                    {v.productTitle}
-                    {(v.variantTitle || v.sku) && (
-                      <span className="text-muted">
-                        {v.variantTitle && <> · {v.variantTitle}</>}
-                        {v.sku && <> · <bdi className="font-mono text-small" dir="ltr">{v.sku}</bdi></>}
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <span className={cn('text-small', v.nonReturnable ? 'text-warning-text font-medium' : 'text-muted')}>
-                  {v.nonReturnable ? t('settings.portal.products.nonReturnable') : t('settings.portal.products.returnable')}
-                </span>
-                <Toggle
-                  checked={v.nonReturnable}
-                  disabled={pending.has(v.id)}
-                  onChange={value => toggle(v, value)}
-                  ariaLabel={t('settings.portal.products.switchLabel', { name })}
-                />
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      {!loading && !error && items.length < total && (
-        <Button variant="ghost" size="sm" onClick={loadMore}>
-          {t('settings.portal.products.showMore', { count: total - items.length })}
-        </Button>
-      )}
     </div>
   )
 }
@@ -763,45 +361,3 @@ function isFieldKey(f: string): f is FieldKey {
     'exchangesEnabled', 'font', 'refundMethods'].includes(f)
 }
 
-// ── P2: refund methods ────────────────────────────────────────────────────────
-
-const PORTAL_REFUND_METHODS = ['bank_transfer', 'instapay', 'wallet', 'cash'] as const
-
-function orderedMethods(v: string[]): string[] {
-  return PORTAL_REFUND_METHODS.filter(m => v.includes(m))
-}
-
-function sameMethods(a: string[], b: string[]): boolean {
-  return orderedMethods(a).join() === orderedMethods(b).join()
-}
-
-/** Settings → Returns portal → "Refund methods" (design/Traced_portal_refund_method_dc.html, a). */
-function RefundMethodsRow({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
-  const { t } = useTranslation()
-  return (
-    <div className="p-6 space-y-4" role="group" aria-labelledby="refund-methods-title" data-testid="refund-methods-settings">
-      <div>
-        <h3 id="refund-methods-title" className="text-body font-semibold text-primary">{t('settings.portal.refundMethods.title')}</h3>
-        <p className="text-small text-muted mt-1">{t('settings.portal.refundMethods.help')}</p>
-      </div>
-      <div className="grid gap-2.5 sm:grid-cols-2">
-        {PORTAL_REFUND_METHODS.map(m => {
-          const checked = value.includes(m)
-          return (
-            <label key={m}
-              className={cn('flex gap-3 items-start rounded-xl border p-3.5 cursor-pointer transition-colors',
-                checked ? 'border-trace-blue ring-1 ring-trace-blue bg-trace-blue/5' : 'border-grey-100 bg-panel hover:border-grey-300')}>
-              <input type="checkbox" checked={checked} className="w-[18px] h-[18px] mt-0.5 accent-trace-blue shrink-0"
-                onChange={e => onChange(e.target.checked ? orderedMethods([...value, m]) : value.filter(x => x !== m))} />
-              <span>
-                <span className="block text-body font-semibold text-primary">{t(`settings.portal.refundMethods.methods.${m}.title`)}</span>
-                <span className="block text-small text-muted">{t(`settings.portal.refundMethods.methods.${m}.desc`)}</span>
-              </span>
-            </label>
-          )
-        })}
-      </div>
-      <p className="text-small text-muted rounded-lg bg-elevated px-3.5 py-3">{t('settings.portal.refundMethods.note')}</p>
-    </div>
-  )
-}

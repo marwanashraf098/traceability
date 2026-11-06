@@ -102,13 +102,13 @@ describe('Settings → Returns portal', () => {
     const enabled = screen.getByRole('switch', { name: 'Customers can start returns' })
     expect(enabled).toHaveAttribute('aria-checked', 'true')
     expect(enabled.tagName).toBe('BUTTON')
-    expect(screen.getByRole('switch', { name: 'Approve requests automatically' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('radio', { name: /^Approve automatically/ })).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
   })
 
   test('edit and save sends one PUT with every field, including branding', async () => {
     const user = await loaded()
-    await user.click(screen.getByRole('switch', { name: 'Approve requests automatically' }))
+    await user.click(screen.getByRole('radio', { name: /^Approve automatically/ }))
     const window = screen.getByLabelText('Return window')
     await user.clear(window)
     await user.type(window, '14')

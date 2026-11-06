@@ -1,7 +1,6 @@
 import { Navigate, useSearchParams } from 'react-router-dom'
-import { useTranslation } from 'react-i18next'
 import { getRoleFromToken } from '../../api'
-import { Tabs } from '../../components/ui'
+import SettingsNav, { SettingsTabKey } from './SettingsNav'
 import BusinessTab from './BusinessTab'
 import ConnectionsTab from './ConnectionsTab'
 import UsersTab from './UsersTab'
@@ -14,7 +13,7 @@ import LabelsTab from './LabelsTab'
 import PlacesTab from './PlacesTab'
 import { useCapabilities } from '../../capabilities'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'places' | 'pickpack' | 'labels' | 'couriers' | 'portal' | 'privacy'
+type TabKey = SettingsTabKey
 const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'couriers', 'portal']
 
 /**
@@ -51,9 +50,12 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  * Warehouse places S1 adds "Places" (?tab=places, after Locations) — zones / racks / shelves / boxes and their
  * stickers. Owner and manager. Places rollout: shown in every store — its "Use places in this store" switch is the
  * merchant's (PlacesTab).
+ *
+ * Returns portal redesign (Pass A): the row of tabs became a grouped vertical menu (SettingsNav — Store / Operations /
+ * Returns / Account). Same keys, same ?tab= links, same visibility and fallback rules; "Labels" reads
+ * "Labels & printing".
  */
 export default function SettingsPage() {
-  const { t } = useTranslation()
   const role = getRoleFromToken()
   const isOwner = role === 'owner'
   const isWorker = role === 'worker'
@@ -74,21 +76,15 @@ export default function SettingsPage() {
   const requested = searchParams.get('tab') as TabKey | null
   const activeTab = requested && visibleTabs.includes(requested) ? requested : visibleTabs[0]
 
-  function selectTab(key: string) {
+  function selectTab(key: TabKey) {
     setSearchParams({ tab: key })
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-h1 text-primary">{t('settings.title')}</h1>
+    <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+      <SettingsNav visible={visibleTabs} active={activeTab} onSelect={selectTab} />
 
-      <Tabs
-        tabs={visibleTabs.map(key => ({ key, label: t(`settings.tabs.${key}`) }))}
-        activeKey={activeTab}
-        onChange={selectTab}
-      />
-
-      <div className="pt-2">
+      <div className="flex-1 min-w-0 lg:pt-1">
         {activeTab === 'business' && <BusinessTab isOwner={isOwner} />}
         {activeTab === 'connections' && <ConnectionsTab readOnly={!isOwner} />}
         {activeTab === 'users' && <UsersTab />}

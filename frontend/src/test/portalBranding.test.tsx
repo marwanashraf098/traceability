@@ -131,12 +131,19 @@ describe('Settings → Returns portal → Branding', () => {
     // Saved without "Save changes" — which stays disabled (nothing else changed).
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
     await waitFor(() => expect(screen.getByTestId('preview-en-logo')).toHaveAttribute('src', 'data:image/png;base64,eA=='))
+    expect(screen.getByTestId('preview-en')).toHaveTextContent('Start a return')
+    // One preview with an EN / عربي switch (redesign Pass A): the Arabic preview uses the same logo.
+    await user.click(within(screen.getByTestId('preview-language')).getByRole('button', { name: 'عربي' }))
     expect(screen.getByTestId('preview-ar-logo')).toHaveAttribute('src', 'data:image/png;base64,eA==')
+    expect(screen.getByTestId('preview-ar')).toHaveAttribute('dir', 'rtl')
+    expect(screen.getByTestId('preview-ar')).toHaveTextContent('ابدأ الإرجاع')
 
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     expect(await screen.findByText('Logo removed')).toBeInTheDocument()
     expect(calls.some(c => c.method === 'DELETE' && c.url.endsWith('/tenant/portal-settings/logo'))).toBe(true)
     expect(screen.getByTestId('logo-dropzone')).toBeInTheDocument()
+    expect(screen.getByTestId('preview-ar-wordmark')).toHaveTextContent('Nour Studio')
+    await user.click(within(screen.getByTestId('preview-language')).getByRole('button', { name: 'EN' }))
     expect(screen.getByTestId('preview-en-wordmark')).toHaveTextContent('Nour Studio')
   })
 
@@ -171,6 +178,9 @@ describe('Settings → Returns portal → Branding', () => {
 
     await user.click(within(picker).getByRole('radio', { name: 'Tajawal' }))
     expect(screen.getByTestId('portal-preview')).toHaveAttribute('data-font', 'tajawal')
+    expect(screen.getByTestId('preview-en').style.getPropertyValue('--pp-font')).toContain("'Tajawal'")
+    // Both languages: switch the one preview to Arabic (redesign Pass A).
+    await user.click(within(screen.getByTestId('preview-language')).getByRole('button', { name: 'عربي' }))
     expect(screen.getByTestId('preview-ar').style.getPropertyValue('--pp-font')).toContain("'Tajawal'")
     // Tajawal has no 600: its semibold is 700, never synthesized.
     expect(screen.getByTestId('preview-ar').style.getPropertyValue('--pp-w600')).toBe('700')

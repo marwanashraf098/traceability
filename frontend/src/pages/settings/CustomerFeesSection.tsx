@@ -1,16 +1,23 @@
-import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  CustomerFeeSettings, ExchangePricing, FeeArea, FeeAreaOverride, FeeKind, FeeMode, FeeRule, TransferCommandError,
-  addFeeAreaOverride, deleteFeeAreaOverride, getCustomerFees, getFeeAreas, getRoleFromToken, saveExchangePricing,
-  saveFeeRule, saveMerchantFaultReasons,
+  CustomerFeeSettings, ExchangePricing, FeeArea, FeeAreaOverride, FeeKind, FeeMode, FeeRule, FeeRuleInput,
+  TransferCommandError, addFeeAreaOverride, deleteFeeAreaOverride, getCustomerFees, getFeeAreas, getRoleFromToken,
+  saveExchangePricing, saveFeeRule, saveMerchantFaultReasons,
 } from '../../api'
 import { Button, Input, Toggle, cn, useToast } from '../../components/ui'
+import { RadioCards, SavesRightAway } from './portal/ui'
 
 /** The portal's return reasons, in the portal's order (PortalService.REASON_CODES). */
 export const REASON_CODES = ['wrong_size', 'damaged', 'not_as_pictured', 'wrong_item', 'changed_mind', 'other'] as const
 
 const KINDS: FeeKind[] = ['exchange', 'refund']
+
+/** What the editors show right now, saved or not — for the tab's plain-words summary. */
+export interface FeeDraft {
+  pricing?: ExchangePricing
+  rules?: Partial<Record<FeeKind, FeeRuleInput>>
+}
 
 /**
  * Returns portal fees F1 — Settings → Returns portal → Exchange pricing and Customer fees. Each block saves on its
@@ -19,17 +26,28 @@ const KINDS: FeeKind[] = ['exchange', 'refund']
  *
  * Wrapped in its own error boundary (prod report 2026-11-06: a render crash here blanked the whole settings page):
  * a failure shows "Something went wrong — Reload" in place of these cards and the rest of the page keeps working.
+ *
+ * Redesign Pass A: the tab places the two parts in its own sections — `part="pricing"` inside Exchanges, `part="fees"`
+ * (the Fee / Type / Amount / On table, the store's-fault reasons, fees by area) inside Refunds & fees — and passes the
+ * one loaded `settings` to both. With no `part` both render as two cards, and with no `settings` it loads its own.
+ * Endpoints, bodies and when each block saves are unchanged.
  */
-export default function CustomerFeesSection() {
+export default function CustomerFeesSection({ part = 'all', settings, onSettings, onDraft }: {
+  part?: 'all' | 'pricing' | 'fees'
+  /** Given by the tab (one load for both parts); undefined → loads its own. */
+  settings?: CustomerFeeSettings | null
+  onSettings?: (s: CustomerFeeSettings) => void
+  onDraft?: (d: FeeDraft) => void
+}) {
   return (
-    <FeesErrorBoundary>
-      <CustomerFeesCards />
+    <FeesErrorBoundary compact={part !== 'all'}>
+      <CustomerFeesCards part={part} given={settings} onSettings={onSettings} onDraft={onDraft} />
     </FeesErrorBoundary>
   )
 }
 
 /** Catches a render error inside the fee cards only. Logs the error and its component stack — never settings data. */
-export class FeesErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+export class FeesErrorBoundary extends Component<{ children: ReactNode; compact?: boolean }, { failed: boolean }> {
   state = { failed: false }
 
   static getDerivedStateFromError() {
@@ -41,58 +59,113 @@ export class FeesErrorBoundary extends Component<{ children: ReactNode }, { fail
   }
 
   render() {
-    return this.state.failed ? <FeesCrashed /> : this.props.children
+    return this.state.failed ? <FeesCrashed compact={this.props.compact} /> : this.props.children
   }
 }
 
-function FeesCrashed() {
+function FeesCrashed({ compact }: { compact?: boolean }) {
   const { t } = useTranslation()
   return (
-    <section className="card max-w-3xl p-6 space-y-3" role="alert" data-testid="customer-fees-crashed">
+    <div className={cn(compact ? 'p-6 space-y-3' : 'card max-w-3xl p-6 space-y-3')} role="alert" data-testid="customer-fees-crashed">
       <p className="text-body text-primary">{t('settings.portal.fees.crashed')}</p>
       <Button size="sm" variant="outline" onClick={() => window.location.reload()}>{t('settings.portal.fees.reload')}</Button>
-    </section>
+    </div>
   )
 }
 
-function CustomerFeesCards() {
-  const { t } = useTranslation()
+/** Loads the settings itself when the tab didn't pass them. */
+export function useCustomerFeeSettings(enabled = true): [CustomerFeeSettings | null, (s: CustomerFeeSettings) => void] {
   const [settings, setSettings] = useState<CustomerFeeSettings | null>(null)
-  const owner = getRoleFromToken() === 'owner'
-
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     getCustomerFees().then(s => { if (!cancelled) setSettings(s) }).catch(() => {})
     return () => { cancelled = true }
-  }, [])
+  }, [enabled])
+  return [settings, setSettings]
+}
+
+function CustomerFeesCards({ part, given, onSettings, onDraft }: {
+  part: 'all' | 'pricing' | 'fees'
+  given: CustomerFeeSettings | null | undefined
+  onSettings?: (s: CustomerFeeSettings) => void
+  onDraft?: (d: FeeDraft) => void
+}) {
+  const { t } = useTranslation()
+  const own = given === undefined
+  const [loaded, setLoaded] = useCustomerFeeSettings(own)
+  const settings = own ? loaded : given
+  const owner = getRoleFromToken() === 'owner'
+  const saved = (s: CustomerFeeSettings) => { if (own) setLoaded(s); onSettings?.(s) }
 
   if (!settings?.visible) return null
 
+  const ownerNote = !owner && <p className="text-small text-warning-text mt-1.5">{t('settings.portal.fees.ownerOnly')}</p>
+
+  const pricing = (
+    <ExchangePricingEditor value={settings.exchangePricing} owner={owner} onSaved={saved} onDraft={onDraft} />
+  )
+  const fees = (
+    <>
+      <FeeRulesTable rules={settings.rules} owner={owner} onSaved={saved} onDraft={onDraft} />
+      <ReasonsEditor value={settings.merchantFaultReasons} owner={owner} onSaved={saved} />
+      <AreaOverrides overrides={settings.overrides} owner={owner} onSaved={saved} />
+    </>
+  )
+
+  if (part === 'pricing') {
+    return (
+      <div className="divide-y divide-line" data-testid="customer-fees-pricing">
+        <div className="px-6 pt-5 pb-1">
+          <h4 className="text-body font-semibold text-primary">{t('settings.portal.fees.pricing.title')}</h4>
+          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.description')}</p>
+          {ownerNote}
+        </div>
+        {pricing}
+      </div>
+    )
+  }
+  if (part === 'fees') {
+    return (
+      <div className="divide-y divide-line" data-testid="customer-fees-rules">
+        <div className="px-6 pt-5 pb-4">
+          <h4 className="text-body font-semibold text-primary">{t('settings.portal.fees.title')}</h4>
+          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.table.help')}</p>
+          {ownerNote}
+        </div>
+        {fees}
+      </div>
+    )
+  }
   return (
     <div className="space-y-4" data-testid="customer-fees-section">
-      <section className="card divide-y divide-line max-w-3xl" aria-labelledby="exchange-pricing-title">
+      <section className="card overflow-hidden divide-y divide-line max-w-3xl" aria-labelledby="exchange-pricing-title">
         <div className="p-6">
           <h2 id="exchange-pricing-title" className="text-h3 text-primary">{t('settings.portal.fees.pricing.title')}</h2>
           <p className="text-small text-muted mt-1">{t('settings.portal.fees.pricing.description')}</p>
-          {!owner && <p className="text-small text-warning-text mt-1.5">{t('settings.portal.fees.ownerOnly')}</p>}
+          {ownerNote}
         </div>
-        <ExchangePricingEditor value={settings.exchangePricing} owner={owner} onSaved={setSettings} />
+        {pricing}
       </section>
 
-      <section className="card divide-y divide-line max-w-3xl" aria-labelledby="customer-fees-title">
+      <section className="card overflow-hidden divide-y divide-line max-w-3xl" aria-labelledby="customer-fees-title">
         <div className="p-6">
           <h2 id="customer-fees-title" className="text-h3 text-primary">{t('settings.portal.fees.title')}</h2>
           <p className="text-small text-muted mt-1">{t('settings.portal.fees.description')}</p>
-          {!owner && <p className="text-small text-warning-text mt-1.5">{t('settings.portal.fees.ownerOnly')}</p>}
+          {ownerNote}
         </div>
-        {KINDS.map(k => (
-          <RuleEditor key={k} kind={k} rule={settings.rules[k]} owner={owner} onSaved={setSettings} />
-        ))}
-        <ReasonsEditor value={settings.merchantFaultReasons} owner={owner} onSaved={setSettings} />
-        <AreaOverrides overrides={settings.overrides} owner={owner} onSaved={setSettings} />
+        {fees}
       </section>
     </div>
   )
+}
+
+/** Calls `report` whenever `value` changes (by content), without re-running when the callback's identity changes. */
+function useReport<V>(value: V, report: ((v: V) => void) | undefined) {
+  const ref = useRef(report)
+  ref.current = report
+  const key = JSON.stringify(value)
+  useEffect(() => { ref.current?.(value) }, [key])   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 // ── shared ───────────────────────────────────────────────────────────────────
@@ -169,12 +242,14 @@ function ModeChoice({ name, value, onChange, disabled }: {
 }) {
   const { t } = useTranslation()
   return (
-    <div role="radiogroup" className="inline-flex rounded-xl border border-line overflow-hidden">
+    <div role="radiogroup" className="inline-flex rounded-lg bg-elevated p-0.5 gap-0.5">
       {(['fixed', 'percent'] as FeeMode[]).map(m => (
         // `relative`: the sr-only radio is position:absolute — without a positioned label it is laid out against a far
         // ancestor, and focusing it on click scrolled the page away (prod 2026-11-06, ~3,500 px).
-        <label key={m} className={cn('relative px-3 py-1.5 text-small cursor-pointer select-none',
-          value === m ? 'bg-elevated text-primary font-medium' : 'text-muted', disabled && 'cursor-not-allowed opacity-60')}>
+        <label key={m} className={cn('relative rounded-md px-3 py-1.5 text-small cursor-pointer select-none whitespace-nowrap',
+          'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-trace-blue',
+          value === m ? 'bg-surface text-primary font-semibold shadow-e1' : 'text-muted hover:text-primary',
+          disabled && 'cursor-not-allowed opacity-60')}>
           <input type="radio" className="sr-only" name={name} value={m} checked={value === m} disabled={disabled}
             onChange={() => onChange(m)} />
           {t(`settings.portal.fees.mode.${m}`)}
@@ -197,8 +272,8 @@ export function describeFee(f: { mode: FeeMode; amount: number | null; percent: 
 
 // ── exchange pricing ─────────────────────────────────────────────────────────
 
-function ExchangePricingEditor({ value, owner, onSaved }: {
-  value: ExchangePricing; owner: boolean; onSaved: (s: CustomerFeeSettings) => void
+function ExchangePricingEditor({ value, owner, onSaved, onDraft }: {
+  value: ExchangePricing; owner: boolean; onSaved: (s: CustomerFeeSettings) => void; onDraft?: (d: FeeDraft) => void
 }) {
   const { t } = useTranslation()
   const [anyProduct, setAnyProduct] = useState(value.anyProduct)
@@ -208,57 +283,98 @@ function ExchangePricingEditor({ value, owner, onSaved }: {
   const { saving, error, run } = useSave(onSaved)
   const dirty = anyProduct !== value.anyProduct || freeSwaps !== value.freeVariantSwaps || lowerOnly !== value.sameOrLowerOnly || num(maxDiff) !== numOrNull(value.maxDifference)
   const ro = !owner || saving
+  const input: ExchangePricing = {
+    anyProduct, sameOrLowerOnly: lowerOnly, maxDifference: lowerOnly ? null : num(maxDiff), freeVariantSwaps: freeSwaps,
+  }
+  useReport(input, onDraft ? (pricing => onDraft({ pricing })) : undefined)
 
   return (
-    <div className="p-6 space-y-4" data-testid="exchange-pricing">
-      <div className="flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-body font-medium text-primary">{t('settings.portal.fees.pricing.anyProduct')}</p>
-          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.anyProductHelp')}</p>
-        </div>
-        <Toggle checked={anyProduct} onChange={setAnyProduct} ariaLabel={t('settings.portal.fees.pricing.anyProduct')} disabled={ro} />
+    <div className="divide-y divide-line" data-testid="exchange-pricing">
+      <div className="px-6 py-5 space-y-3">
+        <p id="exchange-swap-to-title" className="text-body font-semibold text-primary">{t('settings.portal.fees.swapTo.title')}</p>
+        <RadioCards labelledBy="exchange-swap-to-title" value={anyProduct ? 'any' : 'same'} disabled={ro}
+          onChange={v => setAnyProduct(v === 'any')} testId="exchange-swap-to"
+          options={[
+            { value: 'same', title: t('settings.portal.fees.swapTo.same'), description: t('settings.portal.fees.swapTo.sameDesc') },
+            { value: 'any', title: t('settings.portal.fees.swapTo.any'), description: t('settings.portal.fees.swapTo.anyDesc') },
+          ]} />
       </div>
-      <div className="flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-body font-medium text-primary">{t('settings.portal.fees.pricing.freeSwaps')}</p>
-          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.freeSwapsHelp')}</p>
-        </div>
-        <Toggle checked={freeSwaps} onChange={setFreeSwaps} ariaLabel={t('settings.portal.fees.pricing.freeSwaps')} disabled={ro} />
+      <PricingSwitch title={t('settings.portal.fees.pricing.freeSwaps')} help={t('settings.portal.fees.pricing.freeSwapsHelp')}
+        checked={freeSwaps} onChange={setFreeSwaps} disabled={ro} />
+      <div className="px-6 py-5 space-y-4">
+        <PricingSwitch inline title={t('settings.portal.fees.pricing.lowerOnly')} help={t('settings.portal.fees.pricing.lowerOnlyHelp')}
+          checked={lowerOnly} onChange={setLowerOnly} disabled={ro} />
+        {!lowerOnly && (
+          <div className="space-y-1 rounded-xl border border-line bg-elevated/60 p-4">
+            <MoneyInput id="exchange-max-difference" label={t('settings.portal.fees.pricing.maxDifference')} value={maxDiff}
+              onChange={setMaxDiff} disabled={ro} testId="max-difference" />
+            <p className="text-small text-muted">{t('settings.portal.fees.pricing.maxDifferenceHelp')}</p>
+          </div>
+        )}
       </div>
-      <div className="flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-body font-medium text-primary">{t('settings.portal.fees.pricing.lowerOnly')}</p>
-          <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.pricing.lowerOnlyHelp')}</p>
-        </div>
-        <Toggle checked={lowerOnly} onChange={setLowerOnly} ariaLabel={t('settings.portal.fees.pricing.lowerOnly')} disabled={ro} />
-      </div>
-      {!lowerOnly && (
-        <div className="space-y-1">
-          <MoneyInput id="exchange-max-difference" label={t('settings.portal.fees.pricing.maxDifference')} value={maxDiff}
-            onChange={setMaxDiff} disabled={ro} testId="max-difference" />
-          <p className="text-small text-muted">{t('settings.portal.fees.pricing.maxDifferenceHelp')}</p>
-        </div>
-      )}
-      <ErrorLine error={error} testId="error-exchange-pricing" />
-      {owner && (
-        <div className="flex justify-end">
-          <Button size="sm" disabled={!dirty || saving}
-            onClick={() => run(() => saveExchangePricing({
-              anyProduct, sameOrLowerOnly: lowerOnly, maxDifference: lowerOnly ? null : num(maxDiff),
-              freeVariantSwaps: freeSwaps,
-            }))}>
-            {t('settings.portal.fees.save')}
-          </Button>
+      {(error || owner) && (
+        <div className="px-6 py-4 flex items-center justify-end gap-3 flex-wrap">
+          <span className="flex-1 min-w-0"><ErrorLine error={error} testId="error-exchange-pricing" /></span>
+          {owner && (
+            <Button size="sm" disabled={!dirty || saving} onClick={() => run(() => saveExchangePricing(input))}>
+              {t('settings.portal.fees.save')}
+            </Button>
+          )}
         </div>
       )}
     </div>
   )
 }
 
+function PricingSwitch({ title, help, checked, onChange, disabled, inline }: {
+  title: string; help: string; checked: boolean; onChange: (v: boolean) => void; disabled: boolean; inline?: boolean
+}) {
+  return (
+    <div className={cn('flex items-start gap-4', !inline && 'px-6 py-5')}>
+      <div className="flex-1 min-w-0">
+        <p className="text-body font-semibold text-primary">{title}</p>
+        <p className="text-small text-muted mt-0.5 max-w-xl">{help}</p>
+      </div>
+      <Toggle checked={checked} onChange={onChange} ariaLabel={title} disabled={disabled} />
+    </div>
+  )
+}
+
 // ── fee rules ────────────────────────────────────────────────────────────────
 
-function RuleEditor({ kind, rule, owner, onSaved }: {
+/** The mockup's Fee / Type / Amount / On table — one row per kind, each still saved by its own Save. */
+const FEE_GRID = 'sm:grid sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1.1fr)_minmax(0,1fr)_auto] sm:gap-4 sm:items-center'
+
+function FeeRulesTable({ rules, owner, onSaved, onDraft }: {
+  rules: Record<FeeKind, FeeRule | null>; owner: boolean; onSaved: (s: CustomerFeeSettings) => void; onDraft?: (d: FeeDraft) => void
+}) {
+  const { t } = useTranslation()
+  const drafts = useRef<Partial<Record<FeeKind, FeeRuleInput>>>({})
+  const report = onDraft && ((kind: FeeKind, r: FeeRuleInput) => {
+    drafts.current = { ...drafts.current, [kind]: r }
+    onDraft({ rules: drafts.current })
+  })
+  return (
+    <div data-testid="fee-rules-table">
+      <div className={cn('hidden px-6 py-2.5 bg-elevated/70 text-caption font-semibold text-muted', FEE_GRID)} aria-hidden="true">
+        <span>{t('settings.portal.fees.table.fee')}</span>
+        <span>{t('settings.portal.fees.table.type')}</span>
+        <span>{t('settings.portal.fees.table.amount')}</span>
+        <span className="text-end">{t('settings.portal.fees.table.on')}</span>
+      </div>
+      <div className="divide-y divide-line border-t border-line">
+        {KINDS.map(k => (
+          <RuleEditor key={k} kind={k} rule={rules[k]} owner={owner} onSaved={onSaved}
+            onDraft={report ? (r => report(k, r)) : undefined} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RuleEditor({ kind, rule, owner, onSaved, onDraft }: {
   kind: FeeKind; rule: FeeRule | null; owner: boolean; onSaved: (s: CustomerFeeSettings) => void
+  onDraft?: (r: FeeRuleInput) => void
 }) {
   const { t } = useTranslation()
   const [enabled, setEnabled] = useState(rule?.enabled ?? false)
@@ -278,6 +394,7 @@ function RuleEditor({ kind, rule, owner, onSaved }: {
     minAmount: mode === 'percent' ? num(min) : null,
     maxAmount: mode === 'percent' ? num(max) : null,
   }), [enabled, mode, waive, amount, percent, min, max])
+  useReport(input, onDraft)
   const dirty = !rule
     ? enabled || amount !== '' || percent !== ''
     : input.enabled !== rule.enabled || input.mode !== modeOf(rule.mode) || input.waiveMerchantFault !== rule.waiveMerchantFault
@@ -286,57 +403,75 @@ function RuleEditor({ kind, rule, owner, onSaved }: {
 
   const title = t(`settings.portal.fees.${kind}.title`)
   return (
-    <div className="p-6 space-y-4" data-testid={`fee-rule-${kind}`}>
-      <div className="flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-body font-medium text-primary">{title}</p>
-          <p className="text-small text-muted mt-0.5">{t(`settings.portal.fees.${kind}.description`)}</p>
+    <div className="px-6 py-4 space-y-3" data-testid={`fee-rule-${kind}`}>
+      <div className={cn('flex flex-col gap-3', FEE_GRID)}>
+        <div className={cn('flex items-start gap-4 sm:block', !enabled && 'opacity-70')}>
+          <div className="flex-1 min-w-0">
+            <p className="text-body font-semibold text-primary">{title}</p>
+            <p className="text-small text-muted mt-0.5">{t(`settings.portal.fees.${kind}.description`)}</p>
+          </div>
         </div>
-        <span className={cn('text-small font-medium mt-0.5', enabled ? 'text-primary' : 'text-muted')} aria-hidden="true">
-          {enabled ? t('settings.portal.on') : t('settings.portal.off')}
-        </span>
-        <Toggle checked={enabled} onChange={setEnabled} ariaLabel={title} disabled={ro} />
+        <div><ModeChoice name={`fee-mode-${kind}`} value={mode} onChange={setMode} disabled={ro} /></div>
+        <div>
+          {mode === 'fixed' ? (
+            <AmountField id={`fee-amount-${kind}`} label={t('settings.portal.fees.amount')} unit={t('settings.portal.fees.currency')}
+              value={amount} onChange={setAmount} disabled={ro} testId={`fee-amount-${kind}`} max={30000} step={1} />
+          ) : (
+            <AmountField id={`fee-percent-${kind}`} label={t('settings.portal.fees.percent')} unit="%"
+              value={percent} onChange={setPercent} disabled={ro} testId={`fee-percent-${kind}`} max={100} step={0.01} decimal />
+          )}
+        </div>
+        <div className="flex items-center gap-3 sm:justify-end">
+          <span className={cn('text-small font-medium', enabled ? 'text-primary' : 'text-muted')} aria-hidden="true">
+            {enabled ? t('settings.portal.on') : t('settings.portal.off')}
+          </span>
+          <Toggle checked={enabled} onChange={setEnabled} ariaLabel={title} disabled={ro} />
+        </div>
       </div>
-      <ModeChoice name={`fee-mode-${kind}`} value={mode} onChange={setMode} disabled={ro} />
-      {mode === 'fixed' ? (
-        <MoneyInput id={`fee-amount-${kind}`} label={t('settings.portal.fees.amount')} value={amount} onChange={setAmount}
-          disabled={ro} testId={`fee-amount-${kind}`} />
-      ) : (
-        <div className="flex flex-wrap gap-4">
-          <label htmlFor={`fee-percent-${kind}`} className="flex flex-col gap-1 text-small text-muted">
-            {t('settings.portal.fees.percent')}
-            <span className="flex items-center gap-2">
-              <span className="w-24">
-                <Input id={`fee-percent-${kind}`} type="number" min={0} max={100} step={0.01} inputMode="decimal"
-                  value={percent} disabled={ro} data-testid={`fee-percent-${kind}`} onChange={e => setPercent(e.target.value)} />
-              </span>
-              <span className="text-body text-muted">%</span>
-            </span>
-          </label>
+      {/* Percentage: the stored min / max sit under the row — never hidden while percent is chosen. */}
+      {mode === 'percent' && (
+        <div className="flex flex-wrap gap-4 rounded-xl border border-line bg-elevated/60 p-3.5">
           <MoneyInput id={`fee-min-${kind}`} label={t('settings.portal.fees.min')} value={min} onChange={setMin} disabled={ro} />
           <MoneyInput id={`fee-max-${kind}`} label={t('settings.portal.fees.max')} value={max} onChange={setMax} disabled={ro} />
         </div>
       )}
-      <label className="flex items-start gap-2 text-body text-primary">
-        <input type="checkbox" className="mt-1" checked={waive} disabled={ro} onChange={e => setWaive(e.target.checked)}
-          data-testid={`fee-waive-${kind}`} />
-        <span>
-          {t('settings.portal.fees.waive')}
-          <span className="block text-small text-muted">
-            {t(mode === 'fixed' ? 'settings.portal.fees.waiveFixedHelp' : 'settings.portal.fees.waivePercentHelp')}
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <label className="flex items-start gap-2 text-small text-primary flex-1 min-w-[220px]">
+          <input type="checkbox" className="mt-0.5 w-4 h-4 accent-trace-blue shrink-0" checked={waive} disabled={ro}
+            onChange={e => setWaive(e.target.checked)} data-testid={`fee-waive-${kind}`} />
+          <span>
+            {t('settings.portal.fees.waive')}
+            <span className="block text-small text-muted">
+              {t(mode === 'fixed' ? 'settings.portal.fees.waiveFixedHelp' : 'settings.portal.fees.waivePercentHelp')}
+            </span>
           </span>
-        </span>
-      </label>
-      <ErrorLine error={error} testId={`error-fee-${kind}`} />
-      {owner && (
-        <div className="flex justify-end">
+        </label>
+        {owner && (
           <Button size="sm" disabled={!dirty || saving}
             onClick={() => run(() => saveFeeRule(kind, input))}>
             {t('settings.portal.fees.save')}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
+      <ErrorLine error={error} testId={`error-fee-${kind}`} />
     </div>
+  )
+}
+
+/** A number in a table cell: the column header names it; the label stays for screen readers. */
+function AmountField({ id, label, unit, value, onChange, disabled, testId, max, step, decimal }: {
+  id: string; label: string; unit: string; value: string; onChange: (v: string) => void; disabled?: boolean
+  testId: string; max: number; step: number; decimal?: boolean
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <label htmlFor={id} className="sr-only">{label}</label>
+      <span className="w-28">
+        <Input id={id} type="number" min={0} max={max} step={step} inputMode={decimal ? 'decimal' : 'numeric'}
+          value={value} disabled={disabled} data-testid={testId} onChange={e => onChange(e.target.value)} />
+      </span>
+      <span className="text-body text-muted">{unit}</span>
+    </span>
   )
 }
 
@@ -350,20 +485,28 @@ function ReasonsEditor({ value, owner, onSaved }: {
   const { saving, error, run } = useSave(onSaved)
   const dirty = picked.length !== value.length || picked.some(r => !value.includes(r))
   return (
-    <fieldset className="p-6 space-y-3" data-testid="merchant-fault-reasons">
+    <fieldset className="px-6 py-5 space-y-3" data-testid="merchant-fault-reasons">
       <legend className="sr-only">{t('settings.portal.fees.reasons.title')}</legend>
       <div>
-        <p className="text-body font-medium text-primary">{t('settings.portal.fees.reasons.title')}</p>
+        <p className="text-body font-semibold text-primary">{t('settings.portal.fees.reasons.title')}</p>
         <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.reasons.description')}</p>
       </div>
-      <div className="grid sm:grid-cols-2 gap-2">
-        {REASON_CODES.map(r => (
-          <label key={r} className="flex items-center gap-2 text-body text-primary">
-            <input type="checkbox" checked={picked.includes(r)} disabled={!owner || saving} data-testid={`reason-${r}`}
-              onChange={e => setPicked(p => e.target.checked ? [...p, r] : p.filter(x => x !== r))} />
-            {t(`exchangesRefunds.requests.reasons.${r}`)}
-          </label>
-        ))}
+      <div className="flex flex-wrap gap-2">
+        {REASON_CODES.map(r => {
+          const on = picked.includes(r)
+          return (
+            <button key={r} type="button" aria-pressed={on} disabled={!owner || saving} data-testid={`reason-${r}`}
+              onClick={() => setPicked(p => on ? p.filter(x => x !== r) : [...p, r])}
+              className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-small font-medium transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-trace-blue disabled:cursor-not-allowed',
+                on ? 'border-trace-blue bg-trace-blue/10 text-trace-blue-hover' : 'border-line bg-panel text-primary hover:border-grey-300',
+                (!owner || saving) && 'opacity-70')}>
+              {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
+                aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>}
+              {t(`exchangesRefunds.requests.reasons.${r}`)}
+            </button>
+          )
+        })}
       </div>
       <ErrorLine error={error} testId="error-reasons" />
       {owner && (
@@ -395,9 +538,9 @@ function AreaOverrides({ overrides, owner, onSaved }: {
   }
 
   return (
-    <div className="p-6 space-y-3" data-testid="fee-area-overrides">
+    <div className="px-6 py-5 space-y-3" data-testid="fee-area-overrides">
       <div>
-        <p className="text-body font-medium text-primary">{t('settings.portal.fees.areas.title')}</p>
+        <p className="text-body font-semibold text-primary">{t('settings.portal.fees.areas.title')}{owner && <SavesRightAway />}</p>
         <p className="text-small text-muted mt-0.5">{t('settings.portal.fees.areas.description')}</p>
       </div>
       {overrides.length === 0 ? (
