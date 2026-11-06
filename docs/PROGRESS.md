@@ -5,8 +5,8 @@
 ## Current state
 
 **Shopify-native returns S3b — exchange shadow orders + reservation from approval (2026-11-06; branch
-`feat/s3b-shadow-orders` off main f09e32b0, NOT merged, NOT deployed; migration V219 — number to be re-checked on main
-AND confirmed for prod by Marawan right before merge).** See CLAUDE.md (S3b paragraph) for the rules.
+`feat/s3b-shadow-orders` rebased on main a5e4e0fd, NOT deployed; migration V219 — main ends at V218, prod ends at
+V218 and V219 is free (Marawan, 17:41)).** See CLAUDE.md (S3b paragraph) for the rules.
 - **Not in S3b:** Pick & Pack gating / Waiting for release (S3c), courier attach (S3d). Until S3c a shadow is never
   packable: status 'confirmed' keeps it out of the queue; scan() → NOT_PICKABLE, complete() → 409.
 - **Main reconcile hold:** an ENDED shadow (V219 state 'ended') no longer holds the store.
