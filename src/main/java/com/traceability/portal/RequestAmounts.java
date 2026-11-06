@@ -55,9 +55,13 @@ public class RequestAmounts {
             m.put("percent", snap.get("percent"));
             m.put("areaSource", snap.get("source"));
             m.put("refundDue", plain(a.get("refund_due")));
-            // F2: an exchange's fee is what the customer owes. Bosta COD stays 0 until F4 — the drawer shows it as
-            // an instruction to collect, nothing is sent to any courier.
+            // F2: an exchange's fee (F3: + the price difference) is what the customer owes. F4: who collects it.
             m.put("collect", plain(a.get("collect_cod")));
+            if ("exchange".equals(a.get("fee_kind")) && ((BigDecimal) a.get("collect_cod")).signum() > 0) {
+                Map<String, Object> c = collector(tenantId, requestId);
+                m.put("collector", c.get("collector"));
+                m.put("bookedCod", c.get("bookedCod"));
+            }
             // F3: an exchange's price difference (null when it didn't apply) and what the customer is owed.
             m.put("paidPrice", plain(a.get("original_unit_price")));
             m.put("replacementPrice", plain(a.get("replacement_unit_price")));
@@ -70,6 +74,32 @@ public class RequestAmounts {
             m.put("lines", parseList((String) a.get("lines_json")));
             return m;
         });
+    }
+
+    /**
+     * F4 — who collects an exchange's amount (only asked when there is one):
+     *   bosta         — booked with Bosta WITH that COD (booking_cod, V215): "Bosta will collect EGP X";
+     *   bosta_pending — a Bosta exchange not booked yet: Bosta will collect it once booked;
+     *   courier       — the merchant's own courier (G4 'manual' booking: other couriers, Lookup) or a portal
+     *                   pre-connect order (never a COD): "Ask your courier to collect EGP X" — display only;
+     *   merchant      — booked with Bosta without a COD (fees switched off at booking): collect it yourself.
+     * A pre-connect order is the one order merchant_orders hides.
+     */
+    Map<String, Object> collector(UUID tenantId, UUID requestId) {
+        Map<String, Object> r = jdbc.queryForList(
+            "SELECT rr.booking_status, rr.booking_cod, " +
+            "       NOT EXISTS (SELECT 1 FROM merchant_orders mo WHERE mo.id = rr.order_id AND mo.tenant_id = rr.tenant_id) AS pre_connect " +
+            "FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId).get(0);
+        String status = (String) r.get("booking_status");
+        BigDecimal booked = (BigDecimal) r.get("booking_cod");
+        Map<String, Object> m = new LinkedHashMap<>();
+        String who;
+        if ("manual".equals(status) || Boolean.TRUE.equals(r.get("pre_connect"))) who = "courier";
+        else if ("booked".equals(status) || "needs_review".equals(status)) who = booked != null ? "bosta" : "merchant";
+        else who = "bosta_pending";
+        m.put("collector", who);
+        m.put("bookedCod", "bosta".equals(who) ? plain(booked) : null);
+        return m;
     }
 
     /**

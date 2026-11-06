@@ -3436,8 +3436,13 @@ export interface RequestAmounts {
   percent: string | null
   areaSource: 'rule' | 'city' | 'district' | null
   refundDue: string | null
-  /** Exchange: what the customer pays (price difference + fee). Shown as an instruction — no courier collects it yet. */
+  /** Exchange: what the customer pays (price difference + fee). */
   collect: string | null
+  /** F4 — who collects it (present only when there is something to collect): Bosta as COD on the booked exchange,
+   *  Bosta once booked, the merchant's own courier (display only), or the merchant (booked without a COD). */
+  collector?: 'bosta' | 'bosta_pending' | 'courier' | 'merchant'
+  /** F4 — the COD booked with Bosta ('bosta' only). */
+  bookedCod?: string | null
   /** F3 — an exchange's price difference (null when it didn't apply) and what the customer is owed. */
   paidPrice?: string | null
   replacementPrice?: string | null

@@ -96,7 +96,22 @@ public class BostaV2Client {
                            String firstLine, String secondLine, String buildingNumber, String floor,
                            String apartment, String city, String districtId,
                            String receiverFirstName, String receiverLastName, String receiverPhone,
-                           String outboundDescription, String returnDescription, String returnNotes) {}
+                           String outboundDescription, String returnDescription, String returnNotes,
+                           java.math.BigDecimal cod) {
+        /** Pre-F4 shape: cod 0. */
+        public Exchange(String uniqueBusinessReference, String businessReference, String businessLocationId,
+                        String firstLine, String secondLine, String buildingNumber, String floor,
+                        String apartment, String city, String districtId,
+                        String receiverFirstName, String receiverLastName, String receiverPhone,
+                        String outboundDescription, String returnDescription, String returnNotes) {
+            this(uniqueBusinessReference, businessReference, businessLocationId, firstLine, secondLine, buildingNumber,
+                floor, apartment, city, districtId, receiverFirstName, receiverLastName, receiverPhone,
+                outboundDescription, returnDescription, returnNotes, java.math.BigDecimal.ZERO);
+        }
+    }
+
+    /** Bosta's COD limit (Mode B amendment #3, COD: 0 ≤ cod ≤ 30,000). */
+    public static final java.math.BigDecimal COD_LIMIT = new java.math.BigDecimal("30000");
 
     public enum CreateOutcome {
         /** Bosta answered 2xx with a tracking number. */
@@ -185,6 +200,13 @@ public class BostaV2Client {
      * attempt, never retried here; outcome mapping as {@link #createReturnPickup}.
      */
     public CreateResult createExchange(String apiKey, Exchange e) {
+        // F4: a cod outside 0..30,000 is refused before any HTTP call — NOT_CREATED, nothing sent, safe to retry.
+        java.math.BigDecimal cod = e.cod() == null ? java.math.BigDecimal.ZERO : e.cod();
+        if (cod.signum() < 0 || cod.compareTo(COD_LIMIT) > 0) {
+            log.info("Bosta createExchange request={} outcome=NOT_CREATED reason=cod_limit", e.uniqueBusinessReference());
+            return new CreateResult(CreateOutcome.NOT_CREATED, null, null, 0,
+                "The amount to collect is more than Bosta can collect (EGP 30,000).", "cod_limit");
+        }
         CreateResult result = postCreate(apiKey, exchangePayload(mapper, e).toString());
         log.info("Bosta createExchange request={} outcome={} status={}",
             e.uniqueBusinessReference(), result.outcome(), result.httpStatus());
@@ -366,7 +388,11 @@ public class BostaV2Client {
     public static ObjectNode exchangePayload(ObjectMapper mapper, Exchange e) {
         ObjectNode b = mapper.createObjectNode();
         b.put("type", 30);
-        b.put("cod", 0);
+        // F4: the frozen collect amount (Mode B amendment #3, COD); 0 exactly as before when nothing is collected.
+        java.math.BigDecimal cod = e.cod() == null ? java.math.BigDecimal.ZERO : e.cod();
+        if (cod.signum() == 0) b.put("cod", 0);
+        else if (cod.stripTrailingZeros().scale() <= 0) b.put("cod", cod.longValueExact());
+        else b.put("cod", cod.setScale(2, java.math.RoundingMode.HALF_UP));
         ObjectNode drop = b.putObject("dropOffAddress");
         drop.put("firstLine", e.firstLine());
         putIfPresent(drop, "secondLine", e.secondLine());

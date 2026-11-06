@@ -173,6 +173,8 @@ export interface FeeQuote {
   customerOwed?: string | null
   /** Why this exchange can't be sent as chosen. */
   blocked?: 'approximate_price' | 'same_or_lower_only' | 'max_difference' | 'cod_limit'
+  /** F4: present ('bosta') when the Bosta courier collects what the customer pays on delivery of the replacement. */
+  codBy?: 'bosta'
 }
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */

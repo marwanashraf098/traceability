@@ -1372,7 +1372,7 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
           <span>{Number(q.collect ?? 0) > 0 ? t('fees.youPay') : owed > 0 ? t('fees.youGetBack') : t('fees.nothingToPay')}</span>
           <span dir="ltr" data-testid={owed > 0 ? 'fee-owed' : 'fee-collect'}>{money(owed > 0 ? q.customerOwed : q.collect)}</span>
         </div>
-        {Number(q.collect ?? 0) > 0 && <p className="pp-item__sub">{t('fees.exchangePayNote')}</p>}
+        {Number(q.collect ?? 0) > 0 && <p className="pp-item__sub" data-testid="fee-pay-note">{q.codBy === 'bosta' ? t('fees.bostaCollects', { amount: money(q.collect) }) : t('fees.exchangePayNote')}</p>}
         {owed > 0 && <p className="pp-item__sub">{t('fees.owedNote')}</p>}
         {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
         {q.blocked && (
@@ -1408,7 +1408,7 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       )}
       {q.feeWaived && <p className="pp-item__sub">{t('fees.waivedNote')}</p>}
       {refund && q.nothingOwed && <p className="pp-item__sub" data-testid="fee-nothing-owed">{t('fees.nothingOwed')}</p>}
-      {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub">{t('fees.exchangePayNote')}</p>}
+      {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub" data-testid="fee-pay-note">{q.codBy === 'bosta' ? t('fees.bostaCollects', { amount: money(q.collect) }) : t('fees.exchangePayNote')}</p>}
       {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
       {q.blocked && (
         <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">

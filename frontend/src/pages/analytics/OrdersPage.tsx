@@ -153,9 +153,21 @@ export default function OrdersPage() {
                         ),
                       },
                       {
-                        key: 'net', header: t('analytics.orders.cols.net'), align: 'end', sortable: true, render: r => r.netToYou == null
-                          ? <span className="text-muted">{r.refundAmountUnknown ? t('analytics.orders.refundUnknown') : t('analytics.orders.pending')}</span>
-                          : r.netToYou < 0 ? <Pill kind="crit">{fmt.money(r.netToYou)}</Pill> : fmt.money(r.netToYou),
+                        key: 'net', header: t('analytics.orders.cols.net'), align: 'end', sortable: true, render: r => {
+                          const net = r.netToYou == null
+                            ? <span className="text-muted">{r.refundAmountUnknown ? t('analytics.orders.refundUnknown') : t('analytics.orders.pending')}</span>
+                            : r.netToYou < 0 ? <Pill kind="crit">{fmt.money(r.netToYou)}</Pill> : fmt.money(r.netToYou)
+                          // F4 — COD collected on the order's exchanges: shown beside the net, never added to it.
+                          if (r.exchangeCod == null || r.exchangeCod <= 0) return net
+                          return (
+                            <span className="inline-flex flex-col items-end">
+                              {net}
+                              <span className="text-caption text-muted" data-testid="order-exchange-cod">
+                                {t('analytics.orders.exchangeCod', { amount: fmt.money(r.exchangeCod) })}
+                              </span>
+                            </span>
+                          )
+                        },
                       },
                     ]}
                   />

@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Returns portal fees F4 — type 30 COD + analytics (2026-11-06; branch `feat/portal-fees-f4` rebased on main 5ff71c98, NOT
+merged, NOT deployed; V215 (V214 is main reconcile) — check main AND ask Marawan about prod before merge).** Mode B amendment #3's COD clause,
+built. Behind `traced.portal-fees.settings-enabled` (off in prod): off = cod 0 and nothing stored, exactly as before.
+- **The rule (`portal.ExchangeCod`, the ONE):** cod = the frozen `return_request_amounts.collect_cod` (fee_kind
+  exchange); 0 when fees off, a refund (type 25 always 0), a portal pre-connect order, or nothing frozen. G4 ('manual')
+  requests are never booked with Bosta.
+- **Booking:** the claim UPDATE (to 'pending') also writes `return_requests.booking_cod` (V215: NULL = no COD; CHECK
+  exchange only, > 0, ≤ 30,000) — what is SENT. Still one POST per attempt, no retry. `BostaV2Client.createExchange`
+  refuses a cod outside 0..30,000 before any HTTP call (NOT_CREATED, status 0, safe to retry); `exchangePayload` writes
+  an integer when whole, else 2 decimals. Read-back: `ExchangeCod.matches(booking_cod, Bosta cod)` (none = 0) →
+  mismatch "cod" → the existing needs_review path.
+- **Display:** drawer amounts `collector` = bosta (booked with that COD: "Bosta will collect EGP X") / bosta_pending /
+  courier (G4 manual or pre-connect: "Ask your courier to collect EGP X", also in ManualCourierPanel — display only) /
+  merchant (booked without a COD: collect it yourself) + `bookedCod`. Portal quote `codBy: 'bosta'` (Bosta exchange,
+  pickup booking on, not pre-connect) → "Bosta will collect EGP X when the courier brings your new item." EN + AR.
+- **Finances:** `OrderFinanceService` adds `exchangeCod` to the ORIGINAL order's row — Σ cod of its requests' delivered
+  type 30 legs that were booked with a COD (by `bosta_tracking_number`); never in total (not a sale — internal EXC-
+  orders stay out of soldLines) or net; JSON key omitted when null. The Bosta money views are unchanged: each leg counts
+  once by its own `raw_cod` (Awaiting payout's unsettled estimate, In bank, payouts).
+- **Not changed (decide later):** Money "In transit" still excludes type 30 legs (pre-existing, so dashboard exchanges
+  with COD aren't in it either); an exchange leg's Bosta fee is still on the internal order, not the original's row.
+- **Tests:** PortalExchangeCodTest (14: c1–c3, m1–m2, n1, l1, r1, f1, p1, g1, a1, d1, x1); exchangeCod.test.tsx (10).
+  MigrationSmokeTest / NotTracedBackfillTest counts — standing approval.
+
 **Main reconcile sweep: statement timeouts since V204 fixed + one retry + repeated-failure alert (2026-11-06; branch
 `fix/main-reconcile-sweep-timeout` merged to main, NOT deployed; V214).** Write behaviour unchanged (writes live for
 Dolt + Nuvira).
@@ -41,9 +65,8 @@ Dolt + Nuvira).
 - **After deploy:** check the next sweeps (`main_reconcile_runs` kind 'sweep', status / sweep_attempt) and set
   TRACED_WATCHDOG_ALERT_EMAILS (or the new var) if it isn't set — without it the alert goes to the log only.
 
-**Returns portal fees F3 — exchange to a different product + price difference (2026-11-05; branch `feat/portal-fees-f3`
-rebased on main fbea5414 (S1b's V212 merged), NOT merged, NOT deployed; V213 — check main AND ask Marawan about prod
-before merge).** Behind
+**Returns portal fees F3 — exchange to a different product + price difference (2026-11-05; MERGED 63bb7408
+2026-11-06, NOT deployed; V213).** Behind
 `traced.portal-fees.settings-enabled` (off in prod): off = byte-identical (PortalExchangePricingOffGoldenTest).
 - **Calculator (`PortalAmounts`, still the ONE):** `calculate(kind, terms|null, fault, items, Difference|null)` — an
   exchange's difference = replacement's current `variants.price` − price paid (F0); net = difference + fee → `collect`

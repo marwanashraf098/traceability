@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button, cn, useToast } from '../../components/ui'
+import { formatMoney } from './requestFormat'
 import { ReturnRequestDetail, TransferCommandError, listGenericCarriers, setManualCourier } from '../../api'
 
 /**
@@ -97,6 +98,12 @@ export default function ManualCourierPanel({ detail, onChanged }: {
             <p data-testid="manual-courier-title">
               {t(exchange ? 'exchangesRefunds.requests.drawer.manual.titleExchange' : 'exchangesRefunds.requests.drawer.manual.title',
                 { carrier: shownCarrier })}
+            </p>
+          )}
+          {/* F4 — what the customer pays on this exchange: the merchant's courier collects it; Traced sends no COD. */}
+          {exchange && detail.amounts?.collector === 'courier' && Number(detail.amounts.collect ?? 0) > 0 && (
+            <p className="text-small text-secondary" data-testid="manual-courier-collect">
+              {t('exchangesRefunds.requests.fees.collectCourier', { amount: formatMoney(detail.amounts.collect, detail.amounts.currency) })}
             </p>
           )}
           {exchange && outboundSet && (
