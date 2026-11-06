@@ -315,17 +315,27 @@ public final class MainReconcileRules {
         // fulfillment never counts) on a live, non-cancelled order still waiting to be picked in Traced, minus what
         // Traced already covers on the line (pieces allocated in custody anywhere + pieces that left) and refund
         // restocks at Main. With fulfilled_from_main the two never subtract more than F − R − left per line.
-        "), fu_lines AS ( " +
-        "  SELECT o.id AS order_id, vv.id AS variant_id, SUM((li->>'quantity')::int) AS f_main " +
+        // Performance (2026-11-06): the tenant's orders are read ONCE per statement — fu_main expands the Main
+        // fulfillment lines of live, not-yet-packed orders (cheap column filters before any jsonb), keyed by the
+        // Shopify variant gid, MATERIALIZED so the planner can't re-run it per variant; the chunk's variants then
+        // hash-join on that gid, and AWAITING_PICK (subplans) runs only for orders that have such a line. Same rows
+        // as joining variants inside the expansion (v = this tenant's :ids, matched by external_id). Before, a
+        // 1,000-variant chunk re-scanned and re-expanded every order per variant and hit the 120 s statement_timeout
+        // (MainReconcileSweepPerformanceTest).
+        "), fu_main AS MATERIALIZED ( " +
+        "  SELECT o.id AS order_id, 'gid://shopify/ProductVariant/' || (li->>'variant_id') AS external_id, " +
+        "         SUM((li->>'quantity')::int) AS f_main " +
         "  FROM merchant_orders o " +
         "  CROSS JOIN LATERAL jsonb_array_elements(" + fulfillmentsSql("o") + ") f " +
         "  CROSS JOIN LATERAL jsonb_array_elements(" + lineItemsSql("f") + ") li " +
-        "  JOIN variants vv ON vv.tenant_id = o.tenant_id AND " + lineMatchesVariantSql("li", "vv") +
-        "                  AND vv.id = ANY(CAST(:ids AS uuid[])) " +
-        "  WHERE o.tenant_id = :t AND " + restShapeSql("f") + " AND lower(f->>'status') = 'success' " +
-        "    AND f->>'location_id' = :mainNum AND li->>'quantity' ~ '^[0-9]+$' " +
-        "    AND " + liveShopifyOrderSql("o") + " AND " + AWAITING_PICK_SQL +
-        "  GROUP BY o.id, vv.id " +
+        "  WHERE o.tenant_id = :t AND " + liveShopifyOrderSql("o") + " AND " + PackListRules.NOT_YET_PACKED_SQL +
+        "    AND " + restShapeSql("f") + " AND lower(f->>'status') = 'success' " +
+        "    AND f->>'location_id' = :mainNum AND li->>'quantity' ~ '^[0-9]+$' AND li->>'variant_id' IS NOT NULL " +
+        "  GROUP BY 1, 2 " +
+        "), fu_lines AS ( " +
+        "  SELECT x.order_id, v.variant_id, x.f_main " +
+        "  FROM fu_main x JOIN v ON v.external_id = x.external_id " +
+        "  WHERE EXISTS (SELECT 1 FROM merchant_orders o WHERE o.id = x.order_id AND o.tenant_id = :t AND " + AWAITING_PICK_SQL + ") " +
         "), fu AS ( " +
         "  SELECT x.variant_id, SUM(GREATEST(0, x.f_main " +
         "           - shopify_restocked_units(o.raw, o.tenant_id, o.id, vv.external_id, :mainGid) " +

@@ -194,6 +194,8 @@ traced:
     # The delivered_not_fulfilled_in_shopify alert: delivered more than N days ago, looked back M days.
     delivered-unfulfilled-days: ${TRACED_MAIN_RECONCILE_DELIVERED_UNFULFILLED_DAYS:7}
     delivered-unfulfilled-lookback-days: 90
+    # Internal alert (operators, not merchants) when a store's sweep fails twice in a row (each with its one retry).
+    alert-emails: ${TRACED_MAIN_RECONCILE_ALERT_EMAILS:${TRACED_WATCHDOG_ALERT_EMAILS:}}
 
 shopify:
   # Pin the API version — never use "latest" in code paths.

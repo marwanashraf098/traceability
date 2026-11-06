@@ -196,17 +196,71 @@ public class MainReconcileService {
             "  AND pending_touched_at < now() - ? * interval '1 second' ORDER BY pending_since LIMIT ?",
             UUID.class, tenantId, debounceSeconds, queueBatch));
         if (due == null || due.isEmpty()) return null;
-        return run(tenantId, "variant", due);
+        return run(tenantId, "variant", due, null);
     }
 
     public UUID runVariants(UUID tenantId, Collection<UUID> variantIds) {
         requireTenant(tenantId);
-        return run(tenantId, "variant", new ArrayList<>(variantIds));
+        return run(tenantId, "variant", new ArrayList<>(variantIds), null);
     }
 
     public UUID runSweep(UUID tenantId) {
+        return runSweep(tenantId, 1);
+    }
+
+    /**
+     * One store's run in a sweep: attempt 1, or 2 = its one retry later in the same sweep (MainReconcileJob).
+     * The attempt is only recorded on the run row (main_reconcile_runs.sweep_attempt, V214) — it changes nothing the
+     * run computes or writes.
+     */
+    public UUID runSweep(UUID tenantId, int attempt) {
         requireTenant(tenantId);
-        return run(tenantId, "sweep", null);
+        if (attempt != 1 && attempt != 2) throw new IllegalArgumentException("sweep attempt must be 1 or 2");
+        return run(tenantId, "sweep", null, attempt);
+    }
+
+    /** True when this run ended 'failed' (a store-level skip, or no run row at all, is not a failure). */
+    public boolean runFailed(UUID tenantId, UUID runId) {
+        requireTenant(tenantId);
+        if (runId == null) return false;
+        return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM main_reconcile_runs WHERE id = ? AND tenant_id = ? AND status = 'failed')",
+            Boolean.class, runId, tenantId)));
+    }
+
+    /** How many of the store's most recent sweeps failed in a row, and the last one's error. */
+    public record SweepStreak(int failedInARow, String lastError) {}
+
+    /**
+     * The store's sweeps, newest first, each decided by its LAST attempt: a retry (attempt 2) stands for its sweep and
+     * hides that sweep's failed first attempt; a first attempt with no retry stands alone. Runs still 'running' (a
+     * restart left them) are not outcomes and are passed over. Counts the leading failed sweeps (stops at the first that
+     * completed or was skipped). Looks at the last 20 finished sweep runs — enough for any streak worth alerting on.
+     */
+    public SweepStreak consecutiveFailedSweeps(UUID tenantId) {
+        requireTenant(tenantId);
+        List<Map<String, Object>> rows = tx.execute(s -> jdbc.queryForList(
+            "SELECT status, COALESCE(sweep_attempt, 1) AS attempt, error FROM main_reconcile_runs " +
+            "WHERE tenant_id = ? AND kind = 'sweep' AND status IN ('completed', 'skipped', 'failed') " +
+            "ORDER BY started_at DESC, id DESC LIMIT 20", tenantId));
+        int failed = 0;
+        String lastError = null;
+        boolean skipFirstAttempt = false;
+        for (Map<String, Object> r : rows == null ? List.<Map<String, Object>>of() : rows) {
+            int attempt = ((Number) r.get("attempt")).intValue();
+            if (skipFirstAttempt && attempt == 1) { skipFirstAttempt = false; continue; }   // the retried first attempt
+            skipFirstAttempt = attempt == 2;
+            if (!"failed".equals(r.get("status"))) break;
+            if (failed == 0) lastError = (String) r.get("error");
+            failed++;
+        }
+        return new SweepStreak(failed, lastError);
+    }
+
+    /** The store's shop domain, for the internal alert (null when the tenant has no active store). */
+    public String shopDomain(UUID tenantId) {
+        requireTenant(tenantId);
+        return storeRepository.findActiveStoreByTenant(tenantId).map(StoreRepository.Store::shopDomain).orElse(null);
     }
 
     private static void requireTenant(UUID tenantId) {
@@ -219,7 +273,7 @@ public class MainReconcileService {
         String numeric() { return gid == null ? null : gid.replaceAll("^.*/", ""); }
     }
 
-    private UUID run(UUID tenantId, String kind, List<UUID> variantIds) {
+    private UUID run(UUID tenantId, String kind, List<UUID> variantIds, Integer sweepAttempt) {
         if (!enabled) return null;   // global kill switch: no reads, no writes
         StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store != null && !allowlisted(store.shopDomain())) {
@@ -246,8 +300,10 @@ public class MainReconcileService {
 
         boolean write = store != null && writeEnabled(store.shopDomain());
         UUID runId = tx.execute(s -> jdbc.queryForObject(
-            "INSERT INTO main_reconcile_runs (tenant_id, kind, mode, location_id, shopify_location_id) VALUES (?, ?, ?, ?, ?) RETURNING id",
-            UUID.class, tenantId, kind, write ? "write" : "report_only", main == null ? null : main.id(), main == null ? null : main.gid()));
+            "INSERT INTO main_reconcile_runs (tenant_id, kind, mode, location_id, shopify_location_id, sweep_attempt) " +
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, kind, write ? "write" : "report_only", main == null ? null : main.id(), main == null ? null : main.gid(),
+            sweepAttempt == null ? null : sweepAttempt.shortValue()));
         Timestamp startedAt = tx.execute(s -> jdbc.queryForObject(
             "SELECT started_at FROM main_reconcile_runs WHERE id = ? AND tenant_id = ?", Timestamp.class, runId, tenantId));
 
