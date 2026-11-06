@@ -98,7 +98,34 @@ public class VariantStockService {
             GROUP BY a.order_item_id
         ) alloc ON alloc.order_item_id = oi.id
         """ + FulfillService.PICKABLE_SHIPMENT_GATE + """
+          AND o.external_id NOT LIKE 'internal:shopify-exchange:%'
         GROUP BY oi.variant_id
+        """;
+
+    /**
+     * S3b — a Shopify-native exchange shadow order's replacement is committed from the return's APPROVAL, by count:
+     * the shadow's live lines (order_items.quantity = what Traced still has to send, ShopifyShadowOrders) minus their
+     * active allocations, while the shadow is in a reserving status ({@link ShopifyShadowOrders#LIVE_STATUSES_SQL}) —
+     * no courier leg needed, on_hold ignored (a held exchange keeps its piece aside). Never a pinned piece, never a
+     * Shopify write. The pickable gate above excludes the prefix, so no unit is counted twice. Binds tenantId twice.
+     */
+    private static final String SHADOW_COMMITTED_SQL = """
+        SELECT oi.variant_id,
+               SUM(GREATEST(oi.quantity - COALESCE(alloc.active_count, 0), 0)) AS committed
+        FROM warehouse_orders o
+        JOIN order_items oi ON oi.order_id = o.id AND oi.tenant_id = o.tenant_id
+        LEFT JOIN (
+            SELECT a.order_item_id, COUNT(*) AS active_count
+            FROM allocations a
+            WHERE a.tenant_id = ? AND a.status = 'active'
+            GROUP BY a.order_item_id
+        ) alloc ON alloc.order_item_id = oi.id
+        WHERE o.tenant_id = ?
+          AND o.external_id LIKE 'internal:shopify-exchange:%'
+          AND o.status::text IN """ + ShopifyShadowOrders.LIVE_STATUSES_SQL + """
+
+        GROUP BY oi.variant_id
+        HAVING SUM(GREATEST(oi.quantity - COALESCE(alloc.active_count, 0), 0)) > 0
         """;
 
     private static final String ON_HAND_SQL = """
@@ -128,6 +155,10 @@ public class VariantStockService {
         Map<UUID, Long> committedByVariant = new HashMap<>();
         jdbc.query(COMMITTED_SQL, (RowCallbackHandler) rs -> committedByVariant.put(
             rs.getObject("variant_id", UUID.class), rs.getLong("committed")),
+            tenantId, tenantId);
+
+        jdbc.query(SHADOW_COMMITTED_SQL, (RowCallbackHandler) rs -> committedByVariant.merge(
+            rs.getObject("variant_id", UUID.class), rs.getLong("committed"), Long::sum),
             tenantId, tenantId);
 
         Map<UUID, Long> onHandByVariant = new HashMap<>();

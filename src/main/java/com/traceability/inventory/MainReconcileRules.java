@@ -124,7 +124,9 @@ public final class MainReconcileRules {
     public static final String EXCHANGE_HOLD_SQL =
         "SELECT EXISTS (SELECT 1 FROM warehouse_orders so WHERE so.tenant_id = ? " +
         "               AND so.external_id LIKE 'internal:shopify-exchange:%' " +
-        "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost')) " +
+        "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost') " +
+        // S3b: a shadow whose reservation ended (V219 state 'ended': every line 0) holds nothing.
+        "               AND NOT " + ShopifyShadowOrders.endedShadowSql("so") + ") " +
         "    OR EXISTS (SELECT 1 FROM exchanges e " +
         "               JOIN merchant_orders xo ON xo.id = e.outbound_order_id AND xo.tenant_id = e.tenant_id " +
         "               JOIN order_items xi ON xi.order_id = xo.id AND xi.tenant_id = xo.tenant_id " +

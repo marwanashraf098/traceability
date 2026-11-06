@@ -41,6 +41,16 @@ public class ShopifyReturnsSync {
         this.tokenProvider = tokenProvider;
     }
 
+    /** S3b: shadow orders are reconciled after every return / fulfillment-order upsert (post-commit). */
+    private com.traceability.inventory.ShopifyShadowOrders shadows;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShadows(com.traceability.inventory.ShopifyShadowOrders shadows) { this.shadows = shadows; }
+
+    private void reconcileShadows(UUID orderId) {
+        if (shadows != null) shadows.reconcileQuietly(orderId);
+    }
+
     /** The store's token, or null when it needs re-auth / can't be had right now (quiet skip). */
     public String token(UUID tenantId, UUID storeId) {
         try {
@@ -57,6 +67,16 @@ public class ShopifyReturnsSync {
     }
 
     public Outcome syncReturn(UUID tenantId, UUID storeId, String shopDomain, String token, String returnGid) {
+        return syncReturn(tenantId, storeId, shopDomain, token, returnGid, true);
+    }
+
+    /**
+     * withFulfillmentOrders (S3b Gap A): a return with exchange lines also re-reads its order's fulfillment orders —
+     * returns/* never names them and orders/updated only refreshes FOs already mirrored, so the exchange FO would
+     * otherwise arrive only with a fulfillment_orders/* webhook. syncOrder passes false (it syncs the FOs itself).
+     */
+    Outcome syncReturn(UUID tenantId, UUID storeId, String shopDomain, String token, String returnGid,
+                       boolean withFulfillmentOrders) {
         JsonNode ret;
         try {
             ret = gateway.fetchReturn(shopDomain, token, returnGid);
@@ -66,15 +86,19 @@ public class ShopifyReturnsSync {
         granted(tenantId, storeId, shopDomain);
         if (ret == null) return Outcome.NOT_FOUND;
         String orderGid = ret.path("order").path("id").asText("");
-        return TenantContext.runAs(tenantId, () -> {
-            UUID orderId = store.tracedOrderId(storeId, orderGid);
-            if (orderId == null) {
-                log.debug("Shopify return {} on {}: order {} isn't in Traced — ignored", returnGid, shopDomain, orderGid);
-                return Outcome.NOT_IN_TRACED;
-            }
-            store.upsertReturn(storeId, orderId, ret);
-            return Outcome.SYNCED;
-        });
+        UUID orderId = TenantContext.runAs(tenantId, () -> store.tracedOrderId(storeId, orderGid));
+        if (orderId == null) {
+            log.debug("Shopify return {} on {}: order {} isn't in Traced — ignored", returnGid, shopDomain, orderGid);
+            return Outcome.NOT_IN_TRACED;
+        }
+        TenantContext.runAs(tenantId, () -> store.upsertReturn(storeId, orderId, ret));
+        boolean hasExchangeLines = ret.path("exchangeLineItems").path("nodes").size() > 0;
+        if (withFulfillmentOrders && hasExchangeLines) {
+            Outcome o = syncOrderFulfillmentOrders(tenantId, storeId, shopDomain, token, orderGid);
+            if (o == Outcome.ACCESS_DENIED) return o;
+        }
+        TenantContext.runAs(tenantId, () -> { reconcileShadows(orderId); return null; });
+        return Outcome.SYNCED;
     }
 
     public Outcome syncFulfillmentOrder(UUID tenantId, UUID storeId, String shopDomain, String foGid) {
@@ -96,6 +120,7 @@ public class ShopifyReturnsSync {
             UUID orderId = store.tracedOrderId(storeId, orderGid);
             if (orderId == null) return Outcome.NOT_IN_TRACED;
             store.upsertFulfillmentOrder(storeId, orderId, fo);
+            reconcileShadows(orderId);
             return Outcome.SYNCED;
         });
     }
@@ -109,10 +134,15 @@ public class ShopifyReturnsSync {
         UUID orderId = TenantContext.runAs(tenantId, () -> store.tracedOrderId(storeId, orderGid));
         if (orderId == null) return Outcome.NOT_IN_TRACED;
         for (String r : returnGids) {
-            Outcome o = syncReturn(tenantId, storeId, shopDomain, token, r);
+            Outcome o = syncReturn(tenantId, storeId, shopDomain, token, r, false);
             if (o == Outcome.ACCESS_DENIED) return o;
         }
         if (returnGids.isEmpty()) return Outcome.SYNCED;
+        return syncOrderFulfillmentOrders(tenantId, storeId, shopDomain, token, orderGid);
+    }
+
+    /** Every fulfillment order of one Shopify order (each upsert reconciles the order's shadows). */
+    private Outcome syncOrderFulfillmentOrders(UUID tenantId, UUID storeId, String shopDomain, String token, String orderGid) {
         List<String> fos;
         try {
             fos = gateway.fetchOrderFulfillmentOrderIds(shopDomain, token, orderGid);

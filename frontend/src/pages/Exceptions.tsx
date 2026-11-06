@@ -92,6 +92,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   shopify_location_inactive: { en: 'Traced Location Inactive In Shopify', ar: 'موقع Traced غير مُفعَّل في شوبيفاي' },
   // A transfer's pieces still counted at the main warehouse in Shopify
   transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
+  shopify_exchange_short: { en: 'Short For A Shopify Exchange', ar: 'نقص لاستبدال في شوبيفاي' },
+  shopify_exchange_shipped_in_shopify: { en: 'Exchange Shipped In Shopify', ar: 'شُحن الاستبدال في شوبيفاي' },
   // Shopify tracking-number edits (V200)
   tracking_changed_after_custody: { en: 'Waybill Changed After Pickup',      ar: 'تغيّرت البوليصة بعد خروج الطرد' },
   tracking_change_needs_review:   { en: 'Shopify Shows A Different Waybill', ar: 'شوبيفاي يعرض بوليصة مختلفة' },

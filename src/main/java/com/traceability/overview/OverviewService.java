@@ -428,6 +428,8 @@ public class OverviewService {
                 LIMIT 1
             ) s ON true
             WHERE o.tenant_id = ? AND o.placed_at IS NOT NULL AND o.placed_at < ?
+              AND NOT (""" + com.traceability.inventory.ShopifyShadowOrders.endedShadowSql("o") + """
+            )
             """,
             (rs, i) -> {
                 String orderStatus = rs.getString("status");

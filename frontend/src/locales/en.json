@@ -516,6 +516,8 @@
       "refund_pending_overdue": "Refund overdue",
       "return_items_overdue": "Return items late",
       "restocked_twice": "Restocked twice (Shopify and Traced)",
+      "shopify_exchange_short": "Short for a Shopify exchange",
+      "shopify_exchange_shipped_in_shopify": "Exchange shipped in Shopify, piece still available",
       "blocked_customer": "Customer on the blocklist",
       "shopify_edit_conflict": "Edited in Shopify after packing",
       "generic_delivered_without_pickup": "Delivered with no pickup scan",
@@ -5693,6 +5695,9 @@
       "comingBack": "Coming back from customer",
       "reason": "Reason: {{reason}}",
       "restocked": "Restocked in Shopify ×{{count}}",
+      "keptAside": "{{number}} · kept aside",
+      "keptAsideShort": "{{number}} · short by {{count}}",
+      "keptAsideEnded": "{{number}} · no longer kept aside",
       "readOnly": "Read-only — this return is managed in Shopify."
     },
     "state": {

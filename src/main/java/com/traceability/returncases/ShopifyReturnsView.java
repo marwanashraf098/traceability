@@ -196,7 +196,45 @@ public final class ShopifyReturnsView {
                 returnVariants.getOrDefault(e.getKey(), Set.of()),
                 evidence.getOrDefault(UUID.fromString((String) m.get("orderId")), Map.of())));
         }
+        keptAside(head, idArr);
         return head;
+    }
+
+    /**
+     * S3b — "#…-X1 · kept aside": the exchange shadow order Traced keeps for this return (V219). Key present only when a
+     * shadow exists (byte-identical otherwise). state: kept_aside | short (ShopifyShadowOrders.shortages, oldest first)
+     * | ended (+ endReason); units = what Traced still keeps aside.
+     */
+    private void keptAside(Map<UUID, Map<String, Object>> head, String[] idArr) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT s.return_id, s.order_id, o.number, s.state, s.end_reason, " +
+            "       (SELECT COALESCE(SUM(sl.live_quantity), 0) FROM shopify_exchange_shadow_lines sl " +
+            "         WHERE sl.shadow_id = s.id AND sl.tenant_id = s.tenant_id) AS units " +
+            "FROM shopify_exchange_shadows s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "WHERE s.return_id = ANY (?::uuid[]) AND s.tenant_id = " + TENANT, (Object) idArr);
+        if (rows.isEmpty()) return;
+        Map<UUID, Integer> shortByOrder = new java.util.HashMap<>();
+        for (com.traceability.inventory.ShopifyShadowOrders.VariantShort vs
+                : com.traceability.inventory.ShopifyShadowOrders.shortages(jdbc).values()) {
+            for (com.traceability.inventory.ShopifyShadowOrders.ShadowShort x : vs.shadows()) {
+                shortByOrder.merge(x.orderId(), x.shortBy(), Integer::sum);
+            }
+        }
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = head.get((UUID) r.get("return_id"));
+            if (m == null) continue;
+            UUID orderId = (UUID) r.get("order_id");
+            Map<String, Object> k = new LinkedHashMap<>();
+            k.put("orderId", orderId.toString());
+            k.put("number", r.get("number"));
+            int shortBy = shortByOrder.getOrDefault(orderId, 0);
+            String state = "ended".equals(r.get("state")) ? "ended" : shortBy > 0 ? "short" : "kept_aside";
+            k.put("state", state);
+            k.put("units", ((Number) r.get("units")).intValue());
+            k.put("shortBy", shortBy);
+            k.put("endReason", r.get("end_reason"));
+            m.put("keptAside", k);
+        }
     }
 
     /** Units of a variant that came back on an order, by grade — from {@link OrderReturnState} (pieces and untracked units). */

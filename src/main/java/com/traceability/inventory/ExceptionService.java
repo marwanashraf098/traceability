@@ -43,6 +43,19 @@ public class ExceptionService {
     private final Clock               clock;
     private final ShipmentLinkService shipmentLinkService;
 
+    /**
+     * S3b: "Exchange shipped in Shopify, piece still available in Traced" stays OFF until S3c lets Traced pack shadows —
+     * before that every Shopify-fulfilled exchange would raise it. The reservation still ends either way.
+     * {@code traced.shopify-exchange.shipped-alert-enabled} (default false); S3c turns it on.
+     */
+    private boolean shippedInShopifyAlertEnabled = false;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShippedInShopifyAlertEnabled(
+            @org.springframework.beans.factory.annotation.Value("${traced.shopify-exchange.shipped-alert-enabled:false}") boolean on) {
+        this.shippedInShopifyAlertEnabled = on;
+    }
+
     public ExceptionService(JdbcTemplate jdbc, Clock clock, ShipmentLinkService shipmentLinkService) {
         this.jdbc                = jdbc;
         this.clock               = clock;
@@ -212,6 +225,10 @@ public class ExceptionService {
         all.addAll(detectShopifyLocationInactive(tenantId));
         // A transfer left out pieces whose arrival hadn't reached Shopify; it has since — Shopify counts them at main.
         all.addAll(detectTransferStockNotRemoved(tenantId));
+        // Shopify-native returns S3b — exchange shadow orders (V219): stock short for a kept-aside replacement, and a
+        // replacement Shopify fulfilled while Traced still had it on the shelf.
+        all.addAll(detectShopifyExchangeShort(tenantId));
+        if (shippedInShopifyAlertEnabled) all.addAll(detectShopifyExchangeShippedInShopify(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
@@ -335,6 +352,8 @@ public class ExceptionService {
         Map.entry("shopify_connection_lost/store",             OrderLink.NONE),
         Map.entry("shopify_location_inactive/location",        OrderLink.NONE),
         Map.entry("transfer_stock_not_removed/transfer",       OrderLink.NONE),
+        Map.entry("shopify_exchange_short/variant",            OrderLink.NONE),           // per variant (shadows are never in Orders)
+        Map.entry("shopify_exchange_shipped_in_shopify/order", OrderLink.DIRECT),         // order_id = the ORIGINAL order
         Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
         Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
         Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
@@ -395,7 +414,8 @@ public class ExceptionService {
         Map.entry("generic_delivered_without_pickup", "other"),
         Map.entry("tracking_changed_after_custody",   "other"),
         Map.entry("superseded_waybill_moving",        "other"),
-        Map.entry("delivered_not_fulfilled_in_shopify", "other"));
+        Map.entry("delivered_not_fulfilled_in_shopify", "other"),
+        Map.entry("shopify_exchange_shipped_in_shopify", "other"));
 
     /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
     public static String reasonGroupOf(String type) {
@@ -441,7 +461,8 @@ public class ExceptionService {
         "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED",
         "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED",
         "shopify_connection_lost",       "SHOPIFY_RECONNECTED",
-        "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE");
+        "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE",
+        "shopify_exchange_short",        "STOCK_COVERS_EXCHANGES");
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -848,6 +869,63 @@ public class ExceptionService {
             "        AND er.subject_key = 'restocked_twice:' || o.id || ':' || v.id || ':' || x.qty) " +
             "ORDER BY a.occurred_at ASC",
             tid, tid, tid);
+    }
+
+    /**
+     * shopify_exchange_short (MEDIUM, S3b, condition-only) — one per variant: the live Shopify-native exchange shadows'
+     * unallocated demand that available stock can't cover (ShopifyShadowOrders.shortages — oldest approval covered
+     * first, so the newest shadows are named). Clears itself when stock covers them.
+     */
+    private List<Map<String, Object>> detectShopifyExchangeShort(UUID tid) {
+        Map<UUID, ShopifyShadowOrders.VariantShort> shorts = ShopifyShadowOrders.shortages(jdbc);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ShopifyShadowOrders.VariantShort vs : shorts.values()) {
+            List<Map<String, Object>> v = jdbc.queryForList(
+                "SELECT 'shopify_exchange_short' AS type, 'MEDIUM' AS severity, 'variant' AS subject_type, " +
+                "       v.id AS variant_id, v.sku, v.title AS variant_title, pr.title AS product_title FROM variants v " +
+                "JOIN products pr ON pr.id = v.product_id WHERE v.id = ? AND v.tenant_id = ?", vs.variantId(), tid);
+            if (v.isEmpty()) continue;
+            Map<String, Object> m = new LinkedHashMap<>(v.get(0));
+            m.put("short_by", vs.shortBy());
+            m.put("shadow_numbers", String.join(", ", vs.shadows().stream()
+                .map(x -> x.number() + " (" + x.shortBy() + ")").toList()));
+            m.put("shadow_order_ids", vs.shadows().stream().map(ShopifyShadowOrders.ShadowShort::orderId).toList());
+            m.put("subject_key", "shopify_exchange_short:" + vs.variantId());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * shopify_exchange_shipped_in_shopify (MEDIUM, S3b) — a shadow line Shopify fulfilled itself (its exchange
+     * fulfillment order CLOSED) while Traced never sent the piece (no allocation on the line left custody) and an
+     * available piece of the variant is still on Traced's shelf. The reservation already ended (ShopifyShadowOrders).
+     * order_id = the ORIGINAL order (shadows are never in Orders); the shipped quantity is in the key.
+     */
+    private List<Map<String, Object>> detectShopifyExchangeShippedInShopify(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_exchange_shipped_in_shopify' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       s.original_order_id AS order_id, oo.number AS order_number, so.number AS shadow_number, " +
+            "       s.order_id AS shadow_order_id, v.id AS variant_id, v.sku, v.title AS variant_title, " +
+            "       pr.title AS product_title, sl.shipped_in_shopify AS shipped, sl.updated_at AS occurred_at, " +
+            "       'shopify_exchange_shipped_in_shopify:' || sl.id || ':' || sl.shipped_in_shopify AS subject_key " +
+            "FROM shopify_exchange_shadow_lines sl " +
+            "JOIN shopify_exchange_shadows s ON s.id = sl.shadow_id AND s.tenant_id = sl.tenant_id " +
+            "JOIN warehouse_orders so ON so.id = s.order_id AND so.tenant_id = s.tenant_id " +
+            "JOIN merchant_orders oo ON oo.id = s.original_order_id AND oo.tenant_id = s.tenant_id " +
+            "JOIN variants v ON v.id = sl.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE sl.tenant_id = ? AND sl.shipped_in_shopify > 0 AND sl.live_quantity = 0 " +
+            "  AND sl.stop_reason = 'shipped_in_shopify' " +
+            "  AND NOT EXISTS (SELECT 1 FROM allocations a JOIN pieces p ON p.id = a.piece_id " +
+            "                  WHERE a.order_item_id = sl.order_item_id AND a.tenant_id = sl.tenant_id " +
+            "                    AND a.status = 'packed' AND p.status::text IN (" + OrderLineFreeze.leftCustodySqlList() + ")) " +
+            "  AND EXISTS (SELECT 1 FROM pieces p WHERE p.tenant_id = sl.tenant_id AND p.variant_id = sl.variant_id " +
+            "              AND p.status = 'available'::piece_status) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = sl.tenant_id " +
+            "      AND er.exception_type = 'shopify_exchange_shipped_in_shopify' " +
+            "      AND er.subject_key = 'shopify_exchange_shipped_in_shopify:' || sl.id || ':' || sl.shipped_in_shopify) " +
+            "ORDER BY sl.updated_at", tid);
     }
 
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
@@ -2569,6 +2647,31 @@ public class ExceptionService {
                     + " أيام لكنه ما زال غير منفّذ في شوبيفاي، لذلك ما زال شوبيفاي يحتسب مخزونه كمحجوز. "
                     + "علّمه كمنفّذ في شوبيفاي (أو ألغِه إن لم يتم).");
                 item.put("suggestedAction", "fulfill_in_shopify");
+                item.put("actionUrl", "/orders/" + item.get("order_id"));
+            }
+            case "shopify_exchange_short" -> {
+                String product = str(item, "product_title") + (item.get("variant_title") != null ? " / " + item.get("variant_title") : "");
+                String n = str(item, "short_by");
+                String numbers = str(item, "shadow_numbers");
+                item.put("descriptionEn", "Short by " + n + " — " + product + ": not enough stock for the exchange(s) made in "
+                    + "Shopify that Traced is keeping aside (" + numbers + "; oldest are covered first). Receive more, or "
+                    + "the newest exchange waits.");
+                item.put("descriptionAr", "ناقص " + n + " — " + product + ": لا يوجد مخزون كافٍ للاستبدالات التي تمت في "
+                    + "شوبيفاي ويحتفظ بها Traced جانباً (" + numbers + "؛ الأقدم أولاً). استلم المزيد، وإلا ينتظر أحدث استبدال.");
+                item.put("suggestedAction", "receive_stock");
+                item.put("actionUrl", "/receiving");
+            }
+            case "shopify_exchange_shipped_in_shopify" -> {
+                String product = str(item, "product_title") + (item.get("variant_title") != null ? " / " + item.get("variant_title") : "");
+                String n = str(item, "shipped");
+                String shadow = str(item, "shadow_number");
+                item.put("descriptionEn", "Exchange shipped in Shopify, piece still available in Traced — " + shadow + ", "
+                    + product + ", " + n + " unit(s). Shopify fulfilled the exchange without Traced, so Traced stopped keeping "
+                    + "it aside. If the piece really left, adjust it in Lookup; then resolve.");
+                item.put("descriptionAr", "تم شحن الاستبدال في شوبيفاي والقطعة ما زالت متاحة في Traced — " + shadow + "، "
+                    + product + "، " + n + " قطعة. نفّذ شوبيفاي الاستبدال بدون Traced، فتوقف Traced عن حجزها. إن خرجت القطعة "
+                    + "فعلاً، عدّلها من البحث، ثم أغلق التنبيه.");
+                item.put("suggestedAction", "check_piece_in_lookup");
                 item.put("actionUrl", "/orders/" + item.get("order_id"));
             }
             case "transfer_stock_not_removed" -> {

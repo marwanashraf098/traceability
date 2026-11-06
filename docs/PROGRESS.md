@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Shopify-native returns S3b — exchange shadow orders + reservation from approval (2026-11-06; branch
+`feat/s3b-shadow-orders` rebased on main a5e4e0fd, NOT deployed; migration V219 — main ends at V218, prod ends at
+V218 and V219 is free (Marawan, 17:41)).** See CLAUDE.md (S3b paragraph) for the rules.
+- **Not in S3b:** Pick & Pack gating / Waiting for release (S3c), courier attach (S3d). Until S3c a shadow is never
+  packable: status 'confirmed' keeps it out of the queue; scan() → NOT_PICKABLE, complete() → 409.
+- **Main reconcile hold:** an ENDED shadow (V219 state 'ended') no longer holds the store.
+- **Review changes (2026-11-06):** the "Exchange shipped in Shopify, piece still available" alert is OFF until S3c
+  (`traced.shopify-exchange.shipped-alert-enabled`, default false; the reservation still ends); an ended shadow
+  (status 'confirmed', every line 0) was counted in late-to-pack — now excluded (`endedShadowSql`); n1 proves it is in
+  no late-to-pack (normal + embedded), no Overview count, no alert of any type, no committed demand. NOTE: a LIVE
+  shadow older than 24 h does count in late-to-pack (Q8), though Traced can't pack it until S3c.
+- **Backfill at deploy (Marawan runs):** `POST /api/v1/ops/shopify-shadows/backfill {"tenantId": …}` → dry-run counts
+  (originalOrders / shadowsToCreate / unitsToKeepAside), then `{"tenantId": …, "apply": true}`. Only the 2 stores with
+  returns access granted have mirror rows.
+- **Known edges:** a return mirrored before the original left custody gets its shadow on the next signal for that order
+  (orders/updated on fulfilment, a return / FO webhook, or the backfill); exchange lines whose variant isn't in the
+  catalogue are skipped (no shadow line).
+- **Tests:** ShopifyShadowOrdersTest (18: start, Q2, access, not packable, 5 end rules + partial + re-hold, stand-down,
+  X2, Short by N + card, golden committed, Gap A, Gap B, cross-tenant app_user, GDPR, backfill), revert-to-confirm on
+  every end rule, stand-down, Q2, Gap A, Gap B and the scan refusal; frontend kept-aside (EN + AR). Test edits:
+  migration counts (217 / 162); allowlist / registry ADDITIONS only (WarehouseOrdersAccessGuardTest,
+  OrdersTableAccessGuardTest, PortalOrderLeakTest + ShadowOrderLeakTest ops endpoint).
 **Portal fees prod fixes (2026-11-06; `fix/portal-fees-prod-bugs` MERGED fc47cc22, NOT deployed; migration V218 — prod was at V217. The S3b branch also has a local V218 and must renumber to V219.)**
 
 **Bug 1 — The Snouts: "exchange for another product" blocked as approximate.** Pre-F0 GraphQL-imported lines keep a
