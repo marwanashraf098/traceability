@@ -774,9 +774,28 @@ class ShopifyNativeReturnsMirrorTest {
         assertThat(s.count("shopify_fulfillment_orders")).isEqualTo(1);
 
         Map<String, String> after = observe(s, orderId);
+        // S2 (approved 2026-11-06): the order detail now SHOWS the Shopify return, read-only — the "From Shopify" card
+        // (shopifyReturns) and the "Exchange item for #…-R1" label (items[].exchangeFor). Only those two are stripped;
+        // every other field of the detail, and every other observation, must still be byte-identical.
+        after.put("orderDetail", withoutS2Display(after.get("orderDetail")));
+        before.put("orderDetail", mapper.writeValueAsString(mapper.readTree(before.get("orderDetail"))));   // same round-trip
         for (String k : before.keySet()) {
             assertThat(after.get(k)).as(k + " byte-identical").isEqualTo(before.get(k));
         }
+    }
+
+    /** The order detail JSON minus S2's two display-only fields (asserted present first). */
+    private String withoutS2Display(String detailJson) throws Exception {
+        ObjectNode d = (ObjectNode) mapper.readTree(detailJson);
+        assertThat(d.has("shopifyReturns")).as("S2 card present").isTrue();
+        d.remove("shopifyReturns");
+        int labelled = 0;
+        for (com.fasterxml.jackson.databind.JsonNode item : d.get("items")) {
+            if (item.has("exchangeFor")) labelled++;
+            ((ObjectNode) item).remove("exchangeFor");
+        }
+        assertThat(labelled).as("S2 exchange line label").isEqualTo(1);
+        return mapper.writeValueAsString(d);
     }
 
     private Map<String, String> observe(Shop s, UUID orderId) throws Exception {
