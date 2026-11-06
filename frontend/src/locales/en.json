@@ -392,7 +392,8 @@
         "placeholder": "Add a note about this order",
         "addButton": "Add note",
         "error": "Couldn't load notes"
-      }
+      },
+      "exchangeItemFor": "Exchange item for {{name}}"
     },
     "timeline": {
       "system": "System",
@@ -5674,5 +5675,86 @@
     "noScans": "Nothing scanned yet.",
     "changeBox": "Choose another box",
     "done": "Done"
+  },
+  "shopifyReturns": {
+    "fromShopify": "From Shopify",
+    "tracedPortal": "Traced portal",
+    "duplicate": "Duplicate return",
+    "card": {
+      "exchange": "Exchange",
+      "return": "Return",
+      "titleExchange": "Exchange {{name}}",
+      "titleReturn": "Return {{name}}",
+      "requestedAt": "Requested in Shopify · {{date}}",
+      "duplicateOf": "Also requested in Traced: {{refs}}",
+      "goingOut": "Going out to customer",
+      "comingBack": "Coming back from customer",
+      "reason": "Reason: {{reason}}",
+      "restocked": "Restocked in Shopify ×{{count}}",
+      "readOnly": "Read-only — this return is managed in Shopify."
+    },
+    "state": {
+      "requested": "Requested",
+      "open": "Open",
+      "on_hold": "On hold",
+      "released": "Released",
+      "shipped": "Shipped",
+      "closed": "Closed",
+      "declined": "Declined",
+      "cancelled": "Cancelled"
+    },
+    "onHoldWith": "On hold · {{reason}}",
+    "holdReason": {
+      "AWAITING_PAYMENT": "Awaiting payment",
+      "AWAITING_RETURN_ITEMS": "Awaiting return items",
+      "HIGH_RISK_OF_FRAUD": "High risk of fraud",
+      "INCORRECT_ADDRESS": "Incorrect address",
+      "INVENTORY_OUT_OF_STOCK": "Out of stock",
+      "UNKNOWN_DELIVERY_DATE": "Unknown delivery date",
+      "ONLINE_STORE_POST_PURCHASE_CROSS_SELL": "Post-purchase offer",
+      "OTHER": "Other reason"
+    },
+    "inTracedLabel": "In Traced",
+    "inTraced": {
+      "expected": "Expected back · not scanned yet",
+      "partial": "Received {{received}} of {{units}}",
+      "awaiting_inspection": "Received · awaiting inspection",
+      "sellable": "Received · graded sellable",
+      "damaged": "Received · graded damaged",
+      "mixed": "Received · {{sellable}} sellable, {{damaged}} damaged",
+      "none": "Not received"
+    },
+    "reasons": {
+      "size-too-small": "Size too small",
+      "size-too-large": "Size too large",
+      "unwanted": "Changed their mind",
+      "not-as-described": "Not as described",
+      "wrong-item": "Wrong item sent",
+      "defective": "Damaged or defective",
+      "style": "Style",
+      "color": "Colour",
+      "other": "Other",
+      "unknown": "Unknown"
+    },
+    "unknownItem": "Item not in Traced's catalogue",
+    "list": {
+      "comingBack": "↩ {{item}} coming back",
+      "goingOut": "↪ {{item}} going out"
+    },
+    "filter": {
+      "label": "Source",
+      "all": "All",
+      "traced": "Traced portal",
+      "shopify": "From Shopify"
+    },
+    "columns": {
+      "request": "Request",
+      "source": "Source",
+      "items": "Items",
+      "shopifyStatus": "Shopify status",
+      "inTraced": "In Traced"
+    },
+    "permissionsNote": "Approve Traced's new Shopify permissions to see returns made in Shopify",
+    "readOnlyNote": "Shopify returns are read-only here. Traced books no courier for them; scan the item in Scan returns when it arrives."
   }
 }

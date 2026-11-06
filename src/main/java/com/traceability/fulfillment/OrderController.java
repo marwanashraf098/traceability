@@ -156,7 +156,11 @@ public class OrderController {
         String sku, int quantity, String imageUrl, List<AllocatedPiece> allocatedPieces,
         boolean addedAfterShipping,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
-        List<ReturnedUnit> returnedUnits) {}
+        List<ReturnedUnit> returnedUnits,
+        // Shopify-native returns S2: the line is a Shopify exchange line (linked in S1) — the return's name, e.g.
+        // "#1006-R1". Absent for every other line.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String exchangeFor) {}
 
     public record AttemptEntry(
         String attemptDate, String type, boolean succeeded,
@@ -209,7 +213,11 @@ public class OrderController {
         // derivation of the same query.
         boolean physicallyWithCourier,
         // V139 (2026-10-05): derived shipping badge — see OrderShippingBadge. Null = no badge.
-        OrderShippingBadge shippingBadge) {}
+        OrderShippingBadge shippingBadge,
+        // Shopify-native returns S2 (read-only): the order's Shopify returns (ShopifyReturnsView cards). Absent when
+        // the order has none — the detail of such an order is byte-identical to before S2.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+        List<Map<String, Object>> shopifyReturns) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
@@ -963,7 +971,8 @@ public class OrderController {
                         null,  // derivedStatus filled below
                         buildShopifyOrderUrl(rs.getString("shop_domain"), rs.getString("external_id")),
                         false,  // physicallyWithCourier filled below
-                        null    // shippingBadge filled below
+                        null,   // shippingBadge filled below
+                        null    // shopifyReturns filled below
                     );
                 }, orderId);
 
@@ -1167,7 +1176,8 @@ public class OrderController {
                 order.placedAt(), order.createdAt(),
                 items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
                 order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier,
-                shippingBadge(orderId));
+                shippingBadge(orderId),
+                new com.traceability.returncases.ShopifyReturnsView(jdbc).cardsForOrder(orderId));
         });
     }
 
@@ -1624,6 +1634,9 @@ public class OrderController {
                     .add(new ReturnedUnit(rs.getInt("unit_no"), rs.getString("grade"))),
             orderId);
 
+        // Shopify-native returns S2: lines that are a Shopify exchange line → the return's name.
+        Map<UUID, String> exchangeFor = new com.traceability.returncases.ShopifyReturnsView(jdbc).exchangeLineReturnNames(orderId);
+
         List<OrderItem> items = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             UUID itemId = (UUID) row.get("item_id");
@@ -1638,7 +1651,8 @@ public class OrderController {
                 (String) row.get("image_url"),
                 pieces,
                 Boolean.TRUE.equals(row.get("added_after_shipping")),
-                unitsByItem.getOrDefault(itemId, List.of())
+                unitsByItem.getOrDefault(itemId, List.of()),
+                exchangeFor.get(itemId)
             ));
         }
         return items;

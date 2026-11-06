@@ -388,7 +388,8 @@
         "placeholder": "أضف ملاحظة حول هذا الطلب",
         "addButton": "إضافة ملاحظة",
         "error": "تعذّر تحميل الملاحظات"
-      }
+      },
+      "exchangeItemFor": "قطعة استبدال للطلب {{name}}"
     },
     "timeline": {
       "system": "النظام",
@@ -6040,5 +6041,86 @@
     "noScans": "لم يُمسح شيء بعد.",
     "changeBox": "اختر صندوقًا آخر",
     "done": "تم"
+  },
+  "shopifyReturns": {
+    "fromShopify": "من Shopify",
+    "tracedPortal": "بوابة Traced",
+    "duplicate": "مرتجع مكرر",
+    "card": {
+      "exchange": "استبدال",
+      "return": "مرتجع",
+      "titleExchange": "استبدال {{name}}",
+      "titleReturn": "مرتجع {{name}}",
+      "requestedAt": "طُلب في Shopify · {{date}}",
+      "duplicateOf": "مطلوب أيضًا في Traced: {{refs}}",
+      "goingOut": "يُرسل إلى العميل",
+      "comingBack": "يرجع من العميل",
+      "reason": "السبب: {{reason}}",
+      "restocked": "أُعيد إلى مخزون Shopify ×{{count}}",
+      "readOnly": "للعرض فقط — يُدار هذا المرتجع في Shopify."
+    },
+    "state": {
+      "requested": "مطلوب",
+      "open": "مفتوح",
+      "on_hold": "معلّق",
+      "released": "جاهز للشحن",
+      "shipped": "تم الشحن",
+      "closed": "مغلق",
+      "declined": "مرفوض",
+      "cancelled": "ملغى"
+    },
+    "onHoldWith": "معلّق · {{reason}}",
+    "holdReason": {
+      "AWAITING_PAYMENT": "بانتظار الدفع",
+      "AWAITING_RETURN_ITEMS": "بانتظار وصول المرتجع",
+      "HIGH_RISK_OF_FRAUD": "خطر احتيال مرتفع",
+      "INCORRECT_ADDRESS": "عنوان غير صحيح",
+      "INVENTORY_OUT_OF_STOCK": "غير متوفر في المخزون",
+      "UNKNOWN_DELIVERY_DATE": "موعد توصيل غير معروف",
+      "ONLINE_STORE_POST_PURCHASE_CROSS_SELL": "عرض ما بعد الشراء",
+      "OTHER": "سبب آخر"
+    },
+    "inTracedLabel": "في Traced",
+    "inTraced": {
+      "expected": "متوقع رجوعه · لم يُمسح بعد",
+      "partial": "استُلم {{received}} من {{units}}",
+      "awaiting_inspection": "استُلم · بانتظار الفحص",
+      "sellable": "استُلم · صالح للبيع",
+      "damaged": "استُلم · تالف",
+      "mixed": "استُلم · {{sellable}} صالح للبيع، {{damaged}} تالف",
+      "none": "لم يُستلم"
+    },
+    "reasons": {
+      "size-too-small": "المقاس صغير",
+      "size-too-large": "المقاس كبير",
+      "unwanted": "غيّر رأيه",
+      "not-as-described": "غير مطابق للوصف",
+      "wrong-item": "وصله منتج خاطئ",
+      "defective": "تالف أو معيب",
+      "style": "الستايل",
+      "color": "اللون",
+      "other": "سبب آخر",
+      "unknown": "غير معروف"
+    },
+    "unknownItem": "منتج غير موجود في كتالوج Traced",
+    "list": {
+      "comingBack": "↪ {{item}} يرجع",
+      "goingOut": "↩ {{item}} يُرسل"
+    },
+    "filter": {
+      "label": "المصدر",
+      "all": "الكل",
+      "traced": "بوابة Traced",
+      "shopify": "من Shopify"
+    },
+    "columns": {
+      "request": "الطلب",
+      "source": "المصدر",
+      "items": "القطع",
+      "shopifyStatus": "حالة Shopify",
+      "inTraced": "في Traced"
+    },
+    "permissionsNote": "وافق على صلاحيات Traced الجديدة في Shopify لترى المرتجعات التي تمت في Shopify",
+    "readOnlyNote": "مرتجعات Shopify هنا للعرض فقط. لا يحجز Traced مندوبًا لها؛ امسح القطعة في «مسح المرتجعات» عند وصولها."
   }
 }
