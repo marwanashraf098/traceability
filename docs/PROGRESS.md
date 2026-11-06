@@ -32,11 +32,10 @@ Marawan right before merge).** Room for exchange shadow orders; no shadow row is
   re-runnable), ShadowOrderLeakTest (every endpoint; sales LISTs byte-identical with shadows present; 7 warehouse
   screens must change; drawer GETs 200 own / 404 other tenant; writes never reach another tenant's shadow; detectors,
   not-traced, Bosta candidates, pickable filter on both views, committed +2, portal lookup, hold query),
-  MainReconcileExchangeHoldTest (h1–h5). Revert-to-confirm done for the hold, the portal filter, the queue switch, both
+  MainReconcileExchangeHoldTest (h1–h6; h6: portal Bosta type 30 with a return_request_id, portal generic and Lookup `internal:exchange:rr:` replacements in custody never hold — reconcile still writes, so Dolt.eg / Nuvira keep writing). Revert-to-confirm done for the hold, the portal filter, the queue switch, both
   view predicates, the identity CHECK and the index predicate. Test edits: migration counts (MigrationSmokeTest 216,
   NotTracedBackfillTest 161); OrderLinePaidPricesTest r7's shadow FIXTURE gets origin 'shopify_exchange' (no assertion
-  changed); OrdersSqlScanner takes a pattern; OrderStatusBackwardWriteGuardTest's two regexes also match `warehouse_orders` (the switched writes had gone invisible to it — expected hit lists unchanged). **Pending approval:** `MerchantOrdersViewColumnsTest
-  .viewFiltersOnTheExternalIdPrefix` pins the old one-prefix predicate and fails by design.
+  changed); OrdersSqlScanner takes a pattern; OrderStatusBackwardWriteGuardTest's two regexes also match `warehouse_orders` (the switched writes had gone invisible to it — expected hit lists unchanged). `MerchantOrdersViewColumnsTest.viewFiltersOnTheExternalIdPrefix` now pins the two-prefix predicate (approved 2026-11-06).
 **Returns portal fees — per-store rollout (2026-11-06; branch `feat/portal-fees-tenants` on main 2f2fc46f, MERGED
 2026-11-06, NOT deployed; no migration; full backend 3997, only ExchangeBackfillTest red).** New env `TRACED_PORTAL_FEES_TENANTS` (comma-separated tenant ids). Fees are on for a
 tenant when `traced.portal-fees.settings-enabled` is true OR the tenant is listed; otherwise exactly as today.

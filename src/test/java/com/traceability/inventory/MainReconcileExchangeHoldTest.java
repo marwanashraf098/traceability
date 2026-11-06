@@ -46,6 +46,10 @@ import static org.mockito.Mockito.*;
  *   h2  an open shadow order holds; a delivered (finished) shadow doesn't
  *   h3  a dashboard exchange that is NOT Shopify-native (no -R reference) never holds — Traced-made exchanges reconcile
  *   h4  report-only store: nothing changes (its diffs are confirmed / unconfirmed exactly as before — no hold)
+ *   h6  Traced's own exchanges never hold (Dolt.eg / Nuvira write today and must keep writing): a portal Bosta type 30
+ *       (exchanges row WITH return_request_id — even with a -R-looking reference), a portal generic exchange
+ *       (internal:exchange:rr:, named by return_requests.replacement_order_id, no exchanges row) and a Lookup exchange
+ *       (origin 'lookup', same rr shape), each with its replacement piece reserved in custody → reconcile still writes
  *   h5  cross-tenant: tenant B's held replacement never holds tenant A (A writes); A's own does (same-tenant control)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -265,6 +269,44 @@ class MainReconcileExchangeHoldTest {
             appJdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, b.tenant(), b.tenant())));
         assertThat(own).as("same tenant").isTrue();
         assertThat(cross).as("tenant A's context never sees tenant B's replacement").isFalse();
+    }
+
+    @Test
+    void h6_portalAndLookupExchangesInCustody_neverHold_reconcileStillWrites() {
+        T t = tenant("h6");
+        V v = variant(t), w = variant(t);
+        UUID original = order(t, "{}");
+        orderItem(t, original, v, 1);
+        // (a) portal Bosta exchange: a type-30 exchanges row owned by a return request (adversarial -R reference)
+        UUID portalReq = request(t, original, "portal", "RR-HXAA");
+        String a = nativeReplacement(t, v, "SHOP:#1001-R1");
+        jdbc.update("UPDATE exchanges SET return_request_id = ? WHERE tenant_id = ? AND outbound_order_id = " +
+            "(SELECT current_order_id FROM pieces WHERE id = ?)", portalReq, t.tenant(), a);
+        // (b) portal generic exchange and (c) Lookup exchange: internal:exchange:rr:<request>, no exchanges row
+        for (String origin : List.of("portal", "lookup")) {
+            UUID req = request(t, original, origin, "portal".equals(origin) ? "RR-HXBB" : "RR-HXCC");
+            UUID rr = jdbc.queryForObject(
+                "INSERT INTO orders (tenant_id, store_id, external_id, number, status, payment_method, placed_at, raw) " +
+                "VALUES (?, ?, ?, ?, 'confirmed'::order_status, 'cod', now(), '{}'::jsonb) RETURNING id",
+                UUID.class, t.tenant(), t.store(), "internal:exchange:rr:" + req, "RR-" + origin);
+            jdbc.update("UPDATE return_requests SET replacement_order_id = ? WHERE id = ?", rr, req);
+            allocate(t, orderItem(t, rr, v, 1), piece(t, v, "reserved", t.main()), "active");
+        }
+        level(v, 3, 0, 3, 0);                               // three replacements, all in custody: in sync
+        piece(t, w, "available", t.main());
+        level(w, 3, 3, 0, 0);                               // a real difference: −2
+        assertThat(jdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, t.tenant(), t.tenant()))
+            .as("Traced's own exchanges are not Shopify-native").isFalse();
+        MainReconcileService s = service("all", CUTOFF);
+        run(s, t, v, w);
+        UUID r2 = run(s, t, v, w);
+        assertThat(diffs(t, r2).stream().map(d -> d.get("skip_reason")).toList()).doesNotContain(HOLD);
+        verify(shopifyGateway, times(1)).pushMainReconcile(any(), any(), eq(w.item()), eq(t.mainGid()), eq(-2), anyInt(), any(), any());
+    }
+
+    private UUID request(T t, UUID order, String origin, String reference) {
+        return jdbc.queryForObject("INSERT INTO return_requests (tenant_id, order_id, type, status, reference, origin) " +
+            "VALUES (?, ?, 'exchange', 'approved', ?, ?) RETURNING id", UUID.class, t.tenant(), order, reference, origin);
     }
 
     /**

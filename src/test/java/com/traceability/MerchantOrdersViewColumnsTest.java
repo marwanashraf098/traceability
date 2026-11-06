@@ -87,7 +87,7 @@ class MerchantOrdersViewColumnsTest {
             where = where.substring(where.toUpperCase().lastIndexOf("WHERE"));
             assertThat(where)
                 .as("merchant_orders must filter on the external_id prefix only (V163; see CLAUDE.md)")
-                .isEqualTo("WHERE external_id !~~ 'internal:portal:%'::text;");
+                .isEqualTo("WHERE external_id !~~ 'internal:portal:%'::text AND external_id !~~ 'internal:shopify-exchange:%'::text;");
         }
     }
 
