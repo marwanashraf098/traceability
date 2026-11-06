@@ -107,7 +107,7 @@ public class LookupService {
                 "JOIN variants v  ON v.id = p.variant_id " +
                 "JOIN products pr ON pr.id = v.product_id " +
                 "LEFT JOIN locations loc ON loc.id = p.current_location_id " +
-                "LEFT JOIN merchant_orders o      ON o.id  = p.current_order_id " +
+                "LEFT JOIN warehouse_orders o      ON o.id  = p.current_order_id " +
                 "LEFT JOIN shipments s   ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
@@ -137,7 +137,7 @@ public class LookupService {
             "       pe.metadata ->> 'note' AS meta_note " +
             "FROM piece_events pe " +
             "LEFT JOIN users u     ON u.id  = pe.actor_user_id " +
-            "LEFT JOIN merchant_orders o    ON o.id  = pe.order_id " +
+            "LEFT JOIN warehouse_orders o    ON o.id  = pe.order_id " +
             "LEFT JOIN shipments s ON s.id  = pe.shipment_id " +
             "LEFT JOIN locations loc ON loc.id = pe.location_id " +
             // Flexible labeling slice 6b: a factory piece's received event names its run.
@@ -415,7 +415,7 @@ public class LookupService {
                 "SELECT s.id, s.tracking_number, s.internal_state, " +
                 "       o.id AS order_id, o.number AS order_number, o.status AS order_status " +
                 "FROM shipments s " +
-                "JOIN merchant_orders o ON o.id = s.order_id " +
+                "JOIN warehouse_orders o ON o.id = s.order_id " +
                 "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
                 trackingNumber, tenantId);
         } catch (EmptyResultDataAccessException e) {

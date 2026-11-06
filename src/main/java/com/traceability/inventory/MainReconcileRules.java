@@ -94,6 +94,13 @@ public final class MainReconcileRules {
     public static final String FULFILLMENT_CANCELLED     = "fulfillment_cancelled";
     public static final String NOT_ACTIVATED_AT_MAIN     = "not_activated_at_main";
     public static final String RECONCILE_WRITE_IN_FLIGHT = "reconcile_write_in_flight";
+    /**
+     * S3a interim guard (approved 2026-11-06, until S3c adds shadow pieces to the target): a WRITE store with an open
+     * Shopify-native exchange shadow order, or a Shopify-native exchange's internal:exchange: replacement still in
+     * custody, writes nothing — every variant with a difference is recorded skipped with this reason, Part 1 claims
+     * stay queued (sent once the hold clears) and no ambiguous claim is settled. See {@link #EXCHANGE_HOLD_SQL}.
+     */
+    public static final String SHOPIFY_EXCHANGE_IN_CUSTODY = "shopify_exchange_in_custody";
 
     /** Diff note: unfulfilled_shipped was capped at Shopify's committed at Main. */
     public static final String NOTE_UNFULFILLED_CAPPED = "unfulfilled_capped";
@@ -102,7 +109,31 @@ public final class MainReconcileRules {
 
     public static final List<String> SKIP_ORDER = List.of(NOT_LINKED, SHOPIFY_UNREAD, RECONCILE_WRITE_IN_FLIGHT, PART1_IN_FLIGHT,
         ARRIVAL_REVISIT_PENDING, CLAIM_IN_FLIGHT, CLAIM_AMBIGUOUS, STOCK_TAKE_SYNC_IN_FLIGHT, TRANSFER_SYNC_IN_FLIGHT,
-        FULFILLMENT_UNREADABLE, FULFILLMENT_PENDING, FULFILLMENT_CANCELLED, NOT_ACTIVATED_AT_MAIN);
+        FULFILLMENT_UNREADABLE, FULFILLMENT_PENDING, FULFILLMENT_CANCELLED, NOT_ACTIVATED_AT_MAIN, SHOPIFY_EXCHANGE_IN_CUSTODY);
+
+    /**
+     * S3a interim guard — true when the tenant has (a) an open Shopify-native exchange shadow order
+     * ('internal:shopify-exchange:', any status but delivered / cancelled / returned / lost), or (b) a Shopify-native
+     * exchange ({@link ShopifyNativeExchange} rule) whose internal:exchange: replacement has a piece in Traced custody
+     * (active / packed allocation, piece reserved / packed / awaiting_pickup). Why: the target counts such a piece in
+     * custody but never counts it once it leaves (its order is internal:% — liveShopifyOrderSql), while Shopify counts
+     * the unit on the ORIGINAL order's exchange line until it fulfills that line — so a reconcile write in that window
+     * is either a spurious +1 / −1 pair (Shopify fulfilled first) or a real double −1 (Traced shipped first).
+     * Parameters: tenant, tenant.
+     */
+    public static final String EXCHANGE_HOLD_SQL =
+        "SELECT EXISTS (SELECT 1 FROM warehouse_orders so WHERE so.tenant_id = ? " +
+        "               AND so.external_id LIKE 'internal:shopify-exchange:%' " +
+        "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost')) " +
+        "    OR EXISTS (SELECT 1 FROM exchanges e " +
+        "               JOIN merchant_orders xo ON xo.id = e.outbound_order_id AND xo.tenant_id = e.tenant_id " +
+        "               JOIN order_items xi ON xi.order_id = xo.id AND xi.tenant_id = xo.tenant_id " +
+        "               JOIN allocations xa ON xa.order_item_id = xi.id AND xa.tenant_id = xi.tenant_id " +
+        "                    AND xa.status IN ('active', 'packed') " +
+        "               JOIN pieces xp ON xp.id = xa.piece_id AND xp.tenant_id = xa.tenant_id " +
+        "                    AND xp.status::text IN ('reserved', 'packed', 'awaiting_pickup') " +
+        "               WHERE e.tenant_id = ? AND xo.external_id LIKE 'internal:exchange:%' " +
+        "                 AND " + ShopifyNativeExchange.nativeExchangeSql("xp.variant_id") + ")";
 
     // ── Part 1 outcomes ───────────────────────────────────────────────────────────────────────────────────────────
     public static final String P1_WOULD_SUBTRACT            = "would_subtract";

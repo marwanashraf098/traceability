@@ -213,7 +213,7 @@ public class OverviewService {
 
         // guided_unpack
         all.addAll(jdbc.query(
-            "SELECT o.cancel_requested_at FROM merchant_orders o " +
+            "SELECT o.cancel_requested_at FROM warehouse_orders o " +
             "WHERE o.tenant_id = ? AND o.cancel_requested_at IS NOT NULL " +
             "  AND o.status IN ('packed'::order_status, 'self_pickup_pending'::order_status) " +
             "  AND o.cancel_requested_at >= ?",
@@ -239,7 +239,7 @@ public class OverviewService {
         all.addAll(jdbc.query(
             "SELECT COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
             "                s.last_synced_at, o.created_at) " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, internal_state, last_synced_at, provider_deleted_at FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
@@ -394,7 +394,7 @@ public class OverviewService {
                    COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                    s.exception_code, s.is_delayed, s.sla_breached,
                    s.max_progress_rank, s.provider AS delivery_provider
-            FROM merchant_orders o
+            FROM warehouse_orders o
             LEFT JOIN LATERAL (
                 SELECT internal_state, provider, number_of_attempts,
                        exception_code, is_delayed, sla_breached,

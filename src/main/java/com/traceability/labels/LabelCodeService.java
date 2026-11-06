@@ -165,13 +165,13 @@ public class LabelCodeService {
         for (Line l : lines) {
             if (l.orderItemId() == null && l.orderId() == null) continue;
             if (l.orderItemId() == null) {
-                Integer o = jdbc.queryForObject("SELECT count(*)::int FROM merchant_orders WHERE id = ? AND tenant_id = ?",
+                Integer o = jdbc.queryForObject("SELECT count(*)::int FROM warehouse_orders WHERE id = ? AND tenant_id = ?",
                     Integer.class, l.orderId(), tenantId);
                 if (o == null || o == 0) throw LabelCodeException.invalidOrderRef();
                 continue;
             }
             Integer ok = jdbc.queryForObject(
-                "SELECT count(*)::int FROM order_items oi JOIN merchant_orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id " +
+                "SELECT count(*)::int FROM order_items oi JOIN warehouse_orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id " +
                 "WHERE oi.id = ? AND oi.tenant_id = ? AND oi.order_id = ? AND oi.variant_id = ?",
                 Integer.class, l.orderItemId(), tenantId, l.orderId(), l.variantId());
             if (ok == null || ok == 0) throw LabelCodeException.invalidOrderRef();

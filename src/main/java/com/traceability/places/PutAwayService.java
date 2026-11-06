@@ -158,7 +158,7 @@ public class PutAwayService {
             "       w.status, w.source, w.since, CASE WHEN w.source = 'returns' THEN o.number END AS ref " +
             "FROM (" + WAITING_SQL + ") w " +
             "JOIN variants v ON v.id = w.variant_id JOIN products pr ON pr.id = v.product_id " +
-            "LEFT JOIN merchant_orders o ON o.id = w.order_id " +
+            "LEFT JOIN warehouse_orders o ON o.id = w.order_id " +
             (filter != null ? "WHERE w.source = ? " : "") +
             "ORDER BY w.since DESC, w.id DESC LIMIT ?",
             (rs, i) -> new Raw(rs.getString("id"), rs.getString("short_code"), rs.getObject("variant_id", UUID.class),

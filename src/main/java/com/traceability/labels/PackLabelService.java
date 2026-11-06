@@ -157,7 +157,7 @@ public class PackLabelService {
         if ("last".equals(req.scope())) {
             Integer n = lastBatchId == null ? 0 : jdbc.queryForObject(
                 "SELECT count(*)::int FROM pack_print_batch_items bi " +
-                "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+                "JOIN warehouse_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
                 "WHERE bi.tenant_id = ? AND bi.batch_id = ? AND o.status <> 'cancelled'", Integer.class, tenantId, lastBatchId);
             waybills = n == null ? 0 : n;
         } else {
@@ -177,7 +177,7 @@ public class PackLabelService {
         if (req == null) throw LabelCodeException.invalidPrintRequest();
         if (req.orderId() != null) {
             Integer ok = jdbc.queryForObject(
-                "SELECT count(*)::int FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ? AND " + PACKABLE,
+                "SELECT count(*)::int FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ? AND " + PACKABLE,
                 Integer.class, req.orderId(), tenantId);
             if (ok == null || ok == 0) throw LabelCodeException.orderNotPackable();
             return List.of(new OrderRef(req.orderId()));
@@ -187,7 +187,7 @@ public class PackLabelService {
             // The store's newest waybill print, in its PDF order; orders packed or cancelled since drop out.
             return jdbc.query(
                 "SELECT bi.order_id FROM pack_print_batch_items bi " +
-                "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+                "JOIN warehouse_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
                 "WHERE bi.tenant_id = ? AND bi.batch_id = (" +
                 "    SELECT b.id FROM pack_print_batches b WHERE b.tenant_id = ? " +
                 // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
@@ -315,7 +315,7 @@ public class PackLabelService {
             "           WHERE a.order_item_id = oi.id AND a.status IN ('active','packed')), 0)::int AS unallocated " +
             "FROM label_codes lc " +
             "JOIN order_items oi ON oi.id = lc.order_item_id AND oi.tenant_id = lc.tenant_id " +
-            "JOIN merchant_orders o ON o.id = lc.order_id AND o.tenant_id = lc.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = lc.order_id AND o.tenant_id = lc.tenant_id " +
             "JOIN variants v ON v.id = lc.variant_id JOIN products pr ON pr.id = v.product_id " +
             "WHERE lc.tenant_id = ? AND lc.order_id = ANY(?) AND lc.kind = 'pack' AND lc.status = 'issued' " +
             "ORDER BY lc.order_item_id, lc.code",
@@ -328,7 +328,7 @@ public class PackLabelService {
             tenantId, ids);
         Map<UUID, String[]> heads = new HashMap<>();
         jdbc.query(
-            "SELECT o.id, o.number, fs.tracking_number FROM merchant_orders o " +
+            "SELECT o.id, o.number, fs.tracking_number FROM warehouse_orders o " +
             "LEFT JOIN LATERAL (SELECT tracking_number FROM shipments s " +
             "    WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
@@ -385,7 +385,7 @@ public class PackLabelService {
         FlexibleLabeling.require(jdbc, tenantId);
         if (orderId == null || orderItemId == null) throw LabelCodeException.invalidPrintRequest();
         List<UUID> variant = jdbc.queryForList(
-            "SELECT oi.variant_id FROM order_items oi JOIN merchant_orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id " +
+            "SELECT oi.variant_id FROM order_items oi JOIN warehouse_orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id " +
             "WHERE oi.id = ? AND oi.order_id = ? AND oi.tenant_id = ? AND " + PACKABLE, UUID.class, orderItemId, orderId, tenantId);
         if (variant.isEmpty()) throw LabelCodeException.orderNotPackable();
         Integer untagged = jdbc.queryForObject(

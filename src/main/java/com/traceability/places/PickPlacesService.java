@@ -77,7 +77,7 @@ public class PickPlacesService {
         return new VariantsResponse(out);
     }
 
-    /** One order's lines (pack screen, queue and waybill mode). 404 for an order the caller's merchant_orders lacks. */
+    /** One order's lines (pack screen, queue and waybill mode). 404 for an order the caller's warehouse_orders lacks. */
     @Transactional(readOnly = true)
     public OrderPlaces order(UUID orderId) {
         UUID tenantId = TenantContext.require();
@@ -87,7 +87,7 @@ public class PickPlacesService {
         return r.orders().get(0);
     }
 
-    /** Several orders' lines (waybill mode's printed-but-not-packed list). Orders outside merchant_orders are left out. */
+    /** Several orders' lines (waybill mode's printed-but-not-packed list). Orders outside warehouse_orders are left out. */
     @Transactional(readOnly = true)
     public OrdersResponse orders(List<UUID> orderIds) {
         UUID tenantId = TenantContext.require();
@@ -100,10 +100,10 @@ public class PickPlacesService {
         record Line(UUID orderId, UUID itemId, UUID variantId, int quantity) {}
         List<Line> lines = new ArrayList<>();
         Set<UUID> found = new LinkedHashSet<>();
-        // Every order the caller may see in merchant code: merchant_orders (portal pre-connect rows excluded).
+        // Every order the caller may see in merchant code: warehouse_orders (portal pre-connect rows excluded).
         // ORDER BY only makes the reply deterministic; nothing here picks a "latest" row.
         jdbc.query(
-            "SELECT o.id AS order_id, oi.id AS item_id, oi.variant_id, oi.quantity FROM merchant_orders o " +
+            "SELECT o.id AS order_id, oi.id AS item_id, oi.variant_id, oi.quantity FROM warehouse_orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.tenant_id = o.tenant_id " +
             "WHERE o.tenant_id = ? AND o.id = ANY(?) ORDER BY o.id, oi.variant_id, oi.id",
             rs -> {

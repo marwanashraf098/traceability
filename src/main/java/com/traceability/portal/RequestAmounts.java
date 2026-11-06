@@ -88,7 +88,7 @@ public class RequestAmounts {
     Map<String, Object> collector(UUID tenantId, UUID requestId) {
         Map<String, Object> r = jdbc.queryForList(
             "SELECT rr.booking_status, rr.booking_cod, " +
-            "       NOT EXISTS (SELECT 1 FROM merchant_orders mo WHERE mo.id = rr.order_id AND mo.tenant_id = rr.tenant_id) AS pre_connect " +
+            "       NOT EXISTS (SELECT 1 FROM warehouse_orders mo WHERE mo.id = rr.order_id AND mo.tenant_id = rr.tenant_id) AS pre_connect " +
             "FROM return_requests rr WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId).get(0);
         String status = (String) r.get("booking_status");
         BigDecimal booked = (BigDecimal) r.get("booking_cod");

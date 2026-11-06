@@ -252,7 +252,11 @@ class OrderLinePaidPricesTest {
 
     @Test
     void r7_shopifyExchangeShadowOrder_neverPriced() {
-        UUID order = order(storeA, "internal:shopify-exchange:" + rnd());
+        // V216: a shadow order carries origin 'shopify_exchange' (identity CHECK with the prefix).
+        UUID order = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, payment_method, placed_at, raw, origin) " +
+            "VALUES (?, ?, ?, ?, 'delivered'::order_status, 'cod'::order_payment_method, now(), '{}'::jsonb, 'shopify_exchange') RETURNING id",
+            UUID.class, tenantA, storeA, "internal:shopify-exchange:" + rnd(), "#" + rnd() + "-X1");
         line(order, shirt, 1, "{\"paid_unit_price\":\"500.00\"}");
         assertThat(prices.resolve(tenantA, order)).isEmpty();
         verifyNoInteractions(shopify, tokens);

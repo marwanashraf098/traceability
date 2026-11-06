@@ -33,7 +33,7 @@ public final class TrackingChanges {
 
     /** Takes the order's row lock (the decision is re-read under it), then: is the order frozen? */
     public static boolean lockAndCheckFrozen(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
-        jdbc.queryForList("SELECT id FROM merchant_orders WHERE id = ? AND tenant_id = ? FOR UPDATE", orderId, tenantId);
+        jdbc.queryForList("SELECT id FROM warehouse_orders WHERE id = ? AND tenant_id = ? FOR UPDATE", orderId, tenantId);
         return OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
     }
 
@@ -56,7 +56,7 @@ public final class TrackingChanges {
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
                 "  WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status = 'packed') " +
-                "OR EXISTS (SELECT 1 FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ? " +
+                "OR EXISTS (SELECT 1 FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ? " +
                 "  AND o.status IN ('packed', 'awaiting_pickup'))",
                 Boolean.class, orderId, tenantId, orderId, tenantId))) out.add("packed");
         if (Boolean.TRUE.equals(jdbc.queryForObject(
@@ -64,7 +64,7 @@ public final class TrackingChanges {
                 "OR EXISTS (SELECT 1 FROM pack_print_job_parts jp WHERE jp.tenant_id = ? AND ? = ANY (jp.tracking_numbers))",
                 Boolean.class, shipmentId, tenantId, tenantId, oldTrackingNumber))) out.add("printed");
         if (Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ? AND o.locked_by IS NOT NULL)",
+                "SELECT EXISTS (SELECT 1 FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ? AND o.locked_by IS NOT NULL)",
                 Boolean.class, orderId, tenantId))) out.add("claimed");
         return out;
     }
