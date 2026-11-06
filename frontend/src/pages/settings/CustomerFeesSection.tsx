@@ -171,7 +171,9 @@ function ModeChoice({ name, value, onChange, disabled }: {
   return (
     <div role="radiogroup" className="inline-flex rounded-xl border border-line overflow-hidden">
       {(['fixed', 'percent'] as FeeMode[]).map(m => (
-        <label key={m} className={cn('px-3 py-1.5 text-small cursor-pointer select-none',
+        // `relative`: the sr-only radio is position:absolute — without a positioned label it is laid out against a far
+        // ancestor, and focusing it on click scrolled the page away (prod 2026-11-06, ~3,500 px).
+        <label key={m} className={cn('relative px-3 py-1.5 text-small cursor-pointer select-none',
           value === m ? 'bg-elevated text-primary font-medium' : 'text-muted', disabled && 'cursor-not-allowed opacity-60')}>
           <input type="radio" className="sr-only" name={name} value={m} checked={value === m} disabled={disabled}
             onChange={() => onChange(m)} />
