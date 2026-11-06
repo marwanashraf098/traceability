@@ -158,6 +158,34 @@ describe('order drawer — From Shopify card', () => {
   })
 })
 
+describe('S3b — kept aside', () => {
+  const kept = (state: 'kept_aside' | 'short' | 'ended', shortBy = 0) => order({ shopifyReturns: [{ ...RET,
+    keptAside: { orderId: 'shadow-1', number: '#1006-X1', state, units: state === 'ended' ? 0 : 1, shortBy, endReason: null } }] })
+
+  test('"#1006-X1 · kept aside", "short by N" and "no longer kept aside"; absent without a shadow', async () => {
+    const { unmount } = renderDrawer('en', kept('kept_aside'))
+    expect(await screen.findByTestId('kept-aside')).toHaveTextContent('#1006-X1 · kept aside')
+    unmount()
+    const r2 = renderDrawer('en', kept('short', 2))
+    expect(await screen.findByTestId('kept-aside')).toHaveTextContent('#1006-X1 · short by 2')
+    r2.unmount()
+    const r3 = renderDrawer('en', kept('ended'))
+    expect(await screen.findByTestId('kept-aside')).toHaveTextContent('#1006-X1 · no longer kept aside')
+    r3.unmount()
+    renderDrawer('en', order())
+    await screen.findByTestId('shopify-return-card')
+    expect(screen.queryByTestId('kept-aside')).not.toBeInTheDocument()
+  })
+
+  test('Arabic: kept aside / short', async () => {
+    const r = renderDrawer('ar', kept('kept_aside'))
+    expect(await screen.findByTestId('kept-aside')).toHaveTextContent('#1006-X1 · محجوز جانبًا')
+    r.unmount()
+    renderDrawer('ar', kept('short', 1))
+    expect(await screen.findByTestId('kept-aside')).toHaveTextContent('#1006-X1 · ناقص 1')
+  })
+})
+
 describe('Shopify state chips', () => {
   const CASES: Array<[ShopifyReturnView['state'], string[], string]> = [
     ['requested', [], 'Requested'], ['open', [], 'Open'], ['on_hold', ['AWAITING_PAYMENT'], 'On hold · Awaiting payment'],

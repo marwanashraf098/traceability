@@ -512,6 +512,8 @@
       "refund_pending_overdue": "استرداد متأخر",
       "return_items_overdue": "منتجات مرتجعة متأخرة",
       "restocked_twice": "أُعيد للمخزون مرتين",
+      "shopify_exchange_short": "نقص لاستبدال في Shopify",
+      "shopify_exchange_shipped_in_shopify": "شُحن الاستبدال في Shopify والقطعة ما زالت متاحة",
       "blocked_customer": "العميل في قائمة الحظر",
       "shopify_edit_conflict": "عُدِّل في Shopify بعد التغليف",
       "generic_delivered_without_pickup": "تم التوصيل دون مسح عند التسليم",
@@ -6059,6 +6061,9 @@
       "comingBack": "يرجع من العميل",
       "reason": "السبب: {{reason}}",
       "restocked": "أُعيد إلى مخزون Shopify ×{{count}}",
+      "keptAside": "{{number}} · محجوز جانبًا",
+      "keptAsideShort": "{{number}} · ناقص {{count}}",
+      "keptAsideEnded": "{{number}} · لم يعد محجوزًا",
       "readOnly": "للعرض فقط — يُدار هذا المرتجع في Shopify."
     },
     "state": {

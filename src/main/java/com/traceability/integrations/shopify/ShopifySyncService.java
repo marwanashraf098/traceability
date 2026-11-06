@@ -1,5 +1,7 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.tenancy.TenantContext;
+
 import com.traceability.integrations.bosta.SimulatedShipments;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -682,6 +684,40 @@ public class ShopifySyncService {
     }
 
     private boolean upsertOrder(UUID storeId, UUID tenantId, ShopifyGateway.Order o) {
+        UUID[] written = new UUID[1];
+        boolean flagged = upsertOrderTx(storeId, tenantId, o, written);
+        if (written[0] != null) afterOrderUpsert(tenantId, written[0]);
+        return flagged;
+    }
+
+    /**
+     * S3b Gap B — the import / missing-order paths (here) link exchange lines and reconcile shadow orders like the
+     * webhook path does after an applied orders/* upsert. A cheap no-op for an order with no mirrored return. Never throws.
+     */
+    private void afterOrderUpsert(UUID tenantId, UUID orderId) {
+        if (returnsStore == null && shadows == null) return;
+        try {
+            TenantContext.runAs(tenantId, () -> {
+                if (returnsStore != null) returnsStore.linkExchangeLinesForOrder(orderId);
+                if (shadows != null) shadows.reconcileQuietly(orderId);
+                return null;
+            });
+        } catch (RuntimeException e) {
+            log.warn("Exchange-line link / shadow reconcile after the import of order {} failed — the next signal re-runs it: {}",
+                orderId, e.toString());
+        }
+    }
+
+    private ShopifyReturnsStore returnsStore;
+    private com.traceability.inventory.ShopifyShadowOrders shadows;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyReturnsHooks(ShopifyReturnsStore returnsStore, com.traceability.inventory.ShopifyShadowOrders shadows) {
+        this.returnsStore = returnsStore;
+        this.shadows = shadows;
+    }
+
+    private boolean upsertOrderTx(UUID storeId, UUID tenantId, ShopifyGateway.Order o, UUID[] written) {
         return Boolean.TRUE.equals(tx.execute(status -> {
             String paymentMethod = inferPaymentMethod(o.displayFinancialStatus(), o.paymentGateways());
             BigDecimal codAmount = "cod".equals(paymentMethod) ? o.totalPrice() : null;
@@ -698,6 +734,7 @@ public class ShopifySyncService {
                 return false;
             }
             UUID orderId = up.id();
+            written[0] = orderId;
 
             boolean needsHold = false;
             boolean frozen = OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);

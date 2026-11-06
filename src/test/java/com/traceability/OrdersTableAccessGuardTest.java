@@ -68,6 +68,9 @@ class OrdersTableAccessGuardTest {
         e("courier/GenericExchanges.java#attachGenericForRequest", ALREADY_EXCLUDED_BY_KEY,
             "G4b: INSERTs a generic exchange's internal replacement order, external_id 'internal:exchange:rr:<request>' — "
             + "never a portal row (reads the original through merchant_orders), the same shape as ExchangeService#commit"),
+        e("inventory/ShopifyShadowOrders.java#createShadow", ALREADY_EXCLUDED_BY_KEY,
+            "S3b: INSERTs a new Shopify-native exchange shadow order (external_id 'internal:shopify-exchange:<return gid>'); "
+            + "reads the original through merchant_orders"),
         // ── SAFE_BY_ID
         e("fulfillment/OrderCarrier.java#recompute", SAFE_BY_ID,
           "recomputes one order's carrier class from its own shipments; no list, no count"),

@@ -485,6 +485,10 @@ public class FulfillService {
         if (isUnpickableLookupReplacement(orderId, tenantId)) {
             return ScanResult.rejected("NOT_PICKABLE", NOT_PICKABLE_MESSAGE);
         }
+        // 0a'. S3b: a Shopify-native exchange shadow order is kept aside, never packed until S3c gates it.
+        if (isShopifyExchangeShadow(orderId, tenantId)) {
+            return ScanResult.rejected("NOT_PICKABLE", SHADOW_NOT_PICKABLE_MESSAGE);
+        }
 
         // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
         //     mode opened it) — refuse, in queue mode too. Queue mode never takes claims itself;
@@ -799,6 +803,9 @@ public class FulfillService {
         }
         if (isUnpickableLookupReplacement(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, NOT_PICKABLE_MESSAGE);
+        }
+        if (isShopifyExchangeShadow(orderId, tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, SHADOW_NOT_PICKABLE_MESSAGE);
         }
         requireMerchantOrder(orderId, tenantId);
 
@@ -1482,6 +1489,16 @@ public class FulfillService {
             "  AND o.status::text NOT IN " + com.traceability.portal.LookupExchangeService.PICKABLE_STATUSES_SQL + ") " +
             "AND " + "EXISTS (SELECT 1 FROM return_requests rr WHERE rr.replacement_order_id = ? AND rr.tenant_id = ? " +
             "  AND rr.origin = 'lookup')", Boolean.class, orderId, tenantId, orderId, tenantId));
+    }
+
+    static final String SHADOW_NOT_PICKABLE_MESSAGE =
+        "This is an exchange made in Shopify — its piece is kept aside; packing it through Traced arrives in a later update";
+
+    /** S3b: a Shopify-native exchange shadow order (by its external_id prefix) — refused by scan() and complete(). */
+    private boolean isShopifyExchangeShadow(UUID orderId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ? " +
+            "  AND o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%')", Boolean.class, orderId, tenantId));
     }
 
     private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {

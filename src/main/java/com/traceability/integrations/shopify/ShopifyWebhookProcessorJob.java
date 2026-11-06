@@ -139,6 +139,12 @@ public class ShopifyWebhookProcessorJob {
         this.returnsStore = returnsStore;
     }
 
+    /** S3b: shadow orders are reconciled after the order-side exchange-line link. */
+    private com.traceability.inventory.ShopifyShadowOrders shadows;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShadows(com.traceability.inventory.ShopifyShadowOrders shadows) { this.shadows = shadows; }
+
     /** Analytics slice 10: inventory_items/update + inventory_levels/update refresh READ columns only. */
     private final com.traceability.analytics.AnalyticsInventoryWebhookHandler inventoryReads;
 
@@ -317,7 +323,11 @@ public class ShopifyWebhookProcessorJob {
         if (gid.isEmpty() || returnsStore == null) return;
         try {
             UUID storeId = syncService.resolveStore(tenantId, shopDomain);
-            if (storeId != null) returnsStore.linkExchangeLinesForOrderGid(storeId, gid);
+            if (storeId != null) {
+                returnsStore.linkExchangeLinesForOrderGid(storeId, gid);
+                // S3b: the original's state changed (left custody, new exchange line) — reconcile its shadows.
+                if (shadows != null) shadows.reconcileForOrderGidQuietly(storeId, gid);
+            }
         } catch (RuntimeException e) {
             log.warn("Exchange-line link after the order upsert failed for {} — the next return sync re-links: {}", gid, e.toString());
         }

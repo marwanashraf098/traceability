@@ -330,6 +330,17 @@ export interface ShopifyReturnView {
   holdReasons: string[]
   kind: 'return' | 'exchange'
   inTraced: ShopifyInTraced
+  /** S3b: the exchange shadow order Traced keeps aside for this return — absent when there is none. */
+  keptAside?: ShopifyKeptAside
+}
+
+export interface ShopifyKeptAside {
+  orderId: string
+  number: string
+  state: 'kept_aside' | 'short' | 'ended'
+  units: number
+  shortBy: number
+  endReason: string | null
 }
 
 export interface DeliveryHistoryEntry {

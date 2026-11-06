@@ -31,6 +31,17 @@ class WarehouseOrdersAccessGuardTest {
 
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
+        // S3b (V218) — Shopify-native exchange shadow orders
+        "inventory/FulfillService.java#isShopifyExchangeShadow",
+            "S3b: scan() / complete() refuse a shadow order until S3c gates it — must see the shadow",
+        "inventory/ExceptionService.java#detectShopifyExchangeShippedInShopify",
+            "S3b: names the shadow whose exchange Shopify fulfilled while Traced still had the piece",
+        "inventory/ShopifyShadowOrders.java#shortages",
+            "S3b: Short by N — the live shadows' demand per variant, oldest first",
+        "inventory/VariantStockService.java#field:SHADOW_COMMITTED_SQL",
+            "S3b: a shadow's replacement is committed from approval (by count)",
+        "returncases/ShopifyReturnsView.java#keptAside",
+            "S3b: the Shopify return card's \"#…-X1 · kept aside\" line names the return's shadow",
         "courier/GenericDeliveryService.java#carriersWithCourier",
             "G3 carriers with a leg at the courier — a shadow's generic leg is warehouse/courier work",
         "courier/GenericDeliveryService.java#markDelivered",

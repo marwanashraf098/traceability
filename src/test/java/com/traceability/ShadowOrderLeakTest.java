@@ -560,6 +560,7 @@ class ShadowOrderLeakTest {
         reg("POST /api/v1/ops/review-tenant/{tenantId}/seed", skip(R_OPS));
         reg("POST /api/v1/ops/receipt-reversal",          skip(R_OPS));   // one-off, removed after the run
         reg("GET /api/v1/ops/receipt-reversal",           skip(R_OPS));
+        reg("POST /api/v1/ops/shopify-shadows/backfill",  skip(R_OPS));   // S3b one-off, per tenant, under that tenant
         reg("POST /api/v1/admin/incidents/2212102474-pick-error/reverse", skip("one fixed incident order by number — reads merchant_orders"));
         reg("GET /api/v1/test/probe",                    skip("test-only probe controller (src/test/java)"));
     }

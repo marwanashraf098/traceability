@@ -148,6 +148,16 @@ export function ShopifyReturnCard({ ret }: { ret: ShopifyReturnView }) {
           <ul className="space-y-3">
             {ret.goingOut.map((l, i) => <LineRow key={i} line={l} />)}
           </ul>
+          {ret.keptAside && (
+            <p className={`text-caption font-bold ${ret.keptAside.state === 'short' ? 'text-danger' : 'text-muted'}`}
+               data-testid="kept-aside">
+              {ret.keptAside.state === 'short'
+                ? t('shopifyReturns.card.keptAsideShort', { number: ret.keptAside.number, count: ret.keptAside.shortBy })
+                : ret.keptAside.state === 'ended'
+                  ? t('shopifyReturns.card.keptAsideEnded', { number: ret.keptAside.number })
+                  : t('shopifyReturns.card.keptAside', { number: ret.keptAside.number })}
+            </p>
+          )}
         </div>
       )}
 

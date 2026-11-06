@@ -4,6 +4,23 @@
 
 ## Current state
 
+**Shopify-native returns S3b — exchange shadow orders + reservation from approval (2026-11-06; branch
+`feat/s3b-shadow-orders` off main f09e32b0, NOT merged, NOT deployed; migration V218 — number to be re-checked on main
+AND confirmed for prod by Marawan right before merge).** See CLAUDE.md (S3b paragraph) for the rules.
+- **Not in S3b:** Pick & Pack gating / Waiting for release (S3c), courier attach (S3d). Until S3c a shadow is never
+  packable: status 'confirmed' keeps it out of the queue; scan() → NOT_PICKABLE, complete() → 409.
+- **Main reconcile hold:** an ENDED shadow (V218 state 'ended') no longer holds the store.
+- **Backfill at deploy (Marawan runs):** `POST /api/v1/ops/shopify-shadows/backfill {"tenantId": …}` → dry-run counts
+  (originalOrders / shadowsToCreate / unitsToKeepAside), then `{"tenantId": …, "apply": true}`. Only the 2 stores with
+  returns access granted have mirror rows.
+- **Known edges:** a return mirrored before the original left custody gets its shadow on the next signal for that order
+  (orders/updated on fulfilment, a return / FO webhook, or the backfill); exchange lines whose variant isn't in the
+  catalogue are skipped (no shadow line).
+- **Tests:** ShopifyShadowOrdersTest (18: start, Q2, access, not packable, 5 end rules + partial + re-hold, stand-down,
+  X2, Short by N + card, golden committed, Gap A, Gap B, cross-tenant app_user, GDPR, backfill), revert-to-confirm on
+  every end rule, stand-down, Q2, Gap A, Gap B and the scan refusal; frontend kept-aside (EN + AR). Test edits:
+  migration counts (217 / 162); allowlist / registry ADDITIONS only (WarehouseOrdersAccessGuardTest,
+  OrdersTableAccessGuardTest, PortalOrderLeakTest + ShadowOrderLeakTest ops endpoint).
 **Portal fees prod fixes (2026-11-06; `fix/portal-fees-prod-bugs` MERGED fc47cc22, NOT deployed; migration V218 — prod was at V217. The S3b branch also has a local V218 and must renumber to V219.)**
 
 **Bug 1 — The Snouts: "exchange for another product" blocked as approximate.** Pre-F0 GraphQL-imported lines keep a

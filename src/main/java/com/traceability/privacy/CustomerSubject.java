@@ -76,6 +76,10 @@ public record CustomerSubject(
         orders.addAll(jdbc.queryForList(
             "SELECT replacement_order_id FROM return_requests WHERE tenant_id = ? AND order_id = ANY(?::uuid[]) " +
             "  AND replacement_order_id IS NOT NULL", UUID.class, tenantId, direct));
+        // S3b (V218): a Shopify-native exchange shadow order carries a copy of the original's name, phone and address.
+        orders.addAll(jdbc.queryForList(
+            "SELECT order_id FROM shopify_exchange_shadows WHERE tenant_id = ? AND original_order_id = ANY(?::uuid[])",
+            UUID.class, tenantId, direct));
 
         UUID[] all = orders.toArray(new UUID[0]);
         Set<String> outGids = new LinkedHashSet<>(requestedGids);
