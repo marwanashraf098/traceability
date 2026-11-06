@@ -412,6 +412,9 @@ class CustomerFeeSettingsTest {
         assertThat(putPortalSettings(t, Map.of("exchangesEnabled", true)).getStatusCode().value()).isEqualTo(200);
         stockPiece(t, t.l());
         stockPiece(t, t.l());
+        // F3 (approved 2026-11-06): free swaps on and "any product" off — exchange pricing is F3's (PortalExchangePricingTest);
+        // this test keeps proving every other F1 setting changes nothing.
+        jdbc.update("UPDATE tenants SET portal_free_variant_swaps = true WHERE id = ?", t.id());
 
         // Everything off (the defaults).
         // (read after a generic order exists: the public config's otherCouriers depends on one being there)
@@ -431,7 +434,7 @@ class CustomerFeeSettingsTest {
         assertThat(put(t, BASE + "/rules/refund", rule(false, "fixed", 75, null, null, null, false)).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/rules/exchange", rule(false, "percent", null, "20", 10, 500, false)).getStatusCode().value()).isEqualTo(200);
         assertThat(put(t, BASE + "/merchant-fault-reasons", Map.of("reasons", List.of("wrong_size", "changed_mind"))).getStatusCode().value()).isEqualTo(200);
-        assertThat(put(t, BASE + "/exchange-pricing", Map.of("anyProduct", true, "sameOrLowerOnly", true, "maxDifference", 0,
+        assertThat(put(t, BASE + "/exchange-pricing", Map.of("anyProduct", false, "sameOrLowerOnly", true, "maxDifference", 0,
                 "freeVariantSwaps", true))
             .getStatusCode().value()).isEqualTo(200);
         assertThat(post(t, BASE + "/area-overrides", Map.of("kind", "refund", "cityId", CAIRO, "mode", "fixed", "amount", 200))
