@@ -35,7 +35,7 @@ Marawan right before merge).** Room for exchange shadow orders; no shadow row is
   MainReconcileExchangeHoldTest (h1–h5). Revert-to-confirm done for the hold, the portal filter, the queue switch, both
   view predicates, the identity CHECK and the index predicate. Test edits: migration counts (MigrationSmokeTest 216,
   NotTracedBackfillTest 161); OrderLinePaidPricesTest r7's shadow FIXTURE gets origin 'shopify_exchange' (no assertion
-  changed); OrdersSqlScanner takes a pattern. **Pending approval:** `MerchantOrdersViewColumnsTest
+  changed); OrdersSqlScanner takes a pattern; OrderStatusBackwardWriteGuardTest's two regexes also match `warehouse_orders` (the switched writes had gone invisible to it — expected hit lists unchanged). **Pending approval:** `MerchantOrdersViewColumnsTest
   .viewFiltersOnTheExternalIdPrefix` pins the old one-prefix predicate and fails by design.
 **Returns portal fees — per-store rollout (2026-11-06; branch `feat/portal-fees-tenants` on main 2f2fc46f, MERGED
 2026-11-06, NOT deployed; no migration; full backend 3997, only ExchangeBackfillTest red).** New env `TRACED_PORTAL_FEES_TENANTS` (comma-separated tenant ids). Fees are on for a

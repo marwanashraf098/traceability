@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * never from a packed status).
  *
  * A SOURCE-TEXT SCAN of src/main/java (run from the project root, like NamedDecrementSetGuardTest): Java string
- * concatenations are joined first, then every {@code UPDATE orders | merchant_orders … SET … status = '<pickable>'}
+ * concatenations are joined first, then every {@code UPDATE orders | merchant_orders | warehouse_orders (S3a) … SET … status = '<pickable>'}
  * is found. A parameterised status write ({@code status = ?}) is also listed, so a backward write can't hide behind a
  * bind: the only one is FulfillService.complete() (packed / self_pickup_pending — forward). Known limits: a
  * status written through a CASE expression, a stored procedure or a migration is not seen.
@@ -35,9 +35,9 @@ class OrderStatusBackwardWriteGuardTest {
     /** A string concatenation ("…" + "…", comment lines between allowed) — joined so a statement reads as one. */
     private static final Pattern CONCAT = Pattern.compile("\"\\s*\\+\\s*(?://[^\\n]*\\n\\s*)*\"");
     static final Pattern BACKWARD = Pattern.compile(
-        "(?is)UPDATE\\s+(?:merchant_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*'(new|confirmed|ready_to_pick|picking)'");
+        "(?is)UPDATE\\s+(?:merchant_|warehouse_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*'(new|confirmed|ready_to_pick|picking)'");
     static final Pattern PARAMETERISED = Pattern.compile(
-        "(?is)UPDATE\\s+(?:merchant_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*\\?");
+        "(?is)UPDATE\\s+(?:merchant_|warehouse_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*\\?");
 
     /** Exactly three writers, each one method of one file (path under src/main/java) — never a whole class or pattern. */
     private static final Map<String, String> BACKWARD_ALLOWED = Map.of(
