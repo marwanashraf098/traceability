@@ -979,7 +979,8 @@
       "LABEL_NOT_USED_YET": "Label not used yet — tag it in Tag stock first",
       "LABEL_JUST_USED": "This label was just used by another scan — scan it again",
       "CODE_VOIDED": "This label was voided — throw it away and print a new one",
-      "NO_UNTAGGED_STOCK": "No untagged piece of this product is left — keep this label for the next one"
+      "NO_UNTAGGED_STOCK": "No untagged piece of this product is left — keep this label for the next one",
+      "HELD_FOR_RELEASE": "This exchange is waiting for release in Shopify — keep the piece aside and pack it once Shopify releases it."
     },
     "linkAwb": {
       "title": "Scan AWB Barcode",
@@ -1198,7 +1199,8 @@
         "cancelledAt": "Cancelled at {{time}}",
         "packedAt": "Packed at {{time}}",
         "ok": "OK, scan the next waybill",
-        "waybill": "Waybill {{tracking}}"
+        "waybill": "Waybill {{tracking}}",
+        "HELD_FOR_RELEASE": "Waiting for release in Shopify"
       },
       "setAside": {
         "title": "Set aside order {{number}}?",
@@ -1408,6 +1410,17 @@
       "done": "Order {{number}} unpacked — pack it again from Pick & Pack.",
       "openPickup": "Open the pickup session",
       "failed": "Couldn't unpack the order. Try again."
+    },
+    "shadow": {
+      "exchangeFor": "Exchange for {{number}}",
+      "shortBy": "Short by {{count}}",
+      "waitingTitle": "Waiting for release",
+      "waitingHint": "Exchanges made in Shopify that Shopify hasn't released for fulfilment yet. Keep the piece aside — they move to the queue once released.",
+      "waitingStatus": "Waiting for release in Shopify",
+      "heldTitle": "Waiting for release in Shopify",
+      "heldBody": "Shopify hasn't released this exchange for fulfilment yet. Keep the piece aside — you can pack it once it's released.",
+      "completeHeld": "This exchange is waiting for release in Shopify — keep the piece aside and pack it once Shopify releases it.",
+      "completeEnded": "This exchange ended in Shopify — there is nothing left to pack."
     }
   },
   "lookup": {

@@ -2477,6 +2477,35 @@ export interface PackOrderCard {
   items: PackOrderLine[]
   /** Flexible labeling slice 4 — present only for a switched-on tenant. */
   labels?: PackOrderLabels
+  /** S3c — present only on a Shopify-native exchange shadow order: the original order it replaces. */
+  exchangeFor?: ShadowExchangeFor
+  /** S3c — shadows only: units the warehouse is short for this exchange (0 = fine). */
+  shortBy?: number
+  /** S3c — shadows only: Shopify hasn't released the exchange for fulfilment yet (it can't be packed). */
+  heldForRelease?: boolean
+}
+
+/** S3c — the original order a Shopify-native exchange shadow order (e.g. #1010-X1) replaces. */
+export interface ShadowExchangeFor {
+  orderId: string
+  number: string | null
+}
+
+/** S3c — GET /fulfill/waiting-for-release: exchanges Shopify hasn't released yet (beside the queue, never in it). */
+export interface WaitingForReleaseOrder {
+  id: string
+  number: string | null
+  placed_at: string | null
+  status: string
+  exchangeFor: ShadowExchangeFor
+  shortBy: number
+  items: Array<{
+    variant_id: string
+    product_title: string
+    variant_title: string | null
+    sku: string | null
+    quantity: number
+  }>
 }
 
 export interface PackSessionRecent {
@@ -2668,6 +2697,16 @@ export function getPackSummary() {
 
 export function startPackSession() {
   return transferCommandRequest<PackSessionView>('/pack-sessions', { method: 'POST' })
+}
+
+/** S3c — exchanges Shopify hasn't released for fulfilment yet. Anything unexpected reads as none (section hidden). */
+export async function getWaitingForRelease(): Promise<WaitingForReleaseOrder[]> {
+  try {
+    const rows = await request<WaitingForReleaseOrder[] | null>('/fulfill/waiting-for-release')
+    return Array.isArray(rows) ? rows.filter(r => r && typeof r.id === 'string' && r.exchangeFor) : []
+  } catch {
+    return []
+  }
 }
 
 export function getPackSession(id: string) {
