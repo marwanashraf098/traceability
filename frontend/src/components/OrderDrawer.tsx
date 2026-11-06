@@ -9,6 +9,7 @@ import {
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
 import { Button, OrderPieceBadge, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
+import { ShopifyReturnCard } from './ShopifyReturnCard'
 
 // ── Relative time — same pattern as Overview.tsx/StockTake.tsx/Transfers.tsx (each
 // page owns a small local formatter); reuses the existing generic overview.time.*
@@ -373,6 +374,13 @@ export default function OrderDrawer({
                     )}
                   </div>
 
+                  {/* S2 — returns / exchanges made in Shopify (read-only), one card each; absent when none. */}
+                  {order.shopifyReturns && order.shopifyReturns.length > 0 && (
+                    <div className="space-y-3" data-testid="shopify-returns">
+                      {order.shopifyReturns.map(r => <ShopifyReturnCard key={r.id} ret={r} />)}
+                    </div>
+                  )}
+
                   <div>
                     <p className="text-caption font-bold text-muted uppercase tracking-wider mb-3">
                       {t('orderDetail.items')}
@@ -655,14 +663,23 @@ function DrawerTimeline({ items }: { items: TimelineItem[] }) {
   )
 }
 
-/** Shopify order edits: a quantity-0 line was removed in Shopify — unless it was added after the order left Traced. */
-function removed(item: { quantity: number; addedAfterShipping?: boolean }) {
-  return item.quantity === 0 && !item.addedAfterShipping
+/** Shopify order edits: a quantity-0 line was removed in Shopify — unless it was added after the order left Traced
+ *  (or is a Shopify exchange line, S2). */
+function removed(item: { quantity: number; addedAfterShipping?: boolean; exchangeFor?: string }) {
+  return item.quantity === 0 && !item.addedAfterShipping && !item.exchangeFor
 }
 
-/** A line's quantity — or, for a quantity-0 line, why it is 0. */
-function ItemQuantity({ item }: { item: { quantity: number; addedAfterShipping?: boolean } }) {
+/** A line's quantity — or, for a quantity-0 line, why it is 0. S2: a Shopify exchange line says whose exchange it is. */
+function ItemQuantity({ item }: { item: { quantity: number; addedAfterShipping?: boolean; exchangeFor?: string } }) {
   const { t } = useTranslation()
+  if (item.exchangeFor) {
+    return (
+      <span className="text-caption font-semibold text-info-text flex-shrink-0 text-end" data-testid="item-exchange-for">
+        {item.quantity > 0 && <span className="text-small text-muted font-normal me-1.5">×{item.quantity}</span>}
+        {t('orders.drawer.exchangeItemFor', { name: item.exchangeFor })}
+      </span>
+    )
+  }
   if (item.quantity === 0 && item.addedAfterShipping) {
     return (
       <span className="text-caption font-semibold text-warning-text flex-shrink-0" data-testid="item-added-after-shipping">

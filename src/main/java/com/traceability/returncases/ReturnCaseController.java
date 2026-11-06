@@ -26,15 +26,17 @@ public class ReturnCaseController {
                                     @RequestParam(required = false) String type,
                                     @RequestParam(required = false) String tile,
                                     @RequestParam(required = false) String q,
+                                    @RequestParam(required = false) String source,
                                     @RequestParam(required = false) String cursor,
                                     @RequestParam(defaultValue = "25") int limit) {
-        return cases.list(new ReturnCaseService.Filter(stage, type, tile, q), cursor, limit);
+        return cases.list(new ReturnCaseService.Filter(stage, type, tile, q, source), cursor, limit);
     }
 
     @GetMapping("/counts")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> counts(@RequestParam(required = false) String type,
-                                      @RequestParam(required = false) String q) {
-        return cases.counts(type, q);
+                                      @RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String source) {
+        return cases.counts(type, q, source);
     }
 }

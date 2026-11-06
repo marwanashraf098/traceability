@@ -43,9 +43,11 @@ public class ReturnCaseService {
         "record_refund", "add_in_receiving", "link_order", "link_request", "scan",
         // G4b: a request the merchant books with their own courier (booking 'manual' only)
         "book_with_courier");
-    static final List<String> IN_PROGRESS = List.of("booking", "awaiting_items", "on_the_way");
+    static final List<String> IN_PROGRESS = List.of("booking", "awaiting_items", "on_the_way",
+        // S2: a Shopify return Shopify hasn't finished (read-only — nothing to do in Traced)
+        "shopify_open");
     /** done: refunded, exchanged, received (good) · rejected, closed, cancelled, dismissed, returned_no_exchange (closed) · lost (problem). */
-    static final List<String> DONE_GOOD = List.of("refunded", "exchanged", "received");
+    static final List<String> DONE_GOOD = List.of("refunded", "exchanged", "received", "shopify_closed");
 
     /** The five shortcut tiles → the next steps they count. */
     public static final Map<String, List<String>> TILES = Map.of(
@@ -121,7 +123,8 @@ public class ReturnCaseService {
         "       (SELECT COALESCE(SUM(rf.amount), 0) FROM return_refunds rf WHERE rf.request_id = rr.id AND rf.tenant_id = rr.tenant_id " +
         "          AND rf.kind = 'refund' AND NOT EXISTS (SELECT 1 FROM return_refunds v WHERE v.voids_refund_id = rf.id " +
         "          AND v.kind = 'void')) AS refund_total, " +
-        "       COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') AS currency, rr.close_reason, NULL::text AS inspection_state " +
+        "       COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') AS currency, rr.close_reason, NULL::text AS inspection_state, " +
+        "       rr.order_id AS order_id " +
         "FROM return_requests rr " +
         "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
         "JOIN tenants t ON t.id = rr.tenant_id " +
@@ -161,7 +164,7 @@ public class ReturnCaseService {
         "                  ELSE COALESCE(NULLIF(e.inbound_description_ar, ''), NULLIF(e.inbound_description, ''), '?') || ' ← ' " +
         "                       || COALESCE(NULLIF(e.outbound_description, ''), '?') END], " +
         "       false, ARRAY[e.tracking_number], e.updated_at, NULL::uuid, e.id, NULL::uuid, " +
-        "       NULL::numeric, NULL::text, NULL::text, NULL::text " +
+        "       NULL::numeric, NULL::text, NULL::text, NULL::text, e.matched_order_id " +
         "FROM exchanges e " +
         // Labelling guard: the customer's order is matched_order_id, never outbound_order_id.
         "LEFT JOIN orders mo ON mo.id = e.matched_order_id AND mo.tenant_id = e.tenant_id " +
@@ -198,7 +201,7 @@ public class ReturnCaseService {
         "       NULL::text[], (s.return_intake_completed_at IS NULL AND s.internal_state::text NOT IN ('lost', 'terminated', 'cancelled')), " +
         "       ARRAY[s.tracking_number], " +
         "       GREATEST(s.created_at, s.last_synced_at, s.returned_at, s.return_intake_completed_at), " +
-        "       NULL::uuid, NULL::uuid, s.id, NULL::numeric, NULL::text, NULL::text, st.state " +
+        "       NULL::uuid, NULL::uuid, s.id, NULL::numeric, NULL::text, NULL::text, st.state, s.order_id " +
         "FROM shipments s " +
         "JOIN orders o  ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
         "JOIN tenants t ON t.id = s.tenant_id " +
@@ -216,15 +219,57 @@ public class ReturnCaseService {
         "       ) AS alert) un " +
         "WHERE s.tenant_id = ? AND s.shipment_leg = 'return' AND NOT " + ReturnCaseRules.LEG_HELD_BY_REQUEST_SQL;
 
+    /**
+     * S — Shopify-native returns (S2, read-only; V206 mirror) of the tenant's merchant orders. Param: tenant. No next
+     * step a person takes in Traced: shopify_open (in progress) until Shopify closes / declines / cancels it (done).
+     * Items, the Shopify state and "In Traced" are added per row in Java ({@link ShopifyReturnsView}).
+     */
+    private static final String CASES_S =
+        "SELECT 'S', r.id, CASE WHEN EXISTS (SELECT 1 FROM shopify_exchange_lines x WHERE x.return_id = r.id " +
+        "         AND x.tenant_id = r.tenant_id) THEN 'exchange' ELSE 'refund' END, COALESCE(r.name, r.return_gid), 'shopify', " +
+        "       CASE WHEN mo.pii_redacted_at IS NULL THEN mo.customer_name END, mo.number, r.status, NULL::text, NULL::text, " +
+        "       CASE r.status WHEN 'CLOSED' THEN 'shopify_closed' WHEN 'DECLINED' THEN 'shopify_declined' " +
+        "                     WHEN 'CANCELED' THEN 'shopify_cancelled' ELSE 'shopify_open' END, " +
+        "       0, 0, COALESCE(r.total_quantity, 0), 0, NULL::text, NULL::int, " +
+        "       false, false, false, false, false, false, false, false, " +
+        "       '{}'::text[], NULL::text[], false, '{}'::text[], " +
+        "       GREATEST(COALESCE(r.shopify_created_at, r.created_at), r.request_approved_at, r.closed_at, r.cancelled_seen_at), " +
+        "       NULL::uuid, NULL::uuid, NULL::uuid, NULL::numeric, NULL::text, NULL::text, NULL::text, mo.id " +
+        "FROM shopify_returns r " +
+        "JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
+        "WHERE r.tenant_id = ? ";
+
     private static final String STAGE_SQL =
         "CASE WHEN k.next_step IN (" + quoted(TO_DO) + ") THEN 'to_do' " +
         "     WHEN k.next_step IN (" + quoted(IN_PROGRESS) + ") THEN 'in_progress' ELSE 'done' END";
 
+    /** A live Shopify return / a live Traced request (the duplicate rule — {@link ShopifyReturnsView}). */
+    private static final String LIVE_S = "k1.case_type = 'S' AND k1.status NOT IN " + ShopifyReturnsView.DEAD_SHOPIFY_STATUSES;
+    private static final String LIVE_A = "k1.case_type = 'A' AND k1.status NOT IN " + ShopifyReturnsView.DEAD_REQUEST_STATUSES;
+
+    /**
+     * S2 duplicate return (Q6): an order with a live Traced request AND a live Shopify return — both rows are flagged
+     * {@code duplicate}, never merged, and the Shopify row is listed right after the Traced request: it takes the
+     * request's stage / sort position (its newest live request on the order — the anchor) and sorts after it by
+     * {@code sub_key}. Every other row: own stage / position, sub_key ''. A tenant without Shopify returns gets
+     * exactly the pre-S2 rows, order and cursors.
+     */
     private static final String CASES =
-        "WITH k0 AS (" + CASES_A + " UNION ALL " + CASES_B + " UNION ALL " + CASES_C + "), " +
-        "k AS (SELECT k0.*, " + STAGE_SQL.replace("k.", "k0.") + " AS stage, " +
-        "      (extract(epoch FROM k0.updated_at) * 1000000)::bigint AS updated_us, " +
-        "      k0.case_type || ':' || k0.id AS case_key FROM k0) ";
+        "WITH k0 AS (" + CASES_A + " UNION ALL " + CASES_B + " UNION ALL " + CASES_C + " UNION ALL " + CASES_S + "), " +
+        "k1 AS (SELECT k0.*, " + STAGE_SQL.replace("k.", "k0.") + " AS own_stage, " +
+        "      (extract(epoch FROM k0.updated_at) * 1000000)::bigint AS own_updated_us, " +
+        "      k0.case_type || ':' || k0.id AS own_case_key FROM k0), " +
+        "sdup AS (SELECT DISTINCT k1.order_id FROM k1 WHERE " + LIVE_S + "), " +
+        "anc AS (SELECT DISTINCT ON (k1.order_id) k1.order_id, k1.own_stage, k1.own_updated_us, k1.own_case_key " +
+        "      FROM k1 JOIN sdup ON sdup.order_id = k1.order_id WHERE " + LIVE_A +
+        "      ORDER BY k1.order_id, k1.own_updated_us DESC, k1.own_case_key DESC), " +
+        "k AS (SELECT k1.*, " +
+        "      (an.order_id IS NOT NULL AND ((" + LIVE_S + ") OR (" + LIVE_A + "))) AS duplicate, " +
+        "      CASE WHEN an.order_id IS NOT NULL AND " + LIVE_S + " THEN an.own_stage ELSE k1.own_stage END AS stage, " +
+        "      CASE WHEN an.order_id IS NOT NULL AND " + LIVE_S + " THEN an.own_updated_us ELSE k1.own_updated_us END AS updated_us, " +
+        "      CASE WHEN an.order_id IS NOT NULL AND " + LIVE_S + " THEN an.own_case_key ELSE k1.own_case_key END AS case_key, " +
+        "      CASE WHEN an.order_id IS NOT NULL AND " + LIVE_S + " THEN 'S:' || k1.id ELSE '' END AS sub_key " +
+        "      FROM k1 LEFT JOIN anc an ON an.order_id = k1.order_id) ";
 
     private static String quoted(List<String> codes) {
         StringJoiner j = new StringJoiner(", ");
@@ -242,7 +287,10 @@ public class ReturnCaseService {
 
     // ── API ──────────────────────────────────────────────────────────────────────
 
-    public record Filter(String stage, String type, String tile, String q) {}
+    /** source (S2): null = every case, 'traced' = A / B / C, 'shopify' = Shopify returns only. */
+    public record Filter(String stage, String type, String tile, String q, String source) {
+        public Filter(String stage, String type, String tile, String q) { this(stage, type, tile, q, null); }
+    }
 
     @Transactional(readOnly = true)
     public Map<String, Object> list(Filter f, String cursor, int limit) {
@@ -254,24 +302,25 @@ public class ReturnCaseService {
         if (cursor != null && !cursor.isBlank()) {
             Cursor c = Cursor.decode(cursor);
             where.append(" AND (" + STAGE_RANK_SQL + " > ? OR (" + STAGE_RANK_SQL + " = ? AND " +
-                "(k.updated_us < ? OR (k.updated_us = ? AND k.case_key < ?)))) ");
-            params.addAll(List.of(c.rank(), c.rank(), c.updatedUs(), c.updatedUs(), c.caseKey()));
+                "(k.updated_us < ? OR (k.updated_us = ? AND (k.case_key < ? OR (k.case_key = ? AND k.sub_key > ?)))))) ");
+            params.addAll(List.of(c.rank(), c.rank(), c.updatedUs(), c.updatedUs(), c.caseKey(), c.caseKey(), c.subKey()));
         }
         params.add(size + 1);
         List<Map<String, Object>> rows = jdbc.queryForList(
             CASES + "SELECT k.*, " + TONE_SQL + " AS tone, " + STAGE_RANK_SQL + " AS stage_rank FROM k" + where +
-            " ORDER BY stage_rank, k.updated_us DESC, k.case_key DESC LIMIT ?", params.toArray());
+            " ORDER BY stage_rank, k.updated_us DESC, k.case_key DESC, k.sub_key LIMIT ?", params.toArray());
 
         String next = null;
         if (rows.size() > size) {
             rows = rows.subList(0, size);
             Map<String, Object> last = rows.get(size - 1);
             next = new Cursor(((Number) last.get("stage_rank")).intValue(), ((Number) last.get("updated_us")).longValue(),
-                (String) last.get("case_key")).encode();
+                (String) last.get("case_key"), (String) last.get("sub_key")).encode();
         }
         List<Map<String, Object>> items = new ArrayList<>();
         for (Map<String, Object> r : rows) items.add(toItem(r));
         addManualCarriers(tenantId, items);
+        addShopifyReturns(items);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("items", items);
         body.put("nextCursor", next);
@@ -279,15 +328,21 @@ public class ReturnCaseService {
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> counts(String type, String q) {
+    public Map<String, Object> counts(String type, String q, String source) {
         UUID tenantId = TenantContext.require();
         List<Object> params = baseParams(tenantId);
         StringBuilder where = new StringBuilder(" WHERE true ");
         applyFilters(new Filter(null, type, null, q), where, params, false);
+        String src = checkSource(source);
         Map<String, Integer> byStep = new HashMap<>();
         Map<String, Integer> byStage = new HashMap<>();
-        jdbc.query(CASES + "SELECT k.stage, k.next_step, COUNT(*) AS n FROM k" + where + " GROUP BY k.stage, k.next_step",
+        int[] bySource = new int[2];   // [traced, shopify] — the source chips' counts, before the source filter
+        jdbc.query(CASES + "SELECT k.stage, k.next_step, (k.case_type = 'S') AS shopify, COUNT(*) AS n FROM k" + where +
+                " GROUP BY k.stage, k.next_step, (k.case_type = 'S')",
             (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                boolean shopify = rs.getBoolean("shopify");
+                bySource[shopify ? 1 : 0] += rs.getInt("n");
+                if (src != null && shopify != "shopify".equals(src)) return;
                 byStep.merge(rs.getString("next_step"), rs.getInt("n"), Integer::sum);
                 byStage.merge(rs.getString("stage"), rs.getInt("n"), Integer::sum);
             }, params.toArray());
@@ -302,7 +357,44 @@ public class ReturnCaseService {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("stages", stages);
         body.put("tiles", tiles);
+        // S2: the source chips — only when the tenant has Shopify returns (the counts are unchanged otherwise).
+        if (bySource[1] > 0) body.put("sources", new LinkedHashMap<>(Map.of("traced", bySource[0], "shopify", bySource[1])));
         return body;
+    }
+
+    /** Backwards-compatible: every source. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> counts(String type, String q) {
+        return counts(type, q, null);
+    }
+
+    private static String checkSource(String source) {
+        if (source == null || source.isBlank()) return null;
+        if (!List.of("traced", "shopify").contains(source)) throw bad("source");
+        return source;
+    }
+
+    /**
+     * S2: each Shopify row gets its read-only block (ShopifyReturnsView — state, lines coming back / going out,
+     * Restocked in Shopify, In Traced, duplicate), its items summary, and the order to open (target.orderId).
+     */
+    @SuppressWarnings("unchecked")
+    private void addShopifyReturns(List<Map<String, Object>> items) {
+        List<UUID> ids = new ArrayList<>();
+        for (Map<String, Object> m : items) if ("S".equals(m.get("caseType"))) ids.add(UUID.fromString((String) m.get("id")));
+        if (ids.isEmpty()) return;
+        Map<UUID, Map<String, Object>> view = new ShopifyReturnsView(jdbc).forReturns(ids);
+        for (Map<String, Object> m : items) {
+            if (!"S".equals(m.get("caseType"))) continue;
+            Map<String, Object> v = view.get(UUID.fromString((String) m.get("id")));
+            if (v == null) continue;
+            List<String> back = ShopifyReturnsView.labels(v.get("comingBack"));
+            List<String> out = ShopifyReturnsView.labels(v.get("goingOut"));
+            m.put("itemsSummary", String.join(", ", back) + (out.isEmpty() ? "" : " → " + String.join(", ", out)));
+            m.put("itemsSummaryAr", String.join("، ", back) + (out.isEmpty() ? "" : " ← " + String.join("، ", out)));
+            ((Map<String, Object>) m.get("target")).put("orderId", v.get("orderId"));
+            m.put("shopify", v);
+        }
     }
 
     /**
@@ -323,7 +415,7 @@ public class ReturnCaseService {
             });
             inStock = j.toString();
         }
-        return new ArrayList<>(List.of(inStock, tenantId, tenantId, tenantId));
+        return new ArrayList<>(List.of(inStock, tenantId, tenantId, tenantId, tenantId));
     }
 
     private static void applyFilters(Filter f, StringBuilder where, List<Object> params, boolean withStageAndTile) {
@@ -342,6 +434,8 @@ public class ReturnCaseService {
             if (steps == null) throw bad("tile");
             where.append(" AND k.next_step IN (" + quoted(steps) + ") ");
         }
+        String src = checkSource(f.source());
+        if (src != null) where.append("shopify".equals(src) ? " AND k.case_type = 'S' " : " AND k.case_type <> 'S' ");
         if (f.q() != null && !f.q().isBlank()) {
             String q = f.q().trim();
             String compact = q.replaceAll("\\s+", "");
@@ -426,6 +520,8 @@ public class ReturnCaseService {
         if (Boolean.TRUE.equals(r.get("a_unscanned"))) alerts.add("return_leg_unscanned");
         if (Boolean.TRUE.equals(r.get("a_to_receive"))) alerts.add("return_to_receive");
         m.put("alerts", alerts);
+        // S2: a Traced request / Shopify return on an order that has both (absent otherwise).
+        if (Boolean.TRUE.equals(r.get("duplicate"))) m.put("duplicate", true);
         List<String> en = labels(r.get("items_en"));
         List<String> ar = r.get("items_ar") == null ? en : labels(r.get("items_ar"));
         boolean notScanned = Boolean.TRUE.equals(r.get("not_scanned"));
@@ -455,16 +551,20 @@ public class ReturnCaseService {
 
     // ── Cursor ───────────────────────────────────────────────────────────────────
 
-    record Cursor(int rank, long updatedUs, String caseKey) {
+    /** subKey: '' for every row but a duplicate Shopify row listed under its Traced request (then encoded 4th). */
+    record Cursor(int rank, long updatedUs, String caseKey, String subKey) {
+        Cursor(int rank, long updatedUs, String caseKey) { this(rank, updatedUs, caseKey, ""); }
+
         String encode() {
+            String sub = subKey == null || subKey.isEmpty() ? "" : "|" + subKey;
             return Base64.getUrlEncoder().withoutPadding()
-                .encodeToString((rank + "|" + updatedUs + "|" + caseKey).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((rank + "|" + updatedUs + "|" + caseKey + sub).getBytes(StandardCharsets.UTF_8));
         }
 
         static Cursor decode(String s) {
             try {
-                String[] p = new String(Base64.getUrlDecoder().decode(s), StandardCharsets.UTF_8).split("\\|", 3);
-                return new Cursor(Integer.parseInt(p[0]), Long.parseLong(p[1]), p[2]);
+                String[] p = new String(Base64.getUrlDecoder().decode(s), StandardCharsets.UTF_8).split("\\|", 4);
+                return new Cursor(Integer.parseInt(p[0]), Long.parseLong(p[1]), p[2], p.length > 3 ? p[3] : "");
             } catch (RuntimeException e) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bad cursor");
             }

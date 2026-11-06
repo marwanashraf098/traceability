@@ -4,6 +4,45 @@
 
 ## Current state
 
+**Shopify-native returns S2 — returns / exchanges made in Shopify are SHOWN in Traced, read-only (R1) (2026-11-06; branch
+`feat/s2-shopify-returns-view`, rebased on main 2f2fc46f (F4's V215), NOT deployed; NO migration).** Reads the S1 mirror only: no
+reservation, no Pick & Pack change, no stock write, no Shopify call or write, no new intake logic.
+- **Step 0:** no migration needed. An exchange's fulfillment orders = the order's `shopify_fulfillment_orders` whose
+  `line_items[].lineItemGid` is in one of the return's `shopify_exchange_lines.order_line_gids`. "In Traced" reuses
+  `OrderReturnState` (pieces that came back + untracked units, by variant of the return's lines). The owner note reuses
+  the S1 rule (`ConnectionsController.newPermissionsNeeded`, `/connections` → `shopify.newPermissions`, flag
+  `SHOPIFY_NEW_SCOPES_NOTICE`). No new endpoint: `source` is a new optional param on `GET /returns-exchanges` and `/counts`.
+- **ONE derivation — `ShopifyReturnState.derive(returnStatus, exchangeFos)`** (unit-tested): CANCELED → cancelled,
+  DECLINED → declined, CLOSED → closed, REQUESTED → requested; OPEN: over exchange FOs not CANCELLED/INCOMPLETE — none →
+  open, any ON_HOLD → on_hold (+ hold reasons, e.g. AWAITING_PAYMENT), any OPEN/IN_PROGRESS → released, all CLOSED →
+  shipped, else (SCHEDULED) open.
+- **`ShopifyReturnsView`** (not a bean, caller's JdbcTemplate, merchant_orders, explicit tenant filter): per return —
+  coming back (product, variant, qty, reason handle, reason note, customer note), going out (exchange lines), state,
+  `restockedInShopify` (RESTOCKED dispositions, any location), `inTraced` (expected | partial | awaiting_inspection |
+  sellable | damaged | mixed | none), `duplicate` + `duplicateOf` (refs).
+- **Duplicate return (Q6):** a live Traced request (not rejected / cancelled) AND a live Shopify return (not CANCELED /
+  DECLINED) on one order → both rows `duplicate: true`, never merged; in the list the Shopify row takes its order's newest
+  live request's stage + sort position and sorts right after it (`sub_key`; the cursor gets a 4th part only for such a row).
+- **Order drawer:** `OrderDetail.shopifyReturns` (absent when none) → one "Exchange / Return #…-R1 · From Shopify" card
+  each (state chip, going out, coming back with reason + notes, In Traced, Restocked in Shopify ×N, Duplicate chip);
+  `OrderItem.exchangeFor` (absent otherwise) → "Exchange item for #…-R1" instead of "Added after shipping".
+- **Returns page:** case type `S` in `ReturnCaseService` (next step shopify_open → in progress; shopify_closed (done, good)
+  / shopify_declined / shopify_cancelled (done)); each S row carries the `shopify` block + `target.orderId` (row click opens
+  the order drawer). `counts.sources {traced, shopify}` only when the tenant has Shopify returns; the source chips (All ·
+  Traced portal · From Shopify) and source labels show only then. "From Shopify" view = the mockup's columns (Request ·
+  Source · Items · Shopify status · In Traced); All / Traced views keep the live page's columns (Shopify rows show the
+  state chip + In Traced in the status column). Owners see "Approve Traced's new Shopify permissions to see returns made
+  in Shopify" when `/connections` says so; managers see nothing (workers can't open the page — unchanged). EN + AR.
+- **Golden:** byte-identical vs origin/main on fixed data (order details, every list page + cursors, counts, filtered
+  count / list) — scratch cross-version run, not committed; `ShopifyReturnsViewTest.g1` keeps an order / tenant without
+  Shopify returns byte-identical when another order / tenant gets one.
+- **Tests:** ShopifyReturnStateTest (5), ShopifyReturnsViewTest c1 c2 l1 d1 t1 x1 (app_user cross-tenant + positive
+  control) g1 r1; frontend shopifyReturnsView.test.tsx (24). Revert-to-confirm: FO link off → c2 RED; duplicate anchoring
+  off → d1 RED; duplicate flag off → d1 RED.
+- **Existing test updated (approved 2026-11-06):** `ShopifyNativeReturnsMirrorTest.z1` (S1 golden) strips ONLY
+  `shopifyReturns` and `items[].exchangeFor` from the order detail (asserted present first) before comparing; every
+  other field and observation stays byte-identical. Columns decision (approved): mockup columns only in "From Shopify".
+
 **Returns portal fees F4 — type 30 COD + analytics (2026-11-06; branch `feat/portal-fees-f4` on main 5ff71c98, MERGED
 2026-11-06, NOT deployed; V215 — free on main and prod (prod ends at V214, checked 10:44)).** Mode B amendment #3's COD clause,
 built. Behind `traced.portal-fees.settings-enabled` (off in prod): off = cod 0 and nothing stored, exactly as before.

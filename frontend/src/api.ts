@@ -279,6 +279,57 @@ export interface OrderItem {
   addedAfterShipping?: boolean
   /** Untracked units of this line that came back, graded at arrival. Absent when none. */
   returnedUnits?: { unitNo: number; grade: 'sellable' | 'damaged' }[]
+  /** S2: the line is a Shopify exchange line — the return's name ("#1006-R1"). Absent otherwise. */
+  exchangeFor?: string
+}
+
+// ── Shopify-native returns S2 (read-only) ──
+
+export type ShopifyReturnStateCode =
+  | 'requested' | 'open' | 'on_hold' | 'released' | 'shipped' | 'closed' | 'declined' | 'cancelled'
+
+export interface ShopifyReturnLine {
+  variantId: string | null
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  imageUrl: string | null
+  quantity: number
+  /** Coming-back lines only: Shopify's return reason handle and the customer's notes. */
+  reason?: string | null
+  reasonNote?: string | null
+  customerNote?: string | null
+}
+
+export interface ShopifyInTraced {
+  state: 'expected' | 'partial' | 'awaiting_inspection' | 'sellable' | 'damaged' | 'mixed' | 'none'
+  units: number
+  received: number
+  pending: number
+  sellable: number
+  damaged: number
+}
+
+/** One Shopify return as Traced shows it — the order card and the Returns list row (ShopifyReturnsView). */
+export interface ShopifyReturnView {
+  id: string
+  orderId: string
+  orderNumber: string | null
+  name: string | null
+  status: string
+  requestedAt: string | null
+  closedAt: string | null
+  linesTruncated: boolean
+  duplicate: boolean
+  /** The Traced requests on the same order (references) when duplicate. */
+  duplicateOf: string[]
+  comingBack: ShopifyReturnLine[]
+  goingOut: ShopifyReturnLine[]
+  restockedInShopify: number
+  state: ShopifyReturnStateCode
+  holdReasons: string[]
+  kind: 'return' | 'exchange'
+  inTraced: ShopifyInTraced
 }
 
 export interface DeliveryHistoryEntry {
@@ -354,6 +405,8 @@ export interface OrderDetail {
   // drawer disable those actions proactively. Read as-is, never re-derived client-side.
   physicallyWithCourier: boolean
   shippingBadge: OrderShippingBadge | null
+  /** S2: the order's Shopify returns, oldest first. Absent when there is none. */
+  shopifyReturns?: ShopifyReturnView[]
 }
 
 export interface OrderListParams {
@@ -3198,13 +3251,13 @@ export type CaseTone = 'action' | 'problem' | 'moving' | 'done_good' | 'done_clo
 export type CaseTile = 'toApprove' | 'replacementToChoose' | 'toLinkOrder' | 'refundToRecord' | 'bookingProblem'
 
 export interface ReturnCase {
-  /** A portal request · B dashboard exchange · C courier return no request holds. */
-  caseType: 'A' | 'B' | 'C'
+  /** A portal request · B dashboard exchange · C courier return no request holds · S a Shopify return (S2). */
+  caseType: 'A' | 'B' | 'C' | 'S'
   id: string
   kind: 'refund' | 'exchange'
   /** RR reference (A) or Bosta tracking number (B, C). */
   reference: string
-  source: 'returns_page' | 'bosta'
+  source: 'returns_page' | 'bosta' | 'shopify'
   /** Null when redacted (shown as "—"). */
   customerName: string | null
   /** Null = not found. */
@@ -3238,7 +3291,11 @@ export interface ReturnCase {
   updatedAt: string
   /** C only. */
   legStatus: { primaryKey: string; tone: DerivedTone } | null
-  target: { requestId: string | null; exchangeId: string | null; shipmentId: string | null }
+  target: { requestId: string | null; exchangeId: string | null; shipmentId: string | null; orderId?: string }
+  /** S2: a Traced request / Shopify return on an order that has both. Absent otherwise. */
+  duplicate?: boolean
+  /** S2: S rows only — the read-only Shopify block. */
+  shopify?: ShopifyReturnView
 }
 
 export interface ReturnCasePage { items: ReturnCase[]; nextCursor: string | null }
@@ -3246,13 +3303,18 @@ export interface ReturnCasePage { items: ReturnCase[]; nextCursor: string | null
 export interface ReturnCaseCounts {
   stages: { all: number; to_do: number; in_progress: number; done: number }
   tiles: Record<CaseTile, number>
+  /** S2: present only when the tenant has Shopify returns — the source chips' counts. */
+  sources?: { traced: number; shopify: number }
 }
+
+export type CaseSource = 'traced' | 'shopify'
 
 export interface ReturnCaseFilter {
   stage?: CaseStage | 'all'
   type?: 'refund' | 'exchange'
   tile?: CaseTile
   q?: string
+  source?: CaseSource
 }
 
 export function getReturnCases(filter: ReturnCaseFilter, cursor?: string | null, limit = 25) {
@@ -3261,14 +3323,16 @@ export function getReturnCases(filter: ReturnCaseFilter, cursor?: string | null,
   if (filter.type) params.set('type', filter.type)
   if (filter.tile) params.set('tile', filter.tile)
   if (filter.q) params.set('q', filter.q)
+  if (filter.source) params.set('source', filter.source)
   if (cursor) params.set('cursor', cursor)
   return request<ReturnCasePage>(`/returns-exchanges?${params.toString()}`)
 }
 
-export function getReturnCaseCounts(type?: 'refund' | 'exchange', q?: string) {
+export function getReturnCaseCounts(type?: 'refund' | 'exchange', q?: string, source?: CaseSource) {
   const params = new URLSearchParams()
   if (type) params.set('type', type)
   if (q) params.set('q', q)
+  if (source) params.set('source', source)
   const qs = params.toString()
   return request<ReturnCaseCounts>(`/returns-exchanges/counts${qs ? `?${qs}` : ''}`)
 }

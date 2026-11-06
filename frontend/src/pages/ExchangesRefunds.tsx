@@ -2,11 +2,16 @@ import { Fragment, KeyboardEvent, useCallback, useEffect, useRef, useState } fro
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
-import { Repeat2, Undo2, X } from 'lucide-react'
+import { Info, Repeat2, Undo2, X } from 'lucide-react'
 import {
-  getReturnCaseCounts, getReturnCases, CaseStage, CaseTile, CaseTone, ReturnCase, ReturnCaseCounts,
+  getConnections, getReturnCaseCounts, getReturnCases, getRoleFromToken,
+  CaseSource, CaseStage, CaseTile, CaseTone, ReturnCase, ReturnCaseCounts,
 } from '../api'
 import { Skeleton, cn } from '../components/ui'
+import {
+  DuplicateChip, FromShopifyChip, ShopifyStateChip, inTracedLabel, lineLabel,
+} from '../components/ShopifyReturnCard'
+import OrderDrawer from '../components/OrderDrawer'
 import { formatMoney, shortCustomerName } from './exchangesRefunds/requestFormat'
 import ExchangeRefundDrawer, { ExchangeRefundDrawerRow } from './exchangesRefunds/ExchangeRefundDrawer'
 import ReturnRequestDrawer from './exchangesRefunds/ReturnRequestDrawer'
@@ -50,6 +55,8 @@ const GROUP_ROW: Record<CaseStage, string> = {
 type DrawerTarget =
   | { kind: 'request'; id: string; parcel: string | null }
   | { kind: 'other'; row: ExchangeRefundDrawerRow }
+  // S2: a Shopify return opens its order (the drawer's read-only "From Shopify" card)
+  | { kind: 'order'; orderId: string }
 
 export default function ExchangesRefunds() {
   const { t, i18n } = useTranslation()
@@ -59,6 +66,10 @@ export default function ExchangesRefunds() {
   const [tab, setTab] = useState<CaseStage | 'all'>('all')
   const [tile, setTile] = useState<CaseTile | null>(null)
   const [type, setType] = useState<'' | 'refund' | 'exchange'>('')
+  // S2: source chips (All / Traced portal / From Shopify) — shown only when the store has Shopify returns.
+  const [source, setSource] = useState<'' | CaseSource>('')
+  // S2: the owner's "approve the new Shopify permissions" note (the same rule as Settings → Connections).
+  const [permissionsNote, setPermissionsNote] = useState(false)
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
 
@@ -84,11 +95,11 @@ export default function ExchangesRefunds() {
     const seq = ++loadSeq.current
     setLoading(true)
     setError(false)
-    const filter = { stage: tab, type: type || undefined, tile: tile ?? undefined, q: q || undefined }
+    const filter = { stage: tab, type: type || undefined, tile: tile ?? undefined, q: q || undefined, source: source || undefined }
     try {
       const [page, c] = await Promise.all([
         getReturnCases(filter, null, PAGE_SIZE),
-        getReturnCaseCounts(type || undefined, q || undefined),
+        getReturnCaseCounts(type || undefined, q || undefined, source || undefined),
       ])
       if (seq !== loadSeq.current) return
       setItems(Array.isArray(page?.items) ? page.items : [])
@@ -100,16 +111,27 @@ export default function ExchangesRefunds() {
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
-  }, [tab, type, tile, q])
+  }, [tab, type, tile, q, source])
 
   useEffect(() => { load() }, [load])
+
+  // Owners only: the store hasn't granted Traced the returns permissions yet (managers / workers see nothing).
+  useEffect(() => {
+    if (getRoleFromToken() !== 'owner') return
+    let live = true
+    getConnections()
+      .then(c => { if (live) setPermissionsNote(!!c?.shopify?.newPermissions) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [])
 
   async function showMore() {
     if (!cursor || loadingMore) return
     setLoadingMore(true)
     try {
       const page = await getReturnCases(
-        { stage: tab, type: type || undefined, tile: tile ?? undefined, q: q || undefined }, cursor, PAGE_SIZE)
+        { stage: tab, type: type || undefined, tile: tile ?? undefined, q: q || undefined, source: source || undefined },
+        cursor, PAGE_SIZE)
       setItems(prev => [...prev, ...(page.items ?? [])])
       setCursor(page.nextCursor ?? null)
     } catch {
@@ -130,6 +152,10 @@ export default function ExchangesRefunds() {
   }
 
   function open(c: ReturnCase) {
+    if (c.caseType === 'S') {
+      if (c.target.orderId) setDrawer({ kind: 'order', orderId: c.target.orderId })
+      return
+    }
     if (c.target.requestId && c.caseType === 'A') {
       setDrawer({ kind: 'request', id: c.target.requestId, parcel: null })
       return
@@ -150,7 +176,12 @@ export default function ExchangesRefunds() {
 
   const stages = counts?.stages
   const stageCount = (s: CaseStage | 'all') => (stages ? stages[s] ?? 0 : 0)
-  const filtered = !!(tile || type || q)
+  const filtered = !!(tile || type || q || source)
+  // S2: the source chips and source labels appear once the store has Shopify returns (or a source is chosen).
+  const sources = counts?.sources
+  const showSources = !!sources || !!source
+  const shopifyMode = source === 'shopify'
+  const cols = shopifyMode ? 5 : 6
 
   return (
     <>
@@ -160,7 +191,37 @@ export default function ExchangesRefunds() {
           <p className="text-body text-muted">{t('returnsExchanges.subtitle')}</p>
         </div>
 
+        {permissionsNote && (
+          <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-white border border-[#E3E6EB] text-[14px] text-[#3A404C]"
+            data-testid="shopify-permissions-note">
+            <Info size={18} strokeWidth={2} className="text-[#5B6270] flex-shrink-0 mt-px" aria-hidden />
+            {t('shopifyReturns.permissionsNote')}
+          </div>
+        )}
+
         <Tiles counts={counts} active={tile} onChoose={chooseTile} />
+
+        {showSources && (
+          <div className="flex gap-2 flex-wrap" role="group" aria-label={t('shopifyReturns.filter.label')} data-testid="source-filter">
+            {([['', (sources?.traced ?? 0) + (sources?.shopify ?? 0)], ['traced', sources?.traced ?? 0],
+               ['shopify', sources?.shopify ?? 0]] as Array<['' | CaseSource, number]>).map(([k, n]) => {
+              const active = source === k
+              return (
+                <button
+                  key={k || 'all'}
+                  type="button"
+                  aria-pressed={active}
+                  data-testid={`source-${k || 'all'}`}
+                  onClick={() => setSource(k)}
+                  className={cn('h-11 px-3.5 rounded-full border text-[13px]',
+                    active ? 'border-[#141821] bg-[#141821] text-white font-semibold' : 'border-[#CDD3DC] bg-white text-[#3A404C]')}
+                >
+                  {t(`shopifyReturns.filter.${k || 'all'}`)} · {n.toLocaleString(lang)}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-end gap-4 border-b border-[#E3E6EB]">
           <nav aria-label={t('returnsExchanges.stageLabel')} className="flex gap-6 flex-grow" role="tablist">
@@ -238,26 +299,37 @@ export default function ExchangesRefunds() {
         ) : (
           <section className="bg-white border border-[#E3E6EB] rounded-[14px] overflow-hidden">
             <table className="w-full text-start border-collapse table-fixed" data-testid="cases-table">
-              {/* Column widths as the mockup's grid: 180 · 120 · 120 · 1fr · 250 · 84 (+ cell padding). */}
-              <colgroup>
-                <col className="w-[196px]" /><col className="w-[118px]" /><col className="w-[104px]" />
-                <col /><col className="w-[236px]" /><col className="w-[100px]" />
-              </colgroup>
+              {shopifyMode ? (
+                // S2 — From Shopify: the mockup's columns (Request · Source · Items · Shopify status · In Traced).
+                <colgroup>
+                  <col className="w-[170px]" /><col className="w-[140px]" /><col /><col className="w-[210px]" /><col className="w-[200px]" />
+                </colgroup>
+              ) : (
+                // Column widths as the mockup's grid: 180 · 120 · 120 · 1fr · 250 · 84 (+ cell padding).
+                <colgroup>
+                  <col className="w-[196px]" /><col className="w-[118px]" /><col className="w-[104px]" />
+                  <col /><col className="w-[236px]" /><col className="w-[100px]" />
+                </colgroup>
+              )}
               <thead>
                 <tr className="text-[12px] font-semibold tracking-[0.06em] uppercase text-[#5B6270] border-b border-[#EDEFF3]">
-                  {(['return', 'customer', 'order', 'items', 'next', 'updated'] as const).map(col => (
-                    <th key={col} className="text-start font-semibold px-4 py-3">{t(`returnsExchanges.columns.${col}`)}</th>
-                  ))}
+                  {shopifyMode
+                    ? (['request', 'source', 'items', 'shopifyStatus', 'inTraced'] as const).map(col => (
+                        <th key={col} className="text-start font-semibold px-4 py-3">{t(`shopifyReturns.columns.${col}`)}</th>
+                      ))
+                    : (['return', 'customer', 'order', 'items', 'next', 'updated'] as const).map(col => (
+                        <th key={col} className="text-start font-semibold px-4 py-3">{t(`returnsExchanges.columns.${col}`)}</th>
+                      ))}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   [0, 1, 2].map(i => (
-                    <tr key={i}><td colSpan={6} className="px-4 py-3"><Skeleton className="h-8 w-full" /></td></tr>
+                    <tr key={i}><td colSpan={cols} className="px-4 py-3"><Skeleton className="h-8 w-full" /></td></tr>
                   ))
                 ) : items.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center text-body text-muted" data-testid="cases-empty">
+                    <td colSpan={cols} className="px-5 py-12 text-center text-body text-muted" data-testid="cases-empty">
                       {t(filtered ? 'returnsExchanges.empty.filtered' : `returnsExchanges.empty.${tab}`)}
                     </td>
                   </tr>
@@ -270,7 +342,7 @@ export default function ExchangesRefunds() {
                       <Fragment key={`${c.caseType}:${c.id}`}>
                         {header && (
                           <tr data-testid={`group-${c.stage}`}>
-                            <td colSpan={6} className={cn('px-4 py-2.5 text-[13px] font-semibold border-b border-[#EDEFF3]', GROUP_ROW[c.stage])}>
+                            <td colSpan={cols} className={cn('px-4 py-2.5 text-[13px] font-semibold border-b border-[#EDEFF3]', GROUP_ROW[c.stage])}>
                               {t('returnsExchanges.group', { stage: t(`returnsExchanges.tabs.${c.stage}`), count: total })}
                               {shownInStage < total && (
                                 <span className="font-normal text-[#5B6270]"> {t('returnsExchanges.showing', { count: shownInStage })}</span>
@@ -278,7 +350,9 @@ export default function ExchangesRefunds() {
                             </td>
                           </tr>
                         )}
-                        <CaseRow c={c} onOpen={() => open(c)} />
+                        {shopifyMode
+                          ? <ShopifyModeRow c={c} onOpen={() => open(c)} />
+                          : <CaseRow c={c} onOpen={() => open(c)} showSources={showSources} />}
                       </Fragment>
                     )
                   })
@@ -294,6 +368,14 @@ export default function ExchangesRefunds() {
             )}
           </section>
         )}
+
+        {showSources && (sources?.shopify ?? 0) > 0 && (
+          <p className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-white border border-[#E3E6EB] text-[14px] text-[#3A404C]"
+            data-testid="shopify-read-only-note">
+            <Info size={18} strokeWidth={2} className="text-[#5B6270] flex-shrink-0 mt-px" aria-hidden />
+            {t('shopifyReturns.readOnlyNote')}
+          </p>
+        )}
       </div>
 
       <ReturnRequestDrawer
@@ -307,6 +389,9 @@ export default function ExchangesRefunds() {
         onClose={() => setDrawer(null)}
         onChanged={load}
       />
+      {drawer?.kind === 'order' && (
+        <OrderDrawer orderId={drawer.orderId} onClose={() => setDrawer(null)} />
+      )}
     </>
   )
 }
@@ -344,7 +429,7 @@ function Tiles({ counts, active, onChoose }: {
   )
 }
 
-function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
+function CaseRow({ c, onOpen, showSources = false }: { c: ReturnCase; onOpen: () => void; showSources?: boolean }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const exchange = c.kind === 'exchange'
@@ -371,7 +456,13 @@ function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
             </span>
             <bdi className="font-mono text-[14px] font-semibold text-[#141821]">{c.reference}</bdi>
           </span>
-          <span className="text-[12px] text-[#5B6270]">{t(`returnsExchanges.source.${c.source}`)}</span>
+          {c.caseType === 'S' ? (
+            <span className="flex gap-1.5 flex-wrap"><FromShopifyChip />{c.duplicate && <DuplicateChip />}</span>
+          ) : showSources && c.caseType === 'A' ? (
+            <span className="flex gap-1.5 flex-wrap"><TracedPortalChip />{c.duplicate && <DuplicateChip />}</span>
+          ) : (
+            <span className="text-[12px] text-[#5B6270]">{t(`returnsExchanges.source.${c.source}`)}</span>
+          )}
         </div>
       </td>
       <td className="px-4 py-3 text-[15px] font-semibold text-[#141821]" data-testid="case-customer">
@@ -383,9 +474,17 @@ function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
           : <span className="text-[14px] text-[#5B6270] whitespace-nowrap">{t('returnsExchanges.notFound')}</span>}
       </td>
       <td className="px-4 py-3 text-[14px] text-[#2A303B]" dir="auto" data-testid="case-items">
-        {lang === 'ar' ? c.itemsSummaryAr : c.itemsSummary}
+        {c.shopify ? <ShopifyItems c={c} /> : (lang === 'ar' ? c.itemsSummaryAr : c.itemsSummary)}
       </td>
       <td className="px-4 py-3">
+        {c.shopify ? (
+          <div className="flex flex-col gap-1 items-start">
+            <ShopifyStateChip state={c.shopify.state} holdReasons={c.shopify.holdReasons} />
+            <span className="text-[12px] text-[#5B6270]" data-testid="case-in-traced">
+              {t('shopifyReturns.inTracedLabel')}: {inTracedLabel(t, c.shopify.inTraced)}
+            </span>
+          </div>
+        ) : (
         <div className="flex flex-col gap-1 items-start">
           <span className={cn('px-2.5 py-1 rounded-full text-[13px] font-semibold', TONE_PILL[c.tone])}
             data-testid="case-pill" data-tone={c.tone}>
@@ -393,10 +492,68 @@ function CaseRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
           </span>
           {reason && <span className="text-[12px] text-[#5B6270]" data-testid="case-reason"><bdi>{reason}</bdi></span>}
         </div>
+        )}
       </td>
       <td className={cn('px-4 py-3 text-[13px] whitespace-nowrap', overdue ? 'text-[#B12D25] font-bold' : 'text-[#5B6270]')}
         data-testid="case-updated" data-overdue={overdue || undefined}>
         {overdue ? t('returnsExchanges.overdueAge', { count: c.overdueDays! }) : relativeTime(t, lang, c.updatedAt)}
+      </td>
+    </tr>
+  )
+}
+
+function TracedPortalChip() {
+  const { t } = useTranslation()
+  return (
+    <span data-testid="source-chip" data-source="traced"
+      className="inline-flex px-2 py-0.5 rounded-md bg-[#EEF2FF] text-[#1E3A8A] text-[12px] font-semibold">
+      {t('shopifyReturns.tracedPortal')}
+    </span>
+  )
+}
+
+/** S2: "↩ … coming back" / "↪ … going out" lines of a Shopify return. */
+function ShopifyItems({ c }: { c: ReturnCase }) {
+  const { t } = useTranslation()
+  const s = c.shopify!
+  return (
+    <div className="flex flex-col gap-1">
+      {s.comingBack.map((l, i) => (
+        <span key={`b${i}`} dir="auto">{t('shopifyReturns.list.comingBack', { item: lineLabel(t, l) })}</span>
+      ))}
+      {s.goingOut.map((l, i) => (
+        <span key={`o${i}`} dir="auto" className="text-[#5B6270]">{t('shopifyReturns.list.goingOut', { item: lineLabel(t, l) })}</span>
+      ))}
+    </div>
+  )
+}
+
+/** S2 — the From Shopify view: the mockup's columns. Every row here is a Shopify return (read-only). */
+function ShopifyModeRow({ c, onOpen }: { c: ReturnCase; onOpen: () => void }) {
+  const { t } = useTranslation()
+  function onKey(e: KeyboardEvent<HTMLTableRowElement>) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() }
+  }
+  return (
+    <tr tabIndex={0} onClick={onOpen} onKeyDown={onKey} data-testid="case-row" data-case-id={c.id}
+      className="border-b border-[#EDEFF3] last:border-b-0 cursor-pointer hover:bg-[#FAFBFC] focus:outline-none focus-visible:bg-[#F4F7FF]">
+      <td className="px-4 py-3">
+        <div className="flex flex-col gap-1">
+          <bdi className="font-mono text-[14px] font-semibold text-[#141821]">{c.reference}</bdi>
+          {c.orderNumber && <bdi className="text-[12px] text-[#5B6270]">{c.orderNumber}</bdi>}
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <span className="flex gap-1.5 flex-wrap"><FromShopifyChip />{c.duplicate && <DuplicateChip />}</span>
+      </td>
+      <td className="px-4 py-3 text-[14px] text-[#2A303B]" data-testid="case-items">
+        {c.shopify ? <ShopifyItems c={c} /> : c.itemsSummary}
+      </td>
+      <td className="px-4 py-3">
+        {c.shopify && <ShopifyStateChip state={c.shopify.state} holdReasons={c.shopify.holdReasons} />}
+      </td>
+      <td className="px-4 py-3 text-[14px] text-[#3A404C]" data-testid="case-in-traced">
+        {c.shopify ? inTracedLabel(t, c.shopify.inTraced) : '—'}
       </td>
     </tr>
   )
