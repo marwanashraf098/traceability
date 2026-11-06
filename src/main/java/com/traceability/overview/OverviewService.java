@@ -53,6 +53,18 @@ public class OverviewService {
         this.clock = clock;
     }
 
+    /**
+     * S3c switch ({@link com.traceability.inventory.ShopifyShadowOrders#S3C_FLAG}, default false): until Traced can pack
+     * a shadow order, no shadow counts as late to pack; once on, only ended shadows are left out.
+     */
+    private boolean shadowsPackable = false;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShadowsPackable(
+            @org.springframework.beans.factory.annotation.Value("${" + com.traceability.inventory.ShopifyShadowOrders.S3C_FLAG + ":false}") boolean on) {
+        this.shadowsPackable = on;
+    }
+
     // ── Response records ────────────────────────────────────────────────────
 
     public record TrendPoint(String date, int count) {}
@@ -428,7 +440,7 @@ public class OverviewService {
                 LIMIT 1
             ) s ON true
             WHERE o.tenant_id = ? AND o.placed_at IS NOT NULL AND o.placed_at < ?
-              AND NOT (""" + com.traceability.inventory.ShopifyShadowOrders.endedShadowSql("o") + """
+              AND NOT (""" + com.traceability.inventory.ShopifyShadowOrders.lateToPackExcludedSql("o", shadowsPackable) + """
             )
             """,
             (rs, i) -> {

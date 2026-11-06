@@ -60,6 +60,7 @@ import static org.mockito.Mockito.*;
  *       traced.shopify-exchange.shipped-alert-enabled on (S3c turns it on; off now — Traced can't pack shadows yet)
  *   n1  an ENDED shadow (status 'confirmed', every line 0) is in no late-to-pack (normal + embedded), no Overview count,
  *       no alert of any type (shipped alert on too), no committed demand
+ *   n2  a LIVE shadow is not late to pack (normal + embedded) while the S3c flag is off; with it on it counts
  *   e5  partial: 2 units, Shopify fulfilled 1 → 1 still reserved (per line)
  *   e6  held → released → re-held keeps the reservation
  *   d1  stand-down: a Shopify-native internal:exchange: replacement for the original + variant → no shadow / line 0
@@ -450,9 +451,45 @@ class ShopifyShadowOrdersTest {
             exceptions.setShippedInShopifyAlertEnabled(false);
         }
 
-        // Positive control: the same shadow while LIVE does show in late to pack (status 'confirmed' is pre-pack).
+        // Positive control: the same shadow while LIVE does show in late to pack (status 'confirmed' is pre-pack) —
+        // with the S3c flag on (off, no shadow is late to pack: n2).
         s.ret(gid("Return"), "OPEN", new Object[]{gid("ExchangeLineItem"), s.restV, 1});
-        assertThat(s.as(() -> overview.lateToPack()).overdue()).isEqualTo(lateBefore.overdue() + 1);
+        overview.setShadowsPackable(true);
+        try {
+            assertThat(s.as(() -> overview.lateToPack()).overdue()).isEqualTo(lateBefore.overdue() + 1);
+        } finally {
+            overview.setShadowsPackable(false);
+        }
+    }
+
+    @Test
+    void n2_liveShadow_lateToPackOnlyWithS3cFlag() {
+        Shop s = new Shop("n2");
+        s.pieces(s.v, 1);
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+            new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("shop", "n/a",
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SHOPIFY_EMBEDDED"))));
+        var lateBefore = s.as(() -> overview.lateToPack());
+        var embeddedBefore = s.as(() -> embedded.lateToPack());
+
+        s.ret(gid("Return"), "OPEN", new Object[]{gid("ExchangeLineItem"), s.restV, 1});   // approved > 48 h ago
+        assertThat(s.onlyShadow()).containsEntry("state", "live");
+        assertThat(s.committed(s.v)).isEqualTo(1);
+
+        // Flag off (default): Traced can't pack it yet → not late to pack anywhere.
+        assertThat(s.as(() -> overview.lateToPack())).as("late to pack, flag off").isEqualTo(lateBefore);
+        assertThat(s.as(() -> embedded.lateToPack())).as("embedded, flag off").isEqualTo(embeddedBefore);
+
+        // Flag on (S3c): a live shadow is pre-pack work and counts, in both.
+        overview.setShadowsPackable(true);
+        try {
+            var on = s.as(() -> overview.lateToPack());
+            assertThat(on.overdue()).isEqualTo(lateBefore.overdue() + 1);
+            assertThat(on.over48()).isEqualTo(lateBefore.over48() + 1);
+            assertThat(s.as(() -> embedded.lateToPack()).overdue()).isEqualTo(embeddedBefore.overdue() + 1);
+        } finally {
+            overview.setShadowsPackable(false);
+        }
     }
 
     @Test

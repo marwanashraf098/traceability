@@ -72,6 +72,21 @@ public class ShopifyShadowOrders {
                "AND sx_end.tenant_id = " + o + ".tenant_id AND sx_end.state = 'ended')";
     }
 
+    /**
+     * THE S3c switch: {@code traced.shopify-exchange.shipped-alert-enabled} (default false). Off = Traced can't pack a
+     * shadow yet, so (a) the "shipped in Shopify" alert stays off and (b) no shadow — live or ended — counts as late to
+     * pack. S3c turns it on: then only ended shadows are left out. Read by ExceptionService and OverviewService.
+     */
+    public static final String S3C_FLAG = "traced.shopify-exchange.shipped-alert-enabled";
+
+    /**
+     * Late-to-pack exclusion for shadow orders (normal Overview and embedded both go through OverviewService.lateToPack).
+     * {@code packable} = the S3c flag. {@code o} = the order alias.
+     */
+    public static String lateToPackExcludedSql(String o, boolean packable) {
+        return packable ? endedShadowSql(o) : o + ".external_id LIKE '" + PREFIX + "%'";
+    }
+
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;

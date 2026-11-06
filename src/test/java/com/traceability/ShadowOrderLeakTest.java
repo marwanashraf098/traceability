@@ -575,8 +575,9 @@ class ShadowOrderLeakTest {
     static {
         SHOWS.put("GET /api/v1/fulfill/queue",        "Pick & Pack queue (FulfillService.getQueue on warehouse_orders)");
         SHOWS.put("GET /api/v1/fulfill/gather",       "gather list of the queue's orders");
-        SHOWS.put("GET /api/v1/overview/late-to-pack","late to pack is a warehouse metric (Q8, approved 2026-11-06)");
-        SHOWS.put("GET /api/v1/embedded/overview/late-to-pack", "the same late-to-pack metric inside the embedded app (Q8)");
+        // Late to pack (normal + embedded) is a warehouse metric (Q8) but hidden until S3c: with the S3c flag off
+        // (ShopifyShadowOrders.S3C_FLAG, default) no shadow counts — approved 2026-11-06. S3c turns the flag on and
+        // puts both back here.
         SHOWS.put("GET /api/v1/inventory/stock",      "committed demand (VariantStockService): a shadow's replacement is kept aside");
         SHOWS.put("GET /api/v1/inventory/variants/{variantId}/breakdown", "committed demand of the variant (as above)");
         SHOWS.put("GET /api/v1/catalog",              "committed demand in the catalog (as above)");

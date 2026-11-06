@@ -52,7 +52,7 @@ public class ExceptionService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setShippedInShopifyAlertEnabled(
-            @org.springframework.beans.factory.annotation.Value("${traced.shopify-exchange.shipped-alert-enabled:false}") boolean on) {
+            @org.springframework.beans.factory.annotation.Value("${" + ShopifyShadowOrders.S3C_FLAG + ":false}") boolean on) {
         this.shippedInShopifyAlertEnabled = on;
     }
 
