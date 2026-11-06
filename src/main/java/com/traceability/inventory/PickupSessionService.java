@@ -230,7 +230,7 @@ public class PickupSessionService {
                        CASE WHEN s.provider = 'generic' THEN COALESCE(btrim(s.carrier_name), '') END AS generic_carrier
                 FROM pickup_shipments ps
                 JOIN shipments s ON s.id = ps.shipment_id
-                JOIN merchant_orders    o ON o.id = s.order_id
+                JOIN warehouse_orders    o ON o.id = s.order_id
                 LEFT JOIN users u ON u.id = ps.scanned_by_user_id
                 WHERE ps.pickup_id = ? AND ps.tenant_id = ?
                 ORDER BY ps.scanned_at DESC
@@ -304,7 +304,7 @@ public class PickupSessionService {
                            """ + LEG_ENDED_SQL + """
                            AS ended
                     FROM shipments s
-                    JOIN merchant_orders o ON o.id = s.order_id
+                    JOIN warehouse_orders o ON o.id = s.order_id
                     WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'
                     """,
                     rs -> rs.next() ? new ShipmentRow(
@@ -324,7 +324,7 @@ public class PickupSessionService {
                     shipment = jdbc.query(
                         "SELECT s.id, s.order_id, s.shipment_leg::text AS leg, s.internal_state::text AS internal_state, " +
                         "       o.number AS order_number, s.cod_amount, " + LEG_ENDED_SQL + " AS ended " +
-                        "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
+                        "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id " +
                         "WHERE s.id = ? AND s.tenant_id = ? AND s.provider = 'generic'",
                         rs -> rs.next() ? new ShipmentRow(
                             rs.getObject("id", UUID.class),
@@ -488,7 +488,7 @@ public class PickupSessionService {
                            AS ended_reason
                     FROM pickup_shipments ps
                     JOIN shipments s ON s.id = ps.shipment_id
-                    LEFT JOIN merchant_orders o ON o.id = s.order_id
+                    LEFT JOIN warehouse_orders o ON o.id = s.order_id
                     WHERE ps.pickup_id = ? AND ps.tenant_id = ?
                     """,
                     (rs, i) -> new ScannedShipment(

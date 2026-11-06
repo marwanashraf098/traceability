@@ -51,7 +51,7 @@ public class PackPrintBatchStore {
         String dir = "newest".equals(sort) ? "DESC" : "ASC";
         String sql =
             "SELECT o.id AS order_id, o.number, fs.id AS shipment_id, fs.tracking_number " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, tracking_number, internal_state, provider " +
             "    FROM shipments " +
@@ -91,7 +91,7 @@ public class PackPrintBatchStore {
         UUID tenantId = TenantContext.require();
         String dir = "newest".equals(sort) ? "DESC" : "ASC";
         return jdbc.queryForList(
-            "SELECT o.id FROM merchant_orders o " + FulfillService.PICKABLE_ORDERS_FILTER +
+            "SELECT o.id FROM warehouse_orders o " + FulfillService.PICKABLE_ORDERS_FILTER +
             "ORDER BY o.created_at " + dir + ", o.id " + dir,
             UUID.class, tenantId, lookbackDays);
     }

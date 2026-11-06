@@ -42,7 +42,7 @@ public final class GenericShipments {
         "(s.internal_state = 'created' " +
         " AND NOT EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
         "                 WHERE oi.order_id = s.order_id AND a.tenant_id = s.tenant_id AND a.status = 'packed') " +
-        " AND NOT EXISTS (SELECT 1 FROM merchant_orders o2 WHERE o2.id = s.order_id AND o2.tenant_id = s.tenant_id " +
+        " AND NOT EXISTS (SELECT 1 FROM warehouse_orders o2 WHERE o2.id = s.order_id AND o2.tenant_id = s.tenant_id " +
         "                 AND o2.status IN ('packed', 'awaiting_pickup', 'with_courier', 'delivered', " +
         "                                   'returning', 'returned', 'lost')))";
 
@@ -71,7 +71,7 @@ public final class GenericShipments {
      * {@link #enabled} is true. Cancels first (a cancelled fulfillment's 'created' generic leg), then
      * creates at most one generic shipment for the order, when ALL hold:
      * <ul>
-     *   <li>the order is a post-connect merchant order (in merchant_orders, placed at/after its store's
+     *   <li>the order is a post-connect order (in warehouse_orders, placed at/after its store's
      *       orders_ingest_from — a NULL cutoff, Jumi's, never filters);</li>
      *   <li>the order has no active forward shipment (V104 rule);</li>
      *   <li>the fulfillment isn't cancelled, its class is 'other_known', or 'unknown' while the tenant
@@ -96,7 +96,7 @@ public final class GenericShipments {
         followTrackingEdit(jdbc, tenantId, orderId, fulfillments, classOf, trackingNumbersOf);
 
         Map<String, Object> order = jdbc.queryForList(
-            "SELECT o.id FROM merchant_orders o LEFT JOIN stores st ON st.id = o.store_id " +
+            "SELECT o.id FROM warehouse_orders o LEFT JOIN stores st ON st.id = o.store_id " +
             "WHERE o.id = ? AND o.tenant_id = ? " +
             "  AND (st.orders_ingest_from IS NULL OR o.placed_at IS NULL OR o.placed_at >= st.orders_ingest_from)",
             orderId, tenantId).stream().findFirst().orElse(null);

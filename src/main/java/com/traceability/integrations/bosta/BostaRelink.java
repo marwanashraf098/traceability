@@ -134,7 +134,7 @@ public class BostaRelink {
     /** One row, in the caller's transaction (rules 2–7). */
     private String attempt(UUID tenantId, UUID orderId, Map<String, Object> u) {
         boolean frozen = TrackingChanges.lockAndCheckFrozen(jdbc, tenantId, orderId);
-        List<String> status = jdbc.queryForList("SELECT status::text FROM merchant_orders WHERE id = ? AND tenant_id = ?",
+        List<String> status = jdbc.queryForList("SELECT status::text FROM warehouse_orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
         if (status.isEmpty()) return REFUSED + "identity";
         if (CLOSED_ORDER_STATUSES.contains("'" + status.get(0) + "'")) return REFUSED + "order_closed";

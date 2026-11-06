@@ -340,9 +340,16 @@ public class MainReconcileService {
                 }
             }
             Timestamp readAt = tx.execute(s -> jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class));
+            // S3a interim guard: a write store holding a Shopify-native exchange replacement writes nothing this run.
+            boolean exchangeHold = write && Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+                MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, tenantId, tenantId)));
+            if (exchangeHold) {
+                log.info("Main reconcile run {} tenant={}: no writes — {}", runId, tenantId,
+                    MainReconcileRules.SHOPIFY_EXCHANGE_IN_CUSTODY);
+            }
             List<MainReconcileWriter.Candidate> candidates =
-                compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write);
-            if (write) {
+                compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write, exchangeHold);
+            if (write && !exchangeHold) {
                 // After the compute transaction committed — no DB transaction is open during a Shopify call.
                 MainReconcileWriter writer = new MainReconcileWriter(jdbc, tx, shopify, this::enabled);
                 MainReconcileWriter.Main m = new MainReconcileWriter.Main(main.id(), main.gid());
@@ -481,7 +488,7 @@ public class MainReconcileService {
 
     private List<MainReconcileWriter.Candidate> compute(UUID tenantId, UUID runId, String kind, Main main,
                          Map<UUID, String> items, Map<String, Level> levels, Set<String> readItems, Timestamp readAt,
-                         Timestamp startedAt, boolean write) {
+                         Timestamp startedAt, boolean write, boolean exchangeHold) {
         List<MainReconcileWriter.Candidate> candidates = new ArrayList<>();
         tx.executeWithoutResult(st -> {
             // The seed's lock (ShopifyInventoryReconcileService.acquireTenantLock): one Main writer/reader at a time.
@@ -510,7 +517,7 @@ public class MainReconcileService {
                     new MapSqlParameterSource("t", tenantId).addValue("main", main.id()).addValue("mainGid", main.gid())
                         .addValue("mainNum", main.numeric()).addValue("ids", uuidArray(chunk))
                         .addValue("cancelWindowMinutes", cancelledFulfillmentWindowMinutes)
-                        .addValue("settle", write).addValue("holdMinutes", ambiguousHoldMinutes));
+                        .addValue("settle", write && !exchangeHold).addValue("holdMinutes", ambiguousHoldMinutes));
                 for (Map<String, Object> r : rows) {
                     checked++;
                     UUID variantId = (UUID) r.get("variant_id");
@@ -551,6 +558,9 @@ public class MainReconcileService {
 
                     Integer onHand = lv == null || MainReconcileRules.SHOPIFY_UNREAD.equals(skip) ? null : lv.onHand();
                     Integer delta = onHand == null ? null : target - onHand;
+                    if (skip == null && exchangeHold && delta != null && delta != 0) {
+                        skip = MainReconcileRules.SHOPIFY_EXCHANGE_IN_CUSTODY;   // recorded, never confirmed or written
+                    }
                     State prev = states.get(variantId);
                     String status;
                     Timestamp deltaSince = null;

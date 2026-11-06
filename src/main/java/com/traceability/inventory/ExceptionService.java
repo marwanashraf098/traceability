@@ -478,7 +478,7 @@ public class ExceptionService {
             "       COALESCE(p.last_event_at, p.created_at) AS occurred_at, " +
             "       'lost:piece:' || p.id AS subject_key " +
             "FROM pieces p " +
-            "LEFT JOIN merchant_orders o ON o.id = p.current_order_id " +
+            "LEFT JOIN warehouse_orders o ON o.id = p.current_order_id " +
             "LEFT JOIN shipments s ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
             "WHERE p.status = 'lost'::piece_status " +
             "  AND p.tenant_id = ? " +
@@ -532,7 +532,7 @@ public class ExceptionService {
             "       o.id AS order_id, o.number AS order_number, o.customer_name, fs.tracking_number, " +
             "       ps.reason AS set_aside_reason, u.name AS set_aside_by_name, ps.created_at AS occurred_at, " +
             "       " + PackListRules.SET_ASIDE_KEY_SQL + " AS subject_key " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             PackListRules.LATEST_PACK_OUTCOME_LATERAL +
             "LEFT JOIN pack_sessions pss ON pss.id = ps.session_id " +
             "LEFT JOIN users u ON u.id = pss.user_id " +
@@ -561,7 +561,7 @@ public class ExceptionService {
             "FROM pack_print_batch_items bi " +
             "JOIN pack_print_batches b ON b.id = bi.batch_id AND b.tenant_id = bi.tenant_id " +
             "JOIN shipments s ON s.id = bi.shipment_id AND s.tenant_id = bi.tenant_id " +
-            "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
             "WHERE bi.tenant_id = ? AND " + PackListRules.CANCELLED_AFTER_PRINT_OPEN_SQL + " " +
             // latest batch per shipment (UUIDv4 is not time-ordered — created_at, id only as tie-break)
             "ORDER BY s.id, b.created_at DESC, b.id DESC",
@@ -837,7 +837,7 @@ public class ExceptionService {
             "            GROUP BY rl.return_order_id, rl.variant_id) u " +
             "      GROUP BY u.source_order_id, u.variant_id " +
             "      HAVING SUM(u.pushed) > 0) a " +
-            "JOIN merchant_orders o   ON o.id = a.source_order_id AND o.tenant_id = ? " +
+            "JOIN warehouse_orders o   ON o.id = a.source_order_id AND o.tenant_id = ? " +
             "JOIN variants v ON v.id = a.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "CROSS JOIN LATERAL (SELECT LEAST(a.pushed, " +
@@ -933,7 +933,7 @@ public class ExceptionService {
             "       s.tracking_number, s.returned_at AS occurred_at, " +
             "       'never_received:piece:' || p.id AS subject_key " +
             "FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
+            "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
             "JOIN order_items oi ON oi.order_id = o.id " +
             "JOIN allocations a  ON a.order_item_id = oi.id " +
             "                    AND a.status IN ('packed','active') " +
@@ -1081,7 +1081,7 @@ public class ExceptionService {
             "       s.carrier_name, max(c.created_at) AS occurred_at, " +
             "       'generic_bosta_conflict:scan:' || c.order_id || ':' || c.tracking_number AS subject_key " +
             "FROM generic_conflict_scans c " +
-            "JOIN merchant_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id " +
             "JOIN shipments s ON s.id = c.shipment_id AND s.tenant_id = c.tenant_id " +
             "WHERE c.tenant_id = ? AND s.internal_state NOT IN ('terminated', 'cancelled') " +
             "GROUP BY c.order_id, o.number, c.tracking_number, s.carrier_name, c.tenant_id " +
@@ -1157,7 +1157,7 @@ public class ExceptionService {
             "       s.carrier_name, c.created_at AS occurred_at, 'tracking_change:' || c.id AS subject_key " +
             // s = the leg that carries the order now: the new leg of an unpacked cancel-and-refulfill, else the same leg
             "FROM c JOIN shipments s ON s.id = coalesce(c.new_shipment_id, c.shipment_id) AND s.tenant_id = c.tenant_id " +
-            "JOIN merchant_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id ";
+            "JOIN warehouse_orders o ON o.id = c.order_id AND o.tenant_id = c.tenant_id ";
         // A refusal stands while the leg still has its old number and Shopify no longer shows that number live.
         String refusedStands =
             "c.outcome = 'refused' AND s.tracking_number = c.old_tracking_number " +
@@ -1201,7 +1201,7 @@ public class ExceptionService {
             "       s.order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number AS old_tracking_number, " +
             "       n.tracking_number AS new_tracking_number, s.superseded_last_state, s.superseded_moved_at AS occurred_at, " +
             "       'superseded_waybill_moving:' || s.id AS subject_key " +
-            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN shipments n ON n.id = s.superseded_by_shipment_id " +
             "WHERE s.tenant_id = ? AND s.superseded_at IS NOT NULL AND s.superseded_moved_at IS NOT NULL " +
             "  AND coalesce(s.superseded_last_state, '') NOT IN ('terminated', 'cancelled') " +
@@ -1272,7 +1272,7 @@ public class ExceptionService {
             "       COALESCE(s.last_synced_at, s.created_at) AS occurred_at, " +
             "       'stuck:shipment:' || s.id AS subject_key " +
             "FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
+            "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
             "WHERE s.shipment_leg = 'forward' " +
             // V169: a generic (non-Bosta courier) leg gets no courier updates in G1 — never "stuck".
             "  AND s.provider <> 'generic' " +
@@ -1385,7 +1385,7 @@ public class ExceptionService {
             "       o.id AS order_id, o.number AS order_number, " +
             "       o.cancel_requested_at AS occurred_at, " +
             "       'guided_unpack:order:' || o.id AS subject_key " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             "WHERE o.tenant_id = ? " +
             "  AND o.cancel_requested_at IS NOT NULL " +
             "  AND o.status IN ('packed'::order_status, 'self_pickup_pending'::order_status)",
@@ -1461,7 +1461,7 @@ public class ExceptionService {
             "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
             "                s.last_synced_at, o.created_at) AS occurred_at, " +
             "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, tracking_number, internal_state, last_synced_at, provider_deleted_at, provider " +
             "    FROM shipments " +
@@ -1498,7 +1498,7 @@ public class ExceptionService {
             "       s.carrier_name, s.internal_state::text AS shipment_state, " +
             "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, s.last_synced_at, o.created_at) AS occurred_at, " +
             "       'generic_cancelled_live_shipment:order:' || o.id AS subject_key " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             "JOIN LATERAL (SELECT id, tracking_number, internal_state, last_synced_at, provider, carrier_name " +
             "              FROM shipments WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
             "              ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
@@ -1632,7 +1632,7 @@ public class ExceptionService {
             "       x.reason, s.order_id, o.number AS order_number, s.id AS shipment_id, s.tracking_number, " +
             "       s.carrier_name, x.occurred_at, 'generic_delivered_without_pickup:' || s.id AS subject_key " +
             "FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "JOIN LATERAL ( " +
             "    SELECT 'inferred' AS reason, h.occurred_at FROM shipment_status_history h " +
             "    WHERE h.shipment_id = s.id AND h.source = 'inferred_handover' " +
@@ -1903,7 +1903,7 @@ public class ExceptionService {
             "                  ORDER BY COALESCE(p.short_code, p.barcode)) AS pieces, " +
             "       'waybill_deleted_in_bosta:shipment:' || s.id AS subject_key " +
             "FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "JOIN order_items oi ON oi.order_id = o.id " +
             "JOIN allocations a ON a.order_item_id = oi.id AND a.status <> 'released' " +
             "JOIN pieces p ON p.id = a.piece_id AND p.status IN ('awaiting_pickup', 'with_courier') " +

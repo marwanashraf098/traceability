@@ -40,7 +40,7 @@ public class GenericDeliveryService {
         UUID tenantId = TenantContext.require();
         return jdbc.query(
             "SELECT COALESCE(NULLIF(btrim(s.carrier_name), ''), '') AS carrier, COUNT(*) AS n " +
-            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
             "  AND s.internal_state = 'with_courier' " +
             "GROUP BY 1 ORDER BY 2 DESC, 1",
@@ -67,7 +67,7 @@ public class GenericDeliveryService {
         for (UUID orderId : new LinkedHashSet<>(orderIds)) {
             Map<String, Object> leg = jdbc.queryForList(
                 "SELECT s.id, s.carrier_name, s.tracking_number, o.number FROM shipments s " +
-                "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+                "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
                 "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
                 "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
                 "ORDER BY s.created_at DESC, s.id DESC LIMIT 1", tenantId, orderId).stream().findFirst().orElse(null);

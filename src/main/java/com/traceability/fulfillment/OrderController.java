@@ -938,7 +938,7 @@ public class OrderController {
                        o.placed_at, o.created_at, o.bosta_link_status, o.not_traced_at,
                        o.external_id, st.shop_domain,
                        (e.id IS NOT NULL) AS is_exchange
-                FROM merchant_orders o
+                FROM warehouse_orders o
                 LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id
                 LEFT JOIN stores st ON st.id = o.store_id
                 WHERE o.id = ?
@@ -1194,7 +1194,7 @@ public class OrderController {
             "       (SELECT sh.carrier_name FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
             "          AND sh.shipment_leg = 'forward' AND sh.provider_deleted_at IS NULL ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_carrier_name, " +
             "       " + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + " AS bosta_link_problem " +
-            "FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ?",
+            "FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?",
             rs -> rs.next() ? OrderShippingBadge.derive(rs.getString("status"), rs.getBoolean("is_self_pickup"),
                 rs.getString("forward_state"), rs.getString("shipping_carrier_class"), rs.getString("shipping_carrier_name"),
                 rs.getBoolean("bosta_link_problem"),
@@ -1263,7 +1263,7 @@ public class OrderController {
             Map<String, Object> order = jdbc.query(
                 """
                 SELECT o.placed_at, o.created_at, (e.id IS NOT NULL) AS is_exchange
-                FROM merchant_orders o
+                FROM warehouse_orders o
                 LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id
                 WHERE o.id = ?
                   AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid

@@ -419,6 +419,9 @@ public class PortalService {
         List<Map<String, Object>> matches = jdbc.queryForList(
             "SELECT o.id, o.number, o.pii_redacted_at FROM orders o " +
             "WHERE o.tenant_id = ? " +
+            // S3a: a Shopify-native exchange shadow order (#…-X1) is never a customer's order to return —
+            // never matched, even if its number or phone ever collided with the original's.
+            "  AND o.external_id NOT LIKE 'internal:shopify-exchange:%' " +
             "  AND (o.number = ? OR o.number = ? OR o.number = ?) " +
             "  AND '0' || RIGHT(REGEXP_REPLACE(o.customer_phone, '[^0-9]', '', 'g'), 10) = ?",
             tenantId, raw, stripped, "#" + stripped, phone);

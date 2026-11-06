@@ -123,11 +123,11 @@ public final class OrderLineFreeze {
 
     /**
      * True when the order's line quantities are frozen. Runs on the caller's connection / tenant context.
-     * Shopify ingest only — a portal pre-connect order is not in merchant_orders and reads as not frozen.
+     * Shopify ingest only — a portal pre-connect order is not in warehouse_orders and reads as not frozen.
      */
     public static boolean isFrozen(JdbcTemplate jdbc, UUID orderId, UUID tenantId) {
         List<Boolean> frozen = jdbc.queryForList(
-            "SELECT " + frozenSql("o.id", "o.tenant_id") + " FROM merchant_orders o WHERE o.id = ? AND o.tenant_id = ?",
+            "SELECT " + frozenSql("o.id", "o.tenant_id") + " FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?",
             Boolean.class, orderId, tenantId);
         return !frozen.isEmpty() && Boolean.TRUE.equals(frozen.get(0));
     }

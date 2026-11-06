@@ -125,7 +125,7 @@ public class WaybillResolver {
             "       o.id AS order_id, o.number, o.status::text AS status, o.cancel_requested_at, " +
             "       o.raw ->> 'cancelled_at' AS shopify_cancelled_at, o.on_hold, o.is_self_pickup, " +
             "       (o.placed_at > now() - (? * INTERVAL '1 day')) AS in_window " +
-            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta'",
             lookbackDays, tn, tenantId);
 
@@ -154,7 +154,7 @@ public class WaybillResolver {
             "       o.id AS order_id, o.number, o.status::text AS status, o.cancel_requested_at, " +
             "       o.raw ->> 'cancelled_at' AS shopify_cancelled_at, o.on_hold, o.is_self_pickup, " +
             "       (o.placed_at > now() - (? * INTERVAL '1 day')) AS in_window " +
-            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.id = ? AND s.tenant_id = ? AND s.provider = 'generic'",
             lookbackDays, m.shipmentId(), tenantId);
         if (rows.isEmpty()) {
@@ -290,7 +290,7 @@ public class WaybillResolver {
                 "شحنة الطلب " + label + " تحركت بالفعل (Bosta: " + moved + "). لا يمكن تغليفها مرة أخرى.");
         }
         Boolean gate = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM merchant_orders o " + FulfillService.PICKABLE_SHIPMENT_GATE + "  AND o.id = ?)",
+            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o " + FulfillService.PICKABLE_SHIPMENT_GATE + "  AND o.id = ?)",
             Boolean.class, tenantId, orderId);
         if (!Boolean.TRUE.equals(gate)) {
             return np(NotPackable.OTHER, null, orderId, number, shipmentId, tn,

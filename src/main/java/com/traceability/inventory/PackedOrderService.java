@@ -83,7 +83,7 @@ public class PackedOrderService {
             "       s.tracking_number, s.provider, s.carrier_name, s.cod_amount AS leg_cod, " +
             "       pk.pieces, pe.created_at AS packed_at, pe.packed_by, " +
             "       ops.pickup_id, ops.scheduled_date, ops.scheduled_time_slot " +
-            "FROM merchant_orders o " +
+            "FROM warehouse_orders o " +
             // The newest forward leg (UUIDv4 is not time-ordered — created_at, id only as the tie-break).
             "LEFT JOIN LATERAL ( " +
             "    SELECT fs.tracking_number, fs.provider::text AS provider, fs.carrier_name, fs.cod_amount " +

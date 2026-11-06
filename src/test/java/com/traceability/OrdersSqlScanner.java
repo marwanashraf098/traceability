@@ -30,6 +30,10 @@ final class OrdersSqlScanner {
     static final Pattern ORDERS_REF = Pattern.compile(
         "\\b(FROM|JOIN|UPDATE|INTO)\\s+(?:public\\.)?orders\\b(?!\\.)", Pattern.CASE_INSENSITIVE);
 
+    /** S3a (V216): the same, for the warehouse_orders view (WarehouseOrdersAccessGuardTest). */
+    static final Pattern WAREHOUSE_ORDERS_REF = Pattern.compile(
+        "\\b(FROM|JOIN|UPDATE|INTO)\\s+(?:public\\.)?warehouse_orders\\b(?!\\.)", Pattern.CASE_INSENSITIVE);
+
     record Hit(String file, String member, int line, String keyword, String snippet) {
         String key() { return file + "#" + member; }
     }
@@ -37,11 +41,15 @@ final class OrdersSqlScanner {
     private OrdersSqlScanner() {}
 
     static List<Hit> scanTree(Path root) throws IOException {
+        return scanTree(root, ORDERS_REF);
+    }
+
+    static List<Hit> scanTree(Path root, Pattern ref) throws IOException {
         List<Hit> hits = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(root)) {
             for (Path p : paths.filter(f -> f.toString().endsWith(".java")).sorted().toList()) {
                 String rel = root.relativize(p).toString().replace('\\', '/');
-                hits.addAll(scan(rel, Files.readString(p)));
+                hits.addAll(scan(rel, Files.readString(p), ref));
             }
         }
         return hits;
@@ -51,6 +59,10 @@ final class OrdersSqlScanner {
     private record Chunk(StringBuilder text, List<Integer> lines, List<Integer> codeOffsets) {}
 
     static List<Hit> scan(String file, String src) {
+        return scan(file, src, ORDERS_REF);
+    }
+
+    static List<Hit> scan(String file, String src, Pattern ref) {
         // Pass 1: lex. Collect string chunks (adjacent literals joined by '+') and the code text
         // (strings and comments blanked) used to find the enclosing member.
         StringBuilder code = new StringBuilder(src.length());
@@ -125,7 +137,7 @@ final class OrdersSqlScanner {
 
         List<Hit> hits = new ArrayList<>();
         for (Chunk ch : chunks) {
-            Matcher m = ORDERS_REF.matcher(ch.text);
+            Matcher m = ref.matcher(ch.text);
             while (m.find()) {
                 int at = m.start();
                 int ln = ch.lines.get(at);

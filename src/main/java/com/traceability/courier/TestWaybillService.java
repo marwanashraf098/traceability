@@ -73,7 +73,7 @@ public class TestWaybillService {
 
         List<FulfillmentMatch> fulfillments = jdbc.query(
             "SELECT o.number, t.carrier_raw, t.tracking_number, t.fulfillment_status " +
-            "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
+            "FROM order_fulfillment_tracking t JOIN warehouse_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
             "WHERE t.tenant_id = ? AND (t.tracking_number = ? OR " + keySql("t.tracking_number") + " = ?) " +
             "ORDER BY t.first_seen_at DESC, t.id DESC LIMIT 10",
             (rs, i) -> new FulfillmentMatch(rs.getString("number"), rs.getString("carrier_raw"),
@@ -82,7 +82,7 @@ public class TestWaybillService {
 
         List<ShipmentMatch> shipments = jdbc.query(
             "SELECT o.number, s.provider::text AS provider, s.carrier_name, s.tracking_number, s.internal_state::text AS state " +
-            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "FROM shipments s JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.tenant_id = ? AND ((s.provider = 'bosta' AND s.tracking_number = ?) " +
             "                           OR (s.provider = 'generic' AND s.tracking_key = ?)) " +
             "ORDER BY s.created_at DESC, s.id DESC LIMIT 10",

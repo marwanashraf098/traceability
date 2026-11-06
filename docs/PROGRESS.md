@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Shopify-native returns S3a — views + guards, no behaviour change (2026-11-06; branch `feat/s3a-shadow-views` off main
+d5f48ade, NOT merged, NOT deployed; migrations V216 + V217 — numbers to be re-checked on main AND confirmed for prod by
+Marawan right before merge).** Room for exchange shadow orders; no shadow row is created yet (S3b).
+- **V216:** `orders.origin` + `'shopify_exchange'`; `orders_shopify_exchange_identity_check` (origin ⇔ prefix
+  `internal:shopify-exchange:`); `merchant_orders` re-created (CREATE OR REPLACE, grants kept) hiding portal rows AND
+  shadows; new `warehouse_orders` (security_invoker, same grants) hiding portal rows only. **V217** (non-transactional,
+  `.conf`): Overview's `orders_merchant_tenant_placed_at_idx` rebuilt CONCURRENTLY on both prefixes (build under a temp
+  name → drop old → rename; re-runnable).
+- **Switch:** 98 members moved to `warehouse_orders` (Pick & Pack, pack sessions / claims / completion, print batches,
+  labels, pickups, waybill resolution, shipment linking, generic legs, 14 warehouse detectors + Overview's guided-unpack /
+  cancelled-live-shipment queries, committed demand, Lookup piece / tracking, drawer by id + notes (Q3), late-to-pack
+  (Q8), `RequestAmounts.collector` (pre-connect test = not in warehouse_orders)). Everything else stays on
+  `merchant_orders` (Q4–Q9: COD edit / cancel, blocklist, Shopify signals, not-traced, phone + COD, Lookup by number,
+  Bosta matching, analytics, Orders, Main reconcile). `PortalService.findEligibleOrder` excludes shadows explicitly.
+- **Main reconcile interim hold (approved 2026-11-06):** `MainReconcileRules.EXCHANGE_HOLD_SQL` — a write store with an
+  open shadow or a Shopify-native exchange's internal:exchange: replacement in custody writes nothing: differences
+  skipped `shopify_exchange_in_custody`, Part 1 stays queued, no settle. Report-only unchanged.
+  **Today's native internal:exchange: orders DO have the problem-7 gap:** the target counts the reserved replacement in
+  custody but never once it leaves (its order is `internal:%`, dropped by `liveShopifyOrderSql`), while Shopify keeps the
+  unit on the original's exchange line (Traced stores it at quantity 0) until it fulfils that line. Plugin fulfils at
+  booking (Shopify first) → spurious +1 while in custody, −1 after it leaves (net 0, two real writes) — the hold covers
+  this. Traced ships before Shopify fulfils → real double −1 — the hold does NOT cover the window after the piece left
+  custody; S3c's target term fixes both. Not live today: writes only for Dolt.eg / Nuvira (portal-only, no native exchanges).
+- **Tests:** WarehouseOrdersAccessGuardTest (static allowlist, 98 members), WarehouseOrdersViewTest (columns,
+  predicates, security_invoker, grants, app_user RLS own / cross-tenant, identity CHECK, V217 index valid + index-only +
+  re-runnable), ShadowOrderLeakTest (every endpoint; sales LISTs byte-identical with shadows present; 7 warehouse
+  screens must change; drawer GETs 200 own / 404 other tenant; writes never reach another tenant's shadow; detectors,
+  not-traced, Bosta candidates, pickable filter on both views, committed +2, portal lookup, hold query),
+  MainReconcileExchangeHoldTest (h1–h6; h6: portal Bosta type 30 with a return_request_id, portal generic and Lookup `internal:exchange:rr:` replacements in custody never hold — reconcile still writes, so Dolt.eg / Nuvira keep writing). Revert-to-confirm done for the hold, the portal filter, the queue switch, both
+  view predicates, the identity CHECK and the index predicate. Test edits: migration counts (MigrationSmokeTest 216,
+  NotTracedBackfillTest 161); OrderLinePaidPricesTest r7's shadow FIXTURE gets origin 'shopify_exchange' (no assertion
+  changed); OrdersSqlScanner takes a pattern; OrderStatusBackwardWriteGuardTest's two regexes also match `warehouse_orders` (the switched writes had gone invisible to it — expected hit lists unchanged). `MerchantOrdersViewColumnsTest.viewFiltersOnTheExternalIdPrefix` now pins the two-prefix predicate (approved 2026-11-06).
 **Returns portal fees — per-store rollout (2026-11-06; branch `feat/portal-fees-tenants` on main 2f2fc46f, MERGED
 2026-11-06, NOT deployed; no migration; full backend 3997, only ExchangeBackfillTest red).** New env `TRACED_PORTAL_FEES_TENANTS` (comma-separated tenant ids). Fees are on for a
 tenant when `traced.portal-fees.settings-enabled` is true OR the tenant is listed; otherwise exactly as today.
