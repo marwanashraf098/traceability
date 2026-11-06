@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Returns portal settings redesign — Pass A, appearance only (2026-11-06; branch `feat/portal-settings-pass-a` off main
+a5e4e0fd, committed on the branch, NOT merged, NOT deployed; frontend only, no migration). Approved. Pass B NOT started.**
+Mockup: `design/returns-portal-settings.html`.
+- Settings: grouped vertical menu `SettingsNav` (Store / Operations / Returns / Account). Same keys, same `?tab=`,
+  same fallback and worker redirect. "Labels" is now "Labels & printing".
+- Returns portal split into `pages/settings/portal/`:
+  - header (Live / Off and Open portal follow the SAVED settings) and "Your policy in plain words" (pure
+    `policySummary.ts`; no fee or pricing sentence while fees are hidden);
+  - jump links and five sections; approval and "what they can swap to" as radio cards on the same booleans;
+  - Fee / Type / Amount / On table, with min / max under a percentage row;
+  - one preview with an EN / عربي switch (portal `palette()` unchanged, plus colour notes) and a policy-vs-window
+    warning that reads Latin and Arabic-Indic digits.
+- Saving is unchanged: "Save changes", the section Saves, and saves on click (marked "Saves right away" on the logo,
+  non-returnable list, other couriers and area fees).
+- Kept on purpose: the existing control names and descriptions, because the G4bFix golden snapshot and other tests
+  read them.
+- Vitest: main 1,492/1,492. Branch 1,564 (+72 new). Approved edits: `returnsPortalSettings` ×2 and
+  `returnsPortalBookingSwitch` ×1 now use the auto-approve RADIO "Approve automatically" (PUT-body assertions
+  unchanged). `fulfillmentActivationCard` is a known flake under load (passes alone) — separate task.
+- Browser: 277 passed / 1 skipped.
+- Pass B decisions recorded (from the review): save order other-couriers → portal-settings → exchange-pricing →
+  rules → reasons → variants, stopping at the first failure; `nonReturnable=true` filter on GET /variants; merged
+  waiver; price-mode radios; a location chosen in the same save may enable booking; leave guard on in-app links and
+  beforeunload; logo and area fees stay instant.
+  - Pass B must REMOVE the "Saves right away" marker from the non-returnable list and the other-couriers switch
+    (they join the single save); it stays on the logo and area fees only.
+  - Revisit moving "Allow exchanges" into the Exchanges section header (needs the genericCourierG4bFix golden
+    snapshot updated, with approval).
+
 **Portal fees prod fixes (2026-11-06; `fix/portal-fees-prod-bugs` MERGED fc47cc22, NOT deployed; migration V218 — prod was at V217. The S3b branch also has a local V218 and must renumber to V219.)**
 
 **Bug 1 — The Snouts: "exchange for another product" blocked as approximate.** Pre-F0 GraphQL-imported lines keep a

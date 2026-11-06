@@ -129,7 +129,11 @@ describe('customer fees settings', () => {
     renderWithProviders(<CustomerFeesSection />)
     const box = await screen.findByTestId('exchange-pricing')
     expect(within(box).getByTestId('max-difference')).toHaveValue(300)
-    await user.click(within(box).getByRole('switch', { name: 'Exchange for a different product' }))
+    // "What they can swap to" is a pair of cards on the same anyProduct boolean (redesign Pass A).
+    const any = within(box).getByRole('radio', { name: /^Any product in stock/ })
+    expect(any).toHaveAttribute('aria-checked', 'false')
+    await user.click(any)
+    expect(any).toHaveAttribute('aria-checked', 'true')
     await user.click(within(box).getByRole('switch', { name: 'Same price or lower only' }))
     expect(within(box).queryByTestId('max-difference')).toBeNull()
     await user.click(within(box).getByRole('button', { name: 'Save' }))

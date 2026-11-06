@@ -99,7 +99,8 @@ describe('Slice 8 — Settings › Labels', () => {
     setup(false)
     renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=labels'] })
     await screen.findByRole('button', { name: 'Pick & Pack' })
-    expect(screen.queryByRole('button', { name: 'Labels' })).toBeNull()
+    // The menu item is "Labels & printing" (redesign Pass A); sl1b proves that name is there when the switch is on.
+    expect(screen.queryByRole('button', { name: 'Labels & printing' })).toBeNull()
     expect(calls.some(c => c.url.endsWith('/label-settings'))).toBe(false)
   })
 
@@ -108,6 +109,7 @@ describe('Slice 8 — Settings › Labels', () => {
     const user = userEvent.setup()
     renderWithProviders(<SettingsPage />, { initialEntries: ['/settings?tab=labels'] })
     const tab = await screen.findByTestId('labels-settings')
+    expect(screen.getByRole('button', { name: 'Labels & printing' })).toHaveAttribute('aria-current', 'page')
     expect(within(tab).getByTestId('labels-mode-print_stick').querySelector('input')!.checked).toBe(true)
     expect(within(tab).queryByText(/turn flexible labeling|switch it off/i)).toBeNull()        // no self-serve switch
     await user.click(within(tab).getByTestId('labels-mode-count_only'))

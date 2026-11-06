@@ -6,6 +6,7 @@ import {
 } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
 import { palette } from '../../portal/brand'
+import { SavesRightAway } from './portal/ui'
 import {
   PORTAL_FONTS, PortalFont, DEFAULT_PORTAL_FONT, fontLabel, fontStack, fontVars, loadPortalFont, loadPortalFontRegular,
 } from '../../portal/fonts'
@@ -245,7 +246,7 @@ export function LogoUploader({ settings, logoUrl, onChange }: {
 
   return (
     <div className="space-y-2" role="group" aria-labelledby="portal-logo-title">
-      <p id="portal-logo-title" className="text-body font-medium text-primary">{t('settings.portal.branding.logo')}</p>
+      <p id="portal-logo-title" className="text-body font-semibold text-primary">{t('settings.portal.branding.logo')}<SavesRightAway /></p>
       {hiddenInput}
       {body}
       {error}
@@ -273,7 +274,7 @@ export function FontPicker({ value, onChange }: { value: PortalFont; onChange: (
   useEffect(() => { PORTAL_FONTS.forEach(f => { loadPortalFontRegular(f) }) }, [])
   return (
     <fieldset className="space-y-2" data-testid="font-picker">
-      <legend className="text-body font-medium text-primary">{t('settings.portal.branding.fontLabel')}</legend>
+      <legend className="text-body font-semibold text-primary">{t('settings.portal.branding.fontLabel')}</legend>
       <p className="text-small text-muted -mt-1">{t('settings.portal.branding.fontHelp')}</p>
       <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(210px,1fr))]">
         {PORTAL_FONTS.map(f => {
@@ -312,15 +313,22 @@ export function FontPicker({ value, onChange }: { value: PortalFont; onChange: (
 
 // ── Preview ──────────────────────────────────────────────────────────────────
 
-/** The portal header + "Start a return" card, EN and AR — portal copy, the chosen font and colour. */
-export function PortalPreview({ font, brandColor, logoSrc, storeName }: {
+/**
+ * The portal header + "Start a return" card — portal copy, the chosen font and colour, the return window. One preview
+ * with an EN / عربي switch (redesign Pass A; it starts in the app's language). The colour goes through the live
+ * portal's own palette() — what the merchant sees is what customers get.
+ */
+export function PortalPreview({ font, brandColor, logoSrc, storeName, windowDays }: {
   font: PortalFont
   brandColor: string | null
   /** Uploaded logo object URL, else a valid Shopify link, else null (wordmark). */
   logoSrc: string | null
   storeName: string
+  /** The return window being edited; null hides the note while the field isn't a valid number. */
+  windowDays?: number | null
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const [lang, setLang] = useState<'en' | 'ar'>(i18n.language === 'ar' ? 'ar' : 'en')
   useEffect(() => { loadPortalFont(font) }, [font])
   const colors = useMemo(() => palette(brandColor), [brandColor])
   const style = {
@@ -333,27 +341,43 @@ export function PortalPreview({ font, brandColor, logoSrc, storeName }: {
   } as CSSProperties
   return (
     <aside className="flex flex-col gap-3.5" aria-label={t('settings.portal.branding.preview')} data-testid="portal-preview" data-font={font}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <span className="text-small font-semibold text-muted uppercase tracking-wide">{t('settings.portal.branding.preview')}</span>
-        <span className="text-small text-muted">{t('settings.portal.branding.previewNote')}</span>
+        <div role="group" aria-label={t('settings.portal.branding.previewLanguage')} className="inline-flex rounded-lg bg-surface border border-line p-0.5 gap-0.5"
+          data-testid="preview-language">
+          {(['en', 'ar'] as const).map(l => (
+            <button key={l} type="button" aria-pressed={lang === l} onClick={() => setLang(l)} lang={l}
+              className={cn('px-3 py-1 rounded-md text-small font-semibold transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-trace-blue',
+                lang === l ? 'bg-elevated text-primary' : 'text-muted hover:text-primary')}>
+              {t(l === 'en' ? 'settings.portal.branding.previewEnShort' : 'settings.portal.branding.previewArShort')}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-1">
-        <MiniPortal lang="en" style={style} logoSrc={logoSrc} storeName={storeName} label={t('settings.portal.branding.previewEn')} />
-        <MiniPortal lang="ar" style={style} logoSrc={logoSrc} storeName={storeName} label={t('settings.portal.branding.previewAr')} />
-      </div>
+      <MiniPortal key={lang} lang={lang} style={style} logoSrc={logoSrc} storeName={storeName} windowDays={windowDays ?? null}
+        label={t(lang === 'en' ? 'settings.portal.branding.previewEn' : 'settings.portal.branding.previewAr')} />
+      <p className="text-small text-muted">{t('settings.portal.branding.previewNote')}</p>
     </aside>
   )
 }
 
-function MiniPortal({ lang, style, logoSrc, storeName, label }: {
-  lang: 'en' | 'ar'; style: CSSProperties; logoSrc: string | null; storeName: string; label: string
+/** The portal's own "Returns are accepted within N days" line (portal copy, its one / other forms). */
+function windowNote(copy: typeof portalEn, days: number): string {
+  const p1 = copy.p1 as Record<string, string>
+  const template = days === 1 ? p1.windowNote : (p1.windowNote_other ?? p1.windowNote)
+  return template.replace('{{count}}', String(days))
+}
+
+function MiniPortal({ lang, style, logoSrc, storeName, label, windowDays }: {
+  lang: 'en' | 'ar'; style: CSSProperties; logoSrc: string | null; storeName: string; label: string; windowDays: number | null
 }) {
   const copy = lang === 'ar' ? portalAr : portalEn
   const semibold = { fontWeight: 'var(--pp-w600, 600)' } as CSSProperties
   // A logo that fails to load shows the store-name wordmark, as the portal does.
   const [failed, onError] = useImageFailed(logoSrc)
   return (
-    <div role="img" aria-label={label} className="rounded-xl border border-line overflow-hidden bg-[#F7F7F5] shadow-sm"
+    <div role="img" aria-label={label} className="rounded-2xl border border-line overflow-hidden bg-[#F7F7F5] shadow-e1"
       dir={lang === 'ar' ? 'rtl' : 'ltr'} lang={lang} style={style} data-testid={`preview-${lang}`}>
       <div className="h-12 ps-3.5 pe-2 flex items-center gap-1 bg-white border-b border-[#E6E7E3]">
         {logoSrc && !failed
@@ -365,15 +389,22 @@ function MiniPortal({ lang, style, logoSrc, storeName, label }: {
         <span className="text-[13px] px-1.5" style={{ ...semibold, color: 'var(--accent-text)',
           fontFamily: lang === 'ar' ? "'Geist Variable', sans-serif" : undefined }}>{copy.common.switchTo}</span>
       </div>
-      <div className="p-3.5 flex flex-col gap-2.5 text-[#141821]">
+      <div className="p-4 flex flex-col gap-2.5 text-[#141821]">
         <p className="text-[20px] font-bold leading-tight m-0">{copy.p1.title}</p>
         <p className="text-[13px] leading-normal text-[#5B6270] m-0">{copy.p1.intro}</p>
-        <span className="text-[13px]" style={semibold}>{copy.p1.orderLabel}</span>
+        <span className="text-[13px] mt-1" style={semibold}>{copy.p1.orderLabel}</span>
         <span className="h-[38px] rounded-lg border border-[#CDD3DC] bg-white px-3 flex items-center text-[14px] text-[#8A8F98]">
           {copy.p1.orderPlaceholder}
         </span>
-        <span className="h-10 rounded-[9px] grid place-items-center text-[14px]"
+        <span className="text-[13px]" style={semibold}>{copy.p1.phoneLabel}</span>
+        <span className="h-[38px] rounded-lg border border-[#CDD3DC] bg-white px-3 flex items-center text-[14px] text-[#8A8F98]">
+          <bdi dir="ltr">{copy.p1.phonePlaceholder}</bdi>
+        </span>
+        <span className="h-10 mt-1 rounded-[9px] grid place-items-center text-[14px]" data-testid={`preview-${lang}-button`}
           style={{ ...semibold, background: 'var(--brand)', color: 'var(--on-brand)' }}>{copy.p1.find}</span>
+        {windowDays != null && (
+          <p className="text-[12px] text-[#5B6270] text-center m-0" data-testid={`preview-${lang}-window`}>{windowNote(copy, windowDays)}</p>
+        )}
       </div>
     </div>
   )

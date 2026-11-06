@@ -101,7 +101,7 @@ describe('Settings → Book Bosta pickups when I approve', () => {
 
   test('a save that does not touch the switch does not send pickupBooking', async () => {
     const user = await loaded()
-    await user.click(screen.getByRole('switch', { name: 'Approve requests automatically' }))
+    await user.click(screen.getByRole('radio', { name: /^Approve automatically/ }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(lastPut()).toBeDefined())
     expect(lastPut()!.body).not.toHaveProperty('pickupBooking')

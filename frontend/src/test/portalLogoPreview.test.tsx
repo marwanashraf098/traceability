@@ -1,5 +1,6 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Route, Routes } from 'react-router-dom'
@@ -93,8 +94,12 @@ describe('Settings → Branding: the uploaded logo under the real CSP', () => {
     const sources = appImgSrc()
     await renderBranding()
     const en = await screen.findByTestId('preview-en-logo')
-    const ar = screen.getByTestId('preview-ar-logo')
     const thumb = screen.getByTestId('uploaded-logo-preview')
+    // One preview with an EN / عربي switch (redesign Pass A): switch to Arabic for its logo.
+    const enSrc = en.getAttribute('src')
+    await userEvent.click(within(screen.getByTestId('preview-language')).getByRole('button', { name: 'عربي' }))
+    const ar = await screen.findByTestId('preview-ar-logo')
+    expect(ar.getAttribute('src')).toBe(enSrc)
     for (const img of [en, ar, thumb]) {
       const src = img.getAttribute('src')!
       expect(allowedBy(sources, src), `img-src ${sources.join(' ')} must allow ${src.slice(0, 40)}…`).toBe(true)
@@ -106,10 +111,13 @@ describe('Settings → Branding: the uploaded logo under the real CSP', () => {
   test('a preview logo that fails to load falls back to the store-name wordmark', async () => {
     await renderBranding()
     fireEvent.error(await screen.findByTestId('preview-en-logo'))
-    fireEvent.error(screen.getByTestId('preview-ar-logo'))
     expect(screen.getByTestId('preview-en-wordmark')).toHaveTextContent('The Snouts')
-    expect(screen.getByTestId('preview-ar-wordmark')).toHaveTextContent('The Snouts')
     expect(screen.queryByTestId('preview-en-logo')).not.toBeInTheDocument()
+    // The Arabic preview (EN / عربي switch, redesign Pass A) falls back the same way.
+    await userEvent.click(within(screen.getByTestId('preview-language')).getByRole('button', { name: 'عربي' }))
+    fireEvent.error(await screen.findByTestId('preview-ar-logo'))
+    expect(screen.getByTestId('preview-ar-wordmark')).toHaveTextContent('The Snouts')
+    expect(screen.queryByTestId('preview-ar-logo')).not.toBeInTheDocument()
   })
 
   test('a thumbnail that fails to load shows a neutral placeholder, not alt text', async () => {
