@@ -3031,7 +3031,9 @@
           "lowerOnlyHelp": "Customers can't pick an item that costs more than the one they're sending back.",
           "maxDifference": "Most a customer can pay extra",
           "maxDifferenceHelp": "Leave empty for no limit. The courier collects the difference on delivery."
-        }
+        },
+        "crashed": "Something went wrong showing customer fees.",
+        "reload": "Reload"
       }
     },
     "pickPack": {

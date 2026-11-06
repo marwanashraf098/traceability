@@ -44,6 +44,16 @@ public class PortalFeesRollout {
         return everyone || !tenants.isEmpty();
     }
 
+    /** True when every tenant is on (the global flag). */
+    public boolean everyone() {
+        return everyone;
+    }
+
+    /** The listed tenants (TRACED_PORTAL_FEES_TENANTS), in the order given. */
+    public Set<UUID> listed() {
+        return tenants;
+    }
+
     static Set<UUID> parse(String raw) {
         if (raw == null || raw.isBlank()) return Set.of();
         Set<UUID> out = new LinkedHashSet<>();

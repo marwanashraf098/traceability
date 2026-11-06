@@ -185,7 +185,8 @@ public class RefundSuggestionService {
                 shopify.fetchOrderPrices((String) rr.get("shop_domain"), token, orderGid);
             Map<String, BigDecimal> byVariant = new HashMap<>();
             for (ShopifyOrderPriceGateway.LinePrice lp : prices.lines()) {
-                byVariant.putIfAbsent(lp.variantGid(), lp.unitPriceAfterDiscounts());
+                // A deleted-variant line (variant null) is kept by the gateway since 2026-11-06 — skipped here as before.
+                if (lp.variantGid() != null) byVariant.putIfAbsent(lp.variantGid(), lp.unitPriceAfterDiscounts());
             }
             List<BigDecimal> units = new ArrayList<>();
             for (Line l : lines) {

@@ -4,6 +4,39 @@
 
 ## Current state
 
+**Portal fees prod fixes (2026-11-06; branch `fix/portal-fees-prod-bugs`, NOT merged, NOT deployed; migration V218 — number to be re-checked on main AND confirmed for prod by Marawan right before merge).**
+
+**Bug 1 — The Snouts: "exchange for another product" blocked as approximate.** Pre-F0 GraphQL-imported lines keep a
+GraphQL raw (gid, quantity, variantGid) with no price, although later webhooks put Shopify's REST payload (with the
+line price) on `orders.raw`; so V208 answered NULL, the live read didn't price the line, and F3 blocked. The live
+read's failure cause is unknown: the log was gone with the 15:46 S3a deploy, and it was logged at INFO with only the
+class. Order GID, variant GID, store (connected, OAuth, read_orders) and token were all checked fine on prod.
+- V218: `order_line_paid_unit_price` gains a third stored tier, the order's REST line (same math as net_unit_price). On prod
+  it prices 74 of Snouts' 82 unpriced lines in 90 days, and all 48 lines of its 33 portal-eligible orders. No other
+  tenant's lines change, and it disagrees with no existing price. Analytics columns are untouched.
+- Hardened the live read:
+  - matched by LineItem GID first, so a deleted Shopify variant still prices;
+  - every failure is a WARN with its cause (class, HTTP status, GraphQL codes);
+  - the price is written back to `paid_unit_price`.
+- `PaidPriceBackfill` is one-off. Dry run: `TRACED_PAID_PRICE_BACKFILL_ON_STARTUP=fees`, recreate, `grep PAID_PRICE_BACKFILL`.
+  Then add `TRACED_PAID_PRICE_BACKFILL_APPLY=true`, and remove both lines afterwards.
+- **After deploy:** confirm on a Snouts Bikinis order that the catalogue lists other products. If any order still
+  falls back, grep "Line paid prices" for the cause.
+
+**Bug 2 — blank page on "Percentage" (Settings → Returns portal → Customer fees).** NOT reproduced:
+- jsdom, with empty, filled and prod-shaped rules;
+- real Chrome, EN and AR;
+- a simulated Chrome page translation;
+- the full Returns portal tab;
+- prod's bundle has the same RuleEditor code.
+
+Shipped instead:
+- a card-level error boundary ("Something went wrong showing customer fees" + Reload; logs the error and component stack);
+- tolerant value handling (string amounts, unknown mode, NaN);
+- mode / save / area-override tests in EN and AR.
+
+Next time it happens: get the browser console error (and whether Chrome translation was on).
+
 **Shopify-native returns S3a — views + guards, no behaviour change (2026-11-06; branch `feat/s3a-shadow-views` off main
 d5f48ade, NOT merged, NOT deployed; migrations V216 + V217 — numbers to be re-checked on main AND confirmed for prod by
 Marawan right before merge).** Room for exchange shadow orders; no shadow row is created yet (S3b).
