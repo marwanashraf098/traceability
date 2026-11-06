@@ -277,12 +277,13 @@ public class ShopifyInventoryService {
         UUID variantId = jdbc.queryForObject(
             "SELECT variant_id FROM pieces WHERE id = ? AND tenant_id = ?", UUID.class, pieceId, tenantId);
         // The order it came back from: the piece's current order, else its latest event naming one.
-        UUID orderId = jdbc.query(
+        // S3c: a shadow order's restock is counted on its ORIGINAL order (ShopifyShadowOrders.restockOrderId).
+        UUID orderId = ShopifyShadowOrders.restockOrderId(jdbc, tenantId, jdbc.query(
             "SELECT COALESCE(p.current_order_id, (SELECT e.order_id FROM piece_events e " +
             "    WHERE e.piece_id = p.id AND e.tenant_id = p.tenant_id AND e.order_id IS NOT NULL " +
             "    ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1)) " +
             "FROM pieces p WHERE p.id = ? AND p.tenant_id = ?",
-            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, pieceId, tenantId);
+            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, pieceId, tenantId));
         if (orderId != null) {
             jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                 rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
@@ -922,6 +923,8 @@ public class ShopifyInventoryService {
                                               int earlierInThisReceipt) {
         UUID tenantId = TenantContext.require();
         if (orderId == null || quantity <= 0) return 0;
+        // S3c: a shadow order's restock is counted on its ORIGINAL order (ShopifyShadowOrders.restockOrderId).
+        orderId = ShopifyShadowOrders.restockOrderId(jdbc, tenantId, orderId);
         if (!Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM locations WHERE id = ? AND tenant_id = ? AND is_fulfillment)",
                 Boolean.class, locationId, tenantId))) return 0;
@@ -989,7 +992,9 @@ public class ShopifyInventoryService {
             rs -> rs.next() ? new RestockEvent(rs.getString("restock_event_id"), rs.getString("order_id")) : null,
             pieceId, tenantId));
         String restockEventId = ev == null ? null : ev.restockEventId();
-        UUID orderId = ev == null || ev.orderId() == null ? null : UUID.fromString(ev.orderId());
+        // S3c: a shadow order's restock is counted on its ORIGINAL order (ShopifyShadowOrders.restockOrderId).
+        UUID orderId = ev == null || ev.orderId() == null ? null
+            : tx.execute(st -> ShopifyShadowOrders.restockOrderId(jdbc, tenantId, UUID.fromString(ev.orderId())));
         String triggerId = restockEventId != null ? pieceId + ":" + restockEventId : pieceId;
         UUID batchId = UUID.randomUUID();
 

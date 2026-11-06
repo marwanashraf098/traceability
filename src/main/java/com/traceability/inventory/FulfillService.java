@@ -125,17 +125,55 @@ public class FulfillService {
         PICKABLE_SHIPMENT_GATE + PICKABLE_LOOKBACK_CLAUSE;
 
     /**
+     * S3c — a RELEASED Shopify-native exchange shadow order still at S3b's 'confirmed' (its status is never written
+     * backward to 'new' — OrderStatusBackwardWriteGuardTest): pickable exactly like an order PICKABLE_SHIPMENT_GATE
+     * admits — not on hold, self-pickup or its newest forward leg 'created' (a courier leg like any order) — while its
+     * reservation is live and Shopify has released it ({@link ShopifyShadowOrders#heldSql}). Same LATERAL, same
+     * binding rules (alias {@code o}, tenantId first). PICKABLE_SHIPMENT_GATE itself is untouched.
+     */
+    static final String SHADOW_PICKABLE_GATE =
+        "LEFT JOIN LATERAL ( " +
+        "    SELECT internal_state " +
+        "    FROM shipments " +
+        "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
+        "      AND shipment_leg = 'forward' " +
+        "    ORDER BY created_at DESC, id DESC " +
+        "    LIMIT 1 " +
+        ") latest_shipment ON true " +
+        "WHERE o.tenant_id = ? " +
+        "  AND o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%' " +
+        "  AND o.status = 'confirmed' " +
+        "  AND o.on_hold = false " +
+        "  AND (o.is_self_pickup = true " +
+        "       OR latest_shipment.internal_state = 'created') " +
+        "  AND " + ShopifyShadowOrders.liveShadowSql("o") + " " +
+        "  AND NOT " + ShopifyShadowOrders.heldSql("o") + " ";
+
+    /**
+     * S3c — THE Pick &amp; Pack order set: {@link #PICKABLE_ORDERS_FILTER} minus held / ended shadows (a shadow Unpack put
+     * back to 'new' passes the gate, so the queue drops it itself), plus released shadows at 'confirmed'
+     * ({@link #SHADOW_PICKABLE_GATE} + the lookback). A subquery of order ids; binds (tenantId, lookbackDays,
+     * tenantId, lookbackDays). Shared by the queue, the gather list and print batches.
+     */
+    static final String QUEUE_ORDER_IDS_SQL =
+        "(SELECT o.id FROM warehouse_orders o " + PICKABLE_ORDERS_FILTER +
+        "   AND NOT " + ShopifyShadowOrders.notPackableShadowSql("o") + " " +
+        " UNION ALL " +
+        " SELECT o.id FROM warehouse_orders o " + SHADOW_PICKABLE_GATE + PICKABLE_LOOKBACK_CLAUSE + ")";
+
+    /**
      * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the
      * exact predicate, shared verbatim with {@link #getGatherList(Integer)}.
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getQueue() {
         UUID tenantId = TenantContext.require();
-        return jdbc.queryForList(
+        List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
             "       o.locked_by, o.locked_at, o.is_self_pickup, " +
-            "       (e.id IS NOT NULL) AS is_exchange, " +
+            // S3c: a Shopify-native exchange shadow order carries the exchange badge too.
+            "       (e.id IS NOT NULL OR o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%') AS is_exchange, " +
             "       COALESCE(SUM(oi.quantity), 0) AS total_units, " +
             "       COALESCE(( " +
             "           SELECT COUNT(*) FROM allocations a " +
@@ -156,14 +194,89 @@ public class FulfillService {
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
             "LEFT JOIN exchanges e ON e.outbound_order_id = o.id " +
-            PICKABLE_ORDERS_FILTER +
+            "WHERE o.tenant_id = ? AND o.id IN " + QUEUE_ORDER_IDS_SQL + " " +
             // warehouse_orders is a view: Postgres can't infer the other o.* columns from o.id
             // (no primary key on a view), so every selected / ordered o column is listed.
             "GROUP BY o.id, o.tenant_id, o.number, o.customer_name, o.customer_phone, o.status, " +
             "         o.payment_method, o.cod_amount, o.placed_at, o.locked_by, o.locked_at, " +
-            "         o.is_self_pickup, o.created_at, e.id " +
+            "         o.is_self_pickup, o.created_at, o.external_id, e.id " +
             "ORDER BY o.created_at ASC",
-            tenantId, lookbackDays);
+            tenantId, tenantId, lookbackDays, tenantId, lookbackDays);
+        decorateShadows(tenantId, rows);
+        return rows;
+    }
+
+    /**
+     * S3c: rows of Shopify-native exchange shadow orders get {@code exchangeFor} (the original order's number and id) and
+     * {@code shortBy} (units of this shadow available stock can't cover — {@link ShopifyShadowOrders#shortages}). Keys
+     * present ONLY on shadow rows, so every other order's row is exactly as before. Rows need "id".
+     */
+    void decorateShadows(UUID tenantId, List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return;
+        UUID[] ids = rows.stream().map(r -> (UUID) r.get("id")).toArray(UUID[]::new);
+        Map<UUID, Map<String, Object>> info = new HashMap<>();
+        jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                "SELECT s.order_id, s.original_order_id, oo.number AS original_number " +
+                "FROM shopify_exchange_shadows s " +
+                "JOIN merchant_orders oo ON oo.id = s.original_order_id AND oo.tenant_id = s.tenant_id " +
+                "WHERE s.tenant_id = ? AND s.order_id = ANY(?)");
+            ps.setObject(1, tenantId);
+            ps.setArray(2, con.createArrayOf("uuid", ids));
+            return ps;
+        }, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("orderId", rs.getObject("original_order_id", UUID.class));
+            m.put("number", rs.getString("original_number"));
+            info.put(rs.getObject("order_id", UUID.class), m);
+        });
+        if (info.isEmpty()) return;
+        Map<UUID, Integer> shortBy = shadowShortBy();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = info.get((UUID) r.get("id"));
+            if (m == null) continue;
+            r.put("exchangeFor", m);
+            r.put("shortBy", shortBy.getOrDefault((UUID) r.get("id"), 0));
+        }
+    }
+
+    /** Short by N per shadow order (summed over its variants). Current tenant. */
+    private Map<UUID, Integer> shadowShortBy() {
+        Map<UUID, Integer> out = new HashMap<>();
+        for (ShopifyShadowOrders.VariantShort v : ShopifyShadowOrders.shortages(jdbc).values()) {
+            for (ShopifyShadowOrders.ShadowShort sh : v.shadows()) out.merge(sh.orderId(), sh.shortBy(), Integer::sum);
+        }
+        return out;
+    }
+
+    /**
+     * S3c — "Waiting for release": Shopify-native exchange shadow orders whose replacement is kept aside but which
+     * Shopify hasn't released for fulfilment yet ({@link ShopifyShadowOrders#heldSql} — unprocessed, or its
+     * fulfillment order on hold / scheduled). Beside the queue, never in it; no lookback (a held exchange is shown
+     * until Shopify releases or ends it). Oldest approval first. Each row: id, number, placed_at (the approval),
+     * exchangeFor {orderId, number}, shortBy, items [{variant_id, product_title, variant_title, sku, quantity}].
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getWaitingForRelease() {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT o.id, o.number, o.placed_at, o.status " +
+            "FROM warehouse_orders o " +
+            "WHERE o.tenant_id = ? AND o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%' " +
+            "  AND o.status::text IN " + ShopifyShadowOrders.LIVE_STATUSES_SQL + " " +
+            "  AND " + ShopifyShadowOrders.heldSql("o") + " " +
+            "ORDER BY o.placed_at ASC, o.created_at ASC",
+            tenantId);
+        if (rows.isEmpty()) return rows;
+        decorateShadows(tenantId, rows);
+        for (Map<String, Object> r : rows) {
+            r.put("items", jdbc.queryForList(
+                "SELECT oi.variant_id, p.title AS product_title, v.title AS variant_title, v.sku, oi.quantity " +
+                "FROM order_items oi JOIN variants v ON v.id = oi.variant_id JOIN products p ON p.id = v.product_id " +
+                "WHERE oi.order_id = ? AND oi.tenant_id = ? AND oi.quantity > 0 ORDER BY oi.id",
+                r.get("id"), tenantId));
+        }
+        return rows;
     }
 
     /**
@@ -196,7 +309,11 @@ public class FulfillService {
             "    LIMIT 1 " +
             ") latest_shipment ON true " +
             "WHERE o.tenant_id = ? " +
-            "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
+            // S3c: a released shadow at 'confirmed' needs its courier leg like any order (SHADOW_PICKABLE_GATE).
+            "  AND (o.status IN ('new','ready_to_pick','self_pickup_pending') " +
+            "       OR (o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%' AND o.status = 'confirmed' " +
+            "           AND " + ShopifyShadowOrders.liveShadowSql("o") + ")) " +
+            "  AND NOT " + ShopifyShadowOrders.notPackableShadowSql("o") + " " +
             "  AND o.on_hold = false " +
             "  AND o.is_self_pickup = false " +
             "  AND latest_shipment.internal_state IS NULL " +
@@ -266,12 +383,12 @@ public class FulfillService {
             ? "  AND o.id IN (SELECT bi.order_id FROM pack_print_batch_items bi " +
               "               WHERE bi.batch_id = ? AND bi.tenant_id = o.tenant_id) "
             : "";
-        List<Object> params = new ArrayList<>(List.of(tenantId, lookbackDays));
+        List<Object> params = new ArrayList<>(List.of(tenantId, tenantId, lookbackDays, tenantId, lookbackDays));
         if (batchId != null) params.add(batchId);
         if (limit != null)   params.add(limit);
 
         List<Map<String, Object>> eligibleOrders = jdbc.queryForList(
-            "SELECT o.id FROM warehouse_orders o " + PICKABLE_ORDERS_FILTER + batchClause +
+            "SELECT o.id FROM warehouse_orders o WHERE o.tenant_id = ? AND o.id IN " + QUEUE_ORDER_IDS_SQL + " " + batchClause +
             "ORDER BY o.created_at ASC" + (limit != null ? " LIMIT ?" : ""),
             params.toArray());
 
@@ -343,7 +460,7 @@ public class FulfillService {
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, o.address, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
             "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
-            "       (e.id IS NOT NULL) AS is_exchange, " +
+            "       (e.id IS NOT NULL OR o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%') AS is_exchange, " +
             "       s.id AS shipment_id, s.tracking_number, " +
             // "Has courier" == "Print Waybill can succeed": the same account resolution as
             // BostaAwbService.printAwb() (tenant's bosta row, status 'active'). NOT
@@ -389,6 +506,12 @@ public class FulfillService {
         if ("generic".equals(provider)) {
             order.put("shipment_provider", "generic");
             order.put("shipment_carrier", carrier);
+        }
+        // S3c: a Shopify-native exchange shadow says what it is (exchangeFor / shortBy) and whether Shopify holds it.
+        List<Map<String, Object>> self = new ArrayList<>(List.of(order));
+        decorateShadows(tenantId, self);
+        if (order.containsKey("exchangeFor")) {
+            order.put("heldForRelease", ShopifyShadowOrders.pickState(jdbc, tenantId, orderId) == ShopifyShadowOrders.PickState.HELD);
         }
         List<Map<String, Object>> items = getItemsWithAllocations(orderId, tenantId);
         order.put("items", items);
@@ -485,9 +608,13 @@ public class FulfillService {
         if (isUnpickableLookupReplacement(orderId, tenantId)) {
             return ScanResult.rejected("NOT_PICKABLE", NOT_PICKABLE_MESSAGE);
         }
-        // 0a'. S3b: a Shopify-native exchange shadow order is kept aside, never packed until S3c gates it.
-        if (isShopifyExchangeShadow(orderId, tenantId)) {
-            return ScanResult.rejected("NOT_PICKABLE", SHADOW_NOT_PICKABLE_MESSAGE);
+        // 0a'. S3c: a Shopify-native exchange shadow order is packed only once Shopify releases it.
+        ShopifyShadowOrders.PickState shadow = ShopifyShadowOrders.pickState(jdbc, tenantId, orderId);
+        if (shadow == ShopifyShadowOrders.PickState.HELD) {
+            return ScanResult.rejectedLocalized("HELD_FOR_RELEASE", HELD_FOR_RELEASE_MESSAGE, HELD_FOR_RELEASE_MESSAGE_AR);
+        }
+        if (shadow == ShopifyShadowOrders.PickState.ENDED) {
+            return ScanResult.rejected("NOT_PICKABLE", SHADOW_ENDED_MESSAGE);
         }
 
         // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
@@ -804,8 +931,12 @@ public class FulfillService {
         if (isUnpickableLookupReplacement(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, NOT_PICKABLE_MESSAGE);
         }
-        if (isShopifyExchangeShadow(orderId, tenantId)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, SHADOW_NOT_PICKABLE_MESSAGE);
+        ShopifyShadowOrders.PickState shadow = ShopifyShadowOrders.pickState(jdbc, tenantId, orderId);
+        if (shadow == ShopifyShadowOrders.PickState.HELD) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, HELD_FOR_RELEASE_MESSAGE);
+        }
+        if (shadow == ShopifyShadowOrders.PickState.ENDED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, SHADOW_ENDED_MESSAGE);
         }
         requireMerchantOrder(orderId, tenantId);
 
@@ -1491,15 +1622,14 @@ public class FulfillService {
             "  AND rr.origin = 'lookup')", Boolean.class, orderId, tenantId, orderId, tenantId));
     }
 
-    static final String SHADOW_NOT_PICKABLE_MESSAGE =
-        "This is an exchange made in Shopify — its piece is kept aside; packing it through Traced arrives in a later update";
-
-    /** S3b: a Shopify-native exchange shadow order (by its external_id prefix) — refused by scan() and complete(). */
-    private boolean isShopifyExchangeShadow(UUID orderId, UUID tenantId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ? " +
-            "  AND o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%')", Boolean.class, orderId, tenantId));
-    }
+    /** S3c: a Shopify-native exchange Shopify hasn't released yet (ShopifyShadowOrders.heldSql). */
+    static final String HELD_FOR_RELEASE_MESSAGE =
+        "This exchange is waiting for release in Shopify — keep the piece aside and pack it once Shopify releases it";
+    static final String HELD_FOR_RELEASE_MESSAGE_AR =
+        "هذا الاستبدال في انتظار الإفراج عنه في شوبيفاي — احتفظ بالقطعة جانباً وجهّزها بعد الإفراج عنه";
+    /** S3c: a Shopify-native exchange whose reservation ended (declined / cancelled / fulfilled in Shopify). */
+    static final String SHADOW_ENDED_MESSAGE =
+        "This exchange ended in Shopify — there is nothing left to pack";
 
     private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {
         Boolean exists = jdbc.queryForObject(

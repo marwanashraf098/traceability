@@ -342,7 +342,7 @@ public class MainReconcileService {
             Timestamp readAt = tx.execute(s -> jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class));
             // S3a interim guard: a write store holding a Shopify-native exchange replacement writes nothing this run.
             boolean exchangeHold = write && Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
-                MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, tenantId, tenantId)));
+                MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, tenantId)));
             if (exchangeHold) {
                 log.info("Main reconcile run {} tenant={}: no writes — {}", runId, tenantId,
                     MainReconcileRules.SHOPIFY_EXCHANGE_IN_CUSTODY);

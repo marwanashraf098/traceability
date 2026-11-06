@@ -42,6 +42,16 @@ public class FulfillController {
         return Map.of("count", svc.getAwaitingWaybillCount());
     }
 
+    /**
+     * S3c — "Waiting for release": Shopify-native exchanges whose replacement is kept aside but which Shopify hasn't
+     * released for fulfilment yet. Beside the queue, never in it.
+     */
+    @GetMapping("/waiting-for-release")
+    @PreAuthorize("isAuthenticated()")
+    public List<Map<String, Object>> waitingForRelease() {
+        return svc.getWaitingForRelease();
+    }
+
     /** FR-8.7 — read-only consolidated gather list across all ready_to_pick orders. */
     @GetMapping("/gather")
     @PreAuthorize("isAuthenticated()")
