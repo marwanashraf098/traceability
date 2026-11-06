@@ -125,7 +125,7 @@ public final class MainReconcileRules {
         "SELECT EXISTS (SELECT 1 FROM warehouse_orders so WHERE so.tenant_id = ? " +
         "               AND so.external_id LIKE 'internal:shopify-exchange:%' " +
         "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost') " +
-        // S3b: a shadow whose reservation ended (V218 state 'ended': every line 0) holds nothing.
+        // S3b: a shadow whose reservation ended (V219 state 'ended': every line 0) holds nothing.
         "               AND NOT EXISTS (SELECT 1 FROM shopify_exchange_shadows sx WHERE sx.order_id = so.id " +
         "                               AND sx.tenant_id = so.tenant_id AND sx.state = 'ended')) " +
         "    OR EXISTS (SELECT 1 FROM exchanges e " +

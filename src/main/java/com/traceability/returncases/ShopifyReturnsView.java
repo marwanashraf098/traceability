@@ -201,7 +201,7 @@ public final class ShopifyReturnsView {
     }
 
     /**
-     * S3b — "#…-X1 · kept aside": the exchange shadow order Traced keeps for this return (V218). Key present only when a
+     * S3b — "#…-X1 · kept aside": the exchange shadow order Traced keeps for this return (V219). Key present only when a
      * shadow exists (byte-identical otherwise). state: kept_aside | short (ShopifyShadowOrders.shortages, oldest first)
      * | ended (+ endReason); units = what Traced still keeps aside.
      */

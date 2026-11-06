@@ -31,7 +31,7 @@ class WarehouseOrdersAccessGuardTest {
 
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
-        // S3b (V218) — Shopify-native exchange shadow orders
+        // S3b (V219) — Shopify-native exchange shadow orders
         "inventory/FulfillService.java#isShopifyExchangeShadow",
             "S3b: scan() / complete() refuse a shadow order until S3c gates it — must see the shadow",
         "inventory/ExceptionService.java#detectShopifyExchangeShippedInShopify",

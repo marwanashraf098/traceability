@@ -20,7 +20,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Shopify-native returns S3b — exchange SHADOW orders and their reservation from approval (V218, decisions 2026-11-06).
+ * Shopify-native returns S3b — exchange SHADOW orders and their reservation from approval (V219, decisions 2026-11-06).
  *
  * For each Shopify Return with exchange lines on an order Traced holds, once the return is approved (status OPEN /
  * CLOSED), the store has returns access, and the original order has left Traced custody ({@link OrderLineFreeze} — Q2:
@@ -31,7 +31,7 @@ import java.util.UUID;
  * packable before S3c. Its lines are the exchange lines (variant, LIVE quantity) and count as committed demand by count
  * ({@link VariantStockService}); never a pinned piece, never On Hold, never a Shopify write.
  *
- * <p>{@link #reconcileForOrder} is THE writer (shadow orders, their lines, V218 tables). Idempotent, one per-order
+ * <p>{@link #reconcileForOrder} is THE writer (shadow orders, their lines, V219 tables). Idempotent, one per-order
  * advisory lock, reads the mirror's CURRENT state (rows are never deleted, so existence means nothing). Per exchange line:
  * <pre>
  *   return DECLINED / CANCELED                         → 0, stop 'declined' / 'cancelled'
@@ -44,7 +44,7 @@ import java.util.UUID;
  *   a Shopify-native internal:exchange: replacement already exists for the original + variant → 0, stop 'stood_down'
  *     (no double demand; S3d removes the duplicate properly)
  * </pre>
- * Re-held after release keeps the reservation (ON_HOLD is live). A shadow whose lines are all 0 is 'ended' in V218 (it
+ * Re-held after release keeps the reservation (ON_HOLD is live). A shadow whose lines are all 0 is 'ended' in V219 (it
  * reserves nothing: its lines are 0); one that comes back to life (a new FO) is 'live' again. The shadow ORDER's status
  * stays 'confirmed' in S3b — never written backward (OrderStatusBackwardWriteGuardTest); S3c owns its packing states. Alerts are read from these rows by
  * ExceptionService: {@code shopify_exchange_short} (per variant, oldest shadow first — {@link #shortages}) and

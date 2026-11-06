@@ -212,7 +212,7 @@ public class ExceptionService {
         all.addAll(detectShopifyLocationInactive(tenantId));
         // A transfer left out pieces whose arrival hadn't reached Shopify; it has since — Shopify counts them at main.
         all.addAll(detectTransferStockNotRemoved(tenantId));
-        // Shopify-native returns S3b — exchange shadow orders (V218): stock short for a kept-aside replacement, and a
+        // Shopify-native returns S3b — exchange shadow orders (V219): stock short for a kept-aside replacement, and a
         // replacement Shopify fulfilled while Traced still had it on the shelf.
         all.addAll(detectShopifyExchangeShort(tenantId));
         all.addAll(detectShopifyExchangeShippedInShopify(tenantId));

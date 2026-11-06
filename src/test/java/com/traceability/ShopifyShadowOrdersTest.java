@@ -46,7 +46,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Shopify-native returns S3b — exchange shadow orders + reservation from approval (V218). Mirror rows are written by the
+ * Shopify-native returns S3b — exchange shadow orders + reservation from approval (V219). Mirror rows are written by the
  * real ShopifyReturnsStore; the reconcile, committed demand and the shortage rule run on an app_user connection (RLS).
  *
  *   s1  approved return (no FO yet): ONE shadow — prefix, origin, #…-X1, placed_at = approval, name / phone / address
