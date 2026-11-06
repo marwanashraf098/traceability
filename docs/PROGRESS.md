@@ -16,7 +16,8 @@ V218 and V219 is free (Marawan, 17:41)).** See CLAUDE.md (S3b paragraph) for the
   no late-to-pack (normal + embedded), no Overview count, no alert of any type, no committed demand.
 - **Live shadows out of late-to-pack until S3c (2026-11-06, Marawan):** gated by the same flag
   (`ShopifyShadowOrders.S3C_FLAG`, default off → no shadow is late to pack, normal + embedded; on → only ended ones are
-  left out). n2 tests both states (revert-checked both ways); n1's live positive control now runs with the flag on
+  left out). n2 tests both states (revert-checked both ways); ShadowOrderLeakTest now asserts both late-to-pack
+  endpoints are byte-identical with shadows present (moved out of SHOWS until S3c); n1's live positive control runs with the flag on
   (approved). S3c: turn the flag on.
 - **Backfill at deploy (Marawan runs):** `POST /api/v1/ops/shopify-shadows/backfill {"tenantId": …}` → dry-run counts
   (originalOrders / shadowsToCreate / unitsToKeepAside), then `{"tenantId": …, "apply": true}`. Only the 2 stores with
