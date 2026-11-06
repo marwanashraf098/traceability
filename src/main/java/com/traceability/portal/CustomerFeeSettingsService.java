@@ -2,7 +2,6 @@ package com.traceability.portal;
 
 import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -60,16 +59,22 @@ public class CustomerFeeSettingsService {
 
     private final JdbcTemplate jdbc;
     private final AuditService audit;
-    private final boolean visible;
+    private final PortalFeesRollout rollout;
 
-    public CustomerFeeSettingsService(JdbcTemplate jdbc, AuditService audit,
-                                      @Value("${traced.portal-fees.settings-enabled:false}") boolean visible) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public CustomerFeeSettingsService(JdbcTemplate jdbc, AuditService audit, PortalFeesRollout rollout) {
         this.jdbc = jdbc;
         this.audit = audit;
-        this.visible = visible;
+        this.rollout = rollout;
     }
 
-    public boolean visible() { return visible; }
+    /** Hand-built instances (tests): visible to every tenant or to none. */
+    public CustomerFeeSettingsService(JdbcTemplate jdbc, AuditService audit, boolean visible) {
+        this(jdbc, audit, PortalFeesRollout.of(visible));
+    }
+
+    /** Visible to the current tenant (the rollout: global flag, or the tenant listed). */
+    public boolean visible() { return rollout.on(TenantContext.get()); }
 
     // ── read ─────────────────────────────────────────────────────────────────
 
@@ -105,7 +110,7 @@ public class CustomerFeeSettingsService {
                 rs.getBigDecimal("max_amount")),
             tenantId);
 
-        return new Settings(visible, rules, reasons(t.get("portal_merchant_fault_reasons")), overrides,
+        return new Settings(visible(), rules, reasons(t.get("portal_merchant_fault_reasons")), overrides,
             new ExchangePricing(Boolean.TRUE.equals(t.get("portal_exchange_any_product")),
                 Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")),
                 (BigDecimal) t.get("portal_exchange_max_difference"),
@@ -116,7 +121,7 @@ public class CustomerFeeSettingsService {
     @Transactional(readOnly = true)
     public List<Area> areas(String cityId) {
         TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         if (cityId == null || cityId.isBlank()) {
             return jdbc.query(
                 "SELECT DISTINCT ON (city_id) city_id, city_name, city_name_ar FROM bosta_districts " +
@@ -135,7 +140,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings putRule(UUID actor, String kind, RuleInput in) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         if (!KINDS.contains(kind)) throw CustomerFeeException.kind();
         if (in == null) throw CustomerFeeException.mode();
         Shape s = shape(in.mode(), in.amount(), in.percent(), in.minAmount(), in.maxAmount(), false);
@@ -173,7 +178,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings putMerchantFaultReasons(UUID actor, List<String> reasons) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         if (reasons == null) throw CustomerFeeException.reason();
         // Kept in the portal's own reason order, de-duplicated.
         for (String r : reasons) if (r == null || !PortalService.REASON_CODES.contains(r)) throw CustomerFeeException.reason();
@@ -193,7 +198,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings putExchangePricing(UUID actor, ExchangePricingInput in) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         if (in == null) throw CustomerFeeException.maxDifference();
         BigDecimal maxDiff = in.maxDifference();
         if (maxDiff != null && !wholeInRange(maxDiff, true)) throw CustomerFeeException.maxDifference();
@@ -225,7 +230,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings createOverride(UUID actor, OverrideInput in) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         if (in == null || !KINDS.contains(in.kind())) throw CustomerFeeException.kind();
         String cityId = blankToNull(in.cityId());
         String districtId = blankToNull(in.districtId());
@@ -252,7 +257,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings updateOverride(UUID actor, UUID id, OverrideInput in) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT kind, city_id, district_id, mode, amount, percent, min_amount, max_amount " +
             "FROM portal_fee_area_overrides WHERE id = ? AND tenant_id = ? FOR UPDATE", id, tenantId);
@@ -278,7 +283,7 @@ public class CustomerFeeSettingsService {
     @Transactional
     public Settings deleteOverride(UUID actor, UUID id) {
         UUID tenantId = TenantContext.require();
-        if (!visible) throw CustomerFeeException.notAvailable();
+        if (!visible()) throw CustomerFeeException.notAvailable();
         List<Map<String, Object>> rows = jdbc.queryForList(
             "DELETE FROM portal_fee_area_overrides WHERE id = ? AND tenant_id = ? " +
             "RETURNING kind, city_id, district_id, mode, amount, percent, min_amount, max_amount", id, tenantId);

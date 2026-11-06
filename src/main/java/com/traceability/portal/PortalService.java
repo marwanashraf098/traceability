@@ -62,18 +62,32 @@ public class PortalService {
     }
 
     /**
-     * Returns portal fees F2 — on only with {@code traced.portal-fees.settings-enabled} AND the paid-price resolver
-     * wired (absent on hand-built instances: today's behaviour). Off = every lookup / submit exactly as before.
+     * Returns portal fees F2 — on for a tenant only when {@link PortalFeesRollout} says so (the global flag, or the
+     * tenant in TRACED_PORTAL_FEES_TENANTS) AND the paid-price resolver is wired (absent on hand-built instances:
+     * today's behaviour). Off = every lookup / submit exactly as before.
      */
-    private boolean feesOn;
+    private PortalFeesRollout fees = PortalFeesRollout.of(false);
     private OrderLinePaidPrices paidPrices;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setFees(OrderLinePaidPrices paidPrices,
-                        @org.springframework.beans.factory.annotation.Value("${traced.portal-fees.settings-enabled:false}")
-                        boolean enabled) {
+    public void setFees(OrderLinePaidPrices paidPrices, PortalFeesRollout rollout) {
         this.paidPrices = paidPrices;
-        this.feesOn = enabled && paidPrices != null;
+        this.fees = rollout == null ? PortalFeesRollout.of(false) : rollout;
+    }
+
+    /** Hand-built instances (tests): fees on or off for every tenant. */
+    public void setFees(OrderLinePaidPrices paidPrices, boolean enabled) {
+        setFees(paidPrices, PortalFeesRollout.of(enabled));
+    }
+
+    /** Fees on for this tenant (rollout AND a paid-price resolver). */
+    private boolean feesOn(UUID tenantId) {
+        return paidPrices != null && fees.on(tenantId);
+    }
+
+    /** Fees on for some tenant — false = no per-tenant question, today's path for everyone. */
+    private boolean feesAnywhere() {
+        return paidPrices != null && fees.anyOn();
     }
 
     private final JdbcTemplate        jdbc;
@@ -324,7 +338,7 @@ public class PortalService {
         // Returns portal fees F2: which fees apply to this order — present only when fees are on and at least one
         // applies (absent otherwise: every other lookup is unchanged). The amount depends on the items, reasons and
         // pickup area the customer chooses next, so the portal asks POST /quote for it (the same calculator as submit).
-        if (feesOn) {
+        if (feesOn(tenantId)) {
             boolean refundFee = PortalAmounts.ruleEnabled(jdbc, tenantId, "refund");
             boolean exchangeFee = orderExchanges && PortalAmounts.ruleEnabled(jdbc, tenantId, "exchange");
             if (refundFee || exchangeFee) {
@@ -673,9 +687,9 @@ public class PortalService {
      * fees are off or the slug is unknown; {applies:false} when no fee of this kind applies. Writes nothing.
      */
     public Optional<QuoteResult> quote(String slug, String bearerToken, SubmitRequest req) {
-        if (!feesOn) return Optional.empty();
+        if (!feesAnywhere()) return Optional.empty();
         UUID tenantId = resolveTenant(slug);
-        if (tenantId == null) return Optional.empty();
+        if (tenantId == null || !feesOn(tenantId)) return Optional.empty();
         Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
         if (claims.isEmpty()) return Optional.of(new QuoteResult(QuoteOutcome.UNAUTHORIZED, null));
         UUID orderId = claims.get().orderId();
@@ -765,9 +779,9 @@ public class PortalService {
      * The paid price may need a live Shopify read: resolved with NO transaction open.
      */
     public Optional<CatalogueResult> catalogue(String slug, String bearerToken, UUID variantId, UUID orderItemId, String query) {
-        if (!feesOn) return Optional.empty();
+        if (!feesAnywhere()) return Optional.empty();
         UUID tenantId = resolveTenant(slug);
-        if (tenantId == null) return Optional.empty();
+        if (tenantId == null || !feesOn(tenantId)) return Optional.empty();
         Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
         if (claims.isEmpty()) return Optional.of(new CatalogueResult(CatalogueOutcome.UNAUTHORIZED, null));
         UUID orderId = claims.get().orderId();
@@ -861,7 +875,7 @@ public class PortalService {
      * (and on a malformed request: submit then answers as before). Runs with NO transaction open.
      */
     private PortalAmounts.Prices feePrices(UUID tenantId, UUID orderId, SubmitRequest req) {
-        if (!feesOn || req == null) return null;
+        if (!feesOn(tenantId) || req == null) return null;
         // F3: an exchange is also priced when a price difference can apply (any product, or free swaps off).
         Boolean on = TenantContext.runAs(tenantId,
             () -> tx.execute(s -> PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))
@@ -1139,7 +1153,7 @@ public class PortalService {
             Boolean.class, replacement, lineVariant, tenantId, tenantId);
         // F3: another product only when fees are on and the store allows it — an ACTIVE product, a priced variant.
         // (The price paid is checked by the pricing: only an approximate price → refused.)
-        if (!Boolean.TRUE.equals(sameProduct) && !(feesOn && PortalAmounts.exchangePricing(jdbc, tenantId).anyProduct()
+        if (!Boolean.TRUE.equals(sameProduct) && !(feesOn(tenantId) && PortalAmounts.exchangePricing(jdbc, tenantId).anyProduct()
                 && Boolean.TRUE.equals(jdbc.queryForObject(
                     "SELECT EXISTS (SELECT 1 FROM variants r JOIN products p ON p.id = r.product_id AND p.tenant_id = r.tenant_id " +
                     "               WHERE r.id = ? AND r.tenant_id = ? AND p.status = 'active' AND r.price IS NOT NULL)",

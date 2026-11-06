@@ -4,6 +4,20 @@
 
 ## Current state
 
+**Returns portal fees — per-store rollout (2026-11-06; branch `feat/portal-fees-tenants` on main 2f2fc46f, MERGED
+2026-11-06, NOT deployed; no migration; full backend 3997, only ExchangeBackfillTest red).** New env `TRACED_PORTAL_FEES_TENANTS` (comma-separated tenant ids). Fees are on for a
+tenant when `traced.portal-fees.settings-enabled` is true OR the tenant is listed; otherwise exactly as today.
+- **One rule:** `portal.PortalFeesRollout` (`on(tenantId)`, `anyOn()`); a malformed entry stops startup (message names
+  the variable and the entry's position, never the value). Empty / unset = off for everyone.
+- **Applied at every flag read:** settings screen GET / writes (`CustomerFeeSettingsService`, current tenant); portal
+  lookup `fees`, quote and catalogue (404 unless on for the slug's tenant; nothing asked per tenant when no tenant is
+  on), freezing at submit + F3 pricing / different-product check (`PortalService.feesOn(tenantId)`); F4 COD
+  (`ReturnPickupBookingService`, the request's tenant). Refund deduction, drawer and finances read the frozen rows /
+  `booking_cod` — a store removed from the list keeps what was already frozen (same as turning the flag off today).
+- **Tests:** PortalFeesRolloutTest (u1 unlisted store golden vs a plain store, l1 listed store on for settings / quote /
+  freeze / refund deduction / F3, x1 cross-tenant with same-tenant controls), PortalFeesRolloutCodTest (c1 listed COD
+  sent, u1 unlisted cod 0, x1 app_user cross-tenant), PortalFeesRolloutUnitTest (4). Empty list = today: the existing
+  F2 / F3 goldens and CustomerFeeSettingsHiddenTest pass unchanged. No existing test edited.
 **Shopify-native returns S2 — returns / exchanges made in Shopify are SHOWN in Traced, read-only (R1) (2026-11-06; branch
 `feat/s2-shopify-returns-view`, rebased on main 2f2fc46f (F4's V215), NOT deployed; NO migration).** Reads the S1 mirror only: no
 reservation, no Pick & Pack change, no stock write, no Shopify call or write, no new intake logic.
