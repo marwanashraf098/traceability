@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   CustomerFeeSettings, ExchangePricing, FeeArea, FeeAreaOverride, FeeKind, FeeMode, FeeRule, TransferCommandError,
@@ -16,8 +16,46 @@ const KINDS: FeeKind[] = ['exchange', 'refund']
  * Returns portal fees F1 — Settings → Returns portal → Exchange pricing and Customer fees. Each block saves on its
  * own (its own endpoint, audit-logged). Owner edits; a manager sees it read-only. Hidden entirely while the backend
  * says {@code visible:false} (until fees are charged) or when it can't be loaded — the rest of the tab is unchanged.
+ *
+ * Wrapped in its own error boundary (prod report 2026-11-06: a render crash here blanked the whole settings page):
+ * a failure shows "Something went wrong — Reload" in place of these cards and the rest of the page keeps working.
  */
 export default function CustomerFeesSection() {
+  return (
+    <FeesErrorBoundary>
+      <CustomerFeesCards />
+    </FeesErrorBoundary>
+  )
+}
+
+/** Catches a render error inside the fee cards only. Logs the error and its component stack — never settings data. */
+export class FeesErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Customer fees settings crashed', error, info.componentStack)
+  }
+
+  render() {
+    return this.state.failed ? <FeesCrashed /> : this.props.children
+  }
+}
+
+function FeesCrashed() {
+  const { t } = useTranslation()
+  return (
+    <section className="card max-w-3xl p-6 space-y-3" role="alert" data-testid="customer-fees-crashed">
+      <p className="text-body text-primary">{t('settings.portal.fees.crashed')}</p>
+      <Button size="sm" variant="outline" onClick={() => window.location.reload()}>{t('settings.portal.fees.reload')}</Button>
+    </section>
+  )
+}
+
+function CustomerFeesCards() {
   const { t } = useTranslation()
   const [settings, setSettings] = useState<CustomerFeeSettings | null>(null)
   const owner = getRoleFromToken() === 'owner'
@@ -82,13 +120,27 @@ function useSave(onSaved: (s: CustomerFeeSettings) => void) {
   return { saving, error, run, clearError: () => setError(undefined) }
 }
 
-/** '' → null; anything else → a number (the backend validates it). */
-function num(s: string): number | null {
-  const v = s.trim()
-  return v === '' ? null : Number(v)
+/** '' (or anything that isn't a number) → null; else a number (the backend validates it). */
+function num(s: string | null | undefined): number | null {
+  const v = (s ?? '').trim()
+  if (v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
 }
 
-function str(n: number | null | undefined) { return n == null ? '' : String(n) }
+/** A stored amount as the field's text; '' for none. Tolerates a number sent as a string. */
+function str(n: number | string | null | undefined) {
+  if (n == null) return ''
+  const v = typeof n === 'number' ? n : Number(n)
+  return Number.isFinite(v) ? String(v) : ''
+}
+
+/** A stored amount as a number (or null) — the dirty checks compare like with like. */
+function numOrNull(n: number | string | null | undefined): number | null {
+  return n == null ? null : num(String(n))
+}
+
+function modeOf(m: unknown): FeeMode { return m === 'percent' ? 'percent' : 'fixed' }
 
 function ErrorLine({ error, testId }: { error?: string; testId: string }) {
   return error ? <p className="text-small text-critical" role="alert" data-testid={testId}>{error}</p> : null
@@ -133,7 +185,7 @@ function ModeChoice({ name, value, onChange, disabled }: {
 /** "EGP 50" / "10% (min EGP 20, max EGP 300)" — what a rule or override charges. */
 export function describeFee(f: { mode: FeeMode; amount: number | null; percent: number | null; minAmount: number | null; maxAmount: number | null },
                             t: (k: string, o?: Record<string, unknown>) => string): string {
-  if (f.mode === 'fixed') return t('settings.portal.fees.fixedLabel', { amount: f.amount ?? 0 })
+  if (modeOf(f.mode) === 'fixed') return t('settings.portal.fees.fixedLabel', { amount: f.amount ?? 0 })
   const base = t('settings.portal.fees.percentLabel', { percent: f.percent ?? 0 })
   const parts: string[] = []
   if (f.minAmount != null) parts.push(t('settings.portal.fees.minLabel', { amount: f.minAmount }))
@@ -152,7 +204,7 @@ function ExchangePricingEditor({ value, owner, onSaved }: {
   const [lowerOnly, setLowerOnly] = useState(value.sameOrLowerOnly)
   const [maxDiff, setMaxDiff] = useState(str(value.maxDifference))
   const { saving, error, run } = useSave(onSaved)
-  const dirty = anyProduct !== value.anyProduct || freeSwaps !== value.freeVariantSwaps || lowerOnly !== value.sameOrLowerOnly || num(maxDiff) !== value.maxDifference
+  const dirty = anyProduct !== value.anyProduct || freeSwaps !== value.freeVariantSwaps || lowerOnly !== value.sameOrLowerOnly || num(maxDiff) !== numOrNull(value.maxDifference)
   const ro = !owner || saving
 
   return (
@@ -208,7 +260,7 @@ function RuleEditor({ kind, rule, owner, onSaved }: {
 }) {
   const { t } = useTranslation()
   const [enabled, setEnabled] = useState(rule?.enabled ?? false)
-  const [mode, setMode] = useState<FeeMode>(rule?.mode ?? 'fixed')
+  const [mode, setMode] = useState<FeeMode>(modeOf(rule?.mode))
   const [amount, setAmount] = useState(str(rule?.amount))
   const [percent, setPercent] = useState(str(rule?.percent))
   const [min, setMin] = useState(str(rule?.minAmount))
@@ -226,9 +278,9 @@ function RuleEditor({ kind, rule, owner, onSaved }: {
   }), [enabled, mode, waive, amount, percent, min, max])
   const dirty = !rule
     ? enabled || amount !== '' || percent !== ''
-    : input.enabled !== rule.enabled || input.mode !== rule.mode || input.waiveMerchantFault !== rule.waiveMerchantFault
-      || input.amount !== rule.amount || input.percent !== rule.percent
-      || input.minAmount !== rule.minAmount || input.maxAmount !== rule.maxAmount
+    : input.enabled !== rule.enabled || input.mode !== modeOf(rule.mode) || input.waiveMerchantFault !== rule.waiveMerchantFault
+      || input.amount !== numOrNull(rule.amount) || input.percent !== numOrNull(rule.percent)
+      || input.minAmount !== numOrNull(rule.minAmount) || input.maxAmount !== numOrNull(rule.maxAmount)
 
   const title = t(`settings.portal.fees.${kind}.title`)
   return (
