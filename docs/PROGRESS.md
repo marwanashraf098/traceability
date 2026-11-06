@@ -4,6 +4,43 @@
 
 ## Current state
 
+**Main reconcile sweep: statement timeouts since V204 fixed + one retry + repeated-failure alert (2026-11-06; branch
+`fix/main-reconcile-sweep-timeout` merged to main, NOT deployed; V214).** Write behaviour unchanged (writes live for
+Dolt + Nuvira).
+- **Diagnosis (prod, read-only):** every failed store run is Postgres `canceling statement due to statement timeout`
+  (Supabase `statement_timeout = 120000` from `platform-defaults.conf`; SQLSTATE class 57 → Spring
+  `DataAccessResourceFailureException`). Failed runs last 121–135 s, against 1–14 s for the same stores when they
+  succeed. Not the pool, not the TCP keep-alive / socketTimeout added in V205 (300 s). auto_explain (log_min_duration
+  10 s, no ANALYZE) shows the cause in EVALUATE_SQL's `fu_lines` (V204's fulfilled_unpicked): the planner estimated the
+  chunk's variants at ~1 row and the tenant's orders at ~68, nested-looped variants OUTSIDE, and re-scanned the
+  tenant's orders, ran the AWAITING_PICK subplans and re-expanded `raw->'fulfillments'` once PER VARIANT (≤ 1,000 per
+  chunk). The misestimate comes and goes, which is why each store fails only some sweeps. Femine 5,334 orders /
+  High line 6,860; ESLA has 44 orders but 8,817 variants.
+- **Fix (`MainReconcileRules.EVALUATE_SQL`, no target change):** `fu_main AS MATERIALIZED` expands the Main
+  fulfillment lines of live, not-yet-packed orders once per statement, keyed by the Shopify variant gid; it hash-joins
+  the chunk's variants (`v`) on external_id, and AWAITING_PICK runs only for orders that have such a line. No index
+  needed.
+- **Timings:** prod, Femine, one 1,000-variant chunk, the fulfilled_unpicked branch alone: old > 60 s (cancelled at
+  a 60 s cap), new 448 ms. Local Femine-sized fixture (2,000 variants, 5,000 orders × ~3 KB raw): chunk ~3 s, full
+  sweep 11–17 s. Locally the old SQL is equally fast with a good plan — the slow plan needs prod's misestimate (stale
+  stats did not reproduce it). So the guard forces nested loops: g1 old = statement timeout (the prod error), new 14.6 s.
+- **Retry + alert (`MainReconcileJob.sweep`):** each store once (attempt 1), then every store whose run failed once
+  more at the end of the same sweep (attempt 2). A sweep counts as failed only if its last attempt failed.
+  `MainReconcileService.consecutiveFailedSweeps` → at EXACTLY 2 in a row, ONE internal alert (`MainReconcileAlerter`:
+  ERROR log + email to `TRACED_MAIN_RECONCILE_ALERT_EMAILS`, default `TRACED_WATCHDOG_ALERT_EMAILS`; 30 s send cap;
+  never the merchant exception system); a 3rd failed sweep → nothing new; a success ends the streak.
+- **V214:** `main_reconcile_runs.sweep_attempt` (1 / 2; NULL for variant runs and older rows = first attempt), CHECK
+  kind = 'sweep'. Written on INSERT only.
+- **Tests:** MainReconcileSweepTest s1 (exact fulfilled_unpicked per variant on the big fixture, each chunk under
+  app_user's 30 s role statement_timeout), s2 (full sweep completes), g1 (structural: forced nested loops, no
+  tenant-wide orders scan with loops > 1; revert-checked RED = statement timeout), r1 (retry after every other store,
+  attempt rows), r2 (alert once at 2, not at 3, again after a success + 2), r3 (fail/ok counts as success), x1
+  (app_user isolation + positive control). MainReconcileTest 17, MainReconcileWriteTest 17 (u1–u7 unchanged),
+  WriteGuard, NamedDecrementSetGuard green. MigrationSmokeTest 212 → 213, NotTracedBackfillTest 157 → 158 (standing
+  approval). Full suite NOT run.
+- **After deploy:** check the next sweeps (`main_reconcile_runs` kind 'sweep', status / sweep_attempt) and set
+  TRACED_WATCHDOG_ALERT_EMAILS (or the new var) if it isn't set — without it the alert goes to the log only.
+
 **Returns portal fees F3 — exchange to a different product + price difference (2026-11-05; branch `feat/portal-fees-f3`
 rebased on main fbea5414 (S1b's V212 merged), NOT merged, NOT deployed; V213 — check main AND ask Marawan about prod
 before merge).** Behind
