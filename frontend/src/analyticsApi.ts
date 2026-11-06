@@ -336,6 +336,8 @@ export interface OrderRow {
   orderId: string; name: string; placedAt: string; customer: string | null; governorate: Governorate | null
   items: number; total: number; paymentGroup: string | null; deliveryStatus: DeliveryStatus; financialStatus: string
   bostaFees: number | null; feesEstimated: boolean; netToYou: number | null; refundAmountUnknown: boolean
+  /** F4 — COD Bosta collected on this order's exchanges (price difference + fee). Never in total or net; absent when none. */
+  exchangeCod?: number | null
   trackingNumbers: string[]
 }
 export interface OrdersPage {

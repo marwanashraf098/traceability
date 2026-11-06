@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -114,6 +115,15 @@ public class ReturnPickupBookingService {
         this.requests   = new ReturnRequestLifecycle(jdbc);
     }
 
+    /** F4: traced.portal-fees.settings-enabled — off (the default, and every hand-built instance) = cod 0 as before. */
+    private boolean portalFeesEnabled;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPortalFeesEnabled(
+            @org.springframework.beans.factory.annotation.Value("${traced.portal-fees.settings-enabled:false}") boolean on) {
+        this.portalFeesEnabled = on;
+    }
+
     // ── The job ───────────────────────────────────────────────────────────────
 
     public void book(UUID requestId, UUID tenantId) {
@@ -172,16 +182,21 @@ public class ReturnPickupBookingService {
             return;
         }
 
+        // F4 (Mode B amendment #3, COD): an exchange carries its frozen collect amount as cod; a type 25 never does.
+        // What is sent is recorded on booking_cod by the claim itself, so the read-back compares with exactly that.
+        BigDecimal cod = ExchangeCod.toSend(portalFeesEnabled, c.exchange, c.portalOrder, c.frozenCollect);
         Integer claimed = tx.execute(s -> jdbc.update(
-            "UPDATE return_requests SET booking_status = 'pending', booking_attempted_at = now(), booking_error = NULL " +
+            "UPDATE return_requests SET booking_status = 'pending', booking_attempted_at = now(), booking_error = NULL, " +
+            "       booking_cod = ? " +
             "WHERE id = ? AND tenant_id = ? AND status = 'approved' " +
             "  AND (booking_status IS NULL OR booking_status = 'failed')",
-            requestId, tenantId));
+            c.exchange ? ExchangeCod.column(cod) : null, requestId, tenantId));
         if (claimed == null || claimed != 1) return;                 // someone else holds the claim
 
-        // The ONE POST — no transaction open, no retry.
+        // The ONE POST — no transaction open, no retry. (createExchange refuses a cod above Bosta's limit before
+        // any HTTP call: NOT_CREATED, safe to retry.)
         BostaV2Client.CreateResult r = c.exchange
-            ? bosta.createExchange(encryption.decrypt(c.apiKeyEncrypted), exchangePayload(c))
+            ? bosta.createExchange(encryption.decrypt(c.apiKeyEncrypted), exchangePayload(c, cod))
             : bosta.createReturnPickup(encryption.decrypt(c.apiKeyEncrypted), payload(c));
 
         switch (r.outcome()) {
@@ -310,7 +325,7 @@ public class ReturnPickupBookingService {
      */
     private void verifyInTenant(UUID requestId, UUID tenantId) {
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
-            "SELECT rr.bosta_tracking_number, rr.pickup_district_id, o.number, rr.type, " +
+            "SELECT rr.bosta_tracking_number, rr.pickup_district_id, o.number, rr.type, rr.booking_cod, " +
             // 4d-1: items that were booked — a finished (done) item is no longer active but was in the parcel.
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
             "          AND i.item_status IN ('awaiting', 'arrived', 'done')) AS items, " +
@@ -334,11 +349,11 @@ public class ReturnPickupBookingService {
         List<String> diffs = new ArrayList<>();
         JsonNode raw = d.raw();
         if ("exchange".equals(r.get("type"))) {
-            // Step 5c — type 30: one item each way, cod 0, and the customer on dropOffAddress
-            // (on an exchange pickupAddress is the merchant — never read it for the customer).
+            // Step 5c — type 30: one item each way, the customer on dropOffAddress (on an exchange pickupAddress is
+            // the merchant — never read it for the customer). F4: cod = exactly the COD sent (booking_cod; none = 0).
             if (d.typeCode() != 30) diffs.add("type");
             if (!sameReference(raw.path("businessReference").asText(null), (String) r.get("number"))) diffs.add("businessReference");
-            if (raw.path("cod").asDouble(0) != 0) diffs.add("cod");
+            if (!ExchangeCod.matches((BigDecimal) r.get("booking_cod"), bostaCod(raw))) diffs.add("cod");
             if (raw.path("specs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("itemsCount");
             if (raw.path("returnSpecs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("returnItemsCount");
             if (!Objects.equals(districtId(raw.path("dropOffAddress")), r.get("pickup_district_id"))) diffs.add("district");
@@ -372,6 +387,18 @@ public class ReturnPickupBookingService {
             });
         }
         log.info("Return pickup read-back request={} outcome={}", requestId, diffs.isEmpty() ? "VERIFIED" : "NEEDS_REVIEW");
+    }
+
+    /** Bosta's cod on a delivery read back (missing / null / unreadable = 0; a non-number never matches a COD). */
+    static BigDecimal bostaCod(JsonNode raw) {
+        JsonNode n = raw.path("cod");
+        if (n.isMissingNode() || n.isNull()) return BigDecimal.ZERO;
+        if (n.isNumber()) return n.decimalValue();
+        try {
+            return new BigDecimal(n.asText().trim());
+        } catch (NumberFormatException e) {
+            return new BigDecimal("-1");
+        }
     }
 
     static String customerDistrictId(JsonNode raw) {
@@ -615,6 +642,8 @@ public class ReturnPickupBookingService {
         /** V117: true when the customer typed a different pickup address (drop = that address). */
         boolean customAddress;
         int itemsCount; List<String> itemLines = new ArrayList<>();
+        /** F4: a portal pre-connect order (no COD on its booking) and the frozen collect amount (null = none). */
+        boolean portalOrder; BigDecimal frozenCollect;
     }
 
     private Context loadContext(UUID requestId, UUID tenantId) {
@@ -624,7 +653,7 @@ public class ReturnPickupBookingService {
             "       (o.origin = 'portal_pre_connect') AS portal_order, o.portal_delivery::text AS portal_delivery, " +
             "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available, " +
             "       rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, rr.custom_building_number, " +
-            "       rr.custom_floor, rr.custom_apartment " +
+            "       rr.custom_floor, rr.custom_apartment, " + ExchangeCod.FROZEN_SQL + " AS frozen_collect " +
             "FROM return_requests rr " +
             "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN tenants t ON t.id = rr.tenant_id " +
@@ -661,6 +690,8 @@ public class ReturnPickupBookingService {
         // original Bosta delivery's dropOffAddress kept in portal_delivery; the receiver is the
         // order's own name / phone (receiver left null → receiverName / receiverPhone fall back).
         boolean portalOrder = Boolean.TRUE.equals(r.get("portal_order"));
+        c.portalOrder = portalOrder;
+        c.frozenCollect = (BigDecimal) r.get("frozen_collect");
         String raw = portalOrder ? null : jdbc.queryForList(
             "SELECT raw::text FROM shipments WHERE tenant_id = ? AND order_id = ? AND shipment_leg = 'forward' " +
             "  AND delivered_at IS NOT NULL AND raw IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -821,7 +852,7 @@ public class ReturnPickupBookingService {
             requestId, tenantId).stream().findFirst().orElse(null);
     }
 
-    private BostaV2Client.Exchange exchangePayload(Context c) {
+    private BostaV2Client.Exchange exchangePayload(Context c, BigDecimal cod) {
         String[] name = receiverName(c);
         return new BostaV2Client.Exchange(
             c.requestId.toString(), c.orderNumber, c.returnLocationId,
@@ -831,7 +862,7 @@ public class ReturnPickupBookingService {
             exchangeOutboundDescription(c.reference, c.replacementProduct != null ? c.replacementProduct : c.product,
                 c.replacementVariant),
             exchangeReturnDescription(c.product, c.originalVariant),
-            "Traced exchange request " + c.reference);
+            "Traced exchange request " + c.reference, cod);
     }
 
     private BostaV2Client.ReturnPickup payload(Context c) {

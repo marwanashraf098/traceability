@@ -278,6 +278,7 @@
     "waivedNote": "No fee, because of the reason you chose.",
     "nothingOwed": "The return fee is more than the item value, so you'd receive EGP 0. You can still send this request.",
     "exchangePayNote": "The store will tell you how to pay this fee.",
+    "bostaCollects": "Bosta will collect {{amount}} when the courier brings your new item.",
     "approximate": "Based on today's prices — the final amount may differ slightly.",
     "exchangePriceTitle": "Price difference",
     "priceDifference": "New item vs. what you paid",

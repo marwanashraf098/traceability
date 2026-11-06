@@ -6,10 +6,17 @@ import { formatMoney } from './requestFormat'
 
 /**
  * Returns portal fees F2 — the request's frozen fee breakdown in the drawer (owner / manager only, like every amount
- * here). Refund: item value − fee = due. Exchange: the fee the customer owes, as an instruction ("collect EGP X") —
- * Traced sends nothing to any courier for it until F4. Before approval the merchant may waive the fee or change it.
+ * here). Refund: item value − fee = due. Exchange: what the customer owes (F3: + the price difference) and, since F4,
+ * who collects it: "Bosta will collect EGP X" (booked as the type 30's COD), "Ask your courier to collect EGP X" (another
+ * courier / a pre-connect order — display only), else "collect it yourself". Before approval the merchant may waive the
+ * fee or change it.
  * Renders nothing for a request without amounts (no fee rule on at submit).
  */
+/** F4 — the instruction by who collects (ExchangeCod / RequestAmounts.collector); none = the F2/F3 copy. */
+const COLLECT_KEY: Record<string, string> = {
+  bosta: 'collectBosta', bosta_pending: 'collectBostaPending', courier: 'collectCourier', merchant: 'collectMerchant',
+}
+
 export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequestDetail; onChanged: () => Promise<void> }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -105,7 +112,7 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
       )}
       {refund && a.nothingOwed && <p className="text-small text-secondary" data-testid="fee-nothing-owed">{t(`${k}.nothingOwed`)}</p>}
       {!refund && Number(a.collect ?? 0) > 0 && (
-        <p className="text-small text-secondary" data-testid="fee-collect">{t(`${k}.collect`, { amount: money(a.collect) })}</p>
+        <p className="text-small text-secondary" data-testid="fee-collect">{t(`${k}.${COLLECT_KEY[a.collector ?? ''] ?? 'collect'}`, { amount: money(a.collector === 'bosta' && a.bookedCod ? a.bookedCod : a.collect) })}</p>
       )}
       {!refund && Number(a.customerOwed ?? 0) > 0 && (
         <p className="text-small text-secondary" data-testid="fee-owed">{t(`${k}.owed`, { amount: money(a.customerOwed ?? null) })}</p>

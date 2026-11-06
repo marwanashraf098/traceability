@@ -737,7 +737,20 @@ public class PortalService {
         body.putAll(priced.quote().toPortalJson());
         // F3: why this exchange can't be sent as quoted (absent when it can).
         if (priced.block() != null) body.put("blocked", priced.block());
+        // F4: a Bosta exchange carries what the customer pays as COD — the portal says "pay the Bosta courier".
+        // Not for another courier (G4: the store arranges it) or a pre-connect order (never a COD).
+        if (req.exchange() && !generic && priced.quote().collect() != null && priced.quote().collect().signum() > 0
+                && bostaCollects(tenantId, orderId)) {
+            body.put("codBy", "bosta");
+        }
         return body;
+    }
+
+    /** F4: the order's exchange is booked with Bosta (pickup booking on) and it isn't a pre-connect order. */
+    private boolean bostaCollects(UUID tenantId, UUID orderId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT t.portal_pickup_booking AND EXISTS (SELECT 1 FROM merchant_orders mo WHERE mo.id = ? AND mo.tenant_id = t.id) " +
+            "FROM tenants t WHERE t.id = ?", Boolean.class, orderId, tenantId));
     }
 
     public enum CatalogueOutcome { OK, UNAUTHORIZED, INVALID }
