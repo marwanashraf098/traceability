@@ -56,6 +56,7 @@ import static org.mockito.Mockito.*;
  *       customer text), created + name, read-back verified; a second sync never creates again
  *   c2  DEFINITE refusal → failed, retried, created on the 2nd; 5 refusals → no 6th call + LOW alert
  *   c3  AMBIGUOUS → failed_ambiguous, NEVER re-sent: the marker read finds nothing (stays) then finds it (created)
+ *   c5  two senders at once: the claim lets only one call returnCreate
  *   c4  write_returns not in the token's scopes → skipped no_permission, no Shopify call; ACCESS_DENIED → skipped
  *   e1  not synced, no write: pre-connect order; not fulfilled in Shopify; fewer returnable units; and nothing at all
  *       for an exchange, a request decided before switch-on, a request still 'requested'
@@ -539,6 +540,34 @@ class ShopifyReturnSyncTest {
     }
 
     @Test
+    void c5_twoSenders_theClaimLetsOnlyOneCreate() throws Exception {
+        Order o = new Order(a, 1, 1);
+        Req r = new Req(a, o, 1);
+        java.util.concurrent.CountDownLatch firstRead = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch secondDone = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        List<ShopifyReturnsWriteGateway.Returnable> lines = shopify.returnable.get(o.gid);
+        // The first sender reads Shopify, then waits (before its claim) until the second has sent and finished.
+        when(writes.returnableFulfillments(anyString(), anyString(), eq(o.gid))).thenAnswer(i -> {
+            if (reads.incrementAndGet() == 1) {
+                firstRead.countDown();
+                assertThat(secondDone.await(20, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            }
+            return new ShopifyReturnsWriteGateway.Returnables(lines, false);
+        });
+        Thread first = new Thread(() -> sync.sync(a.tenant, r.id));
+        first.start();
+        assertThat(firstRead.await(20, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        sync.sync(a.tenant, r.id);
+        secondDone.countDown();
+        first.join(30_000);
+
+        assertThat(creates()).isEqualTo(1);
+        assertThat(shopify.returns).hasSize(1);
+        assertThat(row(r).get("shopify_sync_status")).isEqualTo("created");
+    }
+
+    @Test
     void e1_notSynced_reasons_andNothingForExchangeBeforeSwitchOnOrRequested() {
         // Pre-connect portal order: not in merchant_orders.
         UUID pre = jdbc.queryForObject("INSERT INTO orders (tenant_id, store_id, external_id, number, status, payment_method, " +
@@ -834,6 +863,12 @@ class ShopifyReturnSyncTest {
         appSync.sync(a.tenant, r.id);
         assertThat(row(r).get("shopify_sync_status")).isEqualTo("created");
         assertThat(creates()).isEqualTo(1);
+        grade(r.items.get(0));
+        appSync.sync(a.tenant, r.id);
+        assertThat(action(r, "process", r.items.get(0).toString())).isEqualTo("applied:not_restocked");
+        Integer own = TenantContext.runAs(a.tenant, () -> appJdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id));
+        assertThat(own).isEqualTo(1);
         Integer seen = TenantContext.runAs(b.tenant, () -> appJdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id));
         assertThat(seen).isZero();
