@@ -56,6 +56,8 @@ public class PickupAreaService {
             m.put("cityNameAr", cityNameAr);
             m.put("districts", districts.stream().map(District::toJson).toList());
             if (withPreselected) m.put("preselectedDistrictId", preselectedDistrictId());
+            // 2026-11-07: the original delivery has no district → "Same address" asks for none (present only then).
+            if (withPreselected && forwardDistrictId == null) m.put("districtOptional", true);
             return m;
         }
     }

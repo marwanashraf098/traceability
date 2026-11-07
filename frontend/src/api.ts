@@ -3697,6 +3697,8 @@ export interface ReturnRequestDetail {
   /** G4a — present only for an order shipped with another courier (never on a Bosta order's request). */
   otherCourier?: OtherCourierReturn
   bookingError?: string | null
+  /** 2026-11-07 — present only when Bosta refused a booking sent without a district: choose the area, book again. */
+  bookingFailureReason?: 'district_required'
   bostaTrackingNumber?: string | null
   bookingAttemptedAt?: string | null
   bookingVerifiedAt?: string | null
@@ -4646,6 +4648,26 @@ export interface SetupAddressView {
 
 export function getSetupAddress() {
   return requestReadable<SetupAddressView>('/setup/address')
+}
+
+/** O2b: one of the store's own Shopify locations (address fields only), to pre-fill the warehouse address. */
+export interface ShopifyLocationOption {
+  id: string
+  name: string | null
+  fulfillsOnlineOrders: boolean
+  address1: string | null
+  address2: string | null
+  city: string | null
+  province: string | null
+  provinceCode: string | null
+  countryCode: string | null
+  zip: string | null
+  phone: string | null
+}
+
+/** O2b (owner): read only — empty when the address is already complete, there's no store, or the read failed. */
+export function getSetupShopifyLocations() {
+  return requestReadable<{ locations: ShopifyLocationOption[] }>('/setup/address/shopify-locations')
 }
 
 /** Saves the main warehouse address; answers the tenant's setupStep after the save (null = gate done). */

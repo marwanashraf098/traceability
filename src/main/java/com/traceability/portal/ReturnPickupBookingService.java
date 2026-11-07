@@ -192,7 +192,7 @@ public class ReturnPickupBookingService {
         BigDecimal cod = ExchangeCod.toSend(portalFees.on(tenantId), c.exchange, c.portalOrder, c.frozenCollect);
         Integer claimed = tx.execute(s -> jdbc.update(
             "UPDATE return_requests SET booking_status = 'pending', booking_attempted_at = now(), booking_error = NULL, " +
-            "       booking_cod = ? " +
+            "       booking_cod = ?, booking_failure_reason = NULL " +
             "WHERE id = ? AND tenant_id = ? AND status = 'approved' " +
             "  AND (booking_status IS NULL OR booking_status = 'failed')",
             c.exchange ? ExchangeCod.column(cod) : null, requestId, tenantId));
@@ -204,6 +204,9 @@ public class ReturnPickupBookingService {
             ? bosta.createExchange(encryption.decrypt(c.apiKeyEncrypted), exchangePayload(c, cod))
             : bosta.createReturnPickup(encryption.decrypt(c.apiKeyEncrypted), payload(c));
 
+        if (c.noDistrict) logNoDistrictOutcome(c, r);
+        String failureReason = c.noDistrict && districtRequired(r) ? DISTRICT_REQUIRED : null;
+
         switch (r.outcome()) {
             case CREATED -> {
                 if (saveBooked(requestId, tenantId, r.deliveryId(), r.trackingNumber(), false, "pending")) {
@@ -212,12 +215,16 @@ public class ReturnPickupBookingService {
                 }
             }
             case NOT_CREATED -> tx.execute(s -> {
+                // district_required: a definite failure like any 4xx ('failed' is never re-sent automatically — only
+                // the merchant's Retry / "Book again" after choosing the area).
+                String error = failureReason != null ? DISTRICT_REQUIRED_MESSAGE : r.message();
                 int n = jdbc.update(
-                    "UPDATE return_requests SET booking_status = 'failed', booking_error = ? " +
+                    "UPDATE return_requests SET booking_status = 'failed', booking_error = ?, booking_failure_reason = ? " +
                     "WHERE id = ? AND tenant_id = ? AND booking_status = 'pending'",
-                    r.message(), requestId, tenantId);
-                if (n == 1) requests.event(tenantId, requestId, "booking_failed", null,
-                    ReturnRequestLifecycle.meta("error", r.message()));
+                    error, failureReason, requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_failed", null, failureReason == null
+                    ? ReturnRequestLifecycle.meta("error", r.message())
+                    : ReturnRequestLifecycle.meta("error", error, "reason", failureReason));
                 return n;
             });
             case AMBIGUOUS -> tx.execute(s -> {
@@ -361,7 +368,9 @@ public class ReturnPickupBookingService {
             if (!ExchangeCod.matches((BigDecimal) r.get("booking_cod"), bostaCod(raw))) diffs.add("cod");
             if (raw.path("specs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("itemsCount");
             if (raw.path("returnSpecs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("returnItemsCount");
-            if (!Objects.equals(districtId(raw.path("dropOffAddress")), r.get("pickup_district_id"))) diffs.add("district");
+            // 2026-11-07: booked without a district ("Same address", none on the delivery) — whatever area Bosta set is fine.
+            if (r.get("pickup_district_id") != null
+                    && !Objects.equals(districtId(raw.path("dropOffAddress")), r.get("pickup_district_id"))) diffs.add("district");
         } else {
         if (d.typeCode() != 25) diffs.add("type");
         if (!sameReference(raw.path("businessReference").asText(null), (String) r.get("number"))) diffs.add("businessReference");
@@ -369,7 +378,8 @@ public class ReturnPickupBookingService {
         JsonNode count = raw.path("returnSpecs").path("packageDetails").path("itemsCount");
         if (count.isMissingNode() || count.isNull()) count = raw.path("specs").path("packageDetails").path("itemsCount");
         if (count.asInt(-1) != ((Number) r.get("items")).intValue()) diffs.add("itemsCount");
-        if (!Objects.equals(customerDistrictId(raw), r.get("pickup_district_id"))) diffs.add("district");
+        if (r.get("pickup_district_id") != null
+                && !Objects.equals(customerDistrictId(raw), r.get("pickup_district_id"))) diffs.add("district");
         }
 
         if (diffs.isEmpty()) {
@@ -649,11 +659,14 @@ public class ReturnPickupBookingService {
         int itemsCount; List<String> itemLines = new ArrayList<>();
         /** F4: a portal pre-connect order (no COD on its booking) and the frozen collect amount (null = none). */
         boolean portalOrder; BigDecimal frozenCollect;
+        /** "Same address" of a delivery with no district: booked with the city and lines only (2026-11-07). */
+        boolean noDistrict;
     }
 
     private Context loadContext(UUID requestId, UUID tenantId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, rr.type, " +
+            "       rr.pickup_city_name AS snapshot_city_name, " +
             "       o.number, o.customer_name, o.customer_phone, o.pii_redacted_at, t.portal_pickup_booking, " +
             "       (o.origin = 'portal_pre_connect') AS portal_order, o.portal_delivery::text AS portal_delivery, " +
             "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available, " +
@@ -677,6 +690,7 @@ public class ReturnPickupBookingService {
         c.bookingOn = Boolean.TRUE.equals(r.get("portal_pickup_booking"));
         c.districtId = (String) r.get("pickup_district_id");
         c.cityName = (String) r.get("city_name");
+
         c.districtAvailable = (Boolean) r.get("pickup_available");
         c.exchangesOn = Boolean.TRUE.equals(r.get("portal_exchanges_enabled"));
         c.dropoffAvailable = (Boolean) r.get("dropoff_available");
@@ -718,6 +732,12 @@ public class ReturnPickupBookingService {
         // receiver (name, phone) still comes from the forward leg / the order. The city and
         // district are the request's snapshot either way.
         c.customAddress = "custom".equals(r.get("pickup_address_source"));
+        // 2026-11-07: "Same address" of an original delivery that has NO district (its dropOffAddress — the forward
+        // leg's, or a pre-connect order's stored one) — booked with the request's city snapshot and the lines only.
+        // An original WITH a district still needs one on the request.
+        c.noDistrict = c.districtId == null && !c.customAddress && r.get("snapshot_city_name") != null
+            && c.drop != null && !c.drop.isMissingNode() && districtId(c.drop) == null;
+        if (c.noDistrict) c.cityName = (String) r.get("snapshot_city_name");
         if (c.customAddress) {
             com.fasterxml.jackson.databind.node.ObjectNode a = mapper.createObjectNode();
             putText(a, "firstLine", (String) r.get("custom_first_line"));
@@ -761,14 +781,55 @@ public class ReturnPickupBookingService {
         return c;
     }
 
+    // ── "Same address" without a district (2026-11-07) ───────────────────────
+
+    public static final String DISTRICT_REQUIRED = "district_required";
+    static final String DISTRICT_REQUIRED_MESSAGE = "Bosta needs an area for this pickup. Choose the area and book again.";
+    /** The first no-district bookings per process have Bosta's answer logged (PII-scrubbed), to learn its behaviour. */
+    static final int NO_DISTRICT_LOG_LIMIT = 20;
+    private static final java.util.concurrent.atomic.AtomicInteger noDistrictLogged = new java.util.concurrent.atomic.AtomicInteger();
+    private static final java.util.regex.Pattern AREA_WORDS =
+        java.util.regex.Pattern.compile("(?iu)district|zone|area|منطق|الحي|حي ");
+    private static final java.util.regex.Pattern DIGIT_RUN = java.util.regex.Pattern.compile("\\d{7,}");
+
+    /** A definite (4xx, not 429) refusal whose Bosta text is about the area — sent without a district. */
+    static boolean districtRequired(BostaV2Client.CreateResult r) {
+        if (r.outcome() != BostaV2Client.CreateOutcome.NOT_CREATED) return false;
+        if (r.httpStatus() < 400 || r.httpStatus() >= 500 || r.httpStatus() == 429) return false;
+        String text = (r.message() == null ? "" : r.message()) + " " + (r.bostaErrorCode() == null ? "" : r.bostaErrorCode());
+        return AREA_WORDS.matcher(text).find();
+    }
+
+    /** Bosta's answer for a no-district booking: outcome, status, errorCode and its message with the customer's data removed. */
+    private void logNoDistrictOutcome(Context c, BostaV2Client.CreateResult r) {
+        if (noDistrictLogged.getAndIncrement() >= NO_DISTRICT_LOG_LIMIT) return;
+        log.info("Bosta no-district booking request={} type={} outcome={} status={} errorCode={} districtRequired={} message={}",
+            c.requestId, c.exchange ? 30 : 25, r.outcome(), r.httpStatus(), r.bostaErrorCode(), districtRequired(r),
+            scrub(r.message(), c));
+    }
+
+    /** The message without the customer's phone, name or address lines (and no run of 7+ digits). */
+    private static String scrub(String message, Context c) {
+        if (message == null) return null;
+        String m = message;
+        java.util.List<String> secrets = new java.util.ArrayList<>();
+        secrets.add(c.customerPhone);
+        secrets.add(c.customerName);
+        if (c.receiver != null) for (String f : java.util.List.of("firstName", "lastName", "fullName", "phone")) secrets.add(opt(c.receiver, f));
+        if (c.drop != null) for (String f : java.util.List.of("firstLine", "secondLine", "buildingNumber", "floor", "apartment")) secrets.add(opt(c.drop, f));
+        for (String s : secrets) if (s != null && s.trim().length() >= 2) m = m.replace(s.trim(), "[redacted]");
+        m = DIGIT_RUN.matcher(m).replaceAll("[digits]");
+        return m.length() > 300 ? m.substring(0, 300) : m;
+    }
+
     /** Null when every precondition holds; otherwise the booking_error to record. */
     private String precondition(Context c) {
         if (!"approved".equals(c.status)) return "The request isn't approved.";
         if (!c.bookingOn) return "Bosta pickup booking is switched off in Settings → Returns portal.";
         if (c.apiKeyEncrypted == null) return "There is no active Bosta account.";
         if (c.returnLocationId == null) return "Choose where returns go back to in Settings → Returns portal.";
-        if (c.districtId == null) return "Choose the customer's pickup area.";
-        if (!Boolean.TRUE.equals(c.districtAvailable) || c.cityName == null) {
+        if (c.districtId == null && !c.noDistrict) return "Choose the customer's pickup area.";
+        if (!c.noDistrict && (!Boolean.TRUE.equals(c.districtAvailable) || c.cityName == null)) {
             return "The chosen pickup area isn't available for Bosta pickup any more — choose another.";
         }
         if (c.redacted) return "The customer's data was deleted for this order (privacy request).";
@@ -794,8 +855,9 @@ public class ReturnPickupBookingService {
         if (!c.bookingOn) return "Bosta pickup booking is switched off in Settings → Returns portal.";
         if (c.apiKeyEncrypted == null) return "There is no active Bosta account.";
         if (c.returnLocationId == null) return "Choose where returns go back to in Settings → Returns portal.";
-        if (c.districtId == null) return "Choose the customer's area.";
-        if (!Boolean.TRUE.equals(c.districtAvailable) || !Boolean.TRUE.equals(c.dropoffAvailable) || c.cityName == null) {
+        if (c.districtId == null && !c.noDistrict) return "Choose the customer's area.";
+        if (!c.noDistrict && (!Boolean.TRUE.equals(c.districtAvailable) || !Boolean.TRUE.equals(c.dropoffAvailable)
+                || c.cityName == null)) {
             return "Bosta can't both deliver to and collect from the chosen area — choose another.";
         }
         if (c.replacementVariantId == null) return "The request has no replacement.";

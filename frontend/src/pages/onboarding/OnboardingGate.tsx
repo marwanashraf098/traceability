@@ -6,9 +6,11 @@ import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
 import {
-  getConnections, getRoleFromToken, getSetupAddress, saveSetupAddress,
-  ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupStep,
+  getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress,
+  ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupGovernorate, type SetupStep,
+  type ShopifyLocationOption,
 } from '../../api'
+import { anyFilled, prefillFrom, withTimeout } from './addressPrefill'
 import { clearShopifyStepSeen, markShopifyStepSeen, refreshSetupStep, shopifyStepSeen } from '../../setupGate'
 import { GateFrame, SetupCard, SetupColumns, SetupHeading, SetupStepper, SidePanel } from './SetupLayout'
 
@@ -21,6 +23,9 @@ export { GateFrame }
 // Manager: a "waiting for the owner" screen. A failed Shopify connect comes back to
 // /settings?tab=connections&shopify_error=… — which is behind this gate — so the gate shows that error itself.
 // Restyle only: who is gated, what is required and what is saved are unchanged.
+
+/** O2b: how long the address step waits for the Shopify locations before showing the empty form. */
+export const PREFILL_TIMEOUT_MS = 3000
 
 function firstName(name: string | null | undefined) {
   return name?.trim().split(/\s+/)[0] || null
@@ -155,23 +160,44 @@ export function AddressStep({ mode, onSaved, shopDomain }: {
   const [floor, setFloor] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<{ code?: string; text: string } | null>(null)
+  // O2b — pre-filled from the store's own Shopify locations (gate only, only while no address is saved). Nothing is
+  // saved until "Save and continue"; every field stays editable.
+  const [options, setOptions] = useState<ShopifyLocationOption[]>([])
+  const [sourceId, setSourceId] = useState('')
+  const [filledFrom, setFilledFrom] = useState<string | null>(null)
+
+  function fillFrom(loc: ShopifyLocationOption, provinces: SetupGovernorate[]) {
+    const a = prefillFrom(loc, provinces, i18n.language)
+    setProvince(a.province); setCity(a.city); setStreet(a.street); setBuilding(a.building)
+    setSourceId(loc.id)
+    setFilledFrom(anyFilled(a) ? (loc.name ?? '') : null)
+    setError(null)
+  }
 
   useEffect(() => {
     let cancelled = false
     getSetupAddress()
-      .then(v => {
+      .then(async v => {
         if (cancelled) return
-        setView(v)
         if (v.address) {
           setProvince(v.address.provinceCode)
           setCity(v.address.city)
           setStreet(v.address.street)
           setBuilding(v.address.building ?? '')
           setFloor(v.address.floor ?? '')
+        } else if (mode === 'gate') {
+          // A failed, empty or slow (> PREFILL_TIMEOUT_MS) read shows today's empty form — silently.
+          const locs = await withTimeout(
+            getSetupShopifyLocations().then(r => (Array.isArray(r?.locations) ? r.locations : [])),
+            PREFILL_TIMEOUT_MS, [] as ShopifyLocationOption[])
+          if (cancelled) return
+          if (locs.length > 0) { setOptions(locs); fillFrom(locs[0], v.provinces) }
         }
+        setView(v)
       })
       .catch(() => { if (!cancelled) setLoadError(true) })
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const areas = useMemo(() => view?.provinces.find(p => p.code === province)?.areas ?? [], [view, province])
@@ -212,6 +238,24 @@ export function AddressStep({ mode, onSaved, shopDomain }: {
           <span>{t('setupGate.step1Done')}</span>
           <span className="font-mono truncate" dir="ltr">{shopDomain}</span>
         </p>
+      )}
+
+      {filledFrom !== null && (
+        <p className="flex items-start gap-2 text-small text-primary bg-trace-blue/[0.06] rounded-lg px-3 py-2.5" data-testid="setup-address-prefilled">
+          <Store size={15} className="flex-shrink-0 mt-0.5 text-trace-blue" aria-hidden />
+          <span>{filledFrom ? t('setupGate.address.prefilled', { name: filledFrom }) : t('setupGate.address.prefilledUnnamed')}</span>
+        </p>
+      )}
+      {options.length > 1 && (
+        <label className="flex flex-wrap items-center gap-2 text-small text-muted" data-testid="setup-address-fill-from">
+          {t('setupGate.address.fillFrom')}
+          <select className="input h-9 py-0 w-auto max-w-full" value={sourceId}
+            onChange={e => { const loc = options.find(o => o.id === e.target.value); if (loc) fillFrom(loc, view.provinces) }}>
+            {options.map(o => (
+              <option key={o.id} value={o.id}>{o.name ?? o.address1 ?? o.id}</option>
+            ))}
+          </select>
+        </label>
       )}
 
       <div className="grid grid-cols-2 gap-3.5 max-[520px]:grid-cols-1">

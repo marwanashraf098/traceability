@@ -266,6 +266,9 @@ class RlsCoverageTest {
             "S5a: the caller's own tenant row only (switch, since, own stores' scopes); rollout-gated to tenants listed at " +
             "startup, so this class's runtime tenant always reads {visible:false}; cross-tenant isolation with a same-" +
             "tenant control is ShopifyReturnSyncTest.s2 (app_user, RLS on)"),
+        Map.entry("/api/v1/setup/address/shopify-locations",
+            "O2b: no tenant rows returned — the store's own Shopify location addresses, read live from Shopify; its DB reads " +
+            "(main warehouse, store) run under RLS; covered by ShopifyAddressPrefillTest (app_user, RLS on)"),
         Map.entry("/api/v1/onboarding/receiving-suggestion",
             "O4: no tenant rows returned beyond one variant id of the caller's own catalog, read under RLS in its own " +
             "transaction; covered by ReceivingSuggestionTest (app_user, RLS on)"),

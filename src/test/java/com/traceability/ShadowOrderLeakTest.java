@@ -552,6 +552,7 @@ class ShadowOrderLeakTest {
         reg("POST /api/v1/me/ui-state",                  skip(R_CONFIG));
         reg("GET /api/v1/setup/address",                 list());
         reg("PUT /api/v1/setup/address",                 skip(R_CONFIG));
+        reg("GET /api/v1/setup/address/shopify-locations", skip("the store's own Shopify location addresses (read only) to pre-fill the warehouse address — no order is read"));
         reg("GET /api/v1/health",                        list());
         reg("GET /api/v1/station/roster",                list());
         reg("GET /api/v1/station/pairings/current",      list());
