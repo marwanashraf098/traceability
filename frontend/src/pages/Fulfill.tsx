@@ -23,6 +23,7 @@ import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
+import { TourHelpButton } from '../tours/TourCard'
 import {
   ExchangeForText, HeldForReleaseNotice, ShortByChip, WaitingForReleaseSection, useWaitingForRelease,
 } from './fulfill/ShadowExchange'
@@ -751,7 +752,10 @@ function QueueView({
     <div data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
+            <TourHelpButton tourId="pick_pack_mode" />
+          </div>
           {printable.length > 0 && (
             <p className="text-small text-muted mt-1" data-testid="waybill-status-line">
               {t('fulfill.printBatch.statusLine', {

@@ -116,12 +116,8 @@ public class OnboardingProgressService {
         tasks.add(task("receive", firstReceiving));
         tasks.add(task("pack", exists(
             "SELECT EXISTS (SELECT 1 FROM piece_events e WHERE e.tenant_id = ? AND " + REAL_PACK_SQL + ")", tenantId)));
-        tasks.add(task("pickup", exists(
-            "SELECT EXISTS (SELECT 1 FROM pickups WHERE tenant_id = ? AND session_status = 'closed')", tenantId)));
-        tasks.add(task("returns", exists(
-            "SELECT EXISTS (SELECT 1 FROM return_sessions WHERE tenant_id = ? AND status = 'closed') " +
-            "    OR EXISTS (SELECT 1 FROM piece_events WHERE tenant_id = ? AND event_type = 'return_received')",
-            tenantId, tenantId)));
+        tasks.add(task("pickup", everClosedPickup(jdbc, tenantId)));
+        tasks.add(task("returns", everScannedReturn(jdbc, tenantId)));
         tasks.add(task("transfer", exists(
             "SELECT EXISTS (SELECT 1 FROM transfers WHERE tenant_id = ? AND status <> 'cancelled')", tenantId)));
         tasks.add(task("stock_take", exists(
@@ -272,6 +268,21 @@ public class OnboardingProgressService {
             for (Object o : l) if (o instanceof String s) out.add(s);
         }
         return out;
+    }
+
+    /** The tenant has closed a pickup session — progress task 'pickup' and /me hasEverClosedPickup (O5): ONE rule. */
+    public static boolean everClosedPickup(JdbcTemplate jdbc, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM pickups WHERE tenant_id = ? AND session_status = 'closed')", Boolean.class, tenantId));
+    }
+
+    /** A return session was closed or a piece was received back — progress task 'returns' and /me
+     *  hasEverScannedReturn (O5): ONE rule. */
+    public static boolean everScannedReturn(JdbcTemplate jdbc, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM return_sessions WHERE tenant_id = ? AND status = 'closed') " +
+            "    OR EXISTS (SELECT 1 FROM piece_events WHERE tenant_id = ? AND event_type = 'return_received')",
+            Boolean.class, tenantId, tenantId));
     }
 
     private boolean exists(String sql, Object... args) {

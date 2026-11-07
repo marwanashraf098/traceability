@@ -9,6 +9,7 @@ import {
   listStockTakeSessions, openStockTakeSession, searchVariants, getStockTakeSummary,
   StockTakeSessionSummary, StockTakeScopeType, StockTakeSummaryCounts, VariantMatch,
 } from '../api'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,15 +96,19 @@ export default function StockTake() {
         {t('stocktake.list.resumeSession', { id: shortId(mostRecentOpen.sessionId) })}
       </Button>
     ) : (
-      <Button size="sm" onClick={() => setView('create')}>
-        + {t('stocktake.new')}
-      </Button>
+      <span data-tour-anchor="stocktake-new" className="inline-flex">
+        <Button size="sm" onClick={() => setView('create')}>
+          + {t('stocktake.new')}
+        </Button>
+      </span>
     )
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-h1 text-primary">{t('stocktake.title')}</h1>
+      <PageTour tourId="stock_take" />
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-h1 text-primary me-auto">{t('stocktake.title')}</h1>
+        <TourHelpButton tourId="stock_take" />
         {places ? (
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" iconStart={ClipboardList} onClick={() => setCountingOne(true)}>

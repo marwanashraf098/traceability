@@ -5,6 +5,7 @@ import { useScanner, ScanMeta } from '../hooks/useScanner'
 import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 import {
   Alert, Badge, Button, Card, Input, Modal, Spinner,
 } from '../components/ui'
@@ -210,6 +211,7 @@ export default function TransferReconcile() {
           <Badge tone="warning" label={transfer.destination_location_name} />
         </h1>
         <div className="flex items-center gap-4">
+        <TourHelpButton tourId="transfers" />
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />
         <div className="text-end">
@@ -221,7 +223,9 @@ export default function TransferReconcile() {
         </div>
       </div>
 
+      <PageTour tourId="transfers" />
       {/* Scan back */}
+      <div data-tour-anchor="transfers-reconcile">
       <Card className="space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-body font-semibold text-primary">{t('transfers.reconcile.scanBackTitle')}</h2>
@@ -274,6 +278,7 @@ export default function TransferReconcile() {
           </div>
         )}
       </Card>
+      </div>
 
       {/* Per-line classify + live balance */}
       <Card className="space-y-3">

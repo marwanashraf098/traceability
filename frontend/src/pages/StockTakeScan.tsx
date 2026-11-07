@@ -16,6 +16,7 @@ import {
 } from '../api'
 import { placePath } from './putaway/placePath'
 import { UntaggedCountsPanel } from './stocktake/UntaggedCounts'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 
 // FR-21 Step 6.3, screen 3 — blind full-screen scan. NOT Layout-wrapped, matching
 // the /fulfill precedent. Uses the Step 6.2 shared scanner — no scan mechanics
@@ -200,6 +201,7 @@ export default function StockTakeScan() {
 
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="stocktake-scan">
+      <PageTour tourId="stock_take" />
       {/* Header — back + condition mode toggle + abandon */}
       <div className="bg-panel border-b border-line px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <Button variant="tertiary" size="sm" onClick={() => navigate('/stock-take')}>
@@ -233,6 +235,7 @@ export default function StockTakeScan() {
           </button>
         </div>
         <div className="flex items-center gap-3">
+        <TourHelpButton tourId="stock_take" />
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />
         <button
@@ -247,7 +250,7 @@ export default function StockTakeScan() {
       </div>
 
       {/* Scan input + flash overlay — all mechanics live in useScanner/ScanShell */}
-      <div className="bg-panel border-b border-line px-6 py-4">
+      <div className="bg-panel border-b border-line px-6 py-4" data-tour-anchor="stocktake-scan">
         <ScanShell scanner={scanner} placeholder={t('stocktake.scan.placeholder')} />
         {scanner.recentScans[0] && (() => {
           const data = scanner.recentScans[0].data as ScanData | undefined

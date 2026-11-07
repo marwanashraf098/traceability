@@ -89,6 +89,11 @@ public class UserService {
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a
         // station tablet that is the PIN-switched-in worker, never the owner who signed the tablet in.
         self.put("uiState", UserUiStateService.read(jdbc, tenantId, userId));
+        // Onboarding O5 — the two first-time tours every role takes (pickups, scan returns) start by themselves only
+        // while the store has never done that action. Booleans only, for every role (a worker can't read progress);
+        // the same rules as progress tasks 'pickup' / 'returns'.
+        self.put("hasEverClosedPickup", OnboardingProgressService.everClosedPickup(jdbc, tenantId));
+        self.put("hasEverScannedReturn", OnboardingProgressService.everScannedReturn(jdbc, tenantId));
         // Onboarding O2 — the setup intro screen an owner goes to once the gate is done ('courier' | 'ready' |
         // null; OnboardingProgressService.setupIntro is the one rule). Never for a manager or worker.
         self.put("setupIntro", "owner".equals(self.get("role")) && setupStep == null
