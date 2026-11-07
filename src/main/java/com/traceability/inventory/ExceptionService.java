@@ -44,15 +44,14 @@ public class ExceptionService {
     private final ShipmentLinkService shipmentLinkService;
 
     /**
-     * S3b: "Exchange shipped in Shopify, piece still available in Traced" stays OFF until S3c lets Traced pack shadows —
-     * before that every Shopify-fulfilled exchange would raise it. The reservation still ends either way.
-     * {@code traced.shopify-exchange.shipped-alert-enabled} (default false); S3c turns it on.
+     * "Exchange shipped in Shopify, piece still available in Traced" — ON since S3c (2026-11-07), when Traced packs
+     * shadows ({@link ShopifyShadowOrders#S3C_FLAG}, default true; false is a kill switch). The reservation ends either way.
      */
-    private boolean shippedInShopifyAlertEnabled = false;
+    private boolean shippedInShopifyAlertEnabled = true;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setShippedInShopifyAlertEnabled(
-            @org.springframework.beans.factory.annotation.Value("${" + ShopifyShadowOrders.S3C_FLAG + ":false}") boolean on) {
+            @org.springframework.beans.factory.annotation.Value("${" + ShopifyShadowOrders.S3C_FLAG + ":true}") boolean on) {
         this.shippedInShopifyAlertEnabled = on;
     }
 
@@ -917,9 +916,10 @@ public class ExceptionService {
             "JOIN products pr ON pr.id = v.product_id " +
             "WHERE sl.tenant_id = ? AND sl.shipped_in_shopify > 0 AND sl.live_quantity = 0 " +
             "  AND sl.stop_reason = 'shipped_in_shopify' " +
-            "  AND NOT EXISTS (SELECT 1 FROM allocations a JOIN pieces p ON p.id = a.piece_id " +
+            // S3c: Traced scanned / packed this line itself (or shipped it) — Shopify fulfilling it is the normal end.
+            "  AND NOT EXISTS (SELECT 1 FROM allocations a " +
             "                  WHERE a.order_item_id = sl.order_item_id AND a.tenant_id = sl.tenant_id " +
-            "                    AND a.status = 'packed' AND p.status::text IN (" + OrderLineFreeze.leftCustodySqlList() + ")) " +
+            "                    AND a.status IN ('active', 'packed')) " +
             "  AND EXISTS (SELECT 1 FROM pieces p WHERE p.tenant_id = sl.tenant_id AND p.variant_id = sl.variant_id " +
             "              AND p.status = 'available'::piece_status) " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = sl.tenant_id " +

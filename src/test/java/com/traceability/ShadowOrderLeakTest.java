@@ -179,6 +179,7 @@ class ShadowOrderLeakTest {
         reg("GET /api/v1/fulfill/queue",                 listCtl());
         reg("GET /api/v1/fulfill/queue/awaiting-waybill-count", list());
         reg("GET /api/v1/fulfill/gather",                list());
+        reg("GET /api/v1/fulfill/waiting-for-release",   list());   // S3c: held Shopify-native exchange shadows only
         reg("GET /api/v1/fulfill/mode",                  list());
         reg("GET /api/v1/fulfill/print-batches/options", list());
         reg("GET /api/v1/fulfill/print-batches/today",   list());
@@ -578,9 +579,8 @@ class ShadowOrderLeakTest {
     static {
         SHOWS.put("GET /api/v1/fulfill/queue",        "Pick & Pack queue (FulfillService.getQueue on warehouse_orders)");
         SHOWS.put("GET /api/v1/fulfill/gather",       "gather list of the queue's orders");
-        // Late to pack (normal + embedded) is a warehouse metric (Q8) but hidden until S3c: with the S3c flag off
-        // (ShopifyShadowOrders.S3C_FLAG, default) no shadow counts — approved 2026-11-06. S3c turns the flag on and
-        // puts both back here.
+        SHOWS.put("GET /api/v1/overview/late-to-pack","late to pack is a warehouse metric (Q8; back with the S3c flag on, 2026-11-07)");
+        SHOWS.put("GET /api/v1/embedded/overview/late-to-pack", "the same late-to-pack metric inside the embedded app (Q8)");
         SHOWS.put("GET /api/v1/inventory/stock",      "committed demand (VariantStockService): a shadow's replacement is kept aside");
         SHOWS.put("GET /api/v1/inventory/variants/{variantId}/breakdown", "committed demand of the variant (as above)");
         SHOWS.put("GET /api/v1/catalog",              "committed demand in the catalog (as above)");
@@ -861,16 +861,16 @@ class ShadowOrderLeakTest {
         try { return m.invoke(target, args); } catch (Exception e) { throw new RuntimeException(e); }
     }
 
-    /** Main reconcile's interim exchange hold: any open shadow holds the tenant; a tenant with none is not held. */
+    /** S3c: Main reconcile's interim exchange hold no longer sees shadow orders (the target counts their pieces). */
     @Test
-    void j_mainReconcileExchangeHold_seesOpenShadows() {
+    void j_mainReconcileExchangeHold_ignoresShadows() {
         for (T t : List.of(a, b)) {
             assertThat(jdbc.queryForObject(com.traceability.inventory.MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class,
-                t.tenantId, t.tenantId)).as("tenant " + t.tag + " has open shadow orders").isTrue();
+                t.tenantId)).as("tenant " + t.tag + " has open shadow orders, which no longer hold").isFalse();
         }
         UUID none = UUID.randomUUID();
         assertThat(jdbc.queryForObject(com.traceability.inventory.MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class,
-            none, none)).isFalse();
+            none)).isFalse();
     }
 
     // ── seeding ───────────────────────────────────────────────────────────────

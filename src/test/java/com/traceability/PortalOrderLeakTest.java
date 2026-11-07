@@ -177,6 +177,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/fulfill/queue",                 listCtl());
         reg("GET /api/v1/fulfill/queue/awaiting-waybill-count", list());
         reg("GET /api/v1/fulfill/gather",                list());
+        reg("GET /api/v1/fulfill/waiting-for-release",   list());   // S3c: held Shopify-native exchange shadows only
         reg("GET /api/v1/fulfill/mode",                  list());
         reg("GET /api/v1/fulfill/print-batches/options", list());
         reg("GET /api/v1/fulfill/print-batches/today",   list());

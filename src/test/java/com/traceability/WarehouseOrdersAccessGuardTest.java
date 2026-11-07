@@ -32,8 +32,15 @@ class WarehouseOrdersAccessGuardTest {
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
         // S3b (V219) — Shopify-native exchange shadow orders
-        "inventory/FulfillService.java#isShopifyExchangeShadow",
-            "S3b: scan() / complete() refuse a shadow order until S3c gates it — must see the shadow",
+        // S3c — Pick & Pack (held / released)
+        "inventory/ShopifyShadowOrders.java#pickState",
+            "S3c: scan() / complete() / the waybill resolver read a shadow's held / ended / packable state",
+        "inventory/ShopifyShadowOrders.java#updateShadow",
+            "S3c: a shadow's line quantity follows the mirror only while the shadow is still to be picked (its status)",
+        "inventory/FulfillService.java#field:QUEUE_ORDER_IDS_SQL",
+            "S3c: THE Pick & Pack order set — released shadows in, held / ended shadows out",
+        "inventory/FulfillService.java#getWaitingForRelease",
+            "S3c: Waiting for release lists the held shadows beside the queue",
         "inventory/ExceptionService.java#detectShopifyExchangeShippedInShopify",
             "S3b: names the shadow whose exchange Shopify fulfilled while Traced still had the piece",
         "inventory/ShopifyShadowOrders.java#shortages",
@@ -142,8 +149,6 @@ class WarehouseOrdersAccessGuardTest {
             "Lookup a piece: its order may be a shadow (shown nested under the original in S3d)",
         "inventory/LookupService.java#lookupTracking",
             "Lookup a waybill: a shadow's forward leg",
-        "inventory/MainReconcileRules.java#field:EXCHANGE_HOLD_SQL",
-            "S3a interim guard: Main reconcile holds while a shadow is open — it must see shadows",
         "inventory/OrderLineFreeze.java#isFrozen",
             "a packed / shipped shadow is frozen like any order (hidden it would read as not frozen)",
         "inventory/PackClaim.java#heldByOther",

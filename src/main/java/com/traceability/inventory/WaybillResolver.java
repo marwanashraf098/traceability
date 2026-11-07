@@ -40,6 +40,8 @@ public class WaybillResolver {
         /** Doesn't normalize to a tracking number and isn't a piece code either — some other
          *  barcode (an unrecognised waybill barcode, a product barcode, …). */
         UNRECOGNISED_BARCODE,
+        /** S3c: a Shopify-native exchange Shopify hasn't released for fulfilment yet (ShopifyShadowOrders.heldSql). */
+        HELD_FOR_RELEASE,
         /** Order on hold (manual or blocked customer). Not in the original list — see report. */
         ON_HOLD,
         /** The order exists but this waybill can't be packed; {@code detail} carries the
@@ -202,6 +204,13 @@ public class WaybillResolver {
                 "الطلب " + label + " مغلّف بالفعل" + (who != null ? " بواسطة " + who : "") + ". غالباً طُبعت البوليصة مرتين.");
         }
 
+        // S3c: checked before on hold and the not-packable reasons — the exchange simply isn't released yet.
+        if (ShopifyShadowOrders.pickState(jdbc, tenantId, orderId) == ShopifyShadowOrders.PickState.HELD) {
+            return of(Code.HELD_FOR_RELEASE, orderId, number, shipmentId, tn, null, null, null,
+                "Exchange " + label + " is waiting for release in Shopify. Keep the waybill and the piece aside until it is released.",
+                "الاستبدال " + label + " في انتظار الإفراج عنه في شوبيفاي. احتفظ بالبوليصة والقطعة جانباً حتى يتم الإفراج عنه.");
+        }
+
         if (Boolean.TRUE.equals(r.get("on_hold"))) {
             return of(Code.ON_HOLD, orderId, number, shipmentId, tn, null, null, null,
                 "Order " + label + " is on hold. Give the waybill to a manager.",
@@ -289,9 +298,12 @@ public class WaybillResolver {
                 "The shipment for " + label + " has already moved (Bosta: " + moved + "). It can't be packed again.",
                 "شحنة الطلب " + label + " تحركت بالفعل (Bosta: " + moved + "). لا يمكن تغليفها مرة أخرى.");
         }
+        // S3c: the queue's set — the gate minus held / ended exchange shadows, or a released shadow at 'confirmed'.
         Boolean gate = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o " + FulfillService.PICKABLE_SHIPMENT_GATE + "  AND o.id = ?)",
-            Boolean.class, tenantId, orderId);
+            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o " + FulfillService.PICKABLE_SHIPMENT_GATE + "  AND o.id = ? " +
+            "                 AND NOT " + ShopifyShadowOrders.notPackableShadowSql("o") + ") " +
+            "    OR EXISTS (SELECT 1 FROM warehouse_orders o " + FulfillService.SHADOW_PICKABLE_GATE + "  AND o.id = ?)",
+            Boolean.class, tenantId, orderId, tenantId, orderId);
         if (!Boolean.TRUE.equals(gate)) {
             return np(NotPackable.OTHER, null, orderId, number, shipmentId, tn,
                 "Order " + label + " can't be packed right now. Give the waybill to a manager.",

@@ -54,14 +54,15 @@ public class OverviewService {
     }
 
     /**
-     * S3c switch ({@link com.traceability.inventory.ShopifyShadowOrders#S3C_FLAG}, default false): until Traced can pack
-     * a shadow order, no shadow counts as late to pack; once on, only ended shadows are left out.
+     * S3c switch ({@link com.traceability.inventory.ShopifyShadowOrders#S3C_FLAG}, ON since S3c): a live shadow order
+     * is pre-pack warehouse work and counts as late to pack; only ended shadows are left out. Off (kill switch) = no
+     * shadow counts.
      */
-    private boolean shadowsPackable = false;
+    private boolean shadowsPackable = true;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setShadowsPackable(
-            @org.springframework.beans.factory.annotation.Value("${" + com.traceability.inventory.ShopifyShadowOrders.S3C_FLAG + ":false}") boolean on) {
+            @org.springframework.beans.factory.annotation.Value("${" + com.traceability.inventory.ShopifyShadowOrders.S3C_FLAG + ":true}") boolean on) {
         this.shadowsPackable = on;
     }
 

@@ -21,6 +21,7 @@ import {
 } from './packLabels'
 import { PhoneScanButton } from '../../phone/PhoneScanButton'
 import { LinePlaceChips, useOrderPickPlaces } from './PickPlaces'
+import { ExchangeForText, HeldForReleaseNotice, ShortByChip } from './ShadowExchange'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
 // SessionScanning, Rejected, SetAside). Full-screen immersive — no <Layout>. Built on the shared
@@ -457,8 +458,15 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
       <div className="card p-4 lg:w-72 flex-shrink-0 space-y-2" data-testid="order-card">
         <p className="text-caption text-muted uppercase tracking-wide">{t('fulfill.waybill.session.order')}</p>
         <p className="text-h2 font-mono text-primary">{order.number}</p>
+        {(order.exchangeFor || (order.shortBy ?? 0) > 0) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <ExchangeForText exchangeFor={order.exchangeFor} />
+            <ShortByChip shortBy={order.shortBy} />
+          </div>
+        )}
         <p className="text-body text-primary">{order.customer_name}</p>
         {order.area && <p className="text-small text-muted">{order.area}</p>}
+        <HeldForReleaseNotice held={order.heldForRelease} />
         <div className="pt-2 space-y-1 text-small text-muted border-t border-line">
           {order.tracking_number && (
             <p className="font-mono">{t('fulfill.waybill.session.waybill', { tracking: order.tracking_number })}</p>

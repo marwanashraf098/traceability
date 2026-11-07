@@ -201,6 +201,8 @@ public class ReceivingService {
     public Map<String, Object> returnSourcePreview(String key) {
         UUID tenantId = TenantContext.require();
         ReturnSource src = resolveReturnSource(tenantId, key);
+        // S3c: a shadow order's restocks are counted on its ORIGINAL order (ShopifyShadowOrders.restockOrderId).
+        UUID countOrderId = ShopifyShadowOrders.restockOrderId(jdbc, tenantId, src.orderId());
         List<Map<String, Object>> items = new ArrayList<>();
         for (UUID variantId : src.variants()) {
             Map<String, Object> row = jdbc.queryForMap(
@@ -209,8 +211,8 @@ public class ReceivingService {
                 "                 FROM orders o WHERE o.id = ? AND o.tenant_id = ?), 0) AS shopify_restocked, " +
                 "       " + ShopifyInventoryService.TRACED_COUNTED_SQL + " AS traced_counted " +
                 "FROM variants v JOIN products p ON p.id = v.product_id WHERE v.id = ? AND v.tenant_id = ?",
-                src.orderId(), tenantId,
-                tenantId, src.orderId(), variantId, "", tenantId, src.orderId(), variantId, null,
+                countOrderId, tenantId,
+                tenantId, countOrderId, variantId, "", tenantId, countOrderId, variantId, null,
                 variantId, tenantId);
             long restocked = ((Number) row.get("shopify_restocked")).longValue();
             long counted = ((Number) row.get("traced_counted")).longValue();

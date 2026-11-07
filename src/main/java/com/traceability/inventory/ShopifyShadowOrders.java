@@ -73,11 +73,82 @@ public class ShopifyShadowOrders {
     }
 
     /**
-     * THE S3c switch: {@code traced.shopify-exchange.shipped-alert-enabled} (default false). Off = Traced can't pack a
-     * shadow yet, so (a) the "shipped in Shopify" alert stays off and (b) no shadow — live or ended — counts as late to
-     * pack. S3c turns it on: then only ended shadows are left out. Read by ExceptionService and OverviewService.
+     * THE S3c switch: {@code traced.shopify-exchange.shipped-alert-enabled} — ON by default since S3c (2026-11-07), when
+     * Traced packs shadows. Off (a kill switch only) = (a) the "shipped in Shopify" alert stays off and (b) no shadow —
+     * live or ended — counts as late to pack; on = only ended shadows are left out. Read by ExceptionService and
+     * OverviewService. It does NOT gate packing itself.
      */
     public static final String S3C_FLAG = "traced.shopify-exchange.shipped-alert-enabled";
+
+    // ── S3c: held / released (Pick & Pack) ─────────────────────────────────────────────────────────────────────────
+
+    /** Fulfillment order states in which Shopify has RELEASED the replacement for fulfilment (packable). */
+    public static final String RELEASED_FO_SQL = "('OPEN', 'IN_PROGRESS')";
+
+    /**
+     * THE held derivation (S3c — the one rule; Pick & Pack's queue, Waiting for release, scan / complete and the
+     * waybill resolver all read it). A shadow order is HELD — waiting for release in Shopify — while its V219 row is
+     * live and some live line is not fully covered by RELEASED fulfillment orders ({@link #RELEASED_FO_SQL}): the
+     * return is unprocessed (no fulfillment order holds the exchange line yet), or Shopify holds its fulfillment order
+     * (ON_HOLD / SCHEDULED). Released (OPEN / IN_PROGRESS, remaining ≥ the live quantity) → packable like any order —
+     * it still needs a courier leg, exactly as the queue's gate asks of every order. Never held: an ended shadow, an
+     * order that isn't a shadow, a shadow with no V219 row. {@code o} = the order alias (id, tenant_id).
+     */
+    public static String heldSql(String o) {
+        return "EXISTS (SELECT 1 FROM shopify_exchange_shadows sx_h " +
+               "  JOIN shopify_exchange_shadow_lines sl_h ON sl_h.shadow_id = sx_h.id AND sl_h.tenant_id = sx_h.tenant_id " +
+               "       AND sl_h.live_quantity > 0 " +
+               "  JOIN shopify_exchange_lines xl_h ON xl_h.id = sl_h.exchange_line_id AND xl_h.tenant_id = sl_h.tenant_id " +
+               "  WHERE sx_h.order_id = " + o + ".id AND sx_h.tenant_id = " + o + ".tenant_id AND sx_h.state = 'live' " +
+               "    AND COALESCE((SELECT SUM((li_h->>'remainingQuantity')::int) " +
+               "        FROM shopify_fulfillment_orders fo_h " +
+               "        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(fo_h.line_items) = 'array' " +
+               "                                                     THEN fo_h.line_items ELSE '[]'::jsonb END) li_h " +
+               "        WHERE fo_h.tenant_id = sx_h.tenant_id AND fo_h.order_id = sx_h.original_order_id " +
+               "          AND fo_h.status IN " + RELEASED_FO_SQL + " " +
+               "          AND li_h->>'lineItemGid' = ANY(xl_h.order_line_gids) " +
+               "          AND COALESCE(li_h->>'remainingQuantity' ~ '^[0-9]+$', false)), 0) < sl_h.live_quantity)";
+    }
+
+    /** A shadow order whose V219 row is live (its reservation has not ended). {@code o} = the order alias. */
+    public static String liveShadowSql(String o) {
+        return "EXISTS (SELECT 1 FROM shopify_exchange_shadows sx_l WHERE sx_l.order_id = " + o + ".id " +
+               "AND sx_l.tenant_id = " + o + ".tenant_id AND sx_l.state = 'live')";
+    }
+
+    /**
+     * S3c: a shadow Pick & Pack must not offer — held, or its reservation ended (lines 0). A shadow put back to 'new'
+     * by Unpack reaches the queue through the normal gate, so the queue drops these itself. {@code o} = order alias.
+     */
+    public static String notPackableShadowSql(String o) {
+        return "(" + o + ".external_id LIKE '" + PREFIX + "%' AND (" + heldSql(o) + " OR " + endedShadowSql(o) + "))";
+    }
+
+    /** Pick-flow state of one order: NONE (not a shadow), HELD, ENDED, PACKABLE. Caller's connection and tenant. */
+    public enum PickState { NONE, HELD, ENDED, PACKABLE }
+
+    public static PickState pickState(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
+        List<PickState> r = jdbc.query(
+            "SELECT CASE WHEN o.external_id NOT LIKE '" + PREFIX + "%' THEN 'NONE' " +
+            "            WHEN " + heldSql("o") + " THEN 'HELD' " +
+            "            WHEN " + endedShadowSql("o") + " THEN 'ENDED' ELSE 'PACKABLE' END " +
+            "FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?",
+            (rs, i) -> PickState.valueOf(rs.getString(1)), orderId, tenantId);
+        return r.isEmpty() ? PickState.NONE : r.get(0);
+    }
+
+    /**
+     * Restock guard (S3c, problem 7): Shopify records a returned replacement's restock on the ORIGINAL order (the
+     * exchange line lives there), so every restock guard (shopify_restocked_units and Traced's own count) keys a
+     * shadow order by its original. Any other order is returned as it is. Caller's connection and tenant.
+     */
+    public static UUID restockOrderId(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
+        if (orderId == null) return null;
+        List<UUID> r = jdbc.queryForList(
+            "SELECT original_order_id FROM shopify_exchange_shadows WHERE order_id = ? AND tenant_id = ?",
+            UUID.class, orderId, tenantId);
+        return r.isEmpty() ? orderId : r.get(0);
+    }
 
     /**
      * Late-to-pack exclusion for shadow orders (normal Overview and embedded both go through OverviewService.lateToPack).
@@ -264,9 +335,7 @@ public class ShopifyShadowOrders {
             UUID.class, tenantId, o.storeId(), r.get("id"), orderId, o.id(), x, approvedAt,
             anyLive ? "live" : "ended", anyLive ? null : "all_lines_ended", anyLive ? null : new Timestamp(System.currentTimeMillis()));
         for (Plan p : plans) {
-            UUID item = jdbc.queryForObject(
-                "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, external_id) VALUES (?, ?, ?, ?, ?) RETURNING id",
-                UUID.class, tenantId, orderId, p.line().variantId(), p.live(), "exchange-line:" + p.line().id());
+            UUID item = insertLine(tenantId, orderId, p);
             jdbc.update(
                 "INSERT INTO shopify_exchange_shadow_lines (tenant_id, shadow_id, exchange_line_id, order_item_id, variant_id, " +
                 "    quantity, live_quantity, shipped_in_shopify, stop_reason, stopped_at) " +
@@ -283,9 +352,7 @@ public class ShopifyShadowOrders {
                 "SELECT order_item_id FROM shopify_exchange_shadow_lines WHERE tenant_id = ? AND shadow_id = ? AND exchange_line_id = ?",
                 UUID.class, tenantId, shadowId, p.line().id());
             if (items.isEmpty()) {
-                UUID item = jdbc.queryForObject(
-                    "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, external_id) VALUES (?, ?, ?, ?, ?) RETURNING id",
-                    UUID.class, tenantId, orderId, p.line().variantId(), p.live(), "exchange-line:" + p.line().id());
+                UUID item = insertLine(tenantId, orderId, p);
                 jdbc.update(
                     "INSERT INTO shopify_exchange_shadow_lines (tenant_id, shadow_id, exchange_line_id, order_item_id, variant_id, " +
                     "    quantity, live_quantity, shipped_in_shopify, stop_reason, stopped_at) " +
@@ -295,8 +362,22 @@ public class ShopifyShadowOrders {
                 continue;
             }
             UUID item = items.get(0);
-            jdbc.update("UPDATE order_items SET quantity = ? WHERE id = ? AND tenant_id = ? AND quantity IS DISTINCT FROM ?",
-                p.live(), item, tenantId, p.live());
+            // S3c: the line's quantity follows the live quantity only while the shadow is still to be picked, and
+            // never drops below what Traced already scanned / packed for it. Once Traced packed it (status past the
+            // live statuses) Shopify fulfilling the exchange is the normal end — the line stays as packed.
+            jdbc.update(
+                "UPDATE order_items oi SET quantity = x.q " +
+                "FROM (SELECT GREATEST(?, COUNT(*))::int AS q FROM allocations a " +
+                "      WHERE a.order_item_id = ? AND a.tenant_id = ? AND a.status IN ('active', 'packed')) x " +
+                "WHERE oi.id = ? AND oi.tenant_id = ? AND oi.quantity IS DISTINCT FROM x.q " +
+                "  AND EXISTS (SELECT 1 FROM warehouse_orders so WHERE so.id = oi.order_id AND so.tenant_id = oi.tenant_id " +
+                "              AND so.status::text IN " + LIVE_STATUSES_SQL + ")",
+                p.live(), item, tenantId, item, tenantId);
+            // S3c: shadows made before titles were filled (S3b) get them from the variant.
+            jdbc.update(
+                "UPDATE order_items oi SET raw = " + LINE_RAW_SQL + " FROM variants v JOIN products pr ON pr.id = v.product_id " +
+                "WHERE oi.id = ? AND oi.tenant_id = ? AND oi.raw IS NULL AND v.id = oi.variant_id AND v.tenant_id = oi.tenant_id",
+                item, tenantId);
             jdbc.update(
                 "UPDATE shopify_exchange_shadow_lines SET quantity = ?, live_quantity = ?, shipped_in_shopify = ?, " +
                 "    stop_reason = ?, stopped_at = CASE WHEN ?::text IS NULL THEN NULL ELSE COALESCE(stopped_at, now()) END, " +
@@ -318,6 +399,19 @@ public class ShopifyShadowOrders {
                 "updated_at = now() WHERE id = ? AND tenant_id = ? AND (state <> 'ended' OR end_reason IS DISTINCT FROM ?)",
                 endReason, shadowId, tenantId, endReason);
         }
+    }
+
+    /** The shadow line's display data, from its variant (shadow lines have no Shopify line of their own). v / pr. */
+    private static final String LINE_RAW_SQL =
+        "jsonb_build_object('title', pr.title, 'variant_title', v.title, 'sku', v.sku, " +
+        "  'name', CASE WHEN v.title IS NULL OR v.title = 'Default Title' THEN pr.title ELSE pr.title || ' - ' || v.title END)";
+
+    private UUID insertLine(UUID tenantId, UUID orderId, Plan p) {
+        return jdbc.queryForObject(
+            "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity, external_id, raw) " +
+            "SELECT ?, ?, v.id, ?, ?, " + LINE_RAW_SQL + " " +
+            "FROM variants v JOIN products pr ON pr.id = v.product_id WHERE v.id = ? AND v.tenant_id = ? RETURNING id",
+            UUID.class, tenantId, orderId, p.live(), "exchange-line:" + p.line().id(), p.line().variantId(), tenantId);
     }
 
     // ── Short by N (per variant, oldest shadow first) ─────────────────────────────────────────────────────────────

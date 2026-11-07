@@ -53,11 +53,11 @@ import static org.mockito.Mockito.*;
  *       copied (never email), status 'confirmed', a line per exchange line; committed +1 from approval; idempotent
  *   s2  REQUESTED → nothing; approved later → created. No returns access → nothing (today's flow). Original still in
  *       custody (Q2) → nothing
- *   p1  never packable before S3c: not in the pick queue, scan() NOT_PICKABLE, complete() 409
+ *   p1  held until Shopify releases it (S3c): not in the pick queue, scan() HELD_FOR_RELEASE, complete() 409
  *   e1  declined → ends; e2 cancelled → ends (committed back each time)
  *   e3  FO cancelled with no replacement → ends 'fo_cancelled'; with a replacement FO → still reserved (re-keyed)
- *   e4  FO CLOSED while unpacked → ends 'shipped_in_shopify'; the MEDIUM alert (while a piece is available) only with
- *       traced.shopify-exchange.shipped-alert-enabled on (S3c turns it on; off now — Traced can't pack shadows yet)
+ *   e4  FO CLOSED while unpacked → ends 'shipped_in_shopify'; the MEDIUM alert (while a piece is available) with
+ *       traced.shopify-exchange.shipped-alert-enabled on (the default since S3c); off (kill switch) → no alert
  *   n1  an ENDED shadow (status 'confirmed', every line 0) is in no late-to-pack (normal + embedded), no Overview count,
  *       no alert of any type (shipped alert on too), no committed demand
  *   n2  a LIVE shadow is not late to pack (normal + embedded) while the S3c flag is off; with it on it counts
@@ -329,7 +329,7 @@ class ShopifyShadowOrdersTest {
     // ── p1 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void p1_neverPackableBeforeS3c() {
+    void p1_heldUntilReleased_notPackable() {
         Shop s = new Shop("p1");
         s.pieces(s.v, 1);
         s.ret(gid("Return"), "OPEN", new Object[]{gid("ExchangeLineItem"), s.restV, 1});
@@ -340,9 +340,9 @@ class ShopifyShadowOrdersTest {
         assertThat(queue).doesNotContain(shadow.toString()).doesNotContain("-X1");
         String barcode = jdbc.queryForObject("SELECT barcode FROM pieces WHERE tenant_id = ? LIMIT 1", String.class, s.tenant);
         FulfillService.ScanResult r = s.as(() -> fulfill.scan(shadow, barcode, worker));
-        assertThat(r.code()).isEqualTo("NOT_PICKABLE");
+        assertThat(r.code()).isEqualTo("HELD_FOR_RELEASE");
         assertThatThrownBy(() -> s.as(() -> fulfill.complete(shadow, worker)))
-            .isInstanceOf(ResponseStatusException.class).hasMessageContaining("exchange made in Shopify");
+            .isInstanceOf(ResponseStatusException.class).hasMessageContaining("waiting for release in Shopify");
     }
 
     // ── end rules ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -402,7 +402,12 @@ class ShopifyShadowOrdersTest {
         assertThat(s.line(x)).containsEntry("live_quantity", 0).containsEntry("stop_reason", "shipped_in_shopify")
             .containsEntry("shipped_in_shopify", 1);
         assertThat(s.committed(s.v)).isZero();
-        assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).as("flag off (default until S3c): no alert").isEmpty();
+        exceptions.setShippedInShopifyAlertEnabled(false);
+        try {
+            assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).as("flag off (kill switch): no alert").isEmpty();
+        } finally {
+            exceptions.setShippedInShopifyAlertEnabled(true);
+        }
         exceptions.setShippedInShopifyAlertEnabled(true);
         try {
         List<Map<String, Object>> a = s.alerts("shopify_exchange_shipped_in_shopify");
@@ -414,7 +419,7 @@ class ShopifyShadowOrdersTest {
         jdbc.update("UPDATE pieces SET status = 'lost' WHERE tenant_id = ?", s.tenant);
         assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).isEmpty();
         } finally {
-            exceptions.setShippedInShopifyAlertEnabled(false);
+            exceptions.setShippedInShopifyAlertEnabled(true);
         }
     }
 
@@ -448,7 +453,7 @@ class ShopifyShadowOrdersTest {
             assertThat(all).as("no alert of any type names the ended shadow")
                 .noneMatch(a -> a.toString().contains(id) || a.toString().contains("#S3Bn1-X1"));
         } finally {
-            exceptions.setShippedInShopifyAlertEnabled(false);
+            exceptions.setShippedInShopifyAlertEnabled(true);
         }
 
         // Positive control: the same shadow while LIVE does show in late to pack (status 'confirmed' is pre-pack) —
@@ -458,7 +463,7 @@ class ShopifyShadowOrdersTest {
         try {
             assertThat(s.as(() -> overview.lateToPack()).overdue()).isEqualTo(lateBefore.overdue() + 1);
         } finally {
-            overview.setShadowsPackable(false);
+            overview.setShadowsPackable(true);
         }
     }
 
@@ -476,9 +481,14 @@ class ShopifyShadowOrdersTest {
         assertThat(s.onlyShadow()).containsEntry("state", "live");
         assertThat(s.committed(s.v)).isEqualTo(1);
 
-        // Flag off (default): Traced can't pack it yet → not late to pack anywhere.
-        assertThat(s.as(() -> overview.lateToPack())).as("late to pack, flag off").isEqualTo(lateBefore);
-        assertThat(s.as(() -> embedded.lateToPack())).as("embedded, flag off").isEqualTo(embeddedBefore);
+        // Flag off (kill switch since S3c): not late to pack anywhere.
+        overview.setShadowsPackable(false);
+        try {
+            assertThat(s.as(() -> overview.lateToPack())).as("late to pack, flag off").isEqualTo(lateBefore);
+            assertThat(s.as(() -> embedded.lateToPack())).as("embedded, flag off").isEqualTo(embeddedBefore);
+        } finally {
+            overview.setShadowsPackable(true);
+        }
 
         // Flag on (S3c): a live shadow is pre-pack work and counts, in both.
         overview.setShadowsPackable(true);
@@ -488,7 +498,7 @@ class ShopifyShadowOrdersTest {
             assertThat(on.over48()).isEqualTo(lateBefore.over48() + 1);
             assertThat(s.as(() -> embedded.lateToPack()).overdue()).isEqualTo(embeddedBefore.overdue() + 1);
         } finally {
-            overview.setShadowsPackable(false);
+            overview.setShadowsPackable(true);
         }
     }
 

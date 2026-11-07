@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Shopify-native returns S3c — Pick & Pack for exchange shadows (2026-11-07; branch `feat/s3c-pick-pack` off main
+c6aa7ca4, rebased on 5b017cfd, approved and MERGED 2026-11-07, NOT deployed; no migration).** See CLAUDE.md (S3c
+paragraph). **Prod: set `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=false` in `.env` before deploying — on only after S3d
+is verified in prod.**
+- One held rule (`ShopifyShadowOrders.heldSql`); Waiting for release beside the queue; HELD_FOR_RELEASE in scan /
+  complete / waybill mode; released → normal pickable order (needs a courier leg), status never written backward.
+- Short by N + "Exchange for #original" in both modes; shadow lines carry product titles.
+- Main reconcile problem 7 fixed (shadow terms in the target; shadows no longer hold); restock guards key shadows by
+  their original; S3c flag ON by default.
+- Approved test updates applied (p1, e4/n1/n2, h2/h5/h6/j, the shared fetch helper).
+- Known edge: Shopify fulfilling the exchange BEFORE Traced packs (the Bosta app fulfils at shipment creation) still
+  ends the shadow (S3b rule); S3d's courier attach is where that flow belongs. #1009 (third-party fulfilled product
+  ended immediately — an unreadable FO must never end a reservation) is a separate investigation, not in S3c.
 **Returns portal settings redesign — Pass B, one save + merged controls (2026-11-07; branch `feat/portal-settings-pass-b`
 off main c6aa7ca4; MERGED to main 2026-11-07 (7d2b5743), DEPLOYED and live-verified 2026-11-07; no migration; backend change = one optional query param
 → deploy needs the usual `--no-cache` app rebuild). Review round 2 (2026-11-07): the 10 proposed test

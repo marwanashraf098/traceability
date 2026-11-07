@@ -14,7 +14,7 @@ import {
   LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
   scanRejectionText, usePackLineHighlight,
 } from './fulfill/packLabels'
-import type { PackOrderLabels } from '../api'
+import type { PackOrderLabels, ShadowExchangeFor } from '../api'
 import { getAccessToken } from '../auth'
 import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
@@ -23,6 +23,9 @@ import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
+import {
+  ExchangeForText, HeldForReleaseNotice, ShortByChip, WaitingForReleaseSection, useWaitingForRelease,
+} from './fulfill/ShadowExchange'
 
 
 function authHeaders(): Record<string, string> {
@@ -61,6 +64,9 @@ interface QueueOrder {
   is_exchange: boolean
   /** S2 — the order's latest forward shipment is in a print batch. */
   awb_printed?: boolean
+  /** S3c — Shopify-native exchange shadows only: the original order, and units the warehouse is short. */
+  exchangeFor?: ShadowExchangeFor
+  shortBy?: number
 }
 
 interface AllocatedPiece {
@@ -109,6 +115,10 @@ interface OrderDetail {
   items: OrderItem[]
   /** Flexible labeling slice 4 — present only for a switched-on tenant. */
   labels?: PackOrderLabels
+  /** S3c — Shopify-native exchange shadows only. heldForRelease: Shopify hasn't released it (can't be packed). */
+  exchangeFor?: ShadowExchangeFor
+  shortBy?: number
+  heldForRelease?: boolean
 }
 
 interface ScanResult {
@@ -687,6 +697,10 @@ function QueueView({
     return () => { cancelled = true }
   }, [queueEmpty, queue])
 
+  // S3c — "Waiting for release": Shopify-native exchanges Shopify hasn't released yet. A separate list beside
+  // the queue (never mixed into its rows), reloaded with it; any failure simply hides the section.
+  const waitingForRelease = useWaitingForRelease(queue, !loading && tab !== 'packed')
+
   if (loading) return (
     <div className="space-y-3">
       <Skeleton className="h-8 w-48 rounded-xl" />
@@ -843,9 +857,12 @@ function QueueView({
                   } ${highlighted ? 'border-trace-blue shadow-ring-accent' : ''}`}
                   onClick={() => onSelect(order.id)}
                 >
-                  <span className="font-mono text-small font-semibold text-primary">
-                    {order.number ?? order.id.slice(-8)}
-                  </span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-mono text-small font-semibold text-primary">
+                      {order.number ?? order.id.slice(-8)}
+                    </span>
+                    <ExchangeForText exchangeFor={order.exchangeFor} />
+                  </div>
 
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-caption md:text-small text-muted truncate">
@@ -853,6 +870,7 @@ function QueueView({
                     </span>
                     {order.is_self_pickup && <Badge tone="info" label={t('fulfill.selfPickup')} />}
                     {order.is_exchange && <Badge tone="info" label={t('exchange.badge')} />}
+                    <ShortByChip shortBy={order.shortBy} />
                   </div>
 
                   {progressBar(order, progress)}
@@ -884,6 +902,7 @@ function QueueView({
           </div>
         </>
       )}
+      <WaitingForReleaseSection rows={waitingForRelease} />
       </>)}
 
       {labelsFor && (
@@ -1016,6 +1035,7 @@ function PickScreen({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [awbPrinting, setAwbPrinting] = useState(false)
   const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
+  const [completeHeld, setCompleteHeld] = useState(false)
   const autoBackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadOrder = useCallback(async () => {
@@ -1122,6 +1142,13 @@ function PickScreen({
       const res = await api<{ code?: string }>(`/fulfill/${orderId}/complete`, { method: 'POST' })
       // Every line was removed in Shopify meanwhile (kept at quantity 0): nothing to pack.
       if (res.status === 409 && res.data?.code === 'ALL_ITEMS_REMOVED_IN_SHOPIFY') {
+        await loadOrder()
+        return
+      }
+      // S3c: a Shopify-native exchange Shopify hasn't released (or that ended) can't be completed — say so,
+      // never open the waybill step. Shadows only; every other order's Complete is unchanged.
+      if (res.status === 409 && order?.exchangeFor) {
+        setCompleteHeld(true)
         await loadOrder()
         return
       }
@@ -1255,6 +1282,15 @@ function PickScreen({
 
   const itemsList = (
     <div className="flex-1 overflow-y-auto p-6 space-y-3">
+      {order.exchangeFor && (
+        <p className="sm:hidden"><ExchangeForText exchangeFor={order.exchangeFor} /></p>
+      )}
+      <HeldForReleaseNotice held={order.heldForRelease} />
+      {completeHeld && (
+        <div className="card p-4 border-warning/40 text-body text-warning-text" data-testid="shadow-complete-held">
+          {order.heldForRelease ? t('fulfill.shadow.completeHeld') : t('fulfill.shadow.completeEnded')}
+        </div>
+      )}
       {allRemoved && (
         <div className="card p-4 border-warning/40 text-body text-warning-text" data-testid="all-items-removed">
           {t('fulfill.allItemsRemoved')}
@@ -1406,6 +1442,8 @@ function PickScreen({
           {order.is_exchange && (
             <Badge tone="info" label={t('exchange.badge')} />
           )}
+          <ExchangeForText exchangeFor={order.exchangeFor} className="hidden sm:inline" />
+          <ShortByChip shortBy={order.shortBy} />
         </p>
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />

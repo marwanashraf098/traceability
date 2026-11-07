@@ -315,6 +315,9 @@ class RlsCoverageTest {
                     "control + cross-tenant negative control, same pattern as timeline above"),
             entry("/api/v1/fulfill/queue",
                     "uses tx.execute(); empty valid for new tenant"),
+            entry("/api/v1/fulfill/waiting-for-release",
+                    "S3c; @Transactional + TenantContext.require(); empty valid for new tenant; RLS-covered by " +
+                    "ShadowPickPackTest.q8's real app_user same-tenant positive control + cross-tenant negative control"),
             entry("/api/v1/fulfill/queue/awaiting-waybill-count",
                     "@Transactional + TenantContext.require(); zero valid for new tenant; " +
                     "tenant scoping covered by AwaitingWaybillCountTest"),

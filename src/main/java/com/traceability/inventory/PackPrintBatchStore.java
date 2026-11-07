@@ -61,7 +61,9 @@ public class PackPrintBatchStore {
             "    ORDER BY created_at DESC, id DESC " +
             "    LIMIT 1 " +
             ") fs ON true " +
-            FulfillService.PICKABLE_ORDERS_FILTER +
+            // S3c: the queue's own set (FulfillService.QUEUE_ORDER_IDS_SQL — PICKABLE_ORDERS_FILTER minus held /
+            // ended exchange shadows, plus released ones).
+            "WHERE o.tenant_id = ? AND o.id IN " + FulfillService.QUEUE_ORDER_IDS_SQL + " " +
             "  AND o.is_self_pickup = false " +
             "  AND fs.internal_state = 'created' " +
             "  AND fs.provider = 'bosta' " +   // V169: a generic (non-Bosta courier) leg has no Bosta waybill
@@ -77,7 +79,7 @@ public class PackPrintBatchStore {
                 rs.getString("number"),
                 rs.getObject("shipment_id", UUID.class),
                 rs.getString("tracking_number")),
-            tenantId, lookbackDays);
+            tenantId, tenantId, lookbackDays, tenantId, lookbackDays);
     }
 
     /**
@@ -91,9 +93,9 @@ public class PackPrintBatchStore {
         UUID tenantId = TenantContext.require();
         String dir = "newest".equals(sort) ? "DESC" : "ASC";
         return jdbc.queryForList(
-            "SELECT o.id FROM warehouse_orders o " + FulfillService.PICKABLE_ORDERS_FILTER +
+            "SELECT o.id FROM warehouse_orders o WHERE o.tenant_id = ? AND o.id IN " + FulfillService.QUEUE_ORDER_IDS_SQL + " " +
             "ORDER BY o.created_at " + dir + ", o.id " + dir,
-            UUID.class, tenantId, lookbackDays);
+            UUID.class, tenantId, tenantId, lookbackDays, tenantId, lookbackDays);
     }
 
     /**

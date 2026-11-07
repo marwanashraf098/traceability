@@ -51,6 +51,10 @@ import java.util.List;
  *       committed at Main (Traced can't see which location an unfulfilled order is committed at) — a capped variant's
  *       diff carries note 'unfulfilled_capped'. An order whose fulfillments Traced can't read skips the variant
  *       ({@link #FULFILLMENT_UNREADABLE}) unless Shopify says it is FULFILLED.</li>
+ *   <li><b>Shopify-native exchange shadow orders</b> (S3c, problem 7): the replacement is an exchange line of the
+ *       ORIGINAL order in Shopify. Per (original, variant): shadow pieces that left custody while Shopify still shows
+ *       the exchange unfulfilled are added to unfulfilled_shipped (same cap); units Shopify fulfilled from Main on the
+ *       exchange line that Traced hasn't shipped are added to fulfilled_unpicked. See the sx CTEs.</li>
  * </ul>
  *
  * <h3>Write mode (R2, V203) — settling other paths' ambiguous claims</h3>
@@ -112,22 +116,19 @@ public final class MainReconcileRules {
         FULFILLMENT_UNREADABLE, FULFILLMENT_PENDING, FULFILLMENT_CANCELLED, NOT_ACTIVATED_AT_MAIN, SHOPIFY_EXCHANGE_IN_CUSTODY);
 
     /**
-     * S3a interim guard — true when the tenant has (a) an open Shopify-native exchange shadow order
-     * ('internal:shopify-exchange:', any status but delivered / cancelled / returned / lost), or (b) a Shopify-native
-     * exchange ({@link ShopifyNativeExchange} rule) whose internal:exchange: replacement has a piece in Traced custody
+     * Interim guard — true when the tenant has a Shopify-native exchange ({@link ShopifyNativeExchange} rule) whose
+     * internal:exchange: replacement (a dashboard Bosta exchange Traced turned into its own order) has a piece in Traced custody
      * (active / packed allocation, piece reserved / packed / awaiting_pickup). Why: the target counts such a piece in
      * custody but never counts it once it leaves (its order is internal:% — liveShopifyOrderSql), while Shopify counts
      * the unit on the ORIGINAL order's exchange line until it fulfills that line — so a reconcile write in that window
      * is either a spurious +1 / −1 pair (Shopify fulfilled first) or a real double −1 (Traced shipped first).
-     * Parameters: tenant, tenant.
+     * S3c (2026-11-07): Shopify-native exchange SHADOW orders ('internal:shopify-exchange:') no longer hold — the target
+     * counts their pieces against the original's exchange line (the sx CTEs of {@link #EVALUATE_SQL}). The S3d courier
+     * attach routes new native exchanges to shadows; existing internal:exchange: ones keep this hold until they finish.
+     * Parameter: tenant.
      */
     public static final String EXCHANGE_HOLD_SQL =
-        "SELECT EXISTS (SELECT 1 FROM warehouse_orders so WHERE so.tenant_id = ? " +
-        "               AND so.external_id LIKE 'internal:shopify-exchange:%' " +
-        "               AND so.status::text NOT IN ('delivered', 'cancelled', 'returned', 'lost') " +
-        // S3b: a shadow whose reservation ended (V219 state 'ended': every line 0) holds nothing.
-        "               AND NOT " + ShopifyShadowOrders.endedShadowSql("so") + ") " +
-        "    OR EXISTS (SELECT 1 FROM exchanges e " +
+        "SELECT EXISTS (SELECT 1 FROM exchanges e " +
         "               JOIN merchant_orders xo ON xo.id = e.outbound_order_id AND xo.tenant_id = e.tenant_id " +
         "               JOIN order_items xi ON xi.order_id = xo.id AND xi.tenant_id = xo.tenant_id " +
         "               JOIN allocations xa ON xa.order_item_id = xi.id AND xa.tenant_id = xi.tenant_id " +
@@ -428,6 +429,44 @@ public final class MainReconcileRules {
         "  JOIN variants vv ON vv.id = lo.variant_id AND vv.tenant_id = :t " +
         "  WHERE " + liveShopifyOrderSql("o") + " " +
         "  GROUP BY lo.variant_id " +
+        // S3c (problem 7): Shopify-native exchange shadow orders. The replacement is a line of the ORIGINAL order in
+        // Shopify (an exchange line), never of the shadow (internal:% — liveShopifyOrderSql drops it above). Per
+        // (original order, variant): out_s = shadow pieces that left custody naming one of its shadow orders; live =
+        // the units still unfulfilled on Shopify's live fulfillment orders (V219 live_quantity); f_main = units
+        // Shopify fulfilled FROM MAIN on the original's exchange line items (successful REST lines).
+        //   shipped_unfulfilled  = LEAST(out_s, live)          — Traced shipped, Shopify still holds them (added back,
+        //                                                         into unfulfilled_shipped: same committed-at-Main cap)
+        //   fulfilled_unshipped  = GREATEST(0, f_main − out_s) — Shopify fulfilled from Main units Traced still holds
+        //                                                         (subtracted, into fulfilled_unpicked)
+        // Traced ships first: +1 until Shopify fulfills, then f_main covers it — never a reconcile −1 on top of
+        // Shopify's own. Shopify fulfills first: −1 while Traced holds the piece — never a spurious +1.
+        "), sx_lines AS ( " +
+        "  SELECT s.original_order_id AS order_id, sl.variant_id, s.order_id AS shadow_order_id, " +
+        "         sl.live_quantity, xl.order_line_gids " +
+        "  FROM shopify_exchange_shadow_lines sl " +
+        "  JOIN shopify_exchange_shadows s ON s.id = sl.shadow_id AND s.tenant_id = sl.tenant_id " +
+        "  JOIN shopify_exchange_lines xl ON xl.id = sl.exchange_line_id AND xl.tenant_id = sl.tenant_id " +
+        "  JOIN v ON v.variant_id = sl.variant_id " +
+        "  WHERE sl.tenant_id = :t " +
+        "), sx_g AS ( " +
+        "  SELECT order_id, variant_id, SUM(live_quantity) AS live, array_agg(DISTINCT shadow_order_id) AS shadows, " +
+        "         ARRAY(SELECT DISTINCT g FROM sx_lines x2, unnest(x2.order_line_gids) g " +
+        "               WHERE x2.order_id = sx_lines.order_id AND x2.variant_id = sx_lines.variant_id) AS gids " +
+        "  FROM sx_lines GROUP BY order_id, variant_id " +
+        "), sx_o AS ( " +
+        "  SELECT g.variant_id, g.live, " +
+        "    COALESCE((SELECT SUM(lo.out_n) FROM lo WHERE lo.variant_id = g.variant_id AND lo.order_id = ANY(g.shadows)), 0) AS out_s, " +
+        "    COALESCE((SELECT SUM((li->>'quantity')::int) " +
+        "              FROM jsonb_array_elements(" + fulfillmentsSql("o") + ") f, jsonb_array_elements(" + lineItemsSql("f") + ") li " +
+        "              WHERE " + restShapeSql("f") + " AND lower(f->>'status') = 'success' AND f->>'location_id' = :mainNum " +
+        "                AND ('gid://shopify/LineItem/' || (li->>'id')) = ANY(g.gids) " +
+        "                AND li->>'quantity' ~ '^[0-9]+$'), 0) AS f_main, " +
+        "    EXISTS (SELECT 1 FROM jsonb_array_elements(" + fulfillmentsSql("o") + ") f WHERE NOT " + restShapeSql("f") + ") AS unreadable " +
+        "  FROM sx_g g JOIN merchant_orders o ON o.id = g.order_id AND o.tenant_id = :t " +
+        "), sx AS ( " +
+        "  SELECT variant_id, SUM(LEAST(out_s, live)) AS shipped_unfulfilled, " +
+        "         SUM(GREATEST(0, f_main - out_s)) AS fulfilled_unshipped, bool_or(unreadable) AS unreadable " +
+        "  FROM sx_o GROUP BY variant_id " +
         "), ar AS ( " +
         "  SELECT DISTINCT p.variant_id " +
         "  FROM shopify_inventory_adjustments sia " +
@@ -444,9 +483,9 @@ public final class MainReconcileRules {
         "SELECT v.variant_id, v.item, " +
         "       COALESCE(custody.custody, 0) AS custody_at_main, COALESCE(custody.damaged, 0) AS traced_damaged, " +
         "       COALESCE(away.away_counted, 0) AS away_counted, COALESCE(fsum.fulfilled_from_main, 0) AS fulfilled_from_main, " +
-        "       COALESCE(fu.fulfilled_unpicked, 0) AS fulfilled_unpicked, " +
+        "       COALESCE(fu.fulfilled_unpicked, 0) + COALESCE(sx.fulfilled_unshipped, 0) AS fulfilled_unpicked, " +
         "       COALESCE(p1.owed, 0) AS part1_owed, " +
-        "       COALESCE(uf.unfulfilled_shipped, 0) AS unfulfilled_shipped_raw, " +
+        "       COALESCE(uf.unfulfilled_shipped, 0) + COALESCE(sx.shipped_unfulfilled, 0) AS unfulfilled_shipped_raw, " +
         "       COALESCE(p1.in_flight, false) AS part1_in_flight, " +
         "       COALESCE(rw.in_flight, false) AS reconcile_write_in_flight, " +
         "       p1.settle_part1, cl.settle_claims, rw.settle_writes, " +
@@ -461,7 +500,8 @@ public final class MainReconcileRules {
         "                    OR (y.status = 'failed' AND y.attempt_count < " + TransferShopifySync.MAX_ATTEMPTS + ")) " +
         "               AND jsonb_typeof(y.deltas) = 'object' AND jsonb_exists(y.deltas, v.variant_id::text))) " +
         "           AS transfer_sync_in_flight, " +
-        "       (COALESCE(fsum.unreadable, false) OR COALESCE(uf.unreadable, false)) AS fulfillment_unreadable, " +
+        "       (COALESCE(fsum.unreadable, false) OR COALESCE(uf.unreadable, false) OR COALESCE(sx.unreadable, false)) " +
+        "           AS fulfillment_unreadable, " +
         "       COALESCE(fsum.pending, false) AS fulfillment_pending, " +
         "       COALESCE(fsum.cancelled, false) AS fulfillment_cancelled " +
         "FROM v " +
@@ -473,6 +513,7 @@ public final class MainReconcileRules {
         "LEFT JOIN cl ON cl.variant_id = v.variant_id " +
         "LEFT JOIN rw ON rw.variant_id = v.variant_id " +
         "LEFT JOIN uf ON uf.variant_id = v.variant_id " +
+        "LEFT JOIN sx ON sx.variant_id = v.variant_id " +
         "LEFT JOIN ar ON ar.variant_id = v.variant_id";
 
     /**
