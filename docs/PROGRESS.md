@@ -4,8 +4,16 @@
 
 ## Current state
 
-**Shopify-native returns S3d — courier attach (2026-11-07; branch `feat/s3d-courier-attach` off main 8964ccd6, NOT
-merged, NOT deployed; V221 — prod ends at V220, checked 14:46).** See CLAUDE.md (S3d paragraph). Review (2026-11-07): type 20 / RTO with an -R reference keeps today's path (SEND only); unexplained holds stay waiting + `shopify_exchange_still_waiting` after 7 days + owner/manager Release reservation (audited, sticky manual_release); #1009 confirmed on prod (exchange FO at an unreadable 3PL location). Tracked exchange fulfillments keep the shadow
+**Shopify-native returns S4 — returns through Scan returns intake (2026-11-07; branch `feat/s4-shopify-return-intake`
+off main 4e37aa22, NOT merged, NOT deployed; V222 — migration number to be confirmed against prod before merge).** See
+CLAUDE.md (S4 paragraph). A Shopify return line expects its order's pieces of that variant back (a replacement's: via the
+shadow); Scan returns accepts them (customer_return_shopify), links each to the oldest open line (shopify_return_intakes),
+a Traced request takes a duplicate first and covers the line; the S2 card reads the links; restock via the S1b guard;
+LOW "received, still open in Shopify" after 7 days, MEDIUM "declined / cancelled after arrival". Stores without returns
+access unchanged. Not covered: untracked units of a Shopify return (no piece to link).
+
+**Shopify-native returns S3d — courier attach (2026-11-07; branch `feat/s3d-courier-attach` off main 8964ccd6, MERGED
+2026-11-07 as 4e37aa22, NOT deployed; V221).** See CLAUDE.md (S3d paragraph). Review (2026-11-07): type 20 / RTO with an -R reference keeps today's path (SEND only); unexplained holds stay waiting + `shopify_exchange_still_waiting` after 7 days + owner/manager Release reservation (audited, sticky manual_release); #1009 confirmed on prod (exchange FO at an unreadable 3PL location). Tracked exchange fulfillments keep the shadow
 live and packable; untracked end it; unknown never ends it (#1009). Bosta type 30 + SEND and generic courier legs attach
 to the shadow; Lookup nests the shadows. Prod SQL for #1009 / -R SENDs: scratchpad `s3d-step0-prod.sql` (Marawan runs).
 After S3d is verified in prod: `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=true`.
