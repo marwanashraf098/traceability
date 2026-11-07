@@ -106,7 +106,7 @@ describe('Settings → Returns portal', () => {
     expect(enabled).toHaveAttribute('aria-checked', 'true')
     expect(enabled.tagName).toBe('BUTTON')
     expect(screen.getByRole('radio', { name: /^Approve automatically/ })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
   })
 
   test('edit and save sends one PUT with every field, including branding', async () => {
@@ -125,8 +125,8 @@ describe('Settings → Returns portal', () => {
       slug: 'nourstudio', enabled: true, autoApprove: true, returnWindowDays: 14,
       logoUrl: LOGO, brandColor: '#1A2B3C', policyText: 'Unworn items only.',
     })
-    expect(await screen.findByText('Returns portal settings saved')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+    expect(await screen.findByText('Changes saved. Customers see them right away.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
   })
 
   test('policy text counter', async () => {

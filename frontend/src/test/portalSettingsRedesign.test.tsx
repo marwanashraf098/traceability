@@ -143,7 +143,7 @@ describe('Returns portal — summary and fees', () => {
     await user.click(screen.getByRole('radio', { name: /^Approve automatically/ }))
     await user.click(within(screen.getByTestId('fee-rule-refund')).getByRole('switch', { name: 'Return fee' }))
     await user.type(screen.getByTestId('fee-amount-refund'), '20')
-    await user.click(within(exchanges).getByRole('switch', { name: 'Same price or lower only' }))
+    await user.click(within(exchanges).getByRole('radio', { name: /^Same price or lower only/ }))
     expect(lines()).toEqual(expect.arrayContaining([
       'Customers can start a return within 30 days of delivery.',
       'Requests are approved automatically, and Traced books a Bosta pickup straight away.',
@@ -207,10 +207,11 @@ describe('Returns portal — approval cards and saving', () => {
     fees = { ...fees, visible: true }
     await open()
     await screen.findByTestId('fee-area-overrides')
-    expect(screen.getAllByTestId('saves-right-away')).toHaveLength(3)
-    expect(screen.getByTestId('fee-area-overrides')).toContainElement(screen.getAllByTestId('saves-right-away')[1])
+    // Pass B: only the logo and fees by area (the products list is saved with "Save changes" now).
+    expect(screen.getAllByTestId('saves-right-away')).toHaveLength(2)
+    expect(screen.getByTestId('fee-area-overrides')).toContainElement(screen.getAllByTestId('saves-right-away')[0])
     expect(document.getElementById('portal-branding')!).toHaveTextContent('LogoSaves right away')
-    expect(document.getElementById('portal-eligibility')!).toHaveTextContent('Products that can\'t be returnedSaves right away')
+    expect(document.getElementById('portal-eligibility')!.querySelector('[data-testid=saves-right-away]')).toBeNull()
     // Not on rows saved with "Save changes".
     expect(document.getElementById('portal-approval')!.querySelector('[data-testid=saves-right-away]')).toBeNull()
   })

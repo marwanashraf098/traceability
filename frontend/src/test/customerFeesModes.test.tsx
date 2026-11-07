@@ -5,7 +5,8 @@ import { I18nextProvider } from 'react-i18next'
 import i18n from '../i18n'
 import { renderWithProviders, waitFor } from './renderWithProviders'
 import CustomerFeesSection from '../pages/settings/CustomerFeesSection'
-import type { CustomerFeeSettings, FeeRule } from '../api'
+import ReturnsPortalTab from '../pages/settings/ReturnsPortalTab'
+import type { CustomerFeeSettings, FeeRule, PortalSettings } from '../api'
 
 // Prod report 2026-11-06 — Settings → Returns portal → Customer fees: choosing "Percentage" blanked the whole page.
 //   modes    — fixed ⇄ percent both ways, on an empty rule and on a filled one (EN + AR): the fields swap, nothing
@@ -33,6 +34,13 @@ const BASE: CustomerFeeSettings = {
   exchangePricing: { anyProduct: true, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: true },
 }
 
+// Redesign Pass B — what the Returns portal tab also loads around the fee cards (the save group renders the tab).
+const PORTAL: PortalSettings = {
+  slug: 'nourstudio', enabled: true, autoApprove: false, returnWindowDays: 30, logoUrl: null, brandColor: null,
+  policyText: null, pickupBooking: false, portalPickupBooking: false, returnLocationId: null, returnLocationName: null,
+  exchangesEnabled: true,   // the exchange fee shows only while exchanges are on
+}
+
 let settings: CustomerFeeSettings
 let calls: Array<{ method: string; url: string; body?: unknown }>
 let consoleErrors: string[]
@@ -51,6 +59,9 @@ function backend(url: string, opts: RequestInit = {}) {
   calls.push({ method, url, body })
   if (url.includes('/customer-fees/areas?cityId=C1')) return fakeResponse([{ id: 'D1', name: 'Nasr City', nameAr: 'مدينة نصر' }])
   if (url.includes('/customer-fees/areas') && method === 'GET') return fakeResponse([{ id: 'C1', name: 'Cairo', nameAr: 'القاهرة' }])
+  if (url.endsWith('/tenant/portal-settings') && method === 'GET') return fakeResponse(PORTAL)
+  if (url.includes('/variants?') && method === 'GET') return fakeResponse({ items: [], total: 0 })
+  if (url.includes('/bosta/return-locations')) return fakeResponse([])
   return fakeResponse(settings)
 }
 
@@ -74,6 +85,12 @@ afterEach(async () => {
 
 function render() {
   return renderWithProviders(<I18nextProvider i18n={i18n}><CustomerFeesSection /></I18nextProvider>)
+}
+
+/** The Returns portal tab with the fee cards in it (redesign Pass B: one "Save changes" for the tab). */
+async function renderTab() {
+  renderWithProviders(<I18nextProvider i18n={i18n}><ReturnsPortalTab /></I18nextProvider>)
+  await screen.findByTestId('fee-rules-table')
 }
 
 const mode = (m: 'fixed' | 'percent') => i18n.t(`settings.portal.fees.mode.${m}`)
@@ -126,13 +143,14 @@ describe('save', () => {
   test('percent with min and max', async () => {
     settings.rules = { exchange: null, refund: FILLED('refund') }
     const user = userEvent.setup()
-    render()
+    await renderTab()
     const rule = await screen.findByTestId('fee-rule-refund')
     await user.click(within(rule).getByRole('radio', { name: mode('percent') }))
     await user.type(within(rule).getByTestId('fee-percent-refund'), '12.5')
     await user.type(rule.querySelector('#fee-min-refund') as HTMLElement, '20')
     await user.type(rule.querySelector('#fee-max-refund') as HTMLElement, '300')
-    await user.click(within(rule).getByRole('button', { name: 'Save' }))
+    expect(writes()).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toMatchObject({ method: 'PUT', body: {
       enabled: true, mode: 'percent', waiveMerchantFault: true, amount: null, percent: 12.5, minAmount: 20, maxAmount: 300 } })
@@ -140,11 +158,12 @@ describe('save', () => {
 
   test('percent without min / max sends null for both', async () => {
     const user = userEvent.setup()
-    render()
+    await renderTab()
     const rule = await screen.findByTestId('fee-rule-exchange')
     await user.click(within(rule).getByRole('radio', { name: mode('percent') }))
     await user.type(within(rule).getByTestId('fee-percent-exchange'), '10')
-    await user.click(within(rule).getByRole('button', { name: 'Save' }))
+    expect(writes()).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0].body).toEqual({
       enabled: false, mode: 'percent', waiveMerchantFault: true, amount: null, percent: 10, minAmount: null, maxAmount: null })
@@ -153,10 +172,10 @@ describe('save', () => {
   test('amounts sent as strings load, and an unchanged rule is not dirty', async () => {
     settings.rules = { exchange: null,
       refund: { ...FILLED('refund'), mode: 'percent', amount: null, percent: '10.00', minAmount: '20', maxAmount: null } as unknown as FeeRule }
-    render()
+    await renderTab()
     const rule = await screen.findByTestId('fee-rule-refund')
     expect(within(rule).getByTestId('fee-percent-refund')).toHaveValue(10)
-    expect(within(rule).getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
     expect(consoleErrors).toEqual([])
   })
 })

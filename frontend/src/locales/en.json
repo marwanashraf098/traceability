@@ -2924,6 +2924,8 @@
         "loading": "Loading your Bosta locations…",
         "empty": "There are no pickup locations in your Bosta account yet.",
         "default": "{{name}} (default)",
+        "notSaved": "Not saved yet — choose a location to turn on pickups",
+        "useThis": "Use this location",
         "saved": "Saved: {{name}}",
         "retry": "Try again",
         "errors": {

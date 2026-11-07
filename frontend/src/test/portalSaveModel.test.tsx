@@ -371,15 +371,71 @@ describe('merged controls', () => {
       { id: 'loc-2', name: 'Store front', isDefault: false, cityName: 'Giza' }]
     const user = await open()
     const booking = screen.getByRole('switch', { name: 'Book Bosta pickups when I approve' })
-    await waitFor(() => expect(screen.getByLabelText('Returns go back to')).toHaveValue('loc-1'))   // Bosta's default
+    await screen.findByTestId('default-location-hint')
+    expect(screen.getByLabelText('Returns go back to')).toHaveValue('')   // Bosta's default is suggested, not filled in
     expect(booking).toBeDisabled()
     await user.selectOptions(screen.getByLabelText('Returns go back to'), 'loc-2')
+    expect(screen.queryByTestId('default-location-hint')).toBeNull()
     expect(booking).toBeEnabled()
     await user.click(booking)
     expect(writes()).toEqual([])
     await user.click(saveButton()!)
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0].body).toMatchObject({ returnLocationId: 'loc-2', pickupBooking: true })
+  })
+})
+
+describe('Bosta\'s default return location (nothing saved)', () => {
+  beforeEach(() => {
+    portal = { ...portal, returnLocationId: null, returnLocationName: null, exchangesEnabled: false }
+  })
+
+  test('shown with "Not saved yet" — not an unsaved change: no bar, no Edited, no question on leave', async () => {
+    const user = await open()
+    const hint = await screen.findByTestId('default-location-hint')
+    expect(hint).toHaveTextContent('Maadi Warehouse · Cairo (default)')
+    expect(hint).toHaveTextContent('Not saved yet — choose a location to turn on pickups')
+    expect(within(hint).getByRole('button', { name: 'Use this location' })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Book Bosta pickups when I approve' })).toBeDisabled()
+    expect(screen.queryByTestId('save-bar')).toBeNull()
+    expect(saveButton()).toBeNull()
+    expect(screen.queryAllByTestId('edited-tag')).toHaveLength(0)
+
+    const e = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(false)
+
+    await user.click(screen.getAllByRole('link', { name: /Orders/ })[0])
+    expect(await screen.findByText('orders page')).toBeInTheDocument()
+    expect(screen.queryByTestId('leave-guard')).toBeNull()
+    expect(writes()).toEqual([])
+  })
+
+  test('"Use this location" → 1 unsaved change, pickup booking unlocks, Save sends the location', async () => {
+    const user = await open()
+    const booking = screen.getByRole('switch', { name: 'Book Bosta pickups when I approve' })
+    await user.click(await screen.findByRole('button', { name: 'Use this location' }))
+    expect(screen.getByTestId('unsaved-count')).toHaveTextContent('1 unsaved change')
+    expect(screen.getByLabelText('Returns go back to')).toHaveValue('loc-1')
+    expect(screen.queryByTestId('default-location-hint')).toBeNull()
+    expect(within(screen.getByTestId('return-location-row')).getByTestId('edited-tag')).toBeInTheDocument()
+    expect(booking).toBeEnabled()
+    expect(writes()).toEqual([])
+
+    await user.click(booking)
+    await user.click(saveButton()!)
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(writes()[0].url).toMatch(/\/tenant\/portal-settings$/)
+    expect(writes()[0].body).toMatchObject({ returnLocationId: 'loc-1', pickupBooking: true })
+  })
+
+  test('a store with a saved location is unaffected: no suggestion, nothing unsaved, booking available', async () => {
+    portal = { ...portal, returnLocationId: 'loc-1', returnLocationName: 'Maadi Warehouse' }
+    await open()
+    await waitFor(() => expect(screen.getByLabelText('Returns go back to')).toHaveValue('loc-1'))
+    expect(screen.queryByTestId('default-location-hint')).toBeNull()
+    expect(screen.queryByTestId('save-bar')).toBeNull()
+    expect(screen.getByRole('switch', { name: 'Book Bosta pickups when I approve' })).toBeEnabled()
   })
 })
 

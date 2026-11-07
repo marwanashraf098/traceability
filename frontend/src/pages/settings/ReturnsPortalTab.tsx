@@ -49,12 +49,7 @@ export default function ReturnsPortalTab() {
     update(d => ({ ...d, portal: { ...d.portal, form: { ...d.portal.form, [key]: value } } }))
     if (isFieldError(key)) clearFieldError(key)
   }, [update, clearFieldError])
-  // Stable: ReturnLocationRow preselects Bosta's default through it from an effect.
-  const [locationPicked, setLocationPicked] = useState(false)
-  const onLocation = useCallback((id: string | null, byUser: boolean) => {
-    setForm('returnLocationId', id)
-    if (byUser) setLocationPicked(true)
-  }, [setForm])
+  const onLocation = useCallback((id: string) => setForm('returnLocationId', id), [setForm])
   const onFees = useCallback((fn: (d: FeesDraft) => FeesDraft) => update(d => ({ ...d, ...fn(d) })), [update])
 
   if (s.loadError) {
@@ -99,11 +94,10 @@ export default function ReturnsPortalTab() {
   /** Bosta orders can be exchanged: pickup booking on with Bosta connected (saved state). */
   const bostaExchangePath = !!portal.portalPickupBooking && !!portal.bostaConnected
   /**
-   * A return location — saved, or picked by the merchant in this draft. Bosta's default, preselected automatically
-   * when nothing is saved, fills the field but unlocks booking only once saved (as before Pass B).
+   * A return location — saved, or picked by the merchant in this draft. Bosta's default is never filled in by itself
+   * (it is only suggested), so any location in the draft is one the merchant chose.
    */
-  const hasLocation = !!portal.returnLocationId && form.returnLocationId === portal.returnLocationId
-    || (locationPicked && !!form.returnLocationId)
+  const hasLocation = !!form.returnLocationId
 
   const windowNum = Number(d.windowText)
   const windowDays = d.windowText.trim() !== '' && Number.isInteger(windowNum) && windowNum >= 1 && windowNum <= 90 ? windowNum : null

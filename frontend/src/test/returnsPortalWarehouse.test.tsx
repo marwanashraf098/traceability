@@ -99,7 +99,7 @@ describe('Settings → Returns go back to', () => {
     await loaded()
     const select = await screen.findByLabelText('Returns go back to')
     await waitFor(() => expect(select).toHaveValue('5f0a7def4a839b00139d6203'))
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
   })
 
   test('Bosta refuses the key → the message, the saved location, and a retry', async () => {
