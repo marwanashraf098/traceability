@@ -4,6 +4,39 @@
 
 ## Current state
 
+**Returns portal settings redesign — Pass B, one save + merged controls (2026-11-07; branch `feat/portal-settings-pass-b`
+off main c6aa7ca4, committed on the branch, NOT merged, NOT deployed; no migration; backend change = one optional
+query param → deploy needs the usual `--no-cache` app rebuild). Waiting for review: 10 existing tests outside the
+approved list still assert the old per-section Save / disabled Save — their edits are proposed in the report.**
+- One draft for the whole tab (`portal/usePortalSettingsDraft.ts`) and one pure plan (`portal/savePlan.ts`): other
+  couriers → portal settings → exchange pricing → exchange fee → return fee → store's-fault reasons → products (one PUT
+  per changed product, no bulk PUT). A step runs only when its fields changed; a manager's plan has no owner-only call;
+  fees hidden → no fee call. Stops at the first failure: done steps become saved, the rest stay "Edited"; the bar names
+  the failed section with the backend's message. "Changes saved. Customers see them right away." is a toast, full
+  success only.
+- `SaveBar` (sticky, "N unsaved changes · Discard · Save changes", EN + AR plurals) is the only "Save changes", shown
+  only while edited. Every per-section Save and click-to-save is gone except the logo and area fees ("Saves right
+  away" stays only on those two).
+- Leave guard (`portal/useLeaveGuard.tsx`): in-app link clicks (sidebar, Settings menu, any same-site link outside the
+  tab) ask first; beforeunload while dirty. Back button out of scope.
+- Price mode: one radio group (lower / cap / nolimit; the stored conflicting pair reads "lower" and isn't an edit until
+  something changes; empty cap blocks Save client-side, 0 valid).
+- Merged waiver switch + reason chips: on only when every existing rule waives; mixed → off + note, and any save
+  writes the switch into every rule that exists with a valid amount (so they match). No rules → on; the value goes
+  into a rule created in the same save. Each fee row still says how the waiver applies to its type (fixed / percent).
+- **Return location:** a location the MERCHANT PICKS in the draft unlocks booking / exchanges (one PUT carries both;
+  backend stores the location first). The automatic preselect of Bosta's default does NOT unlock anything until saved
+  — needed to keep the genericCourierG4bFix golden snapshot byte-identical (its "Bosta, no location" case renders
+  after the preselect).
+- Excluded products: GET /variants?nonReturnable=true (new optional param, PortalSettingsService.listVariants — same
+  paging/search, same tenant WHERE; PortalVariantsFilterTest incl. cross-tenant with same-tenant positive control);
+  excluded-only list (empty state, plural count) + "Add products" search panel; Remove / Undo / Exclude go into the
+  draft.
+- **Test gotcha:** `stubFetchWithShellDefaults` (test/mockShellFetch.ts) answers ANY URL containing "/me" as GET /me —
+  it swallows PUT …/customer-fees/merchant-fault-reasons. portalSaveModel.test answers the shell calls itself by exact
+  match. The shared helper is unchanged (needs approval).
+- Still open from Pass A: moving "Allow exchanges" into the section header (golden snapshot update, with approval).
+
 **Returns portal settings redesign — Pass A, appearance only (2026-11-06; branch `feat/portal-settings-pass-a` off main
 a5e4e0fd, MERGED to main, NOT deployed; frontend only, no migration). Approved. Pass B NOT started.**
 Mockup: `design/returns-portal-settings.html`.

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Copy, ExternalLink } from 'lucide-react'
 import { Button, cn } from '../../../components/ui'
-import { SwitchRow } from './ui'
+import { EditedTag, SwitchRow } from './ui'
 
 export const PORTAL_HOST = 'returns.tracedtech.com'
 
@@ -11,7 +11,7 @@ export const PORTAL_HOST = 'returns.tracedtech.com'
  * link field are the form being edited, saved with "Save changes" as before.
  */
 export default function PortalHeaderCard({
-  savedLive, savedSlug, enabled, onEnabled, slug, onSlug, slugError, copied, onCopy,
+  savedLive, savedSlug, enabled, onEnabled, slug, onSlug, slugError, copied, onCopy, edited,
 }: {
   savedLive: boolean
   savedSlug: string | null
@@ -22,6 +22,7 @@ export default function PortalHeaderCard({
   slugError?: string
   copied: boolean
   onCopy: () => void
+  edited: { enabled: boolean; slug: boolean }
 }) {
   const { t } = useTranslation()
   const typed = slug.trim().toLowerCase()
@@ -56,6 +57,7 @@ export default function PortalHeaderCard({
           <SwitchRow
             title={t('settings.portal.enabled.title')}
             description={t('settings.portal.enabled.description')}
+            extra={edited.enabled ? <EditedTag /> : undefined}
             checked={enabled}
             onChange={onEnabled}
             note={!enabled ? t('settings.portal.page.offNote') : undefined}
@@ -64,9 +66,12 @@ export default function PortalHeaderCard({
         </div>
 
         <div className="px-6 py-5 space-y-2">
-          <label htmlFor="portal-slug" className="text-body font-semibold text-primary block">
-            {t('settings.portal.link.label')}
-          </label>
+          <div className="flex items-center">
+            <label htmlFor="portal-slug" className="text-body font-semibold text-primary block">
+              {t('settings.portal.link.label')}
+            </label>
+            {edited.slug && <EditedTag />}
+          </div>
           <div className="flex flex-wrap items-start gap-2">
             <div
               dir="ltr"

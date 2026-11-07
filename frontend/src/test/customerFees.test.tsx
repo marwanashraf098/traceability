@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { screen, within } from '@testing-library/react'
 import { renderWithProviders, waitFor } from './renderWithProviders'
 import CustomerFeesSection from '../pages/settings/CustomerFeesSection'
-import type { CustomerFeeSettings } from '../api'
+import ReturnsPortalTab from '../pages/settings/ReturnsPortalTab'
+import type { CustomerFeeSettings, PortalSettings } from '../api'
 
 // Returns portal fees F1 — Settings → Returns portal → Exchange pricing + Customer fees.
 //   hidden   — visible:false (until fees are charged) or a failed load → nothing renders
@@ -11,6 +12,8 @@ import type { CustomerFeeSettings } from '../api'
 //   reasons  — merchant-fault reasons saved in the portal's order
 //   pricing  — "same price or lower" hides the max-difference field and sends null for it;
 //              "free size and colour swaps" is sent as stored unless changed, false when switched off
+//   Redesign Pass B: rules / reasons / pricing are part of the Returns portal tab's one save — changing a control
+//   sends nothing; "Save changes" sends the same PUT as the old per-section Save did.
 //   areas    — add a district fee (city → districts → POST), remove a row (DELETE)
 //   manager  — read-only: no save buttons, owner-only note
 
@@ -26,6 +29,13 @@ const BASE: CustomerFeeSettings = {
   merchantFaultReasons: ['damaged', 'not_as_pictured', 'wrong_item'],
   overrides: [],
   exchangePricing: { anyProduct: false, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: true },
+}
+
+// Redesign Pass B — what the Returns portal tab also loads around the fee cards.
+const PORTAL: PortalSettings = {
+  slug: 'nourstudio', enabled: true, autoApprove: false, returnWindowDays: 30, logoUrl: null, brandColor: null,
+  policyText: null, pickupBooking: false, portalPickupBooking: false, returnLocationId: null, returnLocationName: null,
+  exchangesEnabled: true,   // exchange pricing shows only while exchanges are on
 }
 
 let settings: CustomerFeeSettings
@@ -51,6 +61,9 @@ function backend(url: string, opts: RequestInit = {}) {
   if (url.includes('/customer-fees/areas?cityId=C1')) return fakeResponse([{ id: 'D1', name: 'Nasr City', nameAr: 'مدينة نصر' }])
   if (url.includes('/customer-fees/areas')) return fakeResponse([{ id: 'C1', name: 'Cairo', nameAr: 'القاهرة' }])
   if (url.endsWith('/customer-fees') && method === 'GET') return fakeResponse(settings)
+  if (url.endsWith('/tenant/portal-settings') && method === 'GET') return fakeResponse(PORTAL)
+  if (url.includes('/variants?') && method === 'GET') return fakeResponse({ items: [], total: 0 })
+  if (url.includes('/bosta/return-locations')) return fakeResponse([])
   return fakeResponse(settings)
 }
 
@@ -65,6 +78,12 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 const writes = () => calls.filter(c => c.method !== 'GET')
+
+/** The Returns portal tab with the fee cards in it (redesign Pass B: one "Save changes" for the tab). */
+async function renderTab() {
+  renderWithProviders(<ReturnsPortalTab />)
+  await screen.findByTestId('fee-rules-table')
+}
 
 describe('customer fees settings', () => {
   test('hidden: visible:false renders nothing', async () => {
@@ -88,37 +107,40 @@ describe('customer fees settings', () => {
         maxAmount: null, waiveMerchantFault: true, updatedAt: '2026-11-05T10:00:00Z' }
       return { status: 200, data: settings }
     }
-    renderWithProviders(<CustomerFeesSection />)
-    const card = await screen.findByTestId('fee-rule-refund')
+    await renderTab()
+    const card = screen.getByTestId('fee-rule-refund')
     await user.click(within(card).getByRole('switch'))
     await user.type(within(card).getByTestId('fee-amount-refund'), '50')
-    await user.click(within(card).getByRole('button', { name: 'Save' }))
+    expect(writes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toEqual({
       method: 'PUT', url: expect.stringContaining('/tenant/portal-settings/customer-fees/rules/refund'),
       body: { enabled: true, mode: 'fixed', waiveMerchantFault: true, amount: 50, percent: null, minAmount: null, maxAmount: null },
     })
-    await waitFor(() => expect(within(card).getByRole('button', { name: 'Save' })).toBeDisabled())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
   })
 
   test('rules: a refusal shows the backend message', async () => {
     const user = userEvent.setup()
     reply = () => ({ status: 400, data: { code: 'FEE_PERCENT_INVALID', message_en: 'Enter a percentage above 0.', message_ar: 'أدخل نسبة.' } })
-    renderWithProviders(<CustomerFeesSection />)
-    const card = await screen.findByTestId('fee-rule-exchange')
+    await renderTab()
+    const card = screen.getByTestId('fee-rule-exchange')
     await user.click(within(card).getByRole('radio', { name: 'Percentage' }))
     await user.type(within(card).getByTestId('fee-percent-exchange'), '0')
-    await user.click(within(card).getByRole('button', { name: 'Save' }))
+    expect(writes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await within(card).findByTestId('error-fee-exchange')).toHaveTextContent('Enter a percentage above 0.')
   })
 
   test('reasons: saved in the portal order', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<CustomerFeesSection />)
-    const box = await screen.findByTestId('merchant-fault-reasons')
+    await renderTab()
+    const box = screen.getByTestId('merchant-fault-reasons')
     await user.click(within(box).getByTestId('reason-wrong_size'))
     await user.click(within(box).getByTestId('reason-damaged'))
-    await user.click(within(box).getByRole('button', { name: 'Save' }))
+    expect(writes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0].body).toEqual({ reasons: ['wrong_size', 'not_as_pictured', 'wrong_item'] })
   })
@@ -126,29 +148,32 @@ describe('customer fees settings', () => {
   test('pricing: same price or lower hides the max difference and sends null', async () => {
     const user = userEvent.setup()
     settings.exchangePricing.maxDifference = 300
-    renderWithProviders(<CustomerFeesSection />)
-    const box = await screen.findByTestId('exchange-pricing')
+    await renderTab()
+    const box = screen.getByTestId('exchange-pricing')
     expect(within(box).getByTestId('max-difference')).toHaveValue(300)
     // "What they can swap to" is a pair of cards on the same anyProduct boolean (redesign Pass A).
     const any = within(box).getByRole('radio', { name: /^Any product in stock/ })
     expect(any).toHaveAttribute('aria-checked', 'false')
     await user.click(any)
     expect(any).toHaveAttribute('aria-checked', 'true')
-    await user.click(within(box).getByRole('switch', { name: 'Same price or lower only' }))
+    // Price mode is one radio group (redesign Pass B): "Same price or lower only" in place of its old switch.
+    await user.click(within(box).getByRole('radio', { name: /^Same price or lower only/ }))
     expect(within(box).queryByTestId('max-difference')).toBeNull()
-    await user.click(within(box).getByRole('button', { name: 'Save' }))
+    expect(writes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0].body).toEqual({ anyProduct: true, sameOrLowerOnly: true, maxDifference: null, freeVariantSwaps: true })
   })
 
   test('pricing: switching free swaps off sends false', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<CustomerFeesSection />)
-    const box = await screen.findByTestId('exchange-pricing')
+    await renderTab()
+    const box = screen.getByTestId('exchange-pricing')
     const swaps = within(box).getByRole('switch', { name: 'Free size and colour swaps' })
     expect(swaps).toBeChecked()
     await user.click(swaps)
-    await user.click(within(box).getByRole('button', { name: 'Save' }))
+    expect(writes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0].body).toEqual({ anyProduct: false, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: false })
   })

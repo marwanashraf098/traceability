@@ -356,16 +356,18 @@ public class PortalSettingsService {
     /**
      * GET /api/v1/variants — this tenant's variants with their non-returnable flag, optionally
      * filtered by product title, variant title or SKU (case-insensitive substring; % and _ are
-     * matched literally). ORDER BY product title, variant title, id.
+     * matched literally). ORDER BY product title, variant title, id. {@code nonReturnableOnly}: only the variants
+     * marked non-returnable (Settings' excluded-products list); search, order and paging unchanged.
      */
     @Transactional(readOnly = true)
-    public Map<String, Object> listVariants(String search, int page, int size) {
+    public Map<String, Object> listVariants(String search, boolean nonReturnableOnly, int page, int size) {
         UUID tenantId = TenantContext.require();
         String pattern = search == null || search.isBlank() ? null
             : "%" + search.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
         String where =
             "FROM variants v JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id " +
-            "WHERE v.tenant_id = ? AND (?::text IS NULL OR pr.title ILIKE ? OR v.title ILIKE ? OR v.sku ILIKE ?) ";
+            "WHERE v.tenant_id = ? AND (?::text IS NULL OR pr.title ILIKE ? OR v.title ILIKE ? OR v.sku ILIKE ?) " +
+            (nonReturnableOnly ? "AND v.non_returnable " : "");
         List<Map<String, Object>> items = jdbc.query(
             "SELECT v.id, pr.title AS product_title, v.title AS variant_title, v.sku, v.non_returnable " + where +
             "ORDER BY pr.title, v.title, v.id LIMIT ? OFFSET ?",

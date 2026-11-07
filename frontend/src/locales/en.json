@@ -2830,7 +2830,19 @@
         "showMore": "Show {{count}} more",
         "showMore_other": "Show {{count}} more",
         "loadFailed": "Couldn't load products.",
-        "saveFailed": "Couldn't save that product. Please try again."
+        "saveFailed": "Couldn't save that product. Please try again.",
+        "count_one": "{{count}} product can't be returned",
+        "count_other": "{{count}} products can't be returned",
+        "emptyExcluded": "Every product can be returned.",
+        "add": "Add products",
+        "addTitle": "Add products customers can't return",
+        "done": "Done",
+        "exclude": "Exclude",
+        "excludeLabel": "Exclude {{name}}",
+        "remove": "Remove",
+        "removeLabel": "Remove {{name}}",
+        "undo": "Undo",
+        "undoLabel": "Keep {{name}} excluded"
       },
       "branding": {
         "title": "Branding",
@@ -3057,6 +3069,20 @@
           "amount": "Amount",
           "on": "On",
           "help": "Shown to the customer in the portal before they submit."
+        },
+        "priceMode": {
+          "title": "When the new item costs more",
+          "nolimit": "No limit",
+          "nolimitDesc": "The customer pays the whole difference. The courier collects it on delivery.",
+          "cap": "Up to a limit",
+          "capDesc": "The customer can pay extra up to an amount you set.",
+          "capHelp": "The courier collects the difference on delivery. 0 means nothing extra.",
+          "capRequired": "Enter the most a customer can pay extra, or choose another option."
+        },
+        "waiver": {
+          "title": "Waive fees when it's the store's fault",
+          "description": "Customers pay no fee when they return an item for one of the reasons below.",
+          "mixed": "Your fees don't agree on this yet. Saving applies this setting to every fee."
         }
       },
       "page": {
@@ -3138,6 +3164,33 @@
         "feeRefund": "A return fee of {{fee}} is taken off the refund.",
         "feeRefundWaived": "A return fee of {{fee}} is taken off the refund, except when it's the store's fault.",
         "noFees": "Customers pay no fees."
+      },
+      "saveBar": {
+        "label": "Unsaved changes",
+        "unsaved_one": "{{count}} unsaved change",
+        "unsaved_other": "{{count}} unsaved changes",
+        "discard": "Discard",
+        "saved": "Changes saved. Customers see them right away.",
+        "failed": "{{section}} wasn't saved.",
+        "partial": "The changes listed before it were saved; the rest are still marked Edited.",
+        "blocked": "Fix the highlighted field, then save.",
+        "edited": "Edited",
+        "sections": {
+          "otherCouriers": "Returns for other couriers' orders",
+          "portal": "Portal settings",
+          "pricing": "Exchange pricing",
+          "ruleExchange": "Exchange fee",
+          "ruleRefund": "Return fee",
+          "reasons": "The store's fault reasons",
+          "variants": "Products that can't be returned"
+        }
+      },
+      "leave": {
+        "title": "Leave without saving?",
+        "body_one": "You have {{count}} unsaved change on this page. If you leave now, it's lost.",
+        "body_other": "You have {{count}} unsaved changes on this page. If you leave now, they're lost.",
+        "stay": "Stay on this page",
+        "leave": "Leave without saving"
       }
     },
     "pickPack": {

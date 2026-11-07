@@ -4136,9 +4136,11 @@ export interface PortalVariantRow {
   nonReturnable: boolean
 }
 
-export function getPortalVariants(search: string, page = 0, size = 25) {
+/** nonReturnableOnly (redesign Pass B): only the products marked "can't be returned" — Settings' excluded list. */
+export function getPortalVariants(search: string, page = 0, size = 25, nonReturnableOnly = false) {
   const params = new URLSearchParams({ page: String(page), size: String(size) })
   if (search.trim()) params.set('search', search.trim())
+  if (nonReturnableOnly) params.set('nonReturnable', 'true')
   return request<{ items: PortalVariantRow[]; total: number }>(`/variants?${params.toString()}`)
 }
 

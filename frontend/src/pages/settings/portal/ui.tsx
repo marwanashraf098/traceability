@@ -59,6 +59,17 @@ export function SavesRightAway({ className }: { className?: string }) {
   )
 }
 
+/** "Edited" — next to a field whose change isn't saved yet. */
+export function EditedTag({ className }: { className?: string }) {
+  const { t } = useTranslation()
+  return (
+    <span className={cn('inline-flex items-center align-middle ms-2 rounded-full bg-warning/15 px-2 py-0.5',
+      'text-caption font-semibold text-warning-text', className)} data-testid="edited-tag">
+      {t('settings.portal.saveBar.edited')}
+    </span>
+  )
+}
+
 export interface RadioCardOption<V extends string> { value: V; title: string; description: string }
 
 /**
@@ -66,8 +77,9 @@ export interface RadioCardOption<V extends string> { value: V; title: string; de
  * role="radio" in a radiogroup — no hidden inputs — with the radio keyboard model: Tab reaches the chosen card, the
  * arrow keys move and choose.
  */
-export function RadioCards<V extends string>({ labelledBy, value, options, onChange, disabled, testId }: {
+export function RadioCards<V extends string>({ labelledBy, value, options, onChange, disabled, testId, columns = 2 }: {
   labelledBy: string; value: V; options: RadioCardOption<V>[]; onChange: (v: V) => void; disabled?: boolean; testId?: string
+  columns?: 2 | 3
 }) {
   const refs = useRef<Array<HTMLButtonElement | null>>([])
   function onKey(e: KeyboardEvent, i: number) {
@@ -82,7 +94,7 @@ export function RadioCards<V extends string>({ labelledBy, value, options, onCha
   }
   return (
     <div role="radiogroup" aria-labelledby={labelledBy} aria-disabled={disabled || undefined}
-      className="grid gap-2.5 sm:grid-cols-2" data-testid={testId}>
+      className={cn('grid gap-2.5', columns === 3 ? 'md:grid-cols-3' : 'sm:grid-cols-2')} data-testid={testId}>
       {options.map((o, i) => {
         const checked = o.value === value
         return (

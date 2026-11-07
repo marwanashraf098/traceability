@@ -5,7 +5,7 @@ import { Input, cn } from '../../../components/ui'
 import type { PortalFont } from '../../../portal/fonts'
 import { FontPicker, LogoUploader, PortalPreview } from '../PortalBranding'
 import { brandColourNote, policyWindowMismatch } from './portalChecks'
-import { SectionCard } from './ui'
+import { EditedTag, SectionCard } from './ui'
 
 export const LOGO_PREFIX = 'https://cdn.shopify.com/'
 export const POLICY_MAX = 2000
@@ -32,7 +32,7 @@ type Errors = Partial<Record<'logoUrl' | 'font' | 'brandColor' | 'policyText', s
  */
 export default function BrandingSection({
   saved, uploadedLogoUrl, onLogoSaved, logoUrl, onLogoUrl, font, onFont, brandColor, onBrandColor, policyText, onPolicyText,
-  windowDays, errors,
+  windowDays, errors, edited,
 }: {
   saved: PortalSettings
   uploadedLogoUrl: string | null
@@ -47,6 +47,7 @@ export default function BrandingSection({
   onPolicyText: (v: string) => void
   windowDays: number | null
   errors: Errors
+  edited: { logoUrl: boolean; font: boolean; brandColor: boolean; policyText: boolean }
 }) {
   const { t } = useTranslation()
   const logo = logoUrl.trim()
@@ -67,9 +68,12 @@ export default function BrandingSection({
                 {t('settings.portal.branding.useLink')}
               </summary>
               <div className="space-y-2 mt-2 max-w-xl">
-                <label htmlFor="portal-logo" className="text-small font-medium text-primary block">
-                  {t('settings.portal.branding.logoLabel')}
-                </label>
+                <div className="flex items-center">
+                  <label htmlFor="portal-logo" className="text-small font-medium text-primary block">
+                    {t('settings.portal.branding.logoLabel')}
+                  </label>
+                  {edited.logoUrl && <EditedTag />}
+                </div>
                 <div className="flex items-center gap-3">
                   <div className="flex-1" dir="ltr">
                     <Input
@@ -98,14 +102,18 @@ export default function BrandingSection({
           </div>
 
           <div className="px-6 py-5 space-y-2">
+            {edited.font && <EditedTag className="ms-0" />}
             <FontPicker value={font} onChange={onFont} />
             {errors.font && <p className="text-small text-critical" role="alert" data-testid="error-font">{errors.font}</p>}
           </div>
 
           <div className="px-6 py-5 space-y-2">
-            <label htmlFor="portal-color" className="text-body font-semibold text-primary block">
-              {t('settings.portal.branding.colorLabel')}
-            </label>
+            <div className="flex items-center">
+              <label htmlFor="portal-color" className="text-body font-semibold text-primary block">
+                {t('settings.portal.branding.colorLabel')}
+              </label>
+              {edited.brandColor && <EditedTag />}
+            </div>
             <div className="flex items-center gap-3">
               <input
                 type="color"
@@ -141,9 +149,12 @@ export default function BrandingSection({
           </div>
 
           <div className="px-6 py-5 space-y-2">
-            <label htmlFor="portal-policy" className="text-body font-semibold text-primary block">
-              {t('settings.portal.branding.policyLabel')}
-            </label>
+            <div className="flex items-center">
+              <label htmlFor="portal-policy" className="text-body font-semibold text-primary block">
+                {t('settings.portal.branding.policyLabel')}
+              </label>
+              {edited.policyText && <EditedTag />}
+            </div>
             <textarea
               id="portal-policy"
               rows={5}
