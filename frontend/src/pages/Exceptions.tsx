@@ -105,6 +105,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   tracking_change_needs_review:   { en: 'Shopify Shows A Different Waybill', ar: 'شوبيفاي يعرض بوليصة مختلفة' },
   tracking_changed_relabel:       { en: 'Put The New Waybill On The Parcel', ar: 'ضع البوليصة الجديدة على الطرد' },
   superseded_waybill_moving:      { en: 'Old Waybill Still Moving At Bosta', ar: 'البوليصة القديمة ما زالت تتحرك في Bosta' },
+  shipped_outside_traced:         { en: 'Shipped Outside Traced', ar: 'تم الشحن خارج Traced' },
   // Main reconcile R2 (V203)
   delivered_not_fulfilled_in_shopify: { en: 'Delivered But Not Fulfilled In Shopify', ar: 'تم التوصيل لكنه غير منفّذ في شوبيفاي' },
   // O6-fixes — every type the backend raises has a label (guard: alertLabels.test.tsx reads ExceptionService.java)

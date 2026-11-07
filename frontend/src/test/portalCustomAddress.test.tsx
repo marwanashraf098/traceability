@@ -129,7 +129,7 @@ describe('P3 pickup address', () => {
     const same = screen.getByRole('radio', { name: 'Same as my delivery address (Nasr City - 7th District, Cairo)' })
     expect(same).toBeChecked()
     expect(screen.getByRole('radio', { name: 'A different address' })).not.toBeChecked()
-    expect(screen.getByLabelText('Area')).toHaveValue('Iy7-lFD0BE0')
+    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()   // 2026-11-07: known district, no field
     expect(screen.queryByLabelText('Governorate')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Send return request' }))
@@ -245,7 +245,8 @@ describe('P3 pickup address', () => {
     lookupBody = { ...lookupBody, pickup: { ...PICKUP, cities: undefined } }
     await toDetails()
     expect(screen.queryByRole('radio', { name: 'A different address' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Area')).toHaveValue('Iy7-lFD0BE0')
+    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()   // 2026-11-07: known district, no field
+    expect(screen.getByTestId('pickup-place')).toHaveTextContent('Nasr City - 7th District, Cairo')
   })
 
   test('Arabic: RTL, labels and names in Arabic', async () => {

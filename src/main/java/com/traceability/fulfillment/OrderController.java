@@ -217,7 +217,27 @@ public class OrderController {
         // Shopify-native returns S2 (read-only): the order's Shopify returns (ShopifyReturnsView cards). Absent when
         // the order has none — the detail of such an order is byte-identical to before S2.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
-        List<Map<String, Object>> shopifyReturns) {}
+        List<Map<String, Object>> shopifyReturns,
+        // 2026-11-07: {pieces, target} when "Shipped outside Traced" applies now (ShippedOutsideTraced.offer); absent
+        // otherwise — every other order's detail is byte-identical.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        Map<String, Object> shippedOutsideTraced) {
+
+        /** Before 2026-11-07 — no "Shipped outside Traced" offer. */
+        public OrderDetail(String id, String number, String customerName, String customerPhone,
+                           Object address, String paymentMethod, BigDecimal codAmount,
+                           String status, boolean onHold, String holdReason,
+                           Instant placedAt, Instant createdAt,
+                           List<OrderItem> items, List<ShipmentDetail> shipments,
+                           String bostaLinkStatus, Instant notTracedAt, boolean isExchange,
+                           OrderStatusDeriver.DerivedOrderStatus derivedStatus, String shopifyOrderUrl,
+                           boolean physicallyWithCourier, OrderShippingBadge shippingBadge,
+                           List<Map<String, Object>> shopifyReturns) {
+            this(id, number, customerName, customerPhone, address, paymentMethod, codAmount, status, onHold, holdReason,
+                placedAt, createdAt, items, shipments, bostaLinkStatus, notTracedAt, isExchange, derivedStatus,
+                shopifyOrderUrl, physicallyWithCourier, shippingBadge, shopifyReturns, null);
+        }
+    }
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
@@ -1177,7 +1197,8 @@ public class OrderController {
                 items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
                 order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier,
                 shippingBadge(orderId),
-                new com.traceability.returncases.ShopifyReturnsView(jdbc).cardsForOrder(orderId));
+                new com.traceability.returncases.ShopifyReturnsView(jdbc).cardsForOrder(orderId),
+                com.traceability.inventory.ShippedOutsideTraced.offer(jdbc, TenantContext.require(), orderId));
         });
     }
 
@@ -1518,6 +1539,23 @@ public class OrderController {
         return notesService.list(orderId).stream()
             .map(n -> new OrderNoteResponse(n.id(), n.body(), n.authorName(), n.createdAt()))
             .toList();
+    }
+
+    private com.traceability.inventory.ShippedOutsideTraced shippedOutsideTraced;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShippedOutsideTraced(com.traceability.inventory.ShippedOutsideTraced s) { this.shippedOutsideTraced = s; }
+
+    /**
+     * 2026-11-07 — "Shipped outside Traced": moves the order's pieces still held in Traced out of custody
+     * (ShippedOutsideTraced; existing ledger edges, audited, no Shopify write). 404 not this tenant's (or not a
+     * merchant) order; 409 nothing to move. Owner / manager.
+     */
+    @PostMapping("/{orderId}/shipped-outside-traced")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public com.traceability.inventory.ShippedOutsideTraced.Result shippedOutsideTraced(
+            @PathVariable UUID orderId, @AuthenticationPrincipal CustomUserDetails principal) {
+        return shippedOutsideTraced.apply(orderId, principal.userId());
     }
 
     @PostMapping("/{orderId}/notes")

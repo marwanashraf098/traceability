@@ -49,6 +49,7 @@ export const ALERT_GROUPS: Record<string, string[]> = {
   ],
   'alerts-packing': [
     'guided_unpack', 'pack_set_aside', 'pack_cancelled_after_print', 'blocked_customer', 'shopify_edit_conflict',
+    'shipped_outside_traced',
   ],
   'alerts-returns': [
     'never_received', 'return_leg_unscanned', 'return_in_transit_stuck', 'return_to_receive',

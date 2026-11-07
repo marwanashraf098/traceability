@@ -4,7 +4,7 @@ topic: alerts
 title: تنبيهات التغليف
 roles: [owner, manager]
 related: [set-aside, cancelled-after-print, unpack-after-edit, alerts-cancelled-orders]
-alerts: [guided_unpack, pack_set_aside, pack_cancelled_after_print, blocked_customer, shopify_edit_conflict]
+alerts: [guided_unpack, pack_set_aside, pack_cancelled_after_print, blocked_customer, shopify_edit_conflict, shipped_outside_traced]
 screens: [/exceptions, /fulfill]
 video:
 ---
@@ -29,3 +29,7 @@ video:
 ## عُدّل في شوبيفاي بعد التغليف
 
 تغيّرت منتجات الطلب في Shopify بعد دخوله التغليف. افتح الطلب وقارن ما غُلّف بما طلبه العميل الآن. إذا كان الطلب مغلّفًا وما زال في مخزنك، يعرض التنبيه زر **فكّ تغليف الطلب** لتعيد تغليفه بشكل صحيح. عالج التنبيه عندما يطابق الطرد الطلب.
+
+## تم الشحن خارج Traced
+
+مُسحت قطع هذا الطلب في التجهيز والتغليف، لكن الطلب لم يكتمل هناك: شُحن بطريقة أخرى (أنشأ تطبيق بوسطة البوليصة ونفّذه شوبيفاي). ما زال Traced يحجز القطع، لذلك لا تظهر في مخزونك ولا في بوابة المرتجعات. افتح الطلب (**الإجراء**) واختر **تم الشحن خارج Traced**: تُسجَّل القطع مع شركة الشحن (أو مُسلَّمة إن أبلغت شركة الشحن بذلك)، مثل أي طلب مشحون. لا يتغير شيء في شوبيفاي. يختفي التنبيه بعد نقل القطع.

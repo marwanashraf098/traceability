@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Portal fees: same-product swap refunds (decision C, V223) + refund method only when owed + "Same address" pickup
+without a picker; stale-reserved diagnosis (2026-11-07; branch `feat/portal-fees-pricing-fixes` off main 8b7b51b4,
+merged to main, NOT deployed; migration V223 — main and prod ended at V222 (prod checked by Marawan 22:02)).**
+- **Decision C:** `tenants.portal_same_product_swap_refunds` (default false for every tenant). Off: a same-product
+  swap to a lower price is floored at 0 (no customer_owed; fee and a positive difference still collected); on = before.
+  Different products: real difference both ways. Settings → Exchange pricing switch, shown only while free swaps are
+  off; the PUT carries the key only when it changed. Portal quote + drawer show "a cheaper size isn't refunded" when the
+  frozen difference is 0 but the new price is lower. The Snouts RR-9RTKVJ (720 → 550, fee 10): off = collect 10 / owed
+  0, on = owed 160.
+- **Refund method (RR-LR48WZ):** asked / stored only for a refund or an exchange with customer_owed > 0. The "refund
+  me instead" fallback no longer asks — a later switch-to-refund has no method on file (the merchant asks the
+  customer). Old fallback copy (rf.titleFallback / leadFallback) removed.
+- **"Same address":** Bosta's create schema requires a district (districtId, or districtName + cityId) on both
+  pickupAddress (25) and dropOffAddress (30), so: original district known AND offered for the mode → no city / area
+  field, the portal sends it; else the area is asked (city fixed). Server unchanged (still requires a district). Fee
+  area unchanged: district override → city override → rule (storedDeliveryArea when no district is chosen).
+- **Stale reserved pieces → "Shipped outside Traced" (approved + built 2026-11-07, option A):** a pick scan never
+  completed, then the order shipped outside Traced; nothing could move the piece. Alert `shipped_outside_traced`
+  (MEDIUM, > 7 days since Shopify fulfilled) + owner/manager action in the order drawer (existing ledger edges,
+  packed:with_courier reuse approved, audited, NO Shopify write). Prod today: The Snouts 4 reserved, Juno Babies 2 —
+  after deploy, open each alert's order and use the action. Option B (auto after N days) not approved.
+- **Test edits approved and applied:** PortalRefundMethodTest.s3, portalRefundMethod.test.tsx, portalCustomAddress ×2,
+  portalPickupArea ×1, portalExchangeAreas (refund case). Registry additions: PortalOrderLeakTest + ShadowOrderLeakTest
+  (`POST /orders/{orderId}/shipped-outside-traced`, byOrder).
+
 **O6-fixes — Alerts page labels, "clears when" texts, Go links, the Not traced hint (2026-11-07; branch
 `fix/o6-alert-fixes` off main b6886ece, worktree `~/Documents/traceability-o6f`; approved and MERGED 2026-11-07, NOT
 deployed; frontend only, no migration).**

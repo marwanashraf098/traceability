@@ -89,6 +89,10 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
               <dt className="text-secondary">{t(`${k}.priceDifference`)}</dt>
               <dd dir="ltr" data-testid="fee-difference">{signed(diff)}</dd>
             </div>
+            {/* V223: a cheaper same-product swap isn't paid back while the store's setting is off (frozen as 0). */}
+            {diff === 0 && a.paidPrice != null && a.replacementPrice != null && Number(a.replacementPrice) < Number(a.paidPrice) && (
+              <p className="text-small text-muted" data-testid="fee-difference-floored">{t(`${k}.differenceFloored`)}</p>
+            )}
           </>
         )}
         <div className="flex justify-between gap-4">

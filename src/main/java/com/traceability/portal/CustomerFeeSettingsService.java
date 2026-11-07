@@ -46,11 +46,19 @@ public class CustomerFeeSettingsService {
                                 BigDecimal percent, BigDecimal minAmount, BigDecimal maxAmount) {}
 
     public record ExchangePricing(boolean anyProduct, boolean sameOrLowerOnly, BigDecimal maxDifference,
-                                  boolean freeVariantSwaps) {}
+                                  boolean freeVariantSwaps, boolean sameProductSwapRefunds) {}
 
-    /** {@code freeVariantSwaps} null = keep the stored value (it defaults to true for stores that existed before V210). */
+    /**
+     * {@code freeVariantSwaps} null = keep the stored value (it defaults to true for stores that existed before V210).
+     * {@code sameProductSwapRefunds} null = keep the stored value (V223, default false).
+     */
     public record ExchangePricingInput(Boolean anyProduct, Boolean sameOrLowerOnly, BigDecimal maxDifference,
-                                       Boolean freeVariantSwaps) {}
+                                       Boolean freeVariantSwaps, Boolean sameProductSwapRefunds) {
+        public ExchangePricingInput(Boolean anyProduct, Boolean sameOrLowerOnly, BigDecimal maxDifference,
+                                    Boolean freeVariantSwaps) {
+            this(anyProduct, sameOrLowerOnly, maxDifference, freeVariantSwaps, null);
+        }
+    }
 
     public record Settings(boolean visible, Map<String, Rule> rules, List<String> merchantFaultReasons,
                            List<Override> overrides, ExchangePricing exchangePricing) {}
@@ -92,7 +100,8 @@ public class CustomerFeeSettingsService {
 
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_exchange_any_product, portal_exchange_same_or_lower_only, portal_exchange_max_difference, " +
-            "       portal_free_variant_swaps, portal_merchant_fault_reasons FROM tenants WHERE id = ?", tenantId);
+            "       portal_free_variant_swaps, portal_same_product_swap_refunds, portal_merchant_fault_reasons " +
+            "FROM tenants WHERE id = ?", tenantId);
 
         List<Override> overrides = jdbc.query(
             "SELECT o.id, o.kind, o.city_id, c.city_name, c.city_name_ar, o.district_id, d.district_name, d.district_name_ar, " +
@@ -114,7 +123,8 @@ public class CustomerFeeSettingsService {
             new ExchangePricing(Boolean.TRUE.equals(t.get("portal_exchange_any_product")),
                 Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")),
                 (BigDecimal) t.get("portal_exchange_max_difference"),
-                Boolean.TRUE.equals(t.get("portal_free_variant_swaps"))));
+                Boolean.TRUE.equals(t.get("portal_free_variant_swaps")),
+                Boolean.TRUE.equals(t.get("portal_same_product_swap_refunds"))));
     }
 
     /** Bosta cities (cityId null) or the districts of one city — names only, for the area override picker. */
@@ -204,22 +214,26 @@ public class CustomerFeeSettingsService {
         if (maxDiff != null && !wholeInRange(maxDiff, true)) throw CustomerFeeException.maxDifference();
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_exchange_any_product, portal_exchange_same_or_lower_only, portal_exchange_max_difference, " +
-            "       portal_free_variant_swaps FROM tenants WHERE id = ? FOR UPDATE", tenantId);
+            "       portal_free_variant_swaps, portal_same_product_swap_refunds FROM tenants WHERE id = ? FOR UPDATE", tenantId);
         Map<String, Object> before = new LinkedHashMap<>();
         before.put("anyProduct", Boolean.TRUE.equals(t.get("portal_exchange_any_product")));
         before.put("sameOrLowerOnly", Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")));
         before.put("maxDifference", norm((BigDecimal) t.get("portal_exchange_max_difference")));
         before.put("freeVariantSwaps", Boolean.TRUE.equals(t.get("portal_free_variant_swaps")));
+        before.put("sameProductSwapRefunds", Boolean.TRUE.equals(t.get("portal_same_product_swap_refunds")));
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("anyProduct", Boolean.TRUE.equals(in.anyProduct()));
         after.put("sameOrLowerOnly", Boolean.TRUE.equals(in.sameOrLowerOnly()));
         after.put("maxDifference", norm(maxDiff));
         after.put("freeVariantSwaps", in.freeVariantSwaps() == null ? before.get("freeVariantSwaps") : in.freeVariantSwaps());
+        after.put("sameProductSwapRefunds", in.sameProductSwapRefunds() == null
+            ? before.get("sameProductSwapRefunds") : in.sameProductSwapRefunds());
         if (after.equals(before)) return get();
         jdbc.update("UPDATE tenants SET portal_exchange_any_product = ?, portal_exchange_same_or_lower_only = ?, " +
-                    "    portal_exchange_max_difference = ?, portal_free_variant_swaps = ? WHERE id = ?",
+                    "    portal_exchange_max_difference = ?, portal_free_variant_swaps = ?, " +
+                    "    portal_same_product_swap_refunds = ? WHERE id = ?",
             after.get("anyProduct"), after.get("sameOrLowerOnly"), after.get("maxDifference"),
-            after.get("freeVariantSwaps"), tenantId);
+            after.get("freeVariantSwaps"), after.get("sameProductSwapRefunds"), tenantId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("from", before);
         m.put("to", after);

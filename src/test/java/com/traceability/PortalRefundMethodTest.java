@@ -40,7 +40,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   s2 methods on → /config lists them in order; refund without one → refused; a method the store doesn't
  *      offer (switched off since lookup) → refused; a valid one → stored: method, hint, encrypted blob
  *      (no plaintext in the row)
- *   s3 plain exchange → not asked (a method sent → refused); exchange with the refund fallback → required
+ *   s3 plain exchange → not asked (a method sent → refused); exchange with the refund fallback → not asked either
+ *      (2026-11-07: asked only when the store owes the customer)
  *   d1 the detail payload carries method + hint + flags only; details never in the payload or return_refunds
  *   d2 refund-details: owner / manager get them (no-store); worker 403; another tenant 404 (positive control)
  *   a1 AAD: the ciphertext copied onto another request doesn't decrypt
@@ -162,7 +163,7 @@ class PortalRefundMethodTest {
     // ── s3 ───────────────────────────────────────────────────────────────────
 
     @Test
-    void s3_plainExchangeNotAsked_fallbackExchangeRequired() {
+    void s3_plainExchangeNotAsked_fallbackExchangeNotAskedEither() {
         methods(a, "instapay");
         jdbc.update("UPDATE tenants SET portal_exchanges_enabled = true WHERE id = ?", a.id());
 
@@ -171,13 +172,16 @@ class PortalRefundMethodTest {
             .as("plain exchange: a method sent is refused").isEqualTo(PortalService.SubmitOutcome.INVALID);
         assertThat(exchange(a, plain, false, null, null).outcome()).isEqualTo(PortalService.SubmitOutcome.CREATED);
 
+        // 2026-11-07 (approved): the refund fallback alone no longer asks — the store owes nothing.
         Order fallback = order(a, "#S3B");
-        assertThat(exchange(a, fallback, true, null, null).outcome()).as("fallback: required").isEqualTo(PortalService.SubmitOutcome.INVALID);
         assertThat(exchange(a, fallback, true, "instapay", details("instapay", "Ahmed.K@instapay")).outcome())
-            .isEqualTo(PortalService.SubmitOutcome.CREATED);
-        assertThat(jdbc.queryForMap("SELECT type, refund_method, refund_details_hint FROM return_requests WHERE order_id = ?",
-            fallback.id())).containsEntry("type", "exchange").containsEntry("refund_method", "instapay")
-            .containsEntry("refund_details_hint", "••••ed.k");
+            .as("fallback: a method sent is refused").isEqualTo(PortalService.SubmitOutcome.INVALID);
+        assertThat(exchange(a, fallback, true, null, null).outcome()).isEqualTo(PortalService.SubmitOutcome.CREATED);
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT type, refund_method, refund_details_hint FROM return_requests WHERE order_id = ?", fallback.id());
+        assertThat(row).containsEntry("type", "exchange");
+        assertThat(row.get("refund_method")).isNull();
+        assertThat(row.get("refund_details_hint")).isNull();
     }
 
     // ── d1 ───────────────────────────────────────────────────────────────────

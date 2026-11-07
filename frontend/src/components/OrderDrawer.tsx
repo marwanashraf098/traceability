@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
 import {
-  getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder,
+  getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder, markShippedOutsideTraced,
   getOrderNotes, addOrderNote, ServerMessageError,
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
@@ -75,6 +75,23 @@ export default function OrderDrawer({
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelBusy, setCancelBusy] = useState(false)
   const [cancelErr,  setCancelErr]  = useState('')
+
+  // 2026-11-07 — "Shipped outside Traced" (ShippedOutsideTraced): a plain confirmation, then reload.
+  const [soOpen, setSoOpen] = useState(false)
+  const [soBusy, setSoBusy] = useState(false)
+  const [soErr,  setSoErr]  = useState('')
+
+  const handleShippedOutside = async () => {
+    if (!orderId) return
+    setSoBusy(true); setSoErr('')
+    try {
+      await markShippedOutsideTraced(orderId)
+      setSoOpen(false); reload()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      setSoErr(msg.startsWith('409') ? t('orders.shippedOutside.conflict') : t('orders.shippedOutside.error'))
+    } finally { setSoBusy(false) }
+  }
 
   const reload = () => {
     if (!orderId) return
@@ -379,6 +396,19 @@ export default function OrderDrawer({
                     )}
                   </div>
 
+                  {/* 2026-11-07 — pieces still held in Traced on an order that shipped without Traced's pack flow. */}
+                  {order.shippedOutsideTraced && (
+                    <div className="rounded-2xl border border-warning/40 bg-warning/[0.08] p-4 space-y-2.5" data-testid="shipped-outside">
+                      <p className="text-body font-semibold text-primary">{t('orders.shippedOutside.title')}</p>
+                      <p className="text-small text-secondary">
+                        {t('orders.shippedOutside.body', { count: order.shippedOutsideTraced.pieces })}
+                      </p>
+                      <Button size="sm" variant="secondary" onClick={() => { setSoErr(''); setSoOpen(true) }}>
+                        {t('orders.shippedOutside.action')}
+                      </Button>
+                    </div>
+                  )}
+
                   {/* S2 — returns / exchanges made in Shopify (read-only), one card each; absent when none. */}
                   {order.shopifyReturns && order.shopifyReturns.length > 0 && (
                     <div className="space-y-3" data-testid="shopify-returns">
@@ -593,6 +623,23 @@ export default function OrderDrawer({
                 onClick={handleHold}
               >
                 {t('orderDetail.holdDialog.confirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {soOpen && order?.shippedOutsideTraced && (
+        <Modal title={t('orders.shippedOutside.dialogTitle')} onClose={() => setSoOpen(false)}>
+          <div className="space-y-4">
+            <p className="text-small text-muted">
+              {t(order.shippedOutsideTraced.target === 'delivered' ? 'orders.shippedOutside.dialogBodyDelivered' : 'orders.shippedOutside.dialogBody',
+                { count: order.shippedOutsideTraced.pieces })}
+            </p>
+            {soErr && <p className="text-critical text-small" role="alert">{soErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setSoOpen(false)}>{t('common.cancel')}</Button>
+              <Button variant="primary" loading={soBusy} onClick={handleShippedOutside}>
+                {t('orders.shippedOutside.confirm')}
               </Button>
             </div>
           </div>

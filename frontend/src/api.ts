@@ -418,6 +418,11 @@ export interface OrderDetail {
   shippingBadge: OrderShippingBadge | null
   /** S2: the order's Shopify returns, oldest first. Absent when there is none. */
   shopifyReturns?: ShopifyReturnView[]
+  /**
+   * 2026-11-07: present only when "Shipped outside Traced" applies now — pieces still held in Traced on an order the
+   * courier has (Shopify fulfilled it). target = what the pieces become.
+   */
+  shippedOutsideTraced?: { pieces: number; target: 'with_courier' | 'delivered' }
 }
 
 export interface OrderListParams {
@@ -1941,6 +1946,15 @@ export function updateOrderCod(orderId: string, amount: number) {
 // C2: a refusal that carries {code, message_en, message_ar} (e.g. LOOKUP_EXCHANGE_ORDER — the replacement order of a
 // Lookup exchange) throws ServerMessageError so the drawer shows it; a bare 409 / other error keeps the old
 // `${status}: ${statusText}` Error.
+/** 2026-11-07 — "Shipped outside Traced": moves the order's held pieces out of custody (owner / manager). */
+export async function markShippedOutsideTraced(orderId: string): Promise<{ pieces: number; target: string }> {
+  const res = await authFetch(`/orders/${orderId}/shipped-outside-traced`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) throw new Error(`${res.status}`)
+  return res.json()
+}
+
 export async function cancelOrder(orderId: string) {
   const res = await authFetch(`/fulfill/${orderId}/cancel`, {
     method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
@@ -3898,6 +3912,11 @@ export interface ExchangePricing {
   maxDifference: number | null
   /** Same-product exchanges ignore the price difference. Defaults to true for stores that existed before it. */
   freeVariantSwaps: boolean
+  /**
+   * V223 — with free swaps off, a same-product swap to a LOWER price pays the customer back the difference (default
+   * false: floored at 0). Absent in a PUT body = keep the stored value.
+   */
+  sameProductSwapRefunds?: boolean
 }
 
 export interface CustomerFeeSettings {
