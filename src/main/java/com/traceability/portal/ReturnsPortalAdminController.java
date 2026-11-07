@@ -408,13 +408,18 @@ public class ReturnsPortalAdminController {
         return ResponseEntity.status(e.getStatusCode()).body(err);
     }
 
-    /** Step 4e-A — variant list for the "products that can't be returned" setting. */
+    /**
+     * Step 4e-A — variant list for the "products that can't be returned" setting. Redesign Pass B: optional
+     * {@code nonReturnable=true} lists only the excluded variants (any other value, or none, lists every variant).
+     */
     @GetMapping("/variants")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> listVariants(@RequestParam(required = false) String search,
+                                            @RequestParam(required = false) Boolean nonReturnable,
                                             @RequestParam(defaultValue = "0")  int page,
                                             @RequestParam(defaultValue = "25") int size) {
-        return settings.listVariants(search, Math.max(page, 0), Math.min(Math.max(size, 1), 100));
+        return settings.listVariants(search, Boolean.TRUE.equals(nonReturnable), Math.max(page, 0),
+            Math.min(Math.max(size, 1), 100));
     }
 
     public record NonReturnableRequest(Boolean value) {}

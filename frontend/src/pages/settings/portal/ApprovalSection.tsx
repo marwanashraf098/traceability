@@ -2,17 +2,19 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BostaReturnLocation, ReturnLocationsError, getReturnLocations } from '../../../api'
 import { Button, cn } from '../../../components/ui'
-import { RadioCards, SectionCard, SwitchRow } from './ui'
+import { EditedTag, RadioCards, SectionCard, SwitchRow } from './ui'
 
 /**
  * Approval & pickup — how requests are approved (cards on the same autoApprove boolean), Bosta pickup booking and
- * where returns go back to. Booking keeps its preconditions exactly: it can be switched ON only with Bosta connected
- * and a return location SAVED (the backend enforces the same); the reason shows under it.
+ * where returns go back to. Booking can be switched ON only with Bosta connected and a return location — since Pass B
+ * a location chosen in the same draft counts (the one save sends it in the same PUT, and the backend stores the
+ * location first). Bosta's default is only suggested ("Use this location"), never filled in by itself. The reason
+ * shows under it.
  */
 export default function ApprovalSection({
   autoApprove, onAutoApprove, savedPickupBooking,
   bookingOn, onBooking, bookingDisabled, bookingNote, bookingError,
-  savedLocationName, locationId, onLocation, locationError,
+  savedLocationName, locationId, onLocation, locationError, edited,
 }: {
   autoApprove: boolean
   onAutoApprove: (v: boolean) => void
@@ -25,15 +27,19 @@ export default function ApprovalSection({
   bookingError?: string
   savedLocationName: string | null
   locationId: string | null
-  onLocation: (id: string | null) => void
+  onLocation: (id: string) => void
   locationError?: string
+  edited: { autoApprove: boolean; booking: boolean; location: boolean }
 }) {
   const { t } = useTranslation()
   return (
     <SectionCard id="portal-approval" title={t('settings.portal.sections.approval.title')}
       description={t('settings.portal.sections.approval.description')}>
       <div className="px-6 py-5 space-y-3">
-        <p id="portal-approval-mode" className="text-body font-semibold text-primary">{t('settings.portal.approval.title')}</p>
+        <div className="flex items-center">
+          <p id="portal-approval-mode" className="text-body font-semibold text-primary">{t('settings.portal.approval.title')}</p>
+          {edited.autoApprove && <EditedTag />}
+        </div>
         <RadioCards labelledBy="portal-approval-mode" value={autoApprove ? 'auto' : 'manual'} testId="approval-mode"
           onChange={v => onAutoApprove(v === 'auto')}
           options={[
@@ -46,6 +52,7 @@ export default function ApprovalSection({
       <SwitchRow
         title={t('settings.portal.booking.title')}
         description={t('settings.portal.booking.description')}
+        extra={edited.booking ? <EditedTag /> : undefined}
         checked={bookingOn}
         disabled={bookingDisabled}
         note={bookingNote}
@@ -53,15 +60,16 @@ export default function ApprovalSection({
         onChange={onBooking}
       />
 
-      <ReturnLocationRow savedName={savedLocationName} value={locationId} onChange={onLocation} error={locationError} />
+      <ReturnLocationRow savedName={savedLocationName} value={locationId} onChange={onLocation} error={locationError}
+        edited={edited.location} />
     </SectionCard>
   )
 }
 
 /** "Returns go back to" — the tenant's Bosta pickup locations, loaded live. */
 function ReturnLocationRow({
-  savedName, value, onChange, error,
-}: { savedName: string | null; value: string | null; onChange: (id: string | null) => void; error?: string }) {
+  savedName, value, onChange, error, edited,
+}: { savedName: string | null; value: string | null; onChange: (id: string) => void; error?: string; edited: boolean }) {
   const { t } = useTranslation()
   const [locations, setLocations] = useState<BostaReturnLocation[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -78,12 +86,9 @@ function ReturnLocationRow({
 
   useEffect(() => { load() }, [load])
 
-  // Nothing saved yet → preselect Bosta's default location.
-  useEffect(() => {
-    if (!locations || value) return
-    const def = locations.find(l => l.isDefault)
-    if (def) onChange(def.id)
-  }, [locations, value, onChange])
+  // Nothing saved yet: Bosta's default is SHOWN, not filled in — the draft stays equal to saved (no unsaved change)
+  // until the merchant picks it ("Use this location") or another one.
+  const defaultLocation = locations?.find(l => l.isDefault) ?? null
 
   const label = (l: BostaReturnLocation) => {
     const name = l.cityName ? `${l.name} · ${l.cityName}` : l.name
@@ -93,9 +98,12 @@ function ReturnLocationRow({
   return (
     <div className="px-6 py-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3" data-testid="return-location-row">
       <div className="min-w-0 flex-1 basis-60">
-        <label htmlFor="portal-return-location" className="text-body font-semibold text-primary block">
-          {t('settings.portal.returnLocation.label')}
-        </label>
+        <div className="flex items-center">
+          <label htmlFor="portal-return-location" className="text-body font-semibold text-primary block">
+            {t('settings.portal.returnLocation.label')}
+          </label>
+          {edited && <EditedTag />}
+        </div>
         <p id="portal-return-location-help" className="text-small text-muted mt-0.5">{t('settings.portal.returnLocation.help')}</p>
       </div>
       <div className="flex-1 basis-72 max-w-md space-y-2">
@@ -118,17 +126,28 @@ function ReturnLocationRow({
         ) : locations.length === 0 ? (
           <p className="text-small text-muted">{t('settings.portal.returnLocation.empty')}</p>
         ) : (
+          <>
+          {!value && defaultLocation && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 space-y-2" data-testid="default-location-hint">
+              <p className="text-small text-primary font-semibold"><bdi>{label(defaultLocation)}</bdi></p>
+              <p className="text-small text-muted">{t('settings.portal.returnLocation.notSaved')}</p>
+              <Button variant="outline" size="sm" onClick={() => onChange(defaultLocation.id)}>
+                {t('settings.portal.returnLocation.useThis')}
+              </Button>
+            </div>
+          )}
           <select
             id="portal-return-location"
             className={cn('input w-full', error && 'border-critical')}
             aria-invalid={!!error}
             aria-describedby="portal-return-location-help"
             value={value ?? ''}
-            onChange={e => onChange(e.target.value || null)}
+            onChange={e => { if (e.target.value) onChange(e.target.value) }}
           >
             {!value && <option value="" disabled>{t('settings.portal.returnLocation.label')}</option>}
             {locations.map(l => <option key={l.id} value={l.id}>{label(l)}</option>)}
           </select>
+          </>
         )}
         {error && <p className="text-small text-critical" role="alert" data-testid="error-returnLocationId">{error}</p>}
       </div>

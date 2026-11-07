@@ -133,6 +133,11 @@ describe('Settings — Allow exchanges with other couriers (no Bosta)', () => {
     await waitFor(() => expect(screen.getByTestId('exchanges-note')).toHaveTextContent(
       'No order can be exchanged right now. Turn on Bosta pickup booking, or returns for orders shipped with other couriers.'))
     expect(screen.getByRole('switch', SWITCH)).toBeChecked()
+    // Redesign Pass B: nothing is sent until "Save changes", which sends the same PUT the switch used to send.
+    expect(calls.some(c => c.method === 'PUT')).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(calls.some(c => c.method === 'PUT' && c.url.includes('/other-couriers')
+      && JSON.stringify(c.body) === '{"enabled":false}')).toBe(true))
   })
 
   test('Bosta + other couriers: turning pickup booking off keeps exchanges on', async () => {
@@ -143,6 +148,13 @@ describe('Settings — Allow exchanges with other couriers (no Bosta)', () => {
     expect(within(screen.getByTestId('other-couriers-row')).queryByTestId('other-couriers-note')).toBeNull()
     await user.click(screen.getByRole('switch', { name: 'Book Bosta pickups when I approve' }))
     expect(screen.getByRole('switch', SWITCH)).toBeChecked()
+    // Redesign Pass B: nothing is sent until "Save changes"; the PUT turns booking off and leaves exchanges alone.
+    expect(calls.some(c => c.method === 'PUT')).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(calls.some(c => c.method === 'PUT' && c.url.endsWith('/tenant/portal-settings'))).toBe(true))
+    const put = calls.filter(c => c.method === 'PUT' && c.url.endsWith('/tenant/portal-settings')).pop()!
+    expect(put.body).toMatchObject({ pickupBooking: false })
+    expect(put.body).not.toHaveProperty('exchangesEnabled')
   })
 
   test('Arabic: the neutral description', async () => {

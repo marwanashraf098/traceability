@@ -1,143 +1,67 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  CustomerFeeSettings, PortalSettings, PortalSettingsError, PortalSettingsInput, OtherCouriersReturnsSetting,
-  getOtherCouriersReturns, getPortalSettings, savePortalSettings,
-} from '../../api'
-import { useCapabilities } from '../../capabilities'
-import { Button, Skeleton, useToast } from '../../components/ui'
+import type { PortalSettingsInput } from '../../api'
+import { Skeleton } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
 import { useUploadedLogoUrl } from './PortalBranding'
-import { PortalFont, portalFontOrDefault } from '../../portal/fonts'
-import { FeeDraft, useCustomerFeeSettings } from './CustomerFeesSection'
+import type { FeesDraft, FeesEditorProps } from './CustomerFeesSection'
 import PortalHeaderCard, { PORTAL_HOST } from './portal/PortalHeaderCard'
 import PolicySummaryCard from './portal/PolicySummaryCard'
 import JumpLinks from './portal/JumpLinks'
 import EligibilitySection from './portal/EligibilitySection'
 import ApprovalSection from './portal/ApprovalSection'
 import ExchangesSection from './portal/ExchangesSection'
-import RefundsFeesSection, { orderedMethods, sameMethods } from './portal/RefundsFeesSection'
+import RefundsFeesSection from './portal/RefundsFeesSection'
 import BrandingSection from './portal/BrandingSection'
+import SaveBar from './portal/SaveBar'
 import { PolicyInput } from './portal/policySummary'
+import { Draft, EditedKey, PortalDraft, pricingBody, ruleBody } from './portal/savePlan'
+import { PortalFieldError, usePortalSettingsDraft } from './portal/usePortalSettingsDraft'
+import { useLeaveGuard } from './portal/useLeaveGuard'
 
 export { PORTAL_HOST } from './portal/PortalHeaderCard'
 export { LOGO_PREFIX, POLICY_MAX, isValidLogoUrl } from './portal/BrandingSection'
 
-type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
-  | 'exchangesEnabled' | 'font' | 'refundMethods'
-
 /**
- * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
- * API allows both; SettingsPage never shows this tab to a worker).
+ * Settings → Returns portal (owner and manager; SettingsPage never shows it to a worker).
  *
- * "Save changes" sends the whole form in one PUT (the backend applies it as one UPDATE).
- * The non-returnable switches are separate: each saves immediately through
- * PUT /variants/{id}/non-returnable, as in the mockup (they are not part of the form).
+ * Redesign Pass B — ONE save for the whole tab. Every field is part of one draft (usePortalSettingsDraft); the sticky
+ * bar "N unsaved changes · Discard · Save changes" appears while something is edited, and Save runs the ordered plan
+ * (portal/savePlan.ts): other couriers → portal settings → exchange pricing → exchange fee → return fee → store's-fault
+ * reasons → products, stopping at the first failure. Only the logo (upload / remove) and fees by area still save the
+ * moment they're used ("Saves right away"). Leaving with unsaved changes asks first (useLeaveGuard).
  *
- * Step 4c-2: "Returns go back to" — the tenant's Bosta pickup locations, fetched live. With nothing
- * saved yet, Bosta's default location is preselected (so Save becomes available to store it).
- *
- * Step 4c-3: "Book Bosta pickups when I approve" (tenants.portal_pickup_booking). It can only be
- * switched ON once Bosta is connected and a return location is SAVED (the backend enforces the
- * same); the reason is shown under it. Sent in the PUT only when it changed.
- *
- * Redesign Pass A (design/returns-portal-settings.html) — appearance only. The tab is now a header (Live / Off, Open
- * portal, the switch and the link), "Your policy in plain words", jump links and five sections: Eligibility, Approval
- * & pickup, Exchanges, Refunds & fees, Branding & policy (components in ./portal). What saves when is UNCHANGED: this
- * form with "Save changes"; the logo, the non-returnable switches, the other-couriers switch and area fees the moment
- * they're used ("Saves right away"); exchange pricing, each fee and the store's-fault reasons with their own Save.
- * The customer-fee settings are loaded once here for both places they show and for the summary.
+ * Booking / exchanges preconditions: Bosta connected (saved) and a return location — saved, or chosen in this draft
+ * (the PUT carries both and the backend stores the location first). Everything else as before.
  */
 export default function ReturnsPortalTab() {
   const { t } = useTranslation()
-  const { toast } = useToast()
-  const [saved, setSaved] = useState<PortalSettings | null>(null)
-  const [form, setForm] = useState<PortalSettingsInput | null>(null)
-  const [windowText, setWindowText] = useState('')
-  const [loadError, setLoadError] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({})
+  const s = usePortalSettingsDraft()
   const [copied, setCopied] = useState(false)
-  const [bookingOn, setBookingOn] = useState(false)
-  const [exchangesOn, setExchangesOn] = useState(false)
-  // P1: the font saves with "Save changes" (sent only when it changed); the logo saves on its own.
-  const [font, setFont] = useState<PortalFont>(portalFontOrDefault(undefined))
-  // P2: the portal's refund methods (sent only when changed — absent leaves them as they are).
-  const [refundMethods, setRefundMethods] = useState<string[]>([])
-  // P3: "Require photos" (sent only when changed).
-  const [requirePhotos, setRequirePhotos] = useState(false)
-  const uploadedLogoUrl = useUploadedLogoUrl(saved?.logo?.version)
-  // G4a's "Accept returns for orders shipped with other couriers" (its own endpoint) — G4b fix: with it on,
-  // "Allow exchanges" no longer needs Bosta. Loaded only for a store that ships with other couriers.
-  const { genericCourier } = useCapabilities()
-  const [otherCouriers, setOtherCouriers] = useState<OtherCouriersReturnsSetting | null>(null)
-  useEffect(() => {
-    if (!genericCourier) return
-    let cancelled = false
-    getOtherCouriersReturns().then(s => { if (!cancelled) setOtherCouriers(s) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [genericCourier])
-  const otherCouriersShown = !!otherCouriers && (otherCouriers.available || otherCouriers.enabled)
-  const otherCouriersOn = !!otherCouriers?.enabled
-  /** Bosta orders can be exchanged: pickup booking on with Bosta connected (saved state). */
-  const bostaExchangePath = !!saved?.portalPickupBooking && !!saved?.bostaConnected
-  // Returns portal fees: loaded once for the Exchanges and Refunds & fees sections and the summary. What the fee
-  // editors show (saved or not) feeds the summary through feeDraft; their saves update `fees`.
-  const [fees, setFeesState] = useState<CustomerFeeSettings | null>(null)
-  const [loadedFees] = useCustomerFeeSettings()
-  useEffect(() => { if (loadedFees) setFeesState(loadedFees) }, [loadedFees])
-  const [feeDraft, setFeeDraft] = useState<FeeDraft>({})
-  const setFees = useCallback((s: CustomerFeeSettings) => setFeesState(s), [])
-  const onFeeDraft = useCallback((d: FeeDraft) => setFeeDraft(prev => ({
-    pricing: d.pricing ?? prev.pricing,
-    rules: d.rules ? { ...prev.rules, ...d.rules } : prev.rules,
-  })), [])
-  // Stable: ReturnLocationRow preselects Bosta's default through it from an effect.
-  const onLocation = useCallback((id: string | null) => {
-    setForm(f => (f ? { ...f, returnLocationId: id } : f))
-    setErrors(e => (e.returnLocationId ? { ...e, returnLocationId: undefined } : e))
-  }, [])
+  const root = useRef<HTMLDivElement>(null)
+  const uploadedLogoUrl = useUploadedLogoUrl(s.saved?.portal.logo?.version)
+  const edited = useMemo(() => new Set<EditedKey>(s.edited), [s.edited])
+  const leaveDialog = useLeaveGuard(s.dirty, s.edited.length, root)
 
-  const load = useCallback(async () => {
-    setLoadError(false)
-    try {
-      const s = await getPortalSettings()
-      setSaved(s)
-      setForm(toInput(s))
-      setWindowText(String(s.returnWindowDays))
-      setBookingOn(!!s.portalPickupBooking)
-      setExchangesOn(!!s.exchangesEnabled)
-      setFont(portalFontOrDefault(s.font))
-      setRefundMethods(s.refundMethods ?? [])
-      setRequirePhotos(!!s.requirePhotos)
-    } catch {
-      setLoadError(true)
-    }
-  }, [])
+  const { update, clearFieldError } = s
+  const setPortal = useCallback((patch: Partial<PortalDraft>) => update(d => ({ ...d, portal: { ...d.portal, ...patch } })), [update])
+  const setForm = useCallback(<K extends keyof PortalSettingsInput>(key: K, value: PortalSettingsInput[K]) => {
+    update(d => ({ ...d, portal: { ...d.portal, form: { ...d.portal.form, [key]: value } } }))
+    if (isFieldError(key)) clearFieldError(key)
+  }, [update, clearFieldError])
+  const onLocation = useCallback((id: string) => setForm('returnLocationId', id), [setForm])
+  const onFees = useCallback((fn: (d: FeesDraft) => FeesDraft) => update(d => ({ ...d, ...fn(d) })), [update])
 
-  useEffect(() => { load() }, [load])
-
-  const dirty = useMemo(() => {
-    if (!saved || !form) return false
-    const a = toInput(saved)
-    return JSON.stringify(normalize(a)) !== JSON.stringify(normalize({ ...form, returnWindowDays: Number(windowText) }))
-      || bookingOn !== !!saved.portalPickupBooking
-      || exchangesOn !== !!saved.exchangesEnabled
-      || font !== portalFontOrDefault(saved.font)
-      || !sameMethods(refundMethods, saved.refundMethods ?? [])
-      || requirePhotos !== !!saved.requirePhotos
-  }, [saved, form, windowText, bookingOn, exchangesOn, font, refundMethods, requirePhotos])
-
-  if (loadError) {
+  if (s.loadError) {
     return (
       <div className="card p-10 flex flex-col items-center gap-3 text-center" data-testid="portal-load-error">
         <p className="text-body font-semibold text-primary">{t('settings.portal.loadError')}</p>
-        <button className="btn-outline" onClick={load}>{t('exchangesRefunds.retry')}</button>
+        <button className="btn-outline" onClick={s.load}>{t('exchangesRefunds.retry')}</button>
       </div>
     )
   }
 
-  if (!form || !saved) {
+  if (!s.saved || !s.draft) {
     return (
       <div className="card p-6 space-y-4">
         <Skeleton className="h-6 w-1/3" />
@@ -147,217 +71,180 @@ export default function ReturnsPortalTab() {
     )
   }
 
-  function update<K extends keyof PortalSettingsInput>(key: K, value: PortalSettingsInput[K]) {
-    setForm(f => (f ? { ...f, [key]: value } : f))
-    if (key in errors) setErrors(e => ({ ...e, [key]: undefined }))
-  }
+  const saved = s.saved
+  const draft: Draft = s.draft
+  const portal = saved.portal
+  const d = draft.portal
+  const form = d.form
+  const errors = s.fieldErrors
+  const owner = s.role === 'owner'
+  const has = (k: EditedKey) => edited.has(k)
 
   const slug = (form.slug ?? '').trim().toLowerCase()
-  const portalUrl = `https://${PORTAL_HOST}/${slug}`
-
   async function copyLink() {
     try {
-      await writeToClipboard(portalUrl)
+      await writeToClipboard(`https://${PORTAL_HOST}/${slug}`)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch { /* the link is visible — the user can copy it by hand */ }
   }
 
-  async function save() {
-    if (!form) return
-    setSaving(true)
-    setErrors({})
-    try {
-      const body: PortalSettingsInput = {
-        ...form,
-        slug: form.slug?.trim() ? form.slug.trim() : null,
-        returnWindowDays: Number(windowText),
-        logoUrl: form.logoUrl?.trim() ? form.logoUrl.trim() : null,
-        brandColor: form.brandColor?.trim() ? form.brandColor.trim() : null,
-        policyText: form.policyText?.trim() ? form.policyText : null,
-        ...(bookingOn !== !!saved?.portalPickupBooking ? { pickupBooking: bookingOn } : {}),
-        ...(exchangesOn !== !!saved?.exchangesEnabled ? { exchangesEnabled: exchangesOn } : {}),
-        ...(font !== portalFontOrDefault(saved?.font) ? { font } : {}),
-        ...(!sameMethods(refundMethods, saved?.refundMethods ?? []) ? { refundMethods: orderedMethods(refundMethods) } : {}),
-        ...(requirePhotos !== !!saved?.requirePhotos ? { requirePhotos } : {}),
-      }
-      const s = await savePortalSettings(body)
-      setSaved(s)
-      setForm(toInput(s))
-      setWindowText(String(s.returnWindowDays))
-      setBookingOn(!!s.portalPickupBooking)
-      setExchangesOn(!!s.exchangesEnabled)
-      setFont(portalFontOrDefault(s.font))
-      setRefundMethods(s.refundMethods ?? [])
-      setRequirePhotos(!!s.requirePhotos)
-      toast({ tone: 'success', message: t('settings.portal.saved') })
-    } catch (e) {
-      if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
-        setErrors({ [e.field]: t(`settings.portal.errors.${e.code ?? 'generic'}`, { defaultValue: t('settings.portal.errors.generic') }) })
-      } else if (e instanceof PortalSettingsError && e.status === 400) {
-        toast({ tone: 'error', message: t('settings.portal.errors.generic') })
-      } else {
-        toast({ tone: 'error', message: t('settings.portal.saveFailed') })
-      }
-    } finally {
-      setSaving(false)
-    }
-  }
+  const otherCouriersShown = !!saved.otherCouriers
+  const otherCouriersOn = otherCouriersShown && draft.otherCouriers
+  /** Bosta orders can be exchanged: pickup booking on with Bosta connected (saved state). */
+  const bostaExchangePath = !!portal.portalPickupBooking && !!portal.bostaConnected
+  /**
+   * A return location — saved, or picked by the merchant in this draft. Bosta's default is never filled in by itself
+   * (it is only suggested), so any location in the draft is one the merchant chose.
+   */
+  const hasLocation = !!form.returnLocationId
 
-  const windowNum = Number(windowText)
-  const windowDays = windowText.trim() !== '' && Number.isInteger(windowNum) && windowNum >= 1 && windowNum <= 90 ? windowNum : null
+  const windowNum = Number(d.windowText)
+  const windowDays = d.windowText.trim() !== '' && Number.isInteger(windowNum) && windowNum >= 1 && windowNum <= 90 ? windowNum : null
+
+  const feesShown = !!saved.fees?.visible
+  const feesProps: FeesEditorProps | null = feesShown ? {
+    saved: saved.fees!, draft, onChange: onFees, owner, edited, errors: s.sectionErrors,
+    capError: s.clientErrors.some(e => e.field === 'cap'), onAreaFeesSaved: s.onAreaFeesSaved,
+  } : null
 
   const summaryInput: PolicyInput = {
     enabled: form.enabled,
     windowDays,
     otherCouriers: otherCouriersShown ? otherCouriersOn : null,
-    requirePhotos,
+    requirePhotos: d.requirePhotos,
     autoApprove: form.autoApprove,
-    pickupBooking: bookingOn,
-    exchanges: exchangesOn,
-    refundMethods,
-    fees: fees?.visible ? {
-      ...(feeDraft.pricing ?? fees.exchangePricing),
-      rules: {
-        exchange: feeDraft.rules?.exchange ?? fees.rules.exchange,
-        refund: feeDraft.rules?.refund ?? fees.rules.refund,
-      },
+    pickupBooking: d.bookingOn,
+    exchanges: d.exchangesOn,
+    refundMethods: d.refundMethods,
+    fees: feesShown ? {
+      ...pricingBody(draft.pricing),
+      rules: { exchange: ruleBody(draft.rules.exchange, draft.waiver), refund: ruleBody(draft.rules.refund, draft.waiver) },
     } : null,
   }
 
   return (
-    <div className="space-y-5 max-w-5xl" data-testid="returns-portal-settings">
+    <div ref={root} className="space-y-5 max-w-5xl" data-testid="returns-portal-settings">
       <PortalHeaderCard
-        savedLive={saved.enabled && !!saved.slug}
-        savedSlug={saved.slug}
+        savedLive={portal.enabled && !!portal.slug}
+        savedSlug={portal.slug}
         enabled={form.enabled}
-        onEnabled={v => update('enabled', v)}
+        onEnabled={v => setForm('enabled', v)}
         slug={form.slug ?? ''}
-        onSlug={v => update('slug', v)}
+        onSlug={v => setForm('slug', v)}
         slugError={errors.slug}
         copied={copied}
         onCopy={copyLink}
+        edited={{ enabled: has('portal.enabled'), slug: has('portal.slug') }}
       />
 
       <PolicySummaryCard input={summaryInput} />
       <JumpLinks />
 
       <EligibilitySection
-        windowText={windowText}
-        onWindow={v => { setWindowText(v); setErrors(er => ({ ...er, returnWindowDays: undefined })) }}
+        windowText={d.windowText}
+        onWindow={v => { setPortal({ windowText: v }); clearFieldError('returnWindowDays') }}
         windowError={errors.returnWindowDays}
-        otherCouriers={otherCouriers && otherCouriersShown ? otherCouriers : null}
-        onOtherCouriers={setOtherCouriers}
-        offKeepsExchanges={!!saved.exchangesEnabled && !bostaExchangePath}
-        requirePhotos={requirePhotos}
-        onRequirePhotos={setRequirePhotos}
+        windowEdited={has('portal.returnWindowDays')}
+        otherCouriers={saved.otherCouriers}
+        otherCouriersOn={otherCouriersOn}
+        onOtherCouriers={v => update(x => ({ ...x, otherCouriers: v }))}
+        otherCouriersEdited={has('otherCouriers')}
+        otherCouriersError={s.sectionErrors.otherCouriers}
+        owner={owner}
+        offKeepsExchanges={!!portal.exchangesEnabled && !bostaExchangePath}
+        requirePhotos={d.requirePhotos}
+        onRequirePhotos={v => setPortal({ requirePhotos: v })}
+        requirePhotosEdited={has('portal.requirePhotos')}
+        products={{
+          excluded: s.excluded,
+          excludedError: s.excludedError,
+          onRetryExcluded: s.loadExcluded,
+          onMoreExcluded: s.loadMoreExcluded,
+          changes: draft.variants,
+          onChange: (row, value) => update(x => {
+            const variants = { ...x.variants }
+            if (value === row.nonReturnable) delete variants[row.id]
+            else variants[row.id] = { row, value }
+            return { ...x, variants }
+          }),
+        }}
       />
 
       <ApprovalSection
         autoApprove={form.autoApprove}
-        onAutoApprove={v => update('autoApprove', v)}
-        savedPickupBooking={!!saved.pickupBooking}
-        bookingOn={bookingOn}
-        bookingDisabled={!bookingOn && !(saved.bostaConnected && saved.returnLocationId)}
-        bookingNote={!bookingOn && !saved.bostaConnected
+        onAutoApprove={v => setForm('autoApprove', v)}
+        savedPickupBooking={!!portal.pickupBooking}
+        bookingOn={d.bookingOn}
+        bookingDisabled={!d.bookingOn && !(portal.bostaConnected && hasLocation)}
+        bookingNote={!d.bookingOn && !portal.bostaConnected
           ? t('settings.portal.booking.needsBosta')
-          : !bookingOn && !saved.returnLocationId ? t('settings.portal.booking.needsLocation') : undefined}
+          : !d.bookingOn && !hasLocation ? t('settings.portal.booking.needsLocation') : undefined}
         bookingError={errors.pickupBooking}
         onBooking={v => {
-          setBookingOn(v)
           // Exchanges are booked through pickup booking — switching it off switches them off,
           // unless they're on for other couriers' orders too (G4b fix; the backend agrees).
-          if (!v && !otherCouriersOn) setExchangesOn(false)
-          setErrors(e => ({ ...e, pickupBooking: undefined }))
+          setPortal(!v && !otherCouriersOn ? { bookingOn: v, exchangesOn: false } : { bookingOn: v })
+          clearFieldError('pickupBooking')
         }}
-        savedLocationName={saved.returnLocationName}
+        savedLocationName={portal.returnLocationName}
         locationId={form.returnLocationId}
         onLocation={onLocation}
         locationError={errors.returnLocationId}
+        edited={{ autoApprove: has('portal.autoApprove'), booking: has('portal.pickupBooking'), location: has('portal.returnLocationId') }}
       />
 
       {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location —
           or (G4b fix) with returns for other couriers' orders on. */}
       <ExchangesSection
-        exchangesOn={exchangesOn}
-        onExchanges={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
+        exchangesOn={d.exchangesOn}
+        onExchanges={v => { setPortal({ exchangesOn: v }); clearFieldError('exchangesEnabled') }}
         description={t(otherCouriersOn ? 'settings.portal.exchanges.descriptionOtherCouriers' : 'settings.portal.exchanges.description')}
-        disabled={!exchangesOn && !otherCouriersOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
-        note={exchangesOn
+        disabled={!d.exchangesOn && !otherCouriersOn && !(d.bookingOn && portal.bostaConnected && hasLocation)}
+        note={d.exchangesOn
           ? (otherCouriersShown && !otherCouriersOn && !bostaExchangePath ? t('settings.portal.exchanges.noOrdersEligible') : undefined)
           : otherCouriersOn ? undefined
-          : !saved.bostaConnected ? t(otherCouriersShown ? 'settings.portal.exchanges.needsBostaOrOtherCouriers' : 'settings.portal.exchanges.needsBosta')
-            : !saved.returnLocationId ? t('settings.portal.exchanges.needsLocation')
-              : !bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
+          : !portal.bostaConnected ? t(otherCouriersShown ? 'settings.portal.exchanges.needsBostaOrOtherCouriers' : 'settings.portal.exchanges.needsBosta')
+            : !hasLocation ? t('settings.portal.exchanges.needsLocation')
+              : !d.bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
         error={errors.exchangesEnabled}
-        fees={fees}
-        onFees={setFees}
-        onFeeDraft={onFeeDraft}
+        edited={has('portal.exchangesEnabled')}
+        fees={feesProps}
       />
 
       <RefundsFeesSection
-        refundMethods={refundMethods}
-        onRefundMethods={setRefundMethods}
-        fees={fees}
-        onFees={setFees}
-        onFeeDraft={onFeeDraft}
+        refundMethods={d.refundMethods}
+        onRefundMethods={v => { setPortal({ refundMethods: v }); clearFieldError('refundMethods') }}
+        methodsEdited={has('portal.refundMethods')}
+        fees={feesProps}
       />
 
       <BrandingSection
-        saved={saved}
+        saved={portal}
         uploadedLogoUrl={uploadedLogoUrl}
-        onLogoSaved={s => setSaved(prev => (prev ? { ...prev, logo: s.logo ?? null } : s))}
+        onLogoSaved={s.onLogoSaved}
         logoUrl={form.logoUrl ?? ''}
-        onLogoUrl={v => update('logoUrl', v)}
-        font={font}
-        onFont={f => { setFont(f); setErrors(e => ({ ...e, font: undefined })) }}
+        onLogoUrl={v => setForm('logoUrl', v)}
+        font={d.font}
+        onFont={f => { setPortal({ font: f }); clearFieldError('font') }}
         brandColor={form.brandColor ?? ''}
-        onBrandColor={v => update('brandColor', v)}
+        onBrandColor={v => setForm('brandColor', v)}
         policyText={form.policyText ?? ''}
-        onPolicyText={v => update('policyText', v)}
+        onPolicyText={v => setForm('policyText', v)}
         windowDays={windowDays}
         errors={errors}
+        edited={{ logoUrl: has('portal.logoUrl'), font: has('portal.font'), brandColor: has('portal.brandColor'),
+          policyText: has('portal.policyText') }}
       />
 
-      <div className="flex flex-col items-end gap-1.5">
-        <Button onClick={save} loading={saving} disabled={!dirty || saving}>
-          {t('settings.portal.save')}
-        </Button>
-        <p className="text-small text-muted text-end">{t('settings.portal.branding.saveNote')}</p>
-      </div>
+      <SaveBar count={s.edited.length} saving={s.saving} failure={s.failure} blocked={s.clientErrors.length > 0}
+        onDiscard={s.discard} onSave={s.save} />
+      {leaveDialog}
     </div>
   )
 }
 
-function toInput(s: PortalSettings): PortalSettingsInput {
-  return {
-    slug: s.slug,
-    enabled: s.enabled,
-    autoApprove: s.autoApprove,
-    returnWindowDays: s.returnWindowDays,
-    logoUrl: s.logoUrl,
-    brandColor: s.brandColor,
-    policyText: s.policyText,
-    returnLocationId: s.returnLocationId,
-  }
-}
-
-function normalize(i: PortalSettingsInput) {
-  const blank = (v: string | null) => (v && v.trim() ? v.trim() : null)
-  return {
-    slug: blank(i.slug)?.toLowerCase() ?? null,
-    enabled: i.enabled,
-    autoApprove: i.autoApprove,
-    returnWindowDays: i.returnWindowDays,
-    logoUrl: blank(i.logoUrl),
-    brandColor: blank(i.brandColor),
-    policyText: blank(i.policyText),
-    returnLocationId: i.returnLocationId ?? null,
-  }
-}
-
-function isFieldKey(f: string): f is FieldKey {
+function isFieldError(k: string): k is PortalFieldError {
   return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking',
-    'exchangesEnabled', 'font', 'refundMethods'].includes(f)
+    'exchangesEnabled', 'font', 'refundMethods'].includes(k)
 }
-

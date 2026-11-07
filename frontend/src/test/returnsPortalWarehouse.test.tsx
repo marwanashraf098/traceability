@@ -79,19 +79,19 @@ function lastPut() {
 }
 
 describe('Settings → Returns go back to', () => {
-  test('nothing saved → Bosta default preselected; saving sends returnLocationId', async () => {
+  test('nothing saved → Bosta default suggested, not filled in; picking one is saved with returnLocationId', async () => {
     const user = await loaded()
     const select = await screen.findByLabelText('Returns go back to') as HTMLSelectElement
-    await waitFor(() => expect(select).toHaveValue('yfWPU0tP2'))
+    await screen.findByTestId('default-location-hint')
+    expect(select).toHaveValue('')
     expect(within(select).getByRole('option', { name: 'Maadi Warehouse · Cairo (default)' })).toBeInTheDocument()
     expect(within(select).getByRole('option', { name: 'Original Business Location' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
 
-    const save = screen.getByRole('button', { name: 'Save changes' })
-    expect(save).toBeEnabled()
     await user.selectOptions(select, '5f0a7def4a839b00139d6203')
-    await user.click(save)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(lastPut()?.body).toMatchObject({ returnLocationId: '5f0a7def4a839b00139d6203' }))
-    await waitFor(() => expect(save).toBeDisabled())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
   })
 
   test('a saved location is selected and the form is not dirty', async () => {
@@ -99,7 +99,7 @@ describe('Settings → Returns go back to', () => {
     await loaded()
     const select = await screen.findByLabelText('Returns go back to')
     await waitFor(() => expect(select).toHaveValue('5f0a7def4a839b00139d6203'))
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
   })
 
   test('Bosta refuses the key → the message, the saved location, and a retry', async () => {
@@ -125,7 +125,8 @@ describe('Settings → Returns go back to', () => {
   test('save rejects an unknown location → the error sits under the select', async () => {
     putReply = { status: 400, body: { field: 'returnLocationId', error: 'RETURN_LOCATION_UNKNOWN', message: 'x' } }
     const user = await loaded()
-    await waitFor(() => expect(screen.getByLabelText('Returns go back to')).toHaveValue('yfWPU0tP2'))
+    await user.click(await screen.findByRole('button', { name: 'Use this location' }))
+    expect(screen.getByLabelText('Returns go back to')).toHaveValue('yfWPU0tP2')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByTestId('error-returnLocationId'))
       .toHaveTextContent("That location isn't in your Bosta account. Choose another.")

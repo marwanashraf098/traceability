@@ -50,8 +50,11 @@ function backend(url: string, opts: RequestInit = {}) {
     return fakeResponse(null, 204)
   }
   if (url.includes('/variants?') && method === 'GET') {
-    const q = (new URL(url, 'http://x').searchParams.get('search') ?? '').toLowerCase()
-    const items = variants.filter(v => !q || [v.productTitle, v.variantTitle, v.sku].some(s => s?.toLowerCase().includes(q)))
+    const params = new URL(url, 'http://x').searchParams
+    const q = (params.get('search') ?? '').toLowerCase()
+    const onlyExcluded = params.get('nonReturnable') === 'true'   // redesign Pass B filter, as PortalSettingsService
+    const items = variants.filter(v => (!onlyExcluded || v.nonReturnable)
+      && (!q || [v.productTitle, v.variantTitle, v.sku].some(s => s?.toLowerCase().includes(q))))
     return fakeResponse({ items, total: items.length })
   }
   return fakeResponse({})
@@ -103,7 +106,7 @@ describe('Settings → Returns portal', () => {
     expect(enabled).toHaveAttribute('aria-checked', 'true')
     expect(enabled.tagName).toBe('BUTTON')
     expect(screen.getByRole('radio', { name: /^Approve automatically/ })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
   })
 
   test('edit and save sends one PUT with every field, including branding', async () => {
@@ -122,8 +125,8 @@ describe('Settings → Returns portal', () => {
       slug: 'nourstudio', enabled: true, autoApprove: true, returnWindowDays: 14,
       logoUrl: LOGO, brandColor: '#1A2B3C', policyText: 'Unworn items only.',
     })
-    expect(await screen.findByText('Returns portal settings saved')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+    expect(await screen.findByText('Changes saved. Customers see them right away.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
   })
 
   test('policy text counter', async () => {
@@ -191,26 +194,32 @@ describe('Settings → Returns portal', () => {
     expect(screen.getByLabelText('Brand colour')).toHaveValue('#AABBCC')
   })
 
-  test('non-returnable list: search, and a switch saves immediately', async () => {
+  test('products that can\'t be returned: the excluded list, Add products, saved with Save changes', async () => {
     const user = await loaded()
+    // Only the excluded products, loaded with the nonReturnable=true filter (redesign Pass B).
     const list = await screen.findByTestId('variant-list')
-    expect(within(list).getAllByTestId('variant-row')).toHaveLength(3)
-    const scarf = screen.getByRole('switch', { name: 'Silk Scarf, Sand can\'t be returned' })
-    expect(scarf).toHaveAttribute('aria-checked', 'true')
+    expect(within(list).getAllByTestId('variant-row')).toHaveLength(1)
+    expect(list).toHaveTextContent('Silk Scarf')
+    expect(calls.some(c => c.url.includes('/variants?') && c.url.includes('nonReturnable=true'))).toBe(true)
+    expect(screen.getByTestId('excluded-count')).toHaveTextContent('1 product can\'t be returned')
 
-    const shirt = screen.getByRole('switch', { name: 'Linen Shirt, White / M can\'t be returned' })
-    await user.click(shirt)
+    await user.click(screen.getByRole('button', { name: 'Add products' }))
+    await user.type(screen.getByLabelText('Search products'), 'linen')
+    await waitFor(() => expect(calls.some(c => c.url.includes('/variants?') && c.url.includes('search=linen'))).toBe(true))
+    await user.click(await screen.findByRole('button', { name: 'Exclude Linen Shirt, White / M' }))
+    // Into the draft — nothing is sent yet.
+    expect(calls.some(c => c.method === 'PUT' && c.url.includes('/non-returnable'))).toBe(false)
+    expect(within(screen.getByTestId('variant-list')).getAllByTestId('variant-row')).toHaveLength(2)
+    expect(screen.getByTestId('excluded-count')).toHaveTextContent('2 products can\'t be returned')
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => {
       const call = calls.find(c => c.method === 'PUT' && c.url.endsWith('/variants/v-shirt/non-returnable'))
       expect(call?.body).toEqual({ value: true })
     })
-    await waitFor(() => expect(shirt).toHaveAttribute('aria-checked', 'true'))
-
-    await user.type(screen.getByLabelText('Search products'), 'scarf')
-    await waitFor(() => expect(calls.some(c => c.url.includes('/variants?') && c.url.includes('search=scarf'))).toBe(true))
-    await waitFor(() => expect(within(screen.getByTestId('variant-list')).getAllByTestId('variant-row')).toHaveLength(1))
-    // Not part of the form — Save stays disabled.
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    // Only the product that changed — no bulk PUT, no portal-settings PUT.
+    expect(calls.filter(c => c.method === 'PUT')).toHaveLength(1)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull())
   })
 
   test('manager sees the Returns portal tab', async () => {

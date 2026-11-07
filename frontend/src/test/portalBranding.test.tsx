@@ -128,8 +128,8 @@ describe('Settings → Returns portal → Branding', () => {
     expect(FakeXhr.sent).toHaveLength(1)
     expect(FakeXhr.sent[0]).toMatchObject({ method: 'PUT', url: '/api/v1/tenant/portal-settings/logo' })
     expect(FakeXhr.sent[0].file?.name).toBe('nour-logo.png')
-    // Saved without "Save changes" — which stays disabled (nothing else changed).
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    // Saved without "Save changes" — no save bar (nothing else changed).
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
     await waitFor(() => expect(screen.getByTestId('preview-en-logo')).toHaveAttribute('src', 'data:image/png;base64,eA=='))
     expect(screen.getByTestId('preview-en')).toHaveTextContent('Start a return')
     // One preview with an EN / عربي switch (redesign Pass A): the Arabic preview uses the same logo.
@@ -189,7 +189,7 @@ describe('Settings → Returns portal → Branding', () => {
     await waitFor(() => expect(calls.some(c => c.method === 'PUT' && c.url.endsWith('/tenant/portal-settings'))).toBe(true))
     const put = calls.filter(c => c.method === 'PUT' && c.url.endsWith('/tenant/portal-settings')).pop()!
     expect(put.body).toMatchObject({ slug: 'nourstudio', font: 'tajawal' })
-    expect(await screen.findByText('Returns portal settings saved')).toBeInTheDocument()
+    expect(await screen.findByText('Changes saved. Customers see them right away.')).toBeInTheDocument()
   })
 })
 
