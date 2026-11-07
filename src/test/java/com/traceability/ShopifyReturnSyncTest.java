@@ -72,6 +72,7 @@ import static org.mockito.Mockito.*;
  *   x2  app_user + RLS: tenant B can't sync / see A's request; A can
  *   h1  approving (listed tenant) enqueues the sync job after commit
  *   s1  owner switch: on stamps since + one audit row; unlisted tenant → GET visible:false, PUT 404
+ *   s2  app_user + RLS: the switch GET reads only the caller's own tenant (two listed tenants, both directions)
  *   g0  golden, unlisted tenant: approve enqueues nothing, the drawer has no shopifySync key, sync / sweep do nothing
  * </pre>
  */
@@ -900,6 +901,23 @@ class ShopifyReturnSyncTest {
 
         assertThat(off.as(() -> settings.get())).containsOnlyKeys("visible").containsEntry("visible", false);
         assertThatThrownBy(() -> off.as(() -> settings.set(true, off.user))).isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Autowired com.traceability.account.AuditService audit;
+
+    @Test
+    void s2_appUser_switchReadsOnlyTheCallersOwnTenant_sameTenantControl() {
+        // RLS coverage for GET /tenant/shopify-returns-sync: two listed tenants with different switches, read as app_user.
+        jdbc.update("UPDATE tenants SET shopify_returns_sync_enabled = true, shopify_returns_sync_since = now() WHERE id = ?", a.tenant);
+        jdbc.update("UPDATE tenants SET shopify_returns_sync_enabled = false, shopify_returns_sync_since = NULL WHERE id = ?", b.tenant);
+        ShopifyReturnSyncSettingsService appSettings = new ShopifyReturnSyncSettingsService(appJdbc, rollout, audit);
+        org.springframework.transaction.support.TransactionTemplate appTx =
+            new org.springframework.transaction.support.TransactionTemplate(appTxm);
+        Map<String, Object> asB = b.as(() -> appTx.execute(st -> appSettings.get()));
+        Map<String, Object> asA = a.as(() -> appTx.execute(st -> appSettings.get()));
+        assertThat(asB).containsEntry("visible", true).containsEntry("enabled", false).containsEntry("since", null);
+        assertThat(asA).containsEntry("visible", true).containsEntry("enabled", true);
+        assertThat(asA.get("since")).isNotNull();
     }
 
     @Test
