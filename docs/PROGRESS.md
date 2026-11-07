@@ -4,14 +4,44 @@
 
 ## Current state
 
-**"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, NOT merged,
-NOT deployed; migration V224 — main ends at V223; prod NOT yet confirmed).** See CLAUDE.md ("No-district Same address").
+**"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, merged to main,
+NOT deployed; migration V224 — main and prod ended at V223 (prod checked by Marawan 00:59)).** See CLAUDE.md ("No-district Same address").
 - Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for
   the area → failed / district_required (never retried); the drawer offers the area + Book again.
 - After deploy: watch `grep "Bosta no-district booking"` for the first bookings — districtRequired=true on all of them
   would mean Bosta does need the area on create (then revert the portal to asking).
-- Test edit NEEDED (not made, waiting for approval): PortalSameAddressTest.a2 asserts "no original district, no district
-  sent → 400"; it is now 201 by design.
+- Approved test edit applied: PortalSameAddressTest.a2 now expects 201 (district empty, city kept). Full backend suite
+  4,208 tests: only ExchangeBackfillTest (expected red).
+
+**Onboarding O2b — warehouse address pre-filled from Shopify (2026-11-08; branch `feat/onboarding-address-prefill` off
+main 057263a8, worktree `~/Documents/traceability-o2b`; approved and MERGED 2026-11-08, NOT deployed; no migration).** Mockup
+`design/onboarding/Traced_onboarding_Flow-2-Address`.
+- **Read (backend, new):** `GET /api/v1/setup/address/shopify-locations` (owner) → `ShopifyAddressPrefillService` →
+  `ShopifyLocationListGateway` (minimal read-only query — Move S1 isn't merged): `locations(first: 50, includeLegacy:
+  false, includeInactive: false)` {id, name, isActive, fulfillsOnlineOrders, address{address1, address2, city, province,
+  provinceCode, zip, phone, countryCode}}, validated against 2026-04; Location needs read_locations OR read_inventory OR
+  read_markets_home — Traced holds write_locations / write_inventory: no new scope. No Shopify call once the main
+  warehouse address is complete or with no connected store; no DB transaction during the call; nothing written; no
+  order data. Never Traced's own location (its linked id, even renamed, or the name "Traced Main Warehouse"), never an
+  inactive one; fulfils-online first, then Shopify's order (Shopify has no "most recent activity" for a location). Any
+  failure → an empty list (WARN, class / codes only).
+- **Form (gate's AddressStep, gate mode only, only with no saved address):** waits ≤ 3 s (`PREFILL_TIMEOUT_MS`) — a
+  failed, empty or slow read shows today's empty form silently (a late answer changes nothing). `addressPrefill.ts`:
+  governorate = Shopify's province code when it's one of ours (they're Shopify's own Egypt codes); Shopify's legacy
+  codes map to the governorates they were merged into in 2011 — SU → Giza (city "6th of October" when it's in Giza's
+  area list), HU → Cairo (city "Helwan" when it's in Cairo's), else the governorate with Shopify's own city; else an
+  exact EN / AR name match, else EMPTY (other countries, unknown names — never invented); city only with a matched
+  governorate (choosing one clears the city); street = address1, building = address2; zip and phone have no
+  field today (not used). Several locations → "Fill from: [location ▾]". The note "We filled this in from your Shopify
+  location “…”. Just check it." only when something was filled. Fields stay editable; nothing saved until "Save and
+  continue" (the existing PUT, unchanged). EN + AR.
+- **Tests:** frontend addressPrefill.test 14 (10 rules mutation-checked red, incl. the SU / HU mapping); backend
+  ShopifyAddressPrefillTest 5 (app_user; the real gateway against a mocked Shopify edge: the one read query, no other
+  call, nothing written; 6 rules mutation-checked red). Approved: the endpoint EXEMPT in RlsCoverageTest, SKIP in
+  PortalOrderLeakTest / ShadowOrderLeakTest. Pre-fill stays on the gate only (not the grandfathered banner).
+- **Note for Move S1:** reuse `ShopifyLocationListGateway` (extend it — e.g. an includeInactive / isActive variant)
+  instead of adding a second Shopify location query.
+
 **Portal fees: same-product swap refunds (decision C, V223) + refund method only when owed + "Same address" pickup
 without a picker; stale-reserved diagnosis (2026-11-07; branch `feat/portal-fees-pricing-fixes` off main 8b7b51b4,
 merged to main, NOT deployed; migration V223 — main and prod ended at V222 (prod checked by Marawan 22:02)).**

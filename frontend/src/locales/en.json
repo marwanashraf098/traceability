@@ -311,7 +311,20 @@
     "resetSuccess": "Your password has been reset. Sign in with your new password."
   },
   "orders": {
-    "shippedOutside": {"title": "Shipped outside Traced", "body_one": "The courier has this order and Shopify shows it fulfilled, but {{count}} piece is still held in Traced. It's missing from your stock and the returns portal.", "body_other": "The courier has this order and Shopify shows it fulfilled, but {{count}} pieces are still held in Traced. They're missing from your stock and the returns portal.", "action": "Shipped outside Traced", "dialogTitle": "Mark as shipped outside Traced?", "dialogBody_one": "The piece is marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBody_other": "The {{count}} pieces are marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBodyDelivered_one": "The piece is marked as delivered, as the courier reports. Nothing changes in Shopify.", "dialogBodyDelivered_other": "The {{count}} pieces are marked as delivered, as the courier reports. Nothing changes in Shopify.", "confirm": "Mark shipped", "conflict": "Nothing to move any more — reload the order.", "error": "Couldn't update the order. Try again."},
+    "shippedOutside": {
+      "title": "Shipped outside Traced",
+      "body_one": "The courier has this order and Shopify shows it fulfilled, but {{count}} piece is still held in Traced. It's missing from your stock and the returns portal.",
+      "body_other": "The courier has this order and Shopify shows it fulfilled, but {{count}} pieces are still held in Traced. They're missing from your stock and the returns portal.",
+      "action": "Shipped outside Traced",
+      "dialogTitle": "Mark as shipped outside Traced?",
+      "dialogBody_one": "The piece is marked as with the courier, like any shipped order. Nothing changes in Shopify.",
+      "dialogBody_other": "The {{count}} pieces are marked as with the courier, like any shipped order. Nothing changes in Shopify.",
+      "dialogBodyDelivered_one": "The piece is marked as delivered, as the courier reports. Nothing changes in Shopify.",
+      "dialogBodyDelivered_other": "The {{count}} pieces are marked as delivered, as the courier reports. Nothing changes in Shopify.",
+      "confirm": "Mark shipped",
+      "conflict": "Nothing to move any more — reload the order.",
+      "error": "Couldn't update the order. Try again."
+    },
     "title": "Orders",
     "search": "Search by order #, name, or phone",
     "searchTracking": "Tracking number",
@@ -5301,7 +5314,10 @@
       "errCity": "Enter the city or area.",
       "errStreet": "Enter the street address.",
       "errSave": "Couldn't save the address. Please try again.",
-      "errLoad": "Couldn't load this page. Refresh to try again."
+      "errLoad": "Couldn't load this page. Refresh to try again.",
+      "prefilled": "We filled this in from your Shopify location “{{name}}”. Just check it.",
+      "prefilledUnnamed": "We filled this in from your Shopify location. Just check it.",
+      "fillFrom": "Fill from:"
     },
     "manager": {
       "title": "Waiting for the owner to finish setup",
