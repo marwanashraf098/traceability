@@ -1566,6 +1566,12 @@
       "done": "Moved to {{code}}",
       "cleared": "Place cleared",
       "error": "Couldn't move it. Try again."
+    },
+    "shopifyExchanges": {
+      "title": "Exchanges made in Shopify",
+      "live": "Kept aside",
+      "ended": "Ended",
+      "back": "Back to {{number}}"
     }
   },
   "returns": {

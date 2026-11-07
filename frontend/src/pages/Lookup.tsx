@@ -1143,6 +1143,30 @@ function TrackingView({ result }: { result: TrackingLookupResult }) {
   )
 }
 
+/** S3d: an original order's Shopify-native exchanges (#…-X1), nested in its drawer from Lookup. */
+export function ShopifyExchangesNested({ result, onOpen }: { result: OrderLookupResult; onOpen: (id: string) => void }) {
+  const { t } = useTranslation()
+  if (!result.shopifyExchanges?.length) return null
+  return (
+    <div data-testid="shopify-exchanges" className="mt-3 rounded-xl border border-line bg-elevated px-3 py-2">
+      <p className="text-caption text-muted uppercase tracking-wider mb-1">{t('lookup.shopifyExchanges.title')}</p>
+      <ul className="space-y-1">
+        {result.shopifyExchanges.map(x => (
+          <li key={x.orderId} className="flex items-center justify-between gap-2">
+            <button type="button" onClick={() => onOpen(x.orderId)}
+              className="font-mono text-small text-trace-blue hover:text-trace-blue-hover">
+              {x.orderNumber}
+            </button>
+            <span className="text-small text-muted">
+              {x.state === 'ended' ? t('lookup.shopifyExchanges.ended') : t('lookup.shopifyExchanges.live')}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 // ── Order lookup: no dedicated view component — resolving to an order opens the
 // SAME OrderDrawer used from the Orders list (getOrder()/getOrderTimeline(), the one
 // tenant-scoped order-detail data path), not a parallel Lookup-specific render. See
@@ -1233,6 +1257,9 @@ export default function LookupPage() {
   const [query, setQuery]   = useState(searchParams.get('q') ?? '')
   const [lastQuery, setLastQuery] = useState('')
   const [result, setResult] = useState<LookupResult | null>(null)
+  // S3d: a Shopify-native exchange (#…-X1) opened from its original's drawer; cleared with every new result.
+  const [exchangeOpen, setExchangeOpen] = useState<string | null>(null)
+  useEffect(() => { setExchangeOpen(null) }, [result])
   const [loading, setLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
   // Raw ref kept here (same pattern as Layout search) — Input wraps in div, no forwardRef
@@ -1306,8 +1333,16 @@ export default function LookupPage() {
       {/* Order lookup opens the SAME OrderDrawer the Orders list uses — not a
           Lookup-specific render — see the OrderLookupResult comment in api.ts. */}
       <OrderDrawer
-        orderId={result?.type === 'order' ? (result as OrderLookupResult).orderId : null}
-        onClose={() => setResult(null)}
+        orderId={result?.type === 'order' ? (exchangeOpen ?? (result as OrderLookupResult).orderId) : null}
+        onClose={() => { if (exchangeOpen) setExchangeOpen(null); else setResult(null) }}
+        extra={result?.type === 'order' && !exchangeOpen
+          ? <ShopifyExchangesNested result={result as OrderLookupResult} onOpen={setExchangeOpen} />
+          : exchangeOpen
+            ? <button type="button" data-testid="exchange-back" onClick={() => setExchangeOpen(null)}
+                className="mt-2 text-small text-trace-blue hover:text-trace-blue-hover">
+                {t('lookup.shopifyExchanges.back', { number: (result as OrderLookupResult | null)?.orderNumber ?? '' })}
+              </button>
+            : undefined}
       />
     </div>
   )

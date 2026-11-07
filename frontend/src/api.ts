@@ -772,6 +772,10 @@ export interface OrderLookupResult {
   type: 'order'
   orderId: string
   orderNumber: string | null
+  /** S3d: the order's Shopify-native exchange shadows (#…-X1) — present only when it has any. */
+  shopifyExchanges?: Array<{ orderId: string; orderNumber: string; status: string; state: 'live' | 'ended' }>
+  /** S3d: the shadow number that was typed (the result is its original order). */
+  matchedExchange?: string
 }
 
 /** Flexible labeling: a printed label code no piece carries yet (issued, not tagged in Tag stock / packing). */

@@ -32,6 +32,15 @@ class WarehouseOrdersAccessGuardTest {
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
         // S3b (V219) — Shopify-native exchange shadow orders
+        // S3d — courier attach
+        "courier/GenericShipments.java#followTrackingEdit",
+            "S3d: a Shopify-native exchange's generic leg on its shadow follows Shopify's tracking edits",
+        "integrations/bosta/BostaFulfillmentLinkService.java#attemptInTenant",
+            "S3d: an exchange waybill is the shadow's forward leg — the job must see it to say 'linked via exchange'",
+        "inventory/LookupService.java#lookupOrder",
+            "S3d: Lookup lists the original's #…-X shadows and opens the original from a shadow number",
+        "inventory/ShipmentLinkService.java#linkShadowLeg",
+            "S3d: links a Shopify-native exchange's courier leg to its shadow order",
         // S3c — Pick & Pack (held / released)
         "inventory/ShopifyShadowOrders.java#pickState",
             "S3c: scan() / complete() / the waybill resolver read a shadow's held / ended / packable state",

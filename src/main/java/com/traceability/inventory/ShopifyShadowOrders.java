@@ -202,7 +202,7 @@ public class ShopifyShadowOrders {
      * order's stored REST fulfillments; an unreadable one is not an exchange fulfillment.
      */
     public static String exchangeFulfillmentSql(String ft) {
-        return "EXISTS (SELECT 1 FROM orders xo_f " +
+        return "EXISTS (SELECT 1 FROM merchant_orders xo_f " +
                "  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(xo_f.raw->'fulfillments') = 'array' " +
                "       THEN xo_f.raw->'fulfillments' ELSE '[]'::jsonb END) xf " +
                "  WHERE xo_f.id = " + ft + ".order_id AND xo_f.tenant_id = " + ft + ".tenant_id " +
