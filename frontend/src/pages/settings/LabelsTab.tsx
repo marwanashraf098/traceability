@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Info } from 'lucide-react'
 import { getLabelSettings, updateLabelSettings, ReceivingDefaultMode } from '../../api'
 import { Radio, Skeleton, cn } from '../../components/ui'
+import { ControlMeter, MODE_LEVEL } from '../receiving/ReceivingModeCards'
 
 // Flexible labeling slice 8 — Settings › Labels (switched-on tenants only; owner + manager edit). The receiving mode
 // the "How do you want to receive this delivery?" step pre-selects. Flexible labeling itself is NOT switched here —
@@ -56,7 +57,9 @@ export default function LabelsTab() {
         <Radio value={value} checked={mode === value} onChange={v => setMode(v as ReceivingDefaultMode)} />
       </span>
       <span className="flex-1 min-w-0">
-        <span className="block text-body font-semibold text-primary">{t(`receiving.mode.${value}.title`)}</span>
+        <span className="flex items-center gap-2 text-body font-semibold text-primary">
+          <ControlMeter level={MODE_LEVEL[value]} />{t(`receiving.mode.${value}.title`)}
+        </span>
         <span className="block text-small text-muted mt-0.5">{t(`receiving.mode.${value}.body`)}</span>
       </span>
     </label>
@@ -71,8 +74,9 @@ export default function LabelsTab() {
 
       <div className="space-y-2">
         <p className="text-small font-semibold text-primary">{t('settings.labels.defaultMode')}</p>
-        {option('print_stick')}
+        {/* Low → medium control (O4). High control needs an open factory run, so it's never a default. */}
         {option('count_only')}
+        {option('print_stick')}
       </div>
 
       <p className="flex items-start gap-2 text-small text-muted">

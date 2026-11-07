@@ -27,7 +27,7 @@ import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
-import Receiving from './pages/Receiving'
+import { ReceivingRoute } from './pages/receiving/GuidedReceiving'
 import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
@@ -326,7 +326,8 @@ export default function App() {
           element={
             <RequireAuth>
               <OwnerOnlyRoute>
-                <Layout><Receiving /></Layout>
+                {/* O4: ?guided=1 → the guided first receiving (full-screen), else the normal page in Layout. */}
+                <ReceivingRoute />
               </OwnerOnlyRoute>
             </RequireAuth>
           }

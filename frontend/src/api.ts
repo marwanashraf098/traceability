@@ -1338,6 +1338,20 @@ export function getOnboardingProgress() {
   return request<OnboardingProgress>('/onboarding/progress')
 }
 
+/** O4: the guided first receiving's "Start with one product" — the variant with the most Shopify stock that Traced
+ *  knows (read-only on the server; null when there's nothing to suggest or the read failed). */
+export interface ReceivingSuggestion {
+  variantId: string
+  shopifyQuantity: number
+  /** On hand at the Traced Main location in Shopify; null when unknown. */
+  mainOnHand: number | null
+}
+
+/** Owner / manager. */
+export function getReceivingSuggestion() {
+  return request<{ suggestion: ReceivingSuggestion | null }>('/onboarding/receiving-suggestion')
+}
+
 /** Owner / manager — whitelisted keys only (anything else → 400). `skipped` replaces the stored list. */
 export function patchOnboardingPrefs(patch: OnboardingPrefsPatch) {
   return request<OnboardingProgress>('/onboarding/prefs', { method: 'PATCH', body: JSON.stringify(patch) })

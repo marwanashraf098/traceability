@@ -501,7 +501,7 @@ public class ReceivingService {
     public List<Map<String, Object>> getSessionPieces(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
-            "SELECT p.id, p.barcode, p.status, v.title AS variant_title, pr.title AS product_title " +
+            "SELECT p.id, p.barcode, p.short_code, p.status, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
             "JOIN variants v  ON v.id  = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +

@@ -162,7 +162,7 @@ describe('setup row', () => {
     expect(shopify).toHaveTextContent('Done:Shopify')
     const href = (key: string) => within(screen.getByTestId(`get-started-step-${key}`)).getByRole('link').getAttribute('href')
     expect(href('address')).toBe('/settings?tab=locations')
-    expect(href('first_receiving')).toBe('/receiving')
+    expect(href('first_receiving')).toBe('/receiving?guided=1')
     expect(href('courier')).toBe('/settings?tab=connections')
     expect(href('test_label')).toBe('/receiving')
     expect(screen.getByTestId('get-started-step-test_label')).toHaveTextContent('Print a test label')

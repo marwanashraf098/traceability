@@ -262,6 +262,9 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        Map.entry("/api/v1/onboarding/receiving-suggestion",
+            "O4: no tenant rows returned beyond one variant id of the caller's own catalog, read under RLS in its own " +
+            "transaction; covered by ReceivingSuggestionTest (app_user, RLS on)"),
         Map.entry("/api/v1/ops/receipt-reversal",
             "One-off ops report (no JWT, X-Ops-Secret): hard-wired to one tenant / receipt, runs under TenantContext.runAs " +
             "as app_user; never reads the caller's tenant. Removed after the 2026-11-05 Floe Wear reversal."),

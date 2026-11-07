@@ -539,6 +539,7 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/onboarding/steps",             skip(R_CONFIG));
         reg("GET /api/v1/onboarding/progress",           list());
         reg("PATCH /api/v1/onboarding/prefs",            skip(R_CONFIG));
+        reg("GET /api/v1/onboarding/receiving-suggestion", skip("no order is read — the store's variants by Shopify stock (read only) mapped to its own catalog; returns one variant id"));
         reg("POST /api/v1/me/ui-state",                  skip(R_CONFIG));
         reg("GET /api/v1/setup/address",                 list());
         reg("PUT /api/v1/setup/address",                 skip(R_CONFIG));

@@ -4,6 +4,53 @@
 
 ## Current state
 
+**Onboarding redesign — O4 guided first receiving (Flow-5/6/7) + receiving mode rename (2026-11-07; branch
+`feat/onboarding-guided-receiving` off main beec6e03, worktree `~/Documents/traceability-o4`; approved and MERGED
+2026-11-07, NOT deployed; no migration).** Mockups `design/onboarding/Traced_onboarding_Flow-5/6/7`.
+- **Entry:** Flow-4 "Start my first receiving session" and the Get started card's First receiving step open
+  `/receiving?guided=1`. `ReceivingRoute` (GuidedReceiving.tsx) decides ONCE: owner / manager, not station mode, and
+  progress `first_receiving` not done (or resuming this tab's guided session) → the guided flow, full-screen (GateFrame);
+  anything else → the normal page in Layout. Skip → Overview, nothing stored. The guided session id lives in
+  sessionStorage only (`guidedState.ts`): resume after a reload or after High control's scan loop; cleared when Flow-7
+  is left, so Flow-7 shows once.
+- **Flow-5:** the three mode cards (Medium pre-selected); "Where is this stock now?" hidden (`MOVE_FROM_SHOPIFY_LOCATION
+  = false`); "Start with one product" = `GET /onboarding/receiving-suggestion` (NEW, owner / manager, read only:
+  `ShopifyVariantStockGateway` — productVariants sortKey INVENTORY_QUANTITY reverse, ≤ 2 pages of 50, scopes
+  read_products + read_inventory (no change), no DB transaction during the call, nothing stored; first variant with
+  stock that is an ACTIVE product in the Traced catalog; plus its on-hand at the linked Traced Main location) — title
+  / image from the existing catalog call; empty / failed → the existing picker (ProductSelectionGrid, onCommit mode).
+  Quantity 10. "What happens in Shopify": Traced Main before → after (else +N) + the ADDED warning + one line.
+- **Flow-6:** the REAL SessionView (exported) with the same endpoints (POST session → POST lines → finalize → labels)
+  and a guide panel beside it (no inputs, never focus()). Medium: add product → close → print → stick → check; Low: add
+  product → enter the count → close; High: scan each piece → finish (the factory flow). The check (Medium, after
+  finalize) is READ ONLY against `GET /receiving/sessions/{id}/pieces` (now also returns `short_code`, what the label
+  holds): useScanner + ScanShell + usePhoneScanTarget, unchanged; the only input on the view.
+- **Test label:** any label PDF that opens in the guided session (the guide's Print, or SessionView's own print /
+  reprint / per-variant buttons via its new optional `onPrinted`) → PATCH prefs `testLabelPrinted: true`, once per page
+  (fire-and-forget) → Get started's "Test label" step is done.
+- **Flow-7:** "Your first N pieces are in Traced", Traced Main only, Lookup line (not for Low), pace 50 / 150 / 300 →
+  PATCH labelingPace → Overview. No "done in X days" (the suggestion read has no store total).
+- **Mode rename (copy only, internal values unchanged):** count_only = Low control · Quick count, print_stick = Medium
+  control · Label now, factory = High control · Label & verify (no Recommended badge for now); `ReceivingModeCards`
+  (3-bar meter), low
+  → high in the New session chooser, Flow-5 and Settings › Labels. High is disabled with "Needs a label run · Set up"
+  (→ `/receiving?tab=runs`, new param) without an open run. Badges, Lookup, stock take and the phone header renamed.
+  Descriptions made true (approved copy): Low says main warehouse + shows when you FINISH; High says print first (or
+  the factory), only scanned pieces enter stock, main warehouse. Backend error messages still say count-only /
+  factory-labeled (only reachable outside the UI) — not changed.
+- **Tests:** vitest 1,665 → 1,693 (guidedReceiving 28; 14 rules mutation-checked red); browser
+  guidedReceivingLayout 32 (Flow-5/6/7 + mode cards × EN/AR × desktop/phone × Chromium/WebKit); backend
+  ReceivingSuggestionTest 7 (4 rules mutation-checked red). Approved edits: 11 existing frontend tests (copy / link
+  only — flexibleRollout ro1, flexibleS5S8 rc1, flexibleS6b fb2, getStartedCard gs1, putAwayLists snapshot badge,
+  receivingCountOnly c2, receivingRedesign rs1–rs3, stocktakeUntagged su5) and the new endpoint classified in
+  RlsCoverageTest (EXEMPT) / PortalOrderLeakTest / ShadowOrderLeakTest (SKIP).
+- **O4b — PLANNED follow-up (not built): High control creates its own label run.** The clean version (~3 days, with a
+  migration): an own-labels flag on label_runs (shown as "Your labels", not a factory), a default name (factory name
+  no longer typed), and the run closed automatically when its session finishes (unscanned labels → the run's missing
+  reason). Then High control can be picked directly by a new merchant (today it needs an open factory run).
+- **Bug (pre-existing, logged, not fixed):** the New session chooser is skipped when "+ New session" is clicked before /me
+  answered (the form starts at step 'form' while flexibleLabeling is still false) — existing.
+
 **Onboarding redesign — O3 Get started card + sidebar dots (2026-11-07; branch `feat/onboarding-get-started` off main
 e7476dd4, worktree `~/Documents/traceability-o3`; approved and MERGED 2026-11-07, NOT deployed; no migration).** Mockups
 `design/onboarding/Traced_onboarding_Flow-9-Overview-Real` (+ Flow-8's task list).

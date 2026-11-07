@@ -34,7 +34,7 @@ function stepViews(p: OnboardingProgress, t: (k: string) => string): StepView[] 
     switch (key) {
       case 'shopify':         return [v(t('getStarted.step.shopify'), t('getStarted.step.shopifyTodo'), null, '/settings?tab=connections')]
       case 'address':         return [v(t('getStarted.step.address'), t('getStarted.step.addressTodo'), null, '/settings?tab=locations')]
-      case 'first_receiving': return [v(t('getStarted.step.receiving'), t('getStarted.step.receivingTodo'), null, '/receiving')]
+      case 'first_receiving': return [v(t('getStarted.step.receiving'), t('getStarted.step.receivingTodo'), null, '/receiving?guided=1')]
       case 'courier':         return [v(p.bostaConnected ? t('getStarted.step.bosta') : t('getStarted.step.courier'),
                                         t('getStarted.step.courierTodo'), t('getStarted.step.courierLater'), '/settings?tab=connections')]
       case 'test_label':      return [v(t('getStarted.step.testLabel'), t('getStarted.step.testLabelTodo'),
