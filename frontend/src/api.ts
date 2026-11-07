@@ -1287,6 +1287,13 @@ export interface Me {
   setupStep?: SetupStep
   /** Grandfathered tenants: setup done but the main warehouse has no address yet — the soft banner. */
   warehouseAddressNeeded?: boolean
+  /** O1: this user's tours done and sidebar pages opened (the blue "not opened yet" dots). */
+  uiState?: { toursDone: string[]; pagesSeen: string[] }
+}
+
+/** O1: record a tour done or a page opened for the signed-in user (idempotent; whitelisted ids). */
+export function recordUiState(body: { tourDone?: string; pageSeen?: string }) {
+  return request<{ toursDone: string[]; pagesSeen: string[] }>('/me/ui-state', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export type ShopifyUpgradeStage = 'upgrade' | 'delete_old_app' | null
@@ -1309,6 +1316,12 @@ export interface OnboardingProgress {
   pickPackChosen: boolean
   labelingPace: number | null
   setupIntroSeen?: boolean
+  /** O3: true once the card state was written through PATCH (the auto-slim never overrides a choice). */
+  cardChosen?: boolean
+  /** O3: when the onboarding gate was finished (UTC ISO), null before. */
+  setupCompletedAt?: string | null
+  /** O3: an active Bosta account. */
+  bostaConnected?: boolean
 }
 
 export type OnboardingPrefsPatch = Partial<{

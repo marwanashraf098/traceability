@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, ReactNode } from 'react'
 import { LogOut, Globe, Search, ChevronDown, Bell, Menu } from 'lucide-react'
 import {
-  getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount, getOnboardingStatus,
-  type Me, type OnboardingStatus,
+  getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount,
+  type Me,
 } from '../api'
+import { setupDone, useOnboardingProgress } from '../onboardingProgress'
+import { markPageSeen, pageKeyFor, sentThisLoad } from '../pageSeen'
 import { clearAccessToken } from '../auth'
 import Sidebar, { avatarInitials } from './Sidebar'
 import { cn, MeProvider } from './ui'
@@ -41,7 +43,6 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [me, setMe]             = useState<Me | null>(null)
   const [exceptionsCount, setExceptionsCount] = useState<number | null>(null)
-  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const menuRef   = useRef<HTMLDivElement>(null)
   const role      = getRoleFromToken()
@@ -129,15 +130,26 @@ export default function Layout({ children }: { children: ReactNode }) {
       .catch(err => console.error('Failed to load exceptions count', err))
   }, [role])
 
-  // Setup N/5 chip — decorative, non-blocking: on failure the chip just doesn't
-  // render (never a stale/NaN count). Owner/Manager only, matching the endpoint's
-  // access control (workers get 403 on /onboarding/status).
+  // Onboarding O3 — GET /onboarding/progress (shared with Overview's Get started card): the Setup N/5 chip and the
+  // sidebar dots. Decorative, non-blocking: on failure neither shows. Owner / manager, never station mode.
+  const ownerOrManager = role !== 'worker' && !stationMode
+  const progress = useOnboardingProgress(ownerOrManager)
+  const setupShown = !!progress && progress.card !== 'hidden'
+  const setupCount = progress ? { done: setupDone(progress), total: progress.steps.length } : null
+
+  // A visit marks its sidebar page opened — once per page load, fire-and-forget. Only once /me has answered
+  // with this user's uiState (what was already opened).
+  const pageKey = pageKeyFor(pathname)
   useEffect(() => {
-    if (role === 'worker') return
-    getOnboardingStatus()
-      .then(setOnboarding)
-      .catch(err => console.error('Failed to load onboarding status', err))
-  }, [role])
+    if (!ownerOrManager || !me?.uiState || !pageKey || me.uiState.pagesSeen.includes(pageKey)) return
+    markPageSeen(pageKey)
+  }, [ownerOrManager, me, pageKey])
+
+  // Blue "not opened yet" dots: only while this tenant's Get started card isn't hidden — an active merchant
+  // never suddenly sees dots everywhere. The page on screen is never dotted.
+  const notOpened = ownerOrManager && setupShown && me?.uiState
+    ? (key: string) => key !== pageKey && !me.uiState!.pagesSeen.includes(key) && !sentThisLoad(key)
+    : null
 
   return (
     <MeProvider me={me}>
@@ -147,7 +159,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       {navOpen && (
         <div className="min-[900px]:hidden fixed inset-0 bg-black/45 z-overlay" onClick={() => setNavOpen(false)} data-testid="nav-scrim" />
       )}
-      <Sidebar role={role} me={me} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />
+      <Sidebar role={role} me={me} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} notOpened={notOpened} />
 
       {/* ── Main area ── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -224,7 +236,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                       {me.email && <p className="text-caption text-muted truncate">{me.email}</p>}
                     </div>
                   )}
-                  {onboarding && !onboarding.allDone && (
+                  {setupShown && setupCount && setupCount.done < setupCount.total && (
                     <button
                       type="button"
                       onClick={() => { setMenuOpen(false); navigate('/overview') }}
@@ -232,7 +244,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                     >
                       <span className="text-muted">{t('nav.setupProgress')}</span>
                       <span className="font-bold text-trace-blue bg-trace-blue/15 rounded-full px-2 py-0.5">
-                        {t('nav.setupCount', { done: onboarding.steps.filter(s => s.done).length, total: onboarding.steps.length })}
+                        {t('nav.setupCount', setupCount)}
                       </span>
                     </button>
                   )}

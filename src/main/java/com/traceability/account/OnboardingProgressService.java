@@ -46,6 +46,12 @@ import java.util.*;
  *
  * A step's {@code skipped} is true only while the step is not done.
  *
+ * Get started card (O3): {@code card} is 'hidden' for the demo and review tenants whatever is stored
+ * (ReviewCapabilities.scanHelpers — the same rule SetupStatus uses). {@code cardChosen} is true once the card
+ * state was written through PATCH (server-stamped {@code cardChosenAt}, never client-writable): the frontend's
+ * auto-slim never overrides a choice. {@code setupCompletedAt} (the gate's stamp) and {@code bostaConnected}
+ * (an active Bosta account) feed the card's wording and the auto-slim rule.
+ *
  * Setup intro (O2) — {@link #setupIntro}: the post-gate screens an OWNER is sent to once, after the gate
  * (Flow-3 courier while the courier step is neither done nor skipped, then Flow-4 once; Flow-4 sets the
  * {@code setupIntroSeen} pref). Read by GET /me; never for a manager / worker, a gated tenant, the demo or
@@ -130,10 +136,18 @@ public class OnboardingProgressService {
         }
 
         Object card = prefs.get("card");
+        boolean demoOrReview = com.traceability.review.ReviewCapabilities.scanHelpers(jdbc, tenantId);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("steps", steps);
         out.put("tasks", tasks);
-        out.put("card",  card instanceof String s && CARD_STATES.contains(s) ? s : "full");
+        out.put("card",  demoOrReview ? "hidden" : card instanceof String s && CARD_STATES.contains(s) ? s : "full");
+        out.put("cardChosen", prefs.get("cardChosenAt") != null);
+        out.put("setupCompletedAt", jdbc.queryForObject(
+            "SELECT to_char(setup_completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM tenants WHERE id = ?",
+            String.class, tenantId));
+        out.put("bostaConnected", exists(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts " +
+            "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')", tenantId));
         out.put("pickPackChosen", Boolean.TRUE.equals(prefs.get("pickPackChosen")));
         out.put("labelingPace", prefs.get("labelingPace") instanceof Number n ? n.intValue() : null);
         out.put("setupIntroSeen", Boolean.TRUE.equals(prefs.get("setupIntroSeen")));
@@ -184,8 +198,10 @@ public class OnboardingProgressService {
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "prefs not serializable");
         }
-        jdbc.update("UPDATE tenants SET onboarding_prefs = onboarding_prefs || ?::jsonb WHERE id = ?",
-            json, tenantId);
+        // A card written here is the user's choice: stamp it (server-only key, not in PREF_KEYS).
+        jdbc.update("UPDATE tenants SET onboarding_prefs = onboarding_prefs || ?::jsonb " +
+                    "|| CASE WHEN ? THEN jsonb_build_object('cardChosenAt', now()) ELSE '{}'::jsonb END WHERE id = ?",
+            json, clean.containsKey("card"), tenantId);
         audit.record(actorUserId, "onboarding_prefs_set", "tenant", tenantId.toString(), clean);
         return progress();
     }

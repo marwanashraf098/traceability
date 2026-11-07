@@ -1,15 +1,17 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import { renderWithProviders, screen } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
+import { forgetOnboardingProgress } from '../onboardingProgress'
 import Layout from '../components/Layout'
 import Overview from '../pages/Overview'
 
 /**
- * Overview fresh-tenant card (2026-09-25, App Store review): the reviewer's tenant had
- * 11 Shopify orders and a connected store but zero received pieces, and Overview showed
- * "Nothing to show yet — Connect your Shopify store" instead of their orders.
- *   C1 — the card requires zero pieces AND zero orders.
- *   C2 — its "Connect your Shopify store" step reflects /connections, shown done when connected.
+ * Overview for a fresh tenant (2026-09-25, App Store review): the reviewer's tenant had 11 Shopify orders and a
+ * connected store but zero received pieces, and Overview showed "Nothing to show yet" instead of their orders.
+ * Onboarding O3 retired the fresh-tenant card: the Get started card sits ABOVE the dashboard, which always renders.
+ *   C1 — orders with zero pieces → the dashboard (their orders); zero orders and zero pieces → the dashboard too,
+ *        with Get started above it, never a card that replaces it.
+ *   C2 — the Shopify step reflects GET /onboarding/progress: done ✓ when connected, else "Connect Shopify →".
  * URL-routed fetch fake, real response shapes.
  */
 
@@ -30,17 +32,20 @@ const ZERO_STATUS_TOTALS = {
 }
 const summary = (total: number) => ({ total, processing: total, withCourier: 0, delivered: 0, returned: 0 })
 
-// Reviewer tenant shape: Shopify connected, Bosta not, no test label, no receipt yet.
-const NOT_ALL_DONE_ONBOARDING = {
-  steps: [
-    { key: 'connect_shopify', done: true,  auto: true,  manual: false },
-    { key: 'connect_bosta',   done: false, auto: false, manual: false },
-    { key: 'location',        done: true,  auto: true,  manual: false },
-    { key: 'test_label',      done: false, auto: false, manual: false },
-    { key: 'first_receiving', done: false, auto: false, manual: false },
-  ],
-  allDone: false,
-  dismissed: false,
+// Reviewer tenant shape: Bosta not connected, no test label, no receipt yet; Shopify as the test says.
+function progress(shopifyConnected: boolean) {
+  return {
+    steps: [
+      { key: 'shopify', done: shopifyConnected, skippable: false, skipped: false },
+      { key: 'address', done: true, skippable: false, skipped: false },
+      { key: 'first_receiving', done: false, skippable: false, skipped: false },
+      { key: 'courier', done: false, skippable: true, skipped: false },
+      { key: 'test_label', done: false, skippable: true, skipped: false },
+    ],
+    tasks: [{ key: 'receive', tried: false }],
+    card: 'full', cardChosen: false, setupCompletedAt: new Date().toISOString(), bostaConnected: false,
+    pickPackChosen: false, labelingPace: null,
+  }
 }
 
 function connections(shopifyConnected: boolean) {
@@ -84,13 +89,14 @@ function render(opts: { orders: number; shopifyConnected: boolean }) {
   stubFetchWithShellDefaults(app, {
     me: { name: 'Reviewer', email: 'reviewer2@tracedtech.com', role: 'owner' },
     exceptionsCount: { count: 0, critical: 0, warning: 0 },
-    onboardingStatus: NOT_ALL_DONE_ONBOARDING,
+    onboardingProgress: progress(opts.shopifyConnected),
   })
   return renderWithProviders(<Layout><Overview /></Layout>)
 }
 
-describe('Overview — fresh-tenant card', () => {
+describe('Overview — fresh tenant', () => {
   beforeEach(() => {
+    forgetOnboardingProgress()
     vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
   })
   afterEach(() => vi.unstubAllGlobals())
@@ -101,24 +107,26 @@ describe('Overview — fresh-tenant card', () => {
     expect(screen.queryByTestId('fresh-tenant-card')).toBeNull()
   })
 
-  test('C1 control: zero orders and zero pieces → fresh-tenant card', async () => {
+  test('C1 control: zero orders and zero pieces → the dashboard with Get started above it', async () => {
     render({ orders: 0, shopifyConnected: false })
-    expect(await screen.findByTestId('fresh-tenant-card')).toBeInTheDocument()
-    expect(screen.queryByTestId('stat-cards')).toBeNull()
+    expect(await screen.findByTestId('get-started-card')).toBeInTheDocument()
+    expect(screen.getByTestId('stat-cards')).toBeInTheDocument()
+    expect(screen.queryByTestId('fresh-tenant-card')).toBeNull()
   })
 
-  test('C2: Shopify connected → the Shopify step shows done, no "Connect your Shopify store" link', async () => {
+  test('C2: Shopify connected → the Shopify step shows done, no "Connect Shopify" link', async () => {
     render({ orders: 0, shopifyConnected: true })
-    await screen.findByTestId('fresh-tenant-card')
-    expect(await screen.findByTestId('fresh-tenant-shopify-done')).toHaveTextContent('Shopify store connected')
-    expect(screen.queryByText('Connect your Shopify store')).toBeNull()
+    const step = await screen.findByTestId('get-started-step-shopify')
+    expect(step).toHaveAttribute('data-done', 'true')
+    expect(step).toHaveTextContent('Shopify')
+    expect(screen.queryByRole('link', { name: /Connect Shopify/ })).toBeNull()
   })
 
-  test('C2 control: Shopify not connected → the step is the "Connect your Shopify store" link', async () => {
+  test('C2 control: Shopify not connected → the step is the "Connect Shopify" link', async () => {
     render({ orders: 0, shopifyConnected: false })
-    const link = await screen.findByTestId('fresh-tenant-shopify-todo')
-    expect(link).toHaveTextContent('Connect your Shopify store')
-    expect(link).toHaveAttribute('href', '/connections')
-    expect(screen.queryByTestId('fresh-tenant-shopify-done')).toBeNull()
+    const step = await screen.findByTestId('get-started-step-shopify')
+    expect(step).toHaveAttribute('data-done', 'false')
+    const link = screen.getByRole('link', { name: /Connect Shopify/ })
+    expect(link).toHaveAttribute('href', '/settings?tab=connections')
   })
 })

@@ -19,7 +19,11 @@ import { vi } from 'vitest'
  * If Layout ever grows more background calls, add their paths to SHELL_PATHS.
  */
 
-const SHELL_PATHS = ['/api/v1/me', '/api/v1/exceptions/count', '/api/v1/onboarding/status'] as const
+const SHELL_PATHS = [
+  '/api/v1/me', '/api/v1/exceptions/count', '/api/v1/onboarding/status',
+  // Onboarding O3: Layout's Setup chip + sidebar dots read GET /onboarding/progress; a visit POSTs /me/ui-state.
+  '/api/v1/onboarding/progress', '/api/v1/me/ui-state',
+] as const
 type ShellPath = typeof SHELL_PATHS[number]
 
 /**
@@ -57,6 +61,9 @@ export function stubFetchWithShellDefaults(
     /** Static value, or a () => value factory for tests that need the response to
      *  change across repeated calls (e.g. simulating a refetch after a mutation). */
     onboardingStatus?: unknown | (() => unknown)
+    /** O3: GET /onboarding/progress (Layout's chip / dots and Overview's Get started card). Default {} = nothing
+     *  to show (no card, no chip, no dots) — static value or a () => value factory. */
+    onboardingProgress?: unknown | (() => unknown)
     /** S3c: the Pick & Pack queue's background GET /api/v1/fulfill/waiting-for-release answers [] by default (it
      *  would otherwise take a response from a page's sequential queue). true = let the test's own fetch answer it. */
     passWaitingForRelease?: boolean
@@ -73,6 +80,11 @@ export function stubFetchWithShellDefaults(
       const body = typeof ov === 'function' ? (ov as () => unknown)() : (ov ?? { steps: [], allDone: true, dismissed: true })
       return shellDefaultResponse(body)
     }
+    if (shell === '/api/v1/onboarding/progress') {
+      const op = overrides?.onboardingProgress
+      return shellDefaultResponse(typeof op === 'function' ? (op as () => unknown)() : (op ?? {}))
+    }
+    if (shell === '/api/v1/me/ui-state') return shellDefaultResponse({ toursDone: [], pagesSeen: [] })
     if (!overrides?.passWaitingForRelease && typeof url === 'string'
         && url.split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/, '') === '/api/v1/fulfill/waiting-for-release') {
       return shellDefaultResponse([])

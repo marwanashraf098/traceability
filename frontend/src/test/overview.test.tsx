@@ -2,6 +2,7 @@ import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
+import { forgetOnboardingProgress } from '../onboardingProgress'
 import Layout from '../components/Layout'
 import Overview from '../pages/Overview'
 import Login from '../pages/Login'
@@ -452,112 +453,95 @@ describe('Overview dashboard', () => {
   })
 
   // ── Onboarding card — shown / dismissed / allDone ────────────────────────────
-  test('ov8 onboarding — shown when not dismissed and not all done', async () => {
-    renderOverview({ onboarding: NOT_ALL_DONE_ONBOARDING })
-    expect(await screen.findByTestId('onboarding-card')).toBeInTheDocument()
-  })
+  // ── Get started card (O3) — replaced the onboarding card (ov8–ov10, ov13, ov14) and the fresh-tenant card
+  // (ov11, ov12). Same numbers, new meaning; see getStartedCard.test.tsx for the card's own rules.
 
-  test('ov9 onboarding — hidden when dismissed', async () => {
-    renderOverview({ onboarding: DISMISSED_ONBOARDING })
-    await screen.findByTestId('stat-cards')
+  function progressFixture(card: 'full' | 'slim' | 'hidden', overrides: Record<string, unknown> = {}) {
+    return {
+      steps: [
+        { key: 'shopify', done: true, skippable: false, skipped: false },
+        { key: 'address', done: true, skippable: false, skipped: false },
+        { key: 'first_receiving', done: false, skippable: false, skipped: false },
+        { key: 'courier', done: false, skippable: true, skipped: false },
+        { key: 'test_label', done: false, skippable: true, skipped: false },
+      ],
+      tasks: [{ key: 'receive', tried: false }, { key: 'pack', tried: false }],
+      card, cardChosen: false, setupCompletedAt: new Date().toISOString(), bostaConnected: false,
+      pickPackChosen: false, labelingPace: null, ...overrides,
+    }
+  }
+
+  function renderWithProgress(progress: unknown, map: EndpointMap = {}, extra?: (url: string, opts?: RequestInit) => unknown) {
+    forgetOnboardingProgress()
+    const base = makeAppFetch(map)
+    const appFetch = vi.fn((url: string, opts?: RequestInit) => extra?.(url, opts) ?? base(url, opts))
+    stubFetchWithShellDefaults(appFetch, {
+      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
+      exceptionsCount: { count: 0 },
+      onboardingProgress: progress,
+    })
+    renderWithProviders(<Layout><Overview /></Layout>)
+    return appFetch
+  }
+
+  test('ov8 Get started — card full: setup row and task grid, above the dashboard', async () => {
+    renderWithProgress(progressFixture('full'))
+    const card = await screen.findByTestId('get-started-card')
+    expect(within(card).getByTestId('get-started-count')).toHaveTextContent('2 of 5 done')
+    expect(screen.getByTestId('stat-cards')).toBeInTheDocument()
     expect(screen.queryByTestId('onboarding-card')).toBeNull()
   })
 
-  test('ov10 onboarding — hidden when allDone', async () => {
-    renderOverview({ onboarding: ALL_DONE_ONBOARDING })
-    await screen.findByTestId('stat-cards')
-    expect(screen.queryByTestId('onboarding-card')).toBeNull()
+  test('ov9 Get started — hidden: only "Show Get started again"', async () => {
+    renderWithProgress(progressFixture('hidden'))
+    expect(await screen.findByRole('button', { name: 'Show Get started again' })).toBeInTheDocument()
+    expect(screen.queryByTestId('get-started-card')).toBeNull()
+    expect(screen.queryByTestId('get-started-slim')).toBeNull()
   })
 
-  // ── Fresh-tenant card — shown / not shown ────────────────────────────────────
-  test('ov11 fresh-tenant card — shown when zero pieces and onboarding not all done', async () => {
-    renderOverview({ statusTotals: ZERO_STATUS_TOTALS, ordersSummary: ZERO_ORDERS_SUMMARY, onboarding: NOT_ALL_DONE_ONBOARDING })
-    expect(await screen.findByTestId('fresh-tenant-card')).toBeInTheDocument()
-    expect(screen.queryByTestId('stat-cards')).toBeNull()
+  test('ov10 Get started — slim bar', async () => {
+    renderWithProgress(progressFixture('slim'))
+    const bar = await screen.findByTestId('get-started-slim')
+    expect(bar).toHaveTextContent('Setup 2 of 5')
+    expect(within(bar).getByTestId('get-started-next')).toHaveTextContent('Do your first receiving')
   })
 
-  test('ov12 fresh-tenant card — not shown once there is inventory', async () => {
-    renderOverview({ statusTotals: POPULATED_STATUS_TOTALS })
-    await screen.findByTestId('stat-cards')
+  test('ov11 fresh tenant (zero pieces, zero orders) — Get started AND the dashboard, no fresh-tenant card', async () => {
+    renderWithProgress(progressFixture('full'), { statusTotals: ZERO_STATUS_TOTALS, ordersSummary: ZERO_ORDERS_SUMMARY })
+    expect(await screen.findByTestId('get-started-card')).toBeInTheDocument()
+    expect(screen.getByTestId('stat-cards')).toBeInTheDocument()
     expect(screen.queryByTestId('fresh-tenant-card')).toBeNull()
   })
 
-  // ── Manual checkbox + celebratory transition ─────────────────────────────────
-
-  // ov13: clicking a step's manual checkbox calls setOnboardingStep and flips the
-  // checkbox's checked state optimistically — before the POST's response arrives.
-  test('ov13 manual checkbox — click calls setOnboardingStep and optimistically flips before the network settles', async () => {
-    let resolvePost!: () => void
-    const postPromise = new Promise<void>(res => { resolvePost = res })
-
-    const baseAppFetch = makeAppFetch({})
-    const appFetch = vi.fn((url: string, opts?: RequestInit) => {
-      if (url.includes('/onboarding/steps')) {
-        return postPromise.then(() => jsonNoContent())
-      }
-      return baseAppFetch(url, opts)
-    })
-    stubFetchWithShellDefaults(appFetch, {
-      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
-      exceptionsCount: { count: 0 },
-      onboardingStatus: NOT_ALL_DONE_ONBOARDING,
-    })
-    renderWithProviders(<Layout><Overview /></Layout>)
-
-    await screen.findByTestId('onboarding-card')
-    const row = screen.getByTestId('onboarding-step-test_label')
-    const checkbox = within(row).getByRole('checkbox') as HTMLInputElement
-    expect(checkbox.checked).toBe(false)
-
-    const user = userEvent.setup()
-    await user.click(checkbox)
-
-    // Optimistic: flips to checked immediately, before the mocked POST resolves.
-    expect(checkbox.checked).toBe(true)
-    expect(appFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/onboarding/steps'),
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ step: 'test_label', checked: true }) })
-    )
-
-    // Let the POST resolve and the refetch settle — no leftover pending/disabled state.
-    resolvePost()
-    await waitFor(() => expect(checkbox.disabled).toBe(false))
+  test('ov12 no progress (failed / not answered) — dashboard only, nothing of Get started', async () => {
+    renderWithProgress({}, { statusTotals: POPULATED_STATUS_TOTALS })
+    await screen.findByTestId('stat-cards')
+    await waitFor(() => expect(screen.queryByTestId('get-started-card')).toBeNull())
+    expect(screen.queryByTestId('get-started-hidden')).toBeNull()
+    expect(screen.queryByTestId('fresh-tenant-card')).toBeNull()
   })
 
-  // ov14: an allDone false->true transition (detected across a refetch, here triggered
-  // by the same manual-checkbox flow as ov13) fires the transient "all set" toast and
-  // performs NO db write of its own — specifically, it must never call
-  // POST /onboarding/dismiss. dismissOnboarding is user-initiated only (the X button);
-  // the celebratory toast must never trigger it as a side effect of rendering.
-  test('ov14 celebratory transition — toast fires on false->true, never calls dismissOnboarding', async () => {
-    let onboardingCalls = 0
-    // stubFetchWithShellDefaults intercepts /onboarding/status itself (Layout and
-    // Overview both call it — see renderOverview's own comment above), so the stateful
-    // sequence has to go through its onboardingStatus override, not appFetch directly.
-    const appFetch = makeAppFetch({})
-    stubFetchWithShellDefaults(appFetch, {
-      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
-      exceptionsCount: { count: 0 },
-      onboardingStatus: () => {
-        onboardingCalls += 1
-        return onboardingCalls === 1 ? NOT_ALL_DONE_ONBOARDING : ALL_DONE_ONBOARDING
-      },
-    })
-    renderWithProviders(<Layout><Overview /></Layout>)
+  test('ov13 Minimise — slim at once, PATCH card slim (no checkboxes anywhere)', async () => {
+    const appFetch = renderWithProgress(progressFixture('full'), {}, (url, opts) =>
+      url.includes('/onboarding/prefs') && opts?.method === 'PATCH' ? jsonOk(progressFixture('slim', { cardChosen: true })) : undefined)
+    const card = await screen.findByTestId('get-started-card')
+    expect(within(card).queryByRole('checkbox')).toBeNull()
+    await userEvent.setup().click(within(card).getByRole('button', { name: 'Minimise' }))
+    expect(await screen.findByTestId('get-started-slim')).toBeInTheDocument()
+    expect(appFetch).toHaveBeenCalledWith(expect.stringContaining('/onboarding/prefs'),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ card: 'slim' }) }))
+  })
 
-    await screen.findByTestId('onboarding-card')
-    const row = screen.getByTestId('onboarding-step-test_label')
-    const checkbox = within(row).getByRole('checkbox')
-    const user = userEvent.setup()
-    await user.click(checkbox)
-
-    // The refetch after the toggle returns allDone:true -> transient toast fires.
-    await screen.findByText("You're all set up!")
-
-    // No write beyond the manual-step POST the user explicitly triggered — in
-    // particular, never /onboarding/dismiss as a side effect of the transition/render.
-    expect(appFetch).not.toHaveBeenCalledWith(
-      expect.stringContaining('/onboarding/dismiss'), expect.anything())
+  test('ov14 × — hidden, PATCH card hidden, never the legacy /onboarding/dismiss, no toast', async () => {
+    const appFetch = renderWithProgress(progressFixture('full'), {}, (url, opts) =>
+      url.includes('/onboarding/prefs') && opts?.method === 'PATCH' ? jsonOk(progressFixture('hidden', { cardChosen: true })) : undefined)
+    const card = await screen.findByTestId('get-started-card')
+    await userEvent.setup().click(within(card).getByRole('button', { name: 'Hide Get started' }))
+    expect(await screen.findByRole('button', { name: 'Show Get started again' })).toBeInTheDocument()
+    expect(appFetch).toHaveBeenCalledWith(expect.stringContaining('/onboarding/prefs'),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ card: 'hidden' }) }))
+    expect(appFetch).not.toHaveBeenCalledWith(expect.stringContaining('/onboarding/dismiss'), expect.anything())
+    expect(screen.queryByText("You're all set up!")).toBeNull()
   })
 
   // ── OrderDrawer destinations (Overview navigation pass) ─────────────────────
@@ -627,7 +611,7 @@ describe('Overview dashboard', () => {
       locations: [locationFixture({ shopify_delivery_profile_status: 'not_activated' })],
     })
 
-    await screen.findByTestId('fresh-tenant-card')
+    await screen.findByTestId('stat-cards')
     expect(screen.getByTestId('fulfillment-activation-prompt')).toBeInTheDocument()
   })
 
