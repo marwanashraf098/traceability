@@ -45,7 +45,8 @@
     "closeMenu": "Close menu",
     "putAway": "Place on shelves",
     "notOpened": "not opened yet",
-    "notOpenedLabel": "{{label}}, not opened yet"
+    "notOpenedLabel": "{{label}}, not opened yet",
+    "help": "Help center"
   },
   "overview": {
     "title": "Overview",
@@ -310,6 +311,7 @@
     "resetSuccess": "Your password has been reset. Sign in with your new password."
   },
   "orders": {
+    "shippedOutside": {"title": "Shipped outside Traced", "body_one": "The courier has this order and Shopify shows it fulfilled, but {{count}} piece is still held in Traced. It's missing from your stock and the returns portal.", "body_other": "The courier has this order and Shopify shows it fulfilled, but {{count}} pieces are still held in Traced. They're missing from your stock and the returns portal.", "action": "Shipped outside Traced", "dialogTitle": "Mark as shipped outside Traced?", "dialogBody_one": "The piece is marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBody_other": "The {{count}} pieces are marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBodyDelivered_one": "The piece is marked as delivered, as the courier reports. Nothing changes in Shopify.", "dialogBodyDelivered_other": "The {{count}} pieces are marked as delivered, as the courier reports. Nothing changes in Shopify.", "confirm": "Mark shipped", "conflict": "Nothing to move any more — reload the order.", "error": "Couldn't update the order. Try again."},
     "title": "Orders",
     "search": "Search by order #, name, or phone",
     "searchTracking": "Tracking number",
@@ -469,6 +471,7 @@
     },
     "reasonGroupsLabel": "Filter by reason",
     "reason": {
+      "shopify_return_sync_check": "Check the Shopify return",
       "missing_awb": "Waybill didn't print",
       "fulfillment_link_problem": "Bosta tracking not linked",
       "pack_set_aside": "Set aside while packing",
@@ -506,10 +509,10 @@
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta",
+      "shipped_outside_traced": "Shipped outside Traced, pieces still held",
       "shopify_exchange_still_waiting": "Shopify exchange still waiting",
       "shopify_return_open_after_intake": "Received in Traced, return still open in Shopify",
-      "shopify_return_ended_after_intake": "Return declined or cancelled in Shopify after arrival",
-      "shopify_return_sync_check": "Check the Shopify return"
+      "shopify_return_ended_after_intake": "Return declined or cancelled in Shopify after arrival"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {
@@ -542,7 +545,7 @@
         "days": "Order date"
       },
       "hints": {
-        "traced": "Traced = every piece scanned out in Pick & Pack. Applies to Bosta orders.",
+        "traced": "Not traced = handed to Bosta without any of its pieces being scanned in Pick & Pack. Applies to Bosta orders.",
         "returns": "Pending inspection = returned piece scanned in, not yet restocked or marked damaged."
       },
       "options": {
@@ -1912,6 +1915,46 @@
       "prev": "Previous",
       "next": "Next",
       "drawer": {
+        "shopify": {
+          "label": "Shopify",
+          "waiting": "Will be created as a return in Shopify.",
+          "waitingApproval": "Will be created as a return in Shopify once approved.",
+          "pending": "Creating the return in Shopify…",
+          "created": "Return created in Shopify",
+          "createdNoName": "Return created in Shopify",
+          "openInShopify": "Open the order in Shopify",
+          "skipped": "Not synced to Shopify",
+          "failed": "Shopify didn't create the return yet — Traced will try again.",
+          "failedExhausted": "Shopify refused to create the return. Try again, or create it in Shopify yourself.",
+          "ambiguous": "Not sure the return was created in Shopify — Traced got no clear answer. Check again, or look at the order in Shopify.",
+          "review": "Check the return in Shopify",
+          "outOfStep": "An item's arrival was undone, but Shopify already recorded it as returned. Traced won't change it in Shopify — fix it there if needed.",
+          "stepNeedsCheck": "A step on the Shopify return wasn't confirmed. Check the order in Shopify.",
+          "retry": "Try again",
+          "notInShopifyRetry": "It isn't in Shopify — try again",
+          "checkAgain": "Check again",
+          "markChecked": "I checked it in Shopify",
+          "started": "Done — Shopify will be updated in a moment.",
+          "checkedDone": "Marked as checked.",
+          "actionFailed": "Couldn't do that. Try again.",
+          "reasons": {
+            "pre_connect_order": "the order is from before Traced connected",
+            "not_a_shopify_order": "the order isn't a Shopify order",
+            "store_not_connected": "Shopify isn't connected",
+            "no_permission": "Shopify's new permissions aren't approved yet (Settings › Connections)",
+            "nothing_to_return": "no items are coming back",
+            "line_not_in_shopify": "an item isn't on the Shopify order",
+            "too_many_lines": "the order has too many items for Traced to match",
+            "not_fulfilled_in_shopify": "the order isn't marked fulfilled in Shopify",
+            "not_returnable_in_shopify": "Shopify can't return these items (already returned or refunded)",
+            "request_ended": "the request ended before it was synced",
+            "exchange_not_yet": "exchanges aren't synced to Shopify yet",
+            "readback_mismatch": "the return in Shopify doesn't match the request",
+            "not_found_in_shopify": "the return can't be found in Shopify",
+            "ended_in_shopify": "the return was cancelled or declined in Shopify",
+            "several_returns_found": "more than one Shopify return carries this request"
+          }
+        },
         "label": "Return request {{reference}}",
         "customer": "Customer",
         "phone": "Phone",
@@ -2018,46 +2061,6 @@
           "helpExchangeLookup": "Traced doesn't book this courier. Book the delivery with them, then enter its waybill here — the reserved piece is handed to the courier at once and Shopify goes down by 1. The return waybill for the old item is optional; without it, scan the old item when it arrives.",
           "saveOutboundLookup": "Save and hand to the courier",
           "savedOutboundLookup": "Replacement handed to {{carrier}}."
-        },
-        "shopify": {
-          "label": "Shopify",
-          "waiting": "Will be created as a return in Shopify.",
-          "waitingApproval": "Will be created as a return in Shopify once approved.",
-          "pending": "Creating the return in Shopify…",
-          "created": "Return created in Shopify",
-          "createdNoName": "Return created in Shopify",
-          "openInShopify": "Open the order in Shopify",
-          "skipped": "Not synced to Shopify",
-          "failed": "Shopify didn't create the return yet — Traced will try again.",
-          "failedExhausted": "Shopify refused to create the return. Try again, or create it in Shopify yourself.",
-          "ambiguous": "Not sure the return was created in Shopify — Traced got no clear answer. Check again, or look at the order in Shopify.",
-          "review": "Check the return in Shopify",
-          "outOfStep": "An item's arrival was undone, but Shopify already recorded it as returned. Traced won't change it in Shopify — fix it there if needed.",
-          "stepNeedsCheck": "A step on the Shopify return wasn't confirmed. Check the order in Shopify.",
-          "retry": "Try again",
-          "notInShopifyRetry": "It isn't in Shopify — try again",
-          "checkAgain": "Check again",
-          "markChecked": "I checked it in Shopify",
-          "started": "Done — Shopify will be updated in a moment.",
-          "checkedDone": "Marked as checked.",
-          "actionFailed": "Couldn't do that. Try again.",
-          "reasons": {
-            "pre_connect_order": "the order is from before Traced connected",
-            "not_a_shopify_order": "the order isn't a Shopify order",
-            "store_not_connected": "Shopify isn't connected",
-            "no_permission": "Shopify's new permissions aren't approved yet (Settings › Connections)",
-            "nothing_to_return": "no items are coming back",
-            "line_not_in_shopify": "an item isn't on the Shopify order",
-            "too_many_lines": "the order has too many items for Traced to match",
-            "not_fulfilled_in_shopify": "the order isn't marked fulfilled in Shopify",
-            "not_returnable_in_shopify": "Shopify can't return these items (already returned or refunded)",
-            "request_ended": "the request ended before it was synced",
-            "exchange_not_yet": "exchanges aren't synced to Shopify yet",
-            "readback_mismatch": "the return in Shopify doesn't match the request",
-            "not_found_in_shopify": "the return can't be found in Shopify",
-            "ended_in_shopify": "the return was cancelled or declined in Shopify",
-            "several_returns_found": "more than one Shopify return carries this request"
-          }
         }
       },
       "attention": "Attention",
@@ -2312,6 +2315,7 @@
         "paidPrice": "Price paid",
         "newPrice": "New item",
         "priceDifference": "Price difference",
+        "differenceFloored": "Cheaper same-product swaps aren't refunded (Settings → Returns portal).",
         "owed": "Owed to the customer: {{amount}}. Record the payment once the old item is back."
       }
     }
@@ -2846,6 +2850,16 @@
       "none": "No consent record on file."
     },
     "portal": {
+      "shopifySync": {
+        "title": "Create returns in Shopify",
+        "body": "When you approve a refund request, Traced also creates the return on the order in Shopify, so Shopify's order page and reports show it. Shopify never restocks these items — Traced does, after the item is checked — and Traced never refunds in Shopify: refund there as you do today.",
+        "toggle": "Create returns in Shopify",
+        "permissionMissing": "Approve Traced's new Shopify permissions first (Settings › Connections) — until then requests show \"Not synced\".",
+        "fromNowOn": "Only requests approved from now on are created in Shopify.",
+        "turnedOn": "Returns will be created in Shopify.",
+        "turnedOff": "Returns won't be created in Shopify any more.",
+        "saveFailed": "Couldn't save. Try again."
+      },
       "loadError": "Couldn't load the returns portal settings",
       "on": "On",
       "off": "Off",
@@ -3101,6 +3115,8 @@
           "anyProductHelp": "Customers can pick any product in stock, not only another size or colour of the same one.",
           "freeSwaps": "Free size and colour swaps",
           "freeSwapsHelp": "Another size or colour of the same product costs the customer nothing extra, even if it's priced differently. Turn off to use the price difference, as for a different product.",
+          "sameProductRefunds": "Same-product swaps can refund the customer",
+          "sameProductRefundsHelp": "When the new size or colour costs less, the customer gets the difference back. Off: a cheaper swap of the same product is free, and the customer still pays the exchange fee and any higher price.",
           "lowerOnly": "Same price or lower only",
           "lowerOnlyHelp": "Customers can't pick an item that costs more than the one they're sending back.",
           "maxDifference": "Most a customer can pay extra",
@@ -3243,16 +3259,6 @@
         "body_other": "You have {{count}} unsaved changes on this page. If you leave now, they're lost.",
         "stay": "Stay on this page",
         "leave": "Leave without saving"
-      },
-      "shopifySync": {
-        "title": "Create returns in Shopify",
-        "body": "When you approve a refund request, Traced also creates the return on the order in Shopify, so Shopify's order page and reports show it. Shopify never restocks these items — Traced does, after the item is checked — and Traced never refunds in Shopify: refund there as you do today.",
-        "toggle": "Create returns in Shopify",
-        "permissionMissing": "Approve Traced's new Shopify permissions first (Settings › Connections) — until then requests show \"Not synced\".",
-        "fromNowOn": "Only requests approved from now on are created in Shopify.",
-        "turnedOn": "Returns will be created in Shopify.",
-        "turnedOff": "Returns won't be created in Shopify any more.",
-        "saveFailed": "Couldn't save. Try again."
       }
     },
     "pickPack": {
@@ -4090,6 +4096,7 @@
   },
   "exc": {
     "clearsWhen": {
+      "SHOPIFY_RETURN_SYNC_CHECKED": "Clears when you open the request (Go →), check its return in Shopify, then choose \"I checked it in Shopify\" or \"Try again\".",
       "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when Traced confirms it was deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",
@@ -4097,7 +4104,10 @@
       "WAREHOUSE_ADDRESS_PUSHED": "Clears when the address reaches Shopify — Traced keeps retrying. If it stays, save the address again.",
       "SHOPIFY_RECONNECTED": "Clears when you reconnect Shopify in Settings › Connections (Go →). Stock updates made meanwhile are sent then.",
       "SHOPIFY_LOCATION_ACTIVE": "Clears when the Traced location is active in Shopify again (checked every 10 minutes, or check now in Settings › Connections — Go →). Stock updates made meanwhile are sent then.",
-      "SHOPIFY_RETURN_SYNC_CHECKED": "Clears when you open the request (Go →), check its return in Shopify, then choose \"I checked it in Shopify\" or \"Try again\"."
+      "STOCK_COVERS_EXCHANGES": "Clears when you have enough available stock for the exchanges Traced is keeping aside — receive more of this product, or the exchange ends.",
+      "EXCHANGE_EXPLAINED_OR_RELEASED": "Clears when Shopify releases the exchange for fulfilment (or shows why it's held), or when an owner or manager presses Release reservation under Pick & Pack › Waiting for release.",
+      "SHOPIFY_RETURN_PROCESSED": "Clears when the items that came back are processed in Shopify (refund / restock), or the return is closed there.",
+      "fallback": "Clears by itself once the problem is fixed — no Resolve needed."
     },
     "returnToReceive": {
       "markedBy": "Marked received by {{name}} in session {{session}}",
@@ -6222,5 +6232,192 @@
       "notNow": "Not now, let me explore",
       "saveFailed": "Couldn't save your goal. Try again."
     }
+  },
+  "tours": {
+    "region": "{{tour}} tour",
+    "stepOf": "Step {{step}} of {{total}}",
+    "skip": "Skip tour",
+    "back": "Back",
+    "next": "Next",
+    "done": "Done",
+    "help": "Show the tour for this page",
+    "pickups": {
+      "name": "Pickups",
+      "s1": {
+        "title": "Start a pickup when the courier arrives",
+        "body": "Open a new pickup session and pick the date and time slot. The first parcel you scan sets the courier for this pickup — a parcel for another courier is refused."
+      },
+      "s2": {
+        "title": "Scan each parcel as you hand it over",
+        "body": "Scan the waybill on every parcel going with the courier. Nothing is handed over yet — that happens when you close.",
+        "tip": "A red scan means the waybill was cancelled or deleted in Bosta. Keep that parcel back."
+      },
+      "s3": {
+        "title": "Check what you scanned",
+        "body": "Every scanned waybill is listed with its order and COD. Remove one you scanned by mistake. Parcels you don't scan stay packed for the next pickup."
+      },
+      "s4": {
+        "title": "Close the pickup and print the manifest",
+        "body": "Closing confirms the handover: the scanned parcels become With courier, and there's no undo. Then print the manifest for the courier to sign."
+      }
+    },
+    "scan_returns": {
+      "name": "Scan returns",
+      "s1": {
+        "title": "Scan the returned parcel",
+        "body": "Scan the waybill on the parcel that came back. Traced opens it and shows the pieces it should hold."
+      },
+      "s2": {
+        "title": "Scan each piece inside",
+        "body": "Scan every labelled piece. A piece Traced didn't expect is marked Unexpected. For items shipped before Traced tracked them, mark each one Arrived · sellable or Arrived · damaged.",
+        "tip": "Arrived · sellable doesn't add stock — the item goes on managers' Return To Receive list for their next Receiving session."
+      },
+      "s3": {
+        "title": "Grade every scanned piece",
+        "body": "Restock puts the piece back into your sellable stock, and Shopify counts it again at your main warehouse. Damaged keeps it out of sellable stock.",
+        "tip": "Marking a piece damaged needs a reason."
+      },
+      "s4": {
+        "title": "Close the session",
+        "body": "You can close once every scanned piece is graded. Graded pieces keep their grade."
+      }
+    },
+    "stock_take": {
+      "name": "Stock take",
+      "s1": {
+        "title": "Choose what to count",
+        "body": "Open a count for everything, or only for the products you pick."
+      },
+      "s2": {
+        "title": "Scan every piece you find",
+        "body": "Take the pieces off the shelf and scan each one."
+      },
+      "s3": {
+        "title": "Review what's missing",
+        "body": "The review lists pieces that should be there but weren't scanned. Found one? Use “Found one? Scan it”. Anything still uncounted is written off as lost when you finalize."
+      },
+      "s4": {
+        "title": "Finalize the count",
+        "body": "Finalizing writes off the pieces you didn't find as lost — Shopify goes down for those that were for sale — and puts lost pieces you found back into stock.",
+        "tip": "You confirm the count covered the whole scope first, and finalize can't be undone."
+      }
+    },
+    "transfers": {
+      "name": "Transfers",
+      "s1": {
+        "title": "Choose the kind of transfer",
+        "body": "Send out and back (it returns and you check it in), move to another location (it stays there), or bring back stock you moved earlier."
+      },
+      "s2": {
+        "title": "Scan the pieces going out",
+        "body": "Scan each piece as it leaves. Only scanned pieces are on the transfer."
+      },
+      "s3": {
+        "title": "Send it",
+        "body": "When you send, the pieces leave your stock at the source.",
+        "tip": "Shopify stock at Traced Main goes down for pieces leaving your main warehouse when the destination is set to “Remove from Shopify” (Settings › Locations)."
+      },
+      "s4": {
+        "title": "Check it back in",
+        "body": "When the stock comes back, scan each piece as Good or Condemned, explain anything missing (sold, lost or condemned), and close once every line balances. A move to another location has no scan-back."
+      }
+    }
+  },
+  "pickPackChooser": {
+    "eyebrow": "First time in Pick & Pack",
+    "title": "How do you want to pack?",
+    "lead": "Pick the way your team works today. You can switch any time in Settings › Pick & Pack.",
+    "recommendedBosta": "Recommended for Bosta",
+    "waybill": {
+      "title": "Waybill scan",
+      "desc": "Print all waybills first. Then scan a waybill and its pieces, and the order closes itself.",
+      "s1": "Print the waybills for the batch",
+      "s2": "Scan an order's waybill",
+      "s3": "Scan its pieces — the order closes itself",
+      "best": "Best for busy days and batch printing."
+    },
+    "queue": {
+      "title": "Order queue",
+      "desc": "Traced shows a list of orders. Open one, scan its pieces, then scan or link its waybill.",
+      "s1": "Pick an order from the list",
+      "s2": "Scan its pieces",
+      "s3": "Scan or link the waybill",
+      "best": "Best when waybills are printed one by one."
+    },
+    "selfPickup": "Self-pickup orders have no waybill, so they always stay in the order queue.",
+    "use": "Use {{mode}}",
+    "skip": "Skip for now (uses Order queue)",
+    "close": "Close",
+    "ownerOnly": "Only the store owner can change this, in Settings › Pick & Pack.",
+    "current": "Current mode",
+    "error": "Couldn't save. Try again."
+  },
+  "helpCenter": {
+    "title": "Help center",
+    "heading": "How can we help?",
+    "searchLabel": "Search the help center",
+    "searchHint": "{{count}} answers · search works in Arabic and English",
+    "startHere": "Start here · your first week, in order",
+    "path": {
+      "connect": {
+        "t": "Connect",
+        "d": "Shopify and your courier"
+      },
+      "receive": {
+        "t": "Receive",
+        "d": "Label your first pieces"
+      },
+      "pack": {
+        "t": "Pack",
+        "d": "Scan pieces into an order"
+      },
+      "pickup": {
+        "t": "Pickup",
+        "d": "Hand parcels to the courier"
+      },
+      "returns": {
+        "t": "Returns",
+        "d": "Scan and grade what comes back"
+      }
+    },
+    "allTopics": "All topics",
+    "topics": {
+      "start": "Getting started",
+      "receive": "Receiving & labels",
+      "pack": "Pick & Pack",
+      "pickup": "Pickups",
+      "returns": "Returns",
+      "alerts": "Alerts",
+      "exchange": "Exchanges",
+      "portal": "Returns portal",
+      "stock": "Stock & counts",
+      "places": "Shelves & boxes",
+      "orders": "Orders & tracking",
+      "team": "Team & tablet",
+      "trouble": "Troubleshooting",
+      "analytics": "Analytics",
+      "account": "Account"
+    },
+    "answers": "{{count}} answers",
+    "answers_one": "1 answer",
+    "noMatch": "No answer matches “{{q}}”",
+    "noMatchBody": "Send us the question on WhatsApp. We'll answer and add it here.",
+    "chat": "Chat on WhatsApp",
+    "stillStuck": "Still stuck?",
+    "stillStuckBody": "A real person answers on WhatsApp, in Arabic or English.",
+    "bookCall": "Book a setup call",
+    "loadFailed": "Couldn't load the help center. Try again.",
+    "forRoles": "For {{roles}}",
+    "and": " and ",
+    "shortAnswer": "Short answer:",
+    "related": "Related",
+    "helpful": "Did this answer your question?",
+    "yes": "Yes",
+    "no": "No, chat with us",
+    "thanks": "Thanks — glad it helped.",
+    "notFound": "We couldn't find this answer.",
+    "back": "Back to the help center",
+    "readMore": "Read more",
+    "alertLink": "What does this mean?"
   }
 }

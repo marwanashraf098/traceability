@@ -361,14 +361,15 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
 
-  // P2: the refund-method step — asked when the store offers methods AND this is a refund, or an
-  // exchange the customer is happy to have refunded instead. Then it's required (the backend agrees).
+  // P2: the refund-method step — asked when the store offers methods AND owes the customer: a refund, or an
+  // exchange that leaves the customer owed money (never for the refund fallback alone, 2026-11-07). Then it's
+  // required (the backend agrees).
   const offeredRefundMethods = (config?.refundMethods ?? []).filter(isRefundMethod)
   // F2 / F3 — the latest quote (declared here: an exchange that leaves the customer owed money asks how to pay them).
   const [feeQuote, setFeeQuote] = useState<{ key: string; quote: FeeQuote | null } | null>(null)
   const replacementId = exchangeTarget?.variantId ?? otherTarget?.variantId ?? null
   const owedNow = exchangeMode && Number(feeQuote?.quote?.customerOwed ?? 0) > 0
-  const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || fallbackOk || owedNow)
+  const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || owedNow)
   const chosenRefund = refundMethod && offeredRefundMethods.includes(refundMethod) ? refundMethod : null
   const refundFieldErrors = chosenRefund ? refundErrors(chosenRefund, refundFields) : {}
   const afterChoice: Step = refundAsked ? 'refund' : 'details'
@@ -481,7 +482,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     : exchangeMode && pickup.exchangeDistrictIds
       ? pickup.districts.filter(d => pickup.exchangeDistrictIds!.includes(d.id))
       : pickup.districts
-  const chosenArea = areaDistricts.some(d => d.id === areaId) ? areaId : ''
+  // "Same address" (2026-11-07): Bosta needs a district on the pickup, so when the original delivery's district is
+  // known and offered for this mode it is used as is — no city or area field at all. Only when it isn't known (or
+  // can't be used, e.g. no drop-off there for an exchange) is the customer asked for the area (city fixed).
+  const fixedArea = pickup?.preselectedDistrictId && areaDistricts.some(d => d.id === pickup.preselectedDistrictId)
+    ? pickup.preselectedDistrictId : null
+  const chosenArea = fixedArea ?? (areaDistricts.some(d => d.id === areaId) ? areaId : '')
   const areaMissing = pickup != null && !chosenArea
 
   // V117 — a different pickup address: offered only when lookup lists the cities.
@@ -929,12 +935,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <div className="pp-eyebrow">{stepLabel(exchangeMode ? 3 : 2)}</div>
           {/* F3: an exchange that leaves the customer owed money asks how to pay them back. */}
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>
-            {t(owedNow ? 'rf.titleOwed' : exchangeMode ? 'rf.titleFallback' : 'rf.title')}
+            {t(owedNow ? 'rf.titleOwed' : 'rf.title')}
           </h1>
           <p className="pp-lead">
             {owedNow
               ? t('rf.leadOwed', { store, amount: portalMoney(feeQuote?.quote?.customerOwed ?? '0', lang) })
-              : t(exchangeMode ? 'rf.leadFallback' : 'rf.lead', { store })}
+              : t('rf.lead', { store })}
           </p>
         </div>
         <fieldset className="pp-methods" data-testid="refund-methods">
@@ -1158,7 +1164,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               </div>
             </div>
           )}
-          {pickup && !customChosen && (
+          {pickup && !customChosen && fixedArea && !addressChoice && (
+            <p className="pp-small" data-testid="pickup-place"><bdi>{t('p3.pickupFrom', { place: samePlace() })}</bdi></p>
+          )}
+          {pickup && !customChosen && !fixedArea && (
             <>
               <div className="pp-field">
                 <label htmlFor="pp-city" className="pp-label">{t('p3.cityLabel')}</label>
@@ -1374,6 +1383,9 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
         </div>
         {Number(q.collect ?? 0) > 0 && <p className="pp-item__sub" data-testid="fee-pay-note">{q.codBy === 'bosta' ? t('fees.bostaCollects', { amount: money(q.collect) }) : t('fees.exchangePayNote')}</p>}
         {owed > 0 && <p className="pp-item__sub">{t('fees.owedNote')}</p>}
+        {diff === 0 && q.paidPrice != null && q.replacementPrice != null && Number(q.replacementPrice) < Number(q.paidPrice) && (
+          <p className="pp-item__sub" data-testid="fee-difference-floored">{t('fees.differenceFloored')}</p>
+        )}
         {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
         {q.blocked && (
           <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">

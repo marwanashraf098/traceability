@@ -127,7 +127,22 @@ describe('refund method step', () => {
     })
   })
 
-  test('cash: no fields; plain exchange skips the step; fallback exchange asks with its own heading', async () => {
+  test('cash: no fields on a refund', async () => {
+    config = { ...BASE, refundMethods: ['cash'] }
+    const user = await toItems()
+    await screen.findByRole('heading', { name: 'What would you like to return?' })
+    await chooseShirtAndContinue(user)
+    await screen.findByRole('heading', { name: 'How should we refund you?' })
+    await user.click(screen.getByRole('radio', { name: /Cash/ }))
+    expect(screen.queryByRole('textbox')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByRole('heading', { name: 'Almost done' })
+    expect(screen.getByTestId('refund-summary')).toHaveTextContent('Refund to Cash')
+  })
+
+  // 2026-11-07 (approved): the refund-method step is asked only when the store owes the customer — an exchange
+  // with "refund instead" ticked (and nothing owed) is not asked, ticked or not.
+  test('plain and fallback exchanges both skip the step', async () => {
     config = { ...BASE, exchangesEnabled: true, refundMethods: ['cash'] }
     const user = await toItems()
     await screen.findByRole('heading', { name: 'What would you like to do?' })
@@ -136,21 +151,15 @@ describe('refund method step', () => {
     await user.selectOptions(screen.getByLabelText('Why are you exchanging it?'), 'wrong_size')
     await user.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Choose your new size or colour' })
-    expect(screen.getByText('Step 2 of 4')).toBeInTheDocument()      // fallback pre-ticked → asked
+    expect(screen.getByRole('checkbox', { name: /refund instead/ })).toBeChecked()
+    expect(screen.getByText('Step 2 of 3')).toBeInTheDocument()      // fallback pre-ticked → still not asked
     await user.click(within(screen.getByRole('group', { name: 'Size' })).getByRole('radio', { name: 'L' }))
     await user.click(screen.getByRole('button', { name: 'Continue' }))
-
-    await screen.findByRole('heading', { name: "If we can't exchange it" })
-    expect(screen.getByText('Step 3 of 4')).toBeInTheDocument()
-    await user.click(screen.getByRole('radio', { name: /Cash/ }))
-    expect(screen.queryByRole('textbox')).toBeNull()
-    await user.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Almost done' })
-    expect(screen.getByText('Step 4 of 4')).toBeInTheDocument()
-    expect(screen.getByTestId('refund-summary')).toHaveTextContent('Refund to Cash')
+    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument()
+    expect(screen.queryByTestId('refund-summary')).toBeNull()
 
-    // Back to the size step, untick the fallback → the refund step disappears.
-    await user.click(screen.getByRole('button', { name: 'Back' }))
+    // Back to the size step, untick the fallback → still no refund step.
     await user.click(screen.getByRole('button', { name: 'Back' }))
     await screen.findByRole('heading', { name: 'Choose your new size or colour' })
     await user.click(screen.getByRole('checkbox', { name: /refund instead/ }))

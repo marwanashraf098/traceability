@@ -13,8 +13,146 @@ Shopify auto-closing, cancel / remove refused after a partial process → needs_
 logged as a shape at INFO. **Prod verification plan:** test store only — tenant 9051048a-48bc-4dc9-ba56-86bb3e89bd5d in
 `TRACED_SHOPIFY_RETURNS_SYNC_TENANTS`, owner switches it on, then approve / grade / refund one request and read the
 `Shopify returns write` / `read` shape logs. S5b (exchanges, return only + note) and S5c (fees → returnShippingFee) after
-S5a is verified in prod. Follow-up (existing, not S5a): the clearsWhen labels for S3b/S4's condition-only alerts
-(STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED) are missing from en/ar.json.
+S5a is verified in prod.
+
+**Portal fees: same-product swap refunds (decision C, V223) + refund method only when owed + "Same address" pickup
+without a picker; stale-reserved diagnosis (2026-11-07; branch `feat/portal-fees-pricing-fixes` off main 8b7b51b4,
+merged to main, NOT deployed; migration V223 — main and prod ended at V222 (prod checked by Marawan 22:02)).**
+- **Decision C:** `tenants.portal_same_product_swap_refunds` (default false for every tenant). Off: a same-product
+  swap to a lower price is floored at 0 (no customer_owed; fee and a positive difference still collected); on = before.
+  Different products: real difference both ways. Settings → Exchange pricing switch, shown only while free swaps are
+  off; the PUT carries the key only when it changed. Portal quote + drawer show "a cheaper size isn't refunded" when the
+  frozen difference is 0 but the new price is lower. The Snouts RR-9RTKVJ (720 → 550, fee 10): off = collect 10 / owed
+  0, on = owed 160.
+- **Refund method (RR-LR48WZ):** asked / stored only for a refund or an exchange with customer_owed > 0. The "refund
+  me instead" fallback no longer asks — a later switch-to-refund has no method on file (the merchant asks the
+  customer). Old fallback copy (rf.titleFallback / leadFallback) removed.
+- **"Same address":** Bosta's create schema requires a district (districtId, or districtName + cityId) on both
+  pickupAddress (25) and dropOffAddress (30), so: original district known AND offered for the mode → no city / area
+  field, the portal sends it; else the area is asked (city fixed). Server unchanged (still requires a district). Fee
+  area unchanged: district override → city override → rule (storedDeliveryArea when no district is chosen).
+- **Stale reserved pieces → "Shipped outside Traced" (approved + built 2026-11-07, option A):** a pick scan never
+  completed, then the order shipped outside Traced; nothing could move the piece. Alert `shipped_outside_traced`
+  (MEDIUM, > 7 days since Shopify fulfilled) + owner/manager action in the order drawer (existing ledger edges,
+  packed:with_courier reuse approved, audited, NO Shopify write). Prod today: The Snouts 4 reserved, Juno Babies 2 —
+  after deploy, open each alert's order and use the action. Option B (auto after N days) not approved.
+- **Test edits approved and applied:** PortalRefundMethodTest.s3, portalRefundMethod.test.tsx, portalCustomAddress ×2,
+  portalPickupArea ×1, portalExchangeAreas (refund case). Registry additions: PortalOrderLeakTest + ShadowOrderLeakTest
+  (`POST /orders/{orderId}/shipped-outside-traced`, byOrder).
+
+**O6-fixes — Alerts page labels, "clears when" texts, Go links, the Not traced hint (2026-11-07; branch
+`fix/o6-alert-fixes` off main b6886ece, worktree `~/Documents/traceability-o6f`; approved and MERGED 2026-11-07, NOT
+deployed; frontend only, no migration).**
+- **Labels:** every type ExceptionService raises (54) has an EN + AR label; 15 were missing (high_attempts,
+  missing_awb, missing_provider_id, shopify_cancel_vs_inflight, shopify_edit_conflict, return_in_transit_stuck,
+  return_mismatch, exchange_needs_mapping, exchange_unmapped_state, void_hold_sync_failed, generic_bosta_conflict,
+  generic_multiple_parcels, generic_delivered_without_pickup, generic_cancelled_live_shipment,
+  generic_fulfillment_cancelled). Guard: alertFixes.test reads ExceptionService.java — a new raised type without a
+  label fails it. The 4 types that had no Help group (missing_awb, missing_provider_id, exchange_needs_mapping,
+  exchange_unmapped_state) joined alerts-courier-shipments (sections EN + AR); alert-article headings now match the
+  labels.
+- **Clears when:** STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED written (EN + AR);
+  an unknown code shows `exc.clearsWhen.fallback`, never the raw key. Guard: every CONDITION_ONLY code has both texts.
+- **Go links:** `alertTargets.ts` `goTargetFor` (Alerts page): `/orders/<id>` (no such route — 26 detectors) → the
+  order drawer `/orders?order=<id>`; `/shipments/unlinked` and `/shipments/<id>` → the order's drawer when the alert
+  names an order, else no Go button; Unpack Required `/fulfill/<id>` → `/fulfill?guidedUnpack=<id>` (its own param — `?order=&unpack=1` is the Packed
+  list's edit-conflict dialog; FulfillRoute → Fulfill
+  opens that order's screen with its guided-unpack panel, both packing modes; Back drops the param); other
+  `/fulfill/<id>` → the order drawer; warehouse address `/onboarding` → `/settings?tab=locations`. Guard: every
+  actionUrl expression in ExceptionService (per alert type, both ternary branches) → goTargetFor → a route in App.tsx
+  or no button. The backend's actionUrls are unchanged. The three unlinked-delivery types (unmatched_delivery,
+  bosta_discovery_failed, generic_bosta_conflict) go by the order they name, never their link; `/orders/<id>` prefers the
+  alert's own order_id. The Overview alerts widget uses the SAME mapping (`alertDestination`: an order → OrderDrawer in
+  place; a page → a link; nothing → `/exceptions?type=<type>`) — no dead link anywhere an alert is shown.
+- **Not traced hint:** "Not traced = handed to Bosta without any of its pieces being scanned in Pick & Pack. Applies
+  to Bosta orders." (EN + AR).
+- **Tests:** alertFixes.test 17 (incl. the widget's destinations through the same real-route check; 10 rules
+  mutation-checked red); Overview ov16 / ov17 unchanged and green. Approved edit: ordersTabsFilters (the corrected
+  Not traced hint).
+
+**Onboarding redesign — O6 Help center (2026-11-07; branch `feat/onboarding-help` off main 8b7b51b4, worktree
+`~/Documents/traceability-o6`; approved and MERGED 2026-11-07, NOT deployed; frontend only, no migration).** Mockups
+`design/onboarding/Traced_onboarding_Help-Center`, `Help-Article`.
+- **Content:** 72 articles, EN + AR, `frontend/src/help/{en,ar}/<id>.md` (frontmatter id, topic, title, roles, related[],
+  alerts[], screens[], video — empty, its slot hidden; the body's FIRST paragraph is the short answer). Written from
+  the code, 15 topics (`help/topics.ts`). `help/content.ts` (eager glob) is only imported dynamically
+  (`help/loadHelp.ts`) → one lazy chunk (~272 kB, 96 kB gzip).
+- **/help** (owner / manager, Layout): search (title + body, EN AND AR whichever the page language — `help/search.ts`:
+  lower case; Arabic diacritics / tatweel stripped, alef forms → ا, ة → ه, ى → ي, Arabic-Indic / Persian digits →
+  0-9), topic chips, "Start here" (Connect → Receive → Pack → Pickup → Returns), topic sections; empty → "No answer
+  matches" + WhatsApp. **/help/:id**: breadcrumb, title, "For …", short-answer box, body (react-markdown), Related,
+  "Did this answer your question?" (Yes → thanks only, No → WhatsApp; nothing stored). No "Check my store" (O6b).
+- **Links:** sidebar "Help center" above Settings (owner / manager; none for workers). helpRegistry: each "?" page →
+  its article; the TourCard's "Read more" (owner / manager, a plain link — the tour stays open). Alerts rows: "What does
+  this mean?" → `articleForAlert(type)` (7 alert groups; unknown types → alerts-overview).
+- **Hidden articles:** frontmatter `hidden: true` (today: shopify-native-exchanges, until Shopify-native exchanges are
+  rolled out) — out of search, the count, topics and Related, and its URL says not found; guards forbid any link to a
+  hidden article (registry, alerts, tours, Start here, related[], body links).
+- **Approved copy decisions (2026-11-07):** Analytics articles kept (Analytics is on in prod); emails-junk keeps
+  no-reply@tracedtech.com (the prod sender); Pick & Pack says "recent orders" (not "the last 30 days"); the Lost alert
+  also fires for stock-take and Lookup write-offs; "Don't edit stock at Traced Main by hand in Shopify…"; grade-returns,
+  return-to-receive and lookup-sold-exchange carry the shared "In some cases Traced doesn't change Shopify stock…"
+  line; general advice is labelled **Tip**. Inferred sentences checked against the code: on hold = blocklist OR a
+  product missing from the catalog at import OR a manual Hold order (rewritten); other-courier exchanges need the
+  other-couriers switch (confirmed — generic legs exist only with it on); self-pickup orders can't use the portal
+  (confirmed — the portal needs a delivered courier leg); Tag stock and Places never change Shopify (confirmed — no
+  Shopify call; PlacesShopifyGuardTest); put-away closes after 12 h without activity (rewritten from "a few hours");
+  Return To Receive is resolved by hand (confirmed — nothing resolves it automatically).
+- **Tests:** helpCenter.test 23 (search EN / AR / normalisation / empty, topics, Start here, article page, sidebar by
+  role, guards: every Alerts-page type → an article in EN and AR, registry + tour + Start-here articles in both, related
+  ids exist, alert lists = their group, EN / AR frontmatter agree, no internal / old mode names, hidden articles never
+  linked or listed; Read more by role; alert links — 12 rules mutation-checked red); browser helpCenterLayout 16.
+  Approved edits: putAwayLists snapshot (+ the sidebar's Help link), sidebarReorg g1 + m1 (`/help` before
+  `/settings`), tours.test t6 (articleIds filled).
+- **Phone scanner:** NOT on Pickups — a deliberate decision (custody risk at the handover), not a bug. Lookup: OPEN
+  question (no phone scanner there today).
+- **"O6-fixes" (follow-up slice) — BUILT, see the O6-fixes entry above:** (1) Alerts page labels for the 11 types the backend raises
+  without one (high_attempts, void_hold_sync_failed, shopify_cancel_vs_inflight, generic_* ×5, shopify_edit_conflict,
+  return_in_transit_stuck, return_mismatch) — raw type shown, not filterable; (2) the three missing "clears when" texts
+  (STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED); (3) dead "Go" links:
+  `/shipments/unlinked` (unmatched_delivery, bosta_discovery_failed, generic_bosta_conflict) and `/fulfill/<id>`
+  (guided_unpack) have no route; (4) the Orders "Not traced" filter hint is backwards ("every piece scanned out" — the
+  tag means NO piece was scanned out).
+
+**Onboarding redesign — O5 Pick & Pack chooser + 4 tours + "?" (2026-11-07; branch `feat/onboarding-tours` off main
+cac3b35b, worktree `~/Documents/traceability-o5`; approved and MERGED 2026-11-07, NOT deployed; no migration; backend:
+GET /me's two tour booleans).** Mockups
+`design/onboarding/Traced_onboarding_PickPack-Mode`, `Pickups-Tour`, `Tour-Cards`.
+- **TourCard** (`tours/TourCard.tsx`): non-modal, no focus trap, no autoFocus, never calls focus(), no inputs, no
+  document keydown listener, never touches focusPaused, never Modal; plain buttons whose clicks bubble to the scan
+  screens' own refocus (useScanner / ScanShell / every SAFETY-CRITICAL handler untouched). Bottom-end card on desktop,
+  bottom sheet below 640 px, logical start / end. While the sheet is open at phone width the page's scroll container
+  (the nearest scrolling ancestor — Layout's <main> — else the body) gets bottom padding = the sheet's height, so every
+  control (Pickups' Close) can be scrolled above it; restored on close. "Step x of N", Back, Next / Done, Skip on every step; Skip or Done →
+  POST /me/ui-state {tourDone}. Optional ring: the step's `data-tour-anchor` element gets `data-tour-highlight`
+  (outline only, index.css).
+- **State** (`tours/tourState.ts`): one active tour app-wide (module store — a tour started on a list page follows the
+  user to the full-screen scan screen). Auto-start ONLY when the tenant never did the action AND this user hasn't done /
+  skipped it (GET /me uiState, current token). "Never did": progress tasks for owners / managers; for workers and in
+  station mode GET /me's `hasEverClosedPickup` / `hasEverScannedReturn` (booleans only, every role — the SAME rules as
+  progress tasks pickup / returns: `OnboardingProgressService.everClosedPickup` / `everScannedReturn`). On a station
+  tablet the PIN switch's token is the worker's, so their tourDone is theirs.
+- **Tours** (`tours/tours.ts`, copy `tours.*` EN + AR, checked against the code): pickups (handover happens at CLOSE,
+  not per scan; the first scan sets the courier; no "what's left" list — unscanned parcels stay packed; manifest after
+  close), scan_returns (Arrived · sellable adds NO stock — managers' Return To Receive list; close needs every piece
+  graded), stock_take (scope = everything or picked products; finalize writes off unfound as lost, Shopify down only
+  for ones that were for sale, found back; attestation; no undo — NOT "Traced and Shopify are set to what you counted"),
+  transfers (Shopify drop at Traced Main when the destination is "Remove from Shopify"; check-in = scan back Good /
+  Condemned + classify shortfall; a move has no scan-back). pickups / scan_returns for every role; stock_take /
+  transfers owner + manager.
+- **"?"** (`TourHelpButton`) in the headers of Pick & Pack (queue + waybill pages), Pickups (list + session), Scan
+  returns (landing + open session), Stock take (list + scan), Transfers (list + send-out + reconcile).
+  `help/helpRegistry.ts`: route → {tourId, articleId: null} (O6 fills articleId).
+- **Pick & Pack chooser** (`fulfill/PickPackChooser.tsx`, in FulfillRoute before the page): owner + not station +
+  order_queue + !pickPackChosen + never packed. Use <mode> → PUT /tenant/settings {pickPackMode} then PATCH
+  pickPackChosen; Skip → PATCH only. "Recommended for Bosta" only with Bosta. Copy "Settings › Pick & Pack". Only that
+  case waits for progress; everyone else gets the page with no extra request. Pick & Pack's "?" replays it (owner can
+  switch; others read-only with "Only the store owner can change this").
+- **Tests:** vitest 1,693 → 1,768 (tours.test 75; 19 rules mutation-checked red); browser toursLayout 52 (each
+  tour's step 1 + the chooser × EN/AR × desktop/phone × Chromium/WebKit, and Pickups' Close scrolled fully above the
+  sheet at 390 px — red without the padding); full browser suite 417 + 1 skipped. Backend MeTourSignalsTest 3 (values
+  per role, closed-only, RLS, /me adds exactly the two booleans; 2 rules mutation-checked red). Approved: the 4 snapshot
+  updates (placesS5 ×2, putAwayLists ×2 — only the "?" button, the tour anchors and two wrappers differ).
 
 **Shopify-native returns S4 — returns through Scan returns intake (2026-11-07; branch `feat/s4-shopify-return-intake`
 off main 4e37aa22, approved and MERGED 2026-11-07 as cac3b35b, NOT deployed; V222 — free on main and prod (prod at V221, checked 18:32)).** See

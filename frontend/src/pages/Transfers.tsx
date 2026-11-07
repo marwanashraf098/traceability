@@ -7,6 +7,7 @@ import {
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
   TransferListView, ReturnablePiece, TransferStatus,
 } from '../api'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 
 // FR-22.10 — Relocate is a distinct top-level create action, not a TRANSFER_TYPES radio
 // value: transfer_mode (workflow: round_trip vs relocate_out) is orthogonal to transfer_type
@@ -160,11 +161,15 @@ export default function Transfers() {
 
   return (
     <div className="space-y-4">
+      <PageTour tourId="transfers" />
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-h1 text-primary">{t('transfers.title')}</h1>
-        <Button size="sm" loading={checksLoading} onClick={startNewTransfer}>
-          + {t('transfers.new')}
-        </Button>
+        <h1 className="text-h1 text-primary me-auto">{t('transfers.title')}</h1>
+        <TourHelpButton tourId="transfers" />
+        <span data-tour-anchor="transfers-new" className="inline-flex">
+          <Button size="sm" loading={checksLoading} onClick={startNewTransfer}>
+            + {t('transfers.new')}
+          </Button>
+        </span>
       </div>
 
       {chooserOpen && (

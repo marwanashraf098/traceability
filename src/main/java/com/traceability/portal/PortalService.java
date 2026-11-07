@@ -872,8 +872,7 @@ public class PortalService {
             return terms.map(t -> new Priced(PortalAmounts.calculate(kind, t, fault, items, null), null)).orElse(null);
         }
         PortalAmounts.ExchangePricing pricing = PortalAmounts.exchangePricing(jdbc, tenantId);
-        PortalAmounts.Difference diff = pricing.differenceApplies(swap.sameProduct()) && swap.replacementPrice() != null
-            ? new PortalAmounts.Difference(items.get(0).unitPrice(), swap.replacementPrice()) : null;
+        PortalAmounts.Difference diff = pricing.difference(swap.sameProduct(), items.get(0).unitPrice(), swap.replacementPrice());
         if (terms.isEmpty() && diff == null) return null;
         PortalAmounts.Quote q = PortalAmounts.calculate("exchange", terms.orElse(null), fault, items, diff);
         return new Priced(q, PortalAmounts.exchangeBlock(pricing, swap.sameProduct(), q));
@@ -979,6 +978,8 @@ public class PortalService {
             // Already filtered to pickup (and, for an exchange, drop-off) available districts.
             district = offer.get().find(custom.districtId()).orElseThrow(InvalidSubmission::new);
         } else if (offer.isPresent()) {
+            // "Same address": Bosta needs a district on the pickup — the portal sends the original delivery's own
+            // district when it is known and offered (no picker, 2026-11-07), else the one the customer chose.
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
             // Step 5c: an exchange courier delivers and collects — the district must allow both.
             if (replacement != null && !pickupAreas.exchangeDistrictIds(offer.get().cityId()).contains(district.id())) {
@@ -986,9 +987,10 @@ public class PortalService {
             }
         }
 
-        // P2: the refund method — asked (and then required) only when the store offers methods and
-        // this is a refund, or an exchange the customer is happy to have refunded instead. Re-checked
-        // against the tenant's methods NOW; anything sent when it wasn't asked is refused.
+        // P2: the refund method — asked (and then required) only when the store offers methods AND owes the
+        // customer: a refund, or an exchange that leaves the customer owed money (2026-11-07 — no longer for an
+        // exchange only because the refund fallback is ticked: RR-LR48WZ stored instapay on a collect-280 exchange).
+        // Re-checked against the tenant's methods NOW; anything sent when it wasn't asked is refused.
         // Returns portal fees F2 / F3: priced through THE calculator now (the quote the customer saw); an exchange the
         // pricing refuses (approximate price for another product, a cap, the COD limit) is the generic invalid 400.
         Priced priced = null;
@@ -1084,14 +1086,15 @@ public class PortalService {
 
     /**
      * P2 — the customer's refund choice, or null when it isn't asked. Asked when the tenant offers
-     * at least one method AND (a refund, or an exchange with the refund fallback ticked); then the
+     * at least one method AND the store owes the customer: a refund, or an exchange with customer_owed &gt; 0
+     * (2026-11-07: the refund fallback alone no longer asks); then the
      * method must be one the tenant offers right now and its details must pass RefundDetails.
      * A method sent when it isn't asked is refused (never store details we didn't ask for).
      */
     private RefundDetails refundChoice(UUID tenantId, SubmitRequest req, boolean exchange, boolean owed) {
         List<String> offered = PortalSettingsService.textArray(jdbc.queryForObject(
             "SELECT portal_refund_methods FROM tenants WHERE id = ?", Object.class, tenantId));
-        boolean asked = !offered.isEmpty() && (!exchange || Boolean.TRUE.equals(req.refundFallbackOk()) || owed);
+        boolean asked = !offered.isEmpty() && (!exchange || owed);
         if (!asked) {
             if (req.refundMethod() != null || req.refundDetails() != null) throw new InvalidSubmission();
             return null;

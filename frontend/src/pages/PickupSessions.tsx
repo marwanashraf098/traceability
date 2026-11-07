@@ -6,6 +6,7 @@ import { getPickupManifest, getRoleFromToken, PickupManifest, request } from '..
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 
 // Every call goes through the shared request(): an expired access token is refreshed and the call
 // retried once. The page's old helper cleared the token on the first 401 and sent a worker to /login —
@@ -89,10 +90,13 @@ export default function PickupSessions() {
 
   if (view === 'create') {
     return (
-      <CreateSessionForm
-        onCreated={(id) => { loadSessions(); openSession(id) }}
-        onCancel={() => setView('list')}
-      />
+      <>
+        <CreateSessionForm
+          onCreated={(id) => { loadSessions(); openSession(id) }}
+          onCancel={() => setView('list')}
+        />
+        <PageTour tourId="pickups" />
+      </>
     )
   }
 
@@ -109,11 +113,15 @@ export default function PickupSessions() {
   // ── Session list ────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <PageTour tourId="pickups" />
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-h1 text-primary">{t('pickups.title')}</h1>
-        <button onClick={() => setView('create')} className="btn-brand btn text-small">
-          + {t('pickups.new')}
-        </button>
+        <div className="flex items-center gap-2">
+          <TourHelpButton tourId="pickups" />
+          <button onClick={() => setView('create')} className="btn-brand btn text-small" data-tour-anchor="pickups-new">
+            + {t('pickups.new')}
+          </button>
+        </div>
       </div>
 
       {sessions.length === 0 ? (
@@ -402,7 +410,8 @@ function SessionView({ session: initial, onRefresh, onBack }: {
         {t('pickups.back')}
       </button>
 
-      <div className="flex items-start justify-between">
+      <PageTour tourId="pickups" />
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-h1 text-primary">
             {session.scheduledDate}
@@ -420,6 +429,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
             )}
           </p>
         </div>
+        <TourHelpButton tourId="pickups" className="ms-auto" />
         {!isOpen && (
           <button
             onClick={printManifest}
@@ -462,7 +472,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
 
       {/* Scan input — open sessions only */}
       {isOpen && (
-        <div className="card p-4 space-y-3">
+        <div className="card p-4 space-y-3" data-tour-anchor="pickups-scan">
           <div className="flex items-center justify-between">
             <h2 className="text-caption text-muted uppercase tracking-widest">{t('pickups.scanTitle')}</h2>
             <span className="text-2xl font-bold text-primary tabular-nums">
@@ -508,7 +518,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       )}
 
       {/* Scanned list */}
-      <div className="card overflow-hidden">
+      <div className="card overflow-hidden" data-tour-anchor="pickups-list">
         <div className="px-4 py-3 border-b border-line flex items-center justify-between">
           <h2 className="text-caption text-muted uppercase tracking-widest">
             {t('pickups.scanTitle')}
@@ -568,6 +578,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
             onClick={() => { scanner.clearQueue(); setShowConfirm(true) }}
             className="btn-brand btn text-small"
             disabled={closing}
+            data-tour-anchor="pickups-close"
           >
             {t('pickups.closeSession')}
           </button>

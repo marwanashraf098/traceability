@@ -130,6 +130,7 @@ describe('P3 area in exchange mode', () => {
     expect(submitted().districtId).toBe('Iy7-lFD0BE0')
   })
 
+  // 2026-11-07 (approved): in refund mode the preselected district is offered, so it is used as is — no Area field.
   test('refund: every pickup-available district, preselection kept', async () => {
     const user = await toItems()
     await screen.findByRole('heading', { name: 'What would you like to do?' })
@@ -138,7 +139,8 @@ describe('P3 area in exchange mode', () => {
     await user.selectOptions(within(shirt).getByLabelText('Why are you returning it?'), 'wrong_size')
     await user.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('heading', { name: 'Almost done' })
-    expect(areaOptions()).toEqual(['Iy7-lFD0BE0', 'PickupOnly01'])
-    expect(screen.getByLabelText('Area')).toHaveValue('PickupOnly01')
+    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Send return request' }))
+    await waitFor(() => expect(submitted()?.districtId).toBe('PickupOnly01'))
   })
 })

@@ -43,6 +43,8 @@ export interface PortalDraft {
 export interface PricingDraft {
   anyProduct: boolean
   freeVariantSwaps: boolean
+  /** "Same-product swaps can refund the customer" (V223). */
+  sameProductSwapRefunds: boolean
   priceMode: PriceMode
   /** The cap field's text (kept while another mode is chosen). */
   capText: string
@@ -134,6 +136,7 @@ export function pricingDraftOf(p: ExchangePricing): PricingDraft {
   return {
     anyProduct: !!p.anyProduct,
     freeVariantSwaps: !!p.freeVariantSwaps,
+    sameProductSwapRefunds: !!p.sameProductSwapRefunds,
     priceMode: priceModeOf({ sameOrLowerOnly: !!p.sameOrLowerOnly, maxDifference: numOrNull(p.maxDifference) }),
     capText: str(p.maxDifference),
   }
@@ -192,8 +195,11 @@ export function priceWrite(mode: PriceMode, capText: string): { sameOrLowerOnly:
   return { sameOrLowerOnly: false, maxDifference: null }
 }
 
-export function pricingBody(p: PricingDraft): ExchangePricing {
-  return { anyProduct: p.anyProduct, ...priceWrite(p.priceMode, p.capText), freeVariantSwaps: p.freeVariantSwaps }
+/** The PUT body. {@code sameProductSwapRefunds} is sent only when it differs from {@code saved} (absent = kept). */
+export function pricingBody(p: PricingDraft, saved?: ExchangePricing): ExchangePricing {
+  const body: ExchangePricing = { anyProduct: p.anyProduct, ...priceWrite(p.priceMode, p.capText), freeVariantSwaps: p.freeVariantSwaps }
+  if (saved && p.sameProductSwapRefunds !== !!saved.sameProductSwapRefunds) body.sameProductSwapRefunds = p.sameProductSwapRefunds
+  return body
 }
 
 export function ruleBody(d: RuleDraft, waive: boolean): FeeRuleInput {
@@ -240,7 +246,9 @@ export function portalBody(saved: PortalSettings, d: PortalDraft): PortalSetting
 export type PortalField = 'slug' | 'enabled' | 'autoApprove' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText'
   | 'returnLocationId' | 'pickupBooking' | 'exchangesEnabled' | 'font' | 'refundMethods' | 'requirePhotos'
 
-export type EditedKey = `portal.${PortalField}` | 'otherCouriers' | 'pricing.swapTo' | 'pricing.freeSwaps' | 'pricing.priceMode'
+export type PricingKey = 'pricing.swapTo' | 'pricing.freeSwaps' | 'pricing.sameProductRefunds' | 'pricing.priceMode'
+
+export type EditedKey = `portal.${PortalField}` | 'otherCouriers' | PricingKey
   | 'rule.exchange' | 'rule.refund' | 'waiver' | 'reasons' | `variant.${string}`
 
 const blank = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null)
@@ -272,11 +280,12 @@ export function ruleEdited(saved: FeeRule | null, d: RuleDraft): boolean {
     || b.minAmount !== numOrNull(saved.minAmount) || b.maxAmount !== numOrNull(saved.maxAmount)
 }
 
-export function pricingEdited(saved: ExchangePricing, d: PricingDraft): Array<'pricing.swapTo' | 'pricing.freeSwaps' | 'pricing.priceMode'> {
+export function pricingEdited(saved: ExchangePricing, d: PricingDraft): PricingKey[] {
   const s = pricingDraftOf(saved)
-  const out: Array<'pricing.swapTo' | 'pricing.freeSwaps' | 'pricing.priceMode'> = []
+  const out: PricingKey[] = []
   if (d.anyProduct !== s.anyProduct) out.push('pricing.swapTo')
   if (d.freeVariantSwaps !== s.freeVariantSwaps) out.push('pricing.freeSwaps')
+  if (d.sameProductSwapRefunds !== s.sameProductSwapRefunds) out.push('pricing.sameProductRefunds')
   // Compared as modes, not as the written pair: a stored conflicting state (lower AND a cap) reads "lower" and is not
   // edited until something is changed — saving then writes (true, null).
   if (d.priceMode !== s.priceMode || (d.priceMode === 'cap' && num(d.capText) !== numOrNull(saved.maxDifference))) {
@@ -345,7 +354,7 @@ export function buildSavePlan(saved: SavedState, d: Draft, role: 'owner' | 'mana
   if (fees) {
     if (pricingEdited(fees.exchangePricing, d.pricing).length) {
       if (d.pricing.priceMode === 'cap' && d.pricing.capText.trim() === '') errors.push({ field: 'cap', code: 'CAP_REQUIRED' })
-      steps.push({ section: 'pricing', kind: 'pricing', body: pricingBody(d.pricing) })
+      steps.push({ section: 'pricing', kind: 'pricing', body: pricingBody(d.pricing, fees.exchangePricing) })
     }
     const takers = waiverTakers(fees, d)
     for (const k of FEE_KINDS) {
