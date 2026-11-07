@@ -67,6 +67,7 @@ describe('grouped nav', () => {
       '/orders', '/fulfill', '/pickups',
       '/inventory', '/receiving', '/transfers', '/stock-take',
       '/exchanges', '/returns',
+      '/help',
       '/settings',
     ])
     for (const h of [en.nav.sections.outbound, en.nav.sections.stock, en.nav.sections.returns]) {
@@ -170,7 +171,7 @@ describe('mode switch (owner, analytics on)', () => {
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'mode-tab-analytics')
     const order = ['summary', 'revenue', 'orders', 'money', 'products', 'stock', 'delivery', 'customers']
     expect(hrefs(screen.getByTestId('nav-analytics'))).toEqual(order.map(id => `/analytics/${id}?period=7d`))
-    expect(hrefs(nav())).toEqual([...order.map(id => `/analytics/${id}?period=7d`), '/settings'])
+    expect(hrefs(nav())).toEqual([...order.map(id => `/analytics/${id}?period=7d`), '/help', '/settings'])
     for (const h of [en.nav.analyticsSections.money, en.nav.analyticsSections.products, en.nav.analyticsSections.customers]) {
       expect(within(nav()).getByText(h)).toBeInTheDocument()
     }

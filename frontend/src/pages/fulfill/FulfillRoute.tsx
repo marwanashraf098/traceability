@@ -54,6 +54,10 @@ export default function FulfillRoute() {
       </Layout>
     )
   }
+  // O6-fixes: the Unpack Required alert's Go → opens that cancelled order's unpack panel, whatever the mode.
+  // (Its own param — `?order=<id>&unpack=1` is the Packed list's edit-conflict dialog and must stay as it was.)
+  const guidedUnpack = searchParams.get('guidedUnpack')
+  if (guidedUnpack) return <Fulfill unpackOrderId={guidedUnpack} />
   if (mode === 'order_queue') return <Fulfill />
   if (searchParams.get('view') === 'self-pickup') return <Fulfill selfPickupOnly />
   return <WaybillPackPage />

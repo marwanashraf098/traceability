@@ -6,7 +6,7 @@
 
 **Portal fees: same-product swap refunds (decision C, V223) + refund method only when owed + "Same address" pickup
 without a picker; stale-reserved diagnosis (2026-11-07; branch `feat/portal-fees-pricing-fixes` off main 8b7b51b4,
-NOT merged, NOT deployed; migration V223 — main ends at V222; prod NOT yet confirmed free).**
+merged to main, NOT deployed; migration V223 — main and prod ended at V222 (prod checked by Marawan 22:02)).**
 - **Decision C:** `tenants.portal_same_product_swap_refunds` (default false for every tenant). Off: a same-product
   swap to a lower price is floored at 0 (no customer_owed; fee and a positive difference still collected); on = before.
   Different products: real difference both ways. Settings → Exchange pricing switch, shown only while free swaps are
@@ -28,6 +28,80 @@ NOT merged, NOT deployed; migration V223 — main ends at V222; prod NOT yet con
 - **Test edits approved and applied:** PortalRefundMethodTest.s3, portalRefundMethod.test.tsx, portalCustomAddress ×2,
   portalPickupArea ×1, portalExchangeAreas (refund case). Registry additions: PortalOrderLeakTest + ShadowOrderLeakTest
   (`POST /orders/{orderId}/shipped-outside-traced`, byOrder).
+
+**O6-fixes — Alerts page labels, "clears when" texts, Go links, the Not traced hint (2026-11-07; branch
+`fix/o6-alert-fixes` off main b6886ece, worktree `~/Documents/traceability-o6f`; approved and MERGED 2026-11-07, NOT
+deployed; frontend only, no migration).**
+- **Labels:** every type ExceptionService raises (54) has an EN + AR label; 15 were missing (high_attempts,
+  missing_awb, missing_provider_id, shopify_cancel_vs_inflight, shopify_edit_conflict, return_in_transit_stuck,
+  return_mismatch, exchange_needs_mapping, exchange_unmapped_state, void_hold_sync_failed, generic_bosta_conflict,
+  generic_multiple_parcels, generic_delivered_without_pickup, generic_cancelled_live_shipment,
+  generic_fulfillment_cancelled). Guard: alertFixes.test reads ExceptionService.java — a new raised type without a
+  label fails it. The 4 types that had no Help group (missing_awb, missing_provider_id, exchange_needs_mapping,
+  exchange_unmapped_state) joined alerts-courier-shipments (sections EN + AR); alert-article headings now match the
+  labels.
+- **Clears when:** STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED written (EN + AR);
+  an unknown code shows `exc.clearsWhen.fallback`, never the raw key. Guard: every CONDITION_ONLY code has both texts.
+- **Go links:** `alertTargets.ts` `goTargetFor` (Alerts page): `/orders/<id>` (no such route — 26 detectors) → the
+  order drawer `/orders?order=<id>`; `/shipments/unlinked` and `/shipments/<id>` → the order's drawer when the alert
+  names an order, else no Go button; Unpack Required `/fulfill/<id>` → `/fulfill?guidedUnpack=<id>` (its own param — `?order=&unpack=1` is the Packed
+  list's edit-conflict dialog; FulfillRoute → Fulfill
+  opens that order's screen with its guided-unpack panel, both packing modes; Back drops the param); other
+  `/fulfill/<id>` → the order drawer; warehouse address `/onboarding` → `/settings?tab=locations`. Guard: every
+  actionUrl expression in ExceptionService (per alert type, both ternary branches) → goTargetFor → a route in App.tsx
+  or no button. The backend's actionUrls are unchanged. The three unlinked-delivery types (unmatched_delivery,
+  bosta_discovery_failed, generic_bosta_conflict) go by the order they name, never their link; `/orders/<id>` prefers the
+  alert's own order_id. The Overview alerts widget uses the SAME mapping (`alertDestination`: an order → OrderDrawer in
+  place; a page → a link; nothing → `/exceptions?type=<type>`) — no dead link anywhere an alert is shown.
+- **Not traced hint:** "Not traced = handed to Bosta without any of its pieces being scanned in Pick & Pack. Applies
+  to Bosta orders." (EN + AR).
+- **Tests:** alertFixes.test 17 (incl. the widget's destinations through the same real-route check; 10 rules
+  mutation-checked red); Overview ov16 / ov17 unchanged and green. Approved edit: ordersTabsFilters (the corrected
+  Not traced hint).
+
+**Onboarding redesign — O6 Help center (2026-11-07; branch `feat/onboarding-help` off main 8b7b51b4, worktree
+`~/Documents/traceability-o6`; approved and MERGED 2026-11-07, NOT deployed; frontend only, no migration).** Mockups
+`design/onboarding/Traced_onboarding_Help-Center`, `Help-Article`.
+- **Content:** 72 articles, EN + AR, `frontend/src/help/{en,ar}/<id>.md` (frontmatter id, topic, title, roles, related[],
+  alerts[], screens[], video — empty, its slot hidden; the body's FIRST paragraph is the short answer). Written from
+  the code, 15 topics (`help/topics.ts`). `help/content.ts` (eager glob) is only imported dynamically
+  (`help/loadHelp.ts`) → one lazy chunk (~272 kB, 96 kB gzip).
+- **/help** (owner / manager, Layout): search (title + body, EN AND AR whichever the page language — `help/search.ts`:
+  lower case; Arabic diacritics / tatweel stripped, alef forms → ا, ة → ه, ى → ي, Arabic-Indic / Persian digits →
+  0-9), topic chips, "Start here" (Connect → Receive → Pack → Pickup → Returns), topic sections; empty → "No answer
+  matches" + WhatsApp. **/help/:id**: breadcrumb, title, "For …", short-answer box, body (react-markdown), Related,
+  "Did this answer your question?" (Yes → thanks only, No → WhatsApp; nothing stored). No "Check my store" (O6b).
+- **Links:** sidebar "Help center" above Settings (owner / manager; none for workers). helpRegistry: each "?" page →
+  its article; the TourCard's "Read more" (owner / manager, a plain link — the tour stays open). Alerts rows: "What does
+  this mean?" → `articleForAlert(type)` (7 alert groups; unknown types → alerts-overview).
+- **Hidden articles:** frontmatter `hidden: true` (today: shopify-native-exchanges, until Shopify-native exchanges are
+  rolled out) — out of search, the count, topics and Related, and its URL says not found; guards forbid any link to a
+  hidden article (registry, alerts, tours, Start here, related[], body links).
+- **Approved copy decisions (2026-11-07):** Analytics articles kept (Analytics is on in prod); emails-junk keeps
+  no-reply@tracedtech.com (the prod sender); Pick & Pack says "recent orders" (not "the last 30 days"); the Lost alert
+  also fires for stock-take and Lookup write-offs; "Don't edit stock at Traced Main by hand in Shopify…"; grade-returns,
+  return-to-receive and lookup-sold-exchange carry the shared "In some cases Traced doesn't change Shopify stock…"
+  line; general advice is labelled **Tip**. Inferred sentences checked against the code: on hold = blocklist OR a
+  product missing from the catalog at import OR a manual Hold order (rewritten); other-courier exchanges need the
+  other-couriers switch (confirmed — generic legs exist only with it on); self-pickup orders can't use the portal
+  (confirmed — the portal needs a delivered courier leg); Tag stock and Places never change Shopify (confirmed — no
+  Shopify call; PlacesShopifyGuardTest); put-away closes after 12 h without activity (rewritten from "a few hours");
+  Return To Receive is resolved by hand (confirmed — nothing resolves it automatically).
+- **Tests:** helpCenter.test 23 (search EN / AR / normalisation / empty, topics, Start here, article page, sidebar by
+  role, guards: every Alerts-page type → an article in EN and AR, registry + tour + Start-here articles in both, related
+  ids exist, alert lists = their group, EN / AR frontmatter agree, no internal / old mode names, hidden articles never
+  linked or listed; Read more by role; alert links — 12 rules mutation-checked red); browser helpCenterLayout 16.
+  Approved edits: putAwayLists snapshot (+ the sidebar's Help link), sidebarReorg g1 + m1 (`/help` before
+  `/settings`), tours.test t6 (articleIds filled).
+- **Phone scanner:** NOT on Pickups — a deliberate decision (custody risk at the handover), not a bug. Lookup: OPEN
+  question (no phone scanner there today).
+- **"O6-fixes" (follow-up slice) — BUILT, see the O6-fixes entry above:** (1) Alerts page labels for the 11 types the backend raises
+  without one (high_attempts, void_hold_sync_failed, shopify_cancel_vs_inflight, generic_* ×5, shopify_edit_conflict,
+  return_in_transit_stuck, return_mismatch) — raw type shown, not filterable; (2) the three missing "clears when" texts
+  (STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED); (3) dead "Go" links:
+  `/shipments/unlinked` (unmatched_delivery, bosta_discovery_failed, generic_bosta_conflict) and `/fulfill/<id>`
+  (guided_unpack) have no route; (4) the Orders "Not traced" filter hint is backwards ("every piece scanned out" — the
+  tag means NO piece was scanned out).
 
 **Onboarding redesign — O5 Pick & Pack chooser + 4 tours + "?" (2026-11-07; branch `feat/onboarding-tours` off main
 cac3b35b, worktree `~/Documents/traceability-o5`; approved and MERGED 2026-11-07, NOT deployed; no migration; backend:
