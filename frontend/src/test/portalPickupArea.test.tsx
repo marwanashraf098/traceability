@@ -121,10 +121,11 @@ describe('P3 pickup area', () => {
     })
   })
 
+  // 2026-11-07 (approved): a known original district is used as is — no Area field.
   test('the preselected district is chosen already, so Send is available', async () => {
     lookupBody = lookupWith({ ...PICKUP, preselectedDistrictId: 'Iy7-lFD0BE0' })
     const user = await toDetails()
-    expect(screen.getByLabelText('Area')).toHaveValue('Iy7-lFD0BE0')
+    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Send return request' }))
     await screen.findByTestId('reference')
     expect(submitted().districtId).toBe('Iy7-lFD0BE0')
