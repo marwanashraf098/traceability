@@ -20,11 +20,14 @@ NOT merged, NOT deployed; migration V223 — main ends at V222; prod NOT yet con
   pickupAddress (25) and dropOffAddress (30), so: original district known AND offered for the mode → no city / area
   field, the portal sends it; else the area is asked (city fixed). Server unchanged (still requires a district). Fee
   area unchanged: district override → city override → rule (storedDeliveryArea when no district is chosen).
-- **Stale reserved pieces (#2212095474, P001578):** diagnosis only — a pick scan never completed, then shipped outside
-  Traced; no code path moves a reserved piece afterwards (BostaWebhookJob's reserved→with_courier is not an ALLOWED
-  edge → logged and skipped; scan/complete refuse ALREADY_SHIPPED). Main reconcile counts it once (no drift) when
-  fulfilled from Main. Proposal (not built): alert + manager "Shipped outside Traced" via existing edges
-  reserved→packed→with_courier(→delivered), no Shopify write. Needs Marawan's approval for reusing packed:with_courier.
+- **Stale reserved pieces → "Shipped outside Traced" (approved + built 2026-11-07, option A):** a pick scan never
+  completed, then the order shipped outside Traced; nothing could move the piece. Alert `shipped_outside_traced`
+  (MEDIUM, > 7 days since Shopify fulfilled) + owner/manager action in the order drawer (existing ledger edges,
+  packed:with_courier reuse approved, audited, NO Shopify write). Prod today: The Snouts 4 reserved, Juno Babies 2 —
+  after deploy, open each alert's order and use the action. Option B (auto after N days) not approved.
+- **Test edits approved and applied:** PortalRefundMethodTest.s3, portalRefundMethod.test.tsx, portalCustomAddress ×2,
+  portalPickupArea ×1, portalExchangeAreas (refund case). Registry additions: PortalOrderLeakTest + ShadowOrderLeakTest
+  (`POST /orders/{orderId}/shipped-outside-traced`, byOrder).
 
 **Onboarding redesign — O5 Pick & Pack chooser + 4 tours + "?" (2026-11-07; branch `feat/onboarding-tours` off main
 cac3b35b, worktree `~/Documents/traceability-o5`; approved and MERGED 2026-11-07, NOT deployed; no migration; backend:

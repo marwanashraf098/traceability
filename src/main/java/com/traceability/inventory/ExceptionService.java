@@ -238,6 +238,8 @@ public class ExceptionService {
         all.addAll(detectSupersededWaybillMoving(tenantId));
         // Main reconcile R2 fix 2 (V203): Traced delivered it, Shopify still shows it unfulfilled.
         if (!simulated) all.addAll(detectDeliveredNotFulfilledInShopify(tenantId));
+        // 2026-11-07: pieces still held in Traced on an order shipped outside its pack / pickup flow.
+        if (!simulated) all.addAll(detectShippedOutsideTraced(tenantId));
         // Non-Bosta couriers G1 (V169) — only for a tenant switched on, or one that still has generic legs.
         if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT generic_courier_enabled OR EXISTS (SELECT 1 FROM shipments WHERE tenant_id = ? AND provider = 'generic') " +
@@ -371,7 +373,8 @@ public class ExceptionService {
         Map.entry("tracking_change_needs_review/order",        OrderLink.DIRECT),
         Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT),
         Map.entry("superseded_waybill_moving/shipment",        OrderLink.VIA_SHIPMENT),
-        Map.entry("delivered_not_fulfilled_in_shopify/order",  OrderLink.DIRECT));
+        Map.entry("delivered_not_fulfilled_in_shopify/order",  OrderLink.DIRECT),
+        Map.entry("shipped_outside_traced/order",              OrderLink.DIRECT));
 
     /**
      * Orders "Needs attention" reason groups (2026-10-30): what the merchant has to do, in display priority — an
@@ -424,6 +427,7 @@ public class ExceptionService {
         Map.entry("tracking_changed_after_custody",   "other"),
         Map.entry("superseded_waybill_moving",        "other"),
         Map.entry("delivered_not_fulfilled_in_shopify", "other"),
+        Map.entry("shipped_outside_traced",           "other"),
         Map.entry("shopify_exchange_shipped_in_shopify", "other"),
         Map.entry("shopify_exchange_still_waiting",      "other"));
 
@@ -1734,6 +1738,36 @@ public class ExceptionService {
      * is cancelled; hidden once resolved. Only for a tenant with a connected Shopify store. The rule is
      * {@link MainReconcileRules#DELIVERED_NOT_FULFILLED_SQL} — never re-derive it.
      */
+    /**
+     * MEDIUM — pieces still reserved / packed / awaiting pickup in Traced on an order that left without Traced's pack /
+     * pickup flow (Shopify fulfilled it more than shipped-outside-traced-days ago, its newest forward leg moved and is
+     * with the courier or delivered). One alert per order; condition-only (clears once the pieces move — the order's
+     * "Shipped outside Traced" action, a release, a cancel); hidden once resolved. The rule is
+     * {@link ShippedOutsideTraced#STUCK_PIECES_SQL} — never re-derive it.
+     */
+    private List<Map<String, Object>> detectShippedOutsideTraced(UUID tid) {
+        return new ArrayList<>(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc).queryForList(
+            "SELECT 'shipped_outside_traced' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       s.order_id, s.order_number, min(s.since) AS occurred_at, count(*)::int AS pieces, " +
+            "       'shipped_outside_traced:' || s.order_id AS subject_key " +
+            "FROM (" + ShippedOutsideTraced.STUCK_PIECES_SQL + ") s " +
+            "WHERE NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = :t " +
+            "        AND er.exception_type = 'shipped_outside_traced' " +
+            "        AND er.subject_key = 'shipped_outside_traced:' || s.order_id) " +
+            "GROUP BY s.order_id, s.order_number ORDER BY min(s.since), s.order_id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("t", tid)
+                .addValue("order", null).addValue("days", shippedOutsideDays)));
+    }
+
+    private int shippedOutsideDays = 7;
+
+    /** shipped_outside_traced: Shopify fulfilled the order at least this many days ago. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setShippedOutsideDays(
+            @org.springframework.beans.factory.annotation.Value("${traced.shipped-outside-traced.days:7}") int d) {
+        this.shippedOutsideDays = d;
+    }
+
     private List<Map<String, Object>> detectDeliveredNotFulfilledInShopify(UUID tid) {
         boolean hasStore = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM stores WHERE tenant_id = ? AND status <> 'disconnected')", Boolean.class, tid));
@@ -2735,6 +2769,20 @@ public class ExceptionService {
                         + "تنتظر وتُرسل بمجرد تفعيله من جديد.");
                 item.put("suggestedAction", deleted ? "recreate_shopify_location" : "reactivate_shopify_location");
                 item.put("actionUrl", "/settings?tab=connections");
+            }
+            case "shipped_outside_traced" -> {
+                String n = str(item, "order_number");
+                Object k = item.get("pieces");
+                item.put("descriptionEn", "Order " + n + " shipped outside Traced: Shopify fulfilled it more than "
+                    + shippedOutsideDays + " days ago and the courier has it, but " + k
+                    + " piece(s) are still held in Traced, so they're missing from your stock and the returns portal. "
+                    + "Open the order and choose \"Shipped outside Traced\".");
+                item.put("descriptionAr", "تم شحن الطلب " + n + " خارج Traced: نفّذه شوبيفاي منذ أكثر من "
+                    + shippedOutsideDays + " أيام وهو مع شركة الشحن، لكن " + k
+                    + " قطعة ما زالت محجوزة في Traced، لذلك لا تظهر في مخزونك ولا في بوابة المرتجعات. "
+                    + "افتح الطلب واختر \"تم الشحن خارج Traced\".");
+                item.put("suggestedAction", "shipped_outside_traced");
+                item.put("actionUrl", "/orders/" + item.get("order_id"));
             }
             case "delivered_not_fulfilled_in_shopify" -> {
                 String n = str(item, "order_number");

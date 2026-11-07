@@ -310,6 +310,7 @@
     "resetSuccess": "Your password has been reset. Sign in with your new password."
   },
   "orders": {
+    "shippedOutside": {"title": "Shipped outside Traced", "body_one": "The courier has this order and Shopify shows it fulfilled, but {{count}} piece is still held in Traced. It's missing from your stock and the returns portal.", "body_other": "The courier has this order and Shopify shows it fulfilled, but {{count}} pieces are still held in Traced. They're missing from your stock and the returns portal.", "action": "Shipped outside Traced", "dialogTitle": "Mark as shipped outside Traced?", "dialogBody_one": "The piece is marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBody_other": "The {{count}} pieces are marked as with the courier, like any shipped order. Nothing changes in Shopify.", "dialogBodyDelivered_one": "The piece is marked as delivered, as the courier reports. Nothing changes in Shopify.", "dialogBodyDelivered_other": "The {{count}} pieces are marked as delivered, as the courier reports. Nothing changes in Shopify.", "confirm": "Mark shipped", "conflict": "Nothing to move any more — reload the order.", "error": "Couldn't update the order. Try again."},
     "title": "Orders",
     "search": "Search by order #, name, or phone",
     "searchTracking": "Tracking number",
@@ -506,6 +507,7 @@
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta",
+      "shipped_outside_traced": "Shipped outside Traced, pieces still held",
       "shopify_exchange_still_waiting": "Shopify exchange still waiting",
       "shopify_return_open_after_intake": "Received in Traced, return still open in Shopify",
       "shopify_return_ended_after_intake": "Return declined or cancelled in Shopify after arrival"
