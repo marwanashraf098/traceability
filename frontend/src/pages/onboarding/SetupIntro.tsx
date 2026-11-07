@@ -286,7 +286,7 @@ function SetupReady() {
               className="text-[14.5px] font-medium text-primary/80 hover:text-primary px-1 py-3">
               {t('setupIntro.ready.explore')}
             </button>
-            <Button variant="primary" size="lg" className="px-7" onClick={() => navigate('/receiving')}>
+            <Button variant="primary" size="lg" className="px-7" onClick={() => navigate('/receiving?guided=1')}>
               {t('setupIntro.ready.start')}
             </Button>
           </div>

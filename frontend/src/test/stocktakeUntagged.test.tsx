@@ -175,7 +175,7 @@ describe('Stock take — untagged counts (flexible labeling slice 7)', () => {
     const panel = await screen.findByTestId('untagged-counts')
     expect(within(panel).getByTestId('untagged-row-va')).toHaveTextContent('−2 untagged written off as lost')
     expect(within(panel).getByTestId('untagged-row-vb'))
-      .toHaveTextContent('3 extra Hoodie · Red / L found — receive them with count-only receiving.')
+      .toHaveTextContent('3 extra Hoodie · Red / L found — receive them with Quick count receiving.')
     expect(within(panel).queryByRole('spinbutton')).not.toBeInTheDocument()   // finalized: read-only
   })
 

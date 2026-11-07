@@ -135,7 +135,7 @@ describe('Slice 6b — factory receiving', () => {
     renderWithProviders(routes(), { initialEntries: ['/receiving'] })
     await user.click(await screen.findByRole('button', { name: '+ New Session' }))
     const card = await screen.findByTestId('receiving-mode-factory')
-    expect(card.textContent).toContain('Pieces arrived with Traced labels from the factory. Scan each piece — only scanned pieces enter stock.')
+    expect(card.textContent).toContain('Only scanned pieces enter your stock, so you get exactly what you physically have.')
     expect(within(card).queryByText('Your default')).toBeNull()
     await user.click(card)
 
@@ -145,7 +145,7 @@ describe('Slice 6b — factory receiving', () => {
     expect(within(picker).getByText('2 / 9')).toBeTruthy()
     expect(within(picker).queryByText('Old Mill')).toBeNull()                         // closed runs aren't offered
     expect(screen.getByTestId('count-only-location').textContent).toBe('Main')       // locked to the main warehouse
-    expect(screen.getByText('Factory-labeled pieces go to the main warehouse.')).toBeTruthy()
+    expect(screen.getByText('Label & verify pieces go to the main warehouse.')).toBeTruthy()
     expect(screen.queryByPlaceholderText('Supplier name')).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Create Session' }))

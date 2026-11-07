@@ -116,7 +116,7 @@ describe('Flexible labeling on, no untagged stock — today\'s flows', () => {
     expect(screen.getByTestId('receiving-mode-count_only').getAttribute('aria-pressed')).toBe('false')
 
     await user.click(printStick)
-    expect(screen.getByTestId('receiving-mode-chosen').textContent).toBe('Print & stick now · Change')
+    expect(screen.getByTestId('receiving-mode-chosen').textContent).toBe('Medium control · Label now · Change')
     await user.click(screen.getByRole('button', { name: /create/i }))
     await waitFor(() => expect(posted('/receiving/sessions')[0]?.body).toMatchObject({ mode: 'print_stick' }))
   })

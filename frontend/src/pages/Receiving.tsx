@@ -8,7 +8,8 @@ import { ImportFromExcelButton, ImportPanel } from './receiving/ReceivingImport'
 import { useCapabilities } from '../capabilities'
 import FactoryRuns from './receiving/FactoryRuns'
 import { FactoryLines } from './receiving/FactoryReceivingScan'
-import { ArrowLeft, Barcode, Factory, PackageCheck } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
+import ReceivingModeCards, { type ReceivingMode } from './receiving/ReceivingModeCards'
 
 import { getAccessToken } from '../auth'
 import { authFetch, getRoleFromToken, getLabelSettings, getLabelRuns } from '../api'
@@ -45,8 +46,9 @@ export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 /**
  * print_stick = today's flow (a label per piece); count_only = flexible labeling, pieces go in untagged;
  * factory = flexible labeling slice 6b, the pieces arrived wearing a factory run's labels and are scanned in.
+ * Merchants see them as Medium control · Label now / Low control · Quick count / High control · Label & verify
+ * (O4 rename — copy only; ReceivingModeCards).
  */
-type ReceivingMode = 'print_stick' | 'count_only' | 'factory'
 interface Session {
   id: string; status: string; reference: string | null; supplier_name: string | null
   location_name: string | null; created_at: string; finalized_at: string | null
@@ -60,7 +62,7 @@ export interface Line {
 }
 /** Count-only finished sessions: units of this session's Shopify +N by outcome. */
 interface ShopifySync { applied: number; pending: number; failed: number; skipped: number; shopifyRestocked?: number }
-interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync; factory?: FactoryProgress }
+export interface SessionDetail extends Session { lines: Line[]; shopify?: ShopifySync; factory?: FactoryProgress }
 interface Location { id: string; name: string; is_fulfillment?: boolean }
 
 // open → warning, finalized → success, reversed → critical, unknown → neutral
@@ -91,6 +93,14 @@ export default function Receiving() {
 
   // The factory scan loop (full-screen route) comes back here with ?session=<id> — reopen that session.
   const [searchParams, setSearchParams] = useSearchParams()
+  // O4: ?tab=runs opens Factory runs (High control's "Needs a label run · Set up").
+  const tabParam = searchParams.get('tab')
+  useEffect(() => {
+    if (tabParam !== 'runs') return
+    setTab('runs'); setView('list')
+    setSearchParams({}, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabParam])
   // S1b: arrived from a Return To Receive alert — the line added for it is linked to that return.
   const [returnKey, setReturnKey] = useState<string | null>(() => searchParams.get('return'))
   useEffect(() => {
@@ -229,11 +239,9 @@ export default function Receiving() {
 
 // ── Create Session Form ───────────────────────────────────────────────────────
 
-const MODES: ReceivingMode[] = ['print_stick', 'count_only', 'factory']
-const MODE_ICON = { print_stick: Barcode, count_only: PackageCheck, factory: Factory } as const
-
 /**
- * Switch ON: two steps — "How do you want to receive this delivery?" (two cards; a click picks the mode and goes
+ * Switch ON: two steps — "How do you want to receive this delivery?" (three cards, low → high control; a click on an
+ * available one picks the mode and goes
  * straight on), then today's form with the chosen mode on top ("… · Change") and a Back link. Switch OFF: today's
  * form exactly (no chooser, no mode sent).
  */
@@ -268,7 +276,8 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
   const [runs, setRuns] = useState<LabelRunSummary[] | null>(null)
   const [runId, setRunId] = useState<string>('')
   useEffect(() => {
-    if (!factory || runs !== null) return
+    // O4: loaded with the chooser — High control's card is disabled without an open run.
+    if (!flexibleLabeling || runs !== null) return
     getLabelRuns()
       .then(rs => {
         const open = rs.filter(r => r.status === 'open')
@@ -276,7 +285,7 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
         if (open.length === 1) setRunId(open[0].id)
       })
       .catch(() => setRuns([]))
-  }, [factory, runs])
+  }, [flexibleLabeling, runs])
   const [reference, setReference]   = useState('')
   const [supplier, setSupplier]     = useState('')
   const [note, setNote]             = useState('')
@@ -308,34 +317,12 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
           ← {t('receiving.back')}
         </button>
         <h1 className="text-h1 text-primary">{t('receiving.mode.title')}</h1>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {MODES.map(m => {
-            const Icon = MODE_ICON[m]
-            return (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={mode === m}
-                data-testid={`receiving-mode-${m}`}
-                onClick={() => { setMode(m); setStep('form') }}
-                className={`card text-start p-5 flex flex-col gap-3 transition-colors focus-visible:border-trace-blue ${
-                  mode === m ? 'border-trace-blue bg-trace-blue/[0.06]' : 'hover:border-trace-blue'}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <Icon size={22} strokeWidth={1.75} className="text-trace-blue" />
-                  {m === defaultMode && (
-                    <span data-testid={`receiving-mode-default-${m}`}><Badge tone="info" label={t('receiving.mode.yourDefault')} /></span>
-                  )}
-                </div>
-                <div className="space-y-1.5 flex-1">
-                  <p className="text-h3 text-primary">{t(`receiving.mode.${m}.title`)}</p>
-                  <p className="text-small text-muted">{t(`receiving.mode.${m}.body`)}</p>
-                </div>
-                <p className="text-caption text-muted border-t border-line pt-3">{t(`receiving.mode.${m}.footer`)}</p>
-              </button>
-            )
-          })}
-        </div>
+        <ReceivingModeCards
+          selected={mode}
+          defaultMode={defaultMode}
+          factoryAvailable={runs === null ? null : runs.length > 0}
+          onSelect={m => { setMode(m); setStep('form') }}
+        />
       </div>
     )
   }
@@ -401,9 +388,11 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
 
 // ── Session View ──────────────────────────────────────────────────────────────
 
-function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, onRefresh, onBack }: {
+export function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, onRefresh, onBack, onPrinted }: {
   session: SessionDetail; returnKey?: string | null; onDismissReturn?: () => void
   flexibleLabeling: boolean; onRefresh: () => void; onBack: () => void
+  /** O4: told after every label PDF opened successfully (the guided first session marks the test label done). */
+  onPrinted?: () => void
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -454,6 +443,7 @@ function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, on
       })
       if (!res.ok) throw new Error(res.statusText)
       window.open(URL.createObjectURL(await res.blob()), '_blank')
+      onPrinted?.()
     } catch (e: unknown) { setPrintError((e as Error).message) }
   }
 
@@ -465,6 +455,7 @@ function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, on
       })
       if (!res.ok) throw new Error(res.statusText)
       window.open(URL.createObjectURL(await res.blob()), '_blank')
+      onPrinted?.()
     } catch (e: unknown) { setPrintError((e as Error).message) }
   }
 
@@ -481,6 +472,7 @@ function SessionView({ session, returnKey, onDismissReturn, flexibleLabeling, on
       )
       if (!res.ok) throw new Error(res.statusText)
       window.open(URL.createObjectURL(await res.blob()), '_blank')
+      onPrinted?.()
     } catch (e: unknown) { setPrintError((e as Error).message) }
     finally { setPrintingVariant(null) }
   }
@@ -760,7 +752,7 @@ function FactoryOpenPanel({ progress, onScan, onFinish, finishing }: {
 }
 
 /** Step 2 of a factory session: the OPEN run it receives (factory · reference · received / expected). */
-function RunPicker({ runs, runId, onChange }: {
+export function RunPicker({ runs, runId, onChange }: {
   runs: LabelRunSummary[] | null; runId: string; onChange: (id: string) => void
 }) {
   const { t } = useTranslation()

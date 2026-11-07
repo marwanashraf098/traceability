@@ -18,15 +18,24 @@ import java.util.Map;
 public class OnboardingProgressController {
 
     private final OnboardingProgressService svc;
+    private final ReceivingSuggestionService suggestion;
 
-    public OnboardingProgressController(OnboardingProgressService svc) {
+    public OnboardingProgressController(OnboardingProgressService svc, ReceivingSuggestionService suggestion) {
         this.svc = svc;
+        this.suggestion = suggestion;
     }
 
     @GetMapping("/progress")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> progress(@AuthenticationPrincipal CustomUserDetails principal) {
         return TenantContext.runAs(principal.tenantId(), () -> svc.progress());
+    }
+
+    /** O4 — the guided first receiving's product suggestion (read-only Shopify read; {suggestion: null} when none). */
+    @GetMapping("/receiving-suggestion")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> receivingSuggestion(@AuthenticationPrincipal CustomUserDetails principal) {
+        return TenantContext.runAs(principal.tenantId(), () -> suggestion.suggest());
     }
 
     @PatchMapping("/prefs")

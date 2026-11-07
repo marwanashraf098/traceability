@@ -782,28 +782,30 @@
     "mode": {
       "title": "How do you want to receive this delivery?",
       "print_stick": {
-        "title": "Print & stick now",
-        "body": "Exactly how receiving works today. Enter quantities, print a label for every piece, stick them on before shelving.",
-        "footer": "Every piece has a barcode from day one."
+        "title": "Medium control · Label now",
+        "body": "Choose the exact products and quantities now. Traced creates a barcode for each piece; print them and stick them on. Best when you already know exactly which pieces you have.",
+        "short": "Label now"
       },
       "count_only": {
-        "title": "Count only, label at pack",
-        "body": "No labels now. Enter how many arrived. Pieces go in as untagged and get a label when they're packed.",
-        "footer": "Best for big deliveries and fast movers."
+        "title": "Low control · Quick count",
+        "body": "Just enter how many you have. The stock goes into your main warehouse and shows in Inventory as soon as you finish the session, without barcodes. Best if you have lots of pieces and don't want to barcode them yet. You can label them later.",
+        "short": "Quick count"
       },
-      "mainWarehouseOnly": "Count-only stock goes to the main warehouse.",
+      "mainWarehouseOnly": "Quick count stock goes to the main warehouse.",
       "change": "Change",
       "back": "Back",
-      "printStickBadge": "Print & stick",
+      "printStickBadge": "Label now",
       "yourDefault": "Your default",
       "factory": {
-        "title": "Factory-labeled",
-        "body": "Pieces arrived with Traced labels from the factory. Scan each piece — only scanned pieces enter stock.",
-        "footer": "For factory runs you printed labels for."
-      }
+        "title": "High control · Label & verify",
+        "body": "Print a label for every piece first (or send them to your factory), stick them on, then scan each piece to receive it into your main warehouse. Only scanned pieces enter your stock, so you get exactly what you physically have. The most accurate.",
+        "short": "Label & verify"
+      },
+      "needsRun": "Needs a label run",
+      "setUp": "Set up"
     },
     "countOnly": {
-      "badge": "Count only",
+      "badge": "Quick count",
       "noLabels": "No labels will be printed — these pieces go in as untagged. Each one gets a label when it's packed, or in a Tag stock session.",
       "shopify": "Shopify goes up by {{count}} when you finish, same as normal receiving.",
       "finish": "Finish · add {{count}} to stock",
@@ -868,8 +870,8 @@
       "nothingMatched": "No product in this file has a quantity to add."
     },
     "factory": {
-      "badge": "Factory-labeled",
-      "mainWarehouseOnly": "Factory-labeled pieces go to the main warehouse.",
+      "badge": "Label & verify",
+      "mainWarehouseOnly": "Label & verify pieces go to the main warehouse.",
       "pickRun": "Which factory run arrived?",
       "noOpenRuns": "No open factory runs. Create one in Receiving → Factory runs first.",
       "runLabel": "Factory run",
@@ -1524,7 +1526,7 @@
       "body": "This label was printed for this product, but no piece has been scanned with it yet. Stick it on a piece of this product and scan it in Tag stock.",
       "factoryIssued": "Factory label",
       "factoryTitle": "Factory label not received yet — receive it in its factory run first",
-      "factoryBody": "This label was printed for a factory run. The piece becomes stock when it's scanned in Receiving with that run (Factory-labeled)."
+      "factoryBody": "This label was printed for a factory run. The piece becomes stock when it's scanned in Receiving with that run (Label & verify)."
     },
     "place": "Place",
     "noPlace": "No place yet",
@@ -3272,7 +3274,7 @@
       "title": "Labels",
       "subtitle": "How receiving starts for this store.",
       "defaultMode": "Default receiving mode",
-      "note": "Receiving still asks every time — this only picks the card that's already selected. Anyone can choose the other one.",
+      "note": "Receiving still asks every time — this only picks the card that's already selected. Anyone can still choose another mode.",
       "error": "Couldn't save. Try again."
     },
     "nav": {
@@ -3817,7 +3819,7 @@
       "matches": "Matches",
       "writeOffOpen": "−{{count}} untagged will be written off as lost",
       "writeOffDone": "−{{count}} untagged written off as lost",
-      "extra": "{{count}} extra {{variant}} found — receive them with count-only receiving.",
+      "extra": "{{count}} extra {{variant}} found — receive them with Quick count receiving.",
       "saveError": "Couldn't save the count. Try again.",
       "countLabel": "Untagged count",
       "looksLikeScan": "Looks like a scan — tap the scan bar first"
@@ -4330,7 +4332,7 @@
       "transferReconcile": "Transfer reconcile · {{ref}}",
       "returns": "Scan returns · {{ref}}",
       "tagStock": "Tag stock",
-      "factoryReceiving": "Factory receiving · {{ref}}",
+      "factoryReceiving": "Label & verify · {{ref}}",
       "putAway": "Place on shelves",
       "placeCount": "Counting {{code}}",
       "boxMove": "Moving a box"
@@ -6081,6 +6083,90 @@
       "portal": "portal return refund exchange customer",
       "team": "team worker staff pin tablet users",
       "places": "shelves boxes places zones racks"
+    }
+  },
+  "guidedReceiving": {
+    "headerTitle": "Your first receiving session",
+    "skip": "Skip, I'll do it later",
+    "loading": "Loading…",
+    "setupTitle": "Two quick choices, then you start",
+    "markTitle": "How will you mark the pieces?",
+    "productTitle": "Start with one product",
+    "runTitle": "Which label run arrived?",
+    "suggestionWhy": "You have the most of this one in Shopify · {{count}} in Shopify",
+    "chooseAnother": "Choose another",
+    "useSuggestion": "Use the suggestion",
+    "qtyLabel": "How many pieces now?",
+    "qtyHint": "10 is plenty for a first try",
+    "pickerHint": "Pick a product and how many pieces you're receiving now.",
+    "start": "Start session",
+    "startWith": "Start session · {{count}} pieces",
+    "startWith_one": "Start session · 1 piece",
+    "startError": "Couldn't start the session. Try again.",
+    "noMain": "Your main warehouse isn't set up yet — add it in Settings › Locations.",
+    "shopifyTitle": "What happens in Shopify",
+    "tracedMain": "Traced Main",
+    "warning": "These pieces are ADDED to your online stock. Use this only for stock that isn't counted in Shopify yet — or set your old Shopify location to 0 first.",
+    "explain": "Receiving adds each piece to the Traced Main location in Shopify, so the stock customers can buy goes up by the same number.",
+    "factoryShopify": "Each piece you scan in is added when you finish.",
+    "needTitle": "You'll need",
+    "needPrinter": "A label printer, or any printer for now",
+    "needScanner": "A barcode scanner, or your phone's camera",
+    "guideTitle": "Your first session",
+    "hideGuide": "Hide guide",
+    "showGuide": "Show guide",
+    "step": {
+      "addProduct": "Add a product",
+      "enterCount": "Enter how many you have",
+      "close": "Close the session",
+      "closeHint": "Closing creates a barcode for each piece and adds the pieces to Shopify.",
+      "closeHintLow": "Closing adds the pieces to your stock and to Shopify. No barcodes.",
+      "print": "Print the labels",
+      "printButton": "Print {{count}} labels",
+      "printButton_one": "Print 1 label",
+      "stick": "Stick one label on each piece",
+      "check": "Check by scanning",
+      "checkHint": "Scan each label to check it printed and matches.",
+      "scanFactory": "Scan each piece's label",
+      "scanFactoryHint": "Open the scan screen. Only the pieces you scan enter stock.",
+      "finishFactory": "Finish",
+      "finishFactoryHint": "Finishing adds the scanned pieces to your stock and to Shopify."
+    },
+    "done": "I'm done",
+    "printFailed": "Couldn't open the labels. Try again.",
+    "tipKeyboard": "Scanner typing odd letters? Turn off Caps Lock or switch the keyboard to English.",
+    "tipPhone": "No scanner? Use your phone as a scanner.",
+    "chat": "Stuck? Chat with us",
+    "check": {
+      "title": "Check your labels",
+      "body": "Scan each label to check it printed and matches.",
+      "counter": "{{done}} / {{total}} checked",
+      "last": "Last checked: {{code}}",
+      "placeholder": "Scan a label…",
+      "ok": "Matches this session",
+      "again": "Already checked",
+      "notHere": "Not a piece from this session",
+      "allChecked": "All labels checked.",
+      "loadFailed": "Couldn't load this session's pieces."
+    },
+    "finished": {
+      "title": "Your first {{count}} pieces are in Traced",
+      "title_one": "Your first piece is in Traced",
+      "sub": "Each one now has its own barcode and history, from your shelf to the customer and back.",
+      "subLow": "They're in your stock now, without barcodes. You can label them later.",
+      "changedTitle": "What changed in Shopify",
+      "lookupTitle": "Try it now: scan one of the labels",
+      "lookupBody": "Scan one in Lookup to see its story: who received it, when, and where it is.",
+      "openLookup": "Open Lookup",
+      "paceTitle": "Pick a daily labeling pace",
+      "paceBody": "We'll use it to plan what to label each day.",
+      "relaxed": "Relaxed",
+      "steady": "Steady",
+      "sprint": "Sprint",
+      "perDay": "{{count}} a day",
+      "setGoal": "Set my daily goal",
+      "notNow": "Not now, let me explore",
+      "saveFailed": "Couldn't save your goal. Try again."
     }
   }
 }

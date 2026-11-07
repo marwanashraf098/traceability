@@ -143,7 +143,7 @@ describe('Slice 8 — receiving step 1', () => {
     expect(screen.queryByTestId('receiving-mode-default-print_stick')).toBeNull()
 
     await user.click(screen.getByTestId('receiving-mode-print_stick'))                    // not the default — still works
-    expect(screen.getByTestId('receiving-mode-chosen').textContent).toBe('Print & stick now · Change')
+    expect(screen.getByTestId('receiving-mode-chosen').textContent).toBe('Medium control · Label now · Change')
     await user.click(screen.getByRole('button', { name: /create/i }))
     await waitFor(() => expect(calls.find(c => c.method === 'POST' && c.url.endsWith('/receiving/sessions'))?.body)
       .toMatchObject({ mode: 'print_stick' }))
