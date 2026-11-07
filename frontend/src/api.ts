@@ -1289,6 +1289,43 @@ export type ShopifyUpgradeStage = 'upgrade' | 'delete_old_app' | null
 
 export type SetupStep = 'shopify' | 'address' | null
 
+// ── Onboarding progress (O1, V220) ────────────────────────────────────────────
+
+export interface OnboardingProgressStep {
+  key: 'shopify' | 'address' | 'first_receiving' | 'courier' | 'test_label'
+  done: boolean
+  skippable: boolean
+  skipped: boolean
+}
+
+export interface OnboardingProgress {
+  steps: OnboardingProgressStep[]
+  tasks: { key: string; tried: boolean }[]
+  card: 'full' | 'slim' | 'hidden'
+  pickPackChosen: boolean
+  labelingPace: number | null
+  setupIntroSeen?: boolean
+}
+
+export type OnboardingPrefsPatch = Partial<{
+  card: 'full' | 'slim' | 'hidden'
+  skipped: ('courier' | 'test_label')[]
+  pickPackChosen: boolean
+  testLabelPrinted: boolean
+  labelingPace: number
+  setupIntroSeen: boolean
+}>
+
+/** Owner / manager. */
+export function getOnboardingProgress() {
+  return request<OnboardingProgress>('/onboarding/progress')
+}
+
+/** Owner / manager — whitelisted keys only (anything else → 400). `skipped` replaces the stored list. */
+export function patchOnboardingPrefs(patch: OnboardingPrefsPatch) {
+  return request<OnboardingProgress>('/onboarding/prefs', { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
 /** "Log out" — THIS device only: ends this device's session (and its phone pairing when
  *  {@code deviceId} — the browser's station device id — is given). Other devices, a station
  *  tablet above all, keep working. */

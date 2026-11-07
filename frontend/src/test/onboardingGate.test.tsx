@@ -144,10 +144,10 @@ describe('owner gate', () => {
     stubApi({ me: { role: 'owner', setupStep: 'shopify' } })
     renderAt('/overview')
     expect(await screen.findByTestId('onboarding-step-shopify')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Connect your Shopify store')
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent("Welcome. Let's connect your store.")
     expect(screen.getByTestId('store-finder')).toBeInTheDocument()
     expect(screen.getByTestId('onboarding-logout')).toBeInTheDocument()
-    expect(screen.getByText('Main warehouse address')).toBeInTheDocument()
+    expect(screen.getByText('Warehouse address')).toBeInTheDocument()
     expect(screen.queryByTestId('screen')).toBeNull()
   })
 
@@ -191,18 +191,18 @@ describe('owner gate', () => {
     expect(screen.getByText('Shopify connected')).toBeInTheDocument()
 
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Finish setup' }))
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Choose a governorate.')
     expect(calls.some(c => c.init?.method === 'PUT')).toBe(false)
 
     await user.selectOptions(screen.getByLabelText('Governorate'), 'C')
     await user.type(screen.getByLabelText('City / area'), 'Nasr City')
-    await user.click(screen.getByRole('button', { name: 'Finish setup' }))
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Enter the street address.')
 
     await user.type(screen.getByLabelText('Street address'), '12 Abbas El Akkad St')
     await user.type(screen.getByLabelText(/^Floor/), '2')
-    await user.click(screen.getByRole('button', { name: 'Finish setup' }))
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
 
     expect(await screen.findByTestId('screen')).toHaveTextContent('overview')
     const put = calls.find(c => c.init?.method === 'PUT')!
@@ -223,7 +223,7 @@ describe('owner gate', () => {
     renderAt('/overview', 'ar')
     const form = await screen.findByTestId('onboarding-step-address')
     await waitFor(() => expect((within(form).getByLabelText('المحافظة') as HTMLSelectElement).value).toBe('GZ'))
-    await userEvent.setup().click(within(form).getByRole('button', { name: 'إنهاء الإعداد' }))
+    await userEvent.setup().click(within(form).getByRole('button', { name: 'حفظ ومتابعة' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('أدخل عنوان الشارع.')
     expect(screen.queryByTestId('screen')).toBeNull()
   })
@@ -294,7 +294,7 @@ describe('AR / RTL', () => {
     stubApi({ me: { role: 'owner', setupStep: 'address' } })
     renderAt('/overview', 'ar')
     const form = await screen.findByTestId('onboarding-step-address')
-    expect(within(form).getByText('أين مخزنك الرئيسي؟')).toBeInTheDocument()
+    expect(within(form).getByText('أين مخزنك؟')).toBeInTheDocument()
     const select = within(form).getByLabelText('المحافظة') as HTMLSelectElement
     expect(Array.from(select.options).map(o => o.textContent)).toEqual(['اختر المحافظة', 'القاهرة', 'الجيزة'])
     expect(screen.getByText('تسجيل الخروج')).toBeInTheDocument()

@@ -89,6 +89,10 @@ public class UserService {
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a
         // station tablet that is the PIN-switched-in worker, never the owner who signed the tablet in.
         self.put("uiState", UserUiStateService.read(jdbc, tenantId, userId));
+        // Onboarding O2 — the setup intro screen an owner goes to once the gate is done ('courier' | 'ready' |
+        // null; OnboardingProgressService.setupIntro is the one rule). Never for a manager or worker.
+        self.put("setupIntro", "owner".equals(self.get("role")) && setupStep == null
+            ? OnboardingProgressService.setupIntro(jdbc, tenantId) : null);
         return self;
     }
 

@@ -1,120 +1,39 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Check, Clock, Globe, Info, LogOut, Store } from 'lucide-react'
-import { Logo } from '../../components/Logo'
+import { Check, Clock, Info, Store } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
 import {
-  getConnections, getRoleFromToken, getSetupAddress, logoutThisDevice, saveSetupAddress,
-  ServerMessageError, type SetupAddressView, type SetupStep,
+  getConnections, getRoleFromToken, getSetupAddress, saveSetupAddress,
+  ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupStep,
 } from '../../api'
-import { clearAccessToken } from '../../auth'
-import { stationDeviceId } from '../../phone/PhoneScanProvider'
-import { refreshSetupStep } from '../../setupGate'
+import { clearShopifyStepSeen, markShopifyStepSeen, refreshSetupStep, shopifyStepSeen } from '../../setupGate'
+import { GateFrame, SetupCard, SetupColumns, SetupHeading, SetupStepper, SidePanel } from './SetupLayout'
 
-// Onboarding gate (design/Traced_onboarding_exchange_dc.html screens 1–2): a full-screen page shown in
-// place of any owner / manager screen while GET /me's setupStep is not null. Outside Layout (no sidebar):
-// its own top bar with the language toggle and Log out. Owner: step 1 connects Shopify (the Settings
-// StoreFinder), step 2 saves the main warehouse address. Manager: a "waiting for the owner" screen.
-// A failed Shopify connect comes back to /settings?tab=connections&shopify_error=… — which is behind this
-// gate — so the gate shows that error itself.
+export { GateFrame }
 
-function toggleLang(i18n: { language: string; changeLanguage: (lng: string) => void }) {
-  const next = i18n.language === 'en' ? 'ar' : 'en'
-  i18n.changeLanguage(next)
-  try { localStorage.setItem('lang', next) } catch { /* private mode */ }
-  document.documentElement.dir  = next === 'ar' ? 'rtl' : 'ltr'
-  document.documentElement.lang = next
+// Onboarding gate (design/onboarding/Traced_onboarding_Flow-1-Shopify, Flow-2-Address): a full-screen page
+// shown in place of any owner / manager screen while GET /me's setupStep is not null. Outside Layout (no
+// sidebar): SetupLayout's frame with the stepper, "Need help?", the language toggle and Log out.
+// Owner: step 1 connects Shopify (the Settings StoreFinder), step 2 saves the main warehouse address.
+// Manager: a "waiting for the owner" screen. A failed Shopify connect comes back to
+// /settings?tab=connections&shopify_error=… — which is behind this gate — so the gate shows that error itself.
+// Restyle only: who is gated, what is required and what is saved are unchanged.
+
+function firstName(name: string | null | undefined) {
+  return name?.trim().split(/\s+/)[0] || null
 }
 
-export function GateFrame({ children, onExit, exitLabel }: {
-  children: ReactNode
-  /** Banner mode: a "Back to Traced" link instead of Log out. */
-  onExit?: () => void
-  exitLabel?: string
-}) {
-  const { t, i18n } = useTranslation()
-  const navigate = useNavigate()
-
-  async function logout() {
-    let deviceId: string | undefined
-    try { deviceId = stationDeviceId() } catch { deviceId = undefined }
-    try { await logoutThisDevice(deviceId) } catch { /* ignore */ }
-    clearAccessToken()
-    refreshSetupStep()
-    navigate('/login')
-  }
-
-  return (
-    <div className="min-h-screen bg-bg flex flex-col" data-testid="onboarding-gate">
-      <header className="h-14 border-b border-line flex items-center justify-between px-[18px] max-[640px]:px-4 flex-shrink-0">
-        <Logo variant="mark" size={22} className="text-primary" />
-        <div className="flex items-center gap-1">
-          <button type="button" onClick={() => toggleLang(i18n)}
-            className="inline-flex items-center gap-1.5 text-caption text-muted hover:text-primary hover:bg-black/[0.04] transition-colors px-2.5 py-1.5 rounded-lg">
-            <Globe size={14} strokeWidth={1.75} />
-            {i18n.language === 'en' ? 'العربية' : 'English'}
-          </button>
-          {onExit ? (
-            <button type="button" onClick={onExit}
-              className="inline-flex items-center gap-1.5 text-small font-medium text-muted hover:text-primary hover:bg-black/[0.04] transition-colors px-2.5 py-1.5 rounded-lg">
-              {exitLabel}
-            </button>
-          ) : (
-            <button type="button" onClick={() => void logout()} data-testid="onboarding-logout"
-              className="inline-flex items-center gap-1.5 text-small font-medium text-muted hover:text-danger hover:bg-danger/10 transition-colors px-2.5 py-1.5 rounded-lg">
-              <LogOut size={15} strokeWidth={1.75} className="rtl:-scale-x-100" />
-              {t('nav.logout')}
-            </button>
-          )}
-        </div>
-      </header>
-      <main className="flex-1 flex justify-center px-4 py-10 max-[640px]:py-6">
-        <div className="w-full max-w-[520px] space-y-6">{children}</div>
-      </main>
-    </div>
-  )
-}
-
-function Stepper({ step, shopDomain }: { step: 'shopify' | 'address'; shopDomain: string | null }) {
-  const { t } = useTranslation()
-  const first = step === 'shopify'
-  return (
-    <ol className="space-y-2" aria-label={t('setupGate.stepsLabel')}>
-      <li className={cn('flex items-center gap-3 rounded-xl border px-3.5 py-2.5',
-        first ? 'border-trace-blue/40 bg-trace-blue/[0.06]' : 'border-success/25 bg-success/[0.06]')}
-        aria-current={first ? 'step' : undefined}>
-        <span className={cn('w-6 h-6 rounded-full flex items-center justify-center text-caption font-bold flex-shrink-0',
-          first ? 'bg-trace-blue text-white' : 'bg-success text-white')}>
-          {first ? '1' : <Check size={14} strokeWidth={3} />}
-        </span>
-        <span className="flex-1 min-w-0">
-          <span className="block text-small font-semibold text-primary">
-            {first ? t('setupGate.step1') : t('setupGate.step1Done')}
-          </span>
-          {!first && shopDomain && (
-            <span className="block text-caption text-muted font-mono truncate" dir="ltr">{shopDomain}</span>
-          )}
-        </span>
-      </li>
-      <li className={cn('flex items-center gap-3 rounded-xl border px-3.5 py-2.5',
-        first ? 'border-line bg-surface' : 'border-trace-blue/40 bg-trace-blue/[0.06]')}
-        aria-current={!first ? 'step' : undefined}>
-        <span className={cn('w-6 h-6 rounded-full flex items-center justify-center text-caption font-bold flex-shrink-0',
-          first ? 'bg-elevated text-muted border border-line' : 'bg-trace-blue text-white')}>2</span>
-        <span className={cn('text-small font-semibold', first ? 'text-muted' : 'text-primary')}>{t('setupGate.step2')}</span>
-      </li>
-    </ol>
-  )
-}
-
-function ConnectStep() {
+function ConnectStep({ name }: { name: string | null }) {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const [callbackError] = useState<string | null>(() => searchParams.get('shopify_error'))
   const [linkedShop, setLinkedShop] = useState<string | null>(null)
+
+  // This device saw the Shopify step: once the store is connected, the gate shows "Connected" first (Flow-1).
+  useEffect(() => { markShopifyStepSeen() }, [])
 
   // Shown once, then stripped from the URL (replace — Back / refresh don't re-show it).
   useEffect(() => {
@@ -134,28 +53,97 @@ function ConnectStep() {
     return () => { cancelled = true }
   }, [])
 
+  const who = firstName(name)
   return (
-    <div className="card p-5 space-y-4" data-testid="onboarding-step-shopify">
-      <div>
-        <h1 className="text-h3 font-semibold text-primary">{t('setupGate.connectTitle')}</h1>
-        <p className="text-body text-muted mt-1">{t('setupGate.connectBody')}</p>
-      </div>
-      {callbackError !== null && (
-        <ErrorAlert title={t(callbackErrorKey(callbackError))} />
-      )}
-      {linkedShop && (
-        <p className="flex items-start gap-2 text-small text-muted" data-testid="onboarding-linked-shop">
-          <Info size={15} className="flex-shrink-0 mt-0.5" />
-          <span>{t('connections.shopify.linkedShop', { shop: linkedShop })}</span>
-        </p>
-      )}
-      <StoreFinder initialInput={linkedShop ?? undefined} hideIntro />
-      <p className="text-small text-muted border-t border-line pt-3">{t('setupGate.connectFooter')}</p>
-    </div>
+    <SetupColumns aside={
+      <SidePanel testId="setup-shopify-panel" title={t('setupGate.shopifyPanel.title')}
+        lines={[t('setupGate.shopifyPanel.reads'), t('setupGate.shopifyPanel.stock'), t('setupGate.shopifyPanel.never')]} />
+    }>
+      <SetupCard data-testid="onboarding-step-shopify">
+        <SetupHeading eyebrow={t('setupGate.eyebrow1')}
+          title={who ? t('setupGate.connectTitleNamed', { name: who }) : t('setupGate.connectTitle')}
+          lead={t('setupGate.connectBody')} />
+        {callbackError !== null && (
+          <ErrorAlert title={t(callbackErrorKey(callbackError))} />
+        )}
+        {linkedShop && (
+          <p className="flex items-start gap-2 text-small text-muted" data-testid="onboarding-linked-shop">
+            <Info size={15} className="flex-shrink-0 mt-0.5" />
+            <span>{t('connections.shopify.linkedShop', { shop: linkedShop })}</span>
+          </p>
+        )}
+        <StoreFinder initialInput={linkedShop ?? undefined} hideIntro />
+        <p className="text-small text-muted border-t border-line pt-3">{t('setupGate.connectFooter')}</p>
+      </SetupCard>
+    </SetupColumns>
   )
 }
 
-export function AddressStep({ mode, onSaved }: { mode: 'gate' | 'banner'; onSaved: (step: SetupStep) => void }) {
+/** Flow-1 after the store is connected — read-only, from /connections (no Shopify call). */
+function ConnectedSummary({ name, onContinue }: { name: string | null; onContinue: () => void }) {
+  const { t } = useTranslation()
+  const [conn, setConn] = useState<ConnectionsStatus['shopify'] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getConnections().then(c => { if (!cancelled) setConn(c.shopify) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const imported = conn?.importStatus === 'completed'
+  const location = conn?.locationState ?? null
+  const rows: { label: string; value: string | null; testId: string }[] = [
+    { label: t('setupGate.connected.products'), testId: 'setup-row-products',
+      value: conn ? (imported ? t('setupGate.connected.imported') : t('setupGate.connected.importing')) : null },
+    // No count without a Shopify call (O2): the line alone.
+    { label: t('setupGate.connected.locations'), value: null, testId: 'setup-row-locations' },
+    { label: t('setupGate.connected.tracedMain'), testId: 'setup-row-traced-main',
+      value: location === 'active' ? t('setupGate.connected.ready')
+        : location === null ? (conn ? t('setupGate.connected.settingUp') : null) : t('setupGate.connected.notActive') },
+  ]
+
+  return (
+    <SetupColumns aside={
+      <SidePanel title={t('setupGate.shopifyPanel.title')}
+        lines={[t('setupGate.shopifyPanel.reads'), t('setupGate.shopifyPanel.stock'), t('setupGate.shopifyPanel.never')]} />
+    }>
+      <SetupCard data-testid="onboarding-shopify-connected">
+        <SetupHeading eyebrow={t('setupGate.eyebrow1')}
+          title={firstName(name) ? t('setupGate.connectTitleNamed', { name: firstName(name) }) : t('setupGate.connectTitle')} />
+        <div className="flex items-center gap-3 bg-success/[0.07] rounded-xl px-4 py-3.5">
+          <span className="w-7 h-7 rounded-full bg-success-text text-white flex items-center justify-center flex-shrink-0">
+            <Check size={15} strokeWidth={3} aria-hidden />
+          </span>
+          <span className="flex flex-col gap-0.5 min-w-0">
+            <span className="text-[15px] font-semibold text-primary">
+              {t('setupGate.connected.to')}{' '}
+              {conn?.shopDomain && <span className="font-mono break-all" dir="ltr">{conn.shopDomain}</span>}
+            </span>
+            <span className="text-body text-primary/80">
+              {imported ? t('setupGate.connected.subDone') : t('setupGate.connected.sub')}
+            </span>
+          </span>
+        </div>
+        <ul className="border border-line rounded-xl divide-y divide-line">
+          {rows.map(r => (
+            <li key={r.testId} data-testid={r.testId} className="flex justify-between gap-4 px-4 py-3 text-body">
+              <span className="text-primary">{r.label}</span>
+              {r.value && <b className="font-semibold text-primary text-end">{r.value}</b>}
+            </li>
+          ))}
+        </ul>
+        <Button variant="primary" size="lg" className="w-full" onClick={onContinue}>{t('setupGate.connected.continue')}</Button>
+      </SetupCard>
+    </SetupColumns>
+  )
+}
+
+export function AddressStep({ mode, onSaved, shopDomain }: {
+  mode: 'gate' | 'banner'
+  onSaved: (step: SetupStep) => void
+  /** Gate only: the connected store, shown as done. */
+  shopDomain?: string | null
+}) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
   const [view, setView] = useState<SetupAddressView | null>(null)
@@ -210,78 +198,101 @@ export function AddressStep({ mode, onSaved }: { mode: 'gate' | 'banner'; onSave
   if (loadError) return <ErrorAlert title={t('setupGate.address.errLoad')} />
   if (!view) return <div className="flex justify-center py-10"><Spinner /></div>
 
-  const fieldLabel = 'block text-small text-muted font-medium mb-1.5'
-  return (
-    <form onSubmit={e => void submit(e)} className="card p-5 space-y-4" data-testid="onboarding-step-address" noValidate>
-      <div>
-        <h1 className="text-h3 font-semibold text-primary">{t('setupGate.address.title')}</h1>
-        <p className="text-body text-muted mt-1">{t('setupGate.address.body')}</p>
-      </div>
+  const gate = mode === 'gate'
+  const fieldLabel = 'block text-body font-semibold text-primary mb-1.5'
+  const form = (
+    <form onSubmit={e => void submit(e)} noValidate data-testid="onboarding-step-address"
+      className="bg-surface border border-line rounded-[18px] p-8 max-[640px]:p-5 flex flex-col gap-5">
+      <SetupHeading eyebrow={gate ? t('setupGate.eyebrow2') : undefined}
+        title={t('setupGate.address.title')} lead={t('setupGate.address.body')} />
 
-      <div>
-        <label htmlFor="setupGovernorate" className={fieldLabel}>{t('setupGate.address.governorate')}</label>
-        <select id="setupGovernorate" value={province} className={cn('input w-full', error?.code === 'GOVERNORATE_REQUIRED' && 'border-critical')}
-          onChange={e => { setProvince(e.target.value); setCity(''); setError(null) }}>
-          <option value="">{t('setupGate.address.governoratePlaceholder')}</option>
-          {view.provinces.map(p => (
-            <option key={p.code} value={p.code}>{isAr ? p.nameAr : p.nameEn}</option>
-          ))}
-        </select>
-      </div>
+      {gate && shopDomain && (
+        <p className="flex items-center gap-2 text-small text-muted" data-testid="setup-shop-done">
+          <Check size={14} strokeWidth={3} className="text-success-text flex-shrink-0" aria-hidden />
+          <span>{t('setupGate.step1Done')}</span>
+          <span className="font-mono truncate" dir="ltr">{shopDomain}</span>
+        </p>
+      )}
 
-      <div>
-        <label htmlFor="setupCity" className={fieldLabel}>{t('setupGate.address.city')}</label>
-        <Input id="setupCity" value={city} list={areas.length ? 'setupCityAreas' : undefined}
-          onChange={e => { setCity(e.target.value); setError(null) }}
-          placeholder={t('setupGate.address.cityPlaceholder')} autoComplete="off" maxLength={100}
-          disabled={!province} invalid={error?.code === 'CITY_REQUIRED'} />
-        {areas.length > 0 && (
-          <datalist id="setupCityAreas">
-            {areas.map(a => <option key={a.nameEn} value={isAr && a.nameAr ? a.nameAr : a.nameEn} />)}
-          </datalist>
-        )}
-      </div>
+      <div className="grid grid-cols-2 gap-3.5 max-[520px]:grid-cols-1">
+        <div>
+          <label htmlFor="setupGovernorate" className={fieldLabel}>{t('setupGate.address.governorate')}</label>
+          <select id="setupGovernorate" value={province}
+            className={cn('input w-full h-[46px]', error?.code === 'GOVERNORATE_REQUIRED' && 'border-critical')}
+            onChange={e => { setProvince(e.target.value); setCity(''); setError(null) }}>
+            <option value="">{t('setupGate.address.governoratePlaceholder')}</option>
+            {view.provinces.map(p => (
+              <option key={p.code} value={p.code}>{isAr ? p.nameAr : p.nameEn}</option>
+            ))}
+          </select>
+        </div>
 
-      <div>
-        <label htmlFor="setupStreet" className={fieldLabel}>{t('setupGate.address.street')}</label>
-        <Input id="setupStreet" value={street} onChange={e => { setStreet(e.target.value); setError(null) }}
-          placeholder={t('setupGate.address.streetPlaceholder')} autoComplete="street-address" maxLength={200}
-          invalid={error?.code === 'STREET_REQUIRED'} />
-      </div>
+        <div>
+          <label htmlFor="setupCity" className={fieldLabel}>{t('setupGate.address.city')}</label>
+          <Input id="setupCity" className="h-[46px]" value={city} list={areas.length ? 'setupCityAreas' : undefined}
+            onChange={e => { setCity(e.target.value); setError(null) }}
+            placeholder={t('setupGate.address.cityPlaceholder')} autoComplete="off" maxLength={100}
+            disabled={!province} invalid={error?.code === 'CITY_REQUIRED'} />
+          {areas.length > 0 && (
+            <datalist id="setupCityAreas">
+              {areas.map(a => <option key={a.nameEn} value={isAr && a.nameAr ? a.nameAr : a.nameEn} />)}
+            </datalist>
+          )}
+        </div>
 
-      <div className="grid grid-cols-2 gap-3 max-[420px]:grid-cols-1">
+        <div className="col-span-2 max-[520px]:col-span-1">
+          <label htmlFor="setupStreet" className={fieldLabel}>{t('setupGate.address.street')}</label>
+          <Input id="setupStreet" className="h-[46px]" value={street} onChange={e => { setStreet(e.target.value); setError(null) }}
+            placeholder={t('setupGate.address.streetPlaceholder')} autoComplete="street-address" maxLength={200}
+            invalid={error?.code === 'STREET_REQUIRED'} />
+        </div>
+
         <div>
           <label htmlFor="setupBuilding" className={fieldLabel}>
-            {t('setupGate.address.building')} <span className="font-normal">{t('setupGate.address.optional')}</span>
+            {t('setupGate.address.building')} <span className="font-normal text-muted">{t('setupGate.address.optional')}</span>
           </label>
-          <Input id="setupBuilding" value={building} onChange={e => setBuilding(e.target.value)} maxLength={50} autoComplete="off" />
+          <Input id="setupBuilding" className="h-[46px]" value={building} onChange={e => setBuilding(e.target.value)} maxLength={50} autoComplete="off" />
         </div>
         <div>
           <label htmlFor="setupFloor" className={fieldLabel}>
-            {t('setupGate.address.floor')} <span className="font-normal">{t('setupGate.address.optional')}</span>
+            {t('setupGate.address.floor')} <span className="font-normal text-muted">{t('setupGate.address.optional')}</span>
           </label>
-          <Input id="setupFloor" value={floor} onChange={e => setFloor(e.target.value)} maxLength={50} autoComplete="off" />
+          <Input id="setupFloor" className="h-[46px]" value={floor} onChange={e => setFloor(e.target.value)} maxLength={50} autoComplete="off" />
         </div>
       </div>
 
-      <p className="flex items-start gap-2 text-small text-muted">
-        <Store size={15} className="flex-shrink-0 mt-0.5" />{t('setupGate.address.shopifyNote')}
-      </p>
+      {!gate && (
+        <p className="flex items-start gap-2 text-small text-muted">
+          <Store size={15} className="flex-shrink-0 mt-0.5" />{t('setupGate.address.shopifyNote')}
+        </p>
+      )}
 
       {error && <ErrorAlert title={error.text} />}
 
-      <Button type="submit" variant="primary" className="w-full" loading={saving}>
-        {mode === 'gate' ? t('setupGate.address.finish') : t('setupGate.address.save')}
-      </Button>
+      <div className={cn('flex pt-1.5', gate ? 'justify-end' : '')}>
+        <Button type="submit" variant="primary" size="lg" className={gate ? 'px-7 max-[520px]:w-full' : 'w-full'} loading={saving}>
+          {gate ? t('setupGate.address.finish') : t('setupGate.address.save')}
+        </Button>
+      </div>
     </form>
+  )
+
+  if (!gate) return form
+  return (
+    <SetupColumns aside={<>
+      <SidePanel testId="setup-address-panel" title={t('setupGate.addressPanel.title')} lines={[t('setupGate.addressPanel.why')]} />
+      <SidePanel title={t('setupGate.addressPanel.moreTitle')} lines={[t('setupGate.addressPanel.more')]} />
+    </>}>
+      {form}
+    </SetupColumns>
   )
 }
 
 function ManagerWaiting({ step }: { step: 'shopify' | 'address' }) {
   const { t } = useTranslation()
   return (
-    <div className="card p-6 text-center space-y-3" data-testid="onboarding-manager-waiting">
-      <span className="mx-auto w-11 h-11 rounded-full bg-trace-blue/10 text-trace-blue flex items-center justify-center">
+    <SetupCard className="items-center text-center gap-3" data-testid="onboarding-manager-waiting">
+      <span className="w-11 h-11 rounded-full bg-trace-blue/10 text-trace-blue flex items-center justify-center">
         <Clock size={20} strokeWidth={2} />
       </span>
       <h1 className="text-h3 font-semibold text-primary">{t('setupGate.manager.title')}</h1>
@@ -289,14 +300,21 @@ function ManagerWaiting({ step }: { step: 'shopify' | 'address' }) {
         {step === 'shopify' ? t('setupGate.manager.bodyShopify') : t('setupGate.manager.bodyAddress')}
       </p>
       <Button variant="secondary" onClick={() => window.location.reload()}>{t('setupGate.manager.check')}</Button>
-    </div>
+    </SetupCard>
   )
 }
 
 /** The gate itself, for a tenant whose setupStep is not null. */
-export default function OnboardingGate({ step, onDone }: { step: 'shopify' | 'address'; onDone: () => void }) {
+export default function OnboardingGate({ step, onDone, name = null }: {
+  step: 'shopify' | 'address'
+  onDone: () => void
+  name?: string | null
+}) {
   const role = getRoleFromToken()
   const [shopDomain, setShopDomain] = useState<string | null>(null)
+  // Flow-1's "Connected" view — only on the device that showed the Shopify step (an App Store signup,
+  // which arrives connected, starts at the address).
+  const [showConnected, setShowConnected] = useState(() => step === 'address' && shopifyStepSeen())
 
   useEffect(() => {
     if (step !== 'address' || role !== 'owner') return
@@ -308,12 +326,19 @@ export default function OnboardingGate({ step, onDone }: { step: 'shopify' | 'ad
   if (role !== 'owner') {
     return <GateFrame><ManagerWaiting step={step} /></GateFrame>
   }
+  if (step === 'shopify') {
+    return <GateFrame width="wide" stepper={<SetupStepper current={0} />}><ConnectStep name={name} /></GateFrame>
+  }
+  if (showConnected) {
+    return (
+      <GateFrame width="wide" stepper={<SetupStepper current={1} />}>
+        <ConnectedSummary name={name} onContinue={() => { clearShopifyStepSeen(); setShowConnected(false) }} />
+      </GateFrame>
+    )
+  }
   return (
-    <GateFrame>
-      <Stepper step={step} shopDomain={shopDomain} />
-      {step === 'shopify'
-        ? <ConnectStep />
-        : <AddressStep mode="gate" onSaved={next => { if (next === null) onDone() }} />}
+    <GateFrame width="wide" stepper={<SetupStepper current={1} />}>
+      <AddressStep mode="gate" shopDomain={shopDomain} onSaved={next => { if (next === null) onDone() }} />
     </GateFrame>
   )
 }
