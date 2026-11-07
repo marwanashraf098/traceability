@@ -1668,12 +1668,15 @@ type View =
   | { type: 'pick'; orderId: string }
   | { type: 'handover'; order: QueueOrder }
 
-export default function Fulfill({ selfPickupOnly = false }: {
+export default function Fulfill({ selfPickupOnly = false, unpackOrderId }: {
   /** Pick & Pack S3 — waybill mode's "Self-pickup orders" entry: the same queue, self-pickup only. */
   selfPickupOnly?: boolean
+  /** O6-fixes — ?guidedUnpack=<orderId> (the Unpack Required alert): open that order straight away; its screen shows the
+   *  "unpack these pieces" panel for a cancelled packed order. Back leaves it (drops ?guidedUnpack) to the normal page. */
+  unpackOrderId?: string
 } = {}) {
   const { t } = useTranslation()
-  const [view, setView] = useState<View>({ type: 'queue' })
+  const [view, setView] = useState<View>(unpackOrderId ? { type: 'pick', orderId: unpackOrderId } : { type: 'queue' })
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [queueLoading, setQueueLoading] = useState(true)
   const [highlightOrderId, setHighlightOrderId] = useState<string | null>(null)
@@ -1708,10 +1711,16 @@ export default function Fulfill({ selfPickupOnly = false }: {
   // pick session (completed or not), highlight whichever order was "next" from
   // there, so the queue makes it obvious where to resume.
   const backFromPick = useCallback((fromOrderId?: string) => {
+    if (unpackOrderId) {
+      // Opened from the alert: back goes to the store's normal Pick & Pack page (FulfillRoute, by mode).
+      setSearchParams(prev => { const next = new URLSearchParams(prev); next.delete('guidedUnpack'); return next }, { replace: true })
+      setView({ type: 'queue' })
+      return
+    }
     setHighlightOrderId(fromOrderId ? nextPickableOrderId(fromOrderId) : null)
     loadQueue()
     setView({ type: 'queue' })
-  }, [loadQueue, nextPickableOrderId])
+  }, [loadQueue, nextPickableOrderId, unpackOrderId, setSearchParams])
 
   if (view.type === 'pick') {
     return (

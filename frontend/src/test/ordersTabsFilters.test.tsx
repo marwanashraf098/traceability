@@ -251,7 +251,7 @@ describe('Filters panel', () => {
     await screen.findByText('#1001')
     await user.click(screen.getByTestId('orders-filters-button'))
     expect(await screen.findByTestId('orders-filter-days-not-applied')).toBeInTheDocument()
-    expect(screen.getByText('Traced = every piece scanned out in Pick & Pack. Applies to Bosta orders.')).toBeInTheDocument()
+    expect(screen.getByText('Not traced = handed to Bosta without any of its pieces being scanned in Pick & Pack. Applies to Bosta orders.')).toBeInTheDocument()
     expect(screen.getByText('Pending inspection = returned piece scanned in, not yet restocked or marked damaged.')).toBeInTheDocument()
   })
 })

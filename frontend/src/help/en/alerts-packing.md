@@ -26,6 +26,6 @@ The order was cancelled after its waybill was printed in a batch. The printed la
 
 The order is on hold because the customer matches your blocklist, the order came in with a product Traced doesn't have in its catalog, or someone pressed **Hold order**; the reason is shown. Decide from the alert: **Release (ship anyway)** lets it continue to packing, **Cancel order** cancels it.
 
-## Shopify edited the order after packing started
+## Edited In Shopify After Packing
 
 The order's items were changed in Shopify after it entered packing. Open the order and compare what's packed with what the customer now ordered. If the order is packed and still in your warehouse, the alert offers **Unpack order** so you can repack it correctly. Resolve once the parcel matches the order.

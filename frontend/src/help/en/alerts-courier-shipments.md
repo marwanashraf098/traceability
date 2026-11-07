@@ -4,7 +4,7 @@ topic: alerts
 title: Courier and shipment alerts
 roles: [owner, manager]
 related: [alerts-overview, connect-bosta, other-couriers, hand-over-parcels]
-alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup]
+alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -38,7 +38,7 @@ A return delivery failed several times and is waiting at Bosta's hub. Ask Bosta 
 
 Bosta tried to deliver and failed; the reason Bosta gave is shown. Contact the customer.
 
-## Many delivery attempts
+## Many Delivery Attempts
 
 The shipment has had two or more delivery attempts; the customer may be unreachable. Contact them.
 
@@ -50,14 +50,30 @@ The waybill was deleted in Bosta after its pieces left the shelf. Find the parce
 
 A piece was scanned back in Scan returns without Bosta reporting a return. Inspect it, then resolve.
 
-## Bosta waybill on another courier's order
+## Bosta Waybill On Another Courier’s Order
 
 A Bosta waybill turned up for an order already shipped with another courier. Traced didn't link it. Check which courier really has the parcel.
 
-## More than one parcel in Shopify
+## More Than One Parcel
 
 Shopify shows more than one parcel for an order shipped with another courier. Traced tracks only the first; check the others yourself.
 
-## Delivered without a pickup scan
+## Delivered Without A Pickup Scan
 
 Shopify says another courier delivered the order, but its parcel was never scanned out at **Pickups**. Traced recorded the handover itself; scan parcels out next time. If the order wasn't packed, nothing moved: pack it, or check the fulfillment in Shopify.
+
+## Waybill Not Printed
+
+Traced couldn't print this shipment's waybill; the reason is shown. Fix it (often in Bosta), print the waybill again, then resolve.
+
+## Bosta ID Missing
+
+Traced couldn't read Bosta's own ID for this shipment, so it can't cancel the delivery for you. If it needs cancelling, cancel it in Bosta.
+
+## Exchange Needs Its Items
+
+An exchange made in Bosta needs Traced to know which item goes out and which comes back. Press **Go →** and choose them; the alert clears by itself.
+
+## Unknown Exchange Status
+
+Bosta sent an exchange update Traced doesn't recognise, so nothing changed in Traced. It clears by itself when Bosta sends a status Traced knows; if it looks stuck, check the exchange in Bosta.

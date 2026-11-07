@@ -27,6 +27,7 @@ import { useStation } from '../components/StationProvider'
 import { useOnboardingProgress } from '../onboardingProgress'
 import { loadCapabilities } from '../capabilities'
 import { withReturnSource } from '../receivingReturn'
+import { alertDestination, type AlertDestination } from '../alertTargets'
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
 // Mirrors tailwind.config.js exactly — never introduce a hex value that isn't
@@ -410,21 +411,9 @@ function FlowStrip({ counts }: { counts: FunnelCounts }) {
 // new hardcoded English map. Degrades gracefully: an empty type is simply
 // omitted, not shown as a blank/broken row.
 //
-// Destination routing (diagnosis: most ExceptionService.enrich() actionUrls point
-// at paths with no matching route — e.g. /orders/{id}, /shipments/{id} — so
-// react-router's catch-all silently redirects them to /overview). Rather than
-// touching enrich() (a separate, shared fix — Exceptions.tsx's own "Go →" button
-// has the identical bug and needs the same decision), these 3 buckets are handled
-// here, frontend-only, keyed by exception `type`:
-//   1. Order-anchored types: open OrderDrawer by order_id, the SAME app-wide
-//      destination Orders.tsx/Lookup.tsx/VariantDrawer.tsx already use — never
-//      navigate to the dead actionUrl for these.
-//   2. Types whose actionUrl already resolves to a real route: used as-is.
-//   3. unmatched_delivery / guided_unpack: no real destination exists yet (no
-//      unlinked-delivery reconciliation screen; Fulfill has no deep-link-to-order
-//      entry point — both unbuilt backlog). Falls back to /exceptions?type=<type>
-//      (a real, already-supported filter — see Exceptions.tsx's own typeFilter)
-//      so the alert always lands somewhere useful, never on /overview.
+// Destination routing (O6-fixes): the SAME mapping as the Alerts page's "Go →" — alertTargets.alertDestination.
+// An order target opens OrderDrawer in place (the app-wide order destination); a real page is a link; an alert with
+// nothing to open goes to the Alerts page filtered to its type. alertFixes.test checks every target is a real route.
 
 interface AlertException {
   type: string
@@ -437,29 +426,9 @@ interface AlertException {
   order_id?: string
 }
 
-type AlertDestination =
-  | { kind: 'order'; orderId: string }
-  | { kind: 'url'; url: string }
-
-// The 12 types whose enrich() actionUrl is a dead /orders/{id} (or similar) but
-// which always carry a real order_id — see the Overview diagnosis pass.
-const ORDER_ANCHORED_ALERT_TYPES = new Set([
-  'lost', 'blocked_customer', 'stuck_shipment', 'delivery_limbo', 'ndr_failed',
-  'missing_awb', 'missing_provider_id', 'high_attempts', 'shopify_cancel_vs_inflight',
-  'cancelled_live_shipment', 'cancelled_but_delivered', 'shopify_edit_conflict',
-])
-
-// No real destination exists for these yet — see the header comment above.
-const EXCEPTIONS_FALLBACK_ALERT_TYPES = new Set(['unmatched_delivery', 'guided_unpack'])
-
 function destinationFor(item: AlertException): AlertDestination {
-  if (ORDER_ANCHORED_ALERT_TYPES.has(item.type) && item.order_id) {
-    return { kind: 'order', orderId: item.order_id }
-  }
-  if (EXCEPTIONS_FALLBACK_ALERT_TYPES.has(item.type)) {
-    return { kind: 'url', url: `/exceptions?type=${item.type}` }
-  }
-  return { kind: 'url', url: withReturnSource(item.actionUrl, item.returnSource) }
+  const d = alertDestination(item)
+  return d.kind === 'url' ? { kind: 'url', url: withReturnSource(d.url, item.returnSource) } : d
 }
 
 interface AlertRow {

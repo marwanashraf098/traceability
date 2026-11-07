@@ -4,6 +4,36 @@
 
 ## Current state
 
+**O6-fixes — Alerts page labels, "clears when" texts, Go links, the Not traced hint (2026-11-07; branch
+`fix/o6-alert-fixes` off main b6886ece, worktree `~/Documents/traceability-o6f`; approved and MERGED 2026-11-07, NOT
+deployed; frontend only, no migration).**
+- **Labels:** every type ExceptionService raises (54) has an EN + AR label; 15 were missing (high_attempts,
+  missing_awb, missing_provider_id, shopify_cancel_vs_inflight, shopify_edit_conflict, return_in_transit_stuck,
+  return_mismatch, exchange_needs_mapping, exchange_unmapped_state, void_hold_sync_failed, generic_bosta_conflict,
+  generic_multiple_parcels, generic_delivered_without_pickup, generic_cancelled_live_shipment,
+  generic_fulfillment_cancelled). Guard: alertFixes.test reads ExceptionService.java — a new raised type without a
+  label fails it. The 4 types that had no Help group (missing_awb, missing_provider_id, exchange_needs_mapping,
+  exchange_unmapped_state) joined alerts-courier-shipments (sections EN + AR); alert-article headings now match the
+  labels.
+- **Clears when:** STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED written (EN + AR);
+  an unknown code shows `exc.clearsWhen.fallback`, never the raw key. Guard: every CONDITION_ONLY code has both texts.
+- **Go links:** `alertTargets.ts` `goTargetFor` (Alerts page): `/orders/<id>` (no such route — 26 detectors) → the
+  order drawer `/orders?order=<id>`; `/shipments/unlinked` and `/shipments/<id>` → the order's drawer when the alert
+  names an order, else no Go button; Unpack Required `/fulfill/<id>` → `/fulfill?guidedUnpack=<id>` (its own param — `?order=&unpack=1` is the Packed
+  list's edit-conflict dialog; FulfillRoute → Fulfill
+  opens that order's screen with its guided-unpack panel, both packing modes; Back drops the param); other
+  `/fulfill/<id>` → the order drawer; warehouse address `/onboarding` → `/settings?tab=locations`. Guard: every
+  actionUrl expression in ExceptionService (per alert type, both ternary branches) → goTargetFor → a route in App.tsx
+  or no button. The backend's actionUrls are unchanged. The three unlinked-delivery types (unmatched_delivery,
+  bosta_discovery_failed, generic_bosta_conflict) go by the order they name, never their link; `/orders/<id>` prefers the
+  alert's own order_id. The Overview alerts widget uses the SAME mapping (`alertDestination`: an order → OrderDrawer in
+  place; a page → a link; nothing → `/exceptions?type=<type>`) — no dead link anywhere an alert is shown.
+- **Not traced hint:** "Not traced = handed to Bosta without any of its pieces being scanned in Pick & Pack. Applies
+  to Bosta orders." (EN + AR).
+- **Tests:** alertFixes.test 17 (incl. the widget's destinations through the same real-route check; 10 rules
+  mutation-checked red); Overview ov16 / ov17 unchanged and green. Approved edit: ordersTabsFilters (the corrected
+  Not traced hint).
+
 **Onboarding redesign — O6 Help center (2026-11-07; branch `feat/onboarding-help` off main 8b7b51b4, worktree
 `~/Documents/traceability-o6`; approved and MERGED 2026-11-07, NOT deployed; frontend only, no migration).** Mockups
 `design/onboarding/Traced_onboarding_Help-Center`, `Help-Article`.
@@ -40,7 +70,7 @@
   `/settings`), tours.test t6 (articleIds filled).
 - **Phone scanner:** NOT on Pickups — a deliberate decision (custody risk at the handover), not a bug. Lookup: OPEN
   question (no phone scanner there today).
-- **NEXT — "O6-fixes" (follow-up slice, not built):** (1) Alerts page labels for the 11 types the backend raises
+- **"O6-fixes" (follow-up slice) — BUILT, see the O6-fixes entry above:** (1) Alerts page labels for the 11 types the backend raises
   without one (high_attempts, void_hold_sync_failed, shopify_cancel_vs_inflight, generic_* ×5, shopify_edit_conflict,
   return_in_transit_stuck, return_mismatch) — raw type shown, not filterable; (2) the three missing "clears when" texts
   (STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED); (3) dead "Go" links:
