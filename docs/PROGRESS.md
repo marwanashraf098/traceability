@@ -4,6 +4,15 @@
 
 ## Current state
 
+**"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, merged to main,
+NOT deployed; migration V224 — main and prod ended at V223 (prod checked by Marawan 00:59)).** See CLAUDE.md ("No-district Same address").
+- Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for
+  the area → failed / district_required (never retried); the drawer offers the area + Book again.
+- After deploy: watch `grep "Bosta no-district booking"` for the first bookings — districtRequired=true on all of them
+  would mean Bosta does need the area on create (then revert the portal to asking).
+- Approved test edit applied: PortalSameAddressTest.a2 now expects 201 (district empty, city kept). Full backend suite
+  4,208 tests: only ExchangeBackfillTest (expected red).
+
 **Onboarding O2b — warehouse address pre-filled from Shopify (2026-11-08; branch `feat/onboarding-address-prefill` off
 main 057263a8, worktree `~/Documents/traceability-o2b`; approved and MERGED 2026-11-08, NOT deployed; no migration).** Mockup
 `design/onboarding/Traced_onboarding_Flow-2-Address`.

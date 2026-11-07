@@ -966,9 +966,14 @@ public class PortalService {
         if (custom != null) {
             // Already filtered to pickup (and, for an exchange, drop-off) available districts.
             district = offer.get().find(custom.districtId()).orElseThrow(InvalidSubmission::new);
+        } else if (offer.isPresent() && req.districtId() == null && offer.get().forwardDistrictId() == null) {
+            // "Same address" of a delivery that had no district (2026-11-07, 95% of prod deliveries): no area asked —
+            // booked with the original's city and lines only (district stays null; Bosta refusing it is handled at
+            // booking: district_required).
+            district = null;
         } else if (offer.isPresent()) {
-            // "Same address": Bosta needs a district on the pickup — the portal sends the original delivery's own
-            // district when it is known and offered (no picker, 2026-11-07), else the one the customer chose.
+            // "Same address": the original delivery's own district when it is known and offered (the portal sends
+            // it, no picker), else the one the customer chose.
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
             // Step 5c: an exchange courier delivers and collects — the district must allow both.
             if (replacement != null && !pickupAreas.exchangeDistrictIds(offer.get().cityId()).contains(district.id())) {
@@ -1012,8 +1017,8 @@ public class PortalService {
             "        ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             requestId, tenantId, orderId, replacement == null ? "refund" : "exchange",
             autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
-            district == null ? null : offer.get().cityId(),
-            district == null ? null : offer.get().cityName(),
+            offer.isPresent() ? offer.get().cityId() : null,
+            offer.isPresent() ? offer.get().cityName() : null,
             district == null ? null : district.id(),
             district == null ? null : district.name(),
             district == null ? null : district.nameAr(),

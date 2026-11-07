@@ -834,6 +834,9 @@ export function BookingState({ detail, onChanged, onBookingStarted }: {
       </span>
     )
   }
+  if (status === 'failed' && detail.bookingFailureReason === 'district_required') {
+    return <DistrictRequired detail={detail} onChanged={onChanged} onBookingStarted={onBookingStarted} />
+  }
   if (status === 'failed') {
     return (
       <div className="space-y-2" data-testid="booking-failed">
@@ -891,6 +894,86 @@ export function BookingState({ detail, onChanged, onBookingStarted }: {
     )
   }
   return <span className="text-muted" data-testid="booking-pending">{t('exchangesRefunds.requests.drawer.bookingPending')}</span>
+}
+
+/**
+ * 2026-11-07 — Bosta refused a "Same address" booking sent without a district: "Bosta needs an area for this pickup",
+ * the request city's areas, and "Book again" (saves the area, then the same retry — never automatic).
+ */
+function DistrictRequired({ detail, onChanged, onBookingStarted }: {
+  detail: ReturnRequestDetail
+  onChanged: () => Promise<void>
+  onBookingStarted?: () => void
+}) {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [areas, setAreas] = useState<ReturnRequestPickupAreas | null>(null)
+  const [loadError, setLoadError] = useState(false)
+  const [districtId, setDistrictId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ar = i18n.language === 'ar'
+
+  useEffect(() => {
+    let cancelled = false
+    getReturnRequestPickupAreas(detail.id)
+      .then(a => { if (!cancelled) setAreas(a) })
+      .catch(() => { if (!cancelled) setLoadError(true) })
+    return () => { cancelled = true }
+  }, [detail.id])
+
+  async function rebook() {
+    if (!districtId) return
+    setBusy(true)
+    try {
+      await setReturnRequestPickupArea(detail.id, districtId)
+      await retryBooking(detail.id)
+      toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingRetried') })
+      if (onBookingStarted) onBookingStarted()
+      else await onChanged()
+    } catch (e) {
+      toast({ tone: 'error', message: e instanceof TransferCommandError
+        ? (ar ? e.messageAr : e.messageEn)
+        : t('exchangesRefunds.requests.drawer.bookingActionFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const name = (d: PickupDistrict) => (ar ? d.nameAr || d.name : d.name)
+  return (
+    <div className="space-y-2" data-testid="booking-district-required">
+      <p className="text-critical">{t('exchangesRefunds.requests.drawer.districtRequired')}</p>
+      {loadError ? (
+        <p className="text-small text-critical" role="alert">{t('exchangesRefunds.requests.drawer.areaLoadFailed')}</p>
+      ) : !areas ? (
+        <Skeleton className="h-10 w-full" />
+      ) : areas.districts.length === 0 ? (
+        <p className="text-small text-muted">{t('exchangesRefunds.requests.drawer.areaNone')}</p>
+      ) : (
+        <div className="space-y-1.5">
+          <label htmlFor="rebook-area" className="text-small font-medium text-primary block">
+            {t('exchangesRefunds.requests.drawer.areaLabel')}
+            {areas.cityName && <span className="font-normal text-muted"> · <bdi>{ar ? areas.cityNameAr || areas.cityName : areas.cityName}</bdi></span>}
+          </label>
+          <div className="flex gap-2">
+            <select id="rebook-area" className="input flex-1" value={districtId} onChange={e => setDistrictId(e.target.value)}>
+              <option value="" disabled>{t('exchangesRefunds.requests.drawer.areaPlaceholder')}</option>
+              {groupByZone(areas.districts, ar).map(g => g.zone
+                ? (
+                  <optgroup key={g.zone} label={g.zone}>
+                    {g.districts.map(d => <option key={d.id} value={d.id}>{name(d)}</option>)}
+                  </optgroup>
+                )
+                : g.districts.map(d => <option key={d.id} value={d.id}>{name(d)}</option>))}
+            </select>
+            <Button size="sm" loading={busy} disabled={!districtId || busy} onClick={rebook}>
+              {t('exchangesRefunds.requests.drawer.bookAgain')}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** Inline "Change area": the request city's pickup-available districts, grouped by zone. */
