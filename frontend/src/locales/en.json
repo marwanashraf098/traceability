@@ -6170,5 +6170,124 @@
       "notNow": "Not now, let me explore",
       "saveFailed": "Couldn't save your goal. Try again."
     }
+  },
+  "tours": {
+    "region": "{{tour}} tour",
+    "stepOf": "Step {{step}} of {{total}}",
+    "skip": "Skip tour",
+    "back": "Back",
+    "next": "Next",
+    "done": "Done",
+    "help": "Show the tour for this page",
+    "pickups": {
+      "name": "Pickups",
+      "s1": {
+        "title": "Start a pickup when the courier arrives",
+        "body": "Open a new pickup session and pick the date and time slot. The first parcel you scan sets the courier for this pickup — a parcel for another courier is refused."
+      },
+      "s2": {
+        "title": "Scan each parcel as you hand it over",
+        "body": "Scan the waybill on every parcel going with the courier. Nothing is handed over yet — that happens when you close.",
+        "tip": "A red scan means the waybill was cancelled or deleted in Bosta. Keep that parcel back."
+      },
+      "s3": {
+        "title": "Check what you scanned",
+        "body": "Every scanned waybill is listed with its order and COD. Remove one you scanned by mistake. Parcels you don't scan stay packed for the next pickup."
+      },
+      "s4": {
+        "title": "Close the pickup and print the manifest",
+        "body": "Closing confirms the handover: the scanned parcels become With courier, and there's no undo. Then print the manifest for the courier to sign."
+      }
+    },
+    "scan_returns": {
+      "name": "Scan returns",
+      "s1": {
+        "title": "Scan the returned parcel",
+        "body": "Scan the waybill on the parcel that came back. Traced opens it and shows the pieces it should hold."
+      },
+      "s2": {
+        "title": "Scan each piece inside",
+        "body": "Scan every labelled piece. A piece Traced didn't expect is marked Unexpected. For items shipped before Traced tracked them, mark each one Arrived · sellable or Arrived · damaged.",
+        "tip": "Arrived · sellable doesn't add stock — the item goes on managers' Return To Receive list for their next Receiving session."
+      },
+      "s3": {
+        "title": "Grade every scanned piece",
+        "body": "Restock puts the piece back into your sellable stock, and Shopify counts it again at your main warehouse. Damaged keeps it out of sellable stock.",
+        "tip": "Marking a piece damaged needs a reason."
+      },
+      "s4": {
+        "title": "Close the session",
+        "body": "You can close once every scanned piece is graded. Graded pieces keep their grade."
+      }
+    },
+    "stock_take": {
+      "name": "Stock take",
+      "s1": {
+        "title": "Choose what to count",
+        "body": "Open a count for everything, or only for the products you pick."
+      },
+      "s2": {
+        "title": "Scan every piece you find",
+        "body": "Take the pieces off the shelf and scan each one."
+      },
+      "s3": {
+        "title": "Review what's missing",
+        "body": "The review lists pieces that should be there but weren't scanned. Found one? Use “Found one? Scan it”. Anything still uncounted is written off as lost when you finalize."
+      },
+      "s4": {
+        "title": "Finalize the count",
+        "body": "Finalizing writes off the pieces you didn't find as lost — Shopify goes down for those that were for sale — and puts lost pieces you found back into stock.",
+        "tip": "You confirm the count covered the whole scope first, and finalize can't be undone."
+      }
+    },
+    "transfers": {
+      "name": "Transfers",
+      "s1": {
+        "title": "Choose the kind of transfer",
+        "body": "Send out and back (it returns and you check it in), move to another location (it stays there), or bring back stock you moved earlier."
+      },
+      "s2": {
+        "title": "Scan the pieces going out",
+        "body": "Scan each piece as it leaves. Only scanned pieces are on the transfer."
+      },
+      "s3": {
+        "title": "Send it",
+        "body": "When you send, the pieces leave your stock at the source.",
+        "tip": "Shopify stock at Traced Main goes down for pieces leaving your main warehouse when the destination is set to “Remove from Shopify” (Settings › Locations)."
+      },
+      "s4": {
+        "title": "Check it back in",
+        "body": "When the stock comes back, scan each piece as Good or Condemned, explain anything missing (sold, lost or condemned), and close once every line balances. A move to another location has no scan-back."
+      }
+    }
+  },
+  "pickPackChooser": {
+    "eyebrow": "First time in Pick & Pack",
+    "title": "How do you want to pack?",
+    "lead": "Pick the way your team works today. You can switch any time in Settings › Pick & Pack.",
+    "recommendedBosta": "Recommended for Bosta",
+    "waybill": {
+      "title": "Waybill scan",
+      "desc": "Print all waybills first. Then scan a waybill and its pieces, and the order closes itself.",
+      "s1": "Print the waybills for the batch",
+      "s2": "Scan an order's waybill",
+      "s3": "Scan its pieces — the order closes itself",
+      "best": "Best for busy days and batch printing."
+    },
+    "queue": {
+      "title": "Order queue",
+      "desc": "Traced shows a list of orders. Open one, scan its pieces, then scan or link its waybill.",
+      "s1": "Pick an order from the list",
+      "s2": "Scan its pieces",
+      "s3": "Scan or link the waybill",
+      "best": "Best when waybills are printed one by one."
+    },
+    "selfPickup": "Self-pickup orders have no waybill, so they always stay in the order queue.",
+    "use": "Use {{mode}}",
+    "skip": "Skip for now (uses Order queue)",
+    "close": "Close",
+    "ownerOnly": "Only the store owner can change this, in Settings › Pick & Pack.",
+    "current": "Current mode",
+    "error": "Couldn't save. Try again."
   }
 }

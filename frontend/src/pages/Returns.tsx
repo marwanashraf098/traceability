@@ -18,6 +18,7 @@ import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ViaPhoneTag } from '../phone/ViaPhoneTag'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 
 
 function authHeaders(): Record<string, string> {
@@ -437,8 +438,10 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
     // the SESSION_ALREADY_OPEN catch above, so a worker never needs the list.
     return (
       <div className="space-y-4" data-testid="returns-landing">
-        <div className="flex items-center justify-between">
-          <h1 className="text-h1 text-primary">{t('returns.title')}</h1>
+        <PageTour tourId="scan_returns" />
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-h1 text-primary me-auto">{t('returns.title')}</h1>
+          <TourHelpButton tourId="scan_returns" />
           <button
             className="btn-brand"
             disabled={opening}
@@ -483,8 +486,10 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
 
   return (
     <div className="space-y-4" data-testid="returns-landing">
-      <div className="flex items-center justify-between">
-        <h1 className="text-h1 text-primary">{t('returns.title')}</h1>
+      <PageTour tourId="scan_returns" />
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-h1 text-primary me-auto">{t('returns.title')}</h1>
+        <TourHelpButton tourId="scan_returns" />
         {/* raw <button> — Button doesn't spread data-testid */}
         <button
           className="btn-brand"
@@ -1083,6 +1088,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
+      <PageTour tourId="scan_returns" />
       <div className="h-14 border-b border-line bg-surface flex items-center gap-3 px-5 shrink-0">
         <button onClick={onExit} aria-label={t('common.cancel')} className="text-muted hover:text-primary">
           <X size={18} strokeWidth={2} />
@@ -1100,6 +1106,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           </span>
         )}
         <div className="flex-1" />
+        <TourHelpButton tourId="scan_returns" />
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />
         {canManage && (
@@ -1113,7 +1120,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         )}
       </div>
 
-      <div className="px-5 py-3.5 border-b border-line bg-base flex items-center gap-2.5 shrink-0">
+      <div className="px-5 py-3.5 border-b border-line bg-base flex items-center gap-2.5 shrink-0" data-tour-anchor="returns-scan">
         <ScanLine size={18} strokeWidth={2} className="text-trace-blue" />
         {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown: do not modify. R1 (approved by
             Marawan 2026-10-04): useScanner's ref, never disabled while a scan is in flight. */}
@@ -1246,6 +1253,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           disabled={!canClose || closing}
           onClick={close}
           data-testid="close-session-button"
+          data-tour-anchor="returns-close"
         >
           {closing && <Spinner size={16} />}
           {t('returns.openSession.close')}

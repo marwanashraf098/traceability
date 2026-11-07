@@ -5,6 +5,7 @@ import { useScanner, ScanMeta } from '../hooks/useScanner'
 import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
+import { PageTour, TourHelpButton } from '../tours/TourCard'
 import { Button, Spinner } from '../components/ui'
 import {
   getTransfer, getVariantPickPlaces, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail, VariantPickPlaces,
@@ -123,12 +124,14 @@ export default function TransferScanOut() {
 
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="transfer-scan-out">
+      <PageTour tourId="transfers" />
       {/* Header */}
       <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between gap-3">
         <Button variant="tertiary" size="sm" onClick={() => navigate(`/transfers/${id}`)}>
           ← {t('transfers.scanOut.back')}
         </Button>
         <div className="flex items-center gap-3 min-w-0">
+        <TourHelpButton tourId="transfers" />
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />
         <div className="text-end min-w-0">
@@ -149,7 +152,7 @@ export default function TransferScanOut() {
       </div>
 
       {/* Scan input + flash overlay */}
-      <div className="bg-panel border-b border-line px-6 py-4">
+      <div className="bg-panel border-b border-line px-6 py-4" data-tour-anchor="transfers-scan">
         <ScanShell scanner={scanner} placeholder={t('transfers.scanOut.placeholder')} />
         {scanner.recentScans[0] && (
           <div

@@ -1289,6 +1289,9 @@ export interface Me {
   warehouseAddressNeeded?: boolean
   /** O1: this user's tours done and sidebar pages opened (the blue "not opened yet" dots). */
   uiState?: { toursDone: string[]; pagesSeen: string[] }
+  /** O5: the store has closed a pickup / received a return — the first-time tours' signal for every role. */
+  hasEverClosedPickup?: boolean
+  hasEverScannedReturn?: boolean
 }
 
 /** O1: record a tour done or a page opened for the signed-in user (idempotent; whitelisted ids). */

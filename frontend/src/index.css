@@ -140,3 +140,13 @@
   .sidebar-scroll::-webkit-scrollbar-thumb { background: theme('colors.sidebar.line'); border-radius: 9999px; }
   .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #3A424F; }
 }
+
+/* Onboarding O5 — a tour step's anchor (TourCard sets data-tour-highlight): a ring only; layout, focus and pointer
+   events are untouched. */
+[data-tour-highlight] {
+  outline: 2px solid theme('colors.trace-blue.DEFAULT');
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-tour-highlight] { transition: outline-color 0.2s ease-out; }
+}

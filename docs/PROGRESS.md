@@ -4,6 +4,46 @@
 
 ## Current state
 
+**Onboarding redesign — O5 Pick & Pack chooser + 4 tours + "?" (2026-11-07; branch `feat/onboarding-tours` off main
+cac3b35b, worktree `~/Documents/traceability-o5`; approved and MERGED 2026-11-07, NOT deployed; no migration; backend:
+GET /me's two tour booleans).** Mockups
+`design/onboarding/Traced_onboarding_PickPack-Mode`, `Pickups-Tour`, `Tour-Cards`.
+- **TourCard** (`tours/TourCard.tsx`): non-modal, no focus trap, no autoFocus, never calls focus(), no inputs, no
+  document keydown listener, never touches focusPaused, never Modal; plain buttons whose clicks bubble to the scan
+  screens' own refocus (useScanner / ScanShell / every SAFETY-CRITICAL handler untouched). Bottom-end card on desktop,
+  bottom sheet below 640 px, logical start / end. While the sheet is open at phone width the page's scroll container
+  (the nearest scrolling ancestor — Layout's <main> — else the body) gets bottom padding = the sheet's height, so every
+  control (Pickups' Close) can be scrolled above it; restored on close. "Step x of N", Back, Next / Done, Skip on every step; Skip or Done →
+  POST /me/ui-state {tourDone}. Optional ring: the step's `data-tour-anchor` element gets `data-tour-highlight`
+  (outline only, index.css).
+- **State** (`tours/tourState.ts`): one active tour app-wide (module store — a tour started on a list page follows the
+  user to the full-screen scan screen). Auto-start ONLY when the tenant never did the action AND this user hasn't done /
+  skipped it (GET /me uiState, current token). "Never did": progress tasks for owners / managers; for workers and in
+  station mode GET /me's `hasEverClosedPickup` / `hasEverScannedReturn` (booleans only, every role — the SAME rules as
+  progress tasks pickup / returns: `OnboardingProgressService.everClosedPickup` / `everScannedReturn`). On a station
+  tablet the PIN switch's token is the worker's, so their tourDone is theirs.
+- **Tours** (`tours/tours.ts`, copy `tours.*` EN + AR, checked against the code): pickups (handover happens at CLOSE,
+  not per scan; the first scan sets the courier; no "what's left" list — unscanned parcels stay packed; manifest after
+  close), scan_returns (Arrived · sellable adds NO stock — managers' Return To Receive list; close needs every piece
+  graded), stock_take (scope = everything or picked products; finalize writes off unfound as lost, Shopify down only
+  for ones that were for sale, found back; attestation; no undo — NOT "Traced and Shopify are set to what you counted"),
+  transfers (Shopify drop at Traced Main when the destination is "Remove from Shopify"; check-in = scan back Good /
+  Condemned + classify shortfall; a move has no scan-back). pickups / scan_returns for every role; stock_take /
+  transfers owner + manager.
+- **"?"** (`TourHelpButton`) in the headers of Pick & Pack (queue + waybill pages), Pickups (list + session), Scan
+  returns (landing + open session), Stock take (list + scan), Transfers (list + send-out + reconcile).
+  `help/helpRegistry.ts`: route → {tourId, articleId: null} (O6 fills articleId).
+- **Pick & Pack chooser** (`fulfill/PickPackChooser.tsx`, in FulfillRoute before the page): owner + not station +
+  order_queue + !pickPackChosen + never packed. Use <mode> → PUT /tenant/settings {pickPackMode} then PATCH
+  pickPackChosen; Skip → PATCH only. "Recommended for Bosta" only with Bosta. Copy "Settings › Pick & Pack". Only that
+  case waits for progress; everyone else gets the page with no extra request. Pick & Pack's "?" replays it (owner can
+  switch; others read-only with "Only the store owner can change this").
+- **Tests:** vitest 1,693 → 1,768 (tours.test 75; 19 rules mutation-checked red); browser toursLayout 52 (each
+  tour's step 1 + the chooser × EN/AR × desktop/phone × Chromium/WebKit, and Pickups' Close scrolled fully above the
+  sheet at 390 px — red without the padding); full browser suite 417 + 1 skipped. Backend MeTourSignalsTest 3 (values
+  per role, closed-only, RLS, /me adds exactly the two booleans; 2 rules mutation-checked red). Approved: the 4 snapshot
+  updates (placesS5 ×2, putAwayLists ×2 — only the "?" button, the tour anchors and two wrappers differ).
+
 **Shopify-native returns S4 — returns through Scan returns intake (2026-11-07; branch `feat/s4-shopify-return-intake`
 off main 4e37aa22, approved and MERGED 2026-11-07, NOT deployed; V222 — free on main and prod (prod at V221, checked 18:32)).** See
 CLAUDE.md (S4 paragraph). A Shopify return line expects its order's pieces of that variant back (a replacement's: via the
