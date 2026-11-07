@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -91,6 +92,27 @@ public final class GenericShipments {
         JsonNode fulfillments = payload.path("fulfillments");
         if (!fulfillments.isArray() || fulfillments.isEmpty()) return null;
 
+        // S3d: a fulfillment of the original's EXCHANGE line items (a Shopify-native exchange with a shadow order)
+        // belongs to that shadow — its generic leg, its cancel and its tracking edits — never to the original.
+        // Split off before anything else; the rest of the order's fulfillments go on exactly as before.
+        Map<UUID, com.fasterxml.jackson.databind.node.ArrayNode> toShadow = new LinkedHashMap<>();
+        com.fasterxml.jackson.databind.node.ArrayNode own = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+        for (JsonNode f : fulfillments) {
+            List<String> gids = com.traceability.inventory.ShopifyShadowOrders.lineItemGids(f);
+            UUID shadow = gids.isEmpty() ? null
+                : com.traceability.inventory.ShopifyShadowOrders.shadowForLineItems(jdbc, tenantId, orderId, gids, false);
+            if (shadow != null) toShadow.computeIfAbsent(shadow,
+                k -> com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode()).add(f);
+            else own.add(f);
+        }
+        for (Map.Entry<UUID, com.fasterxml.jackson.databind.node.ArrayNode> e : toShadow.entrySet()) {
+            onShadowFulfillments(jdbc, tenantId, e.getKey(), e.getValue(), classOf, trackingNumbersOf);
+        }
+        if (!toShadow.isEmpty()) {
+            if (own.isEmpty()) return null;
+            fulfillments = own;
+        }
+
         cancelForCancelledFulfillments(jdbc, tenantId, orderId, fulfillments);
         // V200: the live leg follows Shopify's edited tracking number while the parcel is still in custody.
         followTrackingEdit(jdbc, tenantId, orderId, fulfillments, classOf, trackingNumbersOf);
@@ -134,6 +156,50 @@ public final class GenericShipments {
             }
         }
         return null;
+    }
+
+    /**
+     * S3d — the exchange fulfillments of a Shopify-native exchange's SHADOW order: cancel / follow edits of its generic
+     * leg, then at most one generic leg on the shadow while it is live and has no active forward leg (the same class
+     * and key rules as the order's own; Bosta-class fulfillments are linked by the Bosta paths). A shadow is never
+     * held to the post-connect cutoff (its placed_at is the Return's approval).
+     */
+    private static void onShadowFulfillments(JdbcTemplate jdbc, UUID tenantId, UUID shadowId, JsonNode fulfillments,
+                                             java.util.function.BiFunction<String, String, String> classOf,
+                                             Function<JsonNode, List<String>> trackingNumbersOf) {
+        cancelForCancelledFulfillments(jdbc, tenantId, shadowId, fulfillments);
+        followTrackingEdit(jdbc, tenantId, shadowId, fulfillments, classOf, trackingNumbersOf);
+        boolean live = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shopify_exchange_shadows WHERE order_id = ? AND tenant_id = ? AND state = 'live')",
+            Boolean.class, shadowId, tenantId));
+        Boolean hasForward = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments WHERE order_id = ? AND tenant_id = ? " +
+            "  AND shipment_leg = 'forward' AND internal_state NOT IN ('terminated', 'cancelled'))",
+            Boolean.class, shadowId, tenantId);
+        if (!live || Boolean.TRUE.equals(hasForward)) return;
+        boolean tenantHasBosta = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
+            Boolean.class, tenantId));
+        List<JsonNode> eligible = new ArrayList<>();
+        for (JsonNode f : fulfillments) {
+            if (isCancelled(f) || text(f, "id") == null) continue;
+            String cls = classOf.apply(text(f, "tracking_company"), firstUrl(f));
+            if ("other_known".equals(cls) || ("unknown".equals(cls) && !tenantHasBosta)) eligible.add(f);
+        }
+        eligible.sort(Comparator.comparing((JsonNode f) -> text(f, "created_at"),
+            Comparator.nullsLast(Comparator.naturalOrder())));
+        for (JsonNode f : eligible) {
+            for (String tn : trackingNumbersOf.apply(f)) {
+                String key = GenericTrackingKey.of(tn);
+                if (key == null) continue;
+                UUID created = insertFromFulfillment(jdbc, tenantId, shadowId, tn, key, text(f, "id"),
+                    trimToNull(text(f, "tracking_company")), firstUrl(f));
+                if (created != null) {
+                    log.info("Generic courier leg {} ({}) attached to Shopify exchange shadow {}", created, tn, shadowId);
+                }
+                return;
+            }
+        }
     }
 
     /**
@@ -210,11 +276,14 @@ public final class GenericShipments {
                                    java.util.function.BiFunction<String, String, String> classOf,
                                    Function<JsonNode, List<String>> trackingNumbersOf) {
         Map<String, Object> leg = jdbc.queryForList(
+            // S3d: warehouse_orders + the shadow prefix — a Shopify-native exchange's shadow leg follows edits too.
             "SELECT s.id, s.tracking_number, s.tracking_key, s.shopify_fulfillment_id FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.order_id = ? AND s.tenant_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
             "  AND s.source = 'shopify_fulfillment' AND s.internal_state NOT IN ('terminated', 'cancelled') " +
-            "  AND s.shopify_fulfillment_id IS NOT NULL AND o.external_id NOT LIKE 'internal:%'",
+            "  AND s.shopify_fulfillment_id IS NOT NULL " +
+            "  AND (o.external_id NOT LIKE 'internal:%' OR o.external_id LIKE '" +
+            com.traceability.inventory.ShopifyShadowOrders.PREFIX + "%')",
             orderId, tenantId).stream().findFirst().orElse(null);
         if (leg == null) return;
         Leg l = new Leg((UUID) leg.get("id"), (String) leg.get("tracking_number"), (String) leg.get("tracking_key"),
@@ -374,8 +443,11 @@ public final class GenericShipments {
      */
     private static boolean oldNumberRemoved(JdbcTemplate jdbc, UUID tenantId, UUID orderId, String tn) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM order_fulfillment_tracking WHERE tenant_id = ? AND order_id = ? " +
-            "  AND tracking_number = ? AND removed_at IS NOT NULL)", Boolean.class, tenantId, orderId, tn));
+            // S3d: a shadow's tracking rows are stored on its ORIGINAL order (Shopify's fulfillment is there).
+            "SELECT EXISTS (SELECT 1 FROM order_fulfillment_tracking WHERE tenant_id = ? " +
+            "  AND order_id IN (?, (SELECT sx.original_order_id FROM shopify_exchange_shadows sx " +
+            "                      WHERE sx.order_id = ? AND sx.tenant_id = ?)) " +
+            "  AND tracking_number = ? AND removed_at IS NOT NULL)", Boolean.class, tenantId, orderId, orderId, tenantId, tn));
     }
 
     /** G1's class rule: a named non-Bosta carrier, or an unknown one while the tenant has no active Bosta account. */

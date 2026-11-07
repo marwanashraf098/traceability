@@ -176,6 +176,15 @@ public class ExchangeService {
             tenantId, trackingNumber);
         if (ex == null || !"needs_mapping".equals(ex.status())) return;
 
+        // S3d: a Shopify-native exchange whose Return has a live shadow — the replacement is the shadow's own line;
+        // no guessing from the description.
+        UUID shadowVariant = shadowVariantFor(ex.id(), tenantId);
+        if (shadowVariant != null) {
+            if (claim(ex.id(), tenantId) == 0) return;
+            commit(ex.id(), tenantId, shadowVariant, null, true);
+            return;
+        }
+
         ExchangeMatchService.OutboundResolution resolution =
             matchService.resolveOutboundVariant(ex.outboundDescription());
         if (resolution.classification() != ExchangeMatchService.OutboundMatchClassification.EXACT) return;
@@ -446,6 +455,21 @@ public class ExchangeService {
         return AttachOutcome.ATTACHED;
     }
 
+    /**
+     * S3d: the single live line variant of the shadow this exchange's businessReference names
+     * (ShopifyShadowOrders.shadowForReturnReference), or null — never for an exchange Traced booked.
+     */
+    private UUID shadowVariantFor(UUID exchangeId, UUID tenantId) {
+        String ref = jdbc.query("SELECT raw->>'businessReference' FROM exchanges WHERE id = ? AND tenant_id = ? " +
+            "AND return_request_id IS NULL", rs -> rs.next() ? rs.getString(1) : null, exchangeId, tenantId);
+        UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, ref);
+        if (shadow == null) return null;
+        List<UUID> variants = jdbc.queryForList(
+            "SELECT DISTINCT variant_id FROM order_items WHERE order_id = ? AND tenant_id = ? AND quantity > 0",
+            UUID.class, shadow, tenantId);
+        return variants.size() == 1 ? variants.get(0) : null;
+    }
+
     private int claim(UUID exchangeId, UUID tenantId) {
         return jdbc.update(
             "UPDATE exchanges SET status = 'mapped', updated_at = now() " +
@@ -504,6 +528,36 @@ public class ExchangeService {
             if (inboundVariantExists == null || inboundVariantExists == 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Inbound variant not found");
             }
+        }
+
+        // S3d: a Shopify-native exchange (businessReference names its Shopify Return) with a live shadow that holds
+        // this replacement — the shadow IS the replacement order: no internal:exchange: order is created, the Bosta
+        // leg links to the shadow, and the exchanges row keeps only the inbound leg. Existing internal:exchange: rows
+        // are never touched (they finish on the old path).
+        UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, raw.path("businessReference").asText(null));
+        if (shadow != null && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM order_items WHERE order_id = ? AND tenant_id = ? AND variant_id = ? AND quantity > 0)",
+                Boolean.class, shadow, tenantId, outboundVariantId))
+            && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT return_request_id IS NULL FROM exchanges WHERE id = ? AND tenant_id = ?", Boolean.class, exchangeId, tenantId))) {
+            shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
+            shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
+            jdbc.update(
+                "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, inbound_variant_id = ?, " +
+                "    auto_matched = ?, " +
+                "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
+                "WHERE id = ? AND tenant_id = ?",
+                shadow, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
+            org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
+                .info("Exchange {} (AWB {}) attached to Shopify exchange shadow order {}", exchangeId, trackingNumber, shadow);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("exchangeId", exchangeId.toString());
+            result.put("orderId", shadow.toString());
+            result.put("status", jdbc.queryForObject(
+                "SELECT status FROM exchanges WHERE id = ? AND tenant_id = ?", String.class, exchangeId, tenantId));
+            result.put("autoMatched", autoMatched);
+            result.put("shopifyExchangeShadow", true);
+            return result;
         }
 
         // Guaranteed 1 by construction (ExchangeIngestService only ever creates an

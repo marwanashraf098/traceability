@@ -1193,6 +1193,13 @@ public class ExceptionService {
             "      AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled' " +
             "      AND ft.removed_at IS NULL " +   // V200: a number Shopify replaced is no extra parcel …
             "      AND ft.tracking_number IS DISTINCT FROM s.tracking_number " +
+            // S3d: a Shopify-native exchange's parcel is its shadow order's leg, not an extra parcel of the original
+            "      AND NOT EXISTS (SELECT 1 FROM shipments sx_s JOIN shopify_exchange_shadows sx ON sx.order_id = sx_s.order_id " +
+            "                        AND sx.tenant_id = sx_s.tenant_id " +
+            "                      WHERE sx.original_order_id = ft.order_id AND sx.tenant_id = ft.tenant_id " +
+            "                        AND (sx_s.tracking_number = ft.tracking_number " +
+            "                             OR sx_s.shopify_fulfillment_id = ft.shopify_fulfillment_id)) " +
+            "      AND NOT " + ShopifyShadowOrders.exchangeFulfillmentSql("ft") + " " +
             // … nor a replacement Traced refused to follow (that has its own tracking-change alert)
             "      AND NOT EXISTS (SELECT 1 FROM shipment_tracking_changes c WHERE c.shipment_id = s.id " +
             "                        AND c.tenant_id = s.tenant_id AND c.outcome = 'refused' " +

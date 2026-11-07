@@ -441,8 +441,13 @@ public final class MainReconcileRules {
         // Traced ships first: +1 until Shopify fulfills, then f_main covers it — never a reconcile −1 on top of
         // Shopify's own. Shopify fulfills first: −1 while Traced holds the piece — never a spurious +1.
         "), sx_lines AS ( " +
+        // S3d: "still unfulfilled in Shopify" is the exchange line's quantity minus what Shopify fulfilled — no longer
+        // the reservation's live quantity (units fulfilled WITH tracking stay reserved for Traced to pack). A line
+        // whose return / FO ended (declined, cancelled, fo_cancelled, closed, stood_down) holds nothing in Shopify.
         "  SELECT s.original_order_id AS order_id, sl.variant_id, s.order_id AS shadow_order_id, " +
-        "         sl.live_quantity, xl.order_line_gids " +
+        "         CASE WHEN sl.stop_reason IS NULL OR sl.stop_reason = 'shipped_in_shopify' " +
+        "              THEN GREATEST(0, sl.quantity - sl.shipped_in_shopify) ELSE 0 END AS live_quantity, " +
+        "         xl.order_line_gids " +
         "  FROM shopify_exchange_shadow_lines sl " +
         "  JOIN shopify_exchange_shadows s ON s.id = sl.shadow_id AND s.tenant_id = sl.tenant_id " +
         "  JOIN shopify_exchange_lines xl ON xl.id = sl.exchange_line_id AND xl.tenant_id = sl.tenant_id " +

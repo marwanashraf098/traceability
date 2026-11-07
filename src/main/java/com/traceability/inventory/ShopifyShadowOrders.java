@@ -107,7 +107,10 @@ public class ShopifyShadowOrders {
                "        WHERE fo_h.tenant_id = sx_h.tenant_id AND fo_h.order_id = sx_h.original_order_id " +
                "          AND fo_h.status IN " + RELEASED_FO_SQL + " " +
                "          AND li_h->>'lineItemGid' = ANY(xl_h.order_line_gids) " +
-               "          AND COALESCE(li_h->>'remainingQuantity' ~ '^[0-9]+$', false)), 0) < sl_h.live_quantity)";
+               "          AND COALESCE(li_h->>'remainingQuantity' ~ '^[0-9]+$', false)), 0) " +
+               // S3d: units Shopify fulfilled with tracking (kept reserved by the reconcile) are released — the
+               // courier is booked; only their packing is left.
+               "        + sl_h.shipped_in_shopify < sl_h.live_quantity)";
     }
 
     /** A shadow order whose V219 row is live (its reservation has not ended). {@code o} = the order alias. */
@@ -135,6 +138,92 @@ public class ShopifyShadowOrders {
             "FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?",
             (rs, i) -> PickState.valueOf(rs.getString(1)), orderId, tenantId);
         return r.isEmpty() ? PickState.NONE : r.get(0);
+    }
+
+    // ── S3d: which shadow a courier leg belongs to ────────────────────────────────────────────────────────────────
+
+    private static final java.util.regex.Pattern RETURN_NAME = java.util.regex.Pattern.compile("^#?(.+-R[0-9]+)$");
+
+    /**
+     * THE Bosta rule: the live (not ended) shadow of the Shopify Return a businessReference names — its last ':'-part
+     * (or the whole reference) is the Return's name, e.g. "BRK-46369-EG:BRK-46369-EG-R1" → return "BRK-46369-EG-R1"
+     * ('#' optional on either side; the same -R&lt;digits&gt; shape as {@link ShopifyNativeExchange}). Exactly one
+     * shadow or null — never a guess. Caller's connection and tenant.
+     */
+    public static UUID shadowForReturnReference(JdbcTemplate jdbc, UUID tenantId, String businessReference) {
+        if (businessReference == null) return null;
+        String ref = businessReference.trim();
+        int colon = ref.lastIndexOf(':');
+        if (colon >= 0) ref = ref.substring(colon + 1).trim();
+        java.util.regex.Matcher m = RETURN_NAME.matcher(ref);
+        if (!m.matches()) return null;
+        List<UUID> ids = jdbc.queryForList(
+            "SELECT s.order_id FROM shopify_exchange_shadows s " +
+            "JOIN shopify_returns r ON r.id = s.return_id AND r.tenant_id = s.tenant_id " +
+            "WHERE s.tenant_id = ? AND s.state = 'live' AND ltrim(r.name, '#') = ? LIMIT 2",
+            UUID.class, tenantId, m.group(1));
+        return ids.size() == 1 ? ids.get(0) : null;
+    }
+
+    /**
+     * THE Shopify-fulfillment rule: the shadow of {@code originalOrderId} whose exchange lines are exactly where every
+     * one of {@code lineItemGids} points (a fulfillment of the original's exchange line items). Not ended; exactly one
+     * or null. Caller's connection and tenant.
+     */
+    public static UUID shadowForLineItems(JdbcTemplate jdbc, UUID tenantId, UUID originalOrderId,
+                                          java.util.Collection<String> lineItemGids) {
+        return shadowForLineItems(jdbc, tenantId, originalOrderId, lineItemGids, true);
+    }
+
+    /** {@code liveOnly} false: also an ended shadow — where a cancel / edit of its fulfillment belongs. */
+    public static UUID shadowForLineItems(JdbcTemplate jdbc, UUID tenantId, UUID originalOrderId,
+                                          java.util.Collection<String> lineItemGids, boolean liveOnly) {
+        if (originalOrderId == null || lineItemGids == null || lineItemGids.isEmpty()) return null;
+        List<UUID> ids = jdbc.query(con -> {
+            java.sql.PreparedStatement ps = con.prepareStatement(
+                "SELECT s.order_id FROM shopify_exchange_shadows s " +
+                "WHERE s.tenant_id = ? AND s.original_order_id = ? " + (liveOnly ? "AND s.state = 'live' " : "") +
+                "  AND NOT EXISTS (SELECT 1 FROM unnest(?::text[]) g WHERE NOT EXISTS ( " +
+                "      SELECT 1 FROM shopify_exchange_shadow_lines sl " +
+                "      JOIN shopify_exchange_lines xl ON xl.id = sl.exchange_line_id AND xl.tenant_id = sl.tenant_id " +
+                "      WHERE sl.shadow_id = s.id AND sl.tenant_id = s.tenant_id AND g = ANY(xl.order_line_gids))) " +
+                "LIMIT 2");
+            ps.setObject(1, tenantId);
+            ps.setObject(2, originalOrderId);
+            ps.setArray(3, con.createArrayOf("text", lineItemGids.toArray()));
+            return ps;
+        }, (rs, i) -> rs.getObject(1, UUID.class));
+        return ids.size() == 1 ? ids.get(0) : null;
+    }
+
+    /**
+     * S3d: the order_fulfillment_tracking row (alias {@code ft}) is a fulfillment of its order's exchange line items —
+     * every line item of that stored fulfillment is an exchange line of one of the order's shadows. Read from the
+     * order's stored REST fulfillments; an unreadable one is not an exchange fulfillment.
+     */
+    public static String exchangeFulfillmentSql(String ft) {
+        return "EXISTS (SELECT 1 FROM orders xo_f " +
+               "  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(xo_f.raw->'fulfillments') = 'array' " +
+               "       THEN xo_f.raw->'fulfillments' ELSE '[]'::jsonb END) xf " +
+               "  WHERE xo_f.id = " + ft + ".order_id AND xo_f.tenant_id = " + ft + ".tenant_id " +
+               "    AND xf->>'id' = " + ft + ".shopify_fulfillment_id AND jsonb_typeof(xf->'line_items') = 'array' " +
+               "    AND jsonb_array_length(xf->'line_items') > 0 " +
+               "    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(xf->'line_items') xli WHERE NOT EXISTS ( " +
+               "        SELECT 1 FROM shopify_exchange_shadows sx_f " +
+               "        JOIN shopify_exchange_shadow_lines sl_f ON sl_f.shadow_id = sx_f.id AND sl_f.tenant_id = sx_f.tenant_id " +
+               "        JOIN shopify_exchange_lines xl_f ON xl_f.id = sl_f.exchange_line_id AND xl_f.tenant_id = sl_f.tenant_id " +
+               "        WHERE sx_f.original_order_id = xo_f.id AND sx_f.tenant_id = xo_f.tenant_id " +
+               "          AND ('gid://shopify/LineItem/' || (xli->>'id')) = ANY(xl_f.order_line_gids))))";
+    }
+
+    /** The REST fulfillment's line item gids ("gid://shopify/LineItem/<id>"); empty when it has none it can read. */
+    public static List<String> lineItemGids(JsonNode fulfillment) {
+        List<String> out = new ArrayList<>();
+        for (JsonNode li : fulfillment.path("line_items")) {
+            String id = li.path("id").asText("");
+            if (!id.isBlank()) out.add("gid://shopify/LineItem/" + id);
+        }
+        return out;
     }
 
     /**
@@ -232,6 +321,10 @@ public class ShopifyShadowOrders {
         List<Map<String, Object>> fos = jdbc.queryForList(
             "SELECT status, line_items::text AS line_items FROM shopify_fulfillment_orders WHERE tenant_id = ? AND order_id = ?",
             tenantId, o.id());
+        // S3d: the original's stored fulfillments — the evidence of HOW Shopify fulfilled an exchange line.
+        JsonNode fulfillments = json(jdbc.queryForObject(
+            "SELECT CASE WHEN jsonb_typeof(raw->'fulfillments') = 'array' THEN (raw->'fulfillments')::text ELSE '[]' END " +
+            "FROM merchant_orders WHERE id = ? AND tenant_id = ?", String.class, o.id(), tenantId));
         int created = 0, updated = 0, ended = 0, units = 0;
         for (Map<String, Object> r : jdbc.queryForList(
                 "SELECT id, return_gid, status, COALESCE(request_approved_at, shopify_created_at, created_at) AS approved_at " +
@@ -247,7 +340,7 @@ public class ShopifyShadowOrders {
             if (lines.isEmpty() || "REQUESTED".equals(status)) continue;
 
             List<Plan> plans = new ArrayList<>();
-            for (XLine x : lines) plans.add(plan(tenantId, o.id(), status, x, fos));
+            for (XLine x : lines) plans.add(plan(tenantId, o.id(), status, x, fos, fulfillments));
 
             List<Map<String, Object>> existing = jdbc.queryForList(
                 "SELECT id, order_id, state FROM shopify_exchange_shadows WHERE tenant_id = ? AND return_id = ?", tenantId, returnId);
@@ -270,7 +363,44 @@ public class ShopifyShadowOrders {
         return new Outcome(created, updated, ended, units);
     }
 
-    private Plan plan(UUID tenantId, UUID originalId, String returnStatus, XLine x, List<Map<String, Object>> fos) {
+    /**
+     * S3d — how Shopify fulfilled an exchange line, from the ORIGINAL order's stored REST fulfillments (successful, not
+     * cancelled, lines matched by line item gid): {@code tracked} = units fulfilled WITH a tracking number (a courier is
+     * booked — Traced still packs and hands them over), {@code untracked} = units fulfilled with none ("mark as
+     * fulfilled" — shipped outside Traced) or by a fulfillment service (a 3PL — never Traced's stock).
+     */
+    record Evidence(int tracked, int untracked) {}
+
+    static Evidence evidence(JsonNode fulfillments, List<String> lineGids) {
+        int tracked = 0, untracked = 0;
+        if (lineGids.isEmpty()) return new Evidence(0, 0);
+        for (JsonNode f : fulfillments) {
+            if (!f.path("line_items").isArray() || f.path("location_id").isMissingNode()) continue;   // not REST: unreadable
+            String st = f.path("status").asText("").toLowerCase();
+            if (!"success".equals(st)) continue;
+            boolean hasTracking = !f.path("tracking_number").asText("").isBlank();
+            for (JsonNode t : f.path("tracking_numbers")) if (!t.asText("").isBlank()) hasTracking = true;
+            boolean service = !f.path("service").asText("manual").isBlank() && !"manual".equals(f.path("service").asText("manual"));
+            for (JsonNode li : f.path("line_items")) {
+                if (!lineGids.contains("gid://shopify/LineItem/" + li.path("id").asText(""))) continue;
+                int q = li.path("quantity").asInt(0);
+                boolean lineService = !"manual".equals(li.path("fulfillment_service").asText("manual"));
+                if (hasTracking && !service && !lineService) tracked += q; else untracked += q;
+            }
+        }
+        return new Evidence(tracked, untracked);
+    }
+
+    /**
+     * Per exchange line. S3d central rule: a fulfillment order that closed is NOT "shipped" by itself — a courier app
+     * (Bosta's plugin) fulfils in Shopify when it books the shipment. Units Shopify fulfilled WITH tracking stay
+     * reserved and packable (their courier leg attaches to the shadow; Traced's pack → pickup → custody flow ends
+     * them); only units fulfilled with NO tracking (or by a fulfillment service) end as 'shipped_in_shopify'. Units
+     * Traced can't explain (an FO it can't read, a fulfillment in a shape it can't read, a fulfillment not stored yet)
+     * NEVER end a reservation (#1009).
+     */
+    private Plan plan(UUID tenantId, UUID originalId, String returnStatus, XLine x, List<Map<String, Object>> fos,
+                      JsonNode fulfillments) {
         if ("DECLINED".equals(returnStatus)) return new Plan(x, 0, 0, "declined");
         if ("CANCELED".equals(returnStatus)) return new Plan(x, 0, 0, "cancelled");
         int live = 0, shipped = 0;
@@ -286,11 +416,27 @@ public class ShopifyShadowOrders {
                 if (!DEAD_FO.contains(foStatus)) shipped += Math.max(0, total - remaining);
             }
         }
+        Evidence ev = evidence(fulfillments, x.orderLineGids());
         Plan p;
         if (!matched) {
-            p = "CLOSED".equals(returnStatus) ? new Plan(x, 0, 0, "closed_in_shopify") : new Plan(x, x.quantity(), 0, null);
+            if (x.orderLineGids().isEmpty()) {
+                // never processed: unprocessed demand while OPEN; CLOSED without processing → Shopify closed it
+                p = "CLOSED".equals(returnStatus) ? new Plan(x, 0, 0, "closed_in_shopify") : new Plan(x, x.quantity(), 0, null);
+            } else {
+                // processed, but no fulfillment order Traced can see (#1009: e.g. assigned to a location the token
+                // can't read): only a readable untracked fulfillment of every unit ends it; anything else keeps it.
+                int seen = ev.tracked() + ev.untracked();
+                p = (ev.untracked() >= x.quantity() && ev.tracked() == 0)
+                    ? new Plan(x, 0, seen, "shipped_in_shopify")
+                    : new Plan(x, x.quantity(), seen, null);
+            }
         } else {
             live = Math.min(live, x.quantity());
+            int gap = x.quantity() - live;
+            if (gap > 0 && shipped > 0) {
+                int unknown = Math.max(0, shipped - ev.tracked() - ev.untracked());
+                live += Math.min(gap, ev.tracked() + unknown);
+            }
             p = live > 0 ? new Plan(x, live, shipped, null)
                 : new Plan(x, 0, shipped, shipped > 0 ? "shipped_in_shopify" : "fo_cancelled");
         }

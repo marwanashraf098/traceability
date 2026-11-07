@@ -485,6 +485,19 @@ public class LookupService {
             "ORDER BY placed_at DESC NULLS LAST, id DESC LIMIT 1",
             rs -> rs.next() ? new OrderRow(rs.getObject("id", UUID.class), rs.getString("number")) : null,
             tenantId, trimmed, withHash);
+        // S3d: a Shopify-native exchange's shadow number (#1010-X1) opens its ORIGINAL order, which lists it.
+        String matchedShadow = null;
+        if (order == null) {
+            List<Map<String, Object>> viaShadow = jdbc.queryForList(
+                "SELECT oo.id, oo.number, so.number AS shadow_number FROM warehouse_orders so " +
+                "JOIN shopify_exchange_shadows s ON s.order_id = so.id AND s.tenant_id = so.tenant_id " +
+                "JOIN merchant_orders oo ON oo.id = s.original_order_id AND oo.tenant_id = s.tenant_id " +
+                "WHERE so.tenant_id = ? AND so.number IN (?, ?) LIMIT 1", tenantId, trimmed, withHash);
+            if (!viaShadow.isEmpty()) {
+                order = new OrderRow((UUID) viaShadow.get(0).get("id"), (String) viaShadow.get(0).get("number"));
+                matchedShadow = (String) viaShadow.get(0).get("shadow_number");
+            }
+        }
         if (order == null) {
             throw new LookupNotFoundException("ORDER_NOT_FOUND", query);
         }
@@ -493,6 +506,21 @@ public class LookupService {
         result.put("type",        "order");
         result.put("orderId",     order.id().toString());
         result.put("orderNumber", order.number());
+        // S3d: the original's Shopify-native exchange shadows, nested — key present only when it has any.
+        List<Map<String, Object>> shadows = new ArrayList<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT so.id, so.number, so.status::text AS status, s.state FROM shopify_exchange_shadows s " +
+                "JOIN warehouse_orders so ON so.id = s.order_id AND so.tenant_id = s.tenant_id " +
+                "WHERE s.tenant_id = ? AND s.original_order_id = ? ORDER BY s.x_index", tenantId, order.id())) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("orderId", r.get("id").toString());
+            m.put("orderNumber", r.get("number"));
+            m.put("status", r.get("status"));
+            m.put("state", r.get("state"));
+            shadows.add(m);
+        }
+        if (!shadows.isEmpty()) result.put("shopifyExchanges", shadows);
+        if (matchedShadow != null) result.put("matchedExchange", matchedShadow);
         return result;
     }
 }

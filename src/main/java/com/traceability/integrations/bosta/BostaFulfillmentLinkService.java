@@ -199,9 +199,11 @@ public class BostaFulfillmentLinkService {
             }
         }
 
+        // S3d: warehouse_orders — a Shopify-native exchange's waybill is the forward leg of the original's SHADOW
+        // order (hidden from merchant_orders); it is that exchange, never "another order".
         Map<String, Object> existing = tx.execute(s -> jdbc.queryForList(
             "SELECT s.order_id, o.number, s.provider_deleted_at IS NOT NULL AS deleted FROM shipments s " +
-            "JOIN merchant_orders o ON o.id = s.order_id " +
+            "JOIN warehouse_orders o ON o.id = s.order_id " +
             "WHERE s.tenant_id = ? AND s.tracking_number = ? AND s.provider = 'bosta'", tenantId, tn)
             .stream().findFirst().orElse(null));
         if (existing != null && Boolean.TRUE.equals(existing.get("deleted"))) {
@@ -215,6 +217,15 @@ public class BostaFulfillmentLinkService {
             if (orderId.equals(existing.get("order_id"))) {
                 if (!dryRun) markLinked(tenantId, orderId, tn);
                 return Result.skip("already linked");
+            }
+            // S3d: the waybill is the courier leg of this order's Shopify-native exchange shadow (#…-X1).
+            if (Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM shopify_exchange_shadows WHERE tenant_id = ? AND order_id = ? " +
+                    "  AND original_order_id = ?)", Boolean.class, tenantId, existing.get("order_id"), orderId)))) {
+                String via = "linked via Shopify exchange " + existing.get("number");
+                if (dryRun) return new Result(Verdict.WOULD_LINK, via, null, null);
+                markLinked(tenantId, orderId, tn, via);
+                return new Result(Verdict.LINKED, via, null, null);
             }
             // 2026-10-05: BROEK's plugin fulfills the ORIGINAL order with its exchange's AWB, which is the
             // forward leg of the internal EXC-… replacement order. Matched to this order (or its
@@ -296,6 +307,15 @@ public class BostaFulfillmentLinkService {
         if (delivery == null) {
             if (!dryRun) markRetry(tenantId, orderId, tn, "not found in Bosta", 0, true);
             return Result.skip("not found in Bosta");
+        }
+        // S3d: a delivery booked for a Shopify-native exchange (its businessReference names a Return with a live
+        // shadow) is the SHADOW's courier leg — linked by the Bosta webhook / discovery (ShipmentLinkService step 0b,
+        // ExchangeService's shadow redirect), never as a forward leg of the original and never a link problem.
+        final String deliveryRef = delivery.businessReference();
+        if (tx.execute(s -> com.traceability.inventory.ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, deliveryRef)) != null) {
+            String reason = "Shopify exchange — its waybill links to the exchange order";
+            if (!dryRun) markStatus(tenantId, orderId, tn, "skipped", reason);
+            return Result.skip(reason);
         }
 
         // 3. Is it this order's forward delivery?
