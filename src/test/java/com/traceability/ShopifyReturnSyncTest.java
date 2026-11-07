@@ -866,11 +866,13 @@ class ShopifyReturnSyncTest {
         grade(r.items.get(0));
         appSync.sync(a.tenant, r.id);
         assertThat(action(r, "process", r.items.get(0).toString())).isEqualTo("applied:not_restocked");
-        Integer own = TenantContext.runAs(a.tenant, () -> appJdbc.queryForObject(
-            "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id));
+        Integer own = TenantContext.runAs(a.tenant, () -> new org.springframework.transaction.support.TransactionTemplate(appTxm)
+            .execute(st -> appJdbc.queryForObject(
+                "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id)));
         assertThat(own).isEqualTo(1);
-        Integer seen = TenantContext.runAs(b.tenant, () -> appJdbc.queryForObject(
-            "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id));
+        Integer seen = TenantContext.runAs(b.tenant, () -> new org.springframework.transaction.support.TransactionTemplate(appTxm)
+            .execute(st -> appJdbc.queryForObject(
+                "SELECT COUNT(*) FROM shopify_return_actions WHERE request_id = ?", Integer.class, r.id)));
         assertThat(seen).isZero();
     }
 
