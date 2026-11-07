@@ -451,11 +451,11 @@ describe('t5 Pick & Pack chooser', () => {
 })
 
 describe('t6 registry + AR', () => {
-  test('helpRegistry maps each page to its tour, no article yet', () => {
-    expect(helpFor('/stock-take/st-1/scan')).toEqual({ tourId: 'stock_take', articleId: null })
+  test('helpRegistry maps each page to its tour and its Help article (O6)', () => {
+    expect(helpFor('/stock-take/st-1/scan')).toEqual({ tourId: 'stock_take', articleId: 'stock-take' })
     expect(helpFor('/transfers/tr-1/reconcile')?.tourId).toBe('transfers')
     expect(helpFor('/orders')).toBeNull()
-    expect(Object.values(HELP_REGISTRY).every(e => e.articleId === null)).toBe(true)
+    expect(Object.values(HELP_REGISTRY).every(e => !!e.articleId)).toBe(true)
   })
 
   test('the card reads in Arabic, right to left', async () => {

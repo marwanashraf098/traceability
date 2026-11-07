@@ -1,7 +1,8 @@
 import { withReturnSource } from '../receivingReturn'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { articleForAlert } from '../help/helpRegistry'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
 import {
   Badge, Button, Card, cn, EmptyState, Modal, Select, type SelectOption,
@@ -108,6 +109,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
+/** Every alert type this page knows (the Help guard test maps each one to an article). */
+export const ALERT_TYPES = ALL_TYPES
 const ALL_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 
 function formatAge(secs: number) {
@@ -218,6 +221,11 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
         <p className="text-body text-primary leading-snug">
           {isAr ? item.descriptionAr : item.descriptionEn}
         </p>
+        {/* Onboarding O6 — the Help article that explains this alert type. */}
+        <Link to={`/help/${articleForAlert(item.type)}`} data-testid={`alert-help-${item.type}`}
+          className="inline-block mt-1 text-small text-trace-blue hover:text-trace-blue-hover">
+          {t('helpCenter.alertLink')}
+        </Link>
         <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
           {item.order_number && (
             <span className="text-small text-muted">

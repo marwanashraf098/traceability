@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
+import { articleForTour } from '../help/helpRegistry'
 import { CircleHelp, X } from 'lucide-react'
 import { cn } from '../components/ui'
 import { getRoleFromToken } from '../api'
@@ -74,6 +76,9 @@ export function TourCard({ tourId }: { tourId: TourId }) {
   if (!showing) return null
   const last = step === def.steps.length - 1
   const n = def.steps.length
+  // Owners / managers only: workers have no help center (their "?" only replays tours).
+  const role = getRoleFromToken()
+  const readMore = role === 'owner' || role === 'manager' ? articleForTour(tourId) : null
 
   return (
     <section
@@ -101,6 +106,12 @@ export function TourCard({ tourId }: { tourId: TourId }) {
       <div className="flex flex-col gap-1.5" aria-live="polite">
         <h2 className="text-[16px] font-bold text-primary leading-snug">{t(`${s.key}.title`)}</h2>
         <p className="text-small text-primary/80 leading-relaxed">{t(`${s.key}.body`)}</p>
+        {readMore && (
+          <Link to={`/help/${readMore}`} data-testid="tour-read-more"
+            className="self-start text-small font-medium text-trace-blue hover:text-trace-blue-hover">
+            {t('helpCenter.readMore')}
+          </Link>
+        )}
         {s.hasTip && (
           <p className="text-small text-warning-text bg-warning/[0.08] rounded-lg px-3 py-2 leading-relaxed" data-testid="tour-tip">
             {t(`${s.key}.tip`)}

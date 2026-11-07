@@ -4,6 +4,50 @@
 
 ## Current state
 
+**Onboarding redesign — O6 Help center (2026-11-07; branch `feat/onboarding-help` off main 8b7b51b4, worktree
+`~/Documents/traceability-o6`; approved and MERGED 2026-11-07, NOT deployed; frontend only, no migration).** Mockups
+`design/onboarding/Traced_onboarding_Help-Center`, `Help-Article`.
+- **Content:** 72 articles, EN + AR, `frontend/src/help/{en,ar}/<id>.md` (frontmatter id, topic, title, roles, related[],
+  alerts[], screens[], video — empty, its slot hidden; the body's FIRST paragraph is the short answer). Written from
+  the code, 15 topics (`help/topics.ts`). `help/content.ts` (eager glob) is only imported dynamically
+  (`help/loadHelp.ts`) → one lazy chunk (~272 kB, 96 kB gzip).
+- **/help** (owner / manager, Layout): search (title + body, EN AND AR whichever the page language — `help/search.ts`:
+  lower case; Arabic diacritics / tatweel stripped, alef forms → ا, ة → ه, ى → ي, Arabic-Indic / Persian digits →
+  0-9), topic chips, "Start here" (Connect → Receive → Pack → Pickup → Returns), topic sections; empty → "No answer
+  matches" + WhatsApp. **/help/:id**: breadcrumb, title, "For …", short-answer box, body (react-markdown), Related,
+  "Did this answer your question?" (Yes → thanks only, No → WhatsApp; nothing stored). No "Check my store" (O6b).
+- **Links:** sidebar "Help center" above Settings (owner / manager; none for workers). helpRegistry: each "?" page →
+  its article; the TourCard's "Read more" (owner / manager, a plain link — the tour stays open). Alerts rows: "What does
+  this mean?" → `articleForAlert(type)` (7 alert groups; unknown types → alerts-overview).
+- **Hidden articles:** frontmatter `hidden: true` (today: shopify-native-exchanges, until Shopify-native exchanges are
+  rolled out) — out of search, the count, topics and Related, and its URL says not found; guards forbid any link to a
+  hidden article (registry, alerts, tours, Start here, related[], body links).
+- **Approved copy decisions (2026-11-07):** Analytics articles kept (Analytics is on in prod); emails-junk keeps
+  no-reply@tracedtech.com (the prod sender); Pick & Pack says "recent orders" (not "the last 30 days"); the Lost alert
+  also fires for stock-take and Lookup write-offs; "Don't edit stock at Traced Main by hand in Shopify…"; grade-returns,
+  return-to-receive and lookup-sold-exchange carry the shared "In some cases Traced doesn't change Shopify stock…"
+  line; general advice is labelled **Tip**. Inferred sentences checked against the code: on hold = blocklist OR a
+  product missing from the catalog at import OR a manual Hold order (rewritten); other-courier exchanges need the
+  other-couriers switch (confirmed — generic legs exist only with it on); self-pickup orders can't use the portal
+  (confirmed — the portal needs a delivered courier leg); Tag stock and Places never change Shopify (confirmed — no
+  Shopify call; PlacesShopifyGuardTest); put-away closes after 12 h without activity (rewritten from "a few hours");
+  Return To Receive is resolved by hand (confirmed — nothing resolves it automatically).
+- **Tests:** helpCenter.test 23 (search EN / AR / normalisation / empty, topics, Start here, article page, sidebar by
+  role, guards: every Alerts-page type → an article in EN and AR, registry + tour + Start-here articles in both, related
+  ids exist, alert lists = their group, EN / AR frontmatter agree, no internal / old mode names, hidden articles never
+  linked or listed; Read more by role; alert links — 12 rules mutation-checked red); browser helpCenterLayout 16.
+  Approved edits: putAwayLists snapshot (+ the sidebar's Help link), sidebarReorg g1 + m1 (`/help` before
+  `/settings`), tours.test t6 (articleIds filled).
+- **Phone scanner:** NOT on Pickups — a deliberate decision (custody risk at the handover), not a bug. Lookup: OPEN
+  question (no phone scanner there today).
+- **NEXT — "O6-fixes" (follow-up slice, not built):** (1) Alerts page labels for the 11 types the backend raises
+  without one (high_attempts, void_hold_sync_failed, shopify_cancel_vs_inflight, generic_* ×5, shopify_edit_conflict,
+  return_in_transit_stuck, return_mismatch) — raw type shown, not filterable; (2) the three missing "clears when" texts
+  (STOCK_COVERS_EXCHANGES, EXCHANGE_EXPLAINED_OR_RELEASED, SHOPIFY_RETURN_PROCESSED); (3) dead "Go" links:
+  `/shipments/unlinked` (unmatched_delivery, bosta_discovery_failed, generic_bosta_conflict) and `/fulfill/<id>`
+  (guided_unpack) have no route; (4) the Orders "Not traced" filter hint is backwards ("every piece scanned out" — the
+  tag means NO piece was scanned out).
+
 **Onboarding redesign — O5 Pick & Pack chooser + 4 tours + "?" (2026-11-07; branch `feat/onboarding-tours` off main
 cac3b35b, worktree `~/Documents/traceability-o5`; approved and MERGED 2026-11-07, NOT deployed; no migration; backend:
 GET /me's two tour booleans).** Mockups
