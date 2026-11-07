@@ -185,6 +185,7 @@ public final class ShopifyReturnsView {
             }, (Object) idArr);
 
         Map<UUID, Map<UUID, Evidence>> evidence = evidence(orderIds);
+        Map<UUID, Evidence> intakes = intakeEvidence(idArr);
         for (Map.Entry<UUID, Map<String, Object>> e : head.entrySet()) {
             Map<String, Object> m = e.getValue();
             ShopifyReturnState.Derived d = ShopifyReturnState.derive(
@@ -194,7 +195,8 @@ public final class ShopifyReturnsView {
             m.put("kind", cast(m.get("goingOut")).isEmpty() ? "return" : "exchange");
             m.put("inTraced", inTraced(d.state(), returnUnits.getOrDefault(e.getKey(), 0),
                 returnVariants.getOrDefault(e.getKey(), Set.of()),
-                evidence.getOrDefault(UUID.fromString((String) m.get("orderId")), Map.of())));
+                evidence.getOrDefault(UUID.fromString((String) m.get("orderId")), Map.of()),
+                intakes.get(e.getKey())));
         }
         keptAside(head, idArr);
         return head;
@@ -252,6 +254,8 @@ public final class ShopifyReturnsView {
             OrderReturnState.pieceStateLateral("rs", "pc.id", "pc.status", "oi.order_id") +
             " WHERE oi.order_id = ANY (?::uuid[]) AND oi.tenant_id = " + TENANT +
             "  AND rs.state IS NOT NULL AND (rs.rr_id IS NOT NULL OR a.status IN ('active', 'packed')) " +
+            // S4: a piece linked to a Shopify return line counts only for that return (intakeEvidence)
+            "  AND NOT EXISTS (SELECT 1 FROM shopify_return_intakes si WHERE si.piece_id = pc.id AND si.tenant_id = oi.tenant_id) " +
             "ORDER BY oi.order_id, pc.id, (a.status IN ('active', 'packed')) DESC, a.allocated_at DESC",
             (RowCallbackHandler) rs -> {
                 Evidence ev = out.computeIfAbsent(rs.getObject("order_id", UUID.class), k -> new HashMap<>())
@@ -275,12 +279,40 @@ public final class ShopifyReturnsView {
     }
 
     /**
-     * "In Traced": what Traced already knows of the returned variants on the order (no new intake logic).
+     * S4 — real intake evidence: the pieces Scan returns linked to each return's lines (shopify_return_intakes, V222),
+     * graded for the order each came back for (a returned replacement: its shadow order). A linked piece with no grade
+     * yet counts as awaiting inspection.
+     */
+    private Map<UUID, Evidence> intakeEvidence(String[] idArr) {
+        Map<UUID, Evidence> out = new HashMap<>();
+        jdbc.query(
+            "SELECT i.return_id, rs.state FROM shopify_return_intakes i JOIN pieces pc ON pc.id = i.piece_id " +
+            OrderReturnState.pieceStateLateral("rs", "pc.id", "pc.status", "i.piece_order_id") +
+            " WHERE i.return_id = ANY (?::uuid[]) AND i.tenant_id = " + TENANT,
+            (RowCallbackHandler) rs -> {
+                Evidence ev = out.computeIfAbsent(rs.getObject("return_id", UUID.class), k -> new Evidence());
+                String st = rs.getString("state");
+                if (st == null || "pending_inspection".equals(st)) ev.pending++;
+                else if ("damaged".equals(st)) ev.damaged++;
+                else ev.sellable++;   // restocked, back_to_good
+            }, (Object) idArr);
+        return out;
+    }
+
+    /**
+     * "In Traced": what Traced knows of the return's items — the pieces Scan returns linked to its lines (S4), plus
+     * (for pieces not linked to any Shopify return: before S4, untracked units) the returned variants on the order.
      * state: expected (nothing back yet, return live) | partial (some units back, all graded, fewer than the return)
      * | awaiting_inspection | sellable | damaged | mixed | none (nothing back and the return ended in Shopify).
      */
-    static Map<String, Object> inTraced(String shopifyState, int units, Set<UUID> variants, Map<UUID, Evidence> byVariant) {
+    static Map<String, Object> inTraced(String shopifyState, int units, Set<UUID> variants, Map<UUID, Evidence> byVariant,
+                                        Evidence linked) {
         int pending = 0, sellable = 0, damaged = 0;
+        if (linked != null) {
+            pending += linked.pending;
+            sellable += linked.sellable;
+            damaged += linked.damaged;
+        }
         for (UUID v : variants) {
             Evidence ev = byVariant.get(v);
             if (ev == null) continue;

@@ -1172,8 +1172,12 @@ public class ShipmentLinkService {
      * ExceptionService.detectUnexpectedReturn (the alert) so the two never disagree. Shopify
      * quantities play no part. An AWB scanned in the session is NOT evidence on its own: a
      * never-collected parcel with no return history stays unexpected.
+     *
+     * S4 (2026-11-07): (c) a Shopify-native return expects the piece back — {@link #shopifyReturnExpects}, by the
+     * piece's order (a shadow resolves to its original) and variant. Null piece / variant → (c) is not asked.
      */
-    public boolean isExpectedBack(UUID forwardShipmentId, UUID orderId, UUID tenantId) {
+    public boolean isExpectedBack(UUID forwardShipmentId, UUID orderId, UUID tenantId, String pieceId, UUID variantId) {
+        if (shopifyReturnExpects(tenantId, pieceId, orderId, variantId)) return true;
         if (forwardShipmentId != null) {
             Boolean rto = jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM shipment_status_history h " +
@@ -1184,6 +1188,16 @@ public class ShipmentLinkService {
             if (Boolean.TRUE.equals(rto)) return true;
         }
         return hasActiveReturnLeg(orderId, tenantId);
+    }
+
+    /**
+     * S4 — the piece is expected back by a Shopify-native return (an open return line of its original order for its
+     * variant, or it already satisfies one since it last left). The ONE rule is {@link ShopifyReturnIntake#expects};
+     * Scan returns' acceptance, its unexpected flag and detectUnexpectedReturn all ask it through here. A store
+     * without returns access has no open line, so nothing changes for it.
+     */
+    public boolean shopifyReturnExpects(UUID tenantId, String pieceId, UUID orderId, UUID variantId) {
+        return ShopifyReturnIntake.expects(jdbc, tenantId, pieceId, orderId, variantId);
     }
 
     /**

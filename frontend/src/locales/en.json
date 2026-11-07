@@ -506,7 +506,9 @@
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta",
-      "shopify_exchange_still_waiting": "Shopify exchange still waiting"
+      "shopify_exchange_still_waiting": "Shopify exchange still waiting",
+      "shopify_return_open_after_intake": "Received in Traced, return still open in Shopify",
+      "shopify_return_ended_after_intake": "Return declined or cancelled in Shopify after arrival"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {
