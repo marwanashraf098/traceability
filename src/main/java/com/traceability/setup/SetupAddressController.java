@@ -13,15 +13,25 @@ import java.util.Map;
  *
  *   GET /api/v1/setup/address — {address | null, provinces: [{code, nameEn, nameAr, areas}]}
  *   PUT /api/v1/setup/address — {provinceCode, city, street, building?, floor?} → {setupStep}
+ *   GET /api/v1/setup/address/shopify-locations — O2b: the store's own Shopify locations to pre-fill from (read only;
+ *       empty when the address is already complete or the read fails)
  */
 @RestController
 @RequestMapping("/api/v1/setup/address")
 public class SetupAddressController {
 
     private final SetupAddressService svc;
+    private final ShopifyAddressPrefillService prefill;
 
-    public SetupAddressController(SetupAddressService svc) {
+    public SetupAddressController(SetupAddressService svc, ShopifyAddressPrefillService prefill) {
         this.svc = svc;
+        this.prefill = prefill;
+    }
+
+    @GetMapping("/shopify-locations")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> shopifyLocations() {
+        return prefill.locations();
     }
 
     @GetMapping
