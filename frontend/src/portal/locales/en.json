@@ -82,6 +82,7 @@
     "pickup": "Pickup",
     "pickupText": "The store will arrange a courier to collect the item from the address this order was delivered to.",
     "pickupTextBooking": "A Bosta courier collects the item from the address this order was delivered to.",
+    "pickupFrom": "Pickup from: {{place}}",
     "cityLabel": "City",
     "areaLabel": "Area",
     "areaPlaceholder": "Choose your area",
@@ -182,8 +183,6 @@
   "rf": {
     "title": "How should we refund you?",
     "lead": "{{store}} sends your refund after your return arrives.",
-    "titleFallback": "If we can't exchange it",
-    "leadFallback": "If your new size is sold out, {{store}} refunds you instead. How should they send it?",
     "legend": "Refund method",
     "methods": {
       "bank_transfer": {
@@ -285,6 +284,7 @@
     "youGetBack": "You'll get back",
     "nothingToPay": "Nothing to pay",
     "owedNote": "The store will pay you back. We'll ask how you'd like to receive it.",
+    "differenceFloored": "A cheaper size or colour of the same item isn't refunded.",
     "blocked": {
       "approximate_price": "This item can only be swapped for another size or colour online.",
       "same_or_lower_only": "This store only exchanges for items at the same price or lower.",

@@ -268,6 +268,13 @@ function ExchangePricingEditor({ draft, onChange, owner, edited, errors, capErro
       <PricingSwitch title={t('settings.portal.fees.pricing.freeSwaps')} help={t('settings.portal.fees.pricing.freeSwapsHelp')}
         checked={p.freeVariantSwaps} onChange={v => set({ freeVariantSwaps: v })} disabled={ro}
         edited={edited.has('pricing.freeSwaps')} />
+      {/* V223 — only matters while same-product swaps use the price difference. */}
+      {!p.freeVariantSwaps && (
+        <PricingSwitch title={t('settings.portal.fees.pricing.sameProductRefunds')}
+          help={t('settings.portal.fees.pricing.sameProductRefundsHelp')}
+          checked={p.sameProductSwapRefunds} onChange={v => set({ sameProductSwapRefunds: v })} disabled={ro}
+          edited={edited.has('pricing.sameProductRefunds')} />
+      )}
       <div className="px-6 py-5 space-y-3">
         <div className="flex items-center">
           <p id="exchange-price-mode-title" className="text-body font-semibold text-primary">{t('settings.portal.fees.priceMode.title')}</p>

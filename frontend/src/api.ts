@@ -3898,6 +3898,11 @@ export interface ExchangePricing {
   maxDifference: number | null
   /** Same-product exchanges ignore the price difference. Defaults to true for stores that existed before it. */
   freeVariantSwaps: boolean
+  /**
+   * V223 — with free swaps off, a same-product swap to a LOWER price pays the customer back the difference (default
+   * false: floored at 0). Absent in a PUT body = keep the stored value.
+   */
+  sameProductSwapRefunds?: boolean
 }
 
 export interface CustomerFeeSettings {

@@ -2271,6 +2271,7 @@
         "paidPrice": "Price paid",
         "newPrice": "New item",
         "priceDifference": "Price difference",
+        "differenceFloored": "Cheaper same-product swaps aren't refunded (Settings → Returns portal).",
         "owed": "Owed to the customer: {{amount}}. Record the payment once the old item is back."
       }
     }
@@ -3060,6 +3061,8 @@
           "anyProductHelp": "Customers can pick any product in stock, not only another size or colour of the same one.",
           "freeSwaps": "Free size and colour swaps",
           "freeSwapsHelp": "Another size or colour of the same product costs the customer nothing extra, even if it's priced differently. Turn off to use the price difference, as for a different product.",
+          "sameProductRefunds": "Same-product swaps can refund the customer",
+          "sameProductRefundsHelp": "When the new size or colour costs less, the customer gets the difference back. Off: a cheaper swap of the same product is free, and the customer still pays the exchange fee and any higher price.",
           "lowerOnly": "Same price or lower only",
           "lowerOnlyHelp": "Customers can't pick an item that costs more than the one they're sending back.",
           "maxDifference": "Most a customer can pay extra",

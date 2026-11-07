@@ -82,9 +82,16 @@ public final class PortalAmounts {
      * positive = the customer pays). Present only when the difference applies: a different product, or the same
      * product while free variant swaps are off.
      */
-    public record Difference(BigDecimal paidPrice, BigDecimal replacementPrice) {
+    public record Difference(BigDecimal paidPrice, BigDecimal replacementPrice, boolean floorAtZero) {
+        public Difference(BigDecimal paidPrice, BigDecimal replacementPrice) { this(paidPrice, replacementPrice, false); }
+
+        /**
+         * The difference that is charged or paid back. {@code floorAtZero} (a same-product swap while the store's
+         * "Same-product swaps can refund the customer" is off): a lower new price never pays the customer back — 0.
+         */
         BigDecimal amount() {
-            return replacementPrice.subtract(paidPrice == null ? BigDecimal.ZERO : paidPrice).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal d = replacementPrice.subtract(paidPrice == null ? BigDecimal.ZERO : paidPrice).setScale(2, RoundingMode.HALF_UP);
+            return floorAtZero ? d.max(BigDecimal.ZERO.setScale(2)) : d;
         }
     }
 
@@ -239,22 +246,40 @@ public final class PortalAmounts {
     /** Bosta's COD limit — what a courier can collect on the replacement (F4 sends it; F3 refuses more). */
     public static final BigDecimal COD_LIMIT = new BigDecimal("30000");
 
-    /** The tenant's exchange pricing settings (F1). {@link #active}: a price difference can apply at all. */
-    public record ExchangePricing(boolean anyProduct, boolean sameOrLowerOnly, BigDecimal maxDifference, boolean freeSwaps) {
+    /**
+     * The tenant's exchange pricing settings (F1). {@link #active}: a price difference can apply at all.
+     * {@code sameProductRefunds} (V223, "Same-product swaps can refund the customer", default off): whether a
+     * same-product swap to a LOWER price pays the customer back the difference. Different products always use the real
+     * difference both ways.
+     */
+    public record ExchangePricing(boolean anyProduct, boolean sameOrLowerOnly, BigDecimal maxDifference, boolean freeSwaps,
+                                  boolean sameProductRefunds) {
+        /** Before V223 — a same-product swap paid back a lower price (the setting on). */
+        public ExchangePricing(boolean anyProduct, boolean sameOrLowerOnly, BigDecimal maxDifference, boolean freeSwaps) {
+            this(anyProduct, sameOrLowerOnly, maxDifference, freeSwaps, true);
+        }
+
         public boolean active() { return anyProduct || !freeSwaps; }
 
         /** Whether a price difference applies to this exchange. */
         public boolean differenceApplies(boolean sameProduct) { return !sameProduct || !freeSwaps; }
+
+        /** The exchange's difference, or null when none applies (decision C: same product + setting off → floored at 0). */
+        public Difference difference(boolean sameProduct, BigDecimal paidPrice, BigDecimal replacementPrice) {
+            if (!differenceApplies(sameProduct) || replacementPrice == null) return null;
+            return new Difference(paidPrice, replacementPrice, sameProduct && !sameProductRefunds);
+        }
     }
 
     public static ExchangePricing exchangePricing(JdbcTemplate jdbc, UUID tenantId) {
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_exchange_any_product, portal_exchange_same_or_lower_only, portal_exchange_max_difference, " +
-            "       portal_free_variant_swaps FROM tenants WHERE id = ?", tenantId);
+            "       portal_free_variant_swaps, portal_same_product_swap_refunds FROM tenants WHERE id = ?", tenantId);
         return new ExchangePricing(Boolean.TRUE.equals(t.get("portal_exchange_any_product")),
             Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")),
             (BigDecimal) t.get("portal_exchange_max_difference"),
-            Boolean.TRUE.equals(t.get("portal_free_variant_swaps")));
+            Boolean.TRUE.equals(t.get("portal_free_variant_swaps")),
+            Boolean.TRUE.equals(t.get("portal_same_product_swap_refunds")));
     }
 
     /**
