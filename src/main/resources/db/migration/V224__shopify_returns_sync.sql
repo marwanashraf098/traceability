@@ -1,5 +1,5 @@
 -- ============================================================
--- V223 — Shopify-native returns S5a: a return made on Traced's portal is also created as a Return in Shopify
+-- V224 — Shopify-native returns S5a: a return made on Traced's portal is also created as a Return in Shopify
 -- (refund requests only in S5a; exchanges are S5b, fees S5c). Approved 2026-11-07.
 --
 -- The ONE writer of every column / row below is portal.ShopifyReturnSyncService (+ the owner switch in

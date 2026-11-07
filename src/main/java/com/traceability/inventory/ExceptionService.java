@@ -233,7 +233,7 @@ public class ExceptionService {
         // still holds open, and one whose return Shopify then declined / cancelled.
         all.addAll(detectShopifyReturnOpenAfterIntake(tenantId));
         all.addAll(detectShopifyReturnEndedAfterIntake(tenantId));
-        // Shopify-native returns S5a (V223): a Traced request's Shopify return that needs a person to check it.
+        // Shopify-native returns S5a (V224): a Traced request's Shopify return that needs a person to check it.
         all.addAll(detectShopifyReturnSyncCheck(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
