@@ -17,6 +17,40 @@ is verified in prod.**
 - Known edge: Shopify fulfilling the exchange BEFORE Traced packs (the Bosta app fulfils at shipment creation) still
   ends the shadow (S3b rule); S3d's courier attach is where that flow belongs. #1009 (third-party fulfilled product
   ended immediately — an unreadable FO must never end a reservation) is a separate investigation, not in S3c.
+
+**Onboarding redesign — O2 setup screens Flow-1…4 (2026-11-07; branch `feat/onboarding-setup-screens` off main 7d2b5743,
+worktree `~/Documents/traceability-o2`; approved + MERGED 2026-11-07, NOT deployed (backend changed: deploy app with --no-cache); no migration — one new pref key in the V220 jsonb).**
+Mockups `design/onboarding/Traced_onboarding_Flow-1…4`. Restyle of the V186 gate + two new post-gate screens.
+- **Gate (restyle only):** `OnboardingGate.tsx` on the new `SetupLayout.tsx` (frame: logo, stepper Shopify · Warehouse
+  address · Bosta · "Then: your first receiving", Need help? → wa.me/201037371204, language, Log out; card + side panel).
+  Who is gated, what is required and what is saved are unchanged (onboardingGate.test.tsx: text-only edits in og1, og4,
+  og5, og8). Flow-1 side panel = the corrected copy (no "keeps selling", no "move"). Flow-2 keeps today's fields; panel
+  "Why we need it" keeps only the true line — the mockup's "pickup address on your waybills and manifests" is FALSE today
+  (locations.address_* feeds only the Traced Main Shopify location) and was left out. No videos.
+- **Flow-1 "Connected":** shown at setupStep 'address' ONLY on the device that showed the Shopify step
+  (`traced.setup.shopifyStepSeen` in localStorage, set by ConnectStep, cleared by refreshSetupStep / Continue) — an App
+  Store signup (arrives connected) starts at the address, as before. Read-only from GET /connections: products
+  Imported / Importing… (importStatus), "Your Shopify locations" WITHOUT a number (no count without a Shopify call),
+  Traced Main Warehouse Ready / Setting up… / Not active (locationState). Path-1 OAuth returns to the Shopify admin, and
+  the way back is the embedded "Finish setup in Traced" link (/onboarding).
+- **Setup intro (owner only, outside SetupGate):** `/setup/courier` (Flow-3) and `/setup/ready` (Flow-4),
+  `pages/onboarding/SetupIntro.tsx`. ONE rule: `OnboardingProgressService.setupIntro` → GET /me `setupIntro`
+  'courier' | 'ready' | null — null unless role owner, setupStep null, not demo / review (scanHelpers), card not hidden
+  (V220 backfill hides it for every active tenant) and `setupIntroSeen` not set; 'courier' while the courier step is
+  neither done nor skipped. SetupGate redirects an owner once per screen per page load (`takeIntroRedirect` — a failed
+  pref write can't loop anyone); managers, workers and station mode never. Flow-3: Bosta = the existing POST
+  /bosta/connect + the show-once webhook secret (`WebhookSecretReveal`, now exported); Another courier = PUT
+  /settings/couriers {enabled: true, the saved default carrier}; Skip = PATCH prefs skipped += courier (other skipped
+  steps kept; a failed write still moves on). No Back (the address is saved; Settings › Locations edits it). Flow-4:
+  PATCH setupIntroSeen true on show (best effort), chips (skipped → "Bosta · later"), journey "your courier" unless
+  Bosta, Start → /receiving (O4 guides it), explore → /overview, "Book a free setup call" → Calendly.
+- **Backend:** `setupIntroSeen` (bool) added to the prefs whitelist and to GET /progress; `courierDone` extracted;
+  OnboardingSetupIntroTest (p1 whitelist, m1 courier → ready → null, m2 never manager / worker / station worker, m3
+  never gated / hidden / review / demo).
+- **Tests:** vitest 1,610 → 1,628 (setupIntro.test.tsx 18; all 8 key rules mutation-checked red); browser
+  setupIntroLayout (Flow-1 connected, Flow-3 ×2, Flow-4, EN/AR, desktop/phone, Chromium + WebKit) + the gate's layout
+  test unchanged and green; tsc + vite build clean.
+
 **Returns portal settings redesign — Pass B, one save + merged controls (2026-11-07; branch `feat/portal-settings-pass-b`
 off main c6aa7ca4; MERGED to main 2026-11-07 (7d2b5743), DEPLOYED and live-verified 2026-11-07; no migration; backend change = one optional query param
 → deploy needs the usual `--no-cache` app rebuild). Review round 2 (2026-11-07): the 10 proposed test

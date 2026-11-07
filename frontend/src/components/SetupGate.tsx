@@ -1,8 +1,8 @@
-import { ReactNode, useState } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getRoleFromToken } from '../api'
-import { useSetupState } from '../setupGate'
+import { loadSetupState, takeIntroRedirect, useSetupState, type SetupIntro } from '../setupGate'
 import { useStation } from './StationProvider'
 import OnboardingGate, { AddressStep, GateFrame } from '../pages/onboarding/OnboardingGate'
 
@@ -30,9 +30,35 @@ export function SetupGate({ children }: { children: ReactNode }) {
 function SetupGateInner({ children }: { children: ReactNode }) {
   const state = useSetupState()
   const [done, setDone] = useState(false)
+  // After the gate is finished here: the intro to go to next (undefined while /me is asked again).
+  const [after, setAfter] = useState<SetupIntro | undefined>(undefined)
   if (state === undefined) return <GateSpinner />
-  if (done || state.step === null) return <>{children}</>
-  return <OnboardingGate step={state.step} onDone={() => setDone(true)} />
+  if (done) return after === undefined ? <GateSpinner /> : <IntroRedirect intro={after}>{children}</IntroRedirect>
+  if (state.step === null) return <IntroRedirect intro={state.intro}>{children}</IntroRedirect>
+  return <OnboardingGate step={state.step} name={state.name} onDone={() => {
+    setDone(true)
+    loadSetupState().then(s => setAfter(s.intro))
+  }} />
+}
+
+/**
+ * Onboarding O2 — once the gate is done, an OWNER goes to the setup intro once (GET /me setupIntro:
+ * Flow-3 courier, then Flow-4). Those screens live outside SetupGate, so they can never lock anyone in:
+ * the redirect happens at most once per screen per page load (takeIntroRedirect), managers, workers and
+ * station mode never get here (SetupGate), and the backend never sends an intro for the demo / review
+ * tenants, a hidden card or a tenant that has seen it.
+ */
+function IntroRedirect({ intro, children }: { intro: SetupIntro; children: ReactNode }) {
+  const navigate = useNavigate()
+  const go = getRoleFromToken() === 'owner' ? intro : null
+  const [checked, setChecked] = useState(go === null)
+  useEffect(() => {
+    if (go === null) return
+    if (takeIntroRedirect(go)) navigate(go === 'courier' ? '/setup/courier' : '/setup/ready', { replace: true })
+    else setChecked(true)
+  }, [go, navigate])
+  if (!checked) return <GateSpinner />
+  return <>{children}</>
 }
 
 /**

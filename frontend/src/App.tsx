@@ -61,6 +61,7 @@ import Refund from './pages/Refund'
 import Contact from './pages/Contact'
 import ConnectShopify from './pages/connect/ConnectShopify'
 import { SetupGate, OnboardingRoute } from './components/SetupGate'
+import { SetupCourierPage, SetupReadyPage } from './pages/onboarding/SetupIntro'
 
 type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -612,6 +613,10 @@ export default function App() {
         {/* Onboarding gate (V186): the gate itself while setup isn't done (OwnerOnlyRoute's SetupGate);
             afterwards the warehouse-address form for the soft banner, else Overview. */}
         <Route path="/onboarding" element={<RequireAuth><OwnerOnlyRoute><OnboardingRoute /></OwnerOnlyRoute></RequireAuth>} />
+        {/* Onboarding O2 — the setup intro after the gate (Flow-3 courier, Flow-4 "You're connected"). Deliberately
+            OUTSIDE SetupGate so it can never lock anyone in; owner only, decided by GET /me setupIntro. */}
+        <Route path="/setup/courier" element={<RequireAuth><SetupCourierPage /></RequireAuth>} />
+        <Route path="/setup/ready"   element={<RequireAuth><SetupReadyPage /></RequireAuth>} />
         {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}
         <Route path="/shopify-inventory" element={<Navigate to="/inventory" replace />} />
         {import.meta.env.DEV && StyleGuide && (

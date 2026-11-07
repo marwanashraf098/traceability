@@ -44,7 +44,7 @@ function DisconnectedBadge({ label }: { label: string }) {
 // with the other two rows; the two rows that actually carry secret material
 // remain the Bearer value and the raw secret.
 
-function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () => void }) {
+export function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () => void }) {
   const { t } = useTranslation()
   const webhookUrl = `${window.location.origin}/api/v1/webhooks/bosta`
   const authKeyValue = `Bearer ${secret}`

@@ -45,6 +45,12 @@ import java.util.*;
  *   places      a live shelf or box — present ONLY when places are on for the tenant
  *
  * A step's {@code skipped} is true only while the step is not done.
+ *
+ * Setup intro (O2) — {@link #setupIntro}: the post-gate screens an OWNER is sent to once, after the gate
+ * (Flow-3 courier while the courier step is neither done nor skipped, then Flow-4 once; Flow-4 sets the
+ * {@code setupIntroSeen} pref). Read by GET /me; never for a manager / worker, a gated tenant, the demo or
+ * review tenants, a tenant whose card is hidden (backfilled for every active tenant at V220) or one that
+ * has seen it.
  */
 @Service
 public class OnboardingProgressService {
@@ -52,7 +58,7 @@ public class OnboardingProgressService {
     public static final Set<String> CARD_STATES   = Set.of("full", "slim", "hidden");
     public static final Set<String> SKIPPABLE     = Set.of("courier", "test_label");
     public static final Set<String> PREF_KEYS     =
-        Set.of("card", "skipped", "pickPackChosen", "testLabelPrinted", "labelingPace");
+        Set.of("card", "skipped", "pickPackChosen", "testLabelPrinted", "labelingPace", "setupIntroSeen");
     static final int PACE_MIN = 1, PACE_MAX = 10_000;
 
     /**
@@ -88,11 +94,7 @@ public class OnboardingProgressService {
         boolean firstReceiving = exists(
             "SELECT EXISTS (SELECT 1 FROM receipts WHERE tenant_id = ? " +
             "AND finalized_at IS NOT NULL AND status <> 'reversed')", tenantId);
-        boolean courier = exists(
-            "SELECT EXISTS (SELECT 1 FROM courier_accounts " +
-            "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')", tenantId)
-            || GenericShipments.enabled(jdbc, tenantId)
-            || CourierSimulation.isSimulated(jdbc, tenantId);
+        boolean courier = courierDone(jdbc, tenantId);
         boolean testLabel = Boolean.TRUE.equals(prefs.get("testLabelPrinted"))
             || exists("SELECT EXISTS (SELECT 1 FROM label_reprints WHERE tenant_id = ?)", tenantId);
 
@@ -134,7 +136,35 @@ public class OnboardingProgressService {
         out.put("card",  card instanceof String s && CARD_STATES.contains(s) ? s : "full");
         out.put("pickPackChosen", Boolean.TRUE.equals(prefs.get("pickPackChosen")));
         out.put("labelingPace", prefs.get("labelingPace") instanceof Number n ? n.intValue() : null);
+        out.put("setupIntroSeen", Boolean.TRUE.equals(prefs.get("setupIntroSeen")));
         return out;
+    }
+
+    /** The courier step: an active Bosta account, OR other couriers switched on, OR a simulated courier. */
+    static boolean courierDone(JdbcTemplate jdbc, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM courier_accounts " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')", Boolean.class, tenantId))
+            || GenericShipments.enabled(jdbc, tenantId)
+            || CourierSimulation.isSimulated(jdbc, tenantId);
+    }
+
+    public static final String INTRO_COURIER = "courier", INTRO_READY = "ready";
+
+    /**
+     * The setup intro screen an owner is sent to next — {@link #INTRO_COURIER}, {@link #INTRO_READY} or null.
+     * Caller's transaction and tenant context; the caller has already checked role = owner and setupStep = null.
+     */
+    public static String setupIntro(JdbcTemplate jdbc, UUID tenantId) {
+        if (com.traceability.review.ReviewCapabilities.scanHelpers(jdbc, tenantId)) return null;
+        Map<String, Object> p = jdbc.queryForMap(
+            "SELECT COALESCE(onboarding_prefs->>'setupIntroSeen', '') = 'true' AS seen, " +
+            "       COALESCE(onboarding_prefs->>'card', 'full') = 'hidden' AS hidden, " +
+            "       COALESCE(onboarding_prefs->'skipped', '[]'::jsonb) @> '[\"courier\"]'::jsonb AS courier_skipped " +
+            "FROM tenants WHERE id = ?", tenantId);
+        if (Boolean.TRUE.equals(p.get("seen")) || Boolean.TRUE.equals(p.get("hidden"))) return null;
+        if (!Boolean.TRUE.equals(p.get("courier_skipped")) && !courierDone(jdbc, tenantId)) return INTRO_COURIER;
+        return INTRO_READY;
     }
 
     // ── Write (the ONE writer of tenants.onboarding_prefs) ───────────────────
@@ -190,7 +220,7 @@ public class OnboardingProgressService {
                     }
                     clean.put(key, new ArrayList<>(out));
                 }
-                case "pickPackChosen", "testLabelPrinted" -> {
+                case "pickPackChosen", "testLabelPrinted", "setupIntroSeen" -> {
                     if (!(v instanceof Boolean b)) throw bad(key + " must be true or false");
                     clean.put(key, b);
                 }

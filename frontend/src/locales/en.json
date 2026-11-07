@@ -5269,16 +5269,14 @@
   },
   "setupGate": {
     "stepsLabel": "Setup steps",
-    "step1": "Connect Shopify",
     "step1Done": "Shopify connected",
-    "step2": "Main warehouse address",
-    "connectTitle": "Connect your Shopify store",
-    "connectBody": "Traced needs your store to bring in your products and new orders. You can start using Traced once setup is done — it takes about 2 minutes.",
+    "connectTitle": "Welcome. Let's connect your store.",
+    "connectBody": "Traced reads your products and new orders from Shopify, and keeps your online stock matching your shelves.",
     "connectFooter": "Traced only tracks orders placed after you connect. Your store stays linked to this account — you can't switch it to a different store later.",
     "backToTraced": "Back to Traced",
     "address": {
-      "title": "Where is your main warehouse?",
-      "body": "This is where you receive, store and pack your stock.",
+      "title": "Where is your warehouse?",
+      "body": "This is where your stock lives and where couriers pick up your parcels.",
       "governorate": "Governorate",
       "governoratePlaceholder": "Choose a governorate",
       "city": "City / area",
@@ -5289,7 +5287,7 @@
       "floor": "Floor",
       "optional": "(optional)",
       "shopifyNote": "We also put this address on the “Traced Main Warehouse” location in your Shopify. Shopify needs it to show your products as in stock.",
-      "finish": "Finish setup",
+      "finish": "Save and continue",
       "save": "Save address",
       "errGovernorate": "Choose a governorate.",
       "errCity": "Enter the city or area.",
@@ -5307,6 +5305,42 @@
       "title": "Add your warehouse address",
       "body": "Shopify needs your main warehouse's address to show your products as in stock.",
       "cta": "Add address"
+    },
+    "stepper": {
+      "shopify": "Shopify",
+      "address": "Warehouse address",
+      "courier": "Bosta",
+      "then": "Then: your first receiving"
+    },
+    "needHelp": "Need help?",
+    "eyebrow1": "Step 1 of 3 · about 1 minute",
+    "eyebrow2": "Step 2 of 3 · about 1 minute",
+    "connectTitleNamed": "Welcome, {{name}}. Let's connect your store.",
+    "shopifyPanel": {
+      "title": "What Traced does in your store",
+      "reads": "Reads your products and the orders placed from today.",
+      "stock": "Changes your Shopify stock only through actions you take in Traced: receiving, shipping, returns, stock takes and stock adjustments.",
+      "never": "Never edits your products, prices or customers."
+    },
+    "connected": {
+      "to": "Connected to",
+      "sub": "Importing in the background. You can keep going.",
+      "subDone": "Your products are in. You can keep going.",
+      "products": "Products",
+      "imported": "Imported",
+      "importing": "Importing…",
+      "locations": "Your Shopify locations",
+      "tracedMain": "Location “Traced Main Warehouse” added",
+      "ready": "Ready",
+      "settingUp": "Setting up…",
+      "notActive": "Not active in Shopify",
+      "continue": "Continue"
+    },
+    "addressPanel": {
+      "title": "Why we need it",
+      "why": "We put this address on “Traced Main Warehouse” in Shopify. Without it, Shopify can show your products as sold out by mistake.",
+      "moreTitle": "More than one warehouse?",
+      "more": "Add your main one now. You can add more later in Settings › Locations."
     }
   },
   "labelRuns": {
@@ -5942,5 +5976,60 @@
     },
     "permissionsNote": "Approve Traced's new Shopify permissions to see returns made in Shopify",
     "readOnlyNote": "Shopify returns are read-only here. Traced books no courier for them; scan the item in Scan returns when it arrives."
+  },
+  "setupIntro": {
+    "courier": {
+      "eyebrow": "Step 3 of 3 · about 2 minutes",
+      "title": "How do you ship your orders?",
+      "groupLabel": "Courier",
+      "bosta": "Bosta",
+      "bostaDesc": "Traced reads your deliveries and prints waybills.",
+      "other": "Another courier",
+      "otherDesc": "You print the waybill. Traced reads the tracking number from Shopify.",
+      "keyLabel": "Bosta API key",
+      "keyPlaceholder": "Paste your key here",
+      "keyHelp": "In Bosta: Applications › “Connect your store using an API key” › create a Full access key.",
+      "errKey": "Paste your Bosta API key.",
+      "otherNoteTitle": "Nothing to connect.",
+      "otherNote": "Print your courier's waybill as usual. Traced picks up the tracking number from Shopify, and your team scans the waybill to pack.",
+      "otherWarn": "Add tracking numbers in Shopify before packing, not after shipping.",
+      "errSave": "Couldn't save. Please try again.",
+      "skip": "Skip for now",
+      "connect": "Test and connect",
+      "continue": "Continue",
+      "panelTitle": "With Bosta connected",
+      "panel1": "Orders reach Pick & Pack as soon as they have a Bosta delivery.",
+      "panel2": "Print waybills for a whole batch in one click.",
+      "panel3": "Returns and exchanges are booked and expected before they arrive.",
+      "skipTitle": "Skipping is fine.",
+      "skipBody": "You can receive and label your stock today, and connect Bosta later from Settings › Connections."
+    },
+    "ready": {
+      "title": "You're connected",
+      "chipsLabel": "Setup",
+      "chipShopify": "Shopify",
+      "chipAddress": "Warehouse address",
+      "chipBosta": "Bosta",
+      "chipOther": "Your courier",
+      "chipBostaLater": "Bosta · later",
+      "stockTitle": "Now the part that makes Traced work: your stock",
+      "stockBody": "Traced can only pack, ship and track pieces it knows. Every piece gets a barcode in a receiving session. Your first one takes about 5 minutes.",
+      "journeyLabel": "Your journey",
+      "startHere": "Start here",
+      "then": "Then",
+      "receive": "Receive",
+      "receiveBody": "Give your pieces barcodes",
+      "pack": "Pack",
+      "packBody": "Scan pieces into orders",
+      "pickup": "Pickup",
+      "pickupBody": "Hand parcels to your courier",
+      "pickupBodyBosta": "Hand parcels to Bosta",
+      "returns": "Returns",
+      "returnsBody": "Scan back what comes back",
+      "explore": "I'll explore on my own",
+      "start": "Start my first receiving session",
+      "callLead": "Want us with you for this part?",
+      "call": "Book a free setup call"
+    }
   }
 }
