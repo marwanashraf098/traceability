@@ -521,7 +521,9 @@
       "tracking_change_needs_review": "شوبيفاي يعرض بوليصة مختلفة",
       "tracking_changed_relabel": "ضع البوليصة الجديدة على الطرد",
       "superseded_waybill_moving": "البوليصة القديمة ما زالت تتحرك في Bosta",
-      "shopify_exchange_still_waiting": "استبدال في شوبيفاي ما زال في الانتظار"
+      "shopify_exchange_still_waiting": "استبدال في شوبيفاي ما زال في الانتظار",
+      "shopify_return_open_after_intake": "استُلم في Traced والمرتجع ما زال مفتوحاً في شوبيفاي",
+      "shopify_return_ended_after_intake": "رُفض المرتجع أو أُلغي في شوبيفاي بعد الوصول"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {

@@ -229,6 +229,10 @@ public class ExceptionService {
         all.addAll(detectShopifyExchangeShort(tenantId));
         if (shippedInShopifyAlertEnabled) all.addAll(detectShopifyExchangeShippedInShopify(tenantId));
         all.addAll(detectShopifyExchangeStillWaiting(tenantId));
+        // Shopify-native returns S4 (V222): an item Scan returns took in for a Shopify return whose return Shopify
+        // still holds open, and one whose return Shopify then declined / cancelled.
+        all.addAll(detectShopifyReturnOpenAfterIntake(tenantId));
+        all.addAll(detectShopifyReturnEndedAfterIntake(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
@@ -355,6 +359,8 @@ public class ExceptionService {
         Map.entry("shopify_exchange_short/variant",            OrderLink.NONE),           // per variant (shadows are never in Orders)
         Map.entry("shopify_exchange_shipped_in_shopify/order", OrderLink.DIRECT),         // order_id = the ORIGINAL order
         Map.entry("shopify_exchange_still_waiting/order",      OrderLink.DIRECT),         // order_id = the ORIGINAL order
+        Map.entry("shopify_return_open_after_intake/shopify_return",  OrderLink.DIRECT),  // the Shopify return's order
+        Map.entry("shopify_return_ended_after_intake/shopify_return", OrderLink.DIRECT),
         Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
         Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
         Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
@@ -410,6 +416,8 @@ public class ExceptionService {
         Map.entry("refund_pending_overdue",           "return_to_handle"),
         Map.entry("return_items_overdue",             "return_to_handle"),
         Map.entry("restocked_twice",                  "return_to_handle"),
+        Map.entry("shopify_return_open_after_intake",  "return_to_handle"),
+        Map.entry("shopify_return_ended_after_intake", "return_to_handle"),
         Map.entry("blocked_customer",                 "other"),
         Map.entry("shopify_edit_conflict",            "other"),
         Map.entry("generic_delivered_without_pickup", "other"),
@@ -465,7 +473,8 @@ public class ExceptionService {
         "shopify_connection_lost",       "SHOPIFY_RECONNECTED",
         "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE",
         "shopify_exchange_short",        "STOCK_COVERS_EXCHANGES",
-        "shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED");
+        "shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED",
+        "shopify_return_open_after_intake", "SHOPIFY_RETURN_PROCESSED");
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -956,6 +965,59 @@ public class ExceptionService {
             "ORDER BY s.approved_at", tid);
     }
 
+    private int returnOpenAfterIntakeDays = 7;
+
+    /** shopify_return_open_after_intake: the item reached Traced more than this many days ago (S4, default 7). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReturnOpenAfterIntakeDays(
+            @org.springframework.beans.factory.annotation.Value("${traced.shopify-returns.open-after-intake-days:7}") int d) {
+        this.returnOpenAfterIntakeDays = d;
+    }
+
+    /**
+     * shopify_return_open_after_intake (LOW, S4, condition-only) — Scan returns took in an item of a Shopify return
+     * more than {@link #returnOpenAfterIntakeDays} days ago and Shopify still holds the return open with that unit not
+     * processed. Clears when Shopify processes the received units or closes the return (or it ends — then the MEDIUM
+     * below takes over). One per return; order_id = the return's order.
+     */
+    private List<Map<String, Object>> detectShopifyReturnOpenAfterIntake(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_return_open_after_intake' AS type, 'LOW' AS severity, 'shopify_return' AS subject_type, " +
+            "       r.order_id, mo.number AS order_number, r.name AS return_name, r.id AS shopify_return_id, " +
+            "       (SELECT min(i.received_at) FROM shopify_return_intakes i WHERE i.return_id = r.id AND i.tenant_id = r.tenant_id) AS occurred_at, " +
+            "       'shopify_return_open_after_intake:' || r.id AS subject_key " +
+            "FROM shopify_returns r JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
+            "WHERE r.tenant_id = ? AND r.status = 'OPEN' " +
+            "  AND EXISTS (SELECT 1 FROM shopify_return_lines l " +
+            "              WHERE l.return_id = r.id AND l.tenant_id = r.tenant_id " +
+            "                AND l.processed_quantity < (SELECT COUNT(*) FROM shopify_return_intakes i " +
+            "                    WHERE i.return_line_id = l.id AND i.tenant_id = l.tenant_id " +
+            "                      AND i.received_at < now() - make_interval(days => ?))) " +
+            "ORDER BY occurred_at", tid, returnOpenAfterIntakeDays);
+    }
+
+    /**
+     * shopify_return_ended_after_intake (MEDIUM, S4) — Shopify declined or cancelled a return after Scan returns took
+     * in its item (an intake exists only while the return was live, so any intake on a dead return came first). Traced
+     * moves nothing: a manager decides what happens to the piece(s), then resolves. One per return.
+     */
+    private List<Map<String, Object>> detectShopifyReturnEndedAfterIntake(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_return_ended_after_intake' AS type, 'MEDIUM' AS severity, 'shopify_return' AS subject_type, " +
+            "       r.order_id, mo.number AS order_number, r.name AS return_name, r.id AS shopify_return_id, r.status AS return_status, " +
+            "       (SELECT string_agg(p.barcode, ', ' ORDER BY p.barcode) FROM shopify_return_intakes i " +
+            "          JOIN pieces p ON p.id = i.piece_id WHERE i.return_id = r.id AND i.tenant_id = r.tenant_id) AS barcodes, " +
+            "       COALESCE(r.cancelled_seen_at, r.updated_at) AS occurred_at, " +
+            "       'shopify_return_ended_after_intake:' || r.id AS subject_key " +
+            "FROM shopify_returns r JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
+            "WHERE r.tenant_id = ? AND r.status IN ('DECLINED', 'CANCELED') " +
+            "  AND EXISTS (SELECT 1 FROM shopify_return_intakes i WHERE i.return_id = r.id AND i.tenant_id = r.tenant_id) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = r.tenant_id " +
+            "      AND er.exception_type = 'shopify_return_ended_after_intake' " +
+            "      AND er.subject_key = 'shopify_return_ended_after_intake:' || r.id) " +
+            "ORDER BY occurred_at", tid);
+    }
+
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
         List<Map<String, Object>> out = new ArrayList<>();
         IncrementRecoveryRules.SetupProblem problem = IncrementRecoveryRules.setupProblem(jdbc, tid);
@@ -1418,7 +1480,7 @@ public class ExceptionService {
             "       o.id AS order_id, o.number AS order_number, " +
             "       pe.occurred_at, " +
             "       'unexpected_return:' || p.id AS subject_key, " +
-            "       pe.shipment_id AS expected_back_shipment_id " +
+            "       pe.shipment_id AS expected_back_shipment_id, p.variant_id AS expected_back_variant_id " +
             "FROM pieces p " +
             "JOIN piece_events pe ON pe.piece_id = p.id " +
             "    AND pe.event_type = 'return_received' " +
@@ -1438,7 +1500,8 @@ public class ExceptionService {
         // drift between the two call sites.
         return candidates.stream()
             .filter(row -> !shipmentLinkService.isExpectedBack(
-                (UUID) row.remove("expected_back_shipment_id"), (UUID) row.get("order_id"), tid))
+                (UUID) row.remove("expected_back_shipment_id"), (UUID) row.get("order_id"), tid,
+                (String) row.get("piece_id"), (UUID) row.remove("expected_back_variant_id")))
             .collect(java.util.stream.Collectors.toList());
     }
 
@@ -2707,6 +2770,30 @@ public class ExceptionService {
                     + product + "، " + n + " قطعة. نفّذ شوبيفاي الاستبدال بدون Traced، فتوقف Traced عن حجزها. إن خرجت القطعة "
                     + "فعلاً، عدّلها من البحث، ثم أغلق التنبيه.");
                 item.put("suggestedAction", "check_piece_in_lookup");
+                item.put("actionUrl", "/orders/" + item.get("order_id"));
+            }
+            case "shopify_return_open_after_intake" -> {
+                String name = str(item, "return_name");
+                item.put("descriptionEn", "Received in Traced, return still open in Shopify — " + name + ". The item came "
+                    + "back through Scan returns more than " + returnOpenAfterIntakeDays + " days ago, but the return is "
+                    + "still open in Shopify. Process it in Shopify (refund / restock) or close it there.");
+                item.put("descriptionAr", "استُلم في Traced والمرتجع ما زال مفتوحاً في شوبيفاي — " + name + ". عادت القطعة "
+                    + "عبر مسح المرتجعات منذ أكثر من " + returnOpenAfterIntakeDays + " أيام، لكن المرتجع ما زال مفتوحاً في "
+                    + "شوبيفاي. عالجه في شوبيفاي (استرداد / إعادة للمخزون) أو أغلقه هناك.");
+                item.put("suggestedAction", "process_in_shopify");
+                item.put("actionUrl", "/orders/" + item.get("order_id"));
+            }
+            case "shopify_return_ended_after_intake" -> {
+                String name = str(item, "return_name");
+                boolean declined = "DECLINED".equals(item.get("return_status"));
+                String barcodes = str(item, "barcodes");
+                item.put("descriptionEn", "Return " + name + " was " + (declined ? "declined" : "cancelled") + " in Shopify "
+                    + "after its item arrived in Traced (" + barcodes + "). Traced didn't move anything — decide what "
+                    + "happens to the piece (keep it, send it back to the customer), then resolve.");
+                item.put("descriptionAr", "تم " + (declined ? "رفض" : "إلغاء") + " المرتجع " + name + " في شوبيفاي بعد "
+                    + "وصول القطعة إلى Traced (" + barcodes + "). لم يحرّك Traced أي شيء — قرّر ماذا تفعل بالقطعة "
+                    + "(الاحتفاظ بها أو إعادتها للعميل)، ثم أغلق التنبيه.");
+                item.put("suggestedAction", "manager_decides_piece");
                 item.put("actionUrl", "/orders/" + item.get("order_id"));
             }
             case "shopify_exchange_still_waiting" -> {

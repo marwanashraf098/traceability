@@ -287,6 +287,7 @@ public class ReturnSessionService {
         PieceStatus current   = PieceStatus.fromDb((String) piece.get("status"));
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
+        UUID pieceVariantId   = (UUID) piece.get("variant_id");
         // G3: a piece of an order whose GENERIC forward leg is with the courier or delivered — the scan is the
         // return evidence (same rule as its waybill): the leg becomes 'returned', the piece is expected back.
         // Never a Bosta leg (returnableGenericLeg reads provider = 'generic' only).
@@ -296,8 +297,10 @@ public class ReturnSessionService {
             // G4a: a DELIVERED piece of an order whose customer return is in progress (a portal request on it —
             // which is what attribution below binds to — or a generic return leg awaiting intake) is the
             // customer's return: no "returned to sender" marking; the request rules below accept it.
+            // S4: likewise a delivered piece a Shopify-native return expects back is the customer's return.
             if (genericLeg != null && current == PieceStatus.DELIVERED
-                    && com.traceability.courier.GenericPortalReturns.customerReturnInProgress(jdbc, tenantId, orderId)) {
+                    && (com.traceability.courier.GenericPortalReturns.customerReturnInProgress(jdbc, tenantId, orderId)
+                        || shipmentLinkService.shopifyReturnExpects(tenantId, pieceId, orderId, pieceVariantId))) {
                 genericLeg = null;
             }
             if (genericLeg != null) {
@@ -325,14 +328,14 @@ public class ReturnSessionService {
                 // way back to sender (RTO states move no piece before 46), or the order has a
                 // CRP return leg / matched exchange in flight. ShipmentLinkService.isExpectedBack
                 // is the one rule; detectUnexpectedReturn uses it too.
-                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId);
+                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId, pieceId, pieceVariantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.WITH_COURIER, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case AWAITING_PICKUP -> {
                 legal = true;
-                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId);
+                unexpected = !shipmentLinkService.isExpectedBack(shipmentId, orderId, tenantId, pieceId, pieceVariantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.AWAITING_PICKUP, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
@@ -358,19 +361,26 @@ public class ReturnSessionService {
                 // pieces. Return-leg courier states no longer move pieces, so this scan is
                 // the ONLY way such a piece reaches return_pending_inspection.
                 boolean crpAwaitingIntake = shipmentLinkService.hasReturnLegAwaitingIntake(orderId, tenantId);
-                if (attribution != null || inWindow || matchedExchangeCover || crpAwaitingIntake || genericReturn) {
+                // S4: a Shopify-native return of this order (a replacement's: of its original) expects this
+                // variant back — accepted regardless of the window, like an approved Traced request.
+                boolean shopifyReturn = shipmentLinkService.shopifyReturnExpects(tenantId, pieceId, orderId, variantId);
+                if (attribution != null || inWindow || matchedExchangeCover || crpAwaitingIntake || genericReturn
+                        || shopifyReturn) {
                     legal = true;
                     // Label = what actually covers the piece, independent of the window
                     // (acceptance above is unchanged). Precedence:
-                    // exchange_match > request_return > crp_return > customer_after_delivery.
+                    // exchange_match > request_return > crp_return > customer_return_shopify > rto
+                    // > customer_after_delivery.
                     //   exchange_match — a matched exchange on this order.
                     //   request_return — attributed to an open return-request item (4d-1).
                     //   crp_return     — a return leg, non-terminal or awaiting intake
                     //                    (hasReturnLegAwaitingIntake covers both).
+                    //   customer_return_shopify — a Shopify-native return expects it (S4).
                     //   customer_after_delivery — in window, none of the above.
                     String returnKind = shipmentLinkService.hasMatchedExchange(orderId, tenantId) ? "exchange_match"
                         : attribution != null ? "request_return"
                         : crpAwaitingIntake ? "crp_return"
+                        : shopifyReturn ? "customer_return_shopify"
                         : genericReturn ? "rto"
                         : "customer_after_delivery";
                     String requestMeta = attribution == null ? ""
@@ -423,6 +433,12 @@ public class ReturnSessionService {
             itemId, tenantId, sessionId, pieceId, actorUserId, unexpected,
             attribution == null ? null : attribution.itemId());
         if (attribution != null) requests.reevaluate(tenantId, attribution.requestId(), actorUserId);
+        // S4: which Shopify return line this piece satisfies (oldest open line of its order + variant). A Traced
+        // request that took the scan first is recorded with it — the Shopify line is covered by that scan.
+        if (legal) {
+            ShopifyReturnIntake.link(jdbc, tenantId, pieceId, orderId, pieceVariantId, sessionId, itemId,
+                attribution == null ? null : attribution.itemId(), actorUserId);
+        }
 
         return itemRow(itemId, tenantId);
     }
