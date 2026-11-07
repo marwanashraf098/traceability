@@ -537,6 +537,9 @@ class ShadowOrderLeakTest {
         reg("GET /api/v1/onboarding/status",             list());
         reg("POST /api/v1/onboarding/dismiss",           skip(R_CONFIG));
         reg("POST /api/v1/onboarding/steps",             skip(R_CONFIG));
+        reg("GET /api/v1/onboarding/progress",           list());
+        reg("PATCH /api/v1/onboarding/prefs",            skip(R_CONFIG));
+        reg("POST /api/v1/me/ui-state",                  skip(R_CONFIG));
         reg("GET /api/v1/setup/address",                 list());
         reg("PUT /api/v1/setup/address",                 skip(R_CONFIG));
         reg("GET /api/v1/health",                        list());
