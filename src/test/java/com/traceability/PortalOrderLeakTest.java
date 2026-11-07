@@ -390,6 +390,12 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived",      skip(R_RETURNS));
         reg("POST /api/v1/return-requests/{id}/items/{itemId}/arrived/undo", skip(R_RETURNS));
         reg("PUT /api/v1/return-requests/{id}/pickup-area", skip(R_RETURNS));
+        // Shopify-native returns S5a: the request's Shopify return (drawer) and the owner's switch.
+        for (String a : List.of("shopify-sync/retry", "shopify-sync/check", "shopify-sync/checked")) {
+            reg("POST /api/v1/return-requests/{id}/" + a, skip(R_RETURNS));
+        }
+        reg("GET /api/v1/tenant/shopify-returns-sync", skip(R_CONFIG));
+        reg("PUT /api/v1/tenant/shopify-returns-sync", skip(R_CONFIG));
         reg("PUT /api/v1/return-requests/{id}/amounts", skip(R_RETURNS));          // F2: fee override
         // C2 (2026-10-28): Lookup Exchange — the original-order search reads merchant_orders minus internal orders;
         // what can come back is by order id; the create takes the order in its body (merchant_orders → ORDER_NOT_FOUND

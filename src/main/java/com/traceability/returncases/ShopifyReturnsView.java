@@ -96,7 +96,11 @@ public final class ShopifyReturnsView {
             "SELECT r.id, r.name, r.status, r.order_id, mo.number AS order_number, " +
             "       COALESCE(r.shopify_created_at, r.created_at) AS requested_at, r.closed_at, r.lines_truncated, " +
             "       (r.status NOT IN " + DEAD_SHOPIFY_STATUSES + " AND " +
-            DUPLICATE_TRACED_REQUEST_SQL.formatted("r.order_id", "r.tenant_id") + ") AS duplicate, " +
+            DUPLICATE_TRACED_REQUEST_SQL.formatted("r.order_id", "r.tenant_id") + " AND NOT " +
+            com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + ") AS duplicate, " +
+            // S5a: the Traced request this Shopify return was created for (null for every other return).
+            "       (SELECT q.reference FROM return_requests q WHERE q.tenant_id = r.tenant_id " +
+            "          AND q.shopify_return_gid = r.return_gid LIMIT 1) AS created_for, " +
             "       (SELECT array_agg(q.reference ORDER BY q.created_at, q.id) FROM return_requests q " +
             "         WHERE q.order_id = r.order_id AND q.tenant_id = r.tenant_id " +
             "           AND q.status::text NOT IN " + DEAD_REQUEST_STATUSES + ") AS traced_refs " +
@@ -118,6 +122,8 @@ public final class ShopifyReturnsView {
                 boolean dup = rs.getBoolean("duplicate");
                 m.put("duplicate", dup);
                 m.put("duplicateOf", dup ? strings(rs.getArray("traced_refs")) : List.of());
+                String createdFor = rs.getString("created_for");
+                if (createdFor != null) m.put("createdByTraced", createdFor);
                 m.put("comingBack", new ArrayList<Map<String, Object>>());
                 m.put("goingOut", new ArrayList<Map<String, Object>>());
                 m.put("restockedInShopify", 0);

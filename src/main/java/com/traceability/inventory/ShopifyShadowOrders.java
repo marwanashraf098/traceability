@@ -397,9 +397,11 @@ public class ShopifyShadowOrders {
             "FROM merchant_orders WHERE id = ? AND tenant_id = ?", String.class, o.id(), tenantId));
         int created = 0, updated = 0, ended = 0, units = 0;
         for (Map<String, Object> r : jdbc.queryForList(
-                "SELECT id, return_gid, status, COALESCE(request_approved_at, shopify_created_at, created_at) AS approved_at " +
-                "FROM shopify_returns WHERE tenant_id = ? AND order_id = ? " +
-                "ORDER BY COALESCE(request_approved_at, shopify_created_at, created_at), id", tenantId, o.id())) {
+                "SELECT r.id, r.return_gid, r.status, COALESCE(r.request_approved_at, r.shopify_created_at, r.created_at) AS approved_at " +
+                "FROM shopify_returns r WHERE r.tenant_id = ? AND r.order_id = ? " +
+                // S5a: a return Traced created for its own request never gets a shadow (Traced has its own replacement).
+                "  AND NOT " + com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + " " +
+                "ORDER BY COALESCE(r.request_approved_at, r.shopify_created_at, r.created_at), r.id", tenantId, o.id())) {
             UUID returnId = (UUID) r.get("id");
             String status = (String) r.get("status");
             List<XLine> lines = jdbc.query(

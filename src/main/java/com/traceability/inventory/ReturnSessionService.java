@@ -555,6 +555,11 @@ public class ReturnSessionService {
                 rs -> rs.next() ? rs.getObject("request_item_id", UUID.class) : null,
                 sessionId, pieceId, tenantId);
             requests.onFinalDisposition(tenantId, requestItemId, stored, actorUserId);
+            if (requestItemId != null && shopifyReturnSync != null) {
+                UUID requestId = jdbc.query("SELECT request_id FROM return_request_items WHERE id = ? AND tenant_id = ?",
+                    rs -> rs.next() ? rs.getObject(1, UUID.class) : null, requestItemId, tenantId);
+                shopifyReturnSync.nudge(tenantId, requestId);
+            }
         }
 
         return fetchItemByPiece(sessionId, pieceId, tenantId);
@@ -903,6 +908,7 @@ public class ReturnSessionService {
         requireOpen(sessionId, tenantId);
         UUID requestId = requireItemParcelScanned(sessionId, itemId, tenantId);
         requests.arrivedUntracked(tenantId, requestId, itemId, condition, actorUserId, sessionId);
+        if (shopifyReturnSync != null) shopifyReturnSync.nudge(tenantId, requestId);
     }
 
     /** POST /returns/sessions/{sessionId}/request-items/{itemId}/arrived/undo — same guards. */
@@ -912,6 +918,15 @@ public class ReturnSessionService {
         requireOpen(sessionId, tenantId);
         UUID requestId = requireItemParcelScanned(sessionId, itemId, tenantId);
         requests.undoArrivedUntracked(tenantId, requestId, itemId, actorUserId, sessionId);
+        if (shopifyReturnSync != null) shopifyReturnSync.nudge(tenantId, requestId);
+    }
+
+    /** Shopify-native returns S5a: a graded / arrived request item is processed in Shopify (listed tenants only). */
+    private com.traceability.portal.ShopifyReturnSyncScheduler shopifyReturnSync;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyReturnSync(com.traceability.portal.ShopifyReturnSyncScheduler shopifyReturnSync) {
+        this.shopifyReturnSync = shopifyReturnSync;
     }
 
     /** The item's request (404 when not this tenant's), provided its parcel AWB was scanned in this session (else 409). */

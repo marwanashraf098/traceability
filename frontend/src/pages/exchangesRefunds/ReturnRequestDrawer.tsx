@@ -15,6 +15,7 @@ import ExchangeProgressView from './ExchangeProgressView'
 import CustomerRefundChoice from './CustomerRefundChoice'
 import ItemPhotos from './ItemPhotos'
 import ManualCourierPanel from './ManualCourierPanel'
+import ShopifySyncState from './ShopifySyncState'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -597,6 +598,14 @@ function DrawerContent({
               <dd className="text-body text-primary">
                 <BookingState detail={detail} onChanged={async () => { await load(); onChanged() }}
                   onBookingStarted={startBookingPoll} />
+              </dd>
+            </div>
+          )}
+          {detail.shopifySync && (
+            <div className="col-span-2 min-w-0" data-testid="shopify-sync-row">
+              <dt className="text-caption text-muted mb-0.5">{t('exchangesRefunds.requests.drawer.shopify.label')}</dt>
+              <dd className="text-body text-primary">
+                <ShopifySyncState detail={detail} onChanged={async () => { await load(); onChanged() }} />
               </dd>
             </div>
           )}

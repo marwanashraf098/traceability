@@ -118,6 +118,10 @@ traced:
   # traced.portal-fees.settings-enabled stays false. Empty = no store (today's behaviour).
   portal-fees:
     tenants: ${TRACED_PORTAL_FEES_TENANTS:}
+  # Shopify-native returns S5a (ShopifyReturnSyncRollout): comma-separated tenant ids that may switch on
+  # "Create returns in Shopify". Empty = no tenant (the feature doesn't exist anywhere).
+  shopify-returns-sync:
+    tenants: ${TRACED_SHOPIFY_RETURNS_SYNC_TENANTS:}
   # One-off line paid price backfill (PaidPriceBackfill, 2026-11-06) — never scheduled.
   # TRACED_PAID_PRICE_BACKFILL_ON_STARTUP=fees|<tenant ids> → DRY RUN (counts per tenant, no Shopify call);
   # add TRACED_PAID_PRICE_BACKFILL_APPLY=true to read Shopify and store the prices. Logs: grep PAID_PRICE_BACKFILL.

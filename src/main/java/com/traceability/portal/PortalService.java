@@ -96,6 +96,14 @@ public class PortalService {
     private final PickupAreaService   pickupAreas;
     private final PickupBookingScheduler bookingScheduler;
 
+    /** S5a — an auto-approved request's Shopify return (listed tenants only). */
+    private ShopifyReturnSyncScheduler shopifyReturnSync;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyReturnSync(ShopifyReturnSyncScheduler shopifyReturnSync) {
+        this.shopifyReturnSync = shopifyReturnSync;
+    }
+
     /** Without a scheduler (tests on an app_user connection): auto-approval never enqueues a booking. */
     public PortalService(JdbcTemplate jdbc, PlatformTransactionManager txm, PortalTokenService tokens) {
         this(jdbc, txm, tokens, null);
@@ -666,6 +674,9 @@ public class PortalService {
             // that books Bosta pickups gets its booking job now (the client never sees the id).
             UUID bookRequestId = (UUID) body.remove("_bookRequestId");
             if (bookRequestId != null && bookingScheduler != null) bookingScheduler.enqueue(bookRequestId, tenantId);
+            // S5a: an auto-approved request's Shopify return (listed tenants only; the transaction has committed).
+            UUID syncRequestId = (UUID) body.remove("_syncRequestId");
+            if (syncRequestId != null && shopifyReturnSync != null) shopifyReturnSync.nudge(tenantId, syncRequestId);
             return Optional.of(new SubmitResult(SubmitOutcome.CREATED, body));
         } catch (InvalidSubmission e) {
             return Optional.of(new SubmitResult(SubmitOutcome.INVALID, null));
@@ -1067,6 +1078,7 @@ public class PortalService {
                 "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             body.put("_bookRequestId", requestId);   // internal — removed before the response
         }
+        if (autoApprove) body.put("_syncRequestId", requestId);   // internal — removed before the response
         return body;
     }
 
