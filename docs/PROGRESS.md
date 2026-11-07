@@ -5,18 +5,19 @@
 ## Current state
 
 **Shopify-native returns S4 — returns through Scan returns intake (2026-11-07; branch `feat/s4-shopify-return-intake`
-off main 4e37aa22, NOT merged, NOT deployed; V222 — migration number to be confirmed against prod before merge).** See
+off main 4e37aa22, approved and MERGED 2026-11-07, NOT deployed; V222 — free on main and prod (prod at V221, checked 18:32)).** See
 CLAUDE.md (S4 paragraph). A Shopify return line expects its order's pieces of that variant back (a replacement's: via the
 shadow); Scan returns accepts them (customer_return_shopify), links each to the oldest open line (shopify_return_intakes),
 a Traced request takes a duplicate first and covers the line; the S2 card reads the links; restock via the S1b guard;
-LOW "received, still open in Shopify" after 7 days, MEDIUM "declined / cancelled after arrival". Stores without returns
-access unchanged. Not covered: untracked units of a Shopify return (no piece to link).
+LOW "received, still open in Shopify" after 7 days, MEDIUM "declined / cancelled after arrival". Approval change: an
+OPEN / CLOSED return expects pieces only within the tenant's return window (30 days when none) from its creation
+(test w1, revert-checked). Stores without returns access unchanged. Not covered: untracked units of a Shopify return (no piece to link).
 
 **Shopify-native returns S3d — courier attach (2026-11-07; branch `feat/s3d-courier-attach` off main 8964ccd6, MERGED
-2026-11-07 as 4e37aa22, NOT deployed; V221).** See CLAUDE.md (S3d paragraph). Review (2026-11-07): type 20 / RTO with an -R reference keeps today's path (SEND only); unexplained holds stay waiting + `shopify_exchange_still_waiting` after 7 days + owner/manager Release reservation (audited, sticky manual_release); #1009 confirmed on prod (exchange FO at an unreadable 3PL location). Tracked exchange fulfillments keep the shadow
+2026-11-07 as 4e37aa22, DEPLOYED 2026-11-07 16:23; V221).** See CLAUDE.md (S3d paragraph). Review (2026-11-07): type 20 / RTO with an -R reference keeps today's path (SEND only); unexplained holds stay waiting + `shopify_exchange_still_waiting` after 7 days + owner/manager Release reservation (audited, sticky manual_release); #1009 confirmed on prod (exchange FO at an unreadable 3PL location). Tracked exchange fulfillments keep the shadow
 live and packable; untracked end it; unknown never ends it (#1009). Bosta type 30 + SEND and generic courier legs attach
 to the shadow; Lookup nests the shadows. Prod SQL for #1009 / -R SENDs: scratchpad `s3d-step0-prod.sql` (Marawan runs).
-After S3d is verified in prod: `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=true`.
+Verified in prod end to end on #1011; `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED` (the S3c flag) is ON in prod.
 
 **Shopify-native returns S3c — Pick & Pack for exchange shadows (2026-11-07; branch `feat/s3c-pick-pack` off main
 c6aa7ca4, rebased on 5b017cfd, approved and MERGED 2026-11-07, NOT deployed; no migration).** See CLAUDE.md (S3c

@@ -13,8 +13,10 @@ import java.util.UUID;
  *
  * An OPEN Shopify return line = a line of a return on an order Traced holds, whose store granted returns access
  * ({@code stores.returns_access = 'granted'}), with status OPEN or CLOSED (approved by the merchant — Shopify may
- * have processed the unit before it reached Traced), and fewer Traced intakes than its quantity. REQUESTED (not yet
- * approved), DECLINED and CANCELED returns expect nothing.
+ * have processed the unit before it reached Traced), created no longer ago than the tenant's return window
+ * ({@code tenants.customer_return_window_days}, 30 when none — approved 2026-11-07, so a return closed without the item
+ * coming back never expects it forever), and fewer Traced intakes than its quantity. REQUESTED (not yet approved),
+ * DECLINED and CANCELED returns expect nothing.
  *
  * A piece is expected back by a Shopify return when (a) it already satisfies a line since it last left Traced, or
  * (b) an open line of its ORIGINAL order has the piece's variant. A replacement shipped on a shadow order (#…-X1)
@@ -39,8 +41,11 @@ public final class ShopifyReturnIntake {
         "SELECT l.id AS line_id, l.return_id FROM shopify_return_lines l " +
         "JOIN shopify_returns r ON r.id = l.return_id AND r.tenant_id = l.tenant_id " +
         "JOIN stores st ON st.id = r.store_id " +
+        "JOIN tenants t ON t.id = l.tenant_id " +
         "WHERE l.tenant_id = ? AND r.order_id = ? AND l.variant_id = ? " +
         "  AND r.status IN ('OPEN', 'CLOSED') AND st.returns_access = 'granted' " +
+        "  AND now() <= COALESCE(r.shopify_created_at, r.created_at) " +
+        "              + interval '1 day' * COALESCE(t.customer_return_window_days, 30) " +
         "  AND l.quantity > (SELECT COUNT(*) FROM shopify_return_intakes i " +
         "                    WHERE i.return_line_id = l.id AND i.tenant_id = l.tenant_id) " +
         "ORDER BY COALESCE(r.shopify_created_at, r.created_at), r.id, l.created_at, l.id";

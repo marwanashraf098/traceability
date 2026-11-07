@@ -635,4 +635,50 @@ class ShopifyReturnIntakeTest {
         assertThat(t.alerts(OPEN_ALERT)).isEmpty();
         assertThat(t.alerts(ENDED_ALERT)).isEmpty();
     }
+
+    // ── w1: a Shopify return stops expecting pieces after the tenant's return window ───────────────────────────────
+
+    @Test
+    void w1_openOrClosedReturn_expectsOnlyWithinTheTenantsReturnWindow_fromTheReturnsCreation() {
+        // A tenant with a 10-day window: an OPEN / CLOSED return 9 days old expects; 11 days old doesn't.
+        Shop s = new Shop("w1");
+        jdbc.update("UPDATE tenants SET customer_return_window_days = 10 WHERE id = ?", s.tenant);
+        List<String> inside = new ArrayList<>(), outside = new ArrayList<>();
+        for (String st : List.of("OPEN", "CLOSED")) {
+            UUID a = s.order("#W1-" + st + "-IN", s.v, 1);
+            s.line(s.ret(a, "#W1-" + st + "-IN-R1", st, 9 * 24), s.v, 1);
+            inside.add(s.piece(a, "delivered"));
+            UUID b = s.order("#W1-" + st + "-OUT", s.v, 1);
+            s.line(s.ret(b, "#W1-" + st + "-OUT-R1", st, 11 * 24), s.v, 1);
+            outside.add(s.piece(b, "delivered"));
+        }
+        // The default window (30 days): 29 days old expects; 31 days old doesn't.
+        Shop d = new Shop("w1d");
+        UUID c = d.order("#W1D-IN", d.v, 1);
+        d.line(d.ret(c, "#W1D-IN-R1", "CLOSED", 29 * 24), d.v, 1);
+        String dIn = d.piece(c, "delivered");
+        UUID e = d.order("#W1D-OUT", d.v, 1);
+        d.line(d.ret(e, "#W1D-OUT-R1", "CLOSED", 31 * 24), d.v, 1);
+        String dOut = d.piece(e, "delivered");
+
+        for (String p : inside) {
+            s.scan(p);
+            assertThat(s.status(p)).as("inside %s", p).isEqualTo("return_pending_inspection");
+            assertThat(s.returnKind(p)).isEqualTo("customer_return_shopify");
+            assertThat(s.intakes(p)).hasSize(1);
+        }
+        for (String p : outside) {
+            s.scan(p);
+            assertThat(s.status(p)).as("outside %s", p).isEqualTo("delivered");
+            assertThat(s.unexpected(p)).isTrue();
+            assertThat(s.intakes(p)).isEmpty();
+        }
+        d.scan(dIn);
+        assertThat(d.status(dIn)).isEqualTo("return_pending_inspection");
+        assertThat(d.intakes(dIn)).hasSize(1);
+        d.scan(dOut);
+        assertThat(d.status(dOut)).isEqualTo("delivered");
+        assertThat(d.unexpected(dOut)).isTrue();
+        assertThat(d.intakes(dOut)).isEmpty();
+    }
 }
