@@ -136,9 +136,11 @@ public class ShippedOutsideTraced {
         } catch (StateConflictException | IllegalTransitionException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A piece of this order just changed. Reload and try again.");
         }
-        jdbc.update(
-            "UPDATE merchant_orders o SET status = ?::order_status WHERE o.id = ? AND o.tenant_id = ? AND " +
-            PackListRules.NOT_YET_PACKED_SQL, target.db, orderId, tenantId);
+        // Forward only, a literal per target (OrderStatusBackwardWriteGuardTest: no parameterised status write here).
+        jdbc.update(delivered
+            ? "UPDATE merchant_orders o SET status = 'delivered' WHERE o.id = ? AND o.tenant_id = ? AND " + PackListRules.NOT_YET_PACKED_SQL
+            : "UPDATE merchant_orders o SET status = 'with_courier' WHERE o.id = ? AND o.tenant_id = ? AND " + PackListRules.NOT_YET_PACKED_SQL,
+            orderId, tenantId);
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("pieces", pieces);
         meta.put("to", target.db);
