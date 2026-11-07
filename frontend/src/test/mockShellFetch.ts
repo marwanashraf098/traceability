@@ -57,6 +57,9 @@ export function stubFetchWithShellDefaults(
     /** Static value, or a () => value factory for tests that need the response to
      *  change across repeated calls (e.g. simulating a refetch after a mutation). */
     onboardingStatus?: unknown | (() => unknown)
+    /** S3c: the Pick & Pack queue's background GET /api/v1/fulfill/waiting-for-release answers [] by default (it
+     *  would otherwise take a response from a page's sequential queue). true = let the test's own fetch answer it. */
+    passWaitingForRelease?: boolean
   },
 ): void {
   vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
@@ -69,6 +72,10 @@ export function stubFetchWithShellDefaults(
       const ov = overrides?.onboardingStatus
       const body = typeof ov === 'function' ? (ov as () => unknown)() : (ov ?? { steps: [], allDone: true, dismissed: true })
       return shellDefaultResponse(body)
+    }
+    if (!overrides?.passWaitingForRelease && typeof url === 'string'
+        && url.split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/, '') === '/api/v1/fulfill/waiting-for-release') {
+      return shellDefaultResponse([])
     }
     return appFetch(url, opts)
   })

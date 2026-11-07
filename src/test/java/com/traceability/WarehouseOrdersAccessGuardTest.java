@@ -149,8 +149,6 @@ class WarehouseOrdersAccessGuardTest {
             "Lookup a piece: its order may be a shadow (shown nested under the original in S3d)",
         "inventory/LookupService.java#lookupTracking",
             "Lookup a waybill: a shadow's forward leg",
-        "inventory/MainReconcileRules.java#field:EXCHANGE_HOLD_SQL",
-            "S3a interim guard: Main reconcile holds while a shadow is open — it must see shadows",
         "inventory/OrderLineFreeze.java#isFrozen",
             "a packed / shipped shadow is frozen like any order (hidden it would read as not frozen)",
         "inventory/PackClaim.java#heldByOther",

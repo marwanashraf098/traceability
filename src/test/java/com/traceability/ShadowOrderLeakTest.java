@@ -861,16 +861,16 @@ class ShadowOrderLeakTest {
         try { return m.invoke(target, args); } catch (Exception e) { throw new RuntimeException(e); }
     }
 
-    /** Main reconcile's interim exchange hold: any open shadow holds the tenant; a tenant with none is not held. */
+    /** S3c: Main reconcile's interim exchange hold no longer sees shadow orders (the target counts their pieces). */
     @Test
-    void j_mainReconcileExchangeHold_seesOpenShadows() {
+    void j_mainReconcileExchangeHold_ignoresShadows() {
         for (T t : List.of(a, b)) {
             assertThat(jdbc.queryForObject(com.traceability.inventory.MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class,
-                t.tenantId, t.tenantId)).as("tenant " + t.tag + " has open shadow orders").isTrue();
+                t.tenantId)).as("tenant " + t.tag + " has open shadow orders, which no longer hold").isFalse();
         }
         UUID none = UUID.randomUUID();
         assertThat(jdbc.queryForObject(com.traceability.inventory.MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class,
-            none, none)).isFalse();
+            none)).isFalse();
     }
 
     // ── seeding ───────────────────────────────────────────────────────────────

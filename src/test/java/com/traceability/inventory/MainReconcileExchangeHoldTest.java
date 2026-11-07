@@ -43,7 +43,8 @@ import static org.mockito.Mockito.*;
  *   h1  write store + native replacement in custody: every difference is recorded skipped 'shopify_exchange_in_custody'
  *       (delta kept for the report), no reconcile write, the queued Part 1 claim is NOT sent; once the replacement leaves
  *       custody the hold clears — Part 1 is sent once and the difference is written after the usual two runs
- *   h2  an open shadow order holds; a delivered (finished) shadow doesn't
+ *   h2  a Shopify-native exchange SHADOW order never holds (S3c, 2026-11-07: the target counts its pieces —
+ *       MainReconcileShadowTest); the write happens
  *   h3  a dashboard exchange that is NOT Shopify-native (no -R reference) never holds — Traced-made exchanges reconcile
  *   h4  report-only store: nothing changes (its diffs are confirmed / unconfirmed exactly as before — no hold)
  *   h6  Traced's own exchanges never hold (Dolt.eg / Nuvira write today and must keep writing): a portal Bosta type 30
@@ -199,7 +200,7 @@ class MainReconcileExchangeHoldTest {
     }
 
     @Test
-    void h2_openShadowOrderHolds_finishedShadowDoesNot() {
+    void h2_shadowOrderNeverHolds_writeHappens() {
         T t = tenant("h2");
         V v = variant(t), w = variant(t);
         UUID shadow = shadowOrder(t, v, "new");
@@ -207,12 +208,8 @@ class MainReconcileExchangeHoldTest {
         level(w, 3, 3, 0, 0);
         MainReconcileService s = service("all", CUTOFF);
 
-        run(s, t, w);
-        UUID r2 = run(s, t, w);
-        assertThat(onlyDiff(t, r2)).containsEntry("status", "skipped").containsEntry("skip_reason", HOLD);
-        verify(shopifyGateway, never()).pushMainReconcile(any(), any(), any(), any(), anyInt(), any(), any(), any());
-
-        jdbc.update("UPDATE orders SET status = 'delivered'::order_status WHERE id = ?", shadow);
+        assertThat(jdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, t.tenant()))
+            .as("an open shadow order does not hold").isFalse();
         run(s, t, w);
         run(s, t, w);
         verify(shopifyGateway, times(1)).pushMainReconcile(any(), any(), eq(w.item()), eq(t.mainGid()), eq(-2), anyInt(), any(), any());
@@ -264,9 +261,9 @@ class MainReconcileExchangeHoldTest {
         // The hold query itself under app_user + RLS: B's own context sees it (control); A's context never sees B's rows.
         TransactionTemplate tx = new TransactionTemplate(appTxm);
         Boolean own = TenantContext.runAs(b.tenant(), () -> tx.execute(st ->
-            appJdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, b.tenant(), b.tenant())));
+            appJdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, b.tenant())));
         Boolean cross = TenantContext.runAs(a.tenant(), () -> tx.execute(st ->
-            appJdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, b.tenant(), b.tenant())));
+            appJdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, b.tenant())));
         assertThat(own).as("same tenant").isTrue();
         assertThat(cross).as("tenant A's context never sees tenant B's replacement").isFalse();
     }
@@ -295,7 +292,7 @@ class MainReconcileExchangeHoldTest {
         level(v, 3, 0, 3, 0);                               // three replacements, all in custody: in sync
         piece(t, w, "available", t.main());
         level(w, 3, 3, 0, 0);                               // a real difference: −2
-        assertThat(jdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, t.tenant(), t.tenant()))
+        assertThat(jdbc.queryForObject(MainReconcileRules.EXCHANGE_HOLD_SQL, Boolean.class, t.tenant()))
             .as("Traced's own exchanges are not Shopify-native").isFalse();
         MainReconcileService s = service("all", CUTOFF);
         run(s, t, v, w);
