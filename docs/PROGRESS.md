@@ -5,7 +5,7 @@
 ## Current state
 
 **Shopify-native returns S5a — Traced creates the matching Shopify Return for portal refunds (2026-11-07; branch
-`feat/s5a-shopify-returns-sync` off main cac3b35b, approved 2026-11-08, merged, NOT deployed; V224 — free on prod (prod at V223, checked 00:37)).**
+`feat/s5a-shopify-returns-sync` off main cac3b35b, approved 2026-11-08, merged, NOT deployed; V225 — V224 went to the same-address / no-district branch).**
 See CLAUDE.md (S5a paragraph). Step 0 approved with all 8 defaults (process at grading; NOT_RESTOCKED; undo → LOW alert,
 no Shopify write; exchanges option A in S5b; pre-connect Traced-only; Traced reason in the note; never notify; OFF for new
 signups in v1). Built defensively for every unconfirmed 2026-04 behaviour (NOT_RESTOCKED with and without a location,

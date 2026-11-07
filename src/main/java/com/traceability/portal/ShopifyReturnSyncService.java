@@ -35,7 +35,7 @@ import java.util.function.Supplier;
 /**
  * Shopify-native returns S5a (approved 2026-11-07) — a REFUND request made on Traced's portal is also created as a
  * Return in Shopify, so Shopify's order page, reports and customer history stay right. The ONE writer of
- * {@code return_requests.shopify_sync_*} and {@code shopify_return_actions} (V224), and the ONE caller of
+ * {@code return_requests.shopify_sync_*} and {@code shopify_return_actions} (V225), and the ONE caller of
  * {@link ShopifyReturnsWriteGateway}'s writes.
  *
  * <p>State-driven: {@link #sync} reads what Traced knows and does the next Shopify step, so a missed trigger is
