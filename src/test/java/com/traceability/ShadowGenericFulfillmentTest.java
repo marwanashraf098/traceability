@@ -116,7 +116,7 @@ class ShadowGenericFulfillmentTest {
         final UUID tenant = UUID.randomUUID(), store = UUID.randomUUID(), location = UUID.randomUUID();
         final long restV = IDS.incrementAndGet();
         final UUID v, original;
-        final String originalGid, ownLineGid, exchangeLineGid = gid("LineItem");
+        final String originalGid, ownLineGid, exchangeLineGid = gid("LineItem"), foGid = gid("FulfillmentOrder");
         /** Every fulfillment Shopify has sent for the original so far (orders/updated carries them all). */
         final Map<String, ObjectNode> fulfillments = new LinkedHashMap<>();
 
@@ -173,7 +173,7 @@ class ShadowGenericFulfillmentTest {
             n.putArray("lineItems").addObject().put("id", exchangeLineGid);
             as(() -> returnsStore.upsertReturn(store, original, r));
             ObjectNode fo = mapper.createObjectNode();
-            fo.put("id", gid("FulfillmentOrder"));
+            fo.put("id", foGid);
             fo.put("status", "OPEN");
             fo.putObject("order").put("id", originalGid);
             fo.putArray("fulfillmentHolds");
@@ -202,6 +202,27 @@ class ShadowGenericFulfillmentTest {
             jdbc.update("UPDATE orders SET raw = ?::jsonb WHERE id = ?", payload.toString(), original);
             as(() -> capture.capture(store, originalGid, payload));
             as(() -> shadows.reconcileForOrder(original));
+        }
+
+        /** Shopify closes the exchange's fulfillment order (remaining 0) — the same FO, then the reconcile. */
+        void closeFo() {
+            ObjectNode fo = mapper.createObjectNode();
+            fo.put("id", foGid);
+            fo.put("status", "CLOSED");
+            fo.putObject("order").put("id", originalGid);
+            fo.putArray("fulfillmentHolds");
+            ObjectNode fl = fo.putObject("lineItems").putArray("nodes").addObject();
+            fl.put("id", gid("FulfillmentOrderLineItem"));
+            fl.put("remainingQuantity", 0);
+            fl.put("totalQuantity", 1);
+            fl.putObject("lineItem").put("id", exchangeLineGid).putObject("variant").put("id", "gid://shopify/ProductVariant/" + restV);
+            as(() -> returnsStore.upsertFulfillmentOrder(store, original, fo));
+            as(() -> shadows.reconcileForOrder(original));
+        }
+
+        Map<String, Object> line() {
+            return jdbc.queryForMap("SELECT live_quantity, shipped_in_shopify, stop_reason FROM shopify_exchange_shadow_lines " +
+                "WHERE tenant_id = ?", tenant);
         }
 
         List<Map<String, Object>> generic(UUID orderId) {
@@ -245,6 +266,28 @@ class ShadowGenericFulfillmentTest {
             assertThat(r.get("state")).isEqualTo("created");
         });
         assertThat(s.generic(s.original)).as("never a leg of the original").isEmpty();
+    }
+
+    /**
+     * g5 (Marawan, 2026-11-07): the opposite of "fulfilled in Shopify ends it" — the exchange's fulfillment order CLOSED
+     * with a TRACKED fulfillment: the reservation stays live and packable, and that tracking is the shadow's courier leg.
+     */
+    @Test
+    void g5_foClosedWithTrackedFulfillment_staysLive_trackingAttachesToShadow() {
+        Shop s = new Shop("g5", false);
+        UUID shadow = s.shadow();
+        s.shopify(fulfillment(s.exchangeLineGid, "ARX-X-5005", null, null));
+        s.closeFo();
+
+        assertThat(jdbc.queryForObject("SELECT state FROM shopify_exchange_shadows WHERE order_id = ?", String.class, shadow))
+            .as("tracked: the reservation stays").isEqualTo("live");
+        assertThat(s.line()).containsEntry("live_quantity", 1).containsEntry("shipped_in_shopify", 1).containsEntry("stop_reason", null);
+        assertThat(s.as(() -> ShopifyShadowOrders.pickState(jdbc, s.tenant, shadow)))
+            .as("released — packable").isEqualTo(ShopifyShadowOrders.PickState.PACKABLE);
+        assertThat(s.generic(shadow)).as("the tracking is the shadow's leg").singleElement()
+            .satisfies(r -> assertThat(r.get("tracking_number")).isEqualTo("ARX-X-5005"));
+        assertThat(s.generic(s.original)).isEmpty();
+        assertThat(s.alerts("shopify_exchange_shipped_in_shopify")).isEmpty();
     }
 
     @Test
