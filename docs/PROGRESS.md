@@ -4,6 +4,39 @@
 
 ## Current state
 
+**Onboarding redesign — O3 Get started card + sidebar dots (2026-11-07; branch `feat/onboarding-get-started` off main
+e7476dd4, worktree `~/Documents/traceability-o3`; approved and MERGED 2026-11-07, NOT deployed; no migration).** Mockups
+`design/onboarding/Traced_onboarding_Flow-9-Overview-Real` (+ Flow-8's task list).
+- **Overview:** `components/GetStartedCard.tsx` replaces OnboardingCard (manual checkboxes) AND FreshTenantCard; the
+  dashboard below now ALWAYS renders (the fresh-tenant collapse and its status-totals fetch are gone). Setup row (5
+  steps, one state each: done ✓ or a link — Shopify / address → Settings › Locations / first receiving → /receiving / courier
+  "Connect Bosta" | "Bosta · later" | done "Bosta" or "Courier" → Settings › Connections / test label → /receiving);
+  "What do you want to do?" tiles from progress.tasks (tick = tried; Open only, no Tour until O5; places only when
+  the server lists it; pickup says Bosta only with Bosta) + a client-side search (EN + AR words). States full → slim
+  → hidden ("Show Get started again"); Minimise / × / Show / Show again PATCH prefs card. Auto-slim (shown, never
+  written) when card 'full' AND not chosen AND (setupCompletedAt > 7 days OR 6+ tasks tried).
+- **Backend (no migration):** GET /onboarding/progress adds `cardChosen` (server stamps `cardChosenAt` in the prefs
+  whenever PATCH writes card — not client-writable; the V220 backfill's 'full' is therefore NOT a choice),
+  `setupCompletedAt` (tenants.setup_completed_at), `bostaConnected` (active Bosta account), and answers card
+  'hidden' for demo / review (ReviewCapabilities.scanHelpers). OnboardingGetStartedTest g1–g4.
+- **Who:** owner + manager; never a worker or station mode (no request); demo / review render nothing at all (not
+  even "Show again" — Overview also checks /me scanHelpers).
+- **Shared state:** `onboardingProgress.ts` — readers mounting together share one request (in-flight dedupe; Layout
+  remounts per route, like the old /onboarding/status chip), `setCardState` updates every reader at once.
+- **Layout:** the Setup chip counts the 5 steps from progress, hidden when the card is hidden or all 5 are done;
+  /onboarding/status is no longer called by Overview or Layout (endpoint + backend tests kept).
+- **Dots:** `pageSeen.ts` (route → page key). Owner / manager Operations items + Settings get a blue dot while
+  unopened (`uiState.pagesSeen`), ONLY while the card isn't hidden; never on the page on screen; the link's
+  aria-label is "<label>, not opened yet". A visit POSTs /me/ui-state {pageSeen} once per page per page load
+  (fire-and-forget), only once /me returned uiState; never for a worker / station mode.
+- **Tests:** vitest 1,641 → 1,658 (getStartedCard.test.tsx 17; 11 rules mutation-checked red); edited (approved):
+  overview.test ov8–ov14 (rewritten for the new card), overviewFreshTenant (C1/C2 now against Get started), mockShellFetch
+  (progress + ui-state shell paths, default {} = nothing shown), ov19 (approved: waits for stat-cards instead of the
+  removed fresh-tenant card; red when the activation prompt is removed). Browser getStartedLayout (full / slim /
+  hidden × EN/AR × desktop/phone, Chromium + WebKit) green — scoped to the card (see the follow-up below).
+- **Follow-up (logged, not fixed):** Overview's date-range picker (SegmentedControl) overflows ~7 px at phone width
+  (390 px) in English — "Custom" is clipped. Existing behaviour, outside O3.
+
 **Shopify-native returns S3c — Pick & Pack for exchange shadows (2026-11-07; branch `feat/s3c-pick-pack` off main
 c6aa7ca4, rebased on 5b017cfd, approved and MERGED 2026-11-07, NOT deployed; no migration).** See CLAUDE.md (S3c
 paragraph). **Prod: set `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=false` in `.env` before deploying — on only after S3d

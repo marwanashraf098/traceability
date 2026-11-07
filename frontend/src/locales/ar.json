@@ -43,7 +43,9 @@
     "expand": "توسيع الشريط الجانبي",
     "openMenu": "فتح القائمة",
     "closeMenu": "إغلاق القائمة",
-    "putAway": "وضع على الرفوف"
+    "putAway": "وضع على الرفوف",
+    "notOpened": "لم تُفتح بعد",
+    "notOpenedLabel": "{{label}}، لم تُفتح بعد"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -170,27 +172,6 @@
       "receiving": "استلام مخزون",
       "transfers": "نقل مخزون",
       "lookup": "بحث"
-    },
-    "onboardingCard": {
-      "title": "أكمل إعداد Traced",
-      "dismiss": "إغلاق",
-      "go": "→ الانتقال",
-      "manualCheckbox": "وضع علامة \"{{step}}\" كمكتملة يدويًا",
-      "allSetToast": "كل شيء جاهز!",
-      "chip": {
-        "connect_shopify": "Shopify",
-        "connect_bosta": "بوسطة",
-        "location": "الموقع",
-        "test_label": "ملصق تجريبي",
-        "first_receiving": "أول استلام"
-      }
-    },
-    "freshTenant": {
-      "message": "لا يوجد شيء لعرضه بعد — ابدأ بهذه الخطوات:",
-      "connectShopify": "اربط متجر Shopify الخاص بك",
-      "shopifyConnected": "متجر Shopify متصل",
-      "receiveFirst": "استلم أول شحنة لك",
-      "inviteTeam": "ادعُ فريقك"
     },
     "fulfillmentPrompt": {
       "title": "فعّل موقع مستودعك",
@@ -6420,6 +6401,65 @@
       "start": "ابدأ أول جلسة استلام",
       "callLead": "تريدنا معك في هذه الخطوة؟",
       "call": "احجز مكالمة إعداد مجانية"
+    }
+  },
+  "getStarted": {
+    "title": "ابدأ مع Traced",
+    "short": "ابدأ",
+    "minimise": "تصغير",
+    "hide": "إخفاء «ابدأ»",
+    "show": "عرض",
+    "showAgain": "أظهر «ابدأ» مرة أخرى",
+    "setup": "الإعداد",
+    "doneOf": "تم {{done}} من {{total}}",
+    "setupOf": "الإعداد {{done}} من {{total}}",
+    "next": "التالي:",
+    "doneSr": "تم:",
+    "step": {
+      "shopify": "شوبيفاي",
+      "shopifyTodo": "اربط شوبيفاي",
+      "address": "عنوان المخزن",
+      "addressTodo": "أضف عنوان المخزن",
+      "receiving": "أول استلام",
+      "receivingTodo": "قم بأول استلام",
+      "bosta": "بوستا",
+      "courier": "شركة الشحن",
+      "courierTodo": "اربط بوستا",
+      "courierLater": "بوستا · لاحقًا",
+      "testLabel": "ملصق تجريبي",
+      "testLabelTodo": "اطبع ملصقًا تجريبيًا",
+      "testLabelLater": "ملصق تجريبي · لاحقًا"
+    },
+    "tasksTitle": "ماذا تريد أن تفعل؟",
+    "tried": "جرّبت {{done}} من {{total}}",
+    "triedSr": "تمت التجربة",
+    "search": "ابحث في المهام",
+    "searchPlaceholder": "تغليف، مرتجع، نقل مخزون…",
+    "noMatch": "لا توجد نتيجة. جرّب كلمة أخرى، أو اسألنا على واتساب.",
+    "open": "فتح",
+    "openTask": "فتح: {{task}}",
+    "task": {
+      "receive": "ضع ملصقات على مخزون أكثر",
+      "pack": "غلّف طلبًا",
+      "pickup": "سلّم الطرود لشركة الشحن",
+      "pickupBosta": "سلّم الطرود لبوستا",
+      "returns": "تعامل مع مرتجع",
+      "transfer": "انقل المخزون",
+      "stock_take": "اجرد رفوفك",
+      "portal": "بوابة المرتجعات",
+      "team": "أضف فريقك",
+      "places": "جهّز الرفوف والصناديق"
+    },
+    "words": {
+      "receive": "استلام ملصق باركود مخزون طباعة receive label",
+      "pack": "تغليف طلب بوليصة تجميع pack",
+      "pickup": "تسليم مندوب بوستا طرود شحن pickup",
+      "returns": "مرتجع مرتجعات استرداد استبدال return",
+      "transfer": "نقل تحويل موقع مخزون transfer move",
+      "stock_take": "جرد عد رفوف مخزون count",
+      "portal": "بوابة مرتجع استرداد استبدال عميل portal",
+      "team": "فريق عامل موظف رقم سري تابلت team",
+      "places": "رفوف صناديق أماكن مناطق places"
     }
   }
 }

@@ -3,28 +3,29 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import {
-  AlertTriangle, PackageX, X,
-  Plug, Inbox, Users as UsersIcon, CheckCircle2, Circle,
+  AlertTriangle, PackageX, Inbox,
   Truck, Unlink, ShoppingBag, PackageSearch, PackageCheck,
   Repeat, Search,
 } from 'lucide-react'
 import {
   request,
-  getStatusTotals, getValuation, getOrdersFunnel, getOnboardingStatus, dismissOnboarding,
-  setOnboardingStep,
+  getValuation, getOrdersFunnel, getRoleFromToken,
   getOverviewTrends, getOverviewTopSkus, getOrdersSummary, listOrders, getLateToPack,
   getConnections, listLocations, needsFulfillmentActivation,
-  type StatusTotals, type Valuation, type FunnelCounts,
-  type OnboardingStatus, type OnboardingStep,
+  type Valuation, type FunnelCounts,
   type MetricTrend, type TrendPoint, type TopSku, type OrderSummaryCounts, type OrderSummary,
   type LateToPack, type ConnectionsStatus, type LocationRow,
 } from '../api'
 import {
-  EmptyState, Progress, useMe, useToast,
+  EmptyState, Progress, useMe,
   Skeleton, Spinner, ProductThumb, DeliveryBadge, cn,
   SegmentedControl, Input,
 } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
+import GetStartedCard from '../components/GetStartedCard'
+import { useStation } from '../components/StationProvider'
+import { useOnboardingProgress } from '../onboardingProgress'
+import { loadCapabilities } from '../capabilities'
 import { withReturnSource } from '../receivingReturn'
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
@@ -756,200 +757,13 @@ function QuickActions() {
   )
 }
 
-// ── Onboarding card — condensed, dismissible ────────────────────────────────
-//
-// The 4 checklist steps, in a fixed display order — key strings are the ones
-// OnboardingController.status() returns (connect_shopify/connect_bosta/test_label/
-// first_receiving; "initial_import" was dropped, and "location" too — the onboarding
-// gate (V186) asks for the main warehouse address before the app opens). Each row shows the auto/manual-derived `done`
-// state plus a manual-override checkbox — checking it calls setOnboardingStep()
-// and reconciles from the next onboarding refetch (optimistic flip in between).
-
-const ONBOARDING_STEP_ORDER = ['connect_shopify', 'connect_bosta', 'test_label', 'first_receiving'] as const
-
-const STEP_DEST: Record<string, string> = {
-  connect_shopify: '/settings?tab=connections',
-  connect_bosta:   '/settings?tab=connections',
-  test_label:      '/receiving',
-  first_receiving: '/receiving',
-}
-
-function OnboardingCard({
-  status,
-  onDismissed,
-  onRefetch,
-}: {
-  status: OnboardingStatus
-  onDismissed: () => void
-  onRefetch: () => void
-}) {
-  const { t } = useTranslation()
-  const [dismissing, setDismissing] = useState(false)
-  const [pendingToggle, setPendingToggle] = useState<Set<string>>(new Set())
-  // Optimistic local override for the manual flag, keyed by step — flipped the instant
-  // the checkbox is clicked, before the network round-trip. Cleared per-key once the
-  // authoritative `status` prop (from the next onboarding refetch) actually agrees with
-  // it — reconciling on the real server state, not just on the request settling, so a
-  // failed write correctly snaps back instead of sticking.
-  const [optimisticManual, setOptimisticManual] = useState<Record<string, boolean>>({})
-
-  useEffect(() => {
-    setOptimisticManual(prev => {
-      if (Object.keys(prev).length === 0) return prev
-      const next = { ...prev }
-      let changed = false
-      for (const s of status.steps) {
-        if (s.key in next && next[s.key] === s.manual) { delete next[s.key]; changed = true }
-      }
-      return changed ? next : prev
-    })
-  }, [status.steps])
-
-  const steps = ONBOARDING_STEP_ORDER
-    .map(key => status.steps.find(s => s.key === key))
-    .filter((s): s is OnboardingStep => !!s)
-    .map(s => {
-      const manual = s.key in optimisticManual ? optimisticManual[s.key] : s.manual
-      return { ...s, manual, done: s.auto || manual }
-    })
-  const doneCount = steps.filter(s => s.done).length
-  const pct = steps.length > 0 ? (doneCount / steps.length) * 100 : 0
-
-  async function handleDismiss() {
-    setDismissing(true)
-    try { await dismissOnboarding() } catch { /* optimistic hide regardless */ }
-    onDismissed()
-  }
-
-  async function handleToggle(key: OnboardingStep['key'], checked: boolean) {
-    setOptimisticManual(prev => ({ ...prev, [key]: checked }))
-    setPendingToggle(prev => new Set(prev).add(key))
-    try {
-      await setOnboardingStep(key, checked)
-    } catch {
-      // Write failed — drop the optimistic guess immediately (it would otherwise strand
-      // forever: the reconciling effect only clears an entry once the server's value
-      // matches it, which never happens for a value the server never accepted).
-      setOptimisticManual(prev => { const next = { ...prev }; delete next[key]; return next })
-    }
-    onRefetch()
-    setPendingToggle(prev => { const next = new Set(prev); next.delete(key); return next })
-  }
-
-  return (
-    <div className="card border-trace-blue p-4 flex flex-col gap-3 animate-fadeIn motion-reduce:animate-none" data-testid="onboarding-card">
-      <div className="flex items-center justify-between">
-        <span className="text-small font-bold text-primary">{t('overview.onboardingCard.title')}</span>
-        <button
-          type="button"
-          onClick={handleDismiss}
-          disabled={dismissing}
-          aria-label={t('overview.onboardingCard.dismiss')}
-          className="text-muted [@media(hover:hover)_and_(pointer:fine)]:hover:text-primary transition-colors p-1.5 -m-1.5"
-        >
-          <X size={14} strokeWidth={2} />
-        </button>
-      </div>
-      <Progress value={pct} />
-      <div className="flex flex-col gap-1.5">
-        {steps.map(step => (
-          <div
-            key={step.key}
-            data-testid={`onboarding-step-${step.key}`}
-            data-done={step.done}
-            className="flex items-center gap-2.5 text-caption"
-          >
-            <input
-              type="checkbox"
-              checked={step.manual}
-              disabled={pendingToggle.has(step.key)}
-              onChange={e => handleToggle(step.key, e.target.checked)}
-              aria-label={t('overview.onboardingCard.manualCheckbox', { step: t(`overview.onboardingCard.chip.${step.key}`) })}
-              className="flex-shrink-0"
-            />
-            {step.done
-              ? <CheckCircle2 size={13} strokeWidth={2} className="text-success-text flex-shrink-0" />
-              : <Circle size={13} strokeWidth={2} className="text-muted flex-shrink-0" />}
-            <span className={step.done ? 'flex-1 text-muted line-through' : 'flex-1 text-primary'}>
-              {t(`overview.onboardingCard.chip.${step.key}`)}
-            </span>
-            {!step.done && (
-              <Link
-                to={STEP_DEST[step.key]}
-                className="text-trace-blue [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue-hover transition-colors font-medium flex-shrink-0"
-              >
-                {t('overview.onboardingCard.go')}
-              </Link>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Fresh-tenant card — replaces the whole zone stack ───────────────────────
-
-// `shopifyConnected` comes from the /connections call Overview already makes — the
-// "Connect your Shopify store" step reflects real connection state, never hardcoded.
-function FreshTenantCard({ shopifyConnected }: { shopifyConnected: boolean }) {
-  const { t } = useTranslation()
-  const items = [
-    { icon: Inbox,     label: t('overview.freshTenant.receiveFirst'),   to: '/receiving' },
-    { icon: UsersIcon, label: t('overview.freshTenant.inviteTeam'),     to: '/users' },
-  ]
-  return (
-    <div className="card p-5 flex flex-col gap-3 animate-fadeIn motion-reduce:animate-none" data-testid="fresh-tenant-card">
-      <p className="text-small text-muted">{t('overview.freshTenant.message')}</p>
-      {shopifyConnected ? (
-        <div
-          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3"
-          data-testid="fresh-tenant-shopify-done"
-        >
-          <CheckCircle2 size={16} strokeWidth={1.75} className="text-success-text" />
-          <span className="flex-1 text-small text-muted">{t('overview.freshTenant.shopifyConnected')}</span>
-        </div>
-      ) : (
-        <Link
-          to="/connections"
-          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3
-                     [@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04]
-                     transition-[background-color,transform] duration-100 ease-out [@media(hover:hover)_and_(pointer:fine)]:hover:duration-150
-                     active:scale-[0.97] active:duration-100
-                     motion-reduce:transition-none motion-reduce:active:scale-100"
-          data-testid="fresh-tenant-shopify-todo"
-        >
-          <Plug size={16} strokeWidth={1.75} className="text-trace-blue" />
-          <span className="flex-1 text-small text-primary">{t('overview.freshTenant.connectShopify')}</span>
-        </Link>
-      )}
-      {items.map(item => (
-        <Link
-          key={item.to}
-          to={item.to}
-          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3
-                     [@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04]
-                     transition-[background-color,transform] duration-100 ease-out [@media(hover:hover)_and_(pointer:fine)]:hover:duration-150
-                     active:scale-[0.97] active:duration-100
-                     motion-reduce:transition-none motion-reduce:active:scale-100"
-        >
-          <item.icon size={16} strokeWidth={1.75} className="text-trace-blue" />
-          <span className="flex-1 text-small text-primary">{item.label}</span>
-        </Link>
-      ))}
-    </div>
-  )
-}
-
 // ── Fulfillment-activation prompt card ──────────────────────────────────────────
 //
 // Visibility predicate is needsFulfillmentActivation() (api.ts) — the SAME helper
 // ShopifyConnectionCard's FulfillmentActivationItem uses to decide whether to show its
 // own "Activate fulfillment" UI. Deliberately rendered outside the isFreshTenant/
-// FreshTenantCard split below: a brand-new store can legitimately need activation with
-// zero pieces received yet (the reconcile report has nothing to seed when Traced holds
-// no on-hand stock at all), so this must not be swallowed by the fresh-tenant empty-state
-// collapse the way the rest of the zone stack is.
+// Get started card: a brand-new store can legitimately need activation with zero pieces
+// received yet (the reconcile report has nothing to seed when Traced holds no on-hand stock).
 
 function FulfillmentActivationPromptCard() {
   const { t } = useTranslation()
@@ -990,12 +804,17 @@ export default function Overview() {
   const { t } = useTranslation()
   const me   = useMe()
 
-  // Kept solely to preserve the existing fresh-tenant empty-state gate — its
-  // visual tiles (the old "Inventory health" row) are gone, but the gating
-  // behavior itself must not change (see PROGRESS.md's fresh-tenant/zero-value
-  // gate-collision gotcha).
-  const statusTotals = useZoneFetch<StatusTotals>(getStatusTotals)
-  const onboarding   = useZoneFetch<OnboardingStatus>(getOnboardingStatus)
+  // Onboarding O3 — the Get started card (GET /onboarding/progress, shared with Layout's Setup chip). It replaced
+  // the old onboarding card and the fresh-tenant card; the dashboard below always renders. Never in station mode.
+  const { stationMode } = useStation()
+  const progress = useOnboardingProgress(!stationMode && getRoleFromToken() !== 'worker')
+  // Demo and review tenants never see it — not even "Show again" (the server also answers card 'hidden' for them).
+  const [demoOrReview, setDemoOrReview] = useState<boolean | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    loadCapabilities().then(c => { if (alive) setDemoOrReview(c.scanHelpers) })
+    return () => { alive = false }
+  }, [])
 
   // Feeds the fulfillment-activation prompt card below — same two calls
   // FulfillmentActivationItem (Settings > Connections) already makes, independently
@@ -1040,38 +859,6 @@ export default function Overview() {
     setCustomTo(nextTo)
   }
 
-  const [onboardingHidden, setOnboardingHidden] = useState(false)
-
-  // Transient "you're all set up!" toast — fires only on an in-session false->true
-  // transition (e.g. checking the last manual-override box), never on a fresh load
-  // that's already allDone, and never writes to onboarding_dismissed_at. The
-  // persistent onboarding-card condition below is untouched by this.
-  const { toast } = useToast()
-  const prevAllDoneRef = useRef<boolean | null>(null)
-  useEffect(() => {
-    if (onboarding.loading || onboarding.error || !onboarding.data) return
-    const wasIncomplete = prevAllDoneRef.current === false
-    if (wasIncomplete && onboarding.data.allDone) {
-      toast({ tone: 'success', message: t('overview.onboardingCard.allSetToast') })
-    }
-    prevAllDoneRef.current = onboarding.data.allDone
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onboarding.data, onboarding.loading, onboarding.error])
-
-  const counts = statusTotals.data?.statusCounts
-  const totalPieces = (counts?.available ?? 0) + (counts?.reserved ?? 0) + (counts?.damaged ?? 0) + (counts?.lost ?? 0)
-
-  const showOnboarding = !onboardingHidden && !onboarding.loading && !onboarding.error &&
-    onboarding.data && !onboarding.data.dismissed && !onboarding.data.allDone
-
-  // Fresh = nothing to show at all: no pieces AND no orders. A store connected with real
-  // orders but no received stock yet must see the dashboard (its orders), not the
-  // "get set up" card. orders/summary.total is all-time; a failed/loading call keeps
-  // the dashboard, same as a failed status-totals call already does.
-  const isFreshTenant = !statusTotals.loading && !statusTotals.error && totalPieces === 0 &&
-    !ordersSummary.loading && !ordersSummary.error && ordersSummary.data?.total === 0 &&
-    !onboarding.loading && !onboarding.error && onboarding.data && !onboarding.data.allDone
-
   const showFulfillmentPrompt = !connections.loading && !connections.error && connections.data &&
     !fulfillmentLocations.loading && !fulfillmentLocations.error &&
     needsFulfillmentActivation(
@@ -1102,18 +889,10 @@ export default function Overview() {
 
       {showFulfillmentPrompt && <FulfillmentActivationPromptCard />}
 
-      {isFreshTenant ? (
-        <FreshTenantCard shopifyConnected={connections.data?.shopify.connected === true} />
-      ) : (
-        <>
-          {/* ── Onboarding card ── */}
-          {showOnboarding && onboarding.data && (
-            <OnboardingCard
-              status={onboarding.data}
-              onDismissed={() => setOnboardingHidden(true)}
-              onRefetch={onboarding.refetch}
-            />
-          )}
+      {/* ── Get started (O3) ── */}
+      {progress && demoOrReview === false && <GetStartedCard progress={progress} />}
+
+      <>
 
           {/* ── 5 sparkline stat cards ── */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5" data-testid="stat-cards">
@@ -1205,8 +984,7 @@ export default function Overview() {
             <h2 className="text-caption font-bold text-muted uppercase mb-3">{t('overview.quickActions.title')}</h2>
             <QuickActions />
           </div>
-        </>
-      )}
+      </>
 
       {/* Slide-in overlay, not a route — same pattern as Orders.tsx. */}
       <OrderDrawer orderId={drawerOrderId} onClose={() => setDrawerOrderId(null)} />

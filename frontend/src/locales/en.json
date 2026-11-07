@@ -43,7 +43,9 @@
     "expand": "Expand sidebar",
     "openMenu": "Open menu",
     "closeMenu": "Close menu",
-    "putAway": "Place on shelves"
+    "putAway": "Place on shelves",
+    "notOpened": "not opened yet",
+    "notOpenedLabel": "{{label}}, not opened yet"
   },
   "overview": {
     "title": "Overview",
@@ -170,27 +172,6 @@
       "receiving": "Receive stock",
       "transfers": "Transfer stock",
       "lookup": "Look up"
-    },
-    "onboardingCard": {
-      "title": "Finish setting up Traced",
-      "dismiss": "Dismiss",
-      "go": "Go →",
-      "manualCheckbox": "Mark \"{{step}}\" done manually",
-      "allSetToast": "You're all set up!",
-      "chip": {
-        "connect_shopify": "Shopify",
-        "connect_bosta": "Bosta",
-        "location": "Location",
-        "test_label": "Test label",
-        "first_receiving": "First receiving"
-      }
-    },
-    "freshTenant": {
-      "message": "Nothing to show yet — get set up with these first steps:",
-      "connectShopify": "Connect your Shopify store",
-      "shopifyConnected": "Shopify store connected",
-      "receiveFirst": "Receive your first shipment",
-      "inviteTeam": "Invite your team"
     },
     "fulfillmentPrompt": {
       "title": "Activate your warehouse location",
@@ -6030,6 +6011,65 @@
       "start": "Start my first receiving session",
       "callLead": "Want us with you for this part?",
       "call": "Book a free setup call"
+    }
+  },
+  "getStarted": {
+    "title": "Get started with Traced",
+    "short": "Get started",
+    "minimise": "Minimise",
+    "hide": "Hide Get started",
+    "show": "Show",
+    "showAgain": "Show Get started again",
+    "setup": "Setup",
+    "doneOf": "{{done}} of {{total}} done",
+    "setupOf": "Setup {{done}} of {{total}}",
+    "next": "Next:",
+    "doneSr": "Done:",
+    "step": {
+      "shopify": "Shopify",
+      "shopifyTodo": "Connect Shopify",
+      "address": "Warehouse address",
+      "addressTodo": "Add warehouse address",
+      "receiving": "First receiving",
+      "receivingTodo": "Do your first receiving",
+      "bosta": "Bosta",
+      "courier": "Courier",
+      "courierTodo": "Connect Bosta",
+      "courierLater": "Bosta · later",
+      "testLabel": "Test label",
+      "testLabelTodo": "Print a test label",
+      "testLabelLater": "Test label · later"
+    },
+    "tasksTitle": "What do you want to do?",
+    "tried": "{{done}} of {{total}} tried",
+    "triedSr": "tried",
+    "search": "Search tasks",
+    "searchPlaceholder": "Pack, return, move stock…",
+    "noMatch": "Nothing matches. Try another word, or ask us on WhatsApp (Need help?).",
+    "open": "Open",
+    "openTask": "Open: {{task}}",
+    "task": {
+      "receive": "Label more stock",
+      "pack": "Pack an order",
+      "pickup": "Hand parcels to your courier",
+      "pickupBosta": "Hand parcels to Bosta",
+      "returns": "Handle a return",
+      "transfer": "Move stock",
+      "stock_take": "Count your shelves",
+      "portal": "Returns portal",
+      "team": "Add your team",
+      "places": "Set up shelves & boxes"
+    },
+    "words": {
+      "receive": "receive receiving label barcode stock print",
+      "pack": "pack packing order waybill pick fulfill",
+      "pickup": "pickup courier bosta hand parcels shipping",
+      "returns": "return returns refund exchange scan",
+      "transfer": "transfer move location stock",
+      "stock_take": "stock take count shelves inventory",
+      "portal": "portal return refund exchange customer",
+      "team": "team worker staff pin tablet users",
+      "places": "shelves boxes places zones racks"
     }
   }
 }

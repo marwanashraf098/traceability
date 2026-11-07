@@ -16,6 +16,7 @@ import { cn } from './ui'
 import { analyticsEnabled, isReadyPage, type AnalyticsPageId } from '../analytics/flag'
 import { sharedSearch } from '../analytics/period'
 import { usePutAwayWaiting } from '../pages/putaway/usePutAwayWaiting'
+import { pageKeyFor } from '../pageSeen'
 
 // ── Nav config ──────────────────────────────────────────────────────────────────
 // Owner/manager nav, in display order. A section with no visible items renders no header.
@@ -216,15 +217,20 @@ function useRailTip(collapsed: boolean) {
 
 // ── Nav link ────────────────────────────────────────────────────────────────────
 
-function SideNavLink({ to, icon: Icon, label, collapsed, tipProps, badge }: {
+function SideNavLink({ to, icon: Icon, label, collapsed, tipProps, badge, notOpened }: {
   to: string; icon: LucideIcon; label: string; collapsed: boolean
   tipProps?: Record<string, unknown>
   /** A count beside the label (hidden when 0 / unknown); a dot on the collapsed rail. */
   badge?: number | null
+  /** O3: a small blue dot — this user hasn't opened the page yet. */
+  notOpened?: boolean
 }) {
+  const { t } = useTranslation()
   const showBadge = badge != null && badge > 0
+  const showDot = !!notOpened && !showBadge
   return (
-    <NavLink to={to} {...tipProps} className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active', showBadge && 'relative')}>
+    <NavLink to={to} {...tipProps} aria-label={showDot ? t('nav.notOpenedLabel', { label }) : undefined}
+      className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active', (showBadge || showDot) && 'relative')}>
       {({ isActive }) => (
         <>
           <Icon size={18} strokeWidth={1.75} className={cn('flex-shrink-0', isActive && 'text-trace-blue')} />
@@ -238,6 +244,11 @@ function SideNavLink({ to, icon: Icon, label, collapsed, tipProps, badge }: {
               </span>
               {collapsed && <span aria-hidden className="hidden min-[900px]:block absolute top-1.5 end-2.5 h-2 w-2 rounded-full bg-warning" />}
             </>
+          )}
+          {showDot && (
+            <span aria-hidden data-testid={`nav-dot-${to.slice(1)}`} title={t('nav.notOpened')}
+              className={cn('ms-auto flex-shrink-0 h-2 w-2 rounded-full bg-trace-blue',
+                collapsed && 'min-[900px]:absolute min-[900px]:top-1.5 min-[900px]:end-2.5 min-[900px]:ms-0')} />
           )}
         </>
       )}
@@ -343,11 +354,13 @@ export function avatarInitials(me: Me | null, role: string | null): string {
 // Logo + collapse toggle pinned top; Settings + identity pinned bottom; the nav between scrolls.
 // Below 900 px it is the slide-in phone menu (Layout's top-bar button opens it).
 
-export default function Sidebar({ role, me, navOpen, onCloseNav }: {
+export default function Sidebar({ role, me, navOpen, onCloseNav, notOpened = null }: {
   role: string | null
   me: Me | null
   navOpen: boolean
   onCloseNav: () => void
+  /** O3: is this page key not opened yet (a blue dot)? null = no dots. Operations nav and Settings only. */
+  notOpened?: ((pageKey: string) => boolean) | null
 }) {
   const caps = useCapabilities()
   const { t } = useTranslation()
@@ -388,10 +401,11 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
   const putAwayWaiting = usePutAwayWaiting()
   const visible = (i: NavItem) => !i.capability || caps[i.capability]
 
-  function link(item: NavItem) {
+  function link(item: NavItem, dots = false) {
     const label = t(item.labelKey)
+    const key = dots && notOpened ? pageKeyFor(item.to) : null
     return <SideNavLink key={item.to} to={item.to} icon={item.icon} label={label} collapsed={collapsed} tipProps={bind(label)}
-      badge={item.badge === 'putAway' ? putAwayWaiting : undefined} />
+      badge={item.badge === 'putAway' ? putAwayWaiting : undefined} notOpened={!!key && !!notOpened?.(key)} />
   }
 
   return (
@@ -436,7 +450,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
       <nav id="app-nav-list"
         {...(hasSwitch ? { role: 'tabpanel', 'aria-labelledby': `mode-tab-${mode}` } : {})}
         className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-0.5">
-        {isWorker ? WORKER_ITEMS.filter(visible).map(link) : mode === 'analytics' ? (
+        {isWorker ? WORKER_ITEMS.filter(visible).map(i => link(i)) : mode === 'analytics' ? (
           <div data-testid="nav-analytics" className="flex flex-col gap-0.5">
             {ANALYTICS_SECTIONS.map(s => ({ ...s, pages: s.pages.filter(isReadyPage) }))
               .filter(s => s.pages.length > 0)
@@ -453,7 +467,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
           OWNER_SECTIONS.filter(s => s.items.length > 0).map(s => (
             <div key={s.id} className="flex flex-col gap-0.5">
               {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
-              {s.items.filter(visible).map(link)}
+              {s.items.filter(visible).map(i => link(i, true))}
             </div>
           ))
         )}
@@ -464,7 +478,7 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
       <div className="flex-shrink-0 border-t border-sidebar-line">
         {!isWorker && (
           <div className="py-1.5">
-            {link({ to: '/settings', icon: Settings, labelKey: 'nav.settings' })}
+            {link({ to: '/settings', icon: Settings, labelKey: 'nav.settings' }, true)}
           </div>
         )}
         <div className={cn('px-[18px] py-[14px] flex items-center gap-2.5', !isWorker && 'border-t border-sidebar-line',
