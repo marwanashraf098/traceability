@@ -13,16 +13,22 @@ import { vi } from 'vitest'
  *
  * Call this from a test file's own beforeEach, LAST, after building the
  * page's own fetch mock — it wraps that mock and intercepts only these two
- * URLs before they ever reach it, so the page's own sequential queue is
+ * paths (matched exactly) before they ever reach it, so the page's own sequential queue is
  * never touched by Layout's background calls. No effect on any other URL.
  *
  * If Layout ever grows more background calls, add their paths to SHELL_PATHS.
  */
 
-const SHELL_PATHS = ['/me', '/exceptions/count', '/onboarding/status']
+const SHELL_PATHS = ['/api/v1/me', '/api/v1/exceptions/count', '/api/v1/onboarding/status'] as const
+type ShellPath = typeof SHELL_PATHS[number]
 
-function isShellPath(url: string): boolean {
-  return SHELL_PATHS.some(path => url.endsWith(path) || url.includes(path))
+/**
+ * The shell call this URL is, matched by EXACT path (query string ignored) — never by substring: a substring match
+ * once answered PUT …/customer-fees/merchant-fault-reasons ("…/me…") as GET /me.
+ */
+function shellPath(url: string): ShellPath | null {
+  const path = url.split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/, '')
+  return (SHELL_PATHS as readonly string[]).includes(path) ? path as ShellPath : null
 }
 
 // api.ts's shared request() (used by Layout, unlike a page's own local fetch
@@ -54,21 +60,15 @@ export function stubFetchWithShellDefaults(
   },
 ): void {
   vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
-    if (typeof url === 'string') {
-      if (url.endsWith('/me') || url.includes('/me?')) {
-        return shellDefaultResponse(overrides?.me ?? {})
-      }
-      if (url.includes('/exceptions/count')) {
-        return shellDefaultResponse(overrides?.exceptionsCount ?? {})
-      }
-      if (url.includes('/onboarding/status')) {
-        // Default: complete + dismissed, so Layout's Setup N/5 chip stays silent
-        // in tests that don't care about it — matches the chip's own !allDone gate.
-        const ov = overrides?.onboardingStatus
-        const body = typeof ov === 'function' ? (ov as () => unknown)() : (ov ?? { steps: [], allDone: true, dismissed: true })
-        return shellDefaultResponse(body)
-      }
-      if (isShellPath(url)) return shellDefaultResponse({})
+    const shell = typeof url === 'string' ? shellPath(url) : null
+    if (shell === '/api/v1/me') return shellDefaultResponse(overrides?.me ?? {})
+    if (shell === '/api/v1/exceptions/count') return shellDefaultResponse(overrides?.exceptionsCount ?? {})
+    if (shell === '/api/v1/onboarding/status') {
+      // Default: complete + dismissed, so Layout's Setup N/5 chip stays silent
+      // in tests that don't care about it — matches the chip's own !allDone gate.
+      const ov = overrides?.onboardingStatus
+      const body = typeof ov === 'function' ? (ov as () => unknown)() : (ov ?? { steps: [], allDone: true, dismissed: true })
+      return shellDefaultResponse(body)
     }
     return appFetch(url, opts)
   })

@@ -6,8 +6,9 @@
 
 **Returns portal settings redesign — Pass B, one save + merged controls (2026-11-07; branch `feat/portal-settings-pass-b`
 off main c6aa7ca4, committed on the branch, NOT merged, NOT deployed; no migration; backend change = one optional
-query param → deploy needs the usual `--no-cache` app rebuild). Waiting for review: 10 existing tests outside the
-approved list still assert the old per-section Save / disabled Save — their edits are proposed in the report.**
+query param → deploy needs the usual `--no-cache` app rebuild). Review round 2 (2026-11-07): the 10 proposed test
+edits approved and applied; the default return location is no longer an unsaved change; the shell-fetch test helper
+matches by exact path (own commit).**
 - One draft for the whole tab (`portal/usePortalSettingsDraft.ts`) and one pure plan (`portal/savePlan.ts`): other
   couriers → portal settings → exchange pricing → exchange fee → return fee → store's-fault reasons → products (one PUT
   per changed product, no bulk PUT). A step runs only when its fields changed; a manager's plan has no owner-only call;
@@ -24,17 +25,21 @@ approved list still assert the old per-section Save / disabled Save — their ed
 - Merged waiver switch + reason chips: on only when every existing rule waives; mixed → off + note, and any save
   writes the switch into every rule that exists with a valid amount (so they match). No rules → on; the value goes
   into a rule created in the same save. Each fee row still says how the waiver applies to its type (fixed / percent).
-- **Return location:** a location the MERCHANT PICKS in the draft unlocks booking / exchanges (one PUT carries both;
-  backend stores the location first). The automatic preselect of Bosta's default does NOT unlock anything until saved
-  — needed to keep the genericCourierG4bFix golden snapshot byte-identical (its "Bosta, no location" case renders
-  after the preselect).
+- **Return location (round 2):** nothing is filled in automatically. With no saved location the draft starts equal
+  to saved (no bar, no "Edited", no leave question); the row shows Bosta's default with "Not saved yet — choose a
+  location to turn on pickups" and a "Use this location" button. Picking it (or any other) is 1 unsaved change and
+  only then unlocks booking / exchanges (one PUT carries both; backend stores the location first). The G4bFix golden
+  snapshot is unchanged (it renders before any pick).
 - Excluded products: GET /variants?nonReturnable=true (new optional param, PortalSettingsService.listVariants — same
   paging/search, same tenant WHERE; PortalVariantsFilterTest incl. cross-tenant with same-tenant positive control);
   excluded-only list (empty state, plural count) + "Add products" search panel; Remove / Undo / Exclude go into the
   draft.
-- **Test gotcha:** `stubFetchWithShellDefaults` (test/mockShellFetch.ts) answers ANY URL containing "/me" as GET /me —
-  it swallows PUT …/customer-fees/merchant-fault-reasons. portalSaveModel.test answers the shell calls itself by exact
-  match. The shared helper is unchanged (needs approval).
+- `stubFetchWithShellDefaults` (test/mockShellFetch.ts) now matches the shell calls by exact path (`/api/v1/me`,
+  `/exceptions/count`, `/onboarding/status`, query string ignored) — before, any URL containing "/me" was answered as
+  GET /me (it swallowed PUT …/customer-fees/merchant-fault-reasons).
+- **Follow-up — tests flaky under load** (pass alone; not touched): `fulfillmentActivationCard`, `printJobs`,
+  `analyticsSummary`, `embeddedTabs`, `shopifySetupWizard`, `transfersLifecycle`, `phoneHeaderPlacement` (browser
+  suite), `StationPhoneTest.rateLimit_perPairing_tenScansPerSecond` (backend, when vitest runs at the same time).
 - Still open from Pass A: moving "Allow exchanges" into the section header (golden snapshot update, with approval).
 
 **Returns portal settings redesign — Pass A, appearance only (2026-11-06; branch `feat/portal-settings-pass-a` off main
