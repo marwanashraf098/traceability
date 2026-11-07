@@ -5,7 +5,7 @@
 ## Current state
 
 **Returns portal settings redesign — Pass B, one save + merged controls (2026-11-07; branch `feat/portal-settings-pass-b`
-off main c6aa7ca4; MERGED to main 2026-11-07, NOT deployed; no migration; backend change = one optional query param
+off main c6aa7ca4; MERGED to main 2026-11-07 (7d2b5743), DEPLOYED and live-verified 2026-11-07; no migration; backend change = one optional query param
 → deploy needs the usual `--no-cache` app rebuild). Review round 2 (2026-11-07): the 10 proposed test
 edits approved and applied; the default return location is no longer an unsaved change; the shell-fetch test helper
 matches by exact path (own commit).**
@@ -38,7 +38,7 @@ matches by exact path (own commit).**
   `/exceptions/count`, `/onboarding/status`, query string ignored) — before, any URL containing "/me" was answered as
   GET /me (it swallowed PUT …/customer-fees/merchant-fault-reasons).
 - **Follow-up — tests flaky under load** (pass alone; not touched): `fulfillmentActivationCard`, `printJobs`,
-  `analyticsSummary`, `embeddedTabs`, `shopifySetupWizard`, `transfersLifecycle`, `phoneHeaderPlacement` (browser
+  `analyticsSummary`, `embeddedTabs`, `shopifySetupWizard`, `transfersLifecycle`, `flexibleUiPass` "ut2 — select all, qty cap…", `phoneHeaderPlacement` (browser
   suite), `StationPhoneTest.rateLimit_perPairing_tenScansPerSecond` (backend, when vitest runs at the same time).
 - Still open from Pass A: moving "Allow exchanges" into the section header (golden snapshot update, with approval).
 
@@ -108,7 +108,7 @@ OnboardingCard AND FreshTenantCard) + sidebar dots → O4 guided first receiving
   mapping); a CSP change for external video; editing overview ov8–ov14 / ov11–ov12 in O3.
 
 **Returns portal settings redesign — Pass A, appearance only (2026-11-06; branch `feat/portal-settings-pass-a` off main
-a5e4e0fd, MERGED to main, NOT deployed; frontend only, no migration). Approved. Pass B NOT started.**
+a5e4e0fd, MERGED to main, DEPLOYED and live-verified 2026-11-07 (with Pass B); frontend only, no migration). Approved.**
 Mockup: `design/returns-portal-settings.html`.
 - Settings: grouped vertical menu `SettingsNav` (Store / Operations / Returns / Account). Same keys, same `?tab=`,
   same fallback and worker redirect. "Labels" is now "Labels & printing".
