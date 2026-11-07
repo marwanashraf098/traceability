@@ -4601,6 +4601,26 @@ export function getSetupAddress() {
   return requestReadable<SetupAddressView>('/setup/address')
 }
 
+/** O2b: one of the store's own Shopify locations (address fields only), to pre-fill the warehouse address. */
+export interface ShopifyLocationOption {
+  id: string
+  name: string | null
+  fulfillsOnlineOrders: boolean
+  address1: string | null
+  address2: string | null
+  city: string | null
+  province: string | null
+  provinceCode: string | null
+  countryCode: string | null
+  zip: string | null
+  phone: string | null
+}
+
+/** O2b (owner): read only — empty when the address is already complete, there's no store, or the read failed. */
+export function getSetupShopifyLocations() {
+  return requestReadable<{ locations: ShopifyLocationOption[] }>('/setup/address/shopify-locations')
+}
+
 /** Saves the main warehouse address; answers the tenant's setupStep after the save (null = gate done). */
 export function saveSetupAddress(address: WarehouseAddressInput) {
   return requestReadable<{ setupStep: SetupStep }>('/setup/address', {
