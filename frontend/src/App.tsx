@@ -28,6 +28,8 @@ import ResetPassword from './pages/ResetPassword'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
 import { ReceivingRoute } from './pages/receiving/GuidedReceiving'
+import HelpCenter from './pages/help/HelpCenter'
+import HelpArticle from './pages/help/HelpArticle'
 import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
@@ -576,6 +578,27 @@ export default function App() {
               <WorkerOnlyRoute>
                 <Layout><WorkerHome /></Layout>
               </WorkerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        {/* Onboarding O6 — the help center (owner / manager; workers' "?" only replay tours). */}
+        <Route
+          path="/help"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><HelpCenter /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/help/:id"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><HelpArticle /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />

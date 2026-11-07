@@ -7,7 +7,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, X,
-  BarChart3, Workflow, PanelLeftClose, PanelLeftOpen,
+  BarChart3, Workflow, PanelLeftClose, PanelLeftOpen, LifeBuoy,
   Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt, PackagePlus,
 } from 'lucide-react'
 import type { Me } from '../api'
@@ -478,6 +478,8 @@ export default function Sidebar({ role, me, navOpen, onCloseNav, notOpened = nul
       <div className="flex-shrink-0 border-t border-sidebar-line">
         {!isWorker && (
           <div className="py-1.5">
+            {/* Onboarding O6 — Help center, above Settings (owner / manager only). */}
+            {link({ to: '/help', icon: LifeBuoy, labelKey: 'nav.help' })}
             {link({ to: '/settings', icon: Settings, labelKey: 'nav.settings' }, true)}
           </div>
         )}

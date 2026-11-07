@@ -45,7 +45,8 @@
     "closeMenu": "Close menu",
     "putAway": "Place on shelves",
     "notOpened": "not opened yet",
-    "notOpenedLabel": "{{label}}, not opened yet"
+    "notOpenedLabel": "{{label}}, not opened yet",
+    "help": "Help center"
   },
   "overview": {
     "title": "Overview",
@@ -6289,5 +6290,73 @@
     "ownerOnly": "Only the store owner can change this, in Settings › Pick & Pack.",
     "current": "Current mode",
     "error": "Couldn't save. Try again."
+  },
+  "helpCenter": {
+    "title": "Help center",
+    "heading": "How can we help?",
+    "searchLabel": "Search the help center",
+    "searchHint": "{{count}} answers · search works in Arabic and English",
+    "startHere": "Start here · your first week, in order",
+    "path": {
+      "connect": {
+        "t": "Connect",
+        "d": "Shopify and your courier"
+      },
+      "receive": {
+        "t": "Receive",
+        "d": "Label your first pieces"
+      },
+      "pack": {
+        "t": "Pack",
+        "d": "Scan pieces into an order"
+      },
+      "pickup": {
+        "t": "Pickup",
+        "d": "Hand parcels to the courier"
+      },
+      "returns": {
+        "t": "Returns",
+        "d": "Scan and grade what comes back"
+      }
+    },
+    "allTopics": "All topics",
+    "topics": {
+      "start": "Getting started",
+      "receive": "Receiving & labels",
+      "pack": "Pick & Pack",
+      "pickup": "Pickups",
+      "returns": "Returns",
+      "alerts": "Alerts",
+      "exchange": "Exchanges",
+      "portal": "Returns portal",
+      "stock": "Stock & counts",
+      "places": "Shelves & boxes",
+      "orders": "Orders & tracking",
+      "team": "Team & tablet",
+      "trouble": "Troubleshooting",
+      "analytics": "Analytics",
+      "account": "Account"
+    },
+    "answers": "{{count}} answers",
+    "answers_one": "1 answer",
+    "noMatch": "No answer matches “{{q}}”",
+    "noMatchBody": "Send us the question on WhatsApp. We'll answer and add it here.",
+    "chat": "Chat on WhatsApp",
+    "stillStuck": "Still stuck?",
+    "stillStuckBody": "A real person answers on WhatsApp, in Arabic or English.",
+    "bookCall": "Book a setup call",
+    "loadFailed": "Couldn't load the help center. Try again.",
+    "forRoles": "For {{roles}}",
+    "and": " and ",
+    "shortAnswer": "Short answer:",
+    "related": "Related",
+    "helpful": "Did this answer your question?",
+    "yes": "Yes",
+    "no": "No, chat with us",
+    "thanks": "Thanks — glad it helped.",
+    "notFound": "We couldn't find this answer.",
+    "back": "Back to the help center",
+    "readMore": "Read more",
+    "alertLink": "What does this mean?"
   }
 }
