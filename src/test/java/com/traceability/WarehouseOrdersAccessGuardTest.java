@@ -32,6 +32,11 @@ class WarehouseOrdersAccessGuardTest {
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
         // S3b (V219) — Shopify-native exchange shadow orders
+        // S3d — safety net (unexplained holds)
+        "inventory/ExceptionService.java#detectShopifyExchangeStillWaiting",
+            "S3d: names the shadow held more than 7 days for a reason Traced can't explain",
+        "inventory/ShopifyShadowOrders.java#releaseManually",
+            "S3d: Release reservation reads the shadow's own status (refused once a piece is picked)",
         // S3d — courier attach
         "courier/GenericShipments.java#followTrackingEdit",
             "S3d: a Shopify-native exchange's generic leg on its shadow follows Shopify's tracking edits",
