@@ -31,7 +31,7 @@ public final class SetupStatus {
     public static final String ADDRESS = "address";
 
     /** Main warehouse has the three required parts (governorate, city / area, street). */
-    static final String ADDRESS_COMPLETE_SQL =
+    public static final String ADDRESS_COMPLETE_SQL =
         "address_province_code IS NOT NULL AND address_city IS NOT NULL AND address_street IS NOT NULL";
 
     public static String step(JdbcTemplate jdbc, UUID tenantId) {

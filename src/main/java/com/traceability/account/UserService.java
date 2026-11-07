@@ -86,6 +86,9 @@ public class UserService {
         boolean places = com.traceability.places.Places.enabled(jdbc, tenantId);
         self.put("places", places);
         if (places) self.put("placesDormant", !com.traceability.places.Places.anySetUp(jdbc, tenantId));
+        // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a
+        // station tablet that is the PIN-switched-in worker, never the owner who signed the tablet in.
+        self.put("uiState", UserUiStateService.read(jdbc, tenantId, userId));
         return self;
     }
 

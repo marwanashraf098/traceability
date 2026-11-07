@@ -4,6 +4,71 @@
 
 ## Current state
 
+**Onboarding redesign — O1 progress model (2026-11-07; branch `feat/onboarding-progress` off main c6aa7ca4, worktree
+`~/Documents/traceability-o1`; approved + merged to main 2026-11-07, NOT deployed (Marawan deploys); backend only,
+migration V220 — free on main and prod at merge).** No UI. `GET /onboarding/status`, its card and its tests are untouched.
+- **V220:** `tenants.onboarding_prefs jsonb` (keys card / skipped / pickPackChosen / testLabelPrinted / labelingPace),
+  backfilled: card 'hidden' ⇔ dismissed OR a finalized non-reversed receipt (else 'full'); pickPackChosen ⇔ a Pick & Pack `pack` piece
+  event (not the Lookup exchange dispatch's — see below) OR waybill_scan; testLabelPrinted ⇔ a label_reprints row OR a finalized print_stick receipt. New
+  `user_ui_state (tenant_id, user_id PK, tours_done[], pages_seen[])`: tenant RLS (NULLIF) + FORCE; app_user SELECT /
+  INSERT + UPDATE of the state columns only (no DELETE, tenant / user never change); composite FK to
+  `users (id, tenant_id)` — V220 adds `users_id_tenant_key UNIQUE (id, tenant_id)` for it.
+- **`OnboardingProgressService`** derives every step at read time: shopify (sticky `shopify_connected_at`), address
+  (`SetupStatus.ADDRESS_COMPLETE_SQL`, now public), first_receiving, courier (Bosta active OR other couriers on OR
+  simulated; skippable), test_label (pref OR label_reprints; skippable); tasks receive / pack (`REAL_PACK_SQL`: a `pack` piece event
+  whose metadata event isn't `lookup_exchange_dispatch` — queue, waybill scan and generic packing all go through
+  `FulfillService.complete`; `GenericLegTransitions.dispatchLookupReplacement` also writes `pack` and never counts) /
+  pickup (closed session) / returns (closed return session OR `return_received`) / transfer and stock_take (not
+  cancelled) / portal (portal_enabled) / team (>1 active user) / places (only while places are on: a live shelf or box).
+  `skipped` is reported only while the step isn't done. ONE writer of the prefs (`updatePrefs`, whitelisted, validates
+  everything before writing, audit `onboarding_prefs_set`).
+- **Endpoints:** `GET /api/v1/onboarding/progress` + `PATCH /api/v1/onboarding/prefs` (owner / manager);
+  `GET /me` gains `uiState {toursDone, pagesSeen}`; `POST /api/v1/me/ui-state {tourDone?, pageSeen?}` (any role,
+  caller's own JWT user — on a station tablet that is the PIN-switched-in worker). Tour ids: pickups, scan_returns,
+  stock_take, transfers, pick_pack_mode. Page keys: overview, exceptions, orders, fulfill, pickups, inventory, receiving,
+  put_away, transfers, stock_take, exchanges, returns, settings, worker_home, analytics. The legacy
+  `POST /onboarding/dismiss` now ALSO sets card 'hidden' (`OnboardingProgressService.HIDE_CARD_SQL`), so a dismissal
+  made on the old card before O3 sticks.
+- **Tests:** OnboardingProgressTest (21: s1–s5 steps, t1–t9 tasks + t2b Lookup-exchange pack alone ≠ packed, c1 card, w1 whitelist, r1 roles, u1 ui-state, u2
+  station via real POST /auth/pin, i1 app_user isolation) and OnboardingPrefsBackfillTest (V219 → V220, incl. a Lookup-exchange-only
+  tenant → pickPackChosen false) — every rule revert-checked red. Existing-test edits (asked for / required by guards): MigrationSmokeTest 219 + user_ui_state in
+  TENANT_SCOPED_TABLES, NotTracedBackfillTest 164, RlsCoverageTest (progress COVERED + a test), PortalOrderLeakTest /
+  ShadowOrderLeakTest (3 registrations each).
+- **Known-flakes watch list — PortalOnDemandLookupTest.e1_twoConcurrentLookups_oneRow:** failed again in the O1 full
+  suite (2026-11-07, expected SUCCESS, was NOT_FOUND; run took 1h34 under load), 27/27 alone. Third sighting (2026-10-31,
+  F2, O1) — always under parallel load, always green alone. A red e1 alone is not a regression; rerun the class alone.
+  Same run: AnalyticsB1Test's context couldn't reach its Postgres container (8 errors, 8/8 alone) — load, not code.
+  Full suite 4,083 (4 skipped) before the pack fix; +1 test after (t2b).
+
+**Onboarding redesign — Step 0 findings (2026-11-07, diagnosis; mockups `design/onboarding/`). Slices: O1 progress model
+→ O2 setup screens 1–4 on the existing gate (+ O2b address prefill, a Shopify READ) → O3 Get started card (replaces
+OnboardingCard AND FreshTenantCard) + sidebar dots → O4 guided first receiving → O5 Pick & Pack chooser + 4 tours + "?"
+→ O6 Help center (+ O6b "check my store" diagnostics, empty Pick & Pack) → O7 labeling plan.**
+- Gate (V186) and the old card: the card's checkbox is the MANUAL override only (V83), the circle is done = auto ||
+  manual; its Shopify step reads the LIVE store status while the gate reads the sticky stamp.
+- Print & stick today: add lines → finalize (pieces + Shopify +N) → print. No scan-to-confirm step — the mockup's
+  print → stick → scan → close order is impossible (codes are made at finalize); O4 reorders to close → print → stick →
+  read-only label check against `GET /receiving/sessions/{id}/pieces`. Factory needs an open label run — hide it for a
+  first session. The first-ever print isn't logged anywhere (only reprints) → `testLabelPrinted` pref.
+- "Move from my Shopify location" = a write to a non-Traced Shopify location → breaks the Location-target invariant;
+  NOT designed. Ships hidden behind a frontend constant; risk while hidden: shelf stock already counted at another
+  Shopify location is added on top by the first receiving (+N at Traced Main).
+- Best-seller suggestion: O4 uses "most Shopify stock" (cheap read; copy must not say "top seller");
+  O7 uses a capped read-only 30-day orders aggregate (read_orders covers 60 days; ShopifyInventoryReader already uses
+  the one bulk-operation slot).
+- Pick & Pack chooser goes in `FulfillRoute` (owner only — PUT /tenant/settings is owner-only; Skip never writes
+  pick_pack_mode). Copy fix: "Settings › Pick & Pack", not "Packing".
+- No tour library. Hand-rolled non-modal TourCard: no autofocus, no inputs, no document keydown listener, never
+  `focusPaused`, never `Modal`; clicks bubble to useScanner's SAFETY-CRITICAL refocus, which stays untouched.
+- Help: markdown per locale in the repo, lazy chunk, react-markdown already present; registry maps route → tour +
+  article and the 34 alert types → article (guard test). App CSP (`deploy/nginx.conf:155`) allows only same-origin
+  frames / media — self-host videos or approve a CSP change.
+- Mockup copy that contradicts invariants (fix in the slice that ships it): stock-take tour "Traced and Shopify are set
+  to what you counted"; Pickups tour "Choose the courier" (the first scan sets it); Transfers "drops at the source";
+  Flow-1 "changes stock only when you receive, ship or move"; Flow-7's "Customers still see 42" (move-only).
+- Needs approval: the move write; Flow-2's extra address fields (name / phone / landmark change the approved V184
+  mapping); a CSP change for external video; editing overview ov8–ov14 / ov11–ov12 in O3.
+
 **Returns portal settings redesign — Pass A, appearance only (2026-11-06; branch `feat/portal-settings-pass-a` off main
 a5e4e0fd, MERGED to main, NOT deployed; frontend only, no migration). Approved. Pass B NOT started.**
 Mockup: `design/returns-portal-settings.html`.

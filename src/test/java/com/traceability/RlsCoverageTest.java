@@ -164,6 +164,7 @@ class RlsCoverageTest {
             "/api/v1/transfers/{transferId}",
             "/api/v1/transfers/returnable-pieces",
             "/api/v1/me",
+            "/api/v1/onboarding/progress",
             "/api/v1/exceptions/count",
             "/api/v1/inventory/status-totals",
             "/api/v1/inventory/valuation",
@@ -545,6 +546,22 @@ class RlsCoverageTest {
         assertThat(resp.getBody().get("name")).isEqualTo("cov_owner");
         assertThat(resp.getBody().get("email")).isEqualTo("cov@test.com");
         assertThat(resp.getBody().get("role")).isEqualTo("owner");
+    }
+
+    @Test
+    void onboardingProgress_derivesFromOwnTenantRows() {
+        // Onboarding O1: a finalized receipt of this tenant shows as first_receiving done.
+        jdbc.update("INSERT INTO receipts (tenant_id, location_id, status, finalized_at) " +
+                    "SELECT ?, id, 'finalized', now() FROM locations WHERE tenant_id = ? LIMIT 1",
+            tenantId, tenantId);
+        ResponseEntity<Map> resp = get("/api/v1/onboarding/progress", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> steps = (List<Map<String, Object>>) resp.getBody().get("steps");
+        assertThat(steps).extracting(s -> s.get("key"))
+            .containsExactly("shopify", "address", "first_receiving", "courier", "test_label");
+        assertThat(steps).filteredOn(s -> "first_receiving".equals(s.get("key")))
+            .extracting(s -> s.get("done")).containsExactly(true);
     }
 
     @Test

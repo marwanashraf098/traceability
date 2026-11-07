@@ -156,6 +156,9 @@ public class OnboardingController {
             jdbc.update(
                 "UPDATE tenants SET onboarding_dismissed_at = now() WHERE id = ?",
                 tenantId);
+            // Onboarding O1 (V220): the dismissal also hides the new "Get started" card, so a
+            // dismissal made on the old card before O3 ships stays dismissed.
+            jdbc.update(OnboardingProgressService.HIDE_CARD_SQL, tenantId);
             return null;
         }));
     }
