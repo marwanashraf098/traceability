@@ -184,6 +184,11 @@ traced:
     backfill:
       enabled: ${TRACED_SHOPIFY_RETURNS_BACKFILL_ENABLED:true}
       batch-pause-ms: 250
+  # Shopify-native exchange shadows — THE S3c switch (ShopifyShadowOrders.S3C_FLAG): on = the "exchange shipped in
+  # Shopify" alert and live shadows in late-to-pack (normal + embedded). Run prod with it FALSE until S3d (a Bosta
+  # app fulfils the exchange at shipment creation, so "fulfilled in Shopify" is not "shipped" before S3d).
+  shopify-exchange:
+    shipped-alert-enabled: ${TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED:true}
   main-reconcile:
     enabled: ${TRACED_MAIN_RECONCILE_ENABLED:false}
     report-only: ${TRACED_MAIN_RECONCILE_REPORT_ONLY:true}
