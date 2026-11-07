@@ -4,6 +4,14 @@
 
 ## Current state
 
+**"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, NOT merged,
+NOT deployed; migration V224 — main ends at V223; prod NOT yet confirmed).** See CLAUDE.md ("No-district Same address").
+- Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for
+  the area → failed / district_required (never retried); the drawer offers the area + Book again.
+- After deploy: watch `grep "Bosta no-district booking"` for the first bookings — districtRequired=true on all of them
+  would mean Bosta does need the area on create (then revert the portal to asking).
+- Test edit NEEDED (not made, waiting for approval): PortalSameAddressTest.a2 asserts "no original district, no district
+  sent → 400"; it is now 201 by design.
 **Portal fees: same-product swap refunds (decision C, V223) + refund method only when owed + "Same address" pickup
 without a picker; stale-reserved diagnosis (2026-11-07; branch `feat/portal-fees-pricing-fixes` off main 8b7b51b4,
 merged to main, NOT deployed; migration V223 — main and prod ended at V222 (prod checked by Marawan 22:02)).**

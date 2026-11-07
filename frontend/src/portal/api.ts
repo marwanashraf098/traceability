@@ -83,6 +83,8 @@ export interface PickupOffer {
   preselectedDistrictId: string | null
   /** Step 5c — present when the store allows exchanges: the districts Bosta both delivers to and collects from. */
   exchangeDistrictIds?: string[]
+  /** 2026-11-07: present (true) only when the original delivery had no district — "Same address" then asks for none. */
+  districtOptional?: boolean
   /** V117 — the cities a customer can choose for a different pickup address. */
   cities?: PickupCity[]
 }

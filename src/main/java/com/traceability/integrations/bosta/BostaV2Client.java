@@ -364,7 +364,8 @@ public class BostaV2Client {
         putIfPresent(drop, "floor", p.floor());
         putIfPresent(drop, "apartment", p.apartment());
         drop.put("city", p.city());
-        drop.put("districtId", p.districtId());
+        // 2026-11-07: a "Same address" pickup of a delivery with no district sends none (city + lines only).
+        putIfPresent(drop, "districtId", p.districtId());
         b.put("businessLocationId", p.businessLocationId());
         ObjectNode receiver = b.putObject("receiver");
         receiver.put("firstName", p.receiverFirstName());
@@ -400,7 +401,7 @@ public class BostaV2Client {
         putIfPresent(drop, "floor", e.floor());
         putIfPresent(drop, "apartment", e.apartment());
         drop.put("city", e.city());
-        drop.put("districtId", e.districtId());
+        putIfPresent(drop, "districtId", e.districtId());   // none for a "Same address" delivery without a district
         b.put("businessLocationId", e.businessLocationId());
         ObjectNode receiver = b.putObject("receiver");
         receiver.put("firstName", e.receiverFirstName());

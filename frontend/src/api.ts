@@ -3697,6 +3697,8 @@ export interface ReturnRequestDetail {
   /** G4a — present only for an order shipped with another courier (never on a Bosta order's request). */
   otherCourier?: OtherCourierReturn
   bookingError?: string | null
+  /** 2026-11-07 — present only when Bosta refused a booking sent without a district: choose the area, book again. */
+  bookingFailureReason?: 'district_required'
   bostaTrackingNumber?: string | null
   bookingAttemptedAt?: string | null
   bookingVerifiedAt?: string | null

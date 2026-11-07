@@ -488,7 +488,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const fixedArea = pickup?.preselectedDistrictId && areaDistricts.some(d => d.id === pickup.preselectedDistrictId)
     ? pickup.preselectedDistrictId : null
   const chosenArea = fixedArea ?? (areaDistricts.some(d => d.id === areaId) ? areaId : '')
-  const areaMissing = pickup != null && !chosenArea
+  // 2026-11-07: the original delivery had no district (most Bosta deliveries) — booked with its city and address
+  // only, so nothing is asked either; Bosta refusing that is handled by the merchant (district_required).
+  const areaOptional = pickup?.districtOptional === true && !fixedArea
+  const areaMissing = pickup != null && !chosenArea && !areaOptional
 
   // V117 — a different pickup address: offered only when lookup lists the cities.
   const cities = pickup?.cities ?? []
@@ -1164,10 +1167,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               </div>
             </div>
           )}
-          {pickup && !customChosen && fixedArea && !addressChoice && (
+          {pickup && !customChosen && (fixedArea || areaOptional) && !addressChoice && (
             <p className="pp-small" data-testid="pickup-place"><bdi>{t('p3.pickupFrom', { place: samePlace() })}</bdi></p>
           )}
-          {pickup && !customChosen && !fixedArea && (
+          {pickup && !customChosen && !fixedArea && !areaOptional && (
             <>
               <div className="pp-field">
                 <label htmlFor="pp-city" className="pp-label">{t('p3.cityLabel')}</label>

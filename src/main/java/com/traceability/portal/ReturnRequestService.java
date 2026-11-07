@@ -140,7 +140,7 @@ public class ReturnRequestService {
             "       COALESCE(o.address->>'city', CASE WHEN o.address IS NULL THEN o.shopify_address->>'city' END) AS address_city, " +
             "       o.address->>'zone' AS address_zone, " +
             "       rr.pickup_city_id, rr.pickup_city_name, rr.pickup_district_id, rr.pickup_district_name, " +
-            "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.bosta_tracking_number, " +
+            "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.booking_failure_reason, rr.bosta_tracking_number, " +
             "       rr.booking_attempted_at, rr.booking_verified_at, " +
             "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
             "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
@@ -239,6 +239,8 @@ public class ReturnRequestService {
         // Step 4c-3: the Bosta return pickup booking.
         d.put("bookingStatus", r.get("booking_status"));
         d.put("bookingError", r.get("booking_error"));
+        // 2026-11-07: present only when the last booking failed for a reason the drawer acts on (district_required).
+        if (r.get("booking_failure_reason") != null) d.put("bookingFailureReason", r.get("booking_failure_reason"));
         d.put("bostaTrackingNumber", r.get("bosta_tracking_number"));
         d.put("bookingAttemptedAt", r.get("booking_attempted_at"));
         d.put("bookingVerifiedAt", r.get("booking_verified_at"));

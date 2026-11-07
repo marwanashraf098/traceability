@@ -1957,6 +1957,8 @@
         "bookingBooked": "Booked · {{tracking}}",
         "bookingFailed": "Failed: {{reason}}",
         "bookingRetry": "Retry",
+        "districtRequired": "Bosta needs an area for this pickup. Choose the customer's area and book again.",
+        "bookAgain": "Book again",
         "bookingRetried": "Booking again…",
         "bookingAmbiguous": "Check in Bosta: we couldn't confirm whether this pickup was booked. Look for it in Bosta before doing anything else.",
         "bookingNotBooked": "It wasn't booked — retry",

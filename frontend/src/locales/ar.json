@@ -2049,6 +2049,8 @@
         "bookingBooked": "تم الحجز · {{tracking}}",
         "bookingFailed": "فشل: {{reason}}",
         "bookingRetry": "إعادة المحاولة",
+        "districtRequired": "تحتاج بوسطة إلى المنطقة لهذا الاستلام. اختر منطقة العميل وأعد الحجز.",
+        "bookAgain": "احجز مرة أخرى",
         "bookingRetried": "جارٍ الحجز مرة أخرى…",
         "bookingAmbiguous": "تحقّق في بوسطة: لم نتمكن من التأكد من حجز هذا الاستلام. ابحث عنه في بوسطة قبل أي خطوة أخرى.",
         "bookingNotBooked": "لم يُحجز — أعد المحاولة",
