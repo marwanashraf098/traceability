@@ -4,7 +4,7 @@ topic: alerts
 title: تنبيهات شركات الشحن والشحنات
 roles: [owner, manager]
 related: [alerts-overview, connect-bosta, other-couriers, hand-over-parcels]
-alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup]
+alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -54,10 +54,26 @@ video:
 
 ظهرت بوليصة بوسطة لطلب شُحن بالفعل مع شركة شحن أخرى، ولم يربطها Traced. تأكد أي شركة لديها الطرد فعلًا.
 
-## أكثر من طرد في Shopify
+## أكثر من طرد
 
 يعرض Shopify أكثر من طرد لطلب شُحن مع شركة شحن أخرى. يتابع Traced الطرد الأول فقط؛ راجع الباقي بنفسك.
 
-## وُصّل دون مسح عند التسليم
+## سُلِّم دون مسح في جلسة الاستلام
 
 يقول Shopify إن شركة شحن أخرى وصّلت الطلب، لكن طرده لم يُمسح عند الخروج في **جلسات الاستلام**. سجّل Traced التسليم بنفسه؛ امسح الطرود في المرة القادمة. وإذا لم يكن الطلب مغلّفًا، فلم يتغير شيء: غلّفه أو راجع الشحنة في Shopify.
+
+## لم تُطبع البوليصة
+
+تعذّر على Traced طباعة بوليصة هذه الشحنة، ويظهر السبب. أصلحه (غالبًا في بوسطة)، واطبع البوليصة مرة أخرى، ثم عالج التنبيه.
+
+## رقم بوسطة الداخلي مفقود
+
+تعذّر على Traced قراءة رقم بوسطة الخاص بهذه الشحنة، لذا لا يستطيع إلغاء الشحنة نيابةً عنك. إن احتاجت إلى إلغاء، فألغِها في بوسطة.
+
+## الاستبدال يحتاج تحديد منتجاته
+
+استبدال أُنشئ في بوسطة يحتاج أن يعرف Traced أي منتج يخرج وأيه يعود. اضغط **الإجراء** واخترهما؛ يختفي التنبيه تلقائيًا.
+
+## حالة استبدال غير معروفة
+
+أرسلت بوسطة تحديثًا لاستبدال لا يتعرّف عليه Traced، فلم يتغير شيء في Traced. يختفي تلقائيًا عندما ترسل بوسطة حالة يعرفها Traced؛ وإن بدا متوقفًا، راجع الاستبدال في بوسطة.

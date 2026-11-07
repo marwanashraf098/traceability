@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { articleForAlert } from '../help/helpRegistry'
+import { goTargetFor } from '../alertTargets'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
 import {
   Badge, Button, Card, cn, EmptyState, Modal, Select, type SelectOption,
@@ -106,11 +107,29 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   superseded_waybill_moving:      { en: 'Old Waybill Still Moving At Bosta', ar: 'البوليصة القديمة ما زالت تتحرك في Bosta' },
   // Main reconcile R2 (V203)
   delivered_not_fulfilled_in_shopify: { en: 'Delivered But Not Fulfilled In Shopify', ar: 'تم التوصيل لكنه غير منفّذ في شوبيفاي' },
+  // O6-fixes — every type the backend raises has a label (guard: alertLabels.test.tsx reads ExceptionService.java)
+  high_attempts:            { en: 'Many Delivery Attempts',          ar: 'محاولات توصيل كثيرة' },
+  missing_awb:              { en: 'Waybill Not Printed',             ar: 'لم تُطبع البوليصة' },
+  missing_provider_id:      { en: 'Bosta ID Missing',                ar: 'رقم بوسطة الداخلي مفقود' },
+  shopify_cancel_vs_inflight: { en: 'Cancelled In Shopify · In Transit', ar: 'أُلغي في شوبيفاي · في الطريق' },
+  shopify_edit_conflict:    { en: 'Edited In Shopify After Packing', ar: 'عُدّل في شوبيفاي بعد التغليف' },
+  return_in_transit_stuck:  { en: 'Returned Piece Not Scanned',      ar: 'قطعة مرتجعة لم تُمسح' },
+  return_mismatch:          { en: 'Return Mismatch',                 ar: 'مرتجع غير مطابق' },
+  exchange_needs_mapping:   { en: 'Exchange Needs Its Items',        ar: 'الاستبدال يحتاج تحديد منتجاته' },
+  exchange_unmapped_state:  { en: 'Unknown Exchange Status',         ar: 'حالة استبدال غير معروفة' },
+  void_hold_sync_failed:    { en: 'Shopify Stock Update Failed',     ar: 'فشل تحديث مخزون شوبيفاي' },
+  generic_bosta_conflict:   { en: 'Bosta Waybill On Another Courier’s Order', ar: 'بوليصة بوسطة على طلب شركة شحن أخرى' },
+  generic_multiple_parcels: { en: 'More Than One Parcel',            ar: 'أكثر من طرد' },
+  generic_delivered_without_pickup: { en: 'Delivered Without A Pickup Scan', ar: 'سُلِّم دون مسح في جلسة الاستلام' },
+  generic_cancelled_live_shipment:  { en: 'Cancelled · Courier Still Has It', ar: 'ملغي · الطرد لدى شركة الشحن' },
+  generic_fulfillment_cancelled:    { en: 'Courier Fulfillment Cancelled In Shopify', ar: 'أُلغي تنفيذ الشحن في شوبيفاي' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
 /** Every alert type this page knows (the Help guard test maps each one to an article). */
 export const ALERT_TYPES = ALL_TYPES
+/** O6-fixes: the labels themselves (the label guard checks EN + AR for every type the backend raises). */
+export const ALERT_LABELS = TYPE_LABELS
 const ALL_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 
 function formatAge(secs: number) {
@@ -184,6 +203,7 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
   const isAr = i18n.language === 'ar'
   const navigate = useNavigate()
   const typeLabel = TYPE_LABELS[item.type]
+  const goTarget = goTargetFor(item)
   const rowRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (highlighted) rowRef.current?.scrollIntoView?.({ block: 'center' })
@@ -250,7 +270,7 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
         </div>
         {item.clearsWhen && (
           <p className="text-caption text-muted mt-1" data-testid="exception-clears-when">
-            {t(`exc.clearsWhen.${item.clearsWhen}`)}
+            {t(`exc.clearsWhen.${item.clearsWhen}`, { defaultValue: t('exc.clearsWhen.fallback') })}
           </p>
         )}
         {item.type === 'return_to_receive' && (
@@ -294,8 +314,9 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
             </button>
           </>
         )}
-        {item.actionUrl && item.type !== 'blocked_customer' && (
-          <Button size="sm" onClick={() => navigate(withReturnSource(item.actionUrl, item.returnSource))}>
+        {/* O6-fixes: the Go target is mapped to a real page (alertTargets.ts); no target → no button. */}
+        {goTarget && item.type !== 'blocked_customer' && (
+          <Button size="sm" onClick={() => navigate(withReturnSource(goTarget, item.returnSource))}>
             {isAr ? 'الإجراء' : 'Go →'}
           </Button>
         )}

@@ -18,7 +18,7 @@ A delivery came back to you per Bosta, but one of its pieces was never scanned b
 
 A customer's return parcel is back per Bosta but was never scanned in. Find it and scan it in **Scan returns**.
 
-## Piece on its way back too long
+## Returned Piece Not Scanned
 
 Bosta has had a returning piece on its way back for several days and it still hasn't been scanned in. Check whether it reached you and scan it, or ask Bosta. If you resolve it and nothing changes, it comes back after a week.
 
@@ -46,6 +46,6 @@ The request has been waiting for its refund for several days. Refund the custome
 
 Items on a booked or approved request still haven't come back. Check with the courier or the customer. If they won't come, use **The rest isn't coming** or close the request.
 
-## Return scan didn't match
+## Return Mismatch
 
 A piece scanned in a return session was marked as not matching what was expected (for example, not the real piece). Inspect it, decide what happens to it, then resolve.

@@ -38,6 +38,6 @@ Pieces left the main warehouse on a transfer, but Shopify still counts them ther
 
 The order was delivered more than 7 days ago but is still unfulfilled in Shopify, so Shopify keeps its stock committed. Mark it fulfilled in Shopify (or cancel it if it didn't go through); the alert clears by itself.
 
-## Piece stock update failed in Shopify
+## Shopify Stock Update Failed
 
 A Critical alert about one piece (a hold, void, damage, sale or write-off from Lookup, or an exchange replacement) or a transfer: Shopify refused the update or never confirmed it. Check that item's quantity in Shopify before doing anything, correct it if needed, then resolve. An unconfirmed update is never sent again automatically, so it can't count twice.

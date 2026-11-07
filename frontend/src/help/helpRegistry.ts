@@ -41,6 +41,7 @@ export const ALERT_GROUPS: Record<string, string[]> = {
     'lost', 'unmatched_delivery', 'bosta_discovery_failed', 'fulfillment_link_problem', 'stuck_shipment',
     'delivery_limbo', 'ndr_failed', 'high_attempts', 'waybill_deleted_in_bosta', 'unexpected_return',
     'generic_bosta_conflict', 'generic_multiple_parcels', 'generic_delivered_without_pickup',
+    'missing_awb', 'missing_provider_id', 'exchange_needs_mapping', 'exchange_unmapped_state',
   ],
   'alerts-cancelled-orders': [
     'cancelled_live_shipment', 'cancelled_but_delivered', 'shopify_cancel_vs_inflight',
