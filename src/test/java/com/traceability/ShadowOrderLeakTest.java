@@ -180,6 +180,7 @@ class ShadowOrderLeakTest {
         reg("GET /api/v1/fulfill/queue/awaiting-waybill-count", list());
         reg("GET /api/v1/fulfill/gather",                list());
         reg("GET /api/v1/fulfill/waiting-for-release",   list());   // S3c: held Shopify-native exchange shadows only
+        reg("POST /api/v1/shopify-exchanges/{orderId}/release-reservation", byOrder());   // S3d: shadow orders only
         reg("GET /api/v1/fulfill/mode",                  list());
         reg("GET /api/v1/fulfill/print-batches/options", list());
         reg("GET /api/v1/fulfill/print-batches/today",   list());

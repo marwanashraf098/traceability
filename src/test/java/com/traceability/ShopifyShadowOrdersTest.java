@@ -244,6 +244,19 @@ class ShopifyShadowOrdersTest {
             reconcile();
         }
 
+        /**
+         * S3d fixture: Shopify's REST fulfillment of an exchange line on the ORIGINAL (no tracking = a manual "mark as
+         * fulfilled") — the evidence S3d needs before a fulfilled exchange line ends its reservation.
+         */
+        void untrackedFulfillment(String lineGid, int qty) {
+            String id = lineGid.substring(lineGid.lastIndexOf('/') + 1);
+            jdbc.update("UPDATE orders SET raw = jsonb_set(raw, '{fulfillments}', COALESCE(raw->'fulfillments', '[]'::jsonb) || " +
+                "jsonb_build_array(jsonb_build_object('id', ?::text, 'status', 'success', 'location_id', 1, 'service', 'manual', " +
+                "'tracking_number', NULL, 'line_items', jsonb_build_array(jsonb_build_object('id', ?::bigint, 'quantity', ?::int, " +
+                "'fulfillment_service', 'manual'))))) WHERE id = ?",
+                String.valueOf(IDS.incrementAndGet()), Long.parseLong(id), qty, original);
+        }
+
         ShopifyShadowOrders.Outcome reconcile() { return as(() -> shadows.reconcileForOrder(original)); }
 
         long committed(UUID variant) {
@@ -397,6 +410,7 @@ class ShopifyShadowOrdersTest {
         s.ret(rg, "OPEN", new Object[]{x, s.restV, 1, li});
         String fo = gid("FulfillmentOrder");
         s.fo(fo, "OPEN", null, li, 1, 1);
+        s.untrackedFulfillment(li, 1);                       // S3d: Shopify's fulfillment, no tracking
         s.fo(fo, "CLOSED", null, li, 0, 1);
         // The reservation ends exactly the same with the alert off or on.
         assertThat(s.line(x)).containsEntry("live_quantity", 0).containsEntry("stop_reason", "shipped_in_shopify")
@@ -508,6 +522,7 @@ class ShopifyShadowOrdersTest {
         String x = gid("ExchangeLineItem"), li = gid("LineItem");
         s.ret(gid("Return"), "OPEN", new Object[]{x, s.restV, 2, li});
         assertThat(s.committed(s.v)).isEqualTo(2);
+        s.untrackedFulfillment(li, 1);                       // S3d: Shopify's fulfillment of 1, no tracking
         s.fo(gid("FulfillmentOrder"), "IN_PROGRESS", null, li, 1, 2);
         assertThat(s.line(x)).containsEntry("live_quantity", 1).containsEntry("shipped_in_shopify", 1);
         assertThat(s.onlyShadow()).containsEntry("state", "live");

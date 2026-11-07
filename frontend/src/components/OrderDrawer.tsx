@@ -1,3 +1,4 @@
+import type React from 'react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -48,9 +49,12 @@ type DrawerTab = 'overview' | 'items' | 'shipment' | 'notes'
 export default function OrderDrawer({
   orderId,
   onClose,
+  extra,
 }: {
   orderId: string | null
   onClose: () => void
+  /** S3d: optional block under the header (Lookup lists an original's Shopify-native exchanges here). */
+  extra?: React.ReactNode
 }) {
   const { t, i18n } = useTranslation()
   const [order, setOrder] = useState<OrderDetail | null>(null)
@@ -241,6 +245,7 @@ export default function OrderDrawer({
                 <h2 className="text-h3 text-primary font-mono">{order.number}</h2>
                 <OrderStatus derived={order.derivedStatus} />
               </div>
+              {extra}
               <div className="mt-3">
                 <p className="text-body font-semibold text-primary">{order.customerName ?? t('common.na')}</p>
                 {order.customerPhone && <p className="text-small text-muted">{order.customerPhone}</p>}

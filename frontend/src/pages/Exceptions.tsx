@@ -93,6 +93,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // A transfer's pieces still counted at the main warehouse in Shopify
   transfer_stock_not_removed: { en: 'Transfer Stock Still In Shopify', ar: 'مخزون النقل لا يزال في شوبيفاي' },
   shopify_exchange_short: { en: 'Short For A Shopify Exchange', ar: 'نقص لاستبدال في شوبيفاي' },
+  shopify_exchange_still_waiting: { en: 'Shopify Exchange Still Waiting', ar: 'استبدال في شوبيفاي ما زال في الانتظار' },
   shopify_exchange_shipped_in_shopify: { en: 'Exchange Shipped In Shopify', ar: 'شُحن الاستبدال في شوبيفاي' },
   // Shopify tracking-number edits (V200)
   tracking_changed_after_custody: { en: 'Waybill Changed After Pickup',      ar: 'تغيّرت البوليصة بعد خروج الطرد' },

@@ -4,6 +4,12 @@
 
 ## Current state
 
+**Shopify-native returns S3d — courier attach (2026-11-07; branch `feat/s3d-courier-attach` off main 8964ccd6, NOT
+merged, NOT deployed; V221 — prod ends at V220, checked 14:46).** See CLAUDE.md (S3d paragraph). Review (2026-11-07): type 20 / RTO with an -R reference keeps today's path (SEND only); unexplained holds stay waiting + `shopify_exchange_still_waiting` after 7 days + owner/manager Release reservation (audited, sticky manual_release); #1009 confirmed on prod (exchange FO at an unreadable 3PL location). Tracked exchange fulfillments keep the shadow
+live and packable; untracked end it; unknown never ends it (#1009). Bosta type 30 + SEND and generic courier legs attach
+to the shadow; Lookup nests the shadows. Prod SQL for #1009 / -R SENDs: scratchpad `s3d-step0-prod.sql` (Marawan runs).
+After S3d is verified in prod: `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=true`.
+
 **Shopify-native returns S3c — Pick & Pack for exchange shadows (2026-11-07; branch `feat/s3c-pick-pack` off main
 c6aa7ca4, rebased on 5b017cfd, approved and MERGED 2026-11-07, NOT deployed; no migration).** See CLAUDE.md (S3c
 paragraph). **Prod: set `TRACED_SHOPIFY_EXCHANGE_SHIPPED_ALERT_ENABLED=false` in `.env` before deploying — on only after S3d

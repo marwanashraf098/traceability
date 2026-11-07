@@ -524,7 +524,8 @@
       "tracking_changed_after_custody": "Waybill changed after pickup",
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
-      "superseded_waybill_moving": "Old waybill still moving at Bosta"
+      "superseded_waybill_moving": "Old waybill still moving at Bosta",
+      "shopify_exchange_still_waiting": "Shopify exchange still waiting"
     },
     "reasonMore": "+{{count}}",
     "returnLine": {
@@ -1420,7 +1421,11 @@
       "heldTitle": "Waiting for release in Shopify",
       "heldBody": "Shopify hasn't released this exchange for fulfilment yet. Keep the piece aside — you can pack it once it's released.",
       "completeHeld": "This exchange is waiting for release in Shopify — keep the piece aside and pack it once Shopify releases it.",
-      "completeEnded": "This exchange ended in Shopify — there is nothing left to pack."
+      "completeEnded": "This exchange ended in Shopify — there is nothing left to pack.",
+      "release": "Release reservation",
+      "releaseConfirm": "Release the piece kept aside for {{number}}? Traced stops keeping it for this exchange.",
+      "releaseYes": "Release",
+      "unexplained": "Traced can't see why Shopify hasn't released this exchange — check it in Shopify."
     }
   },
   "lookup": {
@@ -1566,6 +1571,12 @@
       "done": "Moved to {{code}}",
       "cleared": "Place cleared",
       "error": "Couldn't move it. Try again."
+    },
+    "shopifyExchanges": {
+      "title": "Exchanges made in Shopify",
+      "live": "Kept aside",
+      "ended": "Ended",
+      "back": "Back to {{number}}"
     }
   },
   "returns": {

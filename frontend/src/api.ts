@@ -772,6 +772,10 @@ export interface OrderLookupResult {
   type: 'order'
   orderId: string
   orderNumber: string | null
+  /** S3d: the order's Shopify-native exchange shadows (#…-X1) — present only when it has any. */
+  shopifyExchanges?: Array<{ orderId: string; orderNumber: string; status: string; state: 'live' | 'ended' }>
+  /** S3d: the shadow number that was typed (the result is its original order). */
+  matchedExchange?: string
 }
 
 /** Flexible labeling: a printed label code no piece carries yet (issued, not tagged in Tag stock / packing). */
@@ -2528,12 +2532,19 @@ export interface ShadowExchangeFor {
   number: string | null
 }
 
+/** S3d — owner / manager: end a Shopify exchange's reservation by hand (audited; reason manual_release). */
+export async function releaseShopifyExchange(orderId: string): Promise<{ orderId: string; number: string; state: string }> {
+  return request(`/shopify-exchanges/${orderId}/release-reservation`, { method: 'POST' })
+}
+
 /** S3c — GET /fulfill/waiting-for-release: exchanges Shopify hasn't released yet (beside the queue, never in it). */
 export interface WaitingForReleaseOrder {
   id: string
   number: string | null
   placed_at: string | null
   status: string
+  /** S3d: held for a reason Traced can't explain (e.g. its fulfillment order is at a location Traced can't read). */
+  unexplained?: boolean
   exchangeFor: ShadowExchangeFor
   shortBy: number
   items: Array<{

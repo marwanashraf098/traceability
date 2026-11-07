@@ -119,13 +119,17 @@ public class FulfillmentTrackingCapture {
     private void applyShopifyDelivered(UUID tenantId, UUID orderId) {
         if (genericLegs == null) return;
         List<UUID> legs = jdbc.queryForList(
+            // S3d: also the legs of the order's Shopify-native exchange shadows — their fulfillment (and its
+            // shipment_status) is stored on this, the ORIGINAL, order.
             "SELECT s.id FROM shipments s " +
-            "JOIN order_fulfillment_tracking t ON t.tenant_id = s.tenant_id AND t.order_id = s.order_id " +
+            "JOIN order_fulfillment_tracking t ON t.tenant_id = s.tenant_id AND t.order_id = ? " +
             "                                  AND t.shopify_fulfillment_id = s.shopify_fulfillment_id " +
-            "WHERE s.tenant_id = ? AND s.order_id = ? AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
+            "WHERE s.tenant_id = ? AND (s.order_id = ? OR s.order_id IN (SELECT sx.order_id FROM shopify_exchange_shadows sx " +
+            "                                 WHERE sx.tenant_id = ? AND sx.original_order_id = ?)) " +
+            "  AND s.provider = 'generic' AND s.shipment_leg = 'forward' " +
             "  AND s.internal_state IN ('created', 'with_courier') " +
             "  AND t.shipment_status = 'delivered' AND coalesce(t.fulfillment_status, '') <> 'cancelled'",
-            UUID.class, tenantId, orderId);
+            UUID.class, orderId, tenantId, orderId, tenantId, orderId);
         for (UUID leg : legs) {
             genericLegs.deliver(tenantId, leg, com.traceability.courier.GenericLegTransitions.SOURCE_SHOPIFY, null);
         }

@@ -244,6 +244,30 @@ public class ShipmentLinkService {
     }
 
     /**
+     * S3d — a Shopify-native exchange's courier leg on its SHADOW order (ShopifyShadowOrders.shadowForReturnReference /
+     * shadowForLineItems decided which). Same body as {@link #linkAtMapTime}; the shadow keeps S3b's 'confirmed'
+     * (never written backward), so the gate here is the shadow's live statuses plus 'packed' (Traced packed it before
+     * the waybill arrived — the normal AWB link then moves it on). Shadow orders only.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> linkShadowLeg(UUID shadowOrderId, String trackingNumber, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        String[] orderInfo = jdbc.query(
+            "SELECT status, number FROM warehouse_orders WHERE id = ? AND tenant_id = ? " +
+            "  AND external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%'",
+            rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
+            shadowOrderId, tenantId);
+        if (orderInfo == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Exchange order not found");
+        }
+        if (!List.of("confirmed", "new", "ready_to_pick", "packed").contains(orderInfo[0])) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This exchange can't take a waybill now (current: " + orderInfo[0] + ")");
+        }
+        return linkTrackingNumberToOrder(shadowOrderId, orderInfo[1], trackingNumber, tenantId, actorUserId, null, false);
+    }
+
+    /**
      * Shared body of linkByAwbScan() and linkAtMapTime(): normalize, Mode-B verify,
      * swapped-AWB check, forward-only INSERT, then completeLink()'s tail. Extracted
      * verbatim — callers differ only in which order-status gate they check before
@@ -472,6 +496,20 @@ public class ShipmentLinkService {
                 log.info("tryMatchDelivery: tracking={} is a Traced-booked return leg of portal order {}",
                     trackingNumber, portalOrder);
                 return linkMatchedDelivery(tenantId, portalOrder, trackingNumber, delivery, mapped);
+            }
+        }
+
+        // Step 0b (S3d) — a SEND a courier app booked for a Shopify-native exchange: its
+        // businessReference names the Shopify Return ("…:#1010-R1"), whose live shadow order holds the replacement.
+        // It is the SHADOW's courier leg — never a second forward leg on the original (OrderReference would resolve
+        // the part before ':' to the original). Customer-return pickups keep linking to the original (the old item).
+        // SEND (10) only — never a Return to Origin (20: a delivery coming BACK, no parcel to pack; prod's -R type 20
+        // rows are exchanges Bosta turned around, on their existing shipment) and never a CRP (25, the old item).
+        if (delivery != null && delivery.typeCode() == 10) {
+            UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, delivery.businessReference());
+            if (shadow != null) {
+                log.info("tryMatchDelivery: tracking={} is the courier leg of Shopify exchange shadow {}", trackingNumber, shadow);
+                return linkMatchedDelivery(tenantId, shadow, trackingNumber, delivery, mapped);
             }
         }
 

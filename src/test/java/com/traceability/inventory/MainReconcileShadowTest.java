@@ -186,7 +186,8 @@ class MainReconcileShadowTest {
         // quantity drops to 0, Shopify's on_hand drops by 1.
         setFulfillments(t, s.original(), originalLineFulfillment(t),
             fulfillment("7001", t.mainNum(), "success", line(s.lineItemId(), v, 1)));
-        jdbc.update("UPDATE shopify_exchange_shadow_lines SET live_quantity = 0, shipped_in_shopify = 0 WHERE id = ?", s.shadowLine());
+        // S3d: what the reconcile writes for a fulfilled line — shipped_in_shopify counts it (fixture, approved 2026-11-07).
+        jdbc.update("UPDATE shopify_exchange_shadow_lines SET live_quantity = 0, shipped_in_shopify = 1 WHERE id = ?", s.shadowLine());
         level(v, 0, 0, 0, 0);
         assertThat(evaluate(t, v)).as("Shopify fulfilled the line Traced already shipped")
             .containsEntry("unfulfilled_shipped_raw", 0L).containsEntry("fulfilled_unpicked", 0L);
