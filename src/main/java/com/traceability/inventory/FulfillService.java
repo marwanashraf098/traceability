@@ -260,7 +260,9 @@ public class FulfillService {
     public List<Map<String, Object>> getWaitingForRelease() {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT o.id, o.number, o.placed_at, o.status " +
+            "SELECT o.id, o.number, o.placed_at, o.status, " +
+            // S3d: held for a reason Traced can't explain (#1009) — owners / managers may release the reservation
+            "       " + ShopifyShadowOrders.unexplainedHoldSql("o") + " AS unexplained " +
             "FROM warehouse_orders o " +
             "WHERE o.tenant_id = ? AND o.external_id LIKE '" + ShopifyShadowOrders.PREFIX + "%' " +
             "  AND o.status::text IN " + ShopifyShadowOrders.LIVE_STATUSES_SQL + " " +

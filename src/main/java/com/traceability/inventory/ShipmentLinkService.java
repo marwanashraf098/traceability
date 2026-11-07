@@ -499,11 +499,13 @@ public class ShipmentLinkService {
             }
         }
 
-        // Step 0b (S3d) — a forward delivery (SEND) a courier app booked for a Shopify-native exchange: its
+        // Step 0b (S3d) — a SEND a courier app booked for a Shopify-native exchange: its
         // businessReference names the Shopify Return ("…:#1010-R1"), whose live shadow order holds the replacement.
         // It is the SHADOW's courier leg — never a second forward leg on the original (OrderReference would resolve
         // the part before ':' to the original). Customer-return pickups keep linking to the original (the old item).
-        if (!isCrpDelivery(delivery)) {
+        // SEND (10) only — never a Return to Origin (20: a delivery coming BACK, no parcel to pack; prod's -R type 20
+        // rows are exchanges Bosta turned around, on their existing shipment) and never a CRP (25, the old item).
+        if (delivery != null && delivery.typeCode() == 10) {
             UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, delivery.businessReference());
             if (shadow != null) {
                 log.info("tryMatchDelivery: tracking={} is the courier leg of Shopify exchange shadow {}", trackingNumber, shadow);

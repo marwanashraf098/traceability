@@ -228,6 +228,7 @@ public class ExceptionService {
         // replacement Shopify fulfilled while Traced still had it on the shelf.
         all.addAll(detectShopifyExchangeShort(tenantId));
         if (shippedInShopifyAlertEnabled) all.addAll(detectShopifyExchangeShippedInShopify(tenantId));
+        all.addAll(detectShopifyExchangeStillWaiting(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
@@ -353,6 +354,7 @@ public class ExceptionService {
         Map.entry("transfer_stock_not_removed/transfer",       OrderLink.NONE),
         Map.entry("shopify_exchange_short/variant",            OrderLink.NONE),           // per variant (shadows are never in Orders)
         Map.entry("shopify_exchange_shipped_in_shopify/order", OrderLink.DIRECT),         // order_id = the ORIGINAL order
+        Map.entry("shopify_exchange_still_waiting/order",      OrderLink.DIRECT),         // order_id = the ORIGINAL order
         Map.entry("generic_bosta_conflict/delivery",           OrderLink.NONE),
         Map.entry("generic_bosta_conflict/order",              OrderLink.DIRECT),         // the pack scan's order
         Map.entry("generic_multiple_parcels/order",            OrderLink.DIRECT),
@@ -414,7 +416,8 @@ public class ExceptionService {
         Map.entry("tracking_changed_after_custody",   "other"),
         Map.entry("superseded_waybill_moving",        "other"),
         Map.entry("delivered_not_fulfilled_in_shopify", "other"),
-        Map.entry("shopify_exchange_shipped_in_shopify", "other"));
+        Map.entry("shopify_exchange_shipped_in_shopify", "other"),
+        Map.entry("shopify_exchange_still_waiting",      "other"));
 
     /** An alert type's reason group; "other" for a type with none (OrdersFiltersTest keeps that from happening). */
     public static String reasonGroupOf(String type) {
@@ -461,7 +464,8 @@ public class ExceptionService {
         "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED",
         "shopify_connection_lost",       "SHOPIFY_RECONNECTED",
         "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE",
-        "shopify_exchange_short",        "STOCK_COVERS_EXCHANGES");
+        "shopify_exchange_short",        "STOCK_COVERS_EXCHANGES",
+        "shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED");
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -926,6 +930,30 @@ public class ExceptionService {
             "      AND er.exception_type = 'shopify_exchange_shipped_in_shopify' " +
             "      AND er.subject_key = 'shopify_exchange_shipped_in_shopify:' || sl.id || ':' || sl.shipped_in_shopify) " +
             "ORDER BY sl.updated_at", tid);
+    }
+
+    /** S3d safety net: a live shadow held more than this many days for a reason Traced can't explain. */
+    static final int STILL_WAITING_DAYS = 7;
+
+    /**
+     * shopify_exchange_still_waiting (MEDIUM, S3d, condition-only) — a live Shopify-native exchange shadow approved more
+     * than {@link #STILL_WAITING_DAYS} days ago and still held for a reason Traced can't explain
+     * ({@link ShopifyShadowOrders#unexplainedHoldSql} — #1009: e.g. its fulfillment order is at a location Traced can't
+     * read). Clears when Shopify's state explains it again or an owner / manager releases the reservation.
+     */
+    private List<Map<String, Object>> detectShopifyExchangeStillWaiting(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_exchange_still_waiting' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       s.original_order_id AS order_id, oo.number AS order_number, so.number AS shadow_number, " +
+            "       s.order_id AS shadow_order_id, s.approved_at AS occurred_at, " +
+            "       'shopify_exchange_still_waiting:' || s.order_id AS subject_key " +
+            "FROM shopify_exchange_shadows s " +
+            "JOIN warehouse_orders so ON so.id = s.order_id AND so.tenant_id = s.tenant_id " +
+            "JOIN merchant_orders oo ON oo.id = s.original_order_id AND oo.tenant_id = s.tenant_id " +
+            "WHERE s.tenant_id = ? AND s.state = 'live' AND s.approved_at < now() - make_interval(days => " + STILL_WAITING_DAYS + ") " +
+            "  AND so.status::text IN " + ShopifyShadowOrders.LIVE_STATUSES_SQL + " " +
+            "  AND " + ShopifyShadowOrders.unexplainedHoldSql("so") + " " +
+            "ORDER BY s.approved_at", tid);
     }
 
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
@@ -2680,6 +2708,18 @@ public class ExceptionService {
                     + "فعلاً، عدّلها من البحث، ثم أغلق التنبيه.");
                 item.put("suggestedAction", "check_piece_in_lookup");
                 item.put("actionUrl", "/orders/" + item.get("order_id"));
+            }
+            case "shopify_exchange_still_waiting" -> {
+                String shadow = str(item, "shadow_number");
+                item.put("descriptionEn", "Exchange " + shadow + " still waiting — check in Shopify. Traced has kept its "
+                    + "replacement aside for more than " + STILL_WAITING_DAYS + " days but can't see why Shopify hasn't "
+                    + "released it (its fulfillment order may be at a location Traced can't read). If the exchange won't "
+                    + "go out from your warehouse, release the reservation.");
+                item.put("descriptionAr", "الاستبدال " + shadow + " ما زال في الانتظار — راجع شوبيفاي. يحتفظ Traced "
+                    + "بالقطعة البديلة جانباً منذ أكثر من " + STILL_WAITING_DAYS + " أيام لكنه لا يرى سبب عدم الإفراج عنها في "
+                    + "شوبيفاي (قد يكون طلب التنفيذ في موقع لا يستطيع Traced قراءته). إن لم يُشحن الاستبدال من مستودعك، فألغِ الحجز.");
+                item.put("suggestedAction", "release_reservation");
+                item.put("actionUrl", "/fulfill");
             }
             case "transfer_stock_not_removed" -> {
                 String dest = str(item, "destination_name");

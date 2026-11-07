@@ -140,6 +140,76 @@ public class ShopifyShadowOrders {
         return r.isEmpty() ? PickState.NONE : r.get(0);
     }
 
+    // ── S3d: the safety net for reservations Traced can't explain ────────────────────────────────────────────────
+
+    /**
+     * THE "held for a reason Traced can't explain" rule (#1009): a live shadow with a live line whose exchange Shopify
+     * already processed (order_line_gids set) but that no LIVE fulfillment order (OPEN / IN_PROGRESS / ON_HOLD /
+     * SCHEDULED — a Shopify hold is an explained wait) and no readable fulfillment (shipped_in_shopify) covers. An
+     * unprocessed return (customer still to send it back) is an explained wait too. {@code o} = the order alias.
+     */
+    public static String unexplainedHoldSql(String o) {
+        return "EXISTS (SELECT 1 FROM shopify_exchange_shadows sx_u " +
+               "  JOIN shopify_exchange_shadow_lines sl_u ON sl_u.shadow_id = sx_u.id AND sl_u.tenant_id = sx_u.tenant_id " +
+               "       AND sl_u.live_quantity > 0 " +
+               "  JOIN shopify_exchange_lines xl_u ON xl_u.id = sl_u.exchange_line_id AND xl_u.tenant_id = sl_u.tenant_id " +
+               "       AND cardinality(xl_u.order_line_gids) > 0 " +
+               "  WHERE sx_u.order_id = " + o + ".id AND sx_u.tenant_id = " + o + ".tenant_id AND sx_u.state = 'live' " +
+               "    AND COALESCE((SELECT SUM((li_u->>'remainingQuantity')::int) " +
+               "        FROM shopify_fulfillment_orders fo_u " +
+               "        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(fo_u.line_items) = 'array' " +
+               "                                                     THEN fo_u.line_items ELSE '[]'::jsonb END) li_u " +
+               "        WHERE fo_u.tenant_id = sx_u.tenant_id AND fo_u.order_id = sx_u.original_order_id " +
+               "          AND fo_u.status IN ('OPEN', 'IN_PROGRESS', 'ON_HOLD', 'SCHEDULED') " +
+               "          AND li_u->>'lineItemGid' = ANY(xl_u.order_line_gids) " +
+               "          AND COALESCE(li_u->>'remainingQuantity' ~ '^[0-9]+$', false)), 0) " +
+               "        + sl_u.shipped_in_shopify < sl_u.live_quantity)";
+    }
+
+    public static final String RELEASE_REASON = "manual_release";
+
+    /** "Release reservation" refused — the message says why (EN). */
+    public static final class ReleaseRefused extends RuntimeException {
+        public final String code;
+        ReleaseRefused(String code, String message) { super(message); this.code = code; }
+    }
+
+    /**
+     * S3d — an owner / manager ends a live shadow's reservation by hand (e.g. after shopify_exchange_still_waiting):
+     * every line to 0 with stop_reason 'manual_release', the shadow ended 'manual_release' (sticky — the reconcile never
+     * revives it), under the original's reconcile lock. Refused once Traced scanned / packed a piece for it, or when it
+     * is not a live shadow. The caller audits. Current tenant; own transaction. Returns the shadow's number.
+     */
+    public String releaseManually(UUID shadowOrderId) {
+        UUID tenantId = TenantContext.require();
+        return tx.execute(st -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT s.id, s.original_order_id, s.state, o.number, o.status::text AS status FROM shopify_exchange_shadows s " +
+                "JOIN warehouse_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+                "WHERE s.order_id = ? AND s.tenant_id = ?", shadowOrderId, tenantId);
+            if (rows.isEmpty()) throw new ReleaseRefused("NOT_FOUND", "Exchange not found");
+            Map<String, Object> r = rows.get(0);
+            jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", rs -> null, "shopify-shadow:" + r.get("original_order_id"));
+            String state = jdbc.queryForObject("SELECT state FROM shopify_exchange_shadows WHERE id = ?", String.class, r.get("id"));
+            if (!"live".equals(state)) throw new ReleaseRefused("NOT_LIVE", "This exchange's reservation already ended");
+            Boolean picked = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id AND oi.tenant_id = a.tenant_id " +
+                "  WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status IN ('active', 'packed'))",
+                Boolean.class, shadowOrderId, tenantId);
+            if (Boolean.TRUE.equals(picked) || !LIVE_STATUSES_SQL.contains("'" + r.get("status") + "'")) {
+                throw new ReleaseRefused("ALREADY_PICKED", "A piece is already scanned or packed for this exchange — unscan it first");
+            }
+            jdbc.update("UPDATE order_items SET quantity = 0 WHERE order_id = ? AND tenant_id = ?", shadowOrderId, tenantId);
+            jdbc.update("UPDATE shopify_exchange_shadow_lines SET live_quantity = 0, stop_reason = ?, " +
+                "stopped_at = COALESCE(stopped_at, now()), updated_at = now() WHERE shadow_id = ? AND tenant_id = ?",
+                RELEASE_REASON, r.get("id"), tenantId);
+            jdbc.update("UPDATE shopify_exchange_shadows SET state = 'ended', end_reason = ?, ended_at = now(), updated_at = now() " +
+                "WHERE id = ? AND tenant_id = ?", RELEASE_REASON, r.get("id"), tenantId);
+            log.info("Shopify exchange shadow {} ({}) released by hand", r.get("number"), shadowOrderId);
+            return (String) r.get("number");
+        });
+    }
+
     // ── S3d: which shadow a courier leg belongs to ────────────────────────────────────────────────────────────────
 
     private static final java.util.regex.Pattern RETURN_NAME = java.util.regex.Pattern.compile("^#?(.+-R[0-9]+)$");
@@ -343,7 +413,7 @@ public class ShopifyShadowOrders {
             for (XLine x : lines) plans.add(plan(tenantId, o.id(), status, x, fos, fulfillments));
 
             List<Map<String, Object>> existing = jdbc.queryForList(
-                "SELECT id, order_id, state FROM shopify_exchange_shadows WHERE tenant_id = ? AND return_id = ?", tenantId, returnId);
+                "SELECT id, order_id, state, end_reason FROM shopify_exchange_shadows WHERE tenant_id = ? AND return_id = ?", tenantId, returnId);
             boolean anyLive = plans.stream().anyMatch(p -> p.live() > 0);
             if (existing.isEmpty()) {
                 if (!anyLive || !o.frozen()) continue;          // Q2: the original's own line carries the demand
@@ -354,6 +424,7 @@ public class ShopifyShadowOrders {
             } else {
                 if (dryRun) continue;
                 Map<String, Object> s = existing.get(0);
+                if ("manual_release".equals(s.get("end_reason"))) continue;   // released by hand: never revived
                 boolean wasLive = "live".equals(s.get("state"));
                 updateShadow(tenantId, (UUID) s.get("id"), (UUID) s.get("order_id"), status, plans);
                 updated++;
@@ -433,12 +504,16 @@ public class ShopifyShadowOrders {
         } else {
             live = Math.min(live, x.quantity());
             int gap = x.quantity() - live;
+            // Recorded as shipped_in_shopify: only what Traced can SEE fulfilled (readable fulfillments). Units the FO
+            // says were fulfilled but no stored fulfillment explains stay reserved and HELD — "unexplained stays
+            // waiting" (approved 2026-11-07); tracked ones are released (heldSql counts shipped_in_shopify).
+            int seen = Math.min(shipped, ev.tracked() + ev.untracked());
             if (gap > 0 && shipped > 0) {
                 int unknown = Math.max(0, shipped - ev.tracked() - ev.untracked());
                 live += Math.min(gap, ev.tracked() + unknown);
             }
-            p = live > 0 ? new Plan(x, live, shipped, null)
-                : new Plan(x, 0, shipped, shipped > 0 ? "shipped_in_shopify" : "fo_cancelled");
+            p = live > 0 ? new Plan(x, live, seen, null)
+                : new Plan(x, 0, seen, shipped > 0 ? "shipped_in_shopify" : "fo_cancelled");
         }
         if (p.live() > 0 && nativeReplacementExists(tenantId, originalId, x.variantId())) {
             return new Plan(x, 0, p.shipped(), "stood_down");

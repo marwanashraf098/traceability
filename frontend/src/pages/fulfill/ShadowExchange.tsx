@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Clock } from 'lucide-react'
 import { Badge } from '../../components/ui'
-import { getWaitingForRelease } from '../../api'
+import { getWaitingForRelease, getRoleFromToken, releaseShopifyExchange } from '../../api'
 import type { ShadowExchangeFor, WaitingForReleaseOrder } from '../../api'
 
 // S3c — Shopify-native exchange "shadow" orders (#1010-X1) in Pick & Pack. A shadow says which order it
@@ -68,8 +68,47 @@ export function useWaitingForRelease(reloadKey: unknown, enabled = true): Waitin
 }
 
 /** "Waiting for release" — beside the queue, never in it; rows don't open the pick screen. Hidden when empty. */
-export function WaitingForReleaseSection({ rows }: { rows: WaitingForReleaseOrder[] }) {
+/** S3d: "Release reservation" — owner / manager, two steps (no browser dialog), the row leaves on success. */
+function ReleaseReservation({ row, onReleased }: { row: WaitingForReleaseOrder; onReleased: (id: string) => void }) {
   const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const role = getRoleFromToken()
+  if (role !== 'owner' && role !== 'manager') return null
+  if (!confirming) {
+    return (
+      <button type="button" data-testid={`release-${row.id}`} onClick={() => setConfirming(true)}
+        className="text-small text-trace-blue hover:text-trace-blue-hover self-start">
+        {t('fulfill.shadow.release')}
+      </button>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-small">
+      <span className="text-primary">{t('fulfill.shadow.releaseConfirm', { number: row.number ?? '' })}</span>
+      <button type="button" data-testid={`release-yes-${row.id}`} disabled={busy}
+        className="btn rounded-lg bg-danger text-white px-3 py-1 text-small"
+        onClick={async () => {
+          setBusy(true); setError(null)
+          try { await releaseShopifyExchange(row.id); onReleased(row.id) }
+          catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+          finally { setBusy(false) }
+        }}>
+        {t('fulfill.shadow.releaseYes')}
+      </button>
+      <button type="button" onClick={() => setConfirming(false)} className="text-muted hover:text-primary">
+        {t('common.cancel')}
+      </button>
+      {error && <span className="text-danger-text" role="alert">{error}</span>}
+    </div>
+  )
+}
+
+export function WaitingForReleaseSection({ rows: allRows }: { rows: WaitingForReleaseOrder[] }) {
+  const { t } = useTranslation()
+  const [released, setReleased] = useState<Set<string>>(new Set())
+  const rows = allRows.filter(r => !released.has(r.id))
   if (rows.length === 0) return null
   return (
     <section className="mt-8" data-testid="waiting-for-release">
@@ -91,6 +130,9 @@ export function WaitingForReleaseSection({ rows }: { rows: WaitingForReleaseOrde
                 {t('fulfill.shadow.waitingStatus')}
               </span>
             </div>
+            {o.unexplained && (
+              <p className="text-small text-warning-text" data-testid={`unexplained-${o.id}`}>{t('fulfill.shadow.unexplained')}</p>
+            )}
             {o.items.length > 0 && (
               <ul className="space-y-0.5">
                 {o.items.map((i, n) => (
@@ -101,6 +143,7 @@ export function WaitingForReleaseSection({ rows }: { rows: WaitingForReleaseOrde
                 ))}
               </ul>
             )}
+            <ReleaseReservation row={o} onReleased={id => setReleased(prev => new Set(prev).add(id))} />
           </div>
         ))}
       </div>
