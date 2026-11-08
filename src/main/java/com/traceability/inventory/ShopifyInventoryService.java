@@ -634,11 +634,26 @@ public class ShopifyInventoryService {
             shopify.pushExchangeDispatch(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
                                           p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
             status = "applied";
-        } catch (Exception e) {
+        } catch (ShopifyAmbiguousException e) {
+            // P1 (2026-11-08): no confirmed answer — the −1 may have landed. 'failed_ambiguous' is never re-sent:
+            // the manual re-push refuses it and claim() only re-claims 'failed', so a later dispatch signal for the
+            // same piece can't send it again either. A person checks Shopify (void_hold_sync_failed).
+            status = "failed_ambiguous";
+            error = messageOf(e);
+            log.error("Shopify inventory exchange dispatch AMBIGUOUS: piece={} variant={} — verify in Shopify, NOT re-sending: {}",
+                      pieceId, variantId, error);
+        } catch (ShopifyException | IllegalArgumentException e) {
+            // A definite failure (Shopify answered and did not apply it / refused before any call): re-sendable.
             status = "failed";
-            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            error = messageOf(e);
             log.warn("Shopify inventory exchange dispatch failed: piece={} variant={} error={}",
                      pieceId, variantId, error);
+        } catch (RuntimeException e) {
+            // Anything unexpected once the call may have started — assume it may have landed.
+            status = "failed_ambiguous";
+            error = e.getClass().getSimpleName() + ": " + messageOf(e);
+            log.error("Shopify inventory exchange dispatch AMBIGUOUS (unexpected): piece={} variant={} error={}",
+                      pieceId, variantId, error);
         }
 
         markResult(tenantId, "exchange_dispatch", pieceId, variantId, locationId,
@@ -1294,12 +1309,22 @@ public class ShopifyInventoryService {
             } else {
                 cls = ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;    // unknown — assume it may have landed
             }
+            // A recovery check (the identical re-send of an ambiguous claim) says nothing definite about the
+            // FIRST send — whatever it answers, the claim stays ambiguous (P1, 2026-11-08; the gateway already
+            // classifies so, this also covers any other exception). probeStale: it answered without replaying a
+            // success (STALE / an idempotency code / an error) — never sent again automatically, a person checks.
+            boolean probeStale = false;
+            if (resend) {
+                cls = ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+                probeStale = e instanceof ShopifyAdjustFailedException f && f.probeStale();
+            }
             if (cls == ShopifyAdjustFailedException.FailureClass.NEVER_SENT) sentKey = null;
             if (resend && sentBaseline == null) sentBaseline = resendBaseline;
-            log.warn("Shopify inventory adjust failed: trigger={} triggerId={} variant={} class={} error={}",
-                     triggerType, triggerId, variantId, cls.db(), error);
+            log.warn("Shopify inventory adjust failed: trigger={} triggerId={} variant={} class={} probeStale={} error={}",
+                     triggerType, triggerId, variantId, cls.db(), probeStale, error);
             markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
-                p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", error, cls, sentBaseline, sentKey);
+                p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", error, cls, sentBaseline, sentKey,
+                probeStale);
         }
     }
 
@@ -1310,14 +1335,16 @@ public class ShopifyInventoryService {
 
     private record FailedClaim(UUID variantId, UUID locationId, int delta, String triggerType, String triggerId,
                                String failureClass, Integer changeFromQuantity, String sentKey,
-                               int attemptCount, boolean ambiguousExpired, boolean olderThanConfirm, boolean legacy) {}
+                               int attemptCount, boolean ambiguousExpired, boolean olderThanConfirm, boolean legacy,
+                               boolean probeStale) {}
 
     private static final String FAILED_CLAIM_COLUMNS =
         "SELECT sia.variant_id, sia.location_id, sia.delta, sia.trigger_type, sia.trigger_id, sia.failure_class, " +
         "       sia.change_from_quantity, sia.sent_idempotency_key, sia.attempt_count, " +
         "       COALESCE(" + IncrementRecoveryRules.AMBIGUOUS_EXPIRED_SQL + ", false) AS ambiguous_expired, " +
         "       COALESCE(sia.first_attempt_at, sia.created_at) < now() - interval '" +
-                IncrementRecoveryRules.CONFIRM_AFTER_HOURS + " hours' AS older_than_confirm, sia.legacy " +
+                IncrementRecoveryRules.CONFIRM_AFTER_HOURS + " hours' AS older_than_confirm, sia.legacy, " +
+        "       COALESCE(" + IncrementRecoveryRules.PROBE_STALE_SQL + ", false) AS probe_stale " +
         "FROM shopify_inventory_adjustments sia ";
 
     private static FailedClaim failedClaim(java.sql.ResultSet rs) throws java.sql.SQLException {
@@ -1325,7 +1352,7 @@ public class ShopifyInventoryService {
             rs.getInt("delta"), rs.getString("trigger_type"), rs.getString("trigger_id"), rs.getString("failure_class"),
             (Integer) rs.getObject("change_from_quantity"), rs.getString("sent_idempotency_key"),
             rs.getInt("attempt_count"), rs.getBoolean("ambiguous_expired"), rs.getBoolean("older_than_confirm"),
-            rs.getBoolean("legacy"));
+            rs.getBoolean("legacy"), rs.getBoolean("probe_stale"));
     }
 
     /**
@@ -1391,7 +1418,10 @@ public class ShopifyInventoryService {
         String claimKey = ShopifyGateway.idempotencyKey(tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId());
         ShopifyAdjustFailedException.FailureClass cls = ShopifyAdjustFailedException.FailureClass.fromDb(c.failureClass());
 
-        if (cls == ShopifyAdjustFailedException.FailureClass.AMBIGUOUS && !c.ambiguousExpired() && c.sentKey() != null) {
+        // A probeStale claim is never re-checked: its identical re-send already came back without replaying a
+        // success. It reaches here only through the confirmed manual repush, which sends it as a NEW send below.
+        if (cls == ShopifyAdjustFailedException.FailureClass.AMBIGUOUS && !c.ambiguousExpired() && !c.probeStale()
+                && c.sentKey() != null) {
             attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
                 reasonFor(c.triggerType()), c.sentKey(), c.changeFromQuantity(), true);
         } else if (cls == ShopifyAdjustFailedException.FailureClass.NEVER_SENT) {
@@ -1461,7 +1491,7 @@ public class ShopifyInventoryService {
                 "LEGACY_NOT_REPUSHABLE: this update failed before automatic recovery existed — reconcile it " +
                 "manually in Shopify and resolve the exception; it is never replayed");
         }
-        if ((c.olderThanConfirm() || c.ambiguousExpired()) && !confirmOld) {
+        if ((c.olderThanConfirm() || c.ambiguousExpired() || c.probeStale()) && !confirmOld) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "CONFIRMATION_REQUIRED: this update is more than 24 hours old (or its first send may have landed) — " +
                 "check the variant's quantity in Shopify, then confirm to send it");
@@ -1471,9 +1501,10 @@ public class ShopifyInventoryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, blocked.fixEn);
         }
         // A manual resend of an expired-ambiguous claim is a deliberate NEW send after the person's check.
-        FailedClaim toSend = c.ambiguousExpired()
+        // Same for a probeStale claim (its recovery check came back stale): the person confirmed it didn't land.
+        FailedClaim toSend = c.ambiguousExpired() || c.probeStale()
             ? new FailedClaim(c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(), "rejected",
-                c.changeFromQuantity(), c.sentKey(), c.attemptCount(), true, c.olderThanConfirm(), false)
+                c.changeFromQuantity(), c.sentKey(), c.attemptCount(), true, c.olderThanConfirm(), false, c.probeStale())
             : c;
         if (!retryClaim(tenantId, toSend, true)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is already being retried");
@@ -1682,7 +1713,20 @@ public class ShopifyInventoryService {
                                      String status, String error,
                                      ShopifyAdjustFailedException.FailureClass failureClass,
                                      Integer sentBaseline, String sentKey) {
+        markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId, shopifyInventoryItemId,
+            shopifyLocationId, status, error, failureClass, sentBaseline, sentKey, false);
+    }
+
+    /** probeStale: a recovery check came back without replaying a success — no next attempt is scheduled and the
+     *  claim's payload is marked (IncrementRecoveryRules.PROBE_STALE_SQL), so the gave-up alert fires. */
+    private void markIncrementResult(UUID tenantId, String triggerType, String triggerId,
+                                     UUID variantId, UUID locationId,
+                                     String shopifyInventoryItemId, String shopifyLocationId,
+                                     String status, String error,
+                                     ShopifyAdjustFailedException.FailureClass failureClass,
+                                     Integer sentBaseline, String sentKey, boolean probeStale) {
         boolean failed = "failed".equals(status);
+        boolean markProbeStale = failed && probeStale;
         List<ArrivalRevisit.Flipped> revisited = new java.util.ArrayList<>();
         Boolean recorded = tx.execute(txStatus -> {
             // The seed may have superseded this claim while its attempt was in flight (it was 'pending').
@@ -1718,7 +1762,9 @@ public class ShopifyInventoryService {
                 "  sent_idempotency_key = COALESCE(?::text, sent_idempotency_key), " +
                 "  first_attempt_at = COALESCE(first_attempt_at, now()), " +
                 "  last_attempt_at = now(), " +
-                "  next_attempt_at = " + (failed ? IncrementRecoveryRules.NEXT_ATTEMPT_AFTER_FAILURE_SQL : "NULL") + ", " +
+                "  next_attempt_at = " + (failed && !markProbeStale ? IncrementRecoveryRules.NEXT_ATTEMPT_AFTER_FAILURE_SQL : "NULL") + ", " +
+                (markProbeStale ? "  payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('" +
+                    IncrementRecoveryRules.PROBE_STALE_KEY + "', true), " : "") +
                 "  attempt_count = attempt_count + 1, " +
                 "  applied_at = CASE WHEN ? = 'applied' THEN now() ELSE applied_at END " +
                 "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +

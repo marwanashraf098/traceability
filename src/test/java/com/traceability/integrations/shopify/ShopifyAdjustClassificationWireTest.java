@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  *   c1 — the baseline read fails → NEVER_SENT, and the mutation is never sent
  *   c2 — userError on the mutation → REJECTED, carrying the baseline that was sent
- *   c3 — GraphQL error on the mutation → REJECTED
+ *   c3 — GraphQL error on the mutation → AMBIGUOUS (P1, 2026-11-08: Shopify may have run it)
  *   c4 — HTTP 500 on the mutation → AMBIGUOUS
  *   c5 — HTTP 4xx on the mutation → REJECTED
  *   c6 — connection refused on the mutation → NEVER_SENT
@@ -92,9 +92,9 @@ class ShopifyAdjustClassificationWireTest {
     }
 
     @Test
-    void c3_graphqlError_rejected() {
+    void c3_graphqlError_ambiguous() {
         Fake fake = new Fake(n -> n == 1 ? LEVELS : "{\"errors\":[{\"message\":\"Access denied\"}]}");
-        assertThat(adjustFails(fake).failureClass()).isEqualTo(FailureClass.REJECTED);
+        assertThat(adjustFails(fake).failureClass()).isEqualTo(FailureClass.AMBIGUOUS);
     }
 
     @Test
