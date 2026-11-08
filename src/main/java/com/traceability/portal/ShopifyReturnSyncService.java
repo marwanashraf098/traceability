@@ -233,6 +233,7 @@ public class ShopifyReturnSyncService {
         }
         if (returnables.truncated()) { skip(c, "too_many_lines"); return; }
         int returnableTotal = returnables.lines().stream().mapToInt(ShopifyReturnsWriteGateway.Returnable::quantity).sum();
+        String reasonId = fallbackReturnReason(c, token);
 
         // Allocate each wanted LineItem's units over its returnable fulfillment line items, oldest fulfillment first.
         List<ShopifyReturnsWriteGateway.CreateLine> lines = new ArrayList<>();
@@ -245,7 +246,7 @@ public class ShopifyReturnSyncService {
                 if (left == 0) break;
                 if (!r.lineItemGid().equals(w.getKey())) continue;
                 int q = Math.min(left, r.quantity());
-                lines.add(new ShopifyReturnsWriteGateway.CreateLine(r.fulfillmentLineItemGid(), q, note));
+                lines.add(new ShopifyReturnsWriteGateway.CreateLine(r.fulfillmentLineItemGid(), q, note, reasonId));
                 sent.addObject().put("lineItemGid", w.getKey()).put("fulfillmentLineItemGid", r.fulfillmentLineItemGid())
                     .put("quantity", q);
                 left -= q;
@@ -847,6 +848,21 @@ public class ShopifyReturnSyncService {
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The shop's catch-all return reason ("other", else "unknown") for every line of the return we create; null (the
+     * line goes without one, as before) when the shop has none or the read fails — a failed read never blocks or
+     * spends an attempt. Read before the claim, no transaction open.
+     */
+    private String fallbackReturnReason(Ctx c, String token) {
+        try {
+            return reads.fetchFallbackReturnReasonId(c.shopDomain(), token);
+        } catch (RuntimeException e) {
+            log.warn("Shopify return sync: return reason read failed tenant={} request={} cause={}", c.tenantId(),
+                c.requestId(), e.getClass().getSimpleName());
+            return null;
+        }
+    }
 
     private String token(Ctx c) {
         try {

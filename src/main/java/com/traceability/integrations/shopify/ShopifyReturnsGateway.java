@@ -30,4 +30,12 @@ public interface ShopifyReturnsGateway {
 
     /** The order GID a reverse fulfillment order belongs to; null when not found. */
     String fetchReverseFulfillmentOrderOrderGid(String shopDomain, String token, String rfoGid);
+
+    /**
+     * S5a fix (2026-11-08): the id of the shop's catch-all return reason definition — handle "other", else "unknown"
+     * (not deleted) — sent as {@code returnReasonDefinitionId} on every line of a Traced-created return (prod: a
+     * returnCreate with no reason answered userErrors NOT_FOUND on its line). Null when the shop has neither.
+     * Cached per shop. Never a customer field.
+     */
+    String fetchFallbackReturnReasonId(String shopDomain, String token);
 }
