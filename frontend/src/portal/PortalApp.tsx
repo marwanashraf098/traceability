@@ -213,6 +213,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [refundMissing, setRefundMissing] = useState(false)
 
   const [areaId, setAreaId] = useState('')
+  // ZONE_ONLY (2026-11-08): the picker starts filtered to the zone the address names; the customer can clear it.
+  const [zoneFilter, setZoneFilter] = useState(true)
   // V117 — a different pickup address.
   const [addressSource, setAddressSource] = useState<AddressSource>('order')
   const [customCityId, setCustomCityId] = useState('')
@@ -309,6 +311,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       setFallbackOk(true)
       // 2026-11-08: a guessed area (original delivery without a district) is pre-selected; the customer confirms it.
       setAreaId(res.data.pickup?.preselectedDistrictId ?? res.data.pickup?.suggestedDistrictId ?? '')
+      setZoneFilter(true)
       setAddressSource('order')
       setCustomCityId('')
       setCustomAreaId('')
@@ -492,6 +495,13 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const areaMissing = pickup != null && !chosenArea
   // 2026-11-08: the area shown is our guess from the original address (not yet changed by the customer).
   const areaGuessed = !fixedArea && !!pickup?.suggestedDistrictId && chosenArea === pickup.suggestedDistrictId
+  // ZONE_ONLY: the address names a zone with too many areas to pick one — show that zone's areas first.
+  const zoneIds = pickup?.suggestedZoneDistrictIds
+  const zoneDistricts = zoneIds ? areaDistricts.filter(d => zoneIds.includes(d.id)) : []
+  const zoneFiltered = !fixedArea && zoneFilter && zoneDistricts.length > 0
+  const pickerDistricts = zoneFiltered ? zoneDistricts : areaDistricts
+  const zoneLabel = zoneDistricts.length > 0
+    ? (lang === 'ar' ? zoneDistricts[0].zoneNameAr || zoneDistricts[0].zoneName : zoneDistricts[0].zoneName) : null
 
   // V117 — a different pickup address: offered only when lookup lists the cities.
   const cities = pickup?.cities ?? []
@@ -1188,7 +1198,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                   onChange={e => setAreaId(e.target.value)}
                 >
                   <option value="" disabled>{t('p3.areaPlaceholder')}</option>
-                  {groupByZone(areaDistricts, lang).map(g => {
+                  {groupByZone(pickerDistricts, lang).map(g => {
                     const options = g.districts.map(d => (
                       <option key={d.id} value={d.id}>{lang === 'ar' ? d.nameAr || d.name : d.name}</option>
                     ))
@@ -1196,6 +1206,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                   })}
                 </select>
                 {areaGuessed && <p className="pp-muted pp-small" data-testid="area-guessed">{t('p3.areaGuessed')}</p>}
+                {zoneFiltered && (
+                  <p className="pp-muted pp-small" data-testid="area-zone-filter">
+                    <bdi>{zoneLabel ? t('p3.areaZoneFiltered', { zone: zoneLabel }) : t('p3.areaZoneFilteredNoName')}</bdi>{' '}
+                    <button type="button" className="pp-link" onClick={() => setZoneFilter(false)}>{t('p3.areaShowAll')}</button>
+                  </p>
+                )}
               </div>
             </>
           )}
