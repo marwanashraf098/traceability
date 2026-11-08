@@ -305,13 +305,31 @@ public interface ShopifyGateway {
      * quantity write lands there. Idempotent: an "already active" userError is
      * swallowed, not thrown.
      *
-     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
-     *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
-     *                       same logical operation (Shopify dedupes server-side on this key).
+     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04). Since Part D P2
+     *                       (2026-11-08) every caller sends a FRESH key per activation
+     *                       ({@code ShopifyCatalogActivationService.freshActivationKey()}): a re-used key never
+     *                       re-activates an inactive level — Shopify answers "A previous request with this
+     *                       idempotency key failed" even when that request succeeded (dev store, activation.py 1b).
      * @throws ShopifyException on any other userError
      */
     void activateInventoryItem(String shopDomain, String token, String inventoryItemGid,
                                 String locationGid, String idempotencyKey);
+
+    /**
+     * Part D P2 (2026-11-08) — the inactive-level guard's read: of these items, the ones whose inventory level at
+     * {@code locationGid} is NOT active — inactive, never created, or the item itself gone. One read per chunk of at
+     * most {@link #MAX_INPUT_ARRAY} ids ({@code nodes(ids:)} → {@code inventoryLevel(locationId:)}, which answers null
+     * for an inactive level — dev store 2026-11-08). Read-only, no mutation.
+     *
+     * <p>Every write path at the Traced Main location that has no read of its own calls this right before it sends:
+     * a decrement / move / batch push sends nothing for an item in the result (skip {@code main_level_inactive},
+     * CRITICAL alert); an increment re-activates with a fresh key and checks again (MainLevelGuardContractTest).
+     *
+     * @throws ShopifyException when the read fails — nothing was sent; the caller treats it as a definite,
+     *                          retryable "not sent"
+     */
+    java.util.Set<String> inactiveMainLevels(String shopDomain, String token, String locationGid,
+                                             java.util.Collection<String> inventoryItemGids);
 
     /**
      * Batch form of {@link #resolveInventoryItemId}: one nodes(ids:) read per chunk of at most

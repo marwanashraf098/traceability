@@ -795,7 +795,9 @@ public class ExceptionService {
             "    AND p.tenant_id = sia.tenant_id " +
             "WHERE sia.tenant_id = ? " +
             // exchange_dispatch, and piece claims made before piece sync (legacy): any failure.
-            "  AND ((sia.trigger_type = 'exchange_dispatch' AND sia.status IN ('failed', 'failed_ambiguous')) " +
+            "  AND ((sia.trigger_type = 'exchange_dispatch' AND (sia.status IN ('failed', 'failed_ambiguous') " +
+            // Part D P2: a −1 not sent because the item's level at the Traced location is inactive / missing.
+            "        OR (sia.status = 'skipped' AND sia.skip_reason = '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "'))) " +
             "    OR (sia.trigger_type IN ('void_correction', 'hold_enter') AND sia.status = 'failed' " +
             "        AND NOT (" + PieceShopifyRules.LIVE_SQL + ")) " +
             // Piece sync (2026-10-10, D7): no confirmed answer, definite failures with no attempts left,
@@ -803,7 +805,11 @@ public class ExceptionService {
             "    OR (sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL + " AND " + PieceShopifyRules.LIVE_SQL +
             "        AND (sia.status = 'failed_ambiguous' " +
             "          OR (sia.status = 'failed' AND sia.attempt_count >= " + PieceShopifyRules.MAX_ATTEMPTS + ") " +
-            "          OR (sia.status = 'skipped' AND sia.skip_reason IN " + PieceShopifyRules.NEEDS_CHECK_SQL + ")))) " +
+            "          OR (sia.status = 'skipped' AND sia.skip_reason IN " + PieceShopifyRules.NEEDS_CHECK_SQL + ") " +
+            // Part D P2: nothing sent — the item has no active level at the Traced location (a decrement / move
+            // skipped; a +1 still inactive after its activation, re-sent by the sweep meanwhile).
+            "          OR (sia.status = 'skipped' AND sia.skip_reason = '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "') " +
+            "          OR (sia.status = 'failed' AND sia.error LIKE '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + ":%')))) " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = sia.tenant_id " +
@@ -817,12 +823,34 @@ public class ExceptionService {
             "       'void_hold_sync_failed:transfer_out:' || y.transfer_id, y.status, NULL " +
             "FROM transfer_shopify_syncs y " +
             "WHERE y.tenant_id = ? " +
-            "  AND (y.status = 'failed_ambiguous' OR (y.status = 'failed' AND y.attempt_count >= " + TransferShopifySync.MAX_ATTEMPTS + ")) " +
+            "  AND (y.status = 'failed_ambiguous' OR (y.status = 'failed' AND y.attempt_count >= " + TransferShopifySync.MAX_ATTEMPTS + ") " +
+            "       OR (y.status = 'skipped' AND y.reason = '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "')) " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
             "        AND er.exception_type = 'void_hold_sync_failed' " +
             "        AND er.subject_key = 'void_hold_sync_failed:transfer_out:' || y.transfer_id) " +
+            // Part D P2 (2026-11-08): a stock-take write-off push / a Main reconcile Part 1 decrement that sent
+            // NOTHING because an item has no active level at the Traced location (a write there would land on a
+            // hidden level). A person re-activates the item at the location, then re-pushes / the next run sends.
+            "UNION ALL " +
+            "SELECT 'void_hold_sync_failed', 'CRITICAL', 'stock_take', 'stock_take_write_off', y.session_id::text, y.error, " +
+            "       NULL, NULL, y.status, y.created_at, " +
+            "       'void_hold_sync_failed:stock_take_write_off:' || y.session_id, y.status, '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "' " +
+            "FROM stock_take_shopify_syncs y " +
+            "WHERE y.tenant_id = ? AND y.status = 'failed' AND y.error LIKE '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + ":%' " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
+            "        AND er.exception_type = 'void_hold_sync_failed' " +
+            "        AND er.subject_key = 'void_hold_sync_failed:stock_take_write_off:' || y.session_id) " +
+            "UNION ALL " +
+            "SELECT 'void_hold_sync_failed', 'CRITICAL', 'main_reconcile', 'main_reconcile_part1', c.id::text, c.error, " +
+            "       NULL, NULL, c.status, c.created_at, " +
+            "       'void_hold_sync_failed:main_reconcile_part1:' || c.id, c.status, '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "' " +
+            "FROM main_reconcile_part1_claims c " +
+            "WHERE c.tenant_id = ? AND c.status = 'failed' AND c.error LIKE '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + ":%' " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = c.tenant_id " +
+            "        AND er.exception_type = 'void_hold_sync_failed' " +
+            "        AND er.subject_key = 'void_hold_sync_failed:main_reconcile_part1:' || c.id) " +
             "ORDER BY occurred_at ASC",
-            tid, tid);
+            tid, tid, tid, tid);
     }
 
     /**

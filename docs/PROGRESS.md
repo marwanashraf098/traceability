@@ -25,9 +25,64 @@ area is always asked when the original has no district, pre-selected from Distri
   request in the DB (as on prod); PortalSameAddressTest.a2 back to 400; portalSameAddressNoDistrict.test.tsx ×3 → the
   area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
 
+**Part D P2 — the inactive-level guard (2026-11-08; branch `fix/part-d-p2-inactive-level` off main cda16ba7,
+worktree `~/Documents/traceability-partd`; approved and merged 2026-11-08, NOT deployed; no migration).** Never a Shopify write onto an
+inactive (hidden) inventory level at the Traced location; every activation uses a fresh key. See CLAUDE.md ("Inactive-level guard").
+- **Dev-store results (2026-11-08, marwan-nnrumxdy, item The Minimal Snowboard `gid://shopify/InventoryItem/70027005919482`
+  at Traced Main `gid://shopify/Location/97942733050`). Run through the SHOPIFY CLI's app, NOT Traced's** (Marawan's call:
+  `P2_TRANSPORT=cli` in `scripts/dev/part-d-p2/traced_dev.py`, which skips the P2_APP_HANDLE check, prints and logs that
+  loudly, and keeps every other safeguard; CLI session scopes checked first — all four present). Log: `p2-log.jsonl`.
+  - 1a: `inventoryActivate` with a FRESH key re-activates an inactive level — YES.
+  - 1b: the SAME key re-used after the level went inactive again — NO: userError "A previous request with this
+    idempotency key failed. Retry with a new idempotency key." (that earlier request had succeeded), level stays inactive.
+  - 1c: +1 on an inactive level (no baseline) — applied silently, no error, `quantityAfterChange` null; the hidden
+    level reads available 1 / on_hand 1 only with `includeInactive: true`.
+  - 1d: re-activation with a fresh key — the hidden +1 shows (available 1).
+  - 1e (`level_shape.py`, added): `inventoryItem.inventoryLevel(locationId:)` — the shape Traced's baseline read uses —
+    answers **null** for an inactive level. Before P2 `fetchAvailableQuantities` read that null as available 0, so a +N
+    went out with baseline 0 and passed the compare-and-set onto the hidden level.
+  - Every quantity back to its start: Traced Main active, available / on_hand / committed / reserved / incoming /
+    damaged / safety_stock / quality_control all 0; no request named another location (Shop location untouched at 50).
+  - **Not run (app-dependent): `key_retention.py` (how long Shopify keeps an idempotency key) and `s0_bc.py` (S0's
+    b / b2 / b3 / c) — to re-check with Traced's app before Move S2 ships.** 1a / 1b / 1c were also seen with the
+    CLI's app only; the guard does not depend on 1b's answer (a fresh key every time either way).
+- **Built:**
+  - Gateway: `inactiveMainLevels(shop, token, location, items)` — one read per 250 items, `nodes(ids:)` →
+    `inventoryLevel(locationId:) { id }`; returns the items with a null level or no node; a failed read throws
+    ShopifyException ("nothing sent"). The adjust's and the damage move's own baseline read now answer null for no
+    active level and refuse: `ShopifyMainLevelInactiveException` (NEVER_SENT, error prefix `main_level_inactive:`).
+  - Activation: `ShopifyCatalogActivationService.freshActivationKey()` (`traced-activate:<uuid>`) for the catalog
+    batch, the seed, the increment and the piece +1 lazy activations; the old `activationKey` is no longer sent.
+  - Increments (Part D): activate (fresh key) → first send's own read: no active level → never_sent + the
+    `main_level_inactive` error (re-tried on the normal backoff; `IncrementRecoveryRules.MAIN_LEVEL_INACTIVE_SQL` in
+    GAVE_UP_SQL → inventory_increment_sync_failed raised now). A recovery check checks `inactiveMainLevels` first:
+    inactive → not re-sent, stays AMBIGUOUS with its key + baseline. No increment is ever sent without a baseline.
+  - Piece engine: +1s re-check after the fresh-key activation (still inactive → never_sent, CRITICAL alert); every
+    departure / move (void, hold-enter, damage move, write-off, Sold, damage restore) → skipped `main_level_inactive`,
+    no activation, CRITICAL `void_hold_sync_failed`. A return of such a piece sends no +1 (a skipped departure is
+    "not reached").
+  - Exchange dispatch → skipped `main_level_inactive` (CRITICAL). Transfer out → the whole push skipped
+    (`transfer_shopify_syncs.reason`), its return gets no +1. Stock-take write-off push → the whole push 'failed' with
+    the `main_level_inactive:` error, NOT re-thrown (no JobRunr re-send; a person re-pushes after re-activating) —
+    `stock_take_shopify_syncs` has no 'skipped' status and P2 has no migration. Main reconcile Part 1 → its existing
+    Main read (`fetchMainLevels`, stocked false) → 'failed' with the error, re-checked next run while attempts remain.
+    (9) `pushMainReconcile` was already safe (fresh read, stocked check). Stock-take / Part 1 rows join the CRITICAL
+    alert as subject types `stock_take` / `main_reconcile` (rendered generically).
+  - Deliberately not changed: piece +1s (`pushPieceIncrement`) stay single-attempt WITHOUT a baseline — the level
+    check covers the hidden-level case, and they are never re-sent while ambiguous.
+- **Tests:** `MainLevelInactiveWireTest` w1–w6, `MainLevelInactiveGuardTest` i1–i3 (test 8) + d1 ×6 / d2–d5 (test 9),
+  `MainLevelGuardContractTest` g1–g3 (test 10 extension: every `shopify.push*` / `move*` / resend call is preceded by
+  the level check in its method; the gateway's own reads refuse; every activation sends `freshActivationKey()`).
+  18 mutations revert-checked, each red. Full backend suite run once alone: 4,316 tests — ExchangeBackfillTest
+  (known), AwbSpacedBarcodeTest (DB connection flake, green alone) and 7 by-design failures, fixed by three approved
+  test edits: ActivationPolicyTest ap2 / ap7 (a fresh `traced-activate:` key, not the catalog key),
+  PartDRecoveryCheckTest's fake answers `TracedMainLevelActive` with an active level (no assertion changes),
+  StockTakeUntaggedCountTest.u2 verifies the `inactiveMainLevels` call. Those three + the P2 classes re-run green (46).
+  Piece +1s stay without a baseline (approved). Approved and merged 2026-11-08.
+
 **Part D double-apply fix P1 (2026-11-08; branch `fix/part-d-probe-stale` off main cb4c3eba, worktree
-`~/Documents/traceability-partd`; NOT merged, NOT deployed; no migration). P2 (inactive-level guard) waits for a
-dev-store run with Traced's own app.**
+`~/Documents/traceability-partd`; merged d7de1570, NOT deployed; no migration). P2 (inactive-level guard) built
+2026-11-08 — entry above.**
 - The bug (found in Move S0): with `changeFromQuantity` set, Shopify checks the baseline BEFORE the idempotency key, so
   an identical re-send of an increment that LANDED answers `CHANGE_FROM_QUANTITY_STALE`. Three ways it doubled a +N:
   (A) Part D's recovery check (identical re-send of an ambiguous claim) answered STALE → classed REJECTED → retried
@@ -65,7 +120,7 @@ dev-store run with Traced's own app.**
   - `ShopifyAdjustClassificationWireTest.c3` renamed `c3_graphqlError_ambiguous`, expects AMBIGUOUS (approved).
   - Tests: full suite run once alone before Fix 7 (4,230, 2 failures: ExchangeBackfillTest — known — and c3, since
     approved and changed); after Fix 7 the touched classes re-run green (69). Every new test revert-checked.
-- **P2 (not built):** the inactive-level guard (read `inventoryLevels(includeInactive: true)` before every Main write;
+- **P2 (built 2026-11-08 — see the entry above; plan as written then):** the inactive-level guard (read `inventoryLevels(includeInactive: true)` before every Main write;
   increments activate with a NEW key and need a baseline; decrements / moves skip + alert). Waits for the dev-store
   run with Traced's own app — scripts in `scripts/dev/part-d-p2/` (not run): `activation.py` (does `inventoryActivate`
   re-activate an inactive level; does a re-used key replay as a no-op; +1 on an inactive level and whether it shows

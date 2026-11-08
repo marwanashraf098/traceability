@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyMainLevelInactiveException;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
@@ -218,6 +219,27 @@ public class TransferShopifySync {
         Prepared p;
         try {
             p = tx.execute(s -> prepare(tenantId, (UUID) claim.get("location_id"), (String) claim.get("deltas")));
+        } catch (RuntimeException e) {
+            mark(tenantId, syncId, "failed", "Not sent: " + e.getMessage());
+            return;
+        }
+        // Part D P2 (2026-11-08): never a −N onto a hidden (inactive) level. Any item with no active level at the
+        // Traced location refuses the WHOLE push: nothing sent, skipped main_level_inactive (CRITICAL alert — a
+        // person checks Shopify; never an activation before a −N). The return +1 then sees no 'pushed' claim and
+        // writes nothing (RETURN_COUNTED_SQL). A failed check is a definite "not sent" — the sweep re-tries it.
+        try {
+            java.util.Set<String> inactive = shopify.inactiveMainLevels(p.shopDomain(), p.token(), p.locationGid(),
+                p.deltas().stream().map(ShopifyGateway.InventoryDelta::inventoryItemGid).toList());
+            if (inactive != null && !inactive.isEmpty()) {
+                tx.execute(s -> jdbc.update(
+                    "UPDATE transfer_shopify_syncs SET status = 'skipped', reason = ?, " +
+                    "    error = ? WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+                    ShopifyMainLevelInactiveException.REASON,
+                    "Not sent — no active level at the Traced location for " + inactive, syncId, tenantId));
+                log.warn("Transfer Shopify push skipped {} transfer={} items={} — nothing sent",
+                    ShopifyMainLevelInactiveException.REASON, transferId, inactive);
+                return;
+            }
         } catch (RuntimeException e) {
             mark(tenantId, syncId, "failed", "Not sent: " + e.getMessage());
             return;

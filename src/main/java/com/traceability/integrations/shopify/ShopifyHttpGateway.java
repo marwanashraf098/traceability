@@ -914,6 +914,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null,
                 "Could not read the current quantity before the adjust (adjust not sent): " + messageOf(e), e);
         }
+        // Part D P2 (2026-11-08): no active level at the location (inactive, never created, item gone) → nothing is
+        // sent. Before P2 a missing level read as available 0 and the +N went out with baseline 0 — Shopify applied
+        // it to the HIDDEN inactive level with no error (dev store, activation.py q1c). Never an increment without
+        // a baseline.
+        if (changeFromQuantity == null) throw new ShopifyMainLevelInactiveException("Adjust");
         sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
             changeFromQuantity, false);
     }
@@ -1082,20 +1087,70 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     /** Reads the current "available" quantity for one inventory item at one location,
-     *  immediately before a compare-and-swap write. Returns null if no matching level is
-     *  found (e.g. never activated there) — the caller then explicitly opts out of the
-     *  compare-and-swap check for that one call (Shopify's documented null-opt-out) rather
-     *  than guessing a baseline. */
+     *  immediately before a compare-and-swap write. Returns null when the item has no ACTIVE
+     *  level there — inventoryLevel(locationId:) answers null for an inactive level (dev store
+     *  2026-11-08, part-d-p2/level_shape.py), and for one never created — or the item is gone.
+     *  Part D P2: every caller then sends NOTHING (ShopifyMainLevelInactiveException). Before P2
+     *  this went through fetchAvailableQuantities, which reads a null level as available 0, so a
+     *  write went out with baseline 0 onto the hidden level. */
     private Integer currentAvailableQuantityOrNull(String shopDomain, String token,
                                                      String locationGid, String inventoryItemGid) {
-        List<InventoryLevel> levels = fetchAvailableQuantities(shopDomain, token, locationGid,
-            List.of(inventoryItemGid));
-        for (InventoryLevel level : levels) {
-            if (inventoryItemGid.equals(level.inventoryItemGid())) {
-                return level.available();
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("ids", mapper.createArrayNode().add(inventoryItemGid));
+        vars.put("locationId", locationGid);
+        JsonNode nodes = executeGraphQL(shopDomain, token, INVENTORY_LEVELS_QUERY, vars).path("nodes");
+        for (JsonNode node : nodes) {
+            if (node == null || node.isNull() || !inventoryItemGid.equals(node.path("id").asText(null))) continue;
+            JsonNode level = node.path("inventoryLevel");
+            if (level.isMissingNode() || level.isNull()) return null;
+            for (JsonNode q : level.path("quantities")) {
+                if ("available".equals(q.path("name").asText(""))) return q.path("quantity").asInt(0);
             }
+            return 0;   // an active level with no "available" entry reads 0, as before
         }
         return null;
+    }
+
+    private static final String MAIN_LEVEL_ACTIVE_QUERY = """
+            query TracedMainLevelActive($ids: [ID!]!, $locationId: ID!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) { id }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public java.util.Set<String> inactiveMainLevels(String shopDomain, String token, String locationGid,
+                                                    java.util.Collection<String> inventoryItemGids) {
+        java.util.Set<String> wanted = new java.util.LinkedHashSet<>();
+        for (String id : inventoryItemGids) if (id != null && !id.isBlank()) wanted.add(id);
+        java.util.Set<String> active = new java.util.HashSet<>();
+        try {
+            for (List<String> chunk : chunks(new ArrayList<>(wanted), MAX_INPUT_ARRAY)) {
+                ObjectNode vars = mapper.createObjectNode();
+                vars.set("ids", mapper.valueToTree(chunk));
+                vars.put("locationId", locationGid);
+                JsonNode data = executeGraphQL(shopDomain, token, MAIN_LEVEL_ACTIVE_QUERY, vars);
+                JsonNode nodes = data == null ? null : data.path("nodes");
+                if (nodes == null || !nodes.isArray()) {
+                    throw new ShopifyException("level check: no nodes in the answer");
+                }
+                for (JsonNode node : nodes) {
+                    if (node == null || node.isNull()) continue;
+                    JsonNode level = node.path("inventoryLevel");
+                    if (!level.isMissingNode() && !level.isNull()) active.add(node.path("id").asText(""));
+                }
+            }
+        } catch (RuntimeException e) {
+            throw new ShopifyException("Could not check the item's level at the Traced location (nothing sent): "
+                + messageOf(e), e);
+        }
+        java.util.Set<String> inactive = new java.util.LinkedHashSet<>(wanted);
+        inactive.removeAll(active);
+        return inactive;
     }
 
     private static final String INVENTORY_MOVE_QUANTITIES_MUTATION = """
@@ -1124,6 +1179,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
             // Only a read failed — the move was never sent: definite.
             throw new ShopifyException("Damage move not sent — could not read the current quantity: " + e.getMessage(), e);
         }
+        // Part D P2: no active level → nothing sent (backstop — the piece engine checks inactiveMainLevels first).
+        if (fromBaseline == null) throw new ShopifyMainLevelInactiveException("Damage move");
         return sendPieceMove("Damage move", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
             "available", fromBaseline, "damaged", referenceDocumentUri, idempotencyKey);
     }

@@ -6,6 +6,7 @@ import com.traceability.integrations.shopify.ShopifyAdjustFailedException;
 import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyMainLevelInactiveException;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
@@ -626,6 +627,31 @@ public class ShopifyInventoryService {
             return;
         }
 
+        // Part D P2 (2026-11-08): never a −1 onto a hidden (inactive) level. Inactive / missing → nothing sent,
+        // skipped main_level_inactive (CRITICAL void_hold_sync_failed; a person checks Shopify — never an activation
+        // before a −N). A failed check is a definite "not sent" ('failed', re-pushable).
+        try {
+            java.util.Set<String> inactive = shopify.inactiveMainLevels(p.shopDomain(), p.token(),
+                p.shopifyLocationId(), List.of(p.shopifyInventoryItemId()));
+            if (inactive != null && inactive.contains(p.shopifyInventoryItemId())) {
+                tx.execute(st -> jdbc.update(
+                    "UPDATE shopify_inventory_adjustments SET status = 'skipped', skip_reason = ?, error = NULL, " +
+                    "    shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+                    "    shopify_location_id = COALESCE(?, shopify_location_id) " +
+                    "WHERE tenant_id = ? AND trigger_type = 'exchange_dispatch' AND trigger_id = ? " +
+                    "  AND variant_id = ? AND location_id = ? AND status = 'pending'",
+                    ShopifyMainLevelInactiveException.REASON, p.shopifyInventoryItemId(), p.shopifyLocationId(),
+                    tenantId, pieceId, variantId, locationId));
+                log.warn("Shopify inventory: exchange_dispatch skipped ({}) piece={} — nothing sent",
+                         ShopifyMainLevelInactiveException.REASON, pieceId);
+                return;
+            }
+        } catch (Exception e) {
+            markResult(tenantId, "exchange_dispatch", pieceId, variantId, locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", "Not sent: " + messageOf(e));
+            return;
+        }
+
         String status;
         String error = null;
         try {
@@ -751,15 +777,40 @@ public class ShopifyInventoryService {
         boolean increment = "hold_exit".equals(triggerType) || "piece_write_off_return".equals(triggerType)
             || "damaged_restore_increment".equals(triggerType) || "piece_sold_return".equals(triggerType);
         if (increment) {
-            // Lazy activation (no quantity) — if it fails, the +1 was never sent: definite.
+            // Lazy activation (no quantity), a FRESH key every time (Part D P2) — if it fails, the +1 was never
+            // sent: definite.
             try {
                 shopify.activateInventoryItem(p.shopDomain(), p.token(), p.shopifyInventoryItemId(), p.shopifyLocationId(),
-                    ShopifyCatalogActivationService.activationKey(tenantId, variantId, p.shopifyLocationId()));
+                    ShopifyCatalogActivationService.freshActivationKey());
             } catch (Exception e) {
                 markPieceResult(tenantId, claimId, "failed", "Not sent — activation at the Traced location failed: "
                     + messageOf(e), "never_sent", p.shopifyInventoryItemId(), p.shopifyLocationId());
                 return;
             }
+        }
+        // Part D P2 (2026-11-08): the inactive-level guard — never a write onto a hidden level. An increment checks
+        // again AFTER its activation: still inactive → never_sent (re-sent by the sweep, alert raised). A decrement /
+        // move sends nothing and is skipped main_level_inactive (CRITICAL alert; a person checks Shopify) — never an
+        // activation before a −N.
+        java.util.Set<String> inactive;
+        try {
+            inactive = shopify.inactiveMainLevels(p.shopDomain(), p.token(), p.shopifyLocationId(),
+                List.of(p.shopifyInventoryItemId()));
+        } catch (Exception e) {
+            markPieceResult(tenantId, claimId, "failed", "Not sent: " + messageOf(e), "never_sent",
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
+            return;
+        }
+        if (inactive != null && inactive.contains(p.shopifyInventoryItemId())) {
+            if (increment) {
+                markPieceResult(tenantId, claimId, "failed",
+                    new ShopifyMainLevelInactiveException("+1 (still inactive after activation)").getMessage(),
+                    "never_sent", p.shopifyInventoryItemId(), p.shopifyLocationId());
+            } else {
+                markPieceSkipped(tenantId, claimId, ShopifyMainLevelInactiveException.REASON,
+                    p.shopifyInventoryItemId(), p.shopifyLocationId());
+            }
+            return;
         }
         try {
             com.fasterxml.jackson.databind.JsonNode response = null;
@@ -788,6 +839,10 @@ public class ShopifyInventoryService {
                 tx.execute(st -> jdbc.update("UPDATE shopify_inventory_adjustments SET shopify_response = ?::jsonb " +
                     "WHERE id = ? AND tenant_id = ? AND status = 'applied'", body, claimId, tenantId));
             }
+        } catch (ShopifyMainLevelInactiveException e) {
+            // The damage move's own read found no active level (backstop of the check above): nothing sent.
+            markPieceSkipped(tenantId, claimId, ShopifyMainLevelInactiveException.REASON,
+                p.shopifyInventoryItemId(), p.shopifyLocationId());
         } catch (ShopifyAmbiguousException e) {
             markPieceResult(tenantId, claimId, "failed_ambiguous", messageOf(e), "ambiguous",
                 p.shopifyInventoryItemId(), p.shopifyLocationId());
@@ -811,6 +866,19 @@ public class ShopifyInventoryService {
 
     /** The outcome of one attempt. A failure is recorded only over 'pending' (the seed may have
      *  superseded the claim mid-flight); a success is always recorded — it is the truth. */
+    /** Part D P2: a sent-nothing skip of a claim this attempt holds ('pending'). */
+    private void markPieceSkipped(UUID tenantId, long claimId, String skipReason,
+                                  String shopifyInventoryItemId, String shopifyLocationId) {
+        tx.execute(st -> jdbc.update(
+            "UPDATE shopify_inventory_adjustments SET status = 'skipped', skip_reason = ?, error = NULL, " +
+            "    shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+            "    shopify_location_id = COALESCE(?, shopify_location_id) " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+            skipReason, shopifyInventoryItemId, shopifyLocationId, claimId, tenantId));
+        log.warn("Shopify piece sync skipped {} (nothing sent — check the item's level at the Traced location): claim={}",
+                 skipReason, claimId);
+    }
+
     private void markPieceResult(UUID tenantId, long claimId, String status, String error, String failureClass,
                                  String shopifyInventoryItemId, String shopifyLocationId) {
         if (!"applied".equals(status) && ShopifyLocationState.fromError(error) != null) {
@@ -1266,13 +1334,15 @@ public class ShopifyInventoryService {
         // Lazy activation: only ACTIVE products' variants are activated at connect, so a draft or
         // archived variant may reach its first increment without an inventory level at the Traced
         // location. Ensure it first — inventoryActivate carries no quantity (it only creates the
-        // level at 0, "already active" tolerated), and it uses the same idempotency key as the
-        // catalog activation for this variant + location. If it fails, the adjust is NOT sent and
-        // the claim is 'failed' (the adjust never reached Shopify, so a later retry is safe).
+        // level at 0, "already active" tolerated). Part D P2 (2026-11-08): a FRESH key every time —
+        // the old catalog key never re-activates a level that was deactivated since (Shopify answers
+        // "A previous request with this idempotency key failed"). If it fails, the adjust is NOT sent and
+        // the claim is 'failed' (the adjust never reached Shopify, so a later retry is safe). A level
+        // still inactive after it: a first send's own baseline read finds no active level and sends
+        // nothing (ShopifyMainLevelInactiveException → never_sent); a recovery check is checked below.
         try {
             shopify.activateInventoryItem(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                p.shopifyLocationId(),
-                ShopifyCatalogActivationService.activationKey(tenantId, variantId, p.shopifyLocationId()));
+                p.shopifyLocationId(), ShopifyCatalogActivationService.freshActivationKey());
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             log.warn("Shopify inventory: activation before increment failed — adjust not sent " +
@@ -1282,6 +1352,30 @@ public class ShopifyInventoryService {
                 "Activation at the Traced location failed (adjust not sent): " + msg,
                 ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null, null);
             return;
+        }
+
+        if (resend) {
+            // Part D P2: the recovery check carries the stored baseline and does no read of its own — check the
+            // level first. Inactive (or the check failed) → nothing re-sent; the claim stays AMBIGUOUS (the first
+            // send's fate is still unknown), kept with its key and baseline, re-checked on its next pass.
+            String notSent = null;
+            try {
+                java.util.Set<String> inactive = shopify.inactiveMainLevels(p.shopDomain(), p.token(),
+                    p.shopifyLocationId(), List.of(p.shopifyInventoryItemId()));
+                if (inactive != null && inactive.contains(p.shopifyInventoryItemId())) {
+                    notSent = new ShopifyMainLevelInactiveException("Recovery check").getMessage();
+                }
+            } catch (Exception e) {
+                notSent = "Recovery check not sent: " + messageOf(e);
+            }
+            if (notSent != null) {
+                log.warn("Shopify inventory: recovery check not sent trigger={} triggerId={} variant={}: {}",
+                         triggerType, triggerId, variantId, notSent);
+                markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", notSent,
+                    ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, null, null);
+                return;
+            }
         }
 
         try {

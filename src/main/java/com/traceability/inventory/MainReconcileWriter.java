@@ -6,6 +6,7 @@ import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyCasStaleException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyMainLevelInactiveException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -84,6 +85,26 @@ final class MainReconcileWriter {
                 // Never sent: a claim not at the Traced Main location (or no inventory item) is refused before any call.
                 finishPart1(tenantId, id, "failed", !main.id().equals(locationId) ? "not_main_location" : "no_inventory_item");
                 logPart1(shop, variantId, id, -qty, "refused");
+                continue;
+            }
+            // Part D P2 (2026-11-08): never a −N onto a hidden (inactive) level — the existing Main read
+            // (inventoryLevel(locationId:) answers null for an inactive level → stocked false). Not active → nothing
+            // sent, 'failed' with the main_level_inactive error (CRITICAL void_hold_sync_failed); the next run checks
+            // again while attempts remain. A failed read is a definite "not sent".
+            String levelProblem = null;
+            try {
+                ShopifyGateway.MainLevel lv = shopify.fetchMainLevels(shop, token, main.gid(), List.of(item)).stream()
+                    .filter(l -> item.equals(l.inventoryItemGid())).findFirst().orElse(null);
+                if (lv == null || !lv.stocked()) {
+                    levelProblem = ShopifyMainLevelInactiveException.REASON
+                        + ": Part 1 decrement not sent — no active level at the Traced location";
+                }
+            } catch (RuntimeException e) {
+                levelProblem = "Not sent — level read failed: " + e.getMessage();
+            }
+            if (levelProblem != null) {
+                finishPart1(tenantId, id, "failed", levelProblem);
+                logPart1(shop, variantId, id, -qty, "not_sent");
                 continue;
             }
             attempted++;
