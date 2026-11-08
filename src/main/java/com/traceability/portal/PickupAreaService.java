@@ -125,27 +125,30 @@ public class PickupAreaService {
      */
     public List<String> originalAddressTexts(UUID tenantId, UUID orderId) {
         List<String> out = new ArrayList<>();
-        jdbc.query(
-            "SELECT o.shopify_address->>'address1' AS a1, o.shopify_address->>'address2' AS a2, " +
-            "       o.shopify_address->>'city' AS c, o.shopify_address->>'province' AS p, " +
-            "       COALESCE(CASE WHEN o.origin = 'portal_pre_connect' THEN o.portal_delivery->'dropOffAddress' END, " +
-            "                (SELECT s.raw->'dropOffAddress' FROM shipments s WHERE s.tenant_id = o.tenant_id " +
-            "                   AND s.order_id = o.id AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
-            "                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1)) AS drop " +
-            "FROM orders o WHERE o.tenant_id = ? AND o.id = ? AND o.pii_redacted_at IS NULL",
-            (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
-                for (String k : new String[]{"a1", "a2", "c", "p"}) add(out, rs.getString(k));
-                String drop = rs.getString("drop");
-                if (drop != null) {
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(drop);
-                        add(out, d.path("firstLine").asText(null));
-                        add(out, d.path("secondLine").asText(null));
-                        add(out, d.path("zone").path("name").asText(null));
-                    } catch (Exception ignored) { /* no Bosta address */ }
-                }
-            },
-            tenantId, orderId);
+        // A portal pre-connect order (not in merchant_orders): its row through portalDropOff (classified MUST_INCLUDE).
+        List<Map<String, Object>> rows = portalDropOff(tenantId, orderId);
+        if (rows.isEmpty()) {
+            rows = jdbc.queryForList(
+                "SELECT o.shopify_address->>'address1' AS a1, o.shopify_address->>'address2' AS a2, " +
+                "       o.shopify_address->>'city' AS c, o.shopify_address->>'province' AS p, " +
+                "       (SELECT (s.raw->'dropOffAddress')::text FROM shipments s WHERE s.tenant_id = o.tenant_id " +
+                "          AND s.order_id = o.id AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
+                "        ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS drop " +
+                "FROM merchant_orders o WHERE o.tenant_id = ? AND o.id = ? AND o.pii_redacted_at IS NULL",
+                tenantId, orderId);
+        }
+        for (Map<String, Object> r : rows) {
+            for (String k : new String[]{"a1", "a2", "c", "p"}) add(out, (String) r.get(k));
+            String drop = (String) r.get("drop");
+            if (drop != null) {
+                try {
+                    com.fasterxml.jackson.databind.JsonNode d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(drop);
+                    add(out, d.path("firstLine").asText(null));
+                    add(out, d.path("secondLine").asText(null));
+                    add(out, d.path("zone").path("name").asText(null));
+                } catch (Exception ignored) { /* no Bosta address */ }
+            }
+        }
         return out;
     }
 
@@ -176,7 +179,13 @@ public class PickupAreaService {
         return jdbc.queryForList(
             "SELECT o.portal_delivery->'dropOffAddress'->'city'->>'_id' AS city_id, " +
             "       COALESCE(o.portal_delivery->'dropOffAddress'->'district'->>'_id', " +
-            "                o.portal_delivery->'dropOffAddress'->>'districtId') AS district_id " +
+            "                o.portal_delivery->'dropOffAddress'->>'districtId') AS district_id, " +
+            // 2026-11-08 area guess (originalAddressTexts): the same row's address texts — never leave the server.
+            "       CASE WHEN o.pii_redacted_at IS NULL THEN o.shopify_address->>'address1' END AS a1, " +
+            "       CASE WHEN o.pii_redacted_at IS NULL THEN o.shopify_address->>'address2' END AS a2, " +
+            "       CASE WHEN o.pii_redacted_at IS NULL THEN o.shopify_address->>'city' END AS c, " +
+            "       CASE WHEN o.pii_redacted_at IS NULL THEN o.shopify_address->>'province' END AS p, " +
+            "       CASE WHEN o.pii_redacted_at IS NULL THEN (o.portal_delivery->'dropOffAddress')::text END AS drop " +
             "FROM orders o WHERE o.tenant_id = ? AND o.id = ? AND o.origin = 'portal_pre_connect'",
             tenantId, orderId);
     }
