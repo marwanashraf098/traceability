@@ -48,6 +48,7 @@ import static org.mockito.Mockito.*;
  * city names reach DistrictGuesser from bosta_districts.
  *
  *   z1 "Nasr City" names two districts of ONE zone served alike → SAME_ZONE, the first by name (7th District)
+ *   z2 "Madinaty" names a 4-district zone → ZONE_ONLY: no suggestion, suggestedZoneDistrictIds = the zone's districts
  *   k1 a district named like the city ("Cairo") is never a match → no suggestion
  *   a1 two zones named → no suggestion (still ambiguous)
  */
@@ -84,6 +85,7 @@ class PortalAreaGuessAmbiguityTest {
     static final String KEY_A = "bosta-key-tenant-a";
     static final String ZAM = "zamalek-district";
     static final String NASR8 = "nasr-8-district", CAIRO_D = "cairo-named-district";
+    static final List<String> MADINATY = List.of("mad-1", "mad-2", "mad-3", "mad-4");
 
     @LocalServerPort int port;
     @Autowired TestRestTemplate  rest;
@@ -132,6 +134,7 @@ class PortalAreaGuessAmbiguityTest {
         district(NASR8, CAIRO, "Cairo", "القاهرة", "Nasr City", "مدينة نصر", "Nasr City - 8th District", "مدينة نصر - الحي الثامن", true);
         district(CAIRO_D, CAIRO, "Cairo", "القاهرة", "Downtown", "وسط البلد", "Cairo", "القاهرة", true);
         district("GizaD1", GIZA, "Giza", "الجيزة", "Haram", "الهرم", "Haram", "الهرم", false);
+        for (String m : MADINATY) district(m, CAIRO, "Cairo", "القاهرة", "Madinaty", "مدينتي", "Madinaty " + m, "مدينتي " + m, true);
 
         DataSource appUserDs = new TenantAwareDataSource(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
         appUserRequests = new ReturnRequestService(new JdbcTemplate(appUserDs));
@@ -170,6 +173,21 @@ class PortalAreaGuessAmbiguityTest {
         shopifyAddress(o, "10 Abbas El Akkad", null, "Nasr City");
         assertThat(pickup(a, o)).containsEntry("suggestedDistrictId", NASR);
         assertThat(out.getOut()).contains("Portal area guess tenant=" + a.id() + " outcome=SAME_ZONE");
+    }
+
+    @Test
+    void z2_bigZone_zoneOnly_pickerFilteredNoSuggestion(CapturedOutput out) {
+        bookingReady(a);
+        Order o = deliveredOrder(a, "#8102", CAIRO, null);
+        shopifyAddress(o, "B12 Group 3", null, "Madinaty");   // 4 districts in the zone: more than SAME_ZONE takes
+        Map<String, Object> pickup = pickup(a, o);
+        assertThat(pickup).doesNotContainKey("suggestedDistrictId");
+        assertThat(pickup.get("suggestedZoneDistrictIds")).isEqualTo(MADINATY);
+        assertThat(out.getOut()).contains("Portal area guess tenant=" + a.id() + " outcome=ZONE_ONLY");
+        // The other outcomes never carry the key.
+        Order z1 = deliveredOrder(a, "#8103", CAIRO, null);
+        shopifyAddress(z1, "10 Abbas El Akkad", null, "Nasr City");
+        assertThat(pickup(a, z1)).doesNotContainKey("suggestedZoneDistrictIds");
     }
 
     @Test

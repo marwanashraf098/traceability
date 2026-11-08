@@ -15,7 +15,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   k2 an all-generic name ("New City", numbers) matches nothing
  *   z1 SAME_ZONE: every candidate in one zone, same drop-off → one; the district named like the zone wins
  *   z2 SAME_ZONE: none named like the zone → the first by name
- *   z3 one zone but Bosta serves them differently (drop-off) → still AMBIGUOUS
+ *   z3 one zone but Bosta serves them differently (drop-off) → ZONE_ONLY (no district, the zone's districts)
+ *   c1 SAME_ZONE cap: a zone name naming 4+ districts → ZONE_ONLY, never a pre-select (prod: New Cairo, 119)
+ *   o1 a district's own name inside a big zone → that district (the zone name only narrows)
+ *   o2 an exact zone name (Shopify city) no longer hides a district named in address1
+ *   o3 a district named like its zone ("Maadi") counts as the zone name, not as that district
+ *   o4 the district name and the zone name disagree → AMBIGUOUS (nothing pre-selected, no zone filter)
  *   b1 BOSTA_FIELD: ambiguous overall, the Bosta secondLine / zone names exactly one → it
  *   b2 BOSTA_FIELD: the Bosta fields are themselves ambiguous across zones → AMBIGUOUS
  *   u1 unchanged: one district matched → EXACT / CONTAINS as before
@@ -35,7 +40,12 @@ class DistrictGuesserAmbiguityTest {
         c("zamalek", "Zamalek", "الزمالك", "Downtown", "وسط البلد", "zD", true),
         c("garden", "Garden City", "جاردن سيتي", "Downtown", "وسط البلد", "zD", true),
         c("cairoD", "Cairo", "القاهرة", "Downtown", "وسط البلد", "zD", true),
-        c("newcity", "New City", "مدينة جديدة", "Outer", null, "zO", true));
+        c("newcity", "New City", "مدينة جديدة", "Outer", null, "zO", true),
+        // A big zone (prod: New Cairo, 119 districts) — four here, one named like the zone.
+        c("nc", "New Cairo", "القاهرة الجديدة", "New Cairo", "القاهرة الجديدة", "zNC", true),
+        c("tagamoa5", "Fifth Settlement", "التجمع الخامس", "New Cairo", "القاهرة الجديدة", "zNC", true),
+        c("tagamoa1", "First Settlement", "التجمع الأول", "New Cairo", "القاهرة الجديدة", "zNC", true),
+        c("rehab", "Rehab City", "الرحاب", "New Cairo", "القاهرة الجديدة", "zNC", true));
 
     static final Set<String> CITIES = Set.of("Cairo", "القاهرة", "Giza", "الجيزة");
 
@@ -73,8 +83,46 @@ class DistrictGuesserAmbiguityTest {
     }
 
     @Test
-    void z3_oneZone_servedDifferently_stillAmbiguous() {
-        assertThat(g(List.of(shop("10 Abbas El Akkad, Nasr City")))).isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.AMBIGUOUS, null));
+    void z3_oneZone_servedDifferently_zoneOnly() {
+        assertThat(g(List.of(shop("10 Abbas El Akkad, Nasr City"))))
+            .isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.ZONE_ONLY, null, List.of("nasr10", "nasr7")));
+    }
+
+    @Test
+    void c1_sameZoneCap_bigZone_zoneOnly() {
+        DistrictGuesser.Guess zone = new DistrictGuesser.Guess(DistrictGuesser.Outcome.ZONE_ONLY, null,
+            List.of("nc", "rehab", "tagamoa1", "tagamoa5"));
+        assertThat(g(List.of(shop("New Cairo")))).isEqualTo(zone);
+        assertThat(g(List.of(shop("القاهره الجديده")))).isEqualTo(zone);
+        assertThat(g(List.of(shop("Villa 12, New Cairo")))).isEqualTo(zone);
+    }
+
+    @Test
+    void o1_ownNameInsideABigZone() {
+        assertThat(g(List.of(shop("Villa 12, Fifth Settlement, New Cairo"))))
+            .isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.CONTAINS, "tagamoa5"));
+    }
+
+    @Test
+    void o2_exactZoneName_doesNotHideAddress1() {
+        assertThat(g(List.of(shop("عمارة 5 التجمع الخامس"), shop("New Cairo"))))
+            .isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.CONTAINS, "tagamoa5"));
+        assertThat(g(List.of(shop("Rehab City"), shop("New Cairo"))))
+            .isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.EXACT, "rehab"));
+    }
+
+    @Test
+    void o3_districtNamedLikeItsZone_isTheZone() {
+        // "New Cairo" is the district nc's own name AND its zone's — it names the zone, never nc alone.
+        assertThat(g(List.of(shop("New Cairo"))).districtId()).isNull();
+        // Maadi: the same, but a 3-district zone served alike → SAME_ZONE (the cap allows it).
+        assertThat(g(List.of(shop("Maadi"))).outcome()).isEqualTo(DistrictGuesser.Outcome.SAME_ZONE);
+    }
+
+    @Test
+    void o4_districtAndZoneDisagree_ambiguous() {
+        assertThat(g(List.of(shop("Rehab City"), shop("Nasr City"))))
+            .isEqualTo(new DistrictGuesser.Guess(DistrictGuesser.Outcome.AMBIGUOUS, null));
     }
 
     @Test

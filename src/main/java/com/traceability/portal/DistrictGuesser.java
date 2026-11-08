@@ -20,23 +20,34 @@ import java.util.regex.Pattern;
  * name that is part of a longer matched name is dropped ("maadi" inside "zahraa maadi"); one district left → it, more
  * → AMBIGUOUS, none → NONE. Never fuzzy.
  *
- * <p><b>Less ambiguity (2026-11-08, prod dry run: ~55% ambiguous)</b> — still never a pre-select while ambiguous:
+ * <p><b>Less ambiguity (2026-11-08, prod dry runs)</b> — still never a pre-select while ambiguous:
  * <ul>
  *   <li>a name that is just a city / governorate name (any Bosta city, EN or AR) or only generic words
  *       ({@link #GENERIC}, numbers) matches nothing;</li>
- *   <li>SAME_ZONE — when every candidate left is in ONE Bosta zone and Bosta serves them the same way (pickup and
- *       drop-off flags equal), they count as one: the district named like the zone, else the first by name;</li>
- *   <li>BOSTA_FIELD — still ambiguous: the match is redone on the Bosta delivery's own zone and secondLine only; a
- *       single district there (or one zone, as above) that was among the candidates wins.</li>
+ *   <li><b>zone names never identify a district</b> (prod: "New Cairo" in the Shopify city names all 119 of its
+ *       districts). A matched name is a DISTRICT name when some district carries it as its own name and it is not that
+ *       district's zone name ("Maadi" is El Maadi's name AND its zone's — a zone name); otherwise a ZONE name. Zone
+ *       names never count as "exact" (an exact zone name no longer hides a district named inside address1) — they only
+ *       narrow: district matches outside the matched zones are dropped (none left → both kept, which stays
+ *       ambiguous);</li>
+ *   <li>one district matched → EXACT / CONTAINS (SAME_ZONE when only a zone name matched and the zone has one);</li>
+ *   <li>SAME_ZONE — several candidates, all in ONE Bosta zone, served alike (same drop-off flag), and at most
+ *       {@link #SAME_ZONE_MAX} of them: the district named like the zone, else the first by name;</li>
+ *   <li>BOSTA_FIELD — the match redone on the Bosta delivery's own zone and secondLine alone gives one district (by
+ *       the rules above) among the candidates;</li>
+ *   <li>ZONE_ONLY — the candidates are all in one zone but too many (or served differently): no district, the portal's
+ *       picker opens filtered to that zone's districts ({@link Guess#zoneDistrictIds}); the customer can clear it.</li>
  * </ul>
  */
 public final class DistrictGuesser {
 
     private DistrictGuesser() {}
 
-    public enum Outcome { EXACT, CONTAINS, SAME_ZONE, BOSTA_FIELD, AMBIGUOUS, NONE }
+    public enum Outcome { EXACT, CONTAINS, SAME_ZONE, BOSTA_FIELD, ZONE_ONLY, AMBIGUOUS, NONE }
 
-    public record Guess(Outcome outcome, String districtId) {
+    /** {@code zoneDistrictIds}: ZONE_ONLY only — every candidate district of the zone (sorted), else empty. */
+    public record Guess(Outcome outcome, String districtId, List<String> zoneDistrictIds) {
+        public Guess(Outcome outcome, String districtId) { this(outcome, districtId, List.of()); }
         static final Guess NONE = new Guess(Outcome.NONE, null);
         static final Guess AMBIGUOUS = new Guess(Outcome.AMBIGUOUS, null);
     }
@@ -63,6 +74,8 @@ public final class DistrictGuesser {
 
     static final int MIN_EXACT = 3;
     static final int MIN_CONTAINS = 4;
+    /** SAME_ZONE pre-selects only out of this many districts at most (prod 2026-11-08: 19–119-district zones). */
+    static final int SAME_ZONE_MAX = 3;
 
     private static final Pattern DIACRITICS = Pattern.compile("[\\u064B-\\u065F\\u0670\\u0640]");
     private static final Pattern NON_ALNUM = Pattern.compile("[^\\p{L}\\p{N}]+");
@@ -101,27 +114,48 @@ public final class DistrictGuesser {
     public static Guess guess(List<Field> fields, List<Candidate> candidates, Collection<String> cityNames) {
         Set<String> ignored = new HashSet<>();
         for (String c : cityNames) ignored.add(normalize(c));
-        Map<String, Set<String>> byName = names(candidates, ignored);
+        Names names = names(candidates, ignored);
         Map<String, Candidate> byId = new HashMap<>();
         for (Candidate c : candidates) byId.put(c.districtId(), c);
 
-        Match all = match(texts(fields, false), byName);
-        if (all.districts.isEmpty()) return Guess.NONE;
-        if (all.districts.size() == 1) return new Guess(all.exact ? Outcome.EXACT : Outcome.CONTAINS, all.districts.iterator().next());
-        String zone = sameZone(all.districts, byId);
-        if (zone != null) return new Guess(Outcome.SAME_ZONE, zone);
+        Match all = match(texts(fields, false), names);
+        if (all.candidates.isEmpty()) return Guess.NONE;
+        Guess one = decide(all, byId);
+        if (one != null) return one;
 
-        Match bosta = match(texts(fields, true), byName);
-        Set<String> within = new TreeSet<>(bosta.districts);
-        within.retainAll(all.districts);
-        if (!within.isEmpty() && within.size() == bosta.districts.size()) {
-            String pick = within.size() == 1 ? within.iterator().next() : sameZone(within, byId);
-            if (pick != null) return new Guess(Outcome.BOSTA_FIELD, pick);
+        Match bosta = match(texts(fields, true), names);
+        if (!bosta.candidates.isEmpty() && all.candidates.containsAll(bosta.candidates)) {
+            Guess b = decide(bosta, byId);
+            if (b != null) return new Guess(Outcome.BOSTA_FIELD, b.districtId());
+        }
+        List<String> zone = oneZone(all.candidates, byId);
+        if (zone != null) {
+            List<String> ids = new ArrayList<>();
+            for (Candidate c : candidates) if (zone.get(0).equals(c.zoneId())) ids.add(c.districtId());
+            Collections.sort(ids);
+            return new Guess(Outcome.ZONE_ONLY, null, List.copyOf(ids));
         }
         return Guess.AMBIGUOUS;
     }
 
-    private record Match(Set<String> districts, boolean exact) {}
+    /** One district → EXACT / CONTAINS (SAME_ZONE when only a zone name matched); a small served-alike zone → SAME_ZONE; else null. */
+    private static Guess decide(Match m, Map<String, Candidate> byId) {
+        if (m.candidates.size() == 1) {
+            Outcome o = m.viaZone ? Outcome.SAME_ZONE : m.exact ? Outcome.EXACT : Outcome.CONTAINS;
+            return new Guess(o, m.candidates.iterator().next());
+        }
+        if (m.candidates.size() > SAME_ZONE_MAX) return null;
+        String rep = sameZone(m.candidates, byId);
+        return rep == null ? null : new Guess(Outcome.SAME_ZONE, rep);
+    }
+
+    /** {@code exact}: the candidates are district names some field equals; {@code viaZone}: only zone names matched. */
+    private record Match(Set<String> candidates, boolean exact, boolean viaZone) {}
+
+    /** name → districts it is the OWN name of (not their zone's name); name → districts of the zone it names. */
+    private record Names(Map<String, Set<String>> own, Map<String, Set<String>> zone) {
+        Set<String> all() { Set<String> s = new HashSet<>(own.keySet()); s.addAll(zone.keySet()); return s; }
+    }
 
     private static List<String> texts(List<Field> fields, boolean bostaOnly) {
         List<String> out = new ArrayList<>();
@@ -133,17 +167,31 @@ public final class DistrictGuesser {
         return out;
     }
 
-    /** name → the districts it speaks for, without city names and all-generic names. */
-    private static Map<String, Set<String>> names(List<Candidate> candidates, Set<String> ignored) {
-        Map<String, Set<String>> byName = new HashMap<>();
+    /** Without city names and all-generic names; a district's name equal to its zone's name is a zone name only. */
+    private static Names names(List<Candidate> candidates, Set<String> ignored) {
+        Map<String, Set<String>> own = new HashMap<>();
+        Map<String, Set<String>> zone = new HashMap<>();
         for (Candidate c : candidates) {
-            for (String raw : new String[]{c.name(), c.nameAr(), c.zoneName(), c.zoneNameAr()}) {
+            Set<String> zoneNs = new HashSet<>();
+            for (String raw : new String[]{c.zoneName(), c.zoneNameAr()}) {
                 String n = normalize(raw);
-                if (n.length() < MIN_EXACT || ignored.contains(n) || generic(n)) continue;
-                byName.computeIfAbsent(n, k -> new TreeSet<>()).add(c.districtId());
+                if (!usable(n, ignored)) continue;
+                zoneNs.add(n);
+                zone.computeIfAbsent(n, k -> new TreeSet<>()).add(c.districtId());
+            }
+            for (String raw : new String[]{c.name(), c.nameAr()}) {
+                String n = normalize(raw);
+                if (!usable(n, ignored) || zoneNs.contains(n)) continue;
+                own.computeIfAbsent(n, k -> new TreeSet<>()).add(c.districtId());
             }
         }
-        return byName;
+        // A name some district owns is a district name everywhere (its zone role is dropped).
+        zone.keySet().removeAll(own.keySet());
+        return new Names(own, zone);
+    }
+
+    private static boolean usable(String n, Set<String> ignored) {
+        return n.length() >= MIN_EXACT && !ignored.contains(n) && !generic(n);
     }
 
     static boolean generic(String normalized) {
@@ -153,32 +201,58 @@ public final class DistrictGuesser {
         return true;
     }
 
-    /** Exact, else contains (longest name wins) — the districts hit. */
-    private static Match match(List<String> fields, Map<String, Set<String>> byName) {
-        if (fields.isEmpty()) return new Match(Set.of(), false);
-        Set<String> exact = new TreeSet<>();
-        for (String f : fields) {
-            Set<String> ds = byName.get(f);
-            if (ds != null) exact.addAll(ds);
-        }
-        if (!exact.isEmpty()) return new Match(exact, true);
-        Set<String> matchedNames = new HashSet<>();
-        for (String name : byName.keySet()) {
-            if (name.length() < MIN_CONTAINS) continue;
+    /**
+     * Every name some field equals (exact) or holds as whole words (4+ characters); a name inside a longer matched name
+     * is dropped. District names: exact ones if any, else the contained ones. Zone names narrow them (or are the
+     * candidates when no district name matched).
+     */
+    private static Match match(List<String> fields, Names names) {
+        if (fields.isEmpty()) return new Match(Set.of(), false, false);
+        Set<String> exactNames = new HashSet<>();
+        Set<String> matched = new HashSet<>();
+        for (String name : names.all()) {
             String needle = " " + name + " ";
             for (String f : fields) {
-                if ((" " + f + " ").contains(needle)) { matchedNames.add(name); break; }
+                if (f.equals(name)) { exactNames.add(name); matched.add(name); break; }
+                if (name.length() >= MIN_CONTAINS && (" " + f + " ").contains(needle)) matched.add(name);
             }
         }
-        Set<String> districts = new TreeSet<>();
-        for (String name : matchedNames) {
+        Set<String> kept = new HashSet<>();
+        for (String name : matched) {
             boolean partOfLonger = false;
-            for (String other : matchedNames) {
+            for (String other : matched) {
                 if (!other.equals(name) && (" " + other + " ").contains(" " + name + " ")) { partOfLonger = true; break; }
             }
-            if (!partOfLonger) districts.addAll(byName.get(name));
+            if (!partOfLonger) kept.add(name);
         }
-        return new Match(districts, false);
+        Set<String> exactD = new TreeSet<>(), containsD = new TreeSet<>(), zoneD = new TreeSet<>();
+        for (String name : kept) {
+            Set<String> own = names.own().get(name);
+            if (own != null) (exactNames.contains(name) ? exactD : containsD).addAll(own);
+            else zoneD.addAll(names.zone().get(name));
+        }
+        boolean exact = !exactD.isEmpty();
+        Set<String> d = exact ? exactD : containsD;
+        if (d.isEmpty()) return new Match(zoneD, false, true);
+        if (zoneD.isEmpty()) return new Match(d, exact, false);
+        Set<String> inZone = new TreeSet<>(d);
+        inZone.retainAll(zoneD);
+        if (!inZone.isEmpty()) return new Match(inZone, exact, false);
+        Set<String> both = new TreeSet<>(d);
+        both.addAll(zoneD);
+        return new Match(both, false, false);   // district and zone names disagree — stays ambiguous
+    }
+
+    /** Every candidate known, one non-null zone id → [zoneId]; else null (drop-off not compared). */
+    private static List<String> oneZone(Set<String> ids, Map<String, Candidate> byId) {
+        String zone = null;
+        for (String id : ids) {
+            Candidate c = byId.get(id);
+            if (c == null || c.zoneId() == null) return null;
+            if (zone == null) zone = c.zoneId();
+            else if (!zone.equals(c.zoneId())) return null;
+        }
+        return zone == null ? null : List.of(zone);
     }
 
     /**
@@ -186,14 +260,13 @@ public final class DistrictGuesser {
      * pickup-available) → its representative: the district named like the zone, else the first by name; else null.
      */
     private static String sameZone(Set<String> ids, Map<String, Candidate> byId) {
-        String zone = null;
         Boolean dropoff = null;
+        if (oneZone(ids, byId) == null) return null;
         List<Candidate> cs = new ArrayList<>();
         for (String id : ids) {
             Candidate c = byId.get(id);
-            if (c == null || c.zoneId() == null) return null;
-            if (zone == null) { zone = c.zoneId(); dropoff = c.dropoff(); }
-            else if (!zone.equals(c.zoneId()) || dropoff != c.dropoff()) return null;
+            if (dropoff == null) dropoff = c.dropoff();
+            else if (dropoff != c.dropoff()) return null;
             cs.add(c);
         }
         cs.sort(Comparator.comparing((Candidate c) -> normalize(c.name())).thenComparing(Candidate::districtId));

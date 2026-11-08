@@ -329,6 +329,9 @@ public class PortalService {
         if (pickup != null && offer.get().forwardDistrictId() == null) {
             DistrictGuesser.Guess g = pickupAreas.guessArea(tenantId, orderId, offer.get());
             if (g.districtId() != null) pickup.put("suggestedDistrictId", g.districtId());
+            // ZONE_ONLY: the address names a zone with too many districts to pick one — the picker opens filtered to
+            // that zone's districts (the customer can clear the filter). Present only then.
+            if (g.outcome() == DistrictGuesser.Outcome.ZONE_ONLY) pickup.put("suggestedZoneDistrictIds", g.zoneDistrictIds());
             org.slf4j.LoggerFactory.getLogger(PortalService.class).info("Portal area guess tenant={} outcome={}", tenantId, g.outcome());
         }
         // Step 5c: in exchange mode only districts Bosta can deliver to AND collect from — the

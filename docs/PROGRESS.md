@@ -4,13 +4,21 @@
 
 ## Current state
 
-**Area guess — less ambiguity (2026-11-08 evening; branch `feat/area-guess-ambiguity` off main a05b88ae, NOT merged,
+**Area guess — less ambiguity (2026-11-08 evening; branch `feat/area-guess-ambiguity`, rebased on main e3c9e7e5, merged,
 NOT deployed; no migration).** Prod dry run v1 (7 days): pre-select ~25%, ambiguous ~55%, none ~20%. Rules added in
 DistrictGuesser (see CLAUDE.md): city / governorate and all-generic names never match; SAME_ZONE; BOSTA_FIELD.
 - Read-only for Marawan (scratchpad): `area-guess-collisions.sql` (top 30 colliding district sets per city — Bosta names
   and field types only) and `area-guess-dryrun-v2.sql` (the new per-tenant rates). Both checked locally against the
   Java cases (12/12 and 13/13 identical).
 - The generic-word list (DistrictGuesser.GENERIC) is a first cut — extend it from the collision output.
+- Prod v2 run (2026-11-08 ~13:15): SAME_ZONE dominated (Dolt 248/555, BROEK 228/493, Femine 138/310) — mostly a ZONE
+  name in shopify.city / bosta.firstLine naming every district of a big zone (New Cairo 119, El Shorouk 80, 6 October 61,
+  Sheikh Zayed 39, Nasr City 30). v3 rules: a district named like its zone counts as the zone name; zone names never
+  count as exact (they only narrow district names — an exact zone name in the city no longer hides a district named in
+  address1); SAME_ZONE only for <= 3 districts; ZONE_ONLY otherwise (no pre-select, `pickup.suggestedZoneDistrictIds`,
+  the portal picker filtered to the zone with "Show all areas"). v3 query: scratchpad `area-guess-dryrun-v3.sql`
+  (zone_only + zone_filtered_pct columns; checked locally against the Java on 24 cases, identical). Prod v3 run
+  (2026-11-08): pre-select ~35–46% on the big stores, ambiguous 5–9%, zone-filtered 27–31%; merge approved.
 
 **S5a fix — returnCreate NOT_FOUND (2026-11-08; branch `fix/s5a-return-create-reason` off main cda16ba7; NOT merged, NOT
 deployed; no migration).** Prod test store (#1014, RR-ZMCAUG): every returnCreate answered userErrors NOT_FOUND at a

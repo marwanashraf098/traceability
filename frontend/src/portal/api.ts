@@ -88,6 +88,11 @@ export interface PickupOffer {
    * only when exactly one district matched). Pre-selected in the area picker; the customer confirms or changes it.
    */
   suggestedDistrictId?: string
+  /**
+   * 2026-11-08 ZONE_ONLY: the original address names a Bosta zone with too many areas to pick one — the area picker
+   * opens filtered to these districts (the customer can show all). Present only then.
+   */
+  suggestedZoneDistrictIds?: string[]
   /** V117 — the cities a customer can choose for a different pickup address. */
   cities?: PickupCity[]
 }
