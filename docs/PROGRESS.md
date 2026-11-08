@@ -10,8 +10,9 @@ area is always asked when the original has no district, pre-selected from Distri
 - Dry-run SQL for the match rate (read-only, counts per tenant): scratchpad `area-guess-dryrun.sql` — mirrors the Java
   normalization; checked locally against the 12 unit cases (identical).
 - After deploy: `grep "Portal area guess"` for the live rate; RR-CM5NYQ is re-booked from the drawer (district_required).
-- Test edits NEEDED (waiting for approval): yesterday's no-area tests now contradict the live API —
-  PortalSameAddressNoDistrictTest n1 / n2 / n3 / e1 / x1, PortalSameAddressTest.a2, portalSameAddressNoDistrict.test.tsx ×3.
+- Approved test edits applied: PortalSameAddressNoDistrictTest n1 / n2 / n3 / e1 / x1 now create the no-district
+  request in the DB (as on prod); PortalSameAddressTest.a2 back to 400; portalSameAddressNoDistrict.test.tsx ×3 → the
+  area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
 **"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, merged to main,
 NOT deployed; migration V224 — main and prod ended at V223 (prod checked by Marawan 00:59)).** See CLAUDE.md ("No-district Same address").
 - Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for

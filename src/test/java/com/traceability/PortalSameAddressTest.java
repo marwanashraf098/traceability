@@ -197,14 +197,9 @@ class PortalSameAddressTest {
         assertThat(pickup.get("cityId")).isEqualTo(CAIRO);
         assertThat(pickup.get("preselectedDistrictId")).isNull();
         String token = (String) l.getBody().get("token");
-        // 2026-11-07 (approved): no original district → nothing asked; accepted with the district empty, the city kept.
-        ResponseEntity<Map> none = submit(a, token, null);
-        assertThat(none.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(jdbc.queryForMap("SELECT pickup_city_id, pickup_district_id FROM return_requests WHERE id = ?",
-            requestIdOf(a, none))).containsEntry("pickup_city_id", CAIRO).containsEntry("pickup_district_id", null);
-        // A district the customer (or an older portal) still sends is used, as before — on a second order.
-        Order o2 = deliveredOrder(a, "#5202", CAIRO, null);
-        ResponseEntity<Map> r = submit(a, (String) lookup(a, o2).getBody().get("token"), D10);
+        // 2026-11-08 (approved): Bosta's live API needs a district (RR-CM5NYQ) — none sent → refused again.
+        assertThat(submit(a, token, null).getStatusCode()).as("Bosta needs a district").isEqualTo(HttpStatus.BAD_REQUEST);
+        ResponseEntity<Map> r = submit(a, token, D10);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         UUID id = requestIdOf(a, r);
 
