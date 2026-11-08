@@ -24,6 +24,8 @@ export default function ShopifySyncState({ detail, onChanged }: {
   const { t, i18n } = useTranslation()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'retry' | 'check' | 'checked' | null>(null)
+  // A refused action's reason, shown in the row itself (not only in a toast) — never a silent no-op.
+  const [refused, setRefused] = useState<string | null>(null)
   const s = detail.shopifySync
   if (!s) return null
   const k = 'exchangesRefunds.requests.drawer.shopify'
@@ -31,6 +33,7 @@ export default function ShopifySyncState({ detail, onChanged }: {
 
   async function run(kind: 'retry' | 'check' | 'checked') {
     setBusy(kind)
+    setRefused(null)
     try {
       if (kind === 'retry') await retryShopifySync(detail.id)
       else if (kind === 'check') await checkShopifySync(detail.id)
@@ -38,9 +41,11 @@ export default function ShopifySyncState({ detail, onChanged }: {
       toast({ tone: 'success', message: t(kind === 'checked' ? `${k}.checkedDone` : `${k}.started`) })
       await onChanged()
     } catch (e) {
-      toast({ tone: 'error', message: e instanceof TransferCommandError
+      const message = e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
-        : t(`${k}.actionFailed`) })
+        : t(`${k}.actionFailed`)
+      setRefused(message)
+      toast({ tone: 'error', message })
     } finally {
       setBusy(null)
     }
@@ -88,6 +93,7 @@ export default function ShopifySyncState({ detail, onChanged }: {
       {s.outOfStep && <p className="text-small text-warning-text" data-testid="shopify-sync-out-of-step">{t(`${k}.outOfStep`)}</p>}
       {s.actionsNeedCheck && <p className="text-small text-warning-text" data-testid="shopify-sync-step-check">{t(`${k}.stepNeedsCheck`)}</p>}
       {link}
+      {refused && <p role="alert" className="text-small text-critical" data-testid="shopify-sync-refused">{refused}</p>}
       {(s.canRetry || s.status === 'failed_ambiguous' || s.canMarkChecked) && (
         <div className="flex flex-wrap gap-2">
           {s.status === 'failed_ambiguous' && (

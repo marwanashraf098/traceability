@@ -352,6 +352,7 @@ public class LookupExchangeService {
         }
         String number = jdbc.queryForObject("SELECT number FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             String.class, replacementOrder, tenantId);
+        if (shopifySync != null) shopifySync.nudge(tenantId, requestId);   // S5b, after commit; listed tenants only
         log.info("Lookup exchange {} created — replacement order {}, piece reserved{}", requestId, replacementOrder,
             dispatched ? ", handed to the courier" : "");
         return new Created(requestId.toString(), reference, number, dispatched);
@@ -405,7 +406,16 @@ public class LookupExchangeService {
         if (ReturnRequestLifecycle.CLOSABLE.contains((String) rr.get("status"))) {
             lifecycle.close(tenantId, requestId, ReturnRequestLifecycle.EXCHANGE_FAILED, null, actorUserId);
         }
+        if (shopifySync != null) shopifySync.nudge(tenantId, requestId);   // S5b: cancel / close its Shopify return
         log.info("Lookup exchange {} cancelled — {} piece(s) back to available", requestId, released);
+    }
+
+    private ShopifyReturnSyncScheduler shopifySync;
+
+    /** S5b — the request's Shopify return (nudged after commit; does nothing for a tenant not listed). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyReturnSync(ShopifyReturnSyncScheduler shopifySync) {
+        this.shopifySync = shopifySync;
     }
 
     /** The replacement left Traced: forward history past 'created', or a piece past reserved on the order. */

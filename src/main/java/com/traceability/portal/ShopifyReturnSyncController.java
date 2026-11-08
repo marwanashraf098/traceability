@@ -55,14 +55,18 @@ public class ShopifyReturnSyncController {
         return settings.set(body.enabled(), principal.userId());
     }
 
-    /** "Try again" (failed / not sure it was created / not synced). */
+    /**
+     * "Try again" (failed — also after the automatic attempts ran out / not sure it was created / not synced): a fresh
+     * cycle, enqueued right away. A refusal is a coded 409 the drawer shows (never a silent no-op).
+     */
     @PostMapping("/return-requests/{id}/shopify-sync/retry")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public void retry(@PathVariable UUID id) {
+    public Map<String, Object> retry(@PathVariable UUID id, @AuthenticationPrincipal CustomUserDetails principal) {
         UUID tenantId = own(id);
-        sync.retry(tenantId, id);
+        Map<String, Object> out = sync.retry(tenantId, id, principal == null ? null : principal.userId());
         scheduler.nudge(tenantId, id);
+        return out;
     }
 
     /** "Check again" — runs the next Shopify step now (e.g. look for an unconfirmed return). */
