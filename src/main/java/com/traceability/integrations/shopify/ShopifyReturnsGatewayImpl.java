@@ -4,12 +4,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Real {@link ShopifyReturnsGateway} over {@link ShopifyGateway#executeGraphQLResponsePublic} (read only).
@@ -20,6 +25,8 @@ import java.util.Map;
  */
 @Service
 class ShopifyReturnsGatewayImpl implements ShopifyReturnsGateway {
+
+    private static final Logger log = LoggerFactory.getLogger(ShopifyReturnsGatewayImpl.class);
 
     static final int LINES_PAGE = 50;
 
@@ -85,6 +92,24 @@ class ShopifyReturnsGatewayImpl implements ShopifyReturnsGateway {
             }
             """;
 
+    static final String RETURN_REASONS_QUERY = """
+            query TracedReturnReasons($after: String) {
+              returnReasonDefinitions(first: 250, after: $after, query: "deleted:false") {
+                pageInfo { hasNextPage endCursor }
+                nodes { id handle deleted }
+              }
+            }
+            """;
+
+    /** Catch-all reason handles, best first. */
+    static final List<String> FALLBACK_REASON_HANDLES = List.of("other", "unknown");
+    static final int REASON_PAGES = 4;
+    static final Duration REASON_TTL = Duration.ofHours(24);
+    static final Duration NO_REASON_TTL = Duration.ofHours(1);
+
+    private record CachedReason(String id, Instant until) {}
+    private final Map<String, CachedReason> reasonCache = new ConcurrentHashMap<>();
+
     private final ShopifyGateway shopify;
     private final ObjectMapper mapper;
 
@@ -135,6 +160,36 @@ class ShopifyReturnsGatewayImpl implements ShopifyReturnsGateway {
         JsonNode rfo = data(shopDomain, token, RFO_ORDER_QUERY, vars("id", rfoGid)).path("reverseFulfillmentOrder");
         String gid = rfo.path("order").path("id").asText("");
         return gid.isEmpty() ? null : gid;
+    }
+
+    @Override
+    public String fetchFallbackReturnReasonId(String shopDomain, String token) {
+        CachedReason c = reasonCache.get(shopDomain);
+        if (c != null && Instant.now().isBefore(c.until())) return c.id();
+        Map<String, String> byHandle = new LinkedHashMap<>();
+        String after = null;
+        int seen = 0;
+        for (int page = 0; page < REASON_PAGES; page++) {
+            ObjectNode v = mapper.createObjectNode();
+            if (after == null) v.putNull("after"); else v.put("after", after);
+            JsonNode conn = data(shopDomain, token, RETURN_REASONS_QUERY, v).path("returnReasonDefinitions");
+            for (JsonNode n : conn.path("nodes")) {
+                seen++;
+                if (n.path("deleted").asBoolean(false)) continue;
+                String h = n.path("handle").asText(""), id = n.path("id").asText("");
+                if (!h.isEmpty() && !id.isEmpty()) byHandle.putIfAbsent(h, id);
+            }
+            if (FALLBACK_REASON_HANDLES.stream().anyMatch(byHandle::containsKey)) break;
+            if (!conn.path("pageInfo").path("hasNextPage").asBoolean(false)) break;
+            after = conn.path("pageInfo").path("endCursor").asText(null);
+            if (after == null) break;
+        }
+        String handle = FALLBACK_REASON_HANDLES.stream().filter(byHandle::containsKey).findFirst().orElse(null);
+        String id = handle == null ? null : byHandle.get(handle);
+        log.info("Shopify return reason fallback shop={} handle={} definitions_seen={}", shopDomain,
+            handle == null ? "none" : handle, seen);
+        reasonCache.put(shopDomain, new CachedReason(id, Instant.now().plus(id == null ? NO_REASON_TTL : REASON_TTL)));
+        return id;
     }
 
     private ObjectNode vars(String k, String v) {

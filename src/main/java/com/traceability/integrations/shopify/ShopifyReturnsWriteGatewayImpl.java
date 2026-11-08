@@ -175,6 +175,7 @@ class ShopifyReturnsWriteGatewayImpl implements ShopifyReturnsWriteGateway {
             if (l.quantity() <= 0) throw new IllegalArgumentException("returnCreate needs a positive quantity");
             ObjectNode n = rl.addObject().put("fulfillmentLineItemId", l.fulfillmentLineItemGid()).put("quantity", l.quantity());
             if (l.note() != null) n.put("returnReasonNote", l.note().length() > 255 ? l.note().substring(0, 255) : l.note());
+            if (l.returnReasonDefinitionGid() != null) n.put("returnReasonDefinitionId", l.returnReasonDefinitionGid());
         }
         ObjectNode vars = mapper.createObjectNode();
         vars.set("returnInput", input);
@@ -223,7 +224,30 @@ class ShopifyReturnsWriteGatewayImpl implements ShopifyReturnsWriteGateway {
         ReturnsWriteResponse r = shopify.executeReturnsWriteOnce(shopDomain, token, mutation, vars, field);
         log.info("Shopify returns write {} shop={} outcome={} reason={} shape={}", field, shopDomain, r.kind(),
             r.reason(), shape(r.response()));
+        for (String e : userErrorDetails(r.response(), field)) {
+            log.warn("Shopify returns write {} shop={} userError {}", field, shopDomain, e);
+        }
         return r;
+    }
+
+    /**
+     * Each userError as "field=a.b.c code=X message=…" — the field path segments (schema names and list indexes) and
+     * Shopify's message verbatim (approved 2026-11-08: they name schema fields, not customer data). Nothing else of the
+     * response; values we sent are never echoed here.
+     */
+    static List<String> userErrorDetails(JsonNode response, String field) {
+        List<String> out = new ArrayList<>();
+        if (response == null) return out;
+        JsonNode errors = response.path("data").path(field).path("userErrors");
+        if (!errors.isArray()) return out;
+        for (JsonNode e : errors) {
+            List<String> path = new ArrayList<>();
+            for (JsonNode seg : e.path("field")) path.add(seg.asText());
+            out.add("field=" + (path.isEmpty() ? "-" : String.join(".", path))
+                + " code=" + e.path("code").asText("-")
+                + " message=" + e.path("message").asText("-"));
+        }
+        return out;
     }
 
     // ── shape logging ───────────────────────────────────────────────────────────────────────────

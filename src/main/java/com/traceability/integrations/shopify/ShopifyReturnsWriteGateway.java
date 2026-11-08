@@ -22,8 +22,15 @@ public interface ShopifyReturnsWriteGateway {
     /** The order's returnable fulfillment line items, oldest fulfillment first; {@code truncated} when Shopify had more. */
     record Returnables(List<Returnable> lines, boolean truncated) {}
 
-    /** One return line to create. {@code note} ≤ 255 characters, never customer text. */
-    record CreateLine(String fulfillmentLineItemGid, int quantity, String note) {}
+    /**
+     * One return line to create. {@code note} ≤ 255 characters, never customer text. {@code returnReasonDefinitionGid}
+     * is the shop's catch-all reason (ShopifyReturnsGateway.fetchFallbackReturnReasonId), omitted when null.
+     */
+    record CreateLine(String fulfillmentLineItemGid, int quantity, String note, String returnReasonDefinitionGid) {
+        public CreateLine(String fulfillmentLineItemGid, int quantity, String note) {
+            this(fulfillmentLineItemGid, quantity, note, null);
+        }
+    }
 
     /** READ. Throws ShopifyReturnsAccessDeniedException / ShopifyException like the S1 reads. */
     Returnables returnableFulfillments(String shopDomain, String token, String orderGid);

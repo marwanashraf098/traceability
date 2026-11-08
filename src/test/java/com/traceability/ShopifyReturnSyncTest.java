@@ -57,6 +57,8 @@ import static org.mockito.Mockito.*;
  *   c2  DEFINITE refusal → failed, retried, created on the 2nd; 5 refusals → no 6th call + LOW alert
  *   c3  AMBIGUOUS → failed_ambiguous, NEVER re-sent: the marker read finds nothing (stays) then finds it (created)
  *   c5  two senders at once: the claim lets only one call returnCreate
+ *   c6  (fix 2026-11-08) the shop's catch-all return reason id goes on every created line; the marker stays in the note
+ *   c7  the reason read fails → the return is still created, without a reason, on the same single attempt
  *   c4  write_returns not in the token's scopes → skipped no_permission, no Shopify call; ACCESS_DENIED → skipped
  *   e1  not synced, no write: pre-connect order; not fulfilled in Shopify; fewer returnable units; and nothing at all
  *       for an exchange, a request decided before switch-on, a request still 'requested'
@@ -932,5 +934,42 @@ class ShopifyReturnSyncTest {
         assertThat(row(r).get("shopify_sync_status")).isNull();
         assertThat(mockingDetails(writes).getInvocations()).isEmpty();
         assertThat(alerts(off)).isEmpty();
+    }
+
+    // ── return reason (fix 2026-11-08: prod returnCreate without a reason → userErrors NOT_FOUND) ──────────────
+
+    @Test
+    void c6_fallbackReasonId_onEveryLine_markerStaysInNote() {
+        when(reads.fetchFallbackReturnReasonId(anyString(), anyString()))
+            .thenReturn("gid://shopify/ReturnReasonDefinition/9");
+        Order o = new Order(a, 2, 2);
+        Req r = new Req(a, o, 2);
+
+        sync.sync(a.tenant, r.id);
+
+        assertThat(creates()).isEqualTo(1);
+        List<ShopifyReturnsWriteGateway.CreateLine> lines = callsOf("returnCreate").get(0).getArgument(4);
+        assertThat(lines).isNotEmpty().allSatisfy(l -> {
+            assertThat(l.returnReasonDefinitionGid()).isEqualTo("gid://shopify/ReturnReasonDefinition/9");
+            assertThat(l.note()).startsWith("Traced " + r.reference);
+        });
+        assertThat(row(r).get("shopify_sync_status")).isEqualTo("created");
+    }
+
+    @Test
+    void c7_reasonReadFails_stillCreated_withoutReason_oneAttempt() {
+        when(reads.fetchFallbackReturnReasonId(anyString(), anyString()))
+            .thenThrow(new com.traceability.integrations.shopify.ShopifyException("boom"));
+        Order o = new Order(a, 1, 1);
+        Req r = new Req(a, o, 1);
+
+        sync.sync(a.tenant, r.id);
+
+        assertThat(creates()).isEqualTo(1);
+        List<ShopifyReturnsWriteGateway.CreateLine> lines = callsOf("returnCreate").get(0).getArgument(4);
+        assertThat(lines).singleElement().satisfies(l -> assertThat(l.returnReasonDefinitionGid()).isNull());
+        Map<String, Object> row = row(r);
+        assertThat(row.get("shopify_sync_status")).isEqualTo("created");
+        assertThat(((Number) row.get("shopify_sync_attempts")).intValue()).isEqualTo(1);
     }
 }

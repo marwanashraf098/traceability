@@ -4,6 +4,13 @@
 
 ## Current state
 
+**S5a fix — returnCreate NOT_FOUND (2026-11-08; branch `fix/s5a-return-create-reason` off main cda16ba7; NOT merged, NOT
+deployed; no migration).** Prod test store (#1014, RR-ZMCAUG): every returnCreate answered userErrors NOT_FOUND at a
+3-segment field path; the payload had no reason. 2026-04: `returnReasonDefinitionId` is optional in the schema, the
+`returnReason` enum is deprecated; `fulfillmentLineItemId` was already the FulfillmentLineItem id. Fix: each line sends
+the shop's catch-all reason definition (other → unknown), the marker stays in returnReasonNote; userErrors logged with
+path + message. Confirm after deploy: Try again on RR-ZMCAUG, then `grep "Shopify return reason fallback\|userError"`.
+
 **Shopify-native returns S5a — Traced creates the matching Shopify Return for portal refunds (2026-11-07; branch
 `feat/s5a-shopify-returns-sync` off main cac3b35b, approved 2026-11-08, merged, NOT deployed; V225 — V224 went to the same-address / no-district branch).**
 See CLAUDE.md (S5a paragraph). Step 0 approved with all 8 defaults (process at grading; NOT_RESTOCKED; undo → LOW alert,
