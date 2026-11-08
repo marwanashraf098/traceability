@@ -331,6 +331,25 @@ public interface ShopifyGateway {
     java.util.Set<String> inactiveMainLevels(String shopDomain, String token, String locationGid,
                                              java.util.Collection<String> inventoryItemGids);
 
+    /** Part D P3 audit: at most this many items per {@link #auditMainLevels} request (~600 cost points). */
+    int MAIN_LEVEL_AUDIT_BATCH = 10;
+
+    /**
+     * Part D P3 (2026-11-08) — one item's level at the Traced Main location as the READ-ONLY audit sees it.
+     * {@code state}: active | inactive | missing (no level there; the item's level list is complete) | unknown (Main
+     * not among the first 20 levels and more exist — nothing guessed) | item_gone (Shopify returned no node).
+     * available / onHand: the level's quantities when there is a level (an inactive level's = HIDDEN stock), else null.
+     */
+    record MainLevelAudit(String inventoryItemGid, String sku, String state, Integer available, Integer onHand) {}
+
+    /**
+     * Part D P3 — READ-ONLY: every level of these items INCLUDING inactive ones ({@code inventoryLevels(first: 20,
+     * includeInactive: true)}), classified at {@code locationGid}. One request for at most
+     * {@link #MAIN_LEVEL_AUDIT_BATCH} items (more → IllegalArgumentException); the transport waits until 400 cost
+     * points are back before sending. Used only by MainLevelAuditJob. A failed read throws ShopifyException.
+     */
+    List<MainLevelAudit> auditMainLevels(String shopDomain, String token, String locationGid, List<String> inventoryItemGids);
+
     /**
      * Batch form of {@link #resolveInventoryItemId}: one nodes(ids:) read per chunk of at most
      * {@link #MAX_INPUT_ARRAY} variant GIDs (Shopify caps every input array at 250 —

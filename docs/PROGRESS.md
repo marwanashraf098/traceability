@@ -32,6 +32,39 @@ area is always asked when the original has no district, pre-selected from Distri
   request in the DB (as on prod); PortalSameAddressTest.a2 back to 400; portalSameAddressNoDistrict.test.tsx ×3 → the
   area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
 
+**Part D P3 — one-off READ-ONLY hidden-stock audit (2026-11-08; branch `feat/part-d-p3-level-audit` off main e3c9e7e5;
+merged, NOT deployed, NOT run; no migration).** `MainLevelAuditJob`: for each LISTED tenant, every variant where Traced
+holds available pieces (at Main / elsewhere counted apart; review-fixture variants left out) → its level at the Traced
+Main location in Shopify, inactive levels included → per tenant counts + a row per variant that isn't active.
+- **Run (Marawan):** deploy, set `TRACED_MAIN_LEVEL_AUDIT_TENANTS` (comma-separated tenant ids; one non-id → nothing
+  runs), restart; it runs once on its own thread at startup. Then unset it (a later restart would run it again).
+  Read: `docker logs … | grep MAIN_LEVEL_AUDIT` — `MAIN_LEVEL_AUDIT tenant=… shop=<handle> checked= active= inactive=
+  missing= unknown= item_gone= no_item_id= read_failed= hidden_available= hidden_on_hand=`, `MAIN_LEVEL_AUDIT_ROW
+  … class= sku= variant= traced_available_main= traced_available_other= shopify_active=false hidden_available=
+  hidden_on_hand=`, `MAIN_LEVEL_AUDIT_DONE`. Counts, SKUs and Traced ids only.
+- **Tenant list (Marawan, 2026-11-08 — 25 merchants + testReciving as a control; other dev / test stores left out on
+  purpose):** 4a4d180b-f8f2-4036-96c0-8f88e79c6194, c0c600ba-7077-4d1a-b729-d52775db59d7,
+  caec9b94-78ab-489b-b18d-c9370728ad6f, d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d, 1e5217e6-7d3c-4ee6-b3b4-292fe88b3c5a,
+  abac7039-8c90-4bc8-b4ba-391ef6ff7cdf, a7d6fab9-828d-4b3a-8ab6-71e6bef3d197, 3bd591ae-f5d1-492c-ba43-0dcc794220a3,
+  247615d4-3807-4849-a433-0955ad2a2484, b6a1e328-68a3-4e58-937b-138ee10de0d9, 0940a361-4731-4e43-b398-c70132b77f2c,
+  77a52568-918c-417b-8b05-c5bcece0eb47, 1c6b2868-36a9-4e38-a4b1-5e9059a9c0a8, e785e5e4-2c5c-428e-afdd-d26d90754229,
+  534bf02a-5c8c-4085-a337-b33dd4cbf059, 13f15f6f-f8b4-4586-b655-2ae6e1933628, 310d37af-e25e-4f75-9032-c5e8922fefd6,
+  d30f1d62-efbf-41dc-b8f6-93dfb58cb8b6, 17fd3a1e-fe38-4d67-bee4-7a9694b54720, 0bff033d-678c-44b5-9709-1ada5d762f6b,
+  45d9d861-1820-4beb-bb07-a5669b222a68, 06581956-4afc-4004-b065-dbef666a67e3, f624dfa7-78f4-4016-ba21-9bf6203f3722,
+  753a1e72-d84f-4dd6-971d-0e5d4c8e211e, 6a4801d9-dba9-402c-b960-5c4ed700d13f, 172a2779-7f6b-4129-9d9a-a12ec634a952.
+- Decisions: the operator supplies the tenant list (no cross-tenant read, no new hatch); the normal token refresh in
+  ShopifyTokenProvider is the only possible DB write (approved); both counts kept.
+- How: per tenant under `TenantContext.runAs` — one read-only DB transaction (`VARIANTS_SQL`, `MAIN_SQL`), then Shopify
+  with NO transaction open: `ShopifyGateway.auditMainLevels` (`TracedMainLevelAudit`, validated against 2026-04:
+  `nodes(ids:)` → `inventoryLevels(first: 20, includeInactive: true) { pageInfo { hasNextPage } nodes { isActive location
+  { id } quantities(["available","on_hand"]) } }`), ≤ 10 items per request, 1 s apart, the transport waits for 400 cost
+  points. Classes: active / inactive (its quantities = hidden stock) / missing / unknown (Main not in the first 20 and
+  more exist) / item_gone / no_item_id / read_failed (a failed batch, never retried). Skipped tenants:
+  no_connected_store / missing_scope / main_not_linked.
+- Tests: `MainLevelAuditWireTest` a1–a3, `MainLevelAuditJobTest` j1–j4 (listed tenants only, every table's rows
+  unchanged, line shapes), `MainLevelAuditReadOnlyGuardTest` r1–r2 — the write guard revert-checked (a Shopify write
+  call, a DB write, a mutation document, the read-only transaction dropped: each red).
+
 **Part D P2 — the inactive-level guard (2026-11-08; branch `fix/part-d-p2-inactive-level` off main cda16ba7,
 worktree `~/Documents/traceability-partd`; approved and merged 2026-11-08, NOT deployed; no migration).** Never a Shopify write onto an
 inactive (hidden) inventory level at the Traced location; every activation uses a fresh key. See CLAUDE.md ("Inactive-level guard").
