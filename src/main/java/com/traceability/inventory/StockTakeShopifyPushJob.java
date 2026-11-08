@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyMainLevelInactiveException;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
@@ -124,6 +125,28 @@ public class StockTakeShopifyPushJob {
                 markResult(sessionId, tenantId, "failed", p.error());
                 // Definitive — nothing was ever sent to Shopify. Safe to retry.
                 throw new IllegalStateException("stock-take push precondition failed: " + p.error());
+            }
+
+            // ── Part D P2 (2026-11-08): the inactive-level guard ──────────────
+            // Never a −N onto a hidden (inactive) level. Any item with no active level at the Traced location
+            // refuses the WHOLE push: nothing sent, recorded 'failed' with the main_level_inactive error and NOT
+            // re-thrown (JobRunr doesn't re-send it), CRITICAL void_hold_sync_failed — a person re-activates the item
+            // at the location, then re-pushes. Never an activation before a −N. (stock_take_shopify_syncs has no
+            // 'skipped' status; no migration in P2.) A failed check is a definite "not sent": re-thrown, retried.
+            java.util.Set<String> inactive;
+            try {
+                inactive = shopify.inactiveMainLevels(p.shopDomain(), p.token(), p.locationGid(),
+                    p.deltas().stream().map(ShopifyGateway.InventoryDelta::inventoryItemGid).toList());
+            } catch (RuntimeException e) {
+                markResult(sessionId, tenantId, "failed", "Not sent: " + e.getMessage());
+                throw e;
+            }
+            if (inactive != null && !inactive.isEmpty()) {
+                markResult(sessionId, tenantId, "failed", ShopifyMainLevelInactiveException.REASON
+                    + ": Stock-take write-off not sent — no active level at the Traced location for " + inactive);
+                log.error("stock-take push NOT SENT session={} — items {} have no active level at the Traced " +
+                    "location in Shopify; a person checks", sessionId, inactive);
+                return;
             }
 
             // ── THE HTTP CALL — no DB transaction around this ────────────────

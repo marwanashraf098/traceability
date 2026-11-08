@@ -4,7 +4,42 @@
 
 ## Current state
 
-**S5b — exchanges to Shopify as return only + the Try again fix (2026-11-08; branch `feat/s5b-exchange-returns` off main 5baf3287; NOT merged, NOT deployed; no migration).** S5a verified in prod on the test store (RR-D49WDJ / #1016-R1: created on the 1st attempt with the catch-all reason, read-back verified; grading → NOT_RESTOCKED with no location; Shopify auto-closed after processing → close=already_closed, no call). (1) Try again: RR-ZMCAUG (failed, 5/5) — a press after the deploy left no attempt. The backend path (retry → job → create) works in tests, so the prod cause is NOT reproduced; the fix makes it explicit — fresh cycle (attempts 0, error cleared), enqueued at once, audited with the actor, coded refusals shown in the drawer, 202 with a JSON body, one INFO line per job run. After deploy: press Try again on RR-ZMCAUG, then `grep "manual retry\|Shopify return sync job\|returnCreate"`. (2) S5b: portal + Lookup exchanges create a return for the item coming back (never an exchange line), note names the replacement + collect + "don't refund in Shopify" (no return-level note exists in 2026-04 ReturnInput). **Pending approval:** ShopifyReturnSyncTest.e1 still asserts S5a's "exchange → nothing, drawer exchange_not_yet" — S5b reverses it; the exact edit is proposed in the report, not applied.
+**S5b — exchanges to Shopify as return only + the Try again fix (2026-11-08; branch `feat/s5b-exchange-returns` off main 5baf3287; NOT merged, NOT deployed; no migration).** S5a verified in prod on the test store (RR-D49WDJ / #1016-R1: created on the 1st attempt with the catch-all reason, read-back verified; grading → NOT_RESTOCKED with no location; Shopify auto-closed after processing → close=already_closed, no call). (1) Try again: RR-ZMCAUG (failed, 5/5) — a press after the deploy left no attempt. The backend path (retry → job → create) works in tests, so the prod cause is NOT reproduced; the fix makes it explicit — fresh cycle (attempts 0, error cleared), enqueued at once, audited with the actor, coded refusals shown in the drawer, 202 with a JSON body, one INFO line per job run. After deploy: press Try again on RR-ZMCAUG, then `grep "manual retry\|Shopify return sync job\|returnCreate"`. (2) S5b: portal + Lookup exchanges create a return for the item coming back (never an exchange line), note names the replacement + collect + "don't refund in Shopify" (no return-level note exists in 2026-04 ReturnInput). **Approved 2026-11-09 (review):** e1 edited for S5b; "via courier" for manual booking; A — a Shopify return is never closed / cancelled before its grading (end pending while an item is awaited or back ungraded, x8); B — no money part for 0 / negative, "refund EGP X to customer" when the store owes the customer (x9, n2).
+
+**Main reconcile rollout: "everyone except" + big-change brake (2026-11-08; branch `feat/main-reconcile-exclude-brake`
+off main 0f0bd141; merged, NOT deployed; V226).** Writes are live for Dolt + Nuvira (0 write errors, 6 clean sweeps) —
+how writes work is unchanged.
+- `TRACED_MAIN_RECONCILE_WRITE_EXCLUDE` (comma-separated myshopify domains): a store writes only if in WRITE_SHOPS (or
+  `all`) AND not excluded — exclude wins; excluded stores stay report-only; a malformed entry stops startup.
+- Brake (`MainReconcileBrake`): a write run whose confirmed differences move > max(20 units, 10 % of Shopify on_hand at
+  Main) (`TRACED_MAIN_RECONCILE_BRAKE_UNITS` / `_PERCENT`) sends no reconcile write; Part 1 still goes out. Run row:
+  `skipped` / `large_change_held` + `brake_units_up/down`, `brake_on_hand`, `brake_limit`. Per-variant runs weigh the
+  store's other standing confirmed differences since the latest write sweep (else a held store trickles the change out
+  through small queue runs) and use that sweep's `shopify_on_hand_total`. One operator email (ALERT_EMAILS → WATCHDOG
+  fallback: store, units up/down, top 10 variants); again only after a run back under the limit or after 24 h.
+- Startup log line `Main reconcile config: mode=…, exclude=[…], brake=…; writing stores N of M connected`, plus a WARN
+  for excluded domains that aren't a connected store.
+- Planned prod env: `TRACED_MAIN_RECONCILE_WRITE_SHOPS=all` + the 9-store exclude list (Soccer corner, Juno Babies,
+  hs-sparkle, mashwar, MAVIS, The Snouts, Floe Wear, High line, BROEK). After deploy: check the startup line, then
+  `SELECT … FROM main_reconcile_runs WHERE skip_reason = 'large_change_held'` after the first sweep.
+- Tests: MainReconcileBrakeTest (10: e1–e3, b1–b5, x1, l1); revert-checked (no exclude check → e1/e2 red; no brake →
+  b1/b4/b5 red). MigrationSmokeTest / NotTracedBackfillTest counts — standing approval.
+
+**Area guess — less ambiguity (2026-11-08 evening; branch `feat/area-guess-ambiguity`, rebased on main e3c9e7e5, merged,
+NOT deployed; no migration).** Prod dry run v1 (7 days): pre-select ~25%, ambiguous ~55%, none ~20%. Rules added in
+DistrictGuesser (see CLAUDE.md): city / governorate and all-generic names never match; SAME_ZONE; BOSTA_FIELD.
+- Read-only for Marawan (scratchpad): `area-guess-collisions.sql` (top 30 colliding district sets per city — Bosta names
+  and field types only) and `area-guess-dryrun-v2.sql` (the new per-tenant rates). Both checked locally against the
+  Java cases (12/12 and 13/13 identical).
+- The generic-word list (DistrictGuesser.GENERIC) is a first cut — extend it from the collision output.
+- Prod v2 run (2026-11-08 ~13:15): SAME_ZONE dominated (Dolt 248/555, BROEK 228/493, Femine 138/310) — mostly a ZONE
+  name in shopify.city / bosta.firstLine naming every district of a big zone (New Cairo 119, El Shorouk 80, 6 October 61,
+  Sheikh Zayed 39, Nasr City 30). v3 rules: a district named like its zone counts as the zone name; zone names never
+  count as exact (they only narrow district names — an exact zone name in the city no longer hides a district named in
+  address1); SAME_ZONE only for <= 3 districts; ZONE_ONLY otherwise (no pre-select, `pickup.suggestedZoneDistrictIds`,
+  the portal picker filtered to the zone with "Show all areas"). v3 query: scratchpad `area-guess-dryrun-v3.sql`
+  (zone_only + zone_filtered_pct columns; checked locally against the Java on 24 cases, identical). Prod v3 run
+  (2026-11-08): pre-select ~35–46% on the big stores, ambiguous 5–9%, zone-filtered 27–31%; merge approved.
 
 **S5a fix — returnCreate NOT_FOUND (2026-11-08; branch `fix/s5a-return-create-reason` off main cda16ba7; NOT merged, NOT
 deployed; no migration).** Prod test store (#1014, RR-ZMCAUG): every returnCreate answered userErrors NOT_FOUND at a
@@ -34,9 +69,105 @@ area is always asked when the original has no district, pre-selected from Distri
   request in the DB (as on prod); PortalSameAddressTest.a2 back to 400; portalSameAddressNoDistrict.test.tsx ×3 → the
   area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
 
+**Part D P3 — one-off READ-ONLY hidden-stock audit (2026-11-08; branch `feat/part-d-p3-level-audit` off main e3c9e7e5;
+merged 49be3895, deployed, RUN on prod 2026-11-08 ~22:55; no migration). COMPLETE — Part D P1 / P2 / P3 are all done.** `MainLevelAuditJob`: for each LISTED tenant, every variant where Traced
+holds available pieces (at Main / elsewhere counted apart; review-fixture variants left out) → its level at the Traced
+Main location in Shopify, inactive levels included → per tenant counts + a row per variant that isn't active.
+- **Prod results (Marawan, run 2026-11-08 ~22:55, the 26 tenants below):**
+  - 24 of the 25 merchants: every checked variant active at Traced Main — no hidden stock.
+  - mashwar: 1 `item_gone` variant with 12 Traced pieces at Main (the product was deleted in Shopify).
+  - BROEK: 527 checked — 0 active, 20 inactive, 503 missing, 4 item_gone; Traced holds ~5,306 available pieces at
+    Main; hidden on the inactive levels net −23 (per SKU −6 .. +2). Cause: BROEK deactivated the Traced location in
+    Shopify; their online stock comes from other locations. **Next step is a merchant conversation, not code.**
+  - testReciving (control): all active.
+  - Unset `TRACED_MAIN_LEVEL_AUDIT_TENANTS` so a later restart doesn't run it again.
+- **Run (Marawan):** deploy, set `TRACED_MAIN_LEVEL_AUDIT_TENANTS` (comma-separated tenant ids; one non-id → nothing
+  runs), restart; it runs once on its own thread at startup. Then unset it (a later restart would run it again).
+  Read: `docker logs … | grep MAIN_LEVEL_AUDIT` — `MAIN_LEVEL_AUDIT tenant=… shop=<handle> checked= active= inactive=
+  missing= unknown= item_gone= no_item_id= read_failed= hidden_available= hidden_on_hand=`, `MAIN_LEVEL_AUDIT_ROW
+  … class= sku= variant= traced_available_main= traced_available_other= shopify_active=false hidden_available=
+  hidden_on_hand=`, `MAIN_LEVEL_AUDIT_DONE`. Counts, SKUs and Traced ids only.
+- **Tenant list (Marawan, 2026-11-08 — 25 merchants + testReciving as a control; other dev / test stores left out on
+  purpose):** 4a4d180b-f8f2-4036-96c0-8f88e79c6194, c0c600ba-7077-4d1a-b729-d52775db59d7,
+  caec9b94-78ab-489b-b18d-c9370728ad6f, d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d, 1e5217e6-7d3c-4ee6-b3b4-292fe88b3c5a,
+  abac7039-8c90-4bc8-b4ba-391ef6ff7cdf, a7d6fab9-828d-4b3a-8ab6-71e6bef3d197, 3bd591ae-f5d1-492c-ba43-0dcc794220a3,
+  247615d4-3807-4849-a433-0955ad2a2484, b6a1e328-68a3-4e58-937b-138ee10de0d9, 0940a361-4731-4e43-b398-c70132b77f2c,
+  77a52568-918c-417b-8b05-c5bcece0eb47, 1c6b2868-36a9-4e38-a4b1-5e9059a9c0a8, e785e5e4-2c5c-428e-afdd-d26d90754229,
+  534bf02a-5c8c-4085-a337-b33dd4cbf059, 13f15f6f-f8b4-4586-b655-2ae6e1933628, 310d37af-e25e-4f75-9032-c5e8922fefd6,
+  d30f1d62-efbf-41dc-b8f6-93dfb58cb8b6, 17fd3a1e-fe38-4d67-bee4-7a9694b54720, 0bff033d-678c-44b5-9709-1ada5d762f6b,
+  45d9d861-1820-4beb-bb07-a5669b222a68, 06581956-4afc-4004-b065-dbef666a67e3, f624dfa7-78f4-4016-ba21-9bf6203f3722,
+  753a1e72-d84f-4dd6-971d-0e5d4c8e211e, 6a4801d9-dba9-402c-b960-5c4ed700d13f, 172a2779-7f6b-4129-9d9a-a12ec634a952.
+- Decisions: the operator supplies the tenant list (no cross-tenant read, no new hatch); the normal token refresh in
+  ShopifyTokenProvider is the only possible DB write (approved); both counts kept.
+- How: per tenant under `TenantContext.runAs` — one read-only DB transaction (`VARIANTS_SQL`, `MAIN_SQL`), then Shopify
+  with NO transaction open: `ShopifyGateway.auditMainLevels` (`TracedMainLevelAudit`, validated against 2026-04:
+  `nodes(ids:)` → `inventoryLevels(first: 20, includeInactive: true) { pageInfo { hasNextPage } nodes { isActive location
+  { id } quantities(["available","on_hand"]) } }`), ≤ 10 items per request, 1 s apart, the transport waits for 400 cost
+  points. Classes: active / inactive (its quantities = hidden stock) / missing / unknown (Main not in the first 20 and
+  more exist) / item_gone / no_item_id / read_failed (a failed batch, never retried). Skipped tenants:
+  no_connected_store / missing_scope / main_not_linked.
+- Tests: `MainLevelAuditWireTest` a1–a3, `MainLevelAuditJobTest` j1–j4 (listed tenants only, every table's rows
+  unchanged, line shapes), `MainLevelAuditReadOnlyGuardTest` r1–r2 — the write guard revert-checked (a Shopify write
+  call, a DB write, a mutation document, the read-only transaction dropped: each red).
+
+**Part D P2 — the inactive-level guard (2026-11-08; branch `fix/part-d-p2-inactive-level` off main cda16ba7,
+worktree `~/Documents/traceability-partd` (removed); approved and merged 2026-11-08, deployed (with P3); no migration). COMPLETE.** Never a Shopify write onto an
+inactive (hidden) inventory level at the Traced location; every activation uses a fresh key. See CLAUDE.md ("Inactive-level guard").
+- **Dev-store results (2026-11-08, marwan-nnrumxdy, item The Minimal Snowboard `gid://shopify/InventoryItem/70027005919482`
+  at Traced Main `gid://shopify/Location/97942733050`). Run through the SHOPIFY CLI's app, NOT Traced's** (Marawan's call:
+  `P2_TRANSPORT=cli` in `scripts/dev/part-d-p2/traced_dev.py`, which skips the P2_APP_HANDLE check, prints and logs that
+  loudly, and keeps every other safeguard; CLI session scopes checked first — all four present). Log: `p2-log.jsonl`.
+  - 1a: `inventoryActivate` with a FRESH key re-activates an inactive level — YES.
+  - 1b: the SAME key re-used after the level went inactive again — NO: userError "A previous request with this
+    idempotency key failed. Retry with a new idempotency key." (that earlier request had succeeded), level stays inactive.
+  - 1c: +1 on an inactive level (no baseline) — applied silently, no error, `quantityAfterChange` null; the hidden
+    level reads available 1 / on_hand 1 only with `includeInactive: true`.
+  - 1d: re-activation with a fresh key — the hidden +1 shows (available 1).
+  - 1e (`level_shape.py`, added): `inventoryItem.inventoryLevel(locationId:)` — the shape Traced's baseline read uses —
+    answers **null** for an inactive level. Before P2 `fetchAvailableQuantities` read that null as available 0, so a +N
+    went out with baseline 0 and passed the compare-and-set onto the hidden level.
+  - Every quantity back to its start: Traced Main active, available / on_hand / committed / reserved / incoming /
+    damaged / safety_stock / quality_control all 0; no request named another location (Shop location untouched at 50).
+  - **Not run (app-dependent): `key_retention.py` (how long Shopify keeps an idempotency key) and `s0_bc.py` (S0's
+    b / b2 / b3 / c) — to re-check with Traced's app before Move S2 ships.** 1a / 1b / 1c were also seen with the
+    CLI's app only; the guard does not depend on 1b's answer (a fresh key every time either way).
+- **Built:**
+  - Gateway: `inactiveMainLevels(shop, token, location, items)` — one read per 250 items, `nodes(ids:)` →
+    `inventoryLevel(locationId:) { id }`; returns the items with a null level or no node; a failed read throws
+    ShopifyException ("nothing sent"). The adjust's and the damage move's own baseline read now answer null for no
+    active level and refuse: `ShopifyMainLevelInactiveException` (NEVER_SENT, error prefix `main_level_inactive:`).
+  - Activation: `ShopifyCatalogActivationService.freshActivationKey()` (`traced-activate:<uuid>`) for the catalog
+    batch, the seed, the increment and the piece +1 lazy activations; the old `activationKey` is no longer sent.
+  - Increments (Part D): activate (fresh key) → first send's own read: no active level → never_sent + the
+    `main_level_inactive` error (re-tried on the normal backoff; `IncrementRecoveryRules.MAIN_LEVEL_INACTIVE_SQL` in
+    GAVE_UP_SQL → inventory_increment_sync_failed raised now). A recovery check checks `inactiveMainLevels` first:
+    inactive → not re-sent, stays AMBIGUOUS with its key + baseline. No increment is ever sent without a baseline.
+  - Piece engine: +1s re-check after the fresh-key activation (still inactive → never_sent, CRITICAL alert); every
+    departure / move (void, hold-enter, damage move, write-off, Sold, damage restore) → skipped `main_level_inactive`,
+    no activation, CRITICAL `void_hold_sync_failed`. A return of such a piece sends no +1 (a skipped departure is
+    "not reached").
+  - Exchange dispatch → skipped `main_level_inactive` (CRITICAL). Transfer out → the whole push skipped
+    (`transfer_shopify_syncs.reason`), its return gets no +1. Stock-take write-off push → the whole push 'failed' with
+    the `main_level_inactive:` error, NOT re-thrown (no JobRunr re-send; a person re-pushes after re-activating) —
+    `stock_take_shopify_syncs` has no 'skipped' status and P2 has no migration. Main reconcile Part 1 → its existing
+    Main read (`fetchMainLevels`, stocked false) → 'failed' with the error, re-checked next run while attempts remain.
+    (9) `pushMainReconcile` was already safe (fresh read, stocked check). Stock-take / Part 1 rows join the CRITICAL
+    alert as subject types `stock_take` / `main_reconcile` (rendered generically).
+  - Deliberately not changed: piece +1s (`pushPieceIncrement`) stay single-attempt WITHOUT a baseline — the level
+    check covers the hidden-level case, and they are never re-sent while ambiguous.
+- **Tests:** `MainLevelInactiveWireTest` w1–w6, `MainLevelInactiveGuardTest` i1–i3 (test 8) + d1 ×6 / d2–d5 (test 9),
+  `MainLevelGuardContractTest` g1–g3 (test 10 extension: every `shopify.push*` / `move*` / resend call is preceded by
+  the level check in its method; the gateway's own reads refuse; every activation sends `freshActivationKey()`).
+  18 mutations revert-checked, each red. Full backend suite run once alone: 4,316 tests — ExchangeBackfillTest
+  (known), AwbSpacedBarcodeTest (DB connection flake, green alone) and 7 by-design failures, fixed by three approved
+  test edits: ActivationPolicyTest ap2 / ap7 (a fresh `traced-activate:` key, not the catalog key),
+  PartDRecoveryCheckTest's fake answers `TracedMainLevelActive` with an active level (no assertion changes),
+  StockTakeUntaggedCountTest.u2 verifies the `inactiveMainLevels` call. Those three + the P2 classes re-run green (46).
+  Piece +1s stay without a baseline (approved). Approved and merged 2026-11-08.
+
 **Part D double-apply fix P1 (2026-11-08; branch `fix/part-d-probe-stale` off main cb4c3eba, worktree
-`~/Documents/traceability-partd`; NOT merged, NOT deployed; no migration). P2 (inactive-level guard) waits for a
-dev-store run with Traced's own app.**
+`~/Documents/traceability-partd` (removed); merged d7de1570, deployed (with P3); no migration). COMPLETE — P2 and
+P3 in the entries above.**
 - The bug (found in Move S0): with `changeFromQuantity` set, Shopify checks the baseline BEFORE the idempotency key, so
   an identical re-send of an increment that LANDED answers `CHANGE_FROM_QUANTITY_STALE`. Three ways it doubled a +N:
   (A) Part D's recovery check (identical re-send of an ambiguous claim) answered STALE → classed REJECTED → retried
@@ -74,7 +205,7 @@ dev-store run with Traced's own app.**
   - `ShopifyAdjustClassificationWireTest.c3` renamed `c3_graphqlError_ambiguous`, expects AMBIGUOUS (approved).
   - Tests: full suite run once alone before Fix 7 (4,230, 2 failures: ExchangeBackfillTest — known — and c3, since
     approved and changed); after Fix 7 the touched classes re-run green (69). Every new test revert-checked.
-- **P2 (not built):** the inactive-level guard (read `inventoryLevels(includeInactive: true)` before every Main write;
+- **P2 (built 2026-11-08 — see the entry above; plan as written then):** the inactive-level guard (read `inventoryLevels(includeInactive: true)` before every Main write;
   increments activate with a NEW key and need a baseline; decrements / moves skip + alert). Waits for the dev-store
   run with Traced's own app — scripts in `scripts/dev/part-d-p2/` (not run): `activation.py` (does `inventoryActivate`
   re-activate an inactive level; does a re-used key replay as a no-op; +1 on an inactive level and whether it shows

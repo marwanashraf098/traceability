@@ -71,11 +71,20 @@ public final class IncrementRecoveryRules {
     public static final String AMBIGUOUS_EXPIRED_SQL =
         "(sia.failure_class = 'ambiguous' AND sia.sent_key_first_at < now() - interval '" + AMBIGUOUS_WINDOW_HOURS + " hours')";
 
+    /**
+     * Part D P2 (2026-11-08): the last attempt sent nothing because the item has no ACTIVE level at the Traced
+     * location in Shopify (still inactive after a fresh-key activation — a first send's baseline read, or the level
+     * check before a recovery check). Retries continue on the normal backoff; the alert is raised now (a person can
+     * re-activate the item at the location). The error is rewritten on every attempt, so it clears itself.
+     */
+    public static final String MAIN_LEVEL_INACTIVE_SQL =
+        "(sia.error LIKE '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + ":%')";
+
     /** Nothing left to try automatically: attempts exhausted, ambiguous past the window, or a recovery check that
-     *  came back stale. */
+     *  came back stale — plus (P2) an attempt that found no active level at the Traced location. */
     public static final String GAVE_UP_SQL =
         FAILED_LIVE_SQL + " AND (sia.attempt_count >= " + MAX_ATTEMPTS + " OR " + AMBIGUOUS_EXPIRED_SQL +
-        " OR " + PROBE_STALE_SQL + ")";
+        " OR " + PROBE_STALE_SQL + " OR " + MAIN_LEVEL_INACTIVE_SQL + ")";
 
     /** Legacy backlog (failed before V121). */
     public static final String LEGACY_SQL =

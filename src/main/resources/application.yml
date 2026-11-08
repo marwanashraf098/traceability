@@ -122,6 +122,12 @@ traced:
   # "Create returns in Shopify". Empty = no tenant (the feature doesn't exist anywhere).
   shopify-returns-sync:
     tenants: ${TRACED_SHOPIFY_RETURNS_SYNC_TENANTS:}
+  # One-off READ-ONLY hidden-stock audit (MainLevelAuditJob, Part D P3, 2026-11-08) — never scheduled.
+  # TRACED_MAIN_LEVEL_AUDIT_TENANTS=<tenant ids, comma-separated> → runs once at startup; reads Traced pieces and
+  # Shopify inventory levels (includeInactive) at the Traced location; writes nothing. Logs: grep MAIN_LEVEL_AUDIT.
+  main-level-audit:
+    tenants: ${TRACED_MAIN_LEVEL_AUDIT_TENANTS:}
+    delay-ms: ${TRACED_MAIN_LEVEL_AUDIT_DELAY_MS:1000}
   # One-off line paid price backfill (PaidPriceBackfill, 2026-11-06) — never scheduled.
   # TRACED_PAID_PRICE_BACKFILL_ON_STARTUP=fees|<tenant ids> → DRY RUN (counts per tenant, no Shopify call);
   # add TRACED_PAID_PRICE_BACKFILL_APPLY=true to read Shopify and store the prices. Logs: grep PAID_PRICE_BACKFILL.
@@ -209,6 +215,15 @@ traced:
     # R2 (V203): writes only for these shops (comma-separated; 'all' = every store; empty = none), only with
     # report-only=false AND part1-since set (ISO-8601, the R2 deploy time — Part 1 ignores older fulfillments).
     write-shops: ${TRACED_MAIN_RECONCILE_WRITE_SHOPS:}
+    # Never write for these shops (comma-separated <handle>.myshopify.com; exclude wins over write-shops). They stay
+    # report-only. A malformed entry stops startup.
+    write-exclude: ${TRACED_MAIN_RECONCILE_WRITE_EXCLUDE:}
+    # Big-change brake: a write store whose confirmed differences would move more than max(brake-units, brake-percent %
+    # of Shopify's on_hand at Main) writes nothing that run (Part 1 still sent) and alerts alert-emails once (again after
+    # it was back under the limit or brake-realert-hours).
+    brake-units: ${TRACED_MAIN_RECONCILE_BRAKE_UNITS:20}
+    brake-percent: ${TRACED_MAIN_RECONCILE_BRAKE_PERCENT:10}
+    brake-realert-hours: 24
     part1-since: ${TRACED_MAIN_RECONCILE_PART1_SINCE:}
     ambiguous-hold-minutes: 60
     pending-stale-minutes: 15

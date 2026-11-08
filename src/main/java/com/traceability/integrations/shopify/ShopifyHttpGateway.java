@@ -914,6 +914,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null,
                 "Could not read the current quantity before the adjust (adjust not sent): " + messageOf(e), e);
         }
+        // Part D P2 (2026-11-08): no active level at the location (inactive, never created, item gone) → nothing is
+        // sent. Before P2 a missing level read as available 0 and the +N went out with baseline 0 — Shopify applied
+        // it to the HIDDEN inactive level with no error (dev store, activation.py q1c). Never an increment without
+        // a baseline.
+        if (changeFromQuantity == null) throw new ShopifyMainLevelInactiveException("Adjust");
         sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
             changeFromQuantity, false);
     }
@@ -1082,20 +1087,134 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     /** Reads the current "available" quantity for one inventory item at one location,
-     *  immediately before a compare-and-swap write. Returns null if no matching level is
-     *  found (e.g. never activated there) — the caller then explicitly opts out of the
-     *  compare-and-swap check for that one call (Shopify's documented null-opt-out) rather
-     *  than guessing a baseline. */
+     *  immediately before a compare-and-swap write. Returns null when the item has no ACTIVE
+     *  level there — inventoryLevel(locationId:) answers null for an inactive level (dev store
+     *  2026-11-08, part-d-p2/level_shape.py), and for one never created — or the item is gone.
+     *  Part D P2: every caller then sends NOTHING (ShopifyMainLevelInactiveException). Before P2
+     *  this went through fetchAvailableQuantities, which reads a null level as available 0, so a
+     *  write went out with baseline 0 onto the hidden level. */
     private Integer currentAvailableQuantityOrNull(String shopDomain, String token,
                                                      String locationGid, String inventoryItemGid) {
-        List<InventoryLevel> levels = fetchAvailableQuantities(shopDomain, token, locationGid,
-            List.of(inventoryItemGid));
-        for (InventoryLevel level : levels) {
-            if (inventoryItemGid.equals(level.inventoryItemGid())) {
-                return level.available();
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("ids", mapper.createArrayNode().add(inventoryItemGid));
+        vars.put("locationId", locationGid);
+        JsonNode nodes = executeGraphQL(shopDomain, token, INVENTORY_LEVELS_QUERY, vars).path("nodes");
+        for (JsonNode node : nodes) {
+            if (node == null || node.isNull() || !inventoryItemGid.equals(node.path("id").asText(null))) continue;
+            JsonNode level = node.path("inventoryLevel");
+            if (level.isMissingNode() || level.isNull()) return null;
+            for (JsonNode q : level.path("quantities")) {
+                if ("available".equals(q.path("name").asText(""))) return q.path("quantity").asInt(0);
             }
+            return 0;   // an active level with no "available" entry reads 0, as before
         }
         return null;
+    }
+
+    private static final String MAIN_LEVEL_ACTIVE_QUERY = """
+            query TracedMainLevelActive($ids: [ID!]!, $locationId: ID!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) { id }
+                }
+              }
+            }
+            """;
+
+    /** Part D P3 audit read — validated against Admin API 2026-04 (Shopify toolkit). Read-only: no mutation. */
+    static final String MAIN_LEVEL_AUDIT_QUERY = """
+            query TracedMainLevelAudit($ids: [ID!]!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  sku
+                  inventoryLevels(first: 20, includeInactive: true) {
+                    pageInfo { hasNextPage }
+                    nodes { isActive location { id } quantities(names: ["available", "on_hand"]) { name quantity } }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public List<MainLevelAudit> auditMainLevels(String shopDomain, String token, String locationGid,
+                                                List<String> inventoryItemGids) {
+        if (inventoryItemGids.isEmpty()) return List.of();
+        if (inventoryItemGids.size() > MAIN_LEVEL_AUDIT_BATCH) {
+            throw new IllegalArgumentException("auditMainLevels: at most " + MAIN_LEVEL_AUDIT_BATCH + " items per request");
+        }
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("ids", mapper.valueToTree(inventoryItemGids));
+        // reserveCost 400: the transport's proactive slow-down waits until 400 points are back in the bucket.
+        JsonNode response = postGraphQL(shopDomain, token, MAIN_LEVEL_AUDIT_QUERY, vars, 400);
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && !errors.isEmpty()) {
+            throw new ShopifyException("Shopify GraphQL error: " + errors.get(0).path("message").asText());
+        }
+        JsonNode nodes = response.path("data").path("nodes");
+        if (!nodes.isArray()) throw new ShopifyException("Main level audit: no nodes in the answer");
+        java.util.Map<String, JsonNode> byId = new java.util.HashMap<>();
+        for (JsonNode n : nodes) {
+            if (n != null && !n.isNull() && n.hasNonNull("id")) byId.put(n.path("id").asText(), n);
+        }
+        List<MainLevelAudit> out = new ArrayList<>();
+        for (String item : inventoryItemGids) {
+            JsonNode n = byId.get(item);
+            if (n == null) { out.add(new MainLevelAudit(item, null, "item_gone", null, null)); continue; }
+            String sku = n.path("sku").isTextual() ? n.path("sku").asText() : null;
+            JsonNode levels = n.path("inventoryLevels");
+            JsonNode main = null;
+            for (JsonNode lv : levels.path("nodes")) {
+                if (locationGid.equals(lv.path("location").path("id").asText(null))) { main = lv; break; }
+            }
+            if (main == null) {
+                boolean more = levels.path("pageInfo").path("hasNextPage").asBoolean(false);
+                out.add(new MainLevelAudit(item, sku, more ? "unknown" : "missing", null, null));
+                continue;
+            }
+            Integer available = null, onHand = null;
+            for (JsonNode q : main.path("quantities")) {
+                String name = q.path("name").asText("");
+                if ("available".equals(name)) available = q.path("quantity").asInt(0);
+                else if ("on_hand".equals(name)) onHand = q.path("quantity").asInt(0);
+            }
+            out.add(new MainLevelAudit(item, sku, main.path("isActive").asBoolean(false) ? "active" : "inactive",
+                available, onHand));
+        }
+        return out;
+    }
+
+    @Override
+    public java.util.Set<String> inactiveMainLevels(String shopDomain, String token, String locationGid,
+                                                    java.util.Collection<String> inventoryItemGids) {
+        java.util.Set<String> wanted = new java.util.LinkedHashSet<>();
+        for (String id : inventoryItemGids) if (id != null && !id.isBlank()) wanted.add(id);
+        java.util.Set<String> active = new java.util.HashSet<>();
+        try {
+            for (List<String> chunk : chunks(new ArrayList<>(wanted), MAX_INPUT_ARRAY)) {
+                ObjectNode vars = mapper.createObjectNode();
+                vars.set("ids", mapper.valueToTree(chunk));
+                vars.put("locationId", locationGid);
+                JsonNode data = executeGraphQL(shopDomain, token, MAIN_LEVEL_ACTIVE_QUERY, vars);
+                JsonNode nodes = data == null ? null : data.path("nodes");
+                if (nodes == null || !nodes.isArray()) {
+                    throw new ShopifyException("level check: no nodes in the answer");
+                }
+                for (JsonNode node : nodes) {
+                    if (node == null || node.isNull()) continue;
+                    JsonNode level = node.path("inventoryLevel");
+                    if (!level.isMissingNode() && !level.isNull()) active.add(node.path("id").asText(""));
+                }
+            }
+        } catch (RuntimeException e) {
+            throw new ShopifyException("Could not check the item's level at the Traced location (nothing sent): "
+                + messageOf(e), e);
+        }
+        java.util.Set<String> inactive = new java.util.LinkedHashSet<>(wanted);
+        inactive.removeAll(active);
+        return inactive;
     }
 
     private static final String INVENTORY_MOVE_QUANTITIES_MUTATION = """
@@ -1124,6 +1243,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
             // Only a read failed — the move was never sent: definite.
             throw new ShopifyException("Damage move not sent — could not read the current quantity: " + e.getMessage(), e);
         }
+        // Part D P2: no active level → nothing sent (backstop — the piece engine checks inactiveMainLevels first).
+        if (fromBaseline == null) throw new ShopifyMainLevelInactiveException("Damage move");
         return sendPieceMove("Damage move", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
             "available", fromBaseline, "damaged", referenceDocumentUri, idempotencyKey);
     }

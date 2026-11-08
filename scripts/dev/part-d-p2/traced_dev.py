@@ -14,6 +14,12 @@ which is the whole point of P2.
 Usage (from the repo root, from an IP the dev app allows):
     export P2_APP_HANDLE=<handle>
     python3 -I scripts/dev/part-d-p2/<probe>.py ...
+
+CLI transport (P2_TRANSPORT=cli, added 2026-11-08 on request): the requests go through `shopify store execute`
+(the Shopify CLI's own app and its stored auth — no token in this process), exactly as S0 did. The P2_APP_HANDLE
+check is skipped in that mode and every run prints and logs that the results come from the CLI's app, NOT Traced's.
+Every other safeguard is unchanged: dev store only, 2026-04, one request per call, no retry, stop on no answer. The
+session's access scopes are checked before anything else (REQUIRED_SCOPES).
 """
 import json
 import os
@@ -38,9 +44,17 @@ def _env(key):
 SHOP = _env("SHOPIFY_SHOP_DOMAIN")
 if SHOP != DEV_SHOP:
     raise SystemExit(f"Refusing: .env shop is {SHOP!r}, P2 runs ONLY against {DEV_SHOP}")
+TRANSPORT = os.environ.get("P2_TRANSPORT", "app").strip()
+if TRANSPORT not in ("app", "cli"):
+    raise SystemExit(f"Refusing: P2_TRANSPORT must be 'app' or 'cli', not {TRANSPORT!r}")
+CLI_WARNING = ("!!! P2_TRANSPORT=cli — every request goes through the SHOPIFY CLI'S app, NOT Traced's. Results here "
+               "do NOT prove how Shopify treats Traced's app (idempotency keys may be per app). !!!")
 EXPECT_APP = os.environ.get("P2_APP_HANDLE", "").strip()
-if not EXPECT_APP:
+if TRANSPORT == "app" and not EXPECT_APP:
     raise SystemExit("Refusing: set P2_APP_HANDLE to Traced's dev app handle (the probe checks it before any write)")
+if TRANSPORT == "cli":
+    print(CLI_WARNING)
+REQUIRED_SCOPES = ("read_inventory", "write_inventory", "read_locations", "read_products")
 
 _token = None
 _app_checked = False
@@ -55,8 +69,43 @@ def _mint():
         return json.load(r)["access_token"]
 
 
+def _cli(query, variables):
+    """`shopify store execute` (the CLI app's stored auth). One invocation, no retry. A non-zero exit or output that
+    isn't JSON reads as NO ANSWER (status 0) — the caller stops: a mutation may or may not have landed."""
+    import subprocess
+    args = ["shopify", "store", "execute", "--store", DEV_SHOP, "--version", API_VERSION, "--json",
+            "--query", query, "--variables", json.dumps(variables or {})]
+    if query.lstrip().startswith("mutation"):
+        args.append("--allow-mutations")
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired as e:
+        return 0, {"_no_answer": f"CLI timed out: {e!r}"}
+    out = p.stdout.strip()
+    try:
+        body = json.loads(out[out.index("{"):]) if "{" in out else {"_raw": out[:3000]}
+    except ValueError:
+        body = {"_raw": out[:3000]}
+    if p.returncode != 0 or "_raw" in body:
+        return 0, {"_no_answer": f"CLI exit {p.returncode}", "_stderr": p.stderr[-3000:], **body}
+    if "data" not in body and "errors" not in body:
+        body = {"data": body}   # the CLI prints the data object without the GraphQL envelope
+    return 200, body
+
+
 def _send(label, query, variables):
     global _token
+    if TRANSPORT == "cli":
+        payload = {"query": query, "variables": variables or {}}
+        status, body = _cli(query, variables)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "label": label, "shop": DEV_SHOP,
+                                "api": API_VERSION,
+                                "transport": "shopify store execute — the CLI's app, NOT Traced's",
+                                "request": payload, "status": status, "response": body}) + "\n")
+        if status == 0:
+            raise SystemExit(f"{label}: no answer from Shopify — STOP, check the dev store by hand before re-running")
+        return status, body
     if _token is None:
         _token = _mint()
     payload = {"query": query, "variables": variables or {}}
@@ -89,7 +138,20 @@ def _check_app():
     if _app_checked:
         return
     st, b = _send("whoami", WHOAMI, {})
-    app = (((b.get("data") or {}).get("currentAppInstallation") or {}).get("app") or {})
+    inst = (b.get("data") or {}).get("currentAppInstallation") or {}
+    app = inst.get("app") or {}
+    granted = {s["handle"] for s in (inst.get("accessScopes") or [])}
+    # write_X implies read_X in Shopify's scope model.
+    missing = [s for s in REQUIRED_SCOPES
+               if s not in granted and not (s.startswith("read_") and "write_" + s[5:] in granted)]
+    print(f"scopes: {sorted(granted)}")
+    if missing:
+        raise SystemExit(f"Refusing: the session is missing scopes {missing} — nothing was sent")
+    if TRANSPORT == "cli":
+        print(f"app: {app.get('title')} ({app.get('handle')}) — the CLI's app, NOT Traced's")
+        print(CLI_WARNING)
+        _app_checked = True
+        return
     if app.get("handle") != EXPECT_APP:
         raise SystemExit(f"Refusing: the token belongs to app {app.get('handle')!r} ({app.get('title')!r}), "
                          f"not P2_APP_HANDLE={EXPECT_APP!r}")

@@ -1042,9 +1042,23 @@ function PickScreen({
   const [completeHeld, setCompleteHeld] = useState(false)
   const autoBackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const [loadFailed, setLoadFailed] = useState(false)
+
   const loadOrder = useCallback(async () => {
-    const { data } = await api<OrderDetail>(`/fulfill/${orderId}`)
-    setOrder(data)
+    // Only a real order replaces the one on screen: a 404 / 5xx answers with an error body (no items), which used to be
+    // stored as the order and crash the render (e.g. an Unpack Required alert for an order that's gone). A failed reload
+    // keeps the order already shown; a failed first load shows "couldn't open this order".
+    try {
+      const { data, status } = await api<OrderDetail>(`/fulfill/${orderId}`)
+      if (status >= 200 && status < 300 && Array.isArray((data as OrderDetail | null)?.items)) {
+        setOrder(data)
+        setLoadFailed(false)
+      } else {
+        setLoadFailed(true)
+      }
+    } catch {
+      setLoadFailed(true)
+    }
     setLoading(false)
   }, [orderId])
 
@@ -1235,7 +1249,12 @@ function PickScreen({
       </div>
     </div>
   )
-  if (!order) return null
+  if (!order) return loadFailed ? (
+    <div className="flex flex-col h-screen bg-base items-center justify-center p-8 gap-4" data-testid="fulfill-order-load-failed">
+      <p className="text-muted text-center">{t('fulfill.orderLoadFailed')}</p>
+      <Button variant="secondary" onClick={onBack}>{t('fulfill.backToQueue')}</Button>
+    </div>
+  ) : null
 
   // Order-complete moment — same success-card language as AwbLinkDialog's linked
   // view (rounded-2xl shadow-e3 p-[22px] card), but a distinct step: this fires

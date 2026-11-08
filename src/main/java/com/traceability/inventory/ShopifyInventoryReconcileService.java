@@ -296,11 +296,13 @@ public class ShopifyInventoryReconcileService {
                             }
                             // Connect activates ACTIVE products' variants only — a draft/archived
                             // candidate may have no level at the Traced location yet. Same lazy
-                            // activation as an increment (no quantity, "already active" tolerated,
-                            // same key as the catalog activation); if it fails, no adjust is sent.
+                            // activation as an increment (no quantity, "already active" tolerated, a
+                            // fresh key — Part D P2); if it fails, no adjust is sent. A level still
+                            // inactive after it: the adjust's own read finds no active level and sends
+                            // nothing (ShopifyMainLevelInactiveException) — the seed records it failed.
                             try {
                                 shopify.activateInventoryItem(ctx.shopDomain(), ctx.token(), itemGid, ctx.tracedGid(),
-                                    ShopifyCatalogActivationService.activationKey(tenantId, row.variantId(), ctx.tracedGid()));
+                                    ShopifyCatalogActivationService.freshActivationKey());
                             } catch (Exception e) {
                                 throw new ShopifyException("Activation at the Traced location failed (adjust not sent): "
                                     + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));

@@ -36,8 +36,8 @@ import static org.mockito.Mockito.*;
  *         archived variants are never sent (batch or single); the import stores every variant's
  *         inventory item id, so activation makes no resolve call at all.
  *   ap2 — lazy guard: an increment on a never-activated DRAFT variant activates it at the Traced
- *         location first, then adjusts — in that order, same idempotency key as the catalog
- *         activation.
+ *         location first, then adjusts — in that order, with a FRESH activation key (Part D P2), never
+ *         the catalog activation's key.
  *   ap3 — lazy guard: activation fails → no adjust call, the claim row is 'failed'.
  *   ap4 — item id stored → an increment makes no resolve call.
  *   ap5 — item id missing → resolved exactly once and written back; the next increment for the
@@ -135,7 +135,8 @@ class ActivationPolicyTest {
 
         InOrder order = inOrder(shopifyGateway);
         order.verify(shopifyGateway).activateInventoryItem(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap2"),
-            eq(s.tracedGid()), eq(ShopifyCatalogActivationService.activationKey(s.tenant(), variant, s.tracedGid())));
+            eq(s.tracedGid()), argThat((String k) -> k != null && k.startsWith("traced-activate:")
+                && !k.equals(ShopifyCatalogActivationService.activationKey(s.tenant(), variant, s.tracedGid()))));
         order.verify(shopifyGateway).adjustInventoryQuantities(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap2"),
             eq(s.tracedGid()), eq(2), eq("received"), anyString());
         assertThat(claimStatus(session, variant)).isEqualTo("applied");
@@ -218,7 +219,8 @@ class ActivationPolicyTest {
         assertThat(result.seeded()).isEqualTo(1);
         InOrder order = inOrder(shopifyGateway);
         order.verify(shopifyGateway).activateInventoryItem(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap7"),
-            eq(s.tracedGid()), eq(ShopifyCatalogActivationService.activationKey(s.tenant(), variant, s.tracedGid())));
+            eq(s.tracedGid()), argThat((String k) -> k != null && k.startsWith("traced-activate:")
+                && !k.equals(ShopifyCatalogActivationService.activationKey(s.tenant(), variant, s.tracedGid()))));
         order.verify(shopifyGateway).adjustInventoryQuantities(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap7"),
             eq(s.tracedGid()), eq(2), anyString(), anyString());
     }
