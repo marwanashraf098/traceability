@@ -4,7 +4,7 @@ topic: alerts
 title: تنبيهات المرتجعات والاستبدالات التي تتم في Shopify
 roles: [owner, manager]
 related: [scan-returns, alerts-returns, alerts-shopify-sync]
-alerts: [shopify_exchange_short, shopify_exchange_still_waiting, shopify_exchange_shipped_in_shopify, shopify_return_open_after_intake, shopify_return_ended_after_intake]
+alerts: [shopify_exchange_short, shopify_exchange_still_waiting, shopify_exchange_shipped_in_shopify, shopify_return_open_after_intake, shopify_return_ended_after_intake, shopify_return_sync_check]
 screens: [/exceptions, /fulfill, /returns]
 video:
 ---
@@ -29,3 +29,7 @@ video:
 ## انتهى مرتجع شوبيفاي بعد الوصول
 
 رُفض المرتجع أو أُلغي في Shopify بعد أن وصل منتجه إلى Traced. لم يحرّك Traced أي شيء. قرّر مصير القطعة (الاحتفاظ بها، أو إعادتها للعميل)، ثم عالج التنبيه.
+
+## راجِع مرتجع شوبيفاي
+
+للمتاجر التي تنشئ المرتجعات في Shopify من Traced: لم يستطع Traced تأكيد خطوة على مرتجع Shopify لطلب ما — غير متأكد من إنشاء المرتجع، أو رفضه Shopify عدة مرات، أو المرتجع في Shopify لا يطابق الطلب، أو تم التراجع عن وصول قطعة بعد أن سجّلها Shopify كمرتجعة. افتح الطلب (**انتقال ←**)، وراجع الطلب في Shopify وأصلحه هناك إن لزم، ثم اختر **راجعته في شوبيفاي** أو **حاول مرة أخرى**. لا يعيد Traced هذه القطع للمخزون ولا يسترد أي مبلغ في Shopify. يختفي التنبيه وحده عندما تفعل ذلك.
