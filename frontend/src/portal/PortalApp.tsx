@@ -307,7 +307,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       setExchangeTargetId(null)
       setOtherTarget(null)
       setFallbackOk(true)
-      setAreaId(res.data.pickup?.preselectedDistrictId ?? '')
+      // 2026-11-08: a guessed area (original delivery without a district) is pre-selected; the customer confirms it.
+      setAreaId(res.data.pickup?.preselectedDistrictId ?? res.data.pickup?.suggestedDistrictId ?? '')
       setAddressSource('order')
       setCustomCityId('')
       setCustomAreaId('')
@@ -488,10 +489,9 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const fixedArea = pickup?.preselectedDistrictId && areaDistricts.some(d => d.id === pickup.preselectedDistrictId)
     ? pickup.preselectedDistrictId : null
   const chosenArea = fixedArea ?? (areaDistricts.some(d => d.id === areaId) ? areaId : '')
-  // 2026-11-07: the original delivery had no district (most Bosta deliveries) — booked with its city and address
-  // only, so nothing is asked either; Bosta refusing that is handled by the merchant (district_required).
-  const areaOptional = pickup?.districtOptional === true && !fixedArea
-  const areaMissing = pickup != null && !chosenArea && !areaOptional
+  const areaMissing = pickup != null && !chosenArea
+  // 2026-11-08: the area shown is our guess from the original address (not yet changed by the customer).
+  const areaGuessed = !fixedArea && !!pickup?.suggestedDistrictId && chosenArea === pickup.suggestedDistrictId
 
   // V117 — a different pickup address: offered only when lookup lists the cities.
   const cities = pickup?.cities ?? []
@@ -1167,10 +1167,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               </div>
             </div>
           )}
-          {pickup && !customChosen && (fixedArea || areaOptional) && !addressChoice && (
+          {pickup && !customChosen && fixedArea && !addressChoice && (
             <p className="pp-small" data-testid="pickup-place"><bdi>{t('p3.pickupFrom', { place: samePlace() })}</bdi></p>
           )}
-          {pickup && !customChosen && !fixedArea && !areaOptional && (
+          {pickup && !customChosen && !fixedArea && (
             <>
               <div className="pp-field">
                 <label htmlFor="pp-city" className="pp-label">{t('p3.cityLabel')}</label>
@@ -1195,6 +1195,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                     return g.zone ? <optgroup key={g.zone} label={g.zone}>{options}</optgroup> : options
                   })}
                 </select>
+                {areaGuessed && <p className="pp-muted pp-small" data-testid="area-guessed">{t('p3.areaGuessed')}</p>}
               </div>
             </>
           )}

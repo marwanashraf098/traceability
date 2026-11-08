@@ -4,6 +4,16 @@
 
 ## Current state
 
+**"Same address" area guess (2026-11-08; branch `feat/portal-area-guess` off main cb4c3eba, merged to main, NOT deployed;
+no migration).** Live result: Bosta refused RR-CM5NYQ (type 25, no district) → its live API needs a district. Now the
+area is always asked when the original has no district, pre-selected from DistrictGuesser's guess (see CLAUDE.md).
+- Dry-run SQL for the match rate (read-only, counts per tenant): scratchpad `area-guess-dryrun.sql` — mirrors the Java
+  normalization; checked locally against the 12 unit cases (identical).
+- After deploy: `grep "Portal area guess"` for the live rate; RR-CM5NYQ is re-booked from the drawer (district_required).
+- Approved test edits applied: PortalSameAddressNoDistrictTest n1 / n2 / n3 / e1 / x1 now create the no-district
+  request in the DB (as on prod); PortalSameAddressTest.a2 back to 400; portalSameAddressNoDistrict.test.tsx ×3 → the
+  area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
+
 **Part D double-apply fix P1 (2026-11-08; branch `fix/part-d-probe-stale` off main cb4c3eba, worktree
 `~/Documents/traceability-partd`; NOT merged, NOT deployed; no migration). P2 (inactive-level guard) waits for a
 dev-store run with Traced's own app.**

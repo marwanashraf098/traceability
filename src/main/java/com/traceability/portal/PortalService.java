@@ -315,6 +315,14 @@ public class PortalService {
         boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
         Optional<PickupAreaService.CityAreas> offer = generic ? Optional.empty() : pickupOffer(tenantId, orderId);
         Map<String, Object> pickup = offer.map(a -> a.toJson(true)).orElse(null);
+        // 2026-11-08: the original delivery had no district (Bosta still needs one for the pickup) — the area is
+        // asked, pre-selected when the original address names exactly one of the city's districts (key present only
+        // then; the customer confirms or changes it). Only the outcome is logged, never the address.
+        if (pickup != null && offer.get().forwardDistrictId() == null) {
+            DistrictGuesser.Guess g = pickupAreas.guessArea(tenantId, orderId, offer.get());
+            if (g.districtId() != null) pickup.put("suggestedDistrictId", g.districtId());
+            org.slf4j.LoggerFactory.getLogger(PortalService.class).info("Portal area guess tenant={} outcome={}", tenantId, g.outcome());
+        }
         // Step 5c: in exchange mode only districts Bosta can deliver to AND collect from — the
         // key exists only when the tenant allows exchanges (exact-key tests rely on that).
         if (pickup != null && exchangesEnabled(tenantId)) {
@@ -966,12 +974,9 @@ public class PortalService {
         if (custom != null) {
             // Already filtered to pickup (and, for an exchange, drop-off) available districts.
             district = offer.get().find(custom.districtId()).orElseThrow(InvalidSubmission::new);
-        } else if (offer.isPresent() && req.districtId() == null && offer.get().forwardDistrictId() == null) {
-            // "Same address" of a delivery that had no district (2026-11-07, 95% of prod deliveries): no area asked —
-            // booked with the original's city and lines only (district stays null; Bosta refusing it is handled at
-            // booking: district_required).
-            district = null;
         } else if (offer.isPresent()) {
+            // 2026-11-08: Bosta's live API needs a district on a pickup (RR-CM5NYQ) — a district is always required here,
+            // even when the original delivery had none (the portal then asks, pre-selecting its guess).
             // "Same address": the original delivery's own district when it is known and offered (the portal sends
             // it, no picker), else the one the customer chose.
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);

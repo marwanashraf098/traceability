@@ -6,8 +6,8 @@ import PortalApp from '../portal/PortalApp'
 import { createPortalI18n } from '../portal/i18n'
 import type { LookupLine, LookupResult, PickupDistrict, PortalConfig } from '../portal/api'
 
-// "Same address" when the original delivery had NO district (lookup pickup.districtOptional, 2026-11-07): no city or
-// area field, no district sent (EN + AR); the area question stays for "A different address". Harness as
+// "Same address" when the original delivery had NO district. 2026-11-08 (approved): Bosta's live API needs a district,
+// so the area is asked (city fixed) and Send waits for it (EN + AR); "A different address" asks as before. Harness as
 // portalSameAddress.test.tsx.
 
 const CONFIG: PortalConfig = {
@@ -123,34 +123,38 @@ function submitted() {
 const districtCalls = () => calls.filter(c => c.url.includes('/districts?'))
 
 describe('"Same address" without an original district', () => {
-  test('no area field; nothing about the area is sent', async () => {
+  // 2026-11-08 (approved): Bosta's live API needs a district — the area is asked again (city fixed), even if a lookup
+  // still carries the old districtOptional key; Send waits for an area.
+  test('the area is asked; Send waits for it', async () => {
     lookupBody = { ...lookupBody, pickup: { ...PICKUP, preselectedDistrictId: null, districtOptional: true } }
     const user = await toDetails()
     expect(screen.getByRole('radio', { name: 'Same as my delivery address (Cairo)' })).toBeChecked()
-    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('City')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Send return request' }))
+    expect(screen.getByLabelText('City')).toHaveValue('Cairo')
+    expect(screen.getByLabelText('Area')).toHaveValue('')
+    const send = screen.getByRole('button', { name: 'Send return request' })
+    expect(send).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('Area'), 'D10')
+    await user.click(send)
     await screen.findByRole('heading', { name: 'Request sent' })
-    const body = submitted()
-    for (const key of ['districtId', 'addressSource', 'cityId', 'firstLine']) expect(body).not.toHaveProperty(key)
+    expect(submitted().districtId).toBe('D10')
   })
 
-  test('no address choice: one "Pickup from" line with the city (EN + AR)', async () => {
+  test('no address choice: the area field, no "Pickup from" line (EN + AR)', async () => {
     lookupBody = { ...lookupBody, pickup: { ...PICKUP, preselectedDistrictId: null, districtOptional: true, cities: undefined } }
     const user = await toDetails()
-    expect(screen.getByTestId('pickup-place')).toHaveTextContent('Pickup from: Cairo')
+    expect(screen.queryByTestId('pickup-place')).toBeNull()
+    expect(screen.getByLabelText('Area')).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Send return request' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Switch to Arabic' }))
     await waitFor(() => expect(document.documentElement.dir).toBe('rtl'))
-    expect(screen.getByTestId('pickup-place')).toHaveTextContent('الاستلام من: القاهرة')
+    expect(screen.getByLabelText('المنطقة')).toHaveValue('')
   })
 
-  test('exchange mode: no area asked either', async () => {
+  test('exchange mode: the area is asked too', async () => {
     lookupBody = { ...lookupBody, pickup: { ...PICKUP, preselectedDistrictId: null, districtOptional: true } }
-    const user = await toDetails({ exchange: true })
-    expect(screen.queryByLabelText('Area')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Send return request' }))
-    await waitFor(() => expect(submitted()).not.toBeNull())
-    expect(submitted()).not.toHaveProperty('districtId')
+    await toDetails({ exchange: true })
+    expect(screen.getByLabelText('Area')).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Send return request' })).toBeDisabled()
   })
 
   test('"A different address" still asks for the area', async () => {
