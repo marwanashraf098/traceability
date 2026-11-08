@@ -22,6 +22,14 @@ how writes work is unchanged.
   `SELECT … FROM main_reconcile_runs WHERE skip_reason = 'large_change_held'` after the first sweep.
 - Tests: MainReconcileBrakeTest (10: e1–e3, b1–b5, x1, l1); revert-checked (no exclude check → e1/e2 red; no brake →
   b1/b4/b5 red). MigrationSmokeTest / NotTracedBackfillTest counts — standing approval.
+- **Open follow-ups for Main reconcile (Marawan 2026-11-09 — recorded, NOT built):**
+  1. fulfilled_unpicked: an order whose only forward waybills are cancelled / terminated should count as "waiting to
+     be picked" (today the AWAITING_PICK test wants a live waybill).
+  2. An order fulfilled from Main with no waybill, shipped by a non-Bosta courier, isn't covered yet.
+  3. Alert when a Part 1 claim fails definitely 5 times (exhausted `failed`, attempt_count = PART1_MAX_ATTEMPTS).
+  4. A merchant-visible log of the reconcile's changes to Shopify Main.
+  5. The excluded stores (Soccer corner, Juno Babies, hs-sparkle, mashwar, MAVIS, The Snouts, Floe Wear, High line,
+     BROEK) come off `TRACED_MAIN_RECONCILE_WRITE_EXCLUDE` one by one, each after merchant contact.
 
 **Area guess — less ambiguity (2026-11-08 evening; branch `feat/area-guess-ambiguity`, rebased on main e3c9e7e5, merged,
 NOT deployed; no migration).** Prod dry run v1 (7 days): pre-select ~25%, ambiguous ~55%, none ~20%. Rules added in
