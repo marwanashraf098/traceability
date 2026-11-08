@@ -59,10 +59,20 @@ public class ShopifyCatalogActivationService {
 
     public record ActivationOutcome(int total, int succeeded, int failed, List<Map<String, String>> failures) {}
 
-    /** The @idempotent key for activating this variant at this location — shared by the catalog
-     *  activation and the lazy activation before an increment (same operation, same parameters). */
+    /** The OLD deterministic key (catalog_activation, per variant + location) — NO LONGER SENT (Part D P2,
+     *  2026-11-08). Kept only so MainLevelGuardContractTest can assert no caller passes it again: once a level
+     *  was activated and later deactivated, re-sending this key never re-activates it — Shopify answers "A previous
+     *  request with this idempotency key failed. Retry with a new idempotency key." (dev store, activation.py 1b). */
     public static String activationKey(UUID tenantId, UUID variantId, String locationGid) {
         return ShopifyGateway.idempotencyKey(tenantId, "catalog_activation", variantId.toString(), variantId, locationGid);
+    }
+
+    /** Part D P2 (2026-11-08): the @idempotent key for ONE activation — fresh every time, for every activation
+     *  (catalog batch, lazy activation before an increment, the seed). Activating an active level again is
+     *  harmless ("already active" tolerated), so nothing needs the key to be stable; a fresh key re-activates an
+     *  inactive level (activation.py 1a). A transport retry re-sends the same body, so the same key. */
+    public static String freshActivationKey() {
+        return "traced-activate:" + UUID.randomUUID();
     }
 
     /** Connect / backfill / manual activation: every variant of an ACTIVE product. */
@@ -148,7 +158,7 @@ public class ShopifyCatalogActivationService {
                 continue;
             }
             toActivate.add(r.id());
-            requests.add(new ShopifyGateway.ActivationRequest(itemGid, activationKey(tenantId, r.id(), tracedGid)));
+            requests.add(new ShopifyGateway.ActivationRequest(itemGid, freshActivationKey()));
         }
 
         int succeeded = 0;

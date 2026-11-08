@@ -176,6 +176,7 @@ class StockTakeUntaggedCountTest {
             assertThat(d.inventoryItemGid()).isEqualTo(a.item());
             assertThat(d.negativeDelta()).isEqualTo(-2);
         });
+        verify(shopifyGateway).inactiveMainLevels(eq(t.shop()), any(), eq(t.traced()), any());   // Part D P2 level check
         verifyNoMoreInteractions(shopifyGateway);   // no other decrement / adjust / move
 
         // Finalized: the review shows what happened.

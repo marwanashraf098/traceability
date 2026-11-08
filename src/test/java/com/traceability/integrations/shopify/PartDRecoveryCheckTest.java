@@ -106,6 +106,10 @@ class PartDRecoveryCheckTest {
                     String item = req.path("variables").path("ids").get(0).asText();
                     json = "{\"data\":{\"nodes\":[{\"id\":\"" + item + "\",\"inventoryLevel\":{\"quantities\":" +
                         "[{\"name\":\"available\",\"quantity\":" + available + "}]}}]}}";
+                } else if (q.contains("TracedMainLevelActive")) {
+                    // Part D P2: the level check before a recovery check — the level is active.
+                    String item = req.path("variables").path("ids").get(0).asText();
+                    json = "{\"data\":{\"nodes\":[{\"id\":\"" + item + "\",\"inventoryLevel\":{\"id\":\"lvl\"}}]}}";
                 } else if (q.contains("inventoryAdjustQuantities")) {
                     json = adjust(req);
                 } else {
