@@ -49,9 +49,17 @@ area is always asked when the original has no district, pre-selected from Distri
   area is asked. Prod dry run (7 days): pre-select ~25% (Dolt 25.5, BROEK 26.5, Femine 22.2), ambiguous ~55%, none ~20%.
 
 **Part D P3 — one-off READ-ONLY hidden-stock audit (2026-11-08; branch `feat/part-d-p3-level-audit` off main e3c9e7e5;
-merged, NOT deployed, NOT run; no migration).** `MainLevelAuditJob`: for each LISTED tenant, every variant where Traced
+merged 49be3895, deployed, RUN on prod 2026-11-08 ~22:55; no migration). COMPLETE — Part D P1 / P2 / P3 are all done.** `MainLevelAuditJob`: for each LISTED tenant, every variant where Traced
 holds available pieces (at Main / elsewhere counted apart; review-fixture variants left out) → its level at the Traced
 Main location in Shopify, inactive levels included → per tenant counts + a row per variant that isn't active.
+- **Prod results (Marawan, run 2026-11-08 ~22:55, the 26 tenants below):**
+  - 24 of the 25 merchants: every checked variant active at Traced Main — no hidden stock.
+  - mashwar: 1 `item_gone` variant with 12 Traced pieces at Main (the product was deleted in Shopify).
+  - BROEK: 527 checked — 0 active, 20 inactive, 503 missing, 4 item_gone; Traced holds ~5,306 available pieces at
+    Main; hidden on the inactive levels net −23 (per SKU −6 .. +2). Cause: BROEK deactivated the Traced location in
+    Shopify; their online stock comes from other locations. **Next step is a merchant conversation, not code.**
+  - testReciving (control): all active.
+  - Unset `TRACED_MAIN_LEVEL_AUDIT_TENANTS` so a later restart doesn't run it again.
 - **Run (Marawan):** deploy, set `TRACED_MAIN_LEVEL_AUDIT_TENANTS` (comma-separated tenant ids; one non-id → nothing
   runs), restart; it runs once on its own thread at startup. Then unset it (a later restart would run it again).
   Read: `docker logs … | grep MAIN_LEVEL_AUDIT` — `MAIN_LEVEL_AUDIT tenant=… shop=<handle> checked= active= inactive=
@@ -82,7 +90,7 @@ Main location in Shopify, inactive levels included → per tenant counts + a row
   call, a DB write, a mutation document, the read-only transaction dropped: each red).
 
 **Part D P2 — the inactive-level guard (2026-11-08; branch `fix/part-d-p2-inactive-level` off main cda16ba7,
-worktree `~/Documents/traceability-partd`; approved and merged 2026-11-08, NOT deployed; no migration).** Never a Shopify write onto an
+worktree `~/Documents/traceability-partd` (removed); approved and merged 2026-11-08, deployed (with P3); no migration). COMPLETE.** Never a Shopify write onto an
 inactive (hidden) inventory level at the Traced location; every activation uses a fresh key. See CLAUDE.md ("Inactive-level guard").
 - **Dev-store results (2026-11-08, marwan-nnrumxdy, item The Minimal Snowboard `gid://shopify/InventoryItem/70027005919482`
   at Traced Main `gid://shopify/Location/97942733050`). Run through the SHOPIFY CLI's app, NOT Traced's** (Marawan's call:
@@ -137,8 +145,8 @@ inactive (hidden) inventory level at the Traced location; every activation uses 
   Piece +1s stay without a baseline (approved). Approved and merged 2026-11-08.
 
 **Part D double-apply fix P1 (2026-11-08; branch `fix/part-d-probe-stale` off main cb4c3eba, worktree
-`~/Documents/traceability-partd`; merged d7de1570, NOT deployed; no migration). P2 (inactive-level guard) built
-2026-11-08 — entry above.**
+`~/Documents/traceability-partd` (removed); merged d7de1570, deployed (with P3); no migration). COMPLETE — P2 and
+P3 in the entries above.**
 - The bug (found in Move S0): with `changeFromQuantity` set, Shopify checks the baseline BEFORE the idempotency key, so
   an identical re-send of an increment that LANDED answers `CHANGE_FROM_QUANTITY_STALE`. Three ways it doubled a +N:
   (A) Part D's recovery check (identical re-send of an ambiguous claim) answered STALE → classed REJECTED → retried
