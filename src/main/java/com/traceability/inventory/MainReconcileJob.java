@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +42,31 @@ public class MainReconcileJob {
         this.service   = service;
         this.ownerJdbc = new JdbcTemplate(ownerDs);
         this.alerter   = alerter;
+    }
+
+    /**
+     * The effective write set, once at startup: mode, how many stores write, the exclude list (and any excluded domain
+     * that isn't a connected store — likely a typo), the brake. Cross-tenant read of shop domains only (owner pool).
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void logWriteConfig() {
+        try {
+            List<String> shops = ownerJdbc.queryForList(
+                "SELECT DISTINCT lower(s.shop_domain) FROM stores s " +
+                "JOIN locations l ON l.tenant_id = s.tenant_id AND l.is_fulfillment = true " +
+                "WHERE s.status <> 'disconnected' AND s.shop_domain IS NOT NULL", String.class);
+            long writing = !service.enabled() ? 0
+                : shops.stream().filter(d -> service.allowlisted(d) && service.writeEnabled(d)).count();
+            long excluded = shops.stream().filter(service.writeExclude()::contains).count();
+            List<String> unknown = service.writeExclude().stream().filter(d -> !shops.contains(d)).toList();
+            log.info("Main reconcile config: {}; writing stores {} of {} connected ({} excluded)",
+                service.describeWriteConfig(), writing, shops.size(), excluded);
+            if (!unknown.isEmpty()) {
+                log.warn("Main reconcile config: excluded domains that are not a connected store (typo?): {}", unknown);
+            }
+        } catch (Exception e) {
+            log.warn("Main reconcile config: could not log the write set: {}", e.toString());
+        }
     }
 
     @Recurring(id = "main-reconcile-queue", cron = "${traced.main-reconcile.queue-cron:* * * * *}", zoneId = "UTC")
