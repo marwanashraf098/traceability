@@ -960,6 +960,7 @@
     "connectBosta": "ربط بوستا",
     "units": "وحدة",
     "locked": "مقفل",
+    "orderLoadFailed": "تعذّر فتح هذا الطلب. ربما حُذف أو انقطع الاتصال.",
     "backToQueue": "العودة للقائمة",
     "allItemsRemoved": "تمت إزالة كل المنتجات من هذا الطلب في Shopify — لا يوجد شيء لتغليفه.",
     "scanPlaceholder": "امسح أو أدخل الباركود ثم اضغط Enter",
