@@ -262,6 +262,10 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        Map.entry("/api/v1/tenant/shopify-returns-sync",
+            "S5a: the caller's own tenant row only (switch, since, own stores' scopes); rollout-gated to tenants listed at " +
+            "startup, so this class's runtime tenant always reads {visible:false}; cross-tenant isolation with a same-" +
+            "tenant control is ShopifyReturnSyncTest.s2 (app_user, RLS on)"),
         Map.entry("/api/v1/setup/address/shopify-locations",
             "O2b: no tenant rows returned — the store's own Shopify location addresses, read live from Shopify; its DB reads " +
             "(main warehouse, store) run under RLS; covered by ShopifyAddressPrefillTest (app_user, RLS on)"),

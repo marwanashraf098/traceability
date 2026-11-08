@@ -2508,6 +2508,78 @@ class ShopifyHttpGateway implements ShopifyGateway {
         return postGraphQL(shopDomain, token, query, variables);
     }
 
+    /**
+     * Shopify-native returns S5a — ONE attempt, self-contained like {@link #pushTransferOut} (never postGraphQL: its
+     * retry / throttle loop would re-send a returnCreate). Classification: see {@link ReturnsWriteResponse}. Never logs
+     * or keeps a response body in {@code reason}.
+     */
+    @Override
+    public ReturnsWriteResponse executeReturnsWriteOnce(String shopDomain, String token, String mutation,
+                                                        JsonNode variables, String field) {
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode().put("query", mutation);
+        body.set("variables", variables);
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            int code = e.getStatusCode().value();
+            return ReturnsWriteResponse.of(code == 403 ? ReturnsWriteResponse.Kind.ACCESS_DENIED
+                : ReturnsWriteResponse.Kind.DEFINITE, null, null, "HTTP " + code);
+        } catch (HttpServerErrorException e) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, null,
+                "HTTP " + e.getStatusCode().value());
+        } catch (ResourceAccessException e) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, null,
+                "no response (" + e.getClass().getSimpleName() + ")");
+        } catch (RestClientException e) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, null,
+                "unreadable response (" + e.getClass().getSimpleName() + ")");
+        }
+        if (response == null) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, null, "empty response");
+        }
+        JsonNode data = response.get("data");
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            List<String> codes = graphQLErrorCodes(errors);
+            boolean noData = data == null || data.isNull() || data.path(field).isNull() || data.path(field).isMissingNode();
+            boolean onlyThrottled = codes.stream().allMatch("THROTTLED"::equals);
+            if (onlyThrottled && (data == null || data.isNull())) {
+                return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.DEFINITE, null, response, "THROTTLED");
+            }
+            if (codes.contains("ACCESS_DENIED") && noData) {
+                return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.ACCESS_DENIED, null, response, "ACCESS_DENIED");
+            }
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, response,
+                "GraphQL error " + codes);
+        }
+        if (data == null || data.isNull()) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, response, "no data");
+        }
+        JsonNode payload = data.get(field);
+        if (payload == null || payload.isNull()) {
+            return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.AMBIGUOUS, null, response, "no payload");
+        }
+        JsonNode userErrors = payload.path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            List<String> codes = new ArrayList<>();
+            for (JsonNode ue : userErrors) {
+                String c = ue.path("code").asText("");
+                codes.add(c.matches("[A-Za-z0-9_]{1,64}") ? c : "NO_CODE");
+            }
+            return new ReturnsWriteResponse(ReturnsWriteResponse.Kind.DEFINITE, payload, response,
+                "userErrors " + codes, List.copyOf(codes));
+        }
+        return ReturnsWriteResponse.of(ReturnsWriteResponse.Kind.OK, payload, response, null);
+    }
+
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {
         JsonNode response = postGraphQL(shopDomain, token, query, variables);
         JsonNode errors = response.get("errors");

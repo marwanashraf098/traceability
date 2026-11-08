@@ -58,7 +58,7 @@ export const ALERT_GROUPS: Record<string, string[]> = {
   ],
   'alerts-shopify-returns-exchanges': [
     'shopify_exchange_short', 'shopify_exchange_still_waiting', 'shopify_exchange_shipped_in_shopify',
-    'shopify_return_open_after_intake', 'shopify_return_ended_after_intake',
+    'shopify_return_open_after_intake', 'shopify_return_ended_after_intake', 'shopify_return_sync_check',
   ],
   'alerts-tracking-changes': [
     'tracking_changed_after_custody', 'tracking_change_needs_review', 'tracking_changed_relabel',

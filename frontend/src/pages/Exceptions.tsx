@@ -99,6 +99,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // Shopify-native returns S4 (V222)
   shopify_return_open_after_intake: { en: 'Received, Return Still Open In Shopify', ar: 'استُلم والمرتجع ما زال مفتوحاً في شوبيفاي' },
   shopify_return_ended_after_intake: { en: 'Shopify Return Ended After Arrival', ar: 'انتهى مرتجع شوبيفاي بعد الوصول' },
+  // Shopify-native returns S5a (V225)
+  shopify_return_sync_check: { en: 'Check The Shopify Return', ar: 'راجِع مرتجع شوبيفاي' },
   shopify_exchange_shipped_in_shopify: { en: 'Exchange Shipped In Shopify', ar: 'شُحن الاستبدال في شوبيفاي' },
   // Shopify tracking-number edits (V200)
   tracking_changed_after_custody: { en: 'Waybill Changed After Pickup',      ar: 'تغيّرت البوليصة بعد خروج الطرد' },

@@ -44,6 +44,9 @@ public final class ShopifyReturnIntake {
         "JOIN tenants t ON t.id = l.tenant_id " +
         "WHERE l.tenant_id = ? AND r.order_id = ? AND l.variant_id = ? " +
         "  AND r.status IN ('OPEN', 'CLOSED') AND st.returns_access = 'granted' " +
+        // S5a: a return Traced itself created for one of its requests is never "expected back" by Shopify — the
+        // request's own scan path takes the piece.
+        "  AND NOT " + com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + " " +
         "  AND now() <= COALESCE(r.shopify_created_at, r.created_at) " +
         "              + interval '1 day' * COALESCE(t.customer_return_window_days, 30) " +
         "  AND l.quantity > (SELECT COUNT(*) FROM shopify_return_intakes i " +

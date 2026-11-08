@@ -3735,6 +3735,21 @@ export interface ReturnRequestDetail {
   exchange?: ExchangeProgress | null
   /** Step 5c — approved before "Allow exchanges" was switched on and never booked: "Book now". */
   bookNowAvailable?: boolean
+  /** Shopify-native returns S5a — the request's Shopify return. Absent when the feature doesn't apply. */
+  shopifySync?: ShopifySyncState
+}
+
+/** S5a — ShopifyReturnSyncService.detailBlock. */
+export interface ShopifySyncState {
+  status: 'waiting' | 'skipped' | 'pending' | 'created' | 'failed' | 'failed_ambiguous' | 'needs_review' | 'resolved'
+  reason?: string | null
+  attemptsExhausted?: boolean
+  returnName?: string | null
+  adminUrl?: string | null
+  actionsNeedCheck?: boolean
+  outOfStep?: boolean
+  canRetry?: boolean
+  canMarkChecked?: boolean
 }
 
 /** Step 5c — what the X5 progress is derived from (ReturnRequestService.exchangeProgress). */
@@ -3776,6 +3791,38 @@ export function rejectReturnRequest(id: string, reason: string) {
 /** Step 5c — an approved exchange that was never booked → book it now. */
 export function bookExchangeNow(id: string) {
   return transferCommandRequest<void>(`/return-requests/${id}/booking/book-now`, { method: 'POST' })
+}
+
+/** S5a — "Try again" on the request's Shopify return (failed / unconfirmed / not synced). */
+export function retryShopifySync(id: string) {
+  return transferCommandRequest<void>(`/return-requests/${id}/shopify-sync/retry`, { method: 'POST' })
+}
+
+/** S5a — "Check again": run the request's next Shopify step now. */
+export function checkShopifySync(id: string) {
+  return transferCommandRequest<void>(`/return-requests/${id}/shopify-sync/check`, { method: 'POST' })
+}
+
+/** S5a — "I checked it in Shopify". */
+export function markShopifySyncChecked(id: string) {
+  return transferCommandRequest<void>(`/return-requests/${id}/shopify-sync/checked`, { method: 'POST' })
+}
+
+/** S5a — the owner's "Create returns in Shopify" switch (visible only for listed tenants). */
+export interface ShopifyReturnsSyncSettings {
+  visible: boolean
+  enabled?: boolean
+  since?: string | null
+  permissionGranted?: boolean
+}
+
+export function getShopifyReturnsSync() {
+  return request<ShopifyReturnsSyncSettings>('/tenant/shopify-returns-sync')
+}
+
+export function setShopifyReturnsSync(enabled: boolean) {
+  return transferCommandRequest<ShopifyReturnsSyncSettings>('/tenant/shopify-returns-sync',
+    { method: 'PUT', body: JSON.stringify({ enabled }) })
 }
 
 /** 'failed' → book again. */

@@ -118,7 +118,7 @@ describe('f1 labels', () => {
 })
 
 describe('f2 clears when', () => {
-  const CODES = [...SERVICE.slice(SERVICE.indexOf('CONDITION_ONLY = Map.of('), SERVICE.indexOf(');', SERVICE.indexOf('CONDITION_ONLY = Map.of(')))
+  const CODES = [...SERVICE.slice(SERVICE.indexOf('CONDITION_ONLY = Map.of'), SERVICE.indexOf(');', SERVICE.indexOf('CONDITION_ONLY = Map.of')))
     .matchAll(/"[a-z_]+",\s*"([A-Z_]+)"/g)].map(m => m[1])
 
   test('every code the backend sends has its EN and AR text', () => {

@@ -5,6 +5,7 @@ import { Skeleton } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
 import { useUploadedLogoUrl } from './PortalBranding'
 import type { FeesDraft, FeesEditorProps } from './CustomerFeesSection'
+import ShopifyReturnsSyncCard from './ShopifyReturnsSyncCard'
 import PortalHeaderCard, { PORTAL_HOST } from './portal/PortalHeaderCard'
 import PolicySummaryCard from './portal/PolicySummaryCard'
 import JumpLinks from './portal/JumpLinks'
@@ -193,6 +194,9 @@ export default function ReturnsPortalTab() {
         locationError={errors.returnLocationId}
         edited={{ autoApprove: has('portal.autoApprove'), booking: has('portal.pickupBooking'), location: has('portal.returnLocationId') }}
       />
+
+      {/* Shopify-native returns S5a — "Create returns in Shopify" (rollout-listed tenants only; saves right away). */}
+      <ShopifyReturnsSyncCard owner={owner} />
 
       {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location —
           or (G4b fix) with returns for other couriers' orders on. */}

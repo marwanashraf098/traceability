@@ -237,7 +237,8 @@ public class ReturnCaseService {
         "       NULL::uuid, NULL::uuid, NULL::uuid, NULL::numeric, NULL::text, NULL::text, NULL::text, mo.id " +
         "FROM shopify_returns r " +
         "JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
-        "WHERE r.tenant_id = ? ";
+        // S5a: a return Traced created for its own request is that request's case (A), never a second case S.
+        "WHERE r.tenant_id = ? AND NOT " + com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + " ";
 
     private static final String STAGE_SQL =
         "CASE WHEN k.next_step IN (" + quoted(TO_DO) + ") THEN 'to_do' " +

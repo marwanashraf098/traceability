@@ -345,6 +345,10 @@ public class ReturnRequestService {
                 "FROM return_requests rr JOIN tenants t ON t.id = rr.tenant_id WHERE rr.id = ? AND rr.tenant_id = ?",
                 Boolean.class, id, tenantId)));
         }
+        // Shopify-native returns S5a: present only for a listed tenant with the feature applying to this request.
+        Map<String, Object> shopifySyncBlock = ShopifyReturnSyncService.detailBlock(jdbc, tenantId, id,
+            shopifySyncRollout != null && shopifySyncRollout.listed(tenantId));
+        if (shopifySyncBlock != null) d.put("shopifySync", shopifySyncBlock);
         return d;
     }
 
@@ -407,6 +411,7 @@ public class ReturnRequestService {
             actorUserId, id, tenantId);
         if (updated != 1) throw notRequested(id, tenantId);
         requests.event(tenantId, id, "approved", actorUserId, null);
+        nudgeShopify(tenantId, id);
         // Non-Bosta couriers G4a: shipped with another courier → the merchant books it ('manual'); no job, ever.
         UUID orderId = jdbc.queryForObject("SELECT order_id FROM return_requests WHERE id = ? AND tenant_id = ?",
             UUID.class, id, tenantId);
@@ -748,6 +753,7 @@ public class ReturnRequestService {
     @Transactional
     public void restNotComing(UUID id, UUID actorUserId) {
         requests.restNotComing(TenantContext.require(), id, actorUserId);
+        nudgeShopify(TenantContext.require(), id);
     }
 
     /**
@@ -798,12 +804,14 @@ public class ReturnRequestService {
     @Transactional
     public void itemArrived(UUID id, UUID itemId, String condition, UUID actorUserId) {
         requests.arrivedUntracked(TenantContext.require(), id, itemId, condition, actorUserId, null);
+        nudgeShopify(TenantContext.require(), id);
     }
 
     /** POST /return-requests/{id}/items/{itemId}/arrived/undo. */
     @Transactional
     public void undoItemArrived(UUID id, UUID itemId, UUID actorUserId) {
         requests.undoArrivedUntracked(TenantContext.require(), id, itemId, actorUserId, null);
+        nudgeShopify(TenantContext.require(), id);
     }
 
     // ── Step 4d-2: refunds (owner / manager) ─────────────────────────────────
@@ -825,6 +833,7 @@ public class ReturnRequestService {
     @Transactional
     public void markRefunded(UUID id, UUID actorUserId) {
         requests.markRefunded(TenantContext.require(), id, actorUserId);
+        nudgeShopify(TenantContext.require(), id);
     }
 
     /**
@@ -840,6 +849,7 @@ public class ReturnRequestService {
     @Transactional
     public void close(UUID id, String reason, String note, UUID actorUserId) {
         requests.close(TenantContext.require(), id, reason, note, actorUserId);
+        nudgeShopify(TenantContext.require(), id);
     }
 
     // ── Step 4c-2: pickup area ───────────────────────────────────────────────
@@ -854,6 +864,22 @@ public class ReturnRequestService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setRefundDetailsCipher(RefundDetailsCipher refundCipher) {
         this.refundCipher = refundCipher;
+    }
+
+    // ── Shopify-native returns S5a: the request's Shopify return ─────────────────────────────
+
+    private ShopifyReturnSyncScheduler shopifySync;
+    private ShopifyReturnSyncRollout shopifySyncRollout;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShopifyReturnSync(ShopifyReturnSyncScheduler shopifySync, ShopifyReturnSyncRollout shopifySyncRollout) {
+        this.shopifySync = shopifySync;
+        this.shopifySyncRollout = shopifySyncRollout;
+    }
+
+    /** After this transaction commits: the request's next Shopify step (listed tenants only; otherwise nothing). */
+    private void nudgeShopify(UUID tenantId, UUID id) {
+        if (shopifySync != null) shopifySync.nudge(tenantId, id);
     }
 
     /**

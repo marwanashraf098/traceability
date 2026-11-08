@@ -4,6 +4,17 @@
 
 ## Current state
 
+**Shopify-native returns S5a — Traced creates the matching Shopify Return for portal refunds (2026-11-07; branch
+`feat/s5a-shopify-returns-sync` off main cac3b35b, approved 2026-11-08, merged, NOT deployed; V225 — V224 went to the same-address / no-district branch).**
+See CLAUDE.md (S5a paragraph). Step 0 approved with all 8 defaults (process at grading; NOT_RESTOCKED; undo → LOW alert,
+no Shopify write; exchanges option A in S5b; pre-connect Traced-only; Traced reason in the note; never notify; OFF for new
+signups in v1). Built defensively for every unconfirmed 2026-04 behaviour (NOT_RESTOCKED with and without a location,
+Shopify auto-closing, cancel / remove refused after a partial process → needs_review, no retry); every Shopify response
+logged as a shape at INFO. **Prod verification plan:** test store only — tenant 9051048a-48bc-4dc9-ba56-86bb3e89bd5d in
+`TRACED_SHOPIFY_RETURNS_SYNC_TENANTS`, owner switches it on, then approve / grade / refund one request and read the
+`Shopify returns write` / `read` shape logs. S5b (exchanges, return only + note) and S5c (fees → returnShippingFee) after
+S5a is verified in prod.
+
 **"Same address" area guess (2026-11-08; branch `feat/portal-area-guess` off main cb4c3eba, merged to main, NOT deployed;
 no migration).** Live result: Bosta refused RR-CM5NYQ (type 25, no district) → its live API needs a district. Now the
 area is always asked when the original has no district, pre-selected from DistrictGuesser's guess (see CLAUDE.md).
@@ -241,7 +252,7 @@ GET /me's two tour booleans).** Mockups
   updates (placesS5 ×2, putAwayLists ×2 — only the "?" button, the tour anchors and two wrappers differ).
 
 **Shopify-native returns S4 — returns through Scan returns intake (2026-11-07; branch `feat/s4-shopify-return-intake`
-off main 4e37aa22, approved and MERGED 2026-11-07, NOT deployed; V222 — free on main and prod (prod at V221, checked 18:32)).** See
+off main 4e37aa22, approved and MERGED 2026-11-07 as cac3b35b, NOT deployed; V222 — free on main and prod (prod at V221, checked 18:32)).** See
 CLAUDE.md (S4 paragraph). A Shopify return line expects its order's pieces of that variant back (a replacement's: via the
 shadow); Scan returns accepts them (customer_return_shopify), links each to the oldest open line (shopify_return_intakes),
 a Traced request takes a duplicate first and covers the line; the S2 card reads the links; restock via the S1b guard;

@@ -233,6 +233,8 @@ public class ExceptionService {
         // still holds open, and one whose return Shopify then declined / cancelled.
         all.addAll(detectShopifyReturnOpenAfterIntake(tenantId));
         all.addAll(detectShopifyReturnEndedAfterIntake(tenantId));
+        // Shopify-native returns S5a (V225): a Traced request's Shopify return that needs a person to check it.
+        all.addAll(detectShopifyReturnSyncCheck(tenantId));
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
@@ -351,6 +353,7 @@ public class ExceptionService {
         Map.entry("pickup_booking_problem/return_request",     OrderLink.DIRECT),
         Map.entry("return_link_ambiguous/shipment",            OrderLink.VIA_SHIPMENT),
         Map.entry("refund_pending_overdue/return_request",     OrderLink.DIRECT),
+        Map.entry("shopify_return_sync_check/return_request",  OrderLink.DIRECT),
         Map.entry("return_items_overdue/return_request",       OrderLink.DIRECT),
         Map.entry("pack_set_aside/order",                      OrderLink.DIRECT),
         Map.entry("pack_cancelled_after_print/shipment",       OrderLink.DIRECT),         // the print-batch item's order_id
@@ -417,6 +420,7 @@ public class ExceptionService {
         Map.entry("return_link_ambiguous",            "return_to_handle"),
         Map.entry("pickup_booking_problem",           "return_to_handle"),
         Map.entry("refund_pending_overdue",           "return_to_handle"),
+        Map.entry("shopify_return_sync_check",        "return_to_handle"),
         Map.entry("return_items_overdue",             "return_to_handle"),
         Map.entry("restocked_twice",                  "return_to_handle"),
         Map.entry("shopify_return_open_after_intake",  "return_to_handle"),
@@ -468,17 +472,19 @@ public class ExceptionService {
      * {@link #resolve} refuses them with 409 CONDITION_ONLY. Rows written for these types before
      * this rule are left in place — harmless, nothing reads them.
      */
-    public static final Map<String, String> CONDITION_ONLY = Map.of(
-        "cancelled_live_shipment", "BOSTA_LEG_ENDED",
-        "guided_unpack",           "ORDER_UNPACKED",
-        "exchange_needs_mapping",  "EXCHANGE_MAPPED",
-        "exchange_unmapped_state", "BOSTA_STATE_RECOGNISED",
-        "warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED",
-        "shopify_connection_lost",       "SHOPIFY_RECONNECTED",
-        "shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE",
-        "shopify_exchange_short",        "STOCK_COVERS_EXCHANGES",
-        "shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED",
-        "shopify_return_open_after_intake", "SHOPIFY_RETURN_PROCESSED");
+    public static final Map<String, String> CONDITION_ONLY = Map.ofEntries(
+        Map.entry("cancelled_live_shipment", "BOSTA_LEG_ENDED"),
+        Map.entry("guided_unpack",           "ORDER_UNPACKED"),
+        Map.entry("exchange_needs_mapping",  "EXCHANGE_MAPPED"),
+        Map.entry("exchange_unmapped_state", "BOSTA_STATE_RECOGNISED"),
+        Map.entry("warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED"),
+        Map.entry("shopify_connection_lost",       "SHOPIFY_RECONNECTED"),
+        Map.entry("shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE"),
+        Map.entry("shopify_exchange_short",        "STOCK_COVERS_EXCHANGES"),
+        Map.entry("shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED"),
+        Map.entry("shopify_return_open_after_intake", "SHOPIFY_RETURN_PROCESSED"),
+        // S5a: cleared from the request drawer ("I checked it in Shopify" / "Try again").
+        Map.entry("shopify_return_sync_check", "SHOPIFY_RETURN_SYNC_CHECKED"));
 
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
@@ -992,6 +998,7 @@ public class ExceptionService {
             "       'shopify_return_open_after_intake:' || r.id AS subject_key " +
             "FROM shopify_returns r JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
             "WHERE r.tenant_id = ? AND r.status = 'OPEN' " +
+            "  AND NOT " + com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + " " +
             "  AND EXISTS (SELECT 1 FROM shopify_return_lines l " +
             "              WHERE l.return_id = r.id AND l.tenant_id = r.tenant_id " +
             "                AND l.processed_quantity < (SELECT COUNT(*) FROM shopify_return_intakes i " +
@@ -1005,6 +1012,41 @@ public class ExceptionService {
      * in its item (an intake exists only while the return was live, so any intake on a dead return came first). Traced
      * moves nothing: a manager decides what happens to the piece(s), then resolves. One per return.
      */
+    /**
+     * shopify_return_sync_check (LOW, S5a, condition-only) — a Traced request's Shopify return needs a person: the create
+     * got no confirmed answer, failed every attempt, or reads differently in Shopify (or Shopify ended it); a later step
+     * (process / remove / cancel / close) wasn't confirmed or was refused; or an arrival was undone after Shopify had
+     * processed it ("out of step" — Traced never undoes it in Shopify). Cleared from the drawer. One per request.
+     */
+    private List<Map<String, Object>> detectShopifyReturnSyncCheck(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_return_sync_check' AS type, 'LOW' AS severity, 'return_request' AS subject_type, " +
+            "       rr.id AS request_id, rr.reference, rr.order_id, mo.number AS order_number, rr.shopify_return_name AS return_name, " +
+            "       CASE WHEN rr.shopify_sync_status = 'failed_ambiguous' THEN 'create_unconfirmed' " +
+            "            WHEN rr.shopify_sync_status = 'failed' THEN 'create_failed' " +
+            "            WHEN rr.shopify_sync_status = 'needs_review' THEN 'needs_review' " +
+            "            WHEN EXISTS (SELECT 1 FROM shopify_return_actions a JOIN return_request_items i ON i.id = a.request_item_id " +
+            "                  AND i.tenant_id = a.tenant_id WHERE a.tenant_id = rr.tenant_id AND a.request_id = rr.id " +
+            "                  AND a.action = 'process' AND a.status = 'applied' " +
+            "                  AND NOT (i.item_status = 'done' AND i.arrived_at IS NOT NULL)) THEN 'out_of_step' " +
+            "            ELSE 'step_unconfirmed' END AS check_reason, " +
+            "       COALESCE(rr.shopify_sync_attempted_at, rr.decided_at) AS occurred_at, " +
+            "       'shopify_return_sync_check:' || rr.id AS subject_key " +
+            "FROM return_requests rr " +
+            "LEFT JOIN merchant_orders mo ON mo.id = rr.order_id AND mo.tenant_id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND rr.shopify_sync_status IS NOT NULL " +
+            "  AND (rr.shopify_sync_status IN ('failed_ambiguous', 'needs_review') " +
+            "       OR (rr.shopify_sync_status = 'failed' AND rr.shopify_sync_attempts >= ?) " +
+            "       OR EXISTS (SELECT 1 FROM shopify_return_actions a WHERE a.tenant_id = rr.tenant_id AND a.request_id = rr.id " +
+            "              AND (a.status IN ('failed_ambiguous', 'needs_review') OR (a.status = 'failed' AND a.attempts >= ?))) " +
+            "       OR EXISTS (SELECT 1 FROM shopify_return_actions a JOIN return_request_items i ON i.id = a.request_item_id " +
+            "              AND i.tenant_id = a.tenant_id WHERE a.tenant_id = rr.tenant_id AND a.request_id = rr.id " +
+            "              AND a.action = 'process' AND a.status = 'applied' " +
+            "              AND NOT (i.item_status = 'done' AND i.arrived_at IS NOT NULL))) " +
+            "ORDER BY occurred_at", tid, com.traceability.portal.ShopifyReturnSyncRules.MAX_ATTEMPTS,
+            com.traceability.portal.ShopifyReturnSyncRules.MAX_ATTEMPTS);
+    }
+
     private List<Map<String, Object>> detectShopifyReturnEndedAfterIntake(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'shopify_return_ended_after_intake' AS type, 'MEDIUM' AS severity, 'shopify_return' AS subject_type, " +
@@ -1015,6 +1057,7 @@ public class ExceptionService {
             "       'shopify_return_ended_after_intake:' || r.id AS subject_key " +
             "FROM shopify_returns r JOIN merchant_orders mo ON mo.id = r.order_id AND mo.tenant_id = r.tenant_id " +
             "WHERE r.tenant_id = ? AND r.status IN ('DECLINED', 'CANCELED') " +
+            "  AND NOT " + com.traceability.portal.ShopifyReturnSyncRules.tracedCreatedSql("r") + " " +
             "  AND EXISTS (SELECT 1 FROM shopify_return_intakes i WHERE i.return_id = r.id AND i.tenant_id = r.tenant_id) " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = r.tenant_id " +
             "      AND er.exception_type = 'shopify_return_ended_after_intake' " +
@@ -2733,6 +2776,30 @@ public class ExceptionService {
                         item.put("suggestedAction", "retry_booking");
                     }
                 }
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
+            case "shopify_return_sync_check" -> {
+                String ref = str(item, "reference");
+                String why = str(item, "check_reason");
+                String en = switch (why) {
+                    case "create_unconfirmed" -> "Traced asked Shopify to create the return but got no clear answer — it may or may not be in Shopify.";
+                    case "create_failed" -> "Shopify refused to create the return several times.";
+                    case "needs_review" -> "The return in Shopify doesn't match the request, or was ended in Shopify.";
+                    case "out_of_step" -> "An item's arrival was undone after Shopify had already recorded it as returned.";
+                    default -> "A step on the Shopify return wasn't confirmed by Shopify.";
+                };
+                String ar = switch (why) {
+                    case "create_unconfirmed" -> "طلب Traced من شوبيفاي إنشاء المرتجع ولم يصله رد واضح — قد يكون موجوداً في شوبيفاي أو لا.";
+                    case "create_failed" -> "رفض شوبيفاي إنشاء المرتجع عدة مرات.";
+                    case "needs_review" -> "المرتجع في شوبيفاي لا يطابق الطلب، أو تم إنهاؤه في شوبيفاي.";
+                    case "out_of_step" -> "تم التراجع عن وصول قطعة بعد أن سجّلها شوبيفاي كمرتجعة.";
+                    default -> "لم يؤكد شوبيفاي خطوة على المرتجع.";
+                };
+                item.put("descriptionEn", "Check the Shopify return for request " + ref + ". " + en
+                    + " Open the order in Shopify, fix it there if needed, then mark it checked in the request.");
+                item.put("descriptionAr", "راجِع مرتجع شوبيفاي للطلب " + ref + ". " + ar
+                    + " افتح الطلب في شوبيفاي وأصلحه هناك إن لزم، ثم علّمه كمراجَع في الطلب.");
+                item.put("suggestedAction", "check_in_shopify");
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
             }
             case "refund_pending_overdue" -> {

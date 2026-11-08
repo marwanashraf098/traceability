@@ -484,6 +484,7 @@
     },
     "reasonGroupsLabel": "Filter by reason",
     "reason": {
+      "shopify_return_sync_check": "Check the Shopify return",
       "missing_awb": "Waybill didn't print",
       "fulfillment_link_problem": "Bosta tracking not linked",
       "pack_set_aside": "Set aside while packing",
@@ -1927,6 +1928,46 @@
       "prev": "Previous",
       "next": "Next",
       "drawer": {
+        "shopify": {
+          "label": "Shopify",
+          "waiting": "Will be created as a return in Shopify.",
+          "waitingApproval": "Will be created as a return in Shopify once approved.",
+          "pending": "Creating the return in Shopify…",
+          "created": "Return created in Shopify",
+          "createdNoName": "Return created in Shopify",
+          "openInShopify": "Open the order in Shopify",
+          "skipped": "Not synced to Shopify",
+          "failed": "Shopify didn't create the return yet — Traced will try again.",
+          "failedExhausted": "Shopify refused to create the return. Try again, or create it in Shopify yourself.",
+          "ambiguous": "Not sure the return was created in Shopify — Traced got no clear answer. Check again, or look at the order in Shopify.",
+          "review": "Check the return in Shopify",
+          "outOfStep": "An item's arrival was undone, but Shopify already recorded it as returned. Traced won't change it in Shopify — fix it there if needed.",
+          "stepNeedsCheck": "A step on the Shopify return wasn't confirmed. Check the order in Shopify.",
+          "retry": "Try again",
+          "notInShopifyRetry": "It isn't in Shopify — try again",
+          "checkAgain": "Check again",
+          "markChecked": "I checked it in Shopify",
+          "started": "Done — Shopify will be updated in a moment.",
+          "checkedDone": "Marked as checked.",
+          "actionFailed": "Couldn't do that. Try again.",
+          "reasons": {
+            "pre_connect_order": "the order is from before Traced connected",
+            "not_a_shopify_order": "the order isn't a Shopify order",
+            "store_not_connected": "Shopify isn't connected",
+            "no_permission": "Shopify's new permissions aren't approved yet (Settings › Connections)",
+            "nothing_to_return": "no items are coming back",
+            "line_not_in_shopify": "an item isn't on the Shopify order",
+            "too_many_lines": "the order has too many items for Traced to match",
+            "not_fulfilled_in_shopify": "the order isn't marked fulfilled in Shopify",
+            "not_returnable_in_shopify": "Shopify can't return these items (already returned or refunded)",
+            "request_ended": "the request ended before it was synced",
+            "exchange_not_yet": "exchanges aren't synced to Shopify yet",
+            "readback_mismatch": "the return in Shopify doesn't match the request",
+            "not_found_in_shopify": "the return can't be found in Shopify",
+            "ended_in_shopify": "the return was cancelled or declined in Shopify",
+            "several_returns_found": "more than one Shopify return carries this request"
+          }
+        },
         "label": "Return request {{reference}}",
         "customer": "Customer",
         "phone": "Phone",
@@ -2824,6 +2865,16 @@
       "none": "No consent record on file."
     },
     "portal": {
+      "shopifySync": {
+        "title": "Create returns in Shopify",
+        "body": "When you approve a refund request, Traced also creates the return on the order in Shopify, so Shopify's order page and reports show it. Shopify never restocks these items — Traced does, after the item is checked — and Traced never refunds in Shopify: refund there as you do today.",
+        "toggle": "Create returns in Shopify",
+        "permissionMissing": "Approve Traced's new Shopify permissions first (Settings › Connections) — until then requests show \"Not synced\".",
+        "fromNowOn": "Only requests approved from now on are created in Shopify.",
+        "turnedOn": "Returns will be created in Shopify.",
+        "turnedOff": "Returns won't be created in Shopify any more.",
+        "saveFailed": "Couldn't save. Try again."
+      },
       "loadError": "Couldn't load the returns portal settings",
       "on": "On",
       "off": "Off",
@@ -4060,6 +4111,7 @@
   },
   "exc": {
     "clearsWhen": {
+      "SHOPIFY_RETURN_SYNC_CHECKED": "Clears when you open the request (Go →), check its return in Shopify, then choose \"I checked it in Shopify\" or \"Try again\".",
       "BOSTA_LEG_ENDED": "Clears when Bosta reports this delivery cancelled or delivered, or when Traced confirms it was deleted in Bosta (checked every few hours). Cancel it in Bosta to stop a courier coming.",
       "ORDER_UNPACKED": "Clears when this order's packed pieces are unpacked and back in stock. Open the order (Go →) and unpack them.",
       "EXCHANGE_MAPPED": "Clears when you choose the items going out and coming back for this exchange. Open it (Go →) to choose them.",

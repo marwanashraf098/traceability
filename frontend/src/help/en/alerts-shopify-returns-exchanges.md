@@ -4,7 +4,7 @@ topic: alerts
 title: Alerts for returns and exchanges made in Shopify
 roles: [owner, manager]
 related: [scan-returns, alerts-returns, alerts-shopify-sync]
-alerts: [shopify_exchange_short, shopify_exchange_still_waiting, shopify_exchange_shipped_in_shopify, shopify_return_open_after_intake, shopify_return_ended_after_intake]
+alerts: [shopify_exchange_short, shopify_exchange_still_waiting, shopify_exchange_shipped_in_shopify, shopify_return_open_after_intake, shopify_return_ended_after_intake, shopify_return_sync_check]
 screens: [/exceptions, /fulfill, /returns]
 video:
 ---
@@ -29,3 +29,7 @@ The item came back through **Scan returns** more than 7 days ago, but the return
 ## Shopify Return Ended After Arrival
 
 The return was declined or cancelled in Shopify after its item had already arrived in Traced. Traced didn't move anything. Decide what happens to the piece (keep it, or send it back to the customer), then resolve.
+
+## Check The Shopify Return
+
+For stores that create returns in Shopify from Traced: Traced couldn't confirm a step on the Shopify return of a request — it's not sure the return was created, Shopify refused it several times, the return in Shopify doesn't match the request, or an item's arrival was undone after Shopify had already recorded it as returned. Open the request (**Go →**), check the order in Shopify and fix it there if needed, then choose **I checked it in Shopify** or **Try again**. Traced never restocks or refunds in Shopify for these returns. It clears by itself once you do.

@@ -684,6 +684,17 @@ public interface ShopifyGateway {
         throw new UnsupportedOperationException("executeGraphQLResponsePublic");
     }
 
+    /**
+     * Shopify-native returns S5a — exactly ONE HTTP attempt of a returns WRITE mutation (no Resilience4j retry, no
+     * throttle sleep-and-resend: a re-sent returnCreate would create a second return), classified into
+     * {@link ReturnsWriteResponse}. {@code field} is the mutation's root field (its payload is returned). Called ONLY
+     * by ShopifyReturnsWriteGatewayImpl (ShopifyReturnsWriteGuardTest).
+     */
+    default ReturnsWriteResponse executeReturnsWriteOnce(String shopDomain, String token, String mutation,
+                                                         JsonNode variables, String field) {
+        throw new UnsupportedOperationException("executeReturnsWriteOnce");
+    }
+
     static boolean isScopeGranted(String required, String grantedScopeCsv) {
         if (grantedScopeCsv == null || grantedScopeCsv.isBlank()) return false;
         for (String s : grantedScopeCsv.split(",")) {
