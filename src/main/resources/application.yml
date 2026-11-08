@@ -215,6 +215,15 @@ traced:
     # R2 (V203): writes only for these shops (comma-separated; 'all' = every store; empty = none), only with
     # report-only=false AND part1-since set (ISO-8601, the R2 deploy time — Part 1 ignores older fulfillments).
     write-shops: ${TRACED_MAIN_RECONCILE_WRITE_SHOPS:}
+    # Never write for these shops (comma-separated <handle>.myshopify.com; exclude wins over write-shops). They stay
+    # report-only. A malformed entry stops startup.
+    write-exclude: ${TRACED_MAIN_RECONCILE_WRITE_EXCLUDE:}
+    # Big-change brake: a write store whose confirmed differences would move more than max(brake-units, brake-percent %
+    # of Shopify's on_hand at Main) writes nothing that run (Part 1 still sent) and alerts alert-emails once (again after
+    # it was back under the limit or brake-realert-hours).
+    brake-units: ${TRACED_MAIN_RECONCILE_BRAKE_UNITS:20}
+    brake-percent: ${TRACED_MAIN_RECONCILE_BRAKE_PERCENT:10}
+    brake-realert-hours: 24
     part1-since: ${TRACED_MAIN_RECONCILE_PART1_SINCE:}
     ambiguous-hold-minutes: 60
     pending-stale-minutes: 15

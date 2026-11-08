@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Main reconcile rollout: "everyone except" + big-change brake (2026-11-08; branch `feat/main-reconcile-exclude-brake`
+off main 0f0bd141; merged, NOT deployed; V226).** Writes are live for Dolt + Nuvira (0 write errors, 6 clean sweeps) —
+how writes work is unchanged.
+- `TRACED_MAIN_RECONCILE_WRITE_EXCLUDE` (comma-separated myshopify domains): a store writes only if in WRITE_SHOPS (or
+  `all`) AND not excluded — exclude wins; excluded stores stay report-only; a malformed entry stops startup.
+- Brake (`MainReconcileBrake`): a write run whose confirmed differences move > max(20 units, 10 % of Shopify on_hand at
+  Main) (`TRACED_MAIN_RECONCILE_BRAKE_UNITS` / `_PERCENT`) sends no reconcile write; Part 1 still goes out. Run row:
+  `skipped` / `large_change_held` + `brake_units_up/down`, `brake_on_hand`, `brake_limit`. Per-variant runs weigh the
+  store's other standing confirmed differences since the latest write sweep (else a held store trickles the change out
+  through small queue runs) and use that sweep's `shopify_on_hand_total`. One operator email (ALERT_EMAILS → WATCHDOG
+  fallback: store, units up/down, top 10 variants); again only after a run back under the limit or after 24 h.
+- Startup log line `Main reconcile config: mode=…, exclude=[…], brake=…; writing stores N of M connected`, plus a WARN
+  for excluded domains that aren't a connected store.
+- Planned prod env: `TRACED_MAIN_RECONCILE_WRITE_SHOPS=all` + the 9-store exclude list (Soccer corner, Juno Babies,
+  hs-sparkle, mashwar, MAVIS, The Snouts, Floe Wear, High line, BROEK). After deploy: check the startup line, then
+  `SELECT … FROM main_reconcile_runs WHERE skip_reason = 'large_change_held'` after the first sweep.
+- Tests: MainReconcileBrakeTest (10: e1–e3, b1–b5, x1, l1); revert-checked (no exclude check → e1/e2 red; no brake →
+  b1/b4/b5 red). MigrationSmokeTest / NotTracedBackfillTest counts — standing approval.
+
 **Area guess — less ambiguity (2026-11-08 evening; branch `feat/area-guess-ambiguity`, rebased on main e3c9e7e5, merged,
 NOT deployed; no migration).** Prod dry run v1 (7 days): pre-select ~25%, ambiguous ~55%, none ~20%. Rules added in
 DistrictGuesser (see CLAUDE.md): city / governorate and all-generic names never match; SAME_ZONE; BOSTA_FIELD.

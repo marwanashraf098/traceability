@@ -79,6 +79,11 @@ public class MainReconcileService {
     private boolean reportOnly = true;
     private boolean writeAll = false;
     private Set<String> writeShops = Set.of();
+    private Set<String> writeExclude = Set.of();
+    private int brakeUnits = 20;
+    private int brakePercent = 10;
+    private int brakeRealertHours = 24;
+    private MainReconcileAlerter alerter;
     private java.time.Instant part1Since = null;
     private int ambiguousHoldMinutes = 60;
     private int pendingStaleMinutes = 15;
@@ -113,6 +118,44 @@ public class MainReconcileService {
         this.writeAll = all;
         this.writeShops = Set.copyOf(s);
     }
+
+    /**
+     * Write exclusions: comma-separated myshopify domains that never write, whatever write-shops says (exclude wins).
+     * They keep running report-only. An entry that isn't a myshopify domain stops startup — a typo here would let the
+     * store write.
+     */
+    @Autowired
+    public void setWriteExclude(@Value("${traced.main-reconcile.write-exclude:}") String csv) {
+        Set<String> s = new TreeSet<>();
+        if (csv != null) for (String x : csv.split(",")) {
+            String t = x.trim().toLowerCase(Locale.ROOT);
+            if (t.isEmpty()) continue;
+            if (!t.matches("[a-z0-9][a-z0-9-]*\\.myshopify\\.com")) {
+                throw new IllegalArgumentException("traced.main-reconcile.write-exclude: '" + x.trim() +
+                    "' is not a <handle>.myshopify.com domain");
+            }
+            s.add(t);
+        }
+        this.writeExclude = Collections.unmodifiableSet(s);
+    }
+
+    /** Big-change brake: a write run is held when its confirmed differences move more than max(units, percent% of on_hand). */
+    @Autowired
+    public void setBrakeUnits(@Value("${traced.main-reconcile.brake-units:20}") int units) {
+        if (units < 0) throw new IllegalArgumentException("traced.main-reconcile.brake-units must be >= 0");
+        this.brakeUnits = units;
+    }
+    @Autowired
+    public void setBrakePercent(@Value("${traced.main-reconcile.brake-percent:10}") int percent) {
+        if (percent < 0) throw new IllegalArgumentException("traced.main-reconcile.brake-percent must be >= 0");
+        this.brakePercent = percent;
+    }
+    /** A held store is alerted again only after it was back under the limit, or after this many hours. */
+    @Autowired
+    public void setBrakeRealertHours(@Value("${traced.main-reconcile.brake-realert-hours:24}") int h) { this.brakeRealertHours = h; }
+
+    @Autowired(required = false)
+    public void setAlerter(MainReconcileAlerter alerter) { this.alerter = alerter; }
 
     /**
      * R2 fix 1: Part 1 only for fulfillments created at/after this instant (ISO-8601, set to the R2 deploy time).
@@ -168,11 +211,30 @@ public class MainReconcileService {
     public int retentionDays() { return retentionDays; }
     public int debounceSeconds() { return debounceSeconds; }
 
-    /** Writes for this store: report-only off, a Part 1 cutoff set, and the store in write-shops ('all' or listed). */
+    /**
+     * Writes for this store: report-only off, a Part 1 cutoff set, the store in write-shops ('all' or listed) AND not in
+     * write-exclude (exclude wins).
+     */
     boolean writeEnabled(String shopDomain) {
         if (reportOnly || part1Since == null) return false;
-        return writeAll || (shopDomain != null && writeShops.contains(shopDomain.trim().toLowerCase(Locale.ROOT)));
+        String d = shopDomain == null ? null : shopDomain.trim().toLowerCase(Locale.ROOT);
+        if (d != null && writeExclude.contains(d)) return false;
+        return writeAll || (d != null && writeShops.contains(d));
     }
+
+    /** The effective write configuration, for the startup log (MainReconcileJob). */
+    String describeWriteConfig() {
+        String mode = !enabled ? "disabled"
+            : reportOnly ? "report-only (TRACED_MAIN_RECONCILE_REPORT_ONLY=true)"
+            : part1Since == null ? "report-only (no TRACED_MAIN_RECONCILE_PART1_SINCE)"
+            : writeAll ? "write: all stores"
+            : writeShops.isEmpty() ? "report-only (TRACED_MAIN_RECONCILE_WRITE_SHOPS empty)"
+            : "write: listed stores " + new TreeSet<>(writeShops);
+        return "mode=" + mode + ", exclude=" + writeExclude + ", brake=max(" + brakeUnits + " units, " + brakePercent +
+               "% of Shopify on_hand at Main), re-alert after " + brakeRealertHours + " h";
+    }
+
+    Set<String> writeExclude() { return writeExclude; }
 
     @jakarta.annotation.PostConstruct
     void warnMisconfigured() {
@@ -350,20 +412,34 @@ public class MainReconcileService {
             List<MainReconcileWriter.Candidate> candidates =
                 compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write, exchangeHold);
             if (write && !exchangeHold) {
+                // The big-change brake: weighed after the compute committed, before any write.
+                int ownOnHand = 0;
+                for (Level l : levels.values()) ownOnHand += Math.max(0, l.onHand());
+                MainReconcileBrake.Decision brake = new MainReconcileBrake(jdbc, tx, brakeUnits, brakePercent,
+                    brakeRealertHours, confirmAfterMinutes).evaluate(tenantId, runId, "sweep".equals(kind), candidates, ownOnHand, readAt);
+                if (brake.held()) {
+                    log.warn("Main reconcile run {} tenant={} shop={}: {} — confirmed differences +{} / -{} units over the " +
+                             "limit {} (Shopify on_hand at Main {}); no reconcile writes this run (Part 1 still sent)",
+                        runId, tenantId, store.shopDomain(), MainReconcileBrake.LARGE_CHANGE_HELD, brake.unitsUp(),
+                        brake.unitsDown(), brake.limit(), brake.onHand());
+                }
                 // After the compute transaction committed — no DB transaction is open during a Shopify call.
                 MainReconcileWriter writer = new MainReconcileWriter(jdbc, tx, shopify, this::enabled);
                 MainReconcileWriter.Main m = new MainReconcileWriter.Main(main.id(), main.gid());
-                MainReconcileWriter.Outcome p1 = writer.sendPart1(tenantId, store.shopDomain(), token, m);
+                MainReconcileWriter.Outcome p1 = writer.sendPart1(tenantId, store.shopDomain(), token, m);   // never braked
                 int attempted = p1.attempted(), applied = p1.applied();
-                for (MainReconcileWriter.Candidate c : candidates) {
-                    if (!enabled()) break;
-                    attempted++;
-                    if (writer.write(tenantId, runId, store.shopDomain(), token, m, c)) applied++;
+                if (!brake.held()) {
+                    for (MainReconcileWriter.Candidate c : candidates) {
+                        if (!enabled()) break;
+                        attempted++;
+                        if (writer.write(tenantId, runId, store.shopDomain(), token, m, c)) applied++;
+                    }
                 }
                 int a = attempted, ap = applied;
                 tx.executeWithoutResult(s -> jdbc.update(
                     "UPDATE main_reconcile_runs SET writes_attempted = ?, writes_applied = ? WHERE id = ? AND tenant_id = ?",
                     a, ap, runId, tenantId));
+                if (brake.alert()) alertHeld(tenantId, store.shopDomain(), brake);
             }
         } catch (RuntimeException e) {
             log.warn("Main reconcile run {} tenant={} failed: {}", runId, tenantId, e.toString());
@@ -377,9 +453,45 @@ public class MainReconcileService {
     }
 
     private boolean recentStoreSkip(UUID tenantId) {
+        // A brake-held run is not a store-level skip: it must not hide one.
         return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM main_reconcile_runs WHERE tenant_id = ? AND status = 'skipped' " +
+            "  AND skip_reason <> '" + MainReconcileBrake.LARGE_CHANGE_HELD + "' " +
             "  AND started_at > now() - make_interval(mins => ?))", Boolean.class, tenantId, storeSkipRowMinutes)));
+    }
+
+    /** The operators' email for a held store (MainReconcileAlerter; outside every transaction). */
+    private void alertHeld(UUID tenantId, String shop, MainReconcileBrake.Decision d) {
+        StringBuilder rows = new StringBuilder();
+        for (MainReconcileBrake.Line l : d.top()) {
+            rows.append("<tr><td>").append(html(l.sku() == null ? "—" : l.sku())).append("</td><td>").append(html(l.title()))
+                .append("</td><td style=\"text-align:right\">").append(l.delta() > 0 ? "+" : "").append(l.delta())
+                .append("</td><td>").append(l.shopifyOnHand() == null ? "" : "Shopify " + l.shopifyOnHand() + " → Traced " + l.target())
+                .append("</td></tr>");
+        }
+        String subject = "Traced: Main reconcile held a large change — " + shop;
+        String body = "<p>Main reconcile did <b>not</b> write to Shopify's Traced Main location for <b>" + html(shop) +
+            "</b> (tenant " + tenantId + "): its confirmed differences would move <b>+" + d.unitsUp() + " / -" + d.unitsDown() +
+            "</b> units (" + (d.unitsUp() + d.unitsDown()) + " in total), over the limit of " + d.limit() + " (max(" + brakeUnits +
+            " units, " + brakePercent + "% of Shopify's on_hand at Main = " + d.onHand() + ")).</p>" +
+            "<p>Nothing is written for this store until the differences are back under the limit (Part 1 subtracts still go " +
+            "out). To keep it report-only for good, add it to TRACED_MAIN_RECONCILE_WRITE_EXCLUDE.</p>" +
+            "<p>Top " + d.top().size() + " variants:</p><table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">" +
+            "<tr><th>SKU</th><th>Product</th><th>Change</th><th></th></tr>" + rows + "</table>" +
+            "<p>Not alerted again for this store until it is back under the limit or " + brakeRealertHours + " h have passed.</p>";
+        if (alerter == null) {
+            log.error("Main reconcile ALERT (no alerter): {}", subject);
+            return;
+        }
+        try {
+            alerter.alert(subject, body);
+        } catch (RuntimeException e) {
+            log.error("Main reconcile: large-change alert for {} failed: {}", shop, e.toString());
+        }
+    }
+
+    private static String html(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     // ── retention ───────────────────────────────────────────────────────────────────────────────────────────────
