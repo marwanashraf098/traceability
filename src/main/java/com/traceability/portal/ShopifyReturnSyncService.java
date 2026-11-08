@@ -51,8 +51,14 @@ import java.util.function.Supplier;
  *       {@code removeFromReturn}, then {@code returnClose} (tolerates Shopify having closed it itself).</li>
  *   <li>an arrival undone after Shopify processed it → only the LOW {@code shopify_return_sync_check} alert.</li>
  * </ul>
- * Not synced (recorded, quiet, no retry): exchanges (S5b), pre-connect orders, orders not in Shopify, store not
- * connected, write_returns not approved, a line Shopify can't return.
+ * Not synced (recorded, quiet, no retry): pre-connect orders, orders not in Shopify, store not connected, write_returns
+ * not approved, a line Shopify can't return.
+ *
+ * <p>S5b (option A, approved 2026-11-08): an EXCHANGE request (portal or Lookup) is synced the same way, as a return
+ * of the item coming back only — never an exchange line ({@link ShopifyReturnSyncRules#exchangeNote} carries the
+ * replacement's name, the collect amount and "don't refund in Shopify"). 'exchanged' ends it like refunded (close),
+ * exchange_failed / a Lookup cancel before anything came back cancels it. The replacement's stock leaves through
+ * Step 5a's −1 only; the Traced-created return is never Shopify-native (no shadow, no expected-back line).
  *
  * <p>Safety (the Bosta booking pattern): claim-before-call (a committed conditional UPDATE / INSERT), ONE attempt per
  * call, no transaction open during a Shopify call, every DB touch in {@code TenantContext.runAs}. DEFINITE failure
@@ -155,7 +161,7 @@ public class ShopifyReturnSyncService {
     /** Is this request one the feature applies to at all (listed, switched on, decided after switch-on, a refund)? */
     static boolean applies(Ctx c) {
         return c != null && c.enabled() && c.since() != null && c.decidedAt() != null
-            && !c.decidedAt().isBefore(c.since()) && "refund".equals(c.type())
+            && !c.decidedAt().isBefore(c.since()) && ShopifyReturnSyncRules.SYNCED_TYPES.contains(c.type())
             && !Set.of("requested", "rejected", "cancelled").contains(c.status());
     }
 
@@ -234,6 +240,7 @@ public class ShopifyReturnSyncService {
         if (returnables.truncated()) { skip(c, "too_many_lines"); return; }
         int returnableTotal = returnables.lines().stream().mapToInt(ShopifyReturnsWriteGateway.Returnable::quantity).sum();
         String reasonId = fallbackReturnReason(c, token);
+        String exchangeNote = "exchange".equals(c.type()) ? inTenant(t, () -> exchangeNote(c)) : null;
 
         // Allocate each wanted LineItem's units over its returnable fulfillment line items, oldest fulfillment first.
         List<ShopifyReturnsWriteGateway.CreateLine> lines = new ArrayList<>();
@@ -241,7 +248,7 @@ public class ShopifyReturnSyncService {
         String marker = ShopifyReturnSyncRules.marker(c.reference());
         for (Map.Entry<String, Integer> w : wanted.entrySet()) {
             int left = w.getValue();
-            String note = marker + " · " + String.join(", ", reasons.get(w.getKey()));
+            String note = exchangeNote != null ? exchangeNote : marker + " · " + String.join(", ", reasons.get(w.getKey()));
             for (ShopifyReturnsWriteGateway.Returnable r : returnables.lines()) {
                 if (left == 0) break;
                 if (!r.lineItemGid().equals(w.getKey())) continue;
@@ -327,6 +334,25 @@ public class ShopifyReturnSyncService {
             "UPDATE return_requests SET shopify_sync_status = 'skipped', shopify_sync_reason = ?, shopify_sync_error = NULL " +
             "WHERE id = ? AND tenant_id = ? AND (shopify_sync_status IS NULL OR shopify_sync_status = 'failed')",
             reason, c.requestId(), c.tenantId()));
+    }
+
+    /** S5b — the exchange's line note: the replacement (product / variant), the frozen collect, the warning. */
+    private String exchangeNote(Ctx c) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT p.title AS product, v.title AS variant, rr.booking_status, " + ExchangeCod.FROZEN_SQL + " AS collect " +
+            "FROM return_requests rr " +
+            "LEFT JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
+            "     AND i.replacement_variant_id IS NOT NULL " +
+            "LEFT JOIN variants v ON v.id = i.replacement_variant_id AND v.tenant_id = rr.tenant_id " +
+            "LEFT JOIN products p ON p.id = v.product_id AND p.tenant_id = rr.tenant_id " +
+            "WHERE rr.id = ? AND rr.tenant_id = ? ORDER BY i.created_at, i.id LIMIT 1", c.requestId(), c.tenantId());
+        Map<String, Object> r = rows.isEmpty() ? Map.of() : rows.get(0);
+        String product = (String) r.get("product");
+        String variant = (String) r.get("variant");
+        String label = product == null ? variant
+            : (variant == null || variant.isBlank() || "Default Title".equals(variant)) ? product : product + " / " + variant;
+        return ShopifyReturnSyncRules.exchangeNote(c.reference(), label, (java.math.BigDecimal) r.get("collect"),
+            "manual".equals(r.get("booking_status")));
     }
 
     private void markStuckPending(UUID tenantId, UUID requestId) {
@@ -706,7 +732,7 @@ public class ShopifyReturnSyncService {
             return jdbc.queryForList(
                 "SELECT rr.id FROM return_requests rr JOIN tenants t ON t.id = rr.tenant_id " +
                 "WHERE rr.tenant_id = ? AND t.shopify_returns_sync_enabled AND t.shopify_returns_sync_since IS NOT NULL " +
-                "  AND rr.type = 'refund' AND rr.decided_at >= t.shopify_returns_sync_since " +
+                "  AND rr.type IN " + ShopifyReturnSyncRules.SYNCED_TYPES_SQL + " AND rr.decided_at >= t.shopify_returns_sync_since " +
                 "  AND rr.status::text NOT IN ('requested', 'rejected', 'cancelled') " +
                 "  AND (rr.shopify_sync_status IS NULL " +
                 "       OR (rr.shopify_sync_status = 'failed' AND rr.shopify_sync_attempts < ?) " +
@@ -732,21 +758,49 @@ public class ShopifyReturnSyncService {
     // ── merchant actions (drawer) ──────────────────────────────────────────────────────────────
 
     /**
-     * "Try again": failed → attempts reset; failed_ambiguous → the merchant checked Shopify and it isn't there (→ failed,
-     * attempts reset); skipped → re-evaluated (e.g. after approving Shopify's new permission). 409 otherwise.
+     * "Try again" — a person starts a FRESH cycle: failed (also after the 5 automatic attempts) → attempts 0, the stored
+     * error cleared, back through the normal claim; failed_ambiguous → the merchant checked Shopify and it isn't there
+     * (same reset); skipped → re-evaluated (e.g. after approving Shopify's new permission); not attempted yet → just
+     * run. The caller enqueues the sync right away. Audited (who, from which state / attempts). Every refusal is a
+     * {@link ShopifyReturnSyncException} the drawer shows as is — never a silent no-op.
      */
-    public void retry(UUID tenantId, UUID requestId) {
-        int n = inTenant(tenantId, () -> jdbc.update(
+    public Map<String, Object> retry(UUID tenantId, UUID requestId, UUID actor) {
+        Ctx c = inTenant(tenantId, () -> load(tenantId, requestId));
+        if (c == null) throw new org.springframework.web.server.ResponseStatusException(
+            org.springframework.http.HttpStatus.NOT_FOUND);
+        if (!c.enabled() || c.since() == null) throw ShopifyReturnSyncException.switchedOff();
+        if (!applies(c)) throw ShopifyReturnSyncException.notApplicable();
+        String from = c.syncStatus();
+        if ("pending".equals(from)) throw ShopifyReturnSyncException.inProgress();
+        if (from != null && !Set.of("failed", "failed_ambiguous", "skipped").contains(from)) {
+            throw ShopifyReturnSyncException.alreadyInShopify();
+        }
+        int n = inTenant(tenantId, () -> from == null ? 1 : jdbc.update(
             "UPDATE return_requests SET shopify_sync_status = CASE WHEN shopify_sync_status = 'skipped' THEN NULL " +
-            "        ELSE 'failed' END, shopify_sync_attempts = 0, shopify_sync_reason = NULL " +
-            "WHERE id = ? AND tenant_id = ? AND shopify_sync_status IN ('failed', 'failed_ambiguous', 'skipped')",
-            requestId, tenantId));
-        if (n != 1) throw new org.springframework.web.server.ResponseStatusException(
-            org.springframework.http.HttpStatus.CONFLICT, "Nothing to retry for this request in Shopify.");
+            "        ELSE 'failed' END, shopify_sync_attempts = 0, shopify_sync_reason = NULL, shopify_sync_error = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND shopify_sync_status = ?", requestId, tenantId, from));
+        if (n != 1) throw ShopifyReturnSyncException.changedMeanwhile();
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("from_status", from == null ? "not_attempted" : from);
+        meta.put("from_attempts", c.attempts());
         inTenant(tenantId, () -> {
-            new ReturnRequestLifecycle(jdbc).event(tenantId, requestId, "shopify_sync_retry", null, null);
+            new ReturnRequestLifecycle(jdbc).event(tenantId, requestId, "shopify_sync_retry", actor, meta);
+            if (audit != null) audit.record(actor, "shopify_return_sync_retry", "return_request", requestId.toString(), meta);
             return null;
         });
+        log.info("Shopify return sync: manual retry tenant={} request={} from={} attempts={}", tenantId, requestId,
+            meta.get("from_status"), c.attempts());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", "queued");
+        out.put("fromStatus", meta.get("from_status"));
+        return out;
+    }
+
+    private com.traceability.account.AuditService audit;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAudit(com.traceability.account.AuditService audit) {
+        this.audit = audit;
     }
 
     /**
@@ -812,13 +866,9 @@ public class ShopifyReturnSyncService {
             if (decided != null && decided.before(since)) return null;
             String status = (String) r.get("status");
             if (Set.of("rejected", "cancelled").contains(status)) return null;
-            if (!"refund".equals(r.get("type"))) {
-                out.put("status", "skipped");
-                out.put("reason", "exchange_not_yet");
-            } else {
-                out.put("status", "waiting");
-                out.put("reason", "requested".equals(status) ? "awaiting_approval" : null);
-            }
+            if (!ShopifyReturnSyncRules.SYNCED_TYPES.contains((String) r.get("type"))) return null;
+            out.put("status", "waiting");
+            out.put("reason", "requested".equals(status) ? "awaiting_approval" : null);
         } else {
             boolean exhausted = "failed".equals(sync)
                 && ((Number) r.get("shopify_sync_attempts")).intValue() >= ShopifyReturnSyncRules.MAX_ATTEMPTS;

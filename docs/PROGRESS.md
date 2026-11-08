@@ -4,6 +4,8 @@
 
 ## Current state
 
+**S5b — exchanges to Shopify as return only + the Try again fix (2026-11-08; branch `feat/s5b-exchange-returns` off main 5baf3287; NOT merged, NOT deployed; no migration).** S5a verified in prod on the test store (RR-D49WDJ / #1016-R1: created on the 1st attempt with the catch-all reason, read-back verified; grading → NOT_RESTOCKED with no location; Shopify auto-closed after processing → close=already_closed, no call). (1) Try again: RR-ZMCAUG (failed, 5/5) — a press after the deploy left no attempt. The backend path (retry → job → create) works in tests, so the prod cause is NOT reproduced; the fix makes it explicit — fresh cycle (attempts 0, error cleared), enqueued at once, audited with the actor, coded refusals shown in the drawer, 202 with a JSON body, one INFO line per job run. After deploy: press Try again on RR-ZMCAUG, then `grep "manual retry\|Shopify return sync job\|returnCreate"`. (2) S5b: portal + Lookup exchanges create a return for the item coming back (never an exchange line), note names the replacement + collect + "don't refund in Shopify" (no return-level note exists in 2026-04 ReturnInput). **Pending approval:** ShopifyReturnSyncTest.e1 still asserts S5a's "exchange → nothing, drawer exchange_not_yet" — S5b reverses it; the exact edit is proposed in the report, not applied.
+
 **S5a fix — returnCreate NOT_FOUND (2026-11-08; branch `fix/s5a-return-create-reason` off main cda16ba7; NOT merged, NOT
 deployed; no migration).** Prod test store (#1014, RR-ZMCAUG): every returnCreate answered userErrors NOT_FOUND at a
 3-segment field path; the payload had no reason. 2026-04: `returnReasonDefinitionId` is optional in the schema, the

@@ -174,12 +174,21 @@ class ShopifyReturnsWriteGatewayImpl implements ShopifyReturnsWriteGateway {
         for (CreateLine l : lines) {
             if (l.quantity() <= 0) throw new IllegalArgumentException("returnCreate needs a positive quantity");
             ObjectNode n = rl.addObject().put("fulfillmentLineItemId", l.fulfillmentLineItemGid()).put("quantity", l.quantity());
-            if (l.note() != null) n.put("returnReasonNote", l.note().length() > 255 ? l.note().substring(0, 255) : l.note());
+            if (l.note() != null) {
+                n.put("returnReasonNote", noteWithinLimit(l.note()));
+            }
             if (l.returnReasonDefinitionGid() != null) n.put("returnReasonDefinitionId", l.returnReasonDefinitionGid());
         }
         ObjectNode vars = mapper.createObjectNode();
         vars.set("returnInput", input);
         return write(shopDomain, token, RETURN_CREATE, vars, "returnCreate");
+    }
+
+    /** Shopify's 255-character limit on returnReasonNote, cut by code point (never inside a surrogate pair). */
+    static String noteWithinLimit(String note) {
+        int max = 255;
+        if (note.codePointCount(0, note.length()) <= max) return note;
+        return note.substring(0, note.offsetByCodePoints(0, max));
     }
 
     @Override

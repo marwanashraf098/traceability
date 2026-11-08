@@ -458,6 +458,7 @@ public class ReturnRequestService {
             "UPDATE return_requests SET status = 'approved', decided_at = now(), decided_by = ? " +
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'", actorUserId, id, tenantId);
         requests.event(tenantId, id, "approved", actorUserId, ReturnRequestLifecycle.meta("type", "exchange"));
+        nudgeShopify(tenantId, id);   // S5b: the item coming back becomes a Shopify return (return only, no exchange line)
         // G4b: the replacement order now (internal:exchange:rr:<id>, named by replacement_order_id), booking 'manual'
         // — the merchant books the exchange with their courier; nothing is enqueued.
         if (genericOrder) {
