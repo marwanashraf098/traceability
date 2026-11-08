@@ -124,7 +124,12 @@ public class PickupAreaService {
      * PII: never leaves the server (only the guessed district id does), never logged.
      */
     public List<String> originalAddressTexts(UUID tenantId, UUID orderId) {
-        List<String> out = new ArrayList<>();
+        return originalAddressFields(tenantId, orderId).stream().map(DistrictGuesser.Field::text).toList();
+    }
+
+    /** The same texts, each marked whether it is the Bosta delivery's own zone / secondLine (preferred when ambiguous). */
+    public List<DistrictGuesser.Field> originalAddressFields(UUID tenantId, UUID orderId) {
+        List<DistrictGuesser.Field> out = new ArrayList<>();
         // A portal pre-connect order (not in merchant_orders): its row through portalDropOff (classified MUST_INCLUDE).
         List<Map<String, Object>> rows = portalDropOff(tenantId, orderId);
         if (rows.isEmpty()) {
@@ -138,29 +143,44 @@ public class PickupAreaService {
                 tenantId, orderId);
         }
         for (Map<String, Object> r : rows) {
-            for (String k : new String[]{"a1", "a2", "c", "p"}) add(out, (String) r.get(k));
+            for (String k : new String[]{"a1", "a2", "c", "p"}) add(out, (String) r.get(k), false);
             String drop = (String) r.get("drop");
             if (drop != null) {
                 try {
                     com.fasterxml.jackson.databind.JsonNode d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(drop);
-                    add(out, d.path("firstLine").asText(null));
-                    add(out, d.path("secondLine").asText(null));
-                    add(out, d.path("zone").path("name").asText(null));
+                    add(out, d.path("firstLine").asText(null), false);
+                    add(out, d.path("secondLine").asText(null), true);
+                    add(out, d.path("zone").path("name").asText(null), true);
                 } catch (Exception ignored) { /* no Bosta address */ }
             }
         }
         return out;
     }
 
-    private static void add(List<String> out, String v) {
-        if (v != null && !v.isBlank()) out.add(v);
+    private static void add(List<DistrictGuesser.Field> out, String v, boolean bosta) {
+        if (v != null && !v.isBlank()) out.add(new DistrictGuesser.Field(v, bosta));
     }
 
     /** The area guess for an order whose original delivery had no district (null outcome district = nothing). */
     public DistrictGuesser.Guess guessArea(UUID tenantId, UUID orderId, CityAreas offer) {
-        List<DistrictGuesser.Candidate> cs = offer.districts().stream()
-            .map(d -> new DistrictGuesser.Candidate(d.id(), d.name(), d.nameAr(), d.zoneName(), d.zoneNameAr())).toList();
-        return DistrictGuesser.guess(originalAddressTexts(tenantId, orderId), cs);
+        // The offered districts, with the zone id and drop-off flag the same-zone rule needs (bosta_districts is global
+        // reference data).
+        java.util.Set<String> offered = new java.util.HashSet<>();
+        for (District d : offer.districts()) offered.add(d.id());
+        List<DistrictGuesser.Candidate> cs = jdbc.query(
+            "SELECT district_id, district_name, district_name_ar, zone_name, zone_name_ar, zone_id, dropoff_available " +
+            "FROM bosta_districts WHERE city_id = ? AND pickup_available ORDER BY district_id",
+            (rs, i) -> new DistrictGuesser.Candidate(rs.getString("district_id"), rs.getString("district_name"),
+                rs.getString("district_name_ar"), rs.getString("zone_name"), rs.getString("zone_name_ar"),
+                rs.getString("zone_id"), rs.getBoolean("dropoff_available")),
+            offer.cityId()).stream().filter(c -> offered.contains(c.districtId())).toList();
+        List<String> cityNames = new ArrayList<>();
+        jdbc.query("SELECT DISTINCT city_name, city_name_ar FROM bosta_districts",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                if (rs.getString(1) != null) cityNames.add(rs.getString(1));
+                if (rs.getString(2) != null) cityNames.add(rs.getString(2));
+            });
+        return DistrictGuesser.guess(originalAddressFields(tenantId, orderId), cs, cityNames);
     }
 
     /**
