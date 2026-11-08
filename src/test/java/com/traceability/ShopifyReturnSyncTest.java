@@ -595,18 +595,14 @@ class ShopifyReturnSyncTest {
         sync.sync(a.tenant, tooMany.id);
         assertThat(row(tooMany).get("shopify_sync_reason")).isEqualTo("not_returnable_in_shopify");
 
-        Req exchange = new Req(a, new Order(a, 1, 1), 1, "exchange", "approved", "now()");
         Req before = new Req(a, new Order(a, 1, 1), 1, "refund", "approved", "now() - interval '2 days'");
         Req requested = new Req(a, new Order(a, 1, 1), 1, "refund", "requested", "NULL");
-        for (Req q : List.of(exchange, before, requested)) {
+        for (Req q : List.of(before, requested)) {
             sync.sync(a.tenant, q.id);
             assertThat(row(q).get("shopify_sync_status")).isNull();
         }
         assertThat(creates()).isZero();
-        // The drawer: an exchange says "not yet", one decided before switch-on shows nothing.
-        Map<String, Object> ex = a.as(() -> requests.detail(exchange.id));
-        assertThat(ex.get("shopifySync")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
-            .containsEntry("status", "skipped").containsEntry("reason", "exchange_not_yet");
+        // The drawer: one decided before switch-on shows nothing.
         assertThat(a.as(() -> requests.detail(before.id))).doesNotContainKey("shopifySync");
         assertThat(a.as(() -> requests.detail(requested.id)).get("shopifySync"))
             .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP).containsEntry("reason", "awaiting_approval");

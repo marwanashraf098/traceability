@@ -26,6 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>w2 a note over 255 characters is cut by code point (an emoji at the edge is never split)</li>
  *   <li>n1 the note: marker always whole, collect never cut, the warning dropped first, then the product shortened with
  *       "…"; own courier → "via courier"; nothing to collect → no collect part; never over 255 code points</li>
+ *   <li>n2 money part: a price difference of 0 writes none (never "collect EGP 0"); customer owed → "refund EGP X to
+ *       customer"; a negative or zero amount is never written</li>
  * </ul>
  */
 class ExchangeReturnCreateWireTest {
@@ -100,5 +102,20 @@ class ExchangeReturnCreateWireTest {
         for (int k = 0; k < b.length(); k++) {
             if (Character.isHighSurrogate(b.charAt(k))) assertThat(Character.isLowSurrogate(b.charAt(k + 1))).isTrue();
         }
+    }
+
+    @Test
+    void n2_moneyPart_zeroDropped_owedRefundToCustomer_neverNegative() {
+        String w = " · Exchanged via Traced — don't refund in Shopify";
+        assertThat(ShopifyReturnSyncRules.exchangeNote("RR-AAAAAA", "Tee / M", BigDecimal.ZERO, BigDecimal.ZERO, false))
+            .isEqualTo("Traced RR-AAAAAA · exchanged for Tee / M" + w);
+        assertThat(ShopifyReturnSyncRules.exchangeNote("RR-AAAAAA", "Tee / M", new BigDecimal("0.00"), null, false))
+            .doesNotContain("EGP");
+        assertThat(ShopifyReturnSyncRules.exchangeNote("RR-AAAAAA", "Tee / M", BigDecimal.ZERO, new BigDecimal("120.00"), false))
+            .isEqualTo("Traced RR-AAAAAA · exchanged for Tee / M · refund EGP 120 to customer" + w);
+        assertThat(ShopifyReturnSyncRules.exchangeNote("RR-AAAAAA", "Tee / M", null, new BigDecimal("-40"), true))
+            .isEqualTo("Traced RR-AAAAAA · exchanged for Tee / M" + w);
+        assertThat(ShopifyReturnSyncRules.exchangeNote("RR-AAAAAA", "Tee / M", new BigDecimal("-15"), null, true))
+            .doesNotContain("EGP").doesNotContain("-15");
     }
 }

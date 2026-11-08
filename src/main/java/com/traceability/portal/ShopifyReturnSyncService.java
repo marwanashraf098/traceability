@@ -195,7 +195,8 @@ public class ShopifyReturnSyncService {
         UUID t = c.tenantId();
         List<Item> items = inTenant(t, () -> items(t, c.requestId()));
         List<Item> coming = items.stream().filter(i -> !"not_coming".equals(i.itemStatus())).toList();
-        if (ShopifyReturnSyncRules.TERMINAL.contains(c.status()) && items.stream().noneMatch(Item::graded)) {
+        if (ShopifyReturnSyncRules.TERMINAL.contains(c.status()) && items.stream().noneMatch(Item::graded)
+                && items.stream().noneMatch(i -> ShopifyReturnSyncRules.END_PENDING_ITEM.contains(i.itemStatus()))) {
             skip(c, "request_ended");
             return;
         }
@@ -339,7 +340,9 @@ public class ShopifyReturnSyncService {
     /** S5b — the exchange's line note: the replacement (product / variant), the frozen collect, the warning. */
     private String exchangeNote(Ctx c) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT p.title AS product, v.title AS variant, rr.booking_status, " + ExchangeCod.FROZEN_SQL + " AS collect " +
+            "SELECT p.title AS product, v.title AS variant, rr.booking_status, " + ExchangeCod.FROZEN_SQL + " AS collect, " +
+            "       (SELECT a.customer_owed FROM return_request_amounts a WHERE a.request_id = rr.id " +
+            "          AND a.tenant_id = rr.tenant_id AND a.fee_kind = 'exchange') AS owed " +
             "FROM return_requests rr " +
             "LEFT JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
             "     AND i.replacement_variant_id IS NOT NULL " +
@@ -352,7 +355,7 @@ public class ShopifyReturnSyncService {
         String label = product == null ? variant
             : (variant == null || variant.isBlank() || "Default Title".equals(variant)) ? product : product + " / " + variant;
         return ShopifyReturnSyncRules.exchangeNote(c.reference(), label, (java.math.BigDecimal) r.get("collect"),
-            "manual".equals(r.get("booking_status")));
+            (java.math.BigDecimal) r.get("owed"), "manual".equals(r.get("booking_status")));
     }
 
     private void markStuckPending(UUID tenantId, UUID requestId) {
@@ -492,6 +495,12 @@ public class ShopifyReturnSyncService {
                 && (Set.of("applied", "skipped", "resolved", "failed_ambiguous", "needs_review").contains(a.status())
                     || ("failed".equals(a.status()) && a.attempts() >= ShopifyReturnSyncRules.MAX_ATTEMPTS)));
         if (toProcess.isEmpty() && (!terminal || ended)) return;
+        // Process always comes before close / cancel, whichever Traced event came first: while an item is still
+        // awaited or came back ungraded, the return's end is PENDING (no Shopify read, no call) — the grading's
+        // sync processes it, then ends it. In Traced's own flow 'exchanged' / refunded / closed leave no such item;
+        // this guards any out-of-order arrival of the end before the grading.
+        boolean endPending = items.stream().anyMatch(i -> ShopifyReturnSyncRules.END_PENDING_ITEM.contains(i.itemStatus()));
+        if (toProcess.isEmpty() && endPending) return;
 
         String token = token(c);
         if (token == null) return;
@@ -531,7 +540,7 @@ public class ShopifyReturnSyncService {
 
         for (Item i : toProcess) processUnit(c, token, i, status, lines, rfo, mainGid);
 
-        if (!terminal) return;
+        if (!terminal || endPending) return;
         // Every graded unit must be settled before the return is ended in Shopify.
         Map<String, Action> now = inTenant(t, () -> actions(t, c.requestId()));
         for (Item i : items) {

@@ -63,6 +63,9 @@ import static org.mockito.Mockito.*;
  *   x5  Lookup cancel-exchange before anything came back → returnCancel
  *   x6  switched to refund before approval → synced as a refund (reason label), still one return
  *   x7  cross-tenant (HTTP, app_user + RLS): B can't retry / sync A's exchange; A can (same-tenant control)
+ *   x8  the end arrives BEFORE the grading (exchanged while the old item is still awaited / back but ungraded): no
+ *       close, no cancel, no Shopify read while pending; once graded → process THEN close (in that order)
+ *   x9  customer owed (cheaper replacement) → "refund EGP X to customer"; nothing owed / to collect → no money part
  *   g1  golden, unlisted tenant: approving / creating an exchange enqueues no sync job, no drawer key, no Shopify call
  * </pre>
  */
@@ -688,6 +691,62 @@ class ShopifyExchangeReturnSyncTest {
         appSync.sync(a.tenant, rr);
         assertThat(calls("returnCreate")).isEqualTo(1);
         assertThat(syncRow(rr).get("shopify_sync_status")).isEqualTo("created");
+    }
+
+    // ── order of events, note money ────────────────────────────────────────────────────────────
+
+    @Test
+    void x8_exchangedBeforeGraded_endPending_thenProcessThenClose() {
+        Order o = new Order(a, true);
+        UUID rr = portalExchange(a, o, false);
+        approve(a, rr);
+        sync.sync(a.tenant, rr);
+        assertThat(syncRow(rr).get("shopify_sync_status")).isEqualTo("created");
+
+        // The end comes first: 'exchanged' while the old item is still awaited, then back but not graded.
+        status(rr, "exchanged");
+        clearInvocations(reads);
+        sync.sync(a.tenant, rr);
+        sync.sweepTenant(a.tenant);
+        jdbc.update("UPDATE return_request_items SET item_status = 'arrived', arrived_at = now() WHERE request_id = ?", rr);
+        sync.sync(a.tenant, rr);
+        sync.sweepTenant(a.tenant);
+        assertThat(calls("returnCancel")).as("never cancelled while the item may still be graded").isZero();
+        assertThat(calls("returnClose")).isZero();
+        assertThat(calls("returnProcessNotRestocked")).isZero();
+        verify(reads, never()).fetchReturn(anyString(), anyString(), anyString());
+
+        // Graded → processed, then closed — in that order.
+        jdbc.update("UPDATE return_request_items SET item_status = 'done', active = false, done_at = now(), " +
+            "arrived_condition = 'sellable' WHERE request_id = ?", rr);
+        sync.sync(a.tenant, rr);
+        org.mockito.InOrder order = inOrder(writes);
+        order.verify(writes).returnProcessNotRestocked(anyString(), anyString(), anyString(), anyString(), any(), anyInt(), any());
+        order.verify(writes).returnClose(anyString(), anyString(), anyString());
+        assertThat(calls("returnCancel")).isZero();
+        assertThat(calls("returnClose")).isEqualTo(1);
+        String gid = (String) syncRow(rr).get("shopify_return_gid");
+        assertThat(shopify.returns.get(gid).path("status").asText()).isEqualTo("CLOSED");
+    }
+
+    @Test
+    void x9_customerOwed_refundToCustomer_zero_noMoneyPart() {
+        Order o = new Order(a, false);
+        UUID rr = portalExchange(a, o, false);
+        jdbc.update("INSERT INTO return_request_amounts (request_id, tenant_id, item_value, fee_kind, fee_amount, collect_cod, " +
+            "customer_owed) VALUES (?, ?, 500, 'exchange', 0, 0, 120)", rr, a.tenant);
+        approve(a, rr);
+        sync.sync(a.tenant, rr);
+        assertThat(createdLines(0).get(0).note()).isEqualTo(expectedNote(rr, " · refund EGP 120 to customer"));
+
+        Order z = new Order(a, false);
+        UUID zero = portalExchange(a, z, false);
+        jdbc.update("INSERT INTO return_request_amounts (request_id, tenant_id, item_value, fee_kind, fee_amount, collect_cod, " +
+            "customer_owed) VALUES (?, ?, 500, 'exchange', 0, 0, 0)", zero, a.tenant);
+        approve(a, zero);
+        sync.sync(a.tenant, zero);
+        assertThat(createdLines(1).get(0).note()).isEqualTo(expectedNote(zero, ""))
+            .doesNotContain("EGP 0").doesNotContain("collect").doesNotContain("refund EGP");
     }
 
     // ── golden ─────────────────────────────────────────────────────────────────────────────────

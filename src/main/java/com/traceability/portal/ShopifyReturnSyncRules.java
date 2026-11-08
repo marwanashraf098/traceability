@@ -62,11 +62,23 @@ public final class ShopifyReturnSyncRules {
      */
     public static String exchangeNote(String reference, String replacementLabel, java.math.BigDecimal collect,
                                       boolean ownCourier) {
+        return exchangeNote(reference, replacementLabel, collect, null, ownCourier);
+    }
+
+    /**
+     * As above, with what the store owes the customer (the frozen {@code customer_owed} of a cheaper replacement):
+     * "refund EGP X to customer" in place of the collect part. Only a positive amount is ever written — 0, none or
+     * a negative value writes no money part at all (never "collect EGP 0", never a negative amount).
+     */
+    public static String exchangeNote(String reference, String replacementLabel, java.math.BigDecimal collect,
+                                      java.math.BigDecimal owed, boolean ownCourier) {
         String marker = marker(reference);
         String sep = " · ";
         String cod = collect != null && collect.signum() > 0
             ? "collect EGP " + collect.stripTrailingZeros().toPlainString() + (ownCourier ? " via courier" : " via Bosta")
-            : null;
+            : owed != null && owed.signum() > 0
+                ? "refund EGP " + owed.stripTrailingZeros().toPlainString() + " to customer"
+                : null;
         String product = "exchanged for " + (replacementLabel == null || replacementLabel.isBlank()
             ? "another item" : replacementLabel.strip());
         String tail = cod == null ? "" : sep + cod;
@@ -90,6 +102,12 @@ public final class ShopifyReturnSyncRules {
     private static String firstCodePoints(String s, int n) {
         return s.substring(0, s.offsetByCodePoints(0, Math.min(n, cps(s))));
     }
+
+    /**
+     * Item states that keep a request's Shopify return from being closed / cancelled: still expected, or back but not
+     * graded yet. Process always comes first; the end waits for it.
+     */
+    static final java.util.Set<String> END_PENDING_ITEM = java.util.Set.of("awaiting", "arrived");
 
     /** Request statuses after which nothing more happens on the Traced side (refunded / closed / exchanged). */
     static final java.util.Set<String> TERMINAL = java.util.Set.of("refunded", "closed", "exchanged");
