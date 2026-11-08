@@ -86,6 +86,7 @@
     "cityLabel": "City",
     "areaLabel": "Area",
     "areaPlaceholder": "Choose your area",
+    "areaGuessed": "We picked this from your delivery address — change it if it's wrong.",
     "noteLabel": "Anything the store should know?",
     "emailLabel": "Email for updates",
     "emailPlaceholder": "you@example.com",

@@ -3,6 +3,7 @@ package com.traceability.portal;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,8 +57,6 @@ public class PickupAreaService {
             m.put("cityNameAr", cityNameAr);
             m.put("districts", districts.stream().map(District::toJson).toList());
             if (withPreselected) m.put("preselectedDistrictId", preselectedDistrictId());
-            // 2026-11-07: the original delivery has no district → "Same address" asks for none (present only then).
-            if (withPreselected && forwardDistrictId == null) m.put("districtOptional", true);
             return m;
         }
     }
@@ -116,6 +115,49 @@ public class PickupAreaService {
             leg = forwardLeg(tenantId, orderId);
         }
         return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
+    }
+
+    /**
+     * 2026-11-08 — the original address texts the area guess reads (DistrictGuesser): the order's Shopify shipping
+     * address (address1, address2, city, province) and the original Bosta delivery's dropOffAddress (firstLine,
+     * secondLine, zone name) — portal_delivery for a pre-connect order, else the newest delivered forward leg.
+     * PII: never leaves the server (only the guessed district id does), never logged.
+     */
+    public List<String> originalAddressTexts(UUID tenantId, UUID orderId) {
+        List<String> out = new ArrayList<>();
+        jdbc.query(
+            "SELECT o.shopify_address->>'address1' AS a1, o.shopify_address->>'address2' AS a2, " +
+            "       o.shopify_address->>'city' AS c, o.shopify_address->>'province' AS p, " +
+            "       COALESCE(CASE WHEN o.origin = 'portal_pre_connect' THEN o.portal_delivery->'dropOffAddress' END, " +
+            "                (SELECT s.raw->'dropOffAddress' FROM shipments s WHERE s.tenant_id = o.tenant_id " +
+            "                   AND s.order_id = o.id AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
+            "                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1)) AS drop " +
+            "FROM orders o WHERE o.tenant_id = ? AND o.id = ? AND o.pii_redacted_at IS NULL",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                for (String k : new String[]{"a1", "a2", "c", "p"}) add(out, rs.getString(k));
+                String drop = rs.getString("drop");
+                if (drop != null) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(drop);
+                        add(out, d.path("firstLine").asText(null));
+                        add(out, d.path("secondLine").asText(null));
+                        add(out, d.path("zone").path("name").asText(null));
+                    } catch (Exception ignored) { /* no Bosta address */ }
+                }
+            },
+            tenantId, orderId);
+        return out;
+    }
+
+    private static void add(List<String> out, String v) {
+        if (v != null && !v.isBlank()) out.add(v);
+    }
+
+    /** The area guess for an order whose original delivery had no district (null outcome district = nothing). */
+    public DistrictGuesser.Guess guessArea(UUID tenantId, UUID orderId, CityAreas offer) {
+        List<DistrictGuesser.Candidate> cs = offer.districts().stream()
+            .map(d -> new DistrictGuesser.Candidate(d.id(), d.name(), d.nameAr(), d.zoneName(), d.zoneNameAr())).toList();
+        return DistrictGuesser.guess(originalAddressTexts(tenantId, orderId), cs);
     }
 
     /**

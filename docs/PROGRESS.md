@@ -4,6 +4,14 @@
 
 ## Current state
 
+**"Same address" area guess (2026-11-08; branch `feat/portal-area-guess` off main cb4c3eba, NOT merged, NOT deployed;
+no migration).** Live result: Bosta refused RR-CM5NYQ (type 25, no district) → its live API needs a district. Now the
+area is always asked when the original has no district, pre-selected from DistrictGuesser's guess (see CLAUDE.md).
+- Dry-run SQL for the match rate (read-only, counts per tenant): scratchpad `area-guess-dryrun.sql` — mirrors the Java
+  normalization; checked locally against the 12 unit cases (identical).
+- After deploy: `grep "Portal area guess"` for the live rate; RR-CM5NYQ is re-booked from the drawer (district_required).
+- Test edits NEEDED (waiting for approval): yesterday's no-area tests now contradict the live API —
+  PortalSameAddressNoDistrictTest n1 / n2 / n3 / e1 / x1, PortalSameAddressTest.a2, portalSameAddressNoDistrict.test.tsx ×3.
 **"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, merged to main,
 NOT deployed; migration V224 — main and prod ended at V223 (prod checked by Marawan 00:59)).** See CLAUDE.md ("No-district Same address").
 - Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for
