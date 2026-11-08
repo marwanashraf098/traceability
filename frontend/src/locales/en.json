@@ -946,6 +946,7 @@
     "connectBosta": "Connect Bosta",
     "units": "units",
     "locked": "Locked",
+    "orderLoadFailed": "This order couldn't be opened. It may have been removed, or the connection dropped.",
     "backToQueue": "Back to Queue",
     "allItemsRemoved": "Every item on this order was removed in Shopify — there is nothing to pack.",
     "scanPlaceholder": "Scan or type barcode, then press Enter",
