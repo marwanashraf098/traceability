@@ -795,7 +795,7 @@ public class ExceptionService {
             "    AND p.tenant_id = sia.tenant_id " +
             "WHERE sia.tenant_id = ? " +
             // exchange_dispatch, and piece claims made before piece sync (legacy): any failure.
-            "  AND ((sia.trigger_type = 'exchange_dispatch' AND sia.status = 'failed') " +
+            "  AND ((sia.trigger_type = 'exchange_dispatch' AND sia.status IN ('failed', 'failed_ambiguous')) " +
             "    OR (sia.trigger_type IN ('void_correction', 'hold_enter') AND sia.status = 'failed' " +
             "        AND NOT (" + PieceShopifyRules.LIVE_SQL + ")) " +
             // Piece sync (2026-10-10, D7): no confirmed answer, definite failures with no attempts left,

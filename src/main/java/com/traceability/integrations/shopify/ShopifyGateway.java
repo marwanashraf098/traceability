@@ -342,11 +342,18 @@ public interface ShopifyGateway {
                                                   List<ActivationRequest> requests);
 
     /**
-     * Failed-increment recovery (Part D) — an IDENTICAL resend of an adjust whose first attempt was
-     * ambiguous: same positive delta, same idempotency key, and the SAME changeFromQuantity that was
-     * sent the first time (no fresh read), so Shopify either replays the original result (it applied)
-     * or processes it once (it never arrived). Positive delta only, validated before any network
-     * call; one HTTP attempt path, same failure classification as adjustInventoryQuantities.
+     * Failed-increment recovery (Part D) — the RECOVERY CHECK: an identical re-send of an adjust whose
+     * first attempt was ambiguous — same positive delta, same idempotency key, the SAME changeFromQuantity
+     * that was sent the first time (no fresh read). Positive delta only, validated before any network call;
+     * exactly one HTTP attempt.
+     *
+     * <p>It does NOT reliably replay the first result. Shopify checks changeFromQuantity BEFORE it looks up
+     * the idempotency key (Move S0, 2026-11-07): if the first send LANDED, the quantity has moved and the
+     * re-send answers CHANGE_FROM_QUANTITY_STALE; a key Shopify no longer holds is processed as new. Only a
+     * success means "applied once". Any answer that isn't a success therefore stays AMBIGUOUS — never
+     * REJECTED, never NEVER_SENT — and a userError / non-THROTTLED top-level error / no data sets
+     * {@link ShopifyAdjustFailedException#probeStale()}: the claim is not sent again automatically and a
+     * person checks Shopify.
      */
     void resendInventoryAdjustment(String shopDomain, String token, String inventoryItemGid,
                                    String locationGid, int positiveDelta, String reason,

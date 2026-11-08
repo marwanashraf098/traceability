@@ -49,8 +49,8 @@ import static org.mockito.Mockito.*;
  * district_required, never re-sent by the sweeper); the merchant chooses the area and books again. "Different address"
  * still requires a district.
  *
- *   n1 — lookup flags districtOptional; no district → 201 with the city stored; type 25 payload: city + lines, no
- *        districtId; Bosta accepts → booked; read-back never flags the district Bosta set.
+ *   n1 — 2026-11-08: no districtOptional any more and a submission without a district → 400; a request without one
+ *        (submitted 2026-11-07 → 08) is still booked with city + lines, no districtId; Bosta accepts → booked.
  *   n2 — Bosta refuses for the area → failed + district_required + the drawer message; the detail carries the reason;
  *        the sweeper never re-sends; area chosen + Retry → booked with that districtId, reason cleared. Bosta's answer
  *        is logged once with the customer's phone and street removed.
@@ -176,10 +176,11 @@ class PortalSameAddressNoDistrictTest {
         Order o = deliveredOrder(a, "#6101", CAIRO, null);
         ResponseEntity<Map> l = lookup(a, o);
         Map<String, Object> pickup = (Map<String, Object>) l.getBody().get("pickup");
-        assertThat(pickup).containsEntry("districtOptional", true).containsEntry("preselectedDistrictId", null);
-        ResponseEntity<Map> r = submit(a, (String) l.getBody().get("token"), null);
-        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        UUID id = requestIdOf(a, r);
+        // 2026-11-08 (approved): Bosta's live API needs a district — the portal asks again, a submission without one is
+        // refused. Requests submitted without one (2026-11-07 → 08) still exist: booked with city + lines only.
+        assertThat(pickup).doesNotContainKey("districtOptional").containsEntry("preselectedDistrictId", null);
+        assertThat(submit(a, (String) l.getBody().get("token"), null).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        UUID id = legacyRequest(a, o, "refund", null);
         assertThat(jdbc.queryForMap("SELECT pickup_city_id, pickup_city_name, pickup_district_id FROM return_requests WHERE id = ?", id))
             .containsEntry("pickup_city_id", CAIRO).containsEntry("pickup_city_name", "Cairo").containsEntry("pickup_district_id", null);
 
@@ -201,7 +202,7 @@ class PortalSameAddressNoDistrictTest {
         bookingReady(a);
         Order o = deliveredOrder(a, "#6201", CAIRO, null);
         ResponseEntity<Map> l = lookup(a, o);
-        UUID id = requestIdOf(a, submit(a, (String) l.getBody().get("token"), null));
+        UUID id = legacyRequest(a, o, "refund", null);
         book(a, id, new BostaV2Client.CreateResult(BostaV2Client.CreateOutcome.NOT_CREATED, null, null, 400,
             "pickupAddress.districtId is required for " + o.phone() + " at " + STREET, "VALIDATION_ERROR"));
 
@@ -235,7 +236,7 @@ class PortalSameAddressNoDistrictTest {
     void n3_otherRefusal_failedWithBostasMessage_noReason() {
         bookingReady(a);
         Order o = deliveredOrder(a, "#6301", CAIRO, null);
-        UUID id = requestIdOf(a, submit(a, (String) lookup(a, o).getBody().get("token"), null));
+        UUID id = legacyRequest(a, o, "refund", null);
         book(a, id, new BostaV2Client.CreateResult(BostaV2Client.CreateOutcome.NOT_CREATED, null, null, 400,
             "Invalid receiver phone.", "VALIDATION_ERROR"));
         assertThat(jdbc.queryForMap("SELECT booking_status, booking_failure_reason, booking_error FROM return_requests WHERE id = ?", id))
@@ -261,14 +262,7 @@ class PortalSameAddressNoDistrictTest {
                     "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status, ?, now())",
                     stock, a.id(), large, "PC-" + stock, stock, main);
         Order o = deliveredOrder(a, "#6401", CAIRO, null);
-        String token = (String) lookup(a, o).getBody().get("token");
-        PortalService.SubmitResult r = portal.submit(a.slug(), token, new PortalService.SubmitRequest(
-            List.of(new PortalService.SubmitLine(a.variant(), 1, "wrong_size")), null, null, null, "exchange", large, false))
-            .orElseThrow();
-        assertThat(r.outcome()).isEqualTo(PortalService.SubmitOutcome.CREATED);
-        UUID id = jdbc.queryForObject("SELECT id FROM return_requests WHERE tenant_id = ? AND reference = ?", UUID.class,
-            a.id(), r.body().get("reference"));
-        jdbc.update("UPDATE return_requests SET status = 'approved', decided_at = now() WHERE id = ?", id);
+        UUID id = legacyRequest(a, o, "exchange", large);
         when(bosta.createExchange(any(), any())).thenReturn(created());
         pickupBooking.book(id, a.id());
         org.mockito.ArgumentCaptor<BostaV2Client.Exchange> cap = org.mockito.ArgumentCaptor.forClass(BostaV2Client.Exchange.class);
@@ -315,7 +309,7 @@ class PortalSameAddressNoDistrictTest {
     void x1_otherTenantCantRebook_sameTenantCan() {
         bookingReady(a);
         Order o = deliveredOrder(a, "#6701", CAIRO, null);
-        UUID id = requestIdOf(a, submit(a, (String) lookup(a, o).getBody().get("token"), null));
+        UUID id = legacyRequest(a, o, "refund", null);
         book(a, id, new BostaV2Client.CreateResult(BostaV2Client.CreateOutcome.NOT_CREATED, null, null, 422,
             "district is required", null));
         String ownerB = login(b.owner());
@@ -327,6 +321,21 @@ class PortalSameAddressNoDistrictTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * 2026-11-08: a "Same address" request without a district, approved — as submitted 2026-11-07 → 08 (prod
+     * RR-CM5NYQ). The portal no longer creates these.
+     */
+    private UUID legacyRequest(Tenant t, Order o, String type, UUID replacement) {
+        UUID id = jdbc.queryForObject(
+            "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, pickup_city_id, pickup_city_name, " +
+            "    pickup_address_source, decided_at) VALUES (?, ?, ?, 'approved', ?, ?, 'Cairo', 'order', now()) RETURNING id",
+            UUID.class, t.id(), o.id(), type, reference(), CAIRO);
+        String piece = jdbc.queryForObject("SELECT id FROM pieces WHERE current_order_id = ?", String.class, o.id());
+        jdbc.update("INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, replacement_variant_id) " +
+            "VALUES (?, ?, ?, ?, 'wrong_size', ?)", t.id(), id, piece, t.variant(), replacement);
+        return id;
+    }
 
     private void bookingReady(Tenant t) {
         booking(t, true);

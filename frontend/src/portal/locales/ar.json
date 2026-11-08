@@ -86,6 +86,7 @@
     "cityLabel": "المدينة",
     "areaLabel": "المنطقة",
     "areaPlaceholder": "اختر منطقتك",
+    "areaGuessed": "اخترناها من عنوان التوصيل — غيّرها إن لم تكن صحيحة.",
     "noteLabel": "هل هناك ما يجب أن يعرفه المتجر؟",
     "emailLabel": "البريد الإلكتروني للتحديثات",
     "emailPlaceholder": "you@example.com",

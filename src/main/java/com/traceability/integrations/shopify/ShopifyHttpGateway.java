@@ -915,7 +915,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "Could not read the current quantity before the adjust (adjust not sent): " + messageOf(e), e);
         }
         sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
-            changeFromQuantity);
+            changeFromQuantity, false);
     }
 
     @Override
@@ -928,13 +928,37 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "resendInventoryAdjustment requires a positive delta (FR-17 v2 increment-only); got " + positiveDelta);
         }
         sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
-            changeFromQuantity);
+            changeFromQuantity, true);
     }
 
-    /** The inventoryAdjustQuantities mutation itself, every failure classified (see
-     *  ShopifyAdjustFailedException) and carrying the changeFromQuantity that was sent. */
+    /**
+     * The inventoryAdjustQuantities mutation itself — ONE HTTP attempt (Part D fix P1, 2026-11-08), every failure
+     * classified (see ShopifyAdjustFailedException) and carrying the changeFromQuantity that was sent.
+     *
+     * <p>It deliberately does NOT go through executeGraphQL(): that transport's Resilience4j retry silently re-sends
+     * the same body after a read timeout, and with changeFromQuantity set an identical re-send of an adjust that
+     * LANDED answers CHANGE_FROM_QUANTITY_STALE (Move S0, 2026-11-07) — which used to be classed REJECTED and
+     * retried with a new key: the +N applied twice. Classification (same shape as pushTransferOut / the piece
+     * transport):
+     * <ul>
+     *   <li>HTTP 4xx, or top-level errors that are ALL THROTTLED with no data → REJECTED (Shopify did not run it);</li>
+     *   <li>a connection that was never made (refused, unknown host, connect timeout) → NEVER_SENT;</li>
+     *   <li>5xx, read timeout, reset, any other top-level GraphQL error, an empty / unreadable body, no data →
+     *       AMBIGUOUS;</li>
+     *   <li>a userError → REJECTED (a first send with a baseline: Shopify checks the baseline before anything is
+     *       applied).</li>
+     * </ul>
+     *
+     * <p>{@code recoveryCheck} is true ONLY for {@link #resendInventoryAdjustment} — the identical re-send of an
+     * ambiguous claim. Its answer says nothing definite about the FIRST send, so it is never REJECTED or
+     * NEVER_SENT: a userError (CHANGE_FROM_QUANTITY_STALE, an idempotency code, anything) or a non-THROTTLED
+     * top-level error / no data → AMBIGUOUS with {@code probeStale} set (stop — a person checks Shopify); a 4xx,
+     * THROTTLED, a connection never made, a 5xx or a timeout → AMBIGUOUS without it (the claim stays a
+     * recovery-check candidate, re-sent identically while the key window lasts).
+     */
     private void sendAdjust(String shopDomain, String token, String inventoryItemGid, String locationGid,
-                            int positiveDelta, String reason, String idempotencyKey, Integer changeFromQuantity) {
+                            int positiveDelta, String reason, String idempotencyKey, Integer changeFromQuantity,
+                            boolean recoveryCheck) {
         ObjectNode change = buildInventoryChange(inventoryItemGid, locationGid, positiveDelta, changeFromQuantity);
         ObjectNode input = mapper.createObjectNode()
             .put("reason", reason)
@@ -944,40 +968,103 @@ class ShopifyHttpGateway implements ShopifyGateway {
         vars.set("input", input);
         vars.put("idempotencyKey", idempotencyKey);
 
-        JsonNode data;
-        try {
-            data = executeGraphQL(shopDomain, token, INVENTORY_ADJUST_QUANTITIES_MUTATION, vars);
-        } catch (RuntimeException e) {
-            throw new ShopifyAdjustFailedException(classifyAdjustFailure(e), changeFromQuantity, messageOf(e), e);
-        }
+        JsonNode data = postAdjustOnce(shopDomain, token, vars, changeFromQuantity, recoveryCheck);
         JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {
             String msg = userErrors.get(0).path("message").asText("unknown error");
+            String code = userErrors.get(0).path("code").asText("");
+            if (recoveryCheck) {
+                throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS,
+                    changeFromQuantity, "Recovery check answered" + (code.isBlank() ? "" : " " + code) + ": " + msg
+                    + " — the first send may have landed; not sent again, check Shopify", null, true);
+            }
             throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.REJECTED,
                 changeFromQuantity, "inventoryAdjustQuantities failed: " + msg, null);
         }
     }
 
-    /** A 4xx or a GraphQL error means Shopify answered and did not apply it; a 5xx, a read
-     *  timeout, a reset or anything unexpected may have been processed; a connection that was
-     *  never made (refused, unknown host, connect timeout) never sent anything. */
-    static ShopifyAdjustFailedException.FailureClass classifyAdjustFailure(Throwable e) {
-        if (e instanceof ShopifyTransientException || e instanceof ShopifyAmbiguousException) {
-            return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+    /** The single HTTP attempt of {@link #sendAdjust}; returns {@code data} or throws a classified failure. */
+    private JsonNode postAdjustOnce(String shopDomain, String token, ObjectNode vars, Integer changeFromQuantity,
+                                    boolean recoveryCheck) {
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode().put("query", INVENTORY_ADJUST_QUANTITIES_MUTATION).set("variables", vars);
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.REJECTED, false, recoveryCheck,
+                changeFromQuantity, "Shopify GraphQL HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (HttpServerErrorException e) {
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, false, recoveryCheck,
+                changeFromQuantity, "Shopify GraphQL HTTP " + e.getStatusCode().value() + " from " + shopDomain
+                + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw adjustFailure(neverConnected(e) ? ShopifyAdjustFailedException.FailureClass.NEVER_SENT
+                    : ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, false, recoveryCheck, changeFromQuantity,
+                "No confirmed response from " + shopDomain + ": " + messageOf(e), e);
+        } catch (RestClientException e) {
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, false, recoveryCheck,
+                changeFromQuantity, "Unclassifiable response from " + shopDomain + ": " + messageOf(e), e);
         }
-        if (e instanceof ResourceAccessException) {
-            for (Throwable c = e.getCause(); c != null; c = c.getCause()) {
-                if (c instanceof java.net.ConnectException || c instanceof java.net.UnknownHostException
-                        || c instanceof java.net.NoRouteToHostException
-                        || (c instanceof java.net.SocketTimeoutException
-                            && c.getMessage() != null && c.getMessage().toLowerCase().contains("connect timed out"))) {
-                    return ShopifyAdjustFailedException.FailureClass.NEVER_SENT;
-                }
+        if (response == null) {
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, false, recoveryCheck,
+                changeFromQuantity, "Null response body from " + shopDomain + " — not confirmed", null);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
             }
-            return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw adjustFailure(ShopifyAdjustFailedException.FailureClass.REJECTED, false, recoveryCheck,
+                    changeFromQuantity, "Shopify GraphQL error (THROTTLED): not executed by Shopify", null);
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, true, recoveryCheck,
+                changeFromQuantity, "Shopify GraphQL error" + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed", null);
         }
-        if (e instanceof ShopifyException) return ShopifyAdjustFailedException.FailureClass.REJECTED;
-        return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+        JsonNode data = response.get("data");
+        if (data == null || data.isNull()) {
+            throw adjustFailure(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, true, recoveryCheck,
+                changeFromQuantity, "Response had no data field from " + shopDomain + " — not confirmed", null);
+        }
+        return data;
+    }
+
+    /**
+     * One classified adjust failure. On a recovery check nothing is definite about the FIRST send: REJECTED and
+     * NEVER_SENT become AMBIGUOUS (the claim stays a recovery-check candidate), and an answer that means "Shopify
+     * did not replay a success" ({@code stopsRecoveryCheck}) also sets probeStale.
+     */
+    private static ShopifyAdjustFailedException adjustFailure(ShopifyAdjustFailedException.FailureClass cls,
+                                                              boolean stopsRecoveryCheck, boolean recoveryCheck,
+                                                              Integer changeFromQuantity, String message, Throwable cause) {
+        if (!recoveryCheck) return new ShopifyAdjustFailedException(cls, changeFromQuantity, message, cause);
+        return new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.AMBIGUOUS, changeFromQuantity,
+            (stopsRecoveryCheck ? "Recovery check: " + message + " — the first send may have landed; not sent again, check Shopify"
+                                : "Recovery check: " + message), cause, stopsRecoveryCheck);
+    }
+
+    /** A connection that was never made — nothing left Traced. */
+    private static boolean neverConnected(ResourceAccessException e) {
+        for (Throwable c = e.getCause(); c != null; c = c.getCause()) {
+            if (c instanceof java.net.ConnectException || c instanceof java.net.UnknownHostException
+                    || c instanceof java.net.NoRouteToHostException
+                    || (c instanceof java.net.SocketTimeoutException
+                        && c.getMessage() != null && c.getMessage().toLowerCase().contains("connect timed out"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     ObjectNode buildInventoryChange(String inventoryItemGid, String locationGid,
@@ -1865,11 +1952,15 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "Exchange dispatch HTTP " + e.getStatusCode().value()
                 + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
         } catch (HttpServerErrorException e) {
-            throw new ShopifyException(
-                "Exchange dispatch HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+            // P1 Fix 7 (2026-11-08): classified like pushTransferOut — a 5xx may have been processed.
+            throw new ShopifyAmbiguousException(
+                "Exchange dispatch HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
         } catch (ResourceAccessException e) {
             throw new ShopifyAmbiguousException(
                 "Exchange dispatch: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Exchange dispatch: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
         }
 
         if (response == null) {
@@ -1877,16 +1968,26 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "Exchange dispatch: null response body from " + shopDomain);
         }
 
+        // Definite ONLY when every top-level error is THROTTLED and there is no data (Shopify didn't run it);
+        // any other top-level error may have been executed → ambiguous (failed_ambiguous, never re-sent).
         JsonNode errors = response.get("errors");
         if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Exchange dispatch GraphQL error (THROTTLED): not executed by Shopify");
+            }
             String code = errors.get(0).path("extensions").path("code").asText("");
-            throw new ShopifyException("Exchange dispatch GraphQL error"
+            throw new ShopifyAmbiguousException("Exchange dispatch GraphQL error"
                 + (code.isBlank() ? "" : " (" + code + ")") + ": "
-                + errors.get(0).path("message").asText());
+                + errors.get(0).path("message").asText() + " — not confirmed");
         }
 
         JsonNode data = response.get("data");
-        if (data == null) {
+        if (data == null || data.isNull()) {
             throw new ShopifyAmbiguousException(
                 "Exchange dispatch: response had no data field from " + shopDomain);
         }
