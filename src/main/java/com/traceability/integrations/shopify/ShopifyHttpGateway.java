@@ -1122,6 +1122,70 @@ class ShopifyHttpGateway implements ShopifyGateway {
             }
             """;
 
+    /** Part D P3 audit read — validated against Admin API 2026-04 (Shopify toolkit). Read-only: no mutation. */
+    static final String MAIN_LEVEL_AUDIT_QUERY = """
+            query TracedMainLevelAudit($ids: [ID!]!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  sku
+                  inventoryLevels(first: 20, includeInactive: true) {
+                    pageInfo { hasNextPage }
+                    nodes { isActive location { id } quantities(names: ["available", "on_hand"]) { name quantity } }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public List<MainLevelAudit> auditMainLevels(String shopDomain, String token, String locationGid,
+                                                List<String> inventoryItemGids) {
+        if (inventoryItemGids.isEmpty()) return List.of();
+        if (inventoryItemGids.size() > MAIN_LEVEL_AUDIT_BATCH) {
+            throw new IllegalArgumentException("auditMainLevels: at most " + MAIN_LEVEL_AUDIT_BATCH + " items per request");
+        }
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("ids", mapper.valueToTree(inventoryItemGids));
+        // reserveCost 400: the transport's proactive slow-down waits until 400 points are back in the bucket.
+        JsonNode response = postGraphQL(shopDomain, token, MAIN_LEVEL_AUDIT_QUERY, vars, 400);
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && !errors.isEmpty()) {
+            throw new ShopifyException("Shopify GraphQL error: " + errors.get(0).path("message").asText());
+        }
+        JsonNode nodes = response.path("data").path("nodes");
+        if (!nodes.isArray()) throw new ShopifyException("Main level audit: no nodes in the answer");
+        java.util.Map<String, JsonNode> byId = new java.util.HashMap<>();
+        for (JsonNode n : nodes) {
+            if (n != null && !n.isNull() && n.hasNonNull("id")) byId.put(n.path("id").asText(), n);
+        }
+        List<MainLevelAudit> out = new ArrayList<>();
+        for (String item : inventoryItemGids) {
+            JsonNode n = byId.get(item);
+            if (n == null) { out.add(new MainLevelAudit(item, null, "item_gone", null, null)); continue; }
+            String sku = n.path("sku").isTextual() ? n.path("sku").asText() : null;
+            JsonNode levels = n.path("inventoryLevels");
+            JsonNode main = null;
+            for (JsonNode lv : levels.path("nodes")) {
+                if (locationGid.equals(lv.path("location").path("id").asText(null))) { main = lv; break; }
+            }
+            if (main == null) {
+                boolean more = levels.path("pageInfo").path("hasNextPage").asBoolean(false);
+                out.add(new MainLevelAudit(item, sku, more ? "unknown" : "missing", null, null));
+                continue;
+            }
+            Integer available = null, onHand = null;
+            for (JsonNode q : main.path("quantities")) {
+                String name = q.path("name").asText("");
+                if ("available".equals(name)) available = q.path("quantity").asInt(0);
+                else if ("on_hand".equals(name)) onHand = q.path("quantity").asInt(0);
+            }
+            out.add(new MainLevelAudit(item, sku, main.path("isActive").asBoolean(false) ? "active" : "inactive",
+                available, onHand));
+        }
+        return out;
+    }
+
     @Override
     public java.util.Set<String> inactiveMainLevels(String shopDomain, String token, String locationGid,
                                                     java.util.Collection<String> inventoryItemGids) {

@@ -122,6 +122,12 @@ traced:
   # "Create returns in Shopify". Empty = no tenant (the feature doesn't exist anywhere).
   shopify-returns-sync:
     tenants: ${TRACED_SHOPIFY_RETURNS_SYNC_TENANTS:}
+  # One-off READ-ONLY hidden-stock audit (MainLevelAuditJob, Part D P3, 2026-11-08) — never scheduled.
+  # TRACED_MAIN_LEVEL_AUDIT_TENANTS=<tenant ids, comma-separated> → runs once at startup; reads Traced pieces and
+  # Shopify inventory levels (includeInactive) at the Traced location; writes nothing. Logs: grep MAIN_LEVEL_AUDIT.
+  main-level-audit:
+    tenants: ${TRACED_MAIN_LEVEL_AUDIT_TENANTS:}
+    delay-ms: ${TRACED_MAIN_LEVEL_AUDIT_DELAY_MS:1000}
   # One-off line paid price backfill (PaidPriceBackfill, 2026-11-06) — never scheduled.
   # TRACED_PAID_PRICE_BACKFILL_ON_STARTUP=fees|<tenant ids> → DRY RUN (counts per tenant, no Shopify call);
   # add TRACED_PAID_PRICE_BACKFILL_APPLY=true to read Shopify and store the prices. Logs: grep PAID_PRICE_BACKFILL.
