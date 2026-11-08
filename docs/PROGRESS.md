@@ -4,6 +4,55 @@
 
 ## Current state
 
+**Part D double-apply fix P1 (2026-11-08; branch `fix/part-d-probe-stale` off main cb4c3eba, worktree
+`~/Documents/traceability-partd`; NOT merged, NOT deployed; no migration). P2 (inactive-level guard) waits for a
+dev-store run with Traced's own app.**
+- The bug (found in Move S0): with `changeFromQuantity` set, Shopify checks the baseline BEFORE the idempotency key, so
+  an identical re-send of an increment that LANDED answers `CHANGE_FROM_QUANTITY_STALE`. Three ways it doubled a +N:
+  (A) Part D's recovery check (identical re-send of an ambiguous claim) answered STALE → classed REJECTED → retried
+  with a new key; (B) the first send itself went through `executeGraphQL`'s Resilience4j retry, which silently
+  re-sent a timed-out body → STALE → REJECTED → new key; (C) any top-level GraphQL error / no data was REJECTED.
+- **Prod exposure (Marawan ran the read-only SQL via the Supabase connector, 2026-11-08): no repair needed.** Q2 (failed
+  "rejected" claims with a stale-looking error, still scheduled) = 0; Q3 (ambiguous claims due for a recovery check)
+  = 0. Q1 (increments applied only after a retry under a different key) = 3, none a real double: The Snouts ids
+  169 / 170 (return_inspection, +1 each, 2026-10-08 17:31 → 17:40) were the manual restock repair, sent WITHOUT a
+  baseline (change_from_quantity NULL), so path A can't apply; id 2551 is testReciving, a test store.
+- P1 built:
+  - `ShopifyHttpGateway.sendAdjust` → its own one-shot transport `postAdjustOnce` (no Resilience4j, no throttle
+    loop): 4xx / ALL-THROTTLED-no-data → REJECTED; never connected → NEVER_SENT; 5xx, timeout, reset, other
+    top-level errors, no data → AMBIGUOUS; a userError on a first send → REJECTED (genuine refusal).
+  - The recovery-check flag (set only from `resendInventoryAdjustment`): its answer is never REJECTED / NEVER_SENT;
+    a userError (STALE, idempotency codes, any), a non-THROTTLED top-level error or no data → AMBIGUOUS +
+    `ShopifyAdjustFailedException.probeStale`; 4xx / THROTTLED / never connected / 5xx / timeout → AMBIGUOUS
+    without it (the identical re-send may be tried again inside the 20 h window). `attemptIncrement` also forces
+    AMBIGUOUS for any failure of a recovery check.
+  - probeStale → claim failed / ambiguous, `next_attempt_at` NULL, `payload.probeStale = true`
+    (`IncrementRecoveryRules.PROBE_STALE_SQL`): excluded from `DUE_SQL`, included in `GAVE_UP_SQL` →
+    `inventory_increment_sync_failed` (gave_up). `repushFailedIncrement` requires confirmOld for it and then sends a
+    NEW key with a fresh baseline (the re-claim clears the flag).
+  - `sendExchangeDispatch` splits its catch: `ShopifyAmbiguousException` / unexpected RuntimeException →
+    `failed_ambiguous` (the manual re-push refuses it; `claim()` only re-claims 'failed', so a later dispatch signal
+    can't re-send it); `ShopifyException` / IllegalArgumentException → 'failed' (re-sendable). The
+    `void_hold_sync_failed` detector now also lists exchange_dispatch `failed_ambiguous`.
+  - `ShopifyGateway.resendInventoryAdjustment` javadoc corrected (an identical re-send does NOT replay under CAS).
+  - Not changed: Main reconcile — a probeStale claim counts as "in flight" there (holds that variant) until its key is
+    past the 20 h window, like any non-expired ambiguous claim.
+  - Fix 7 (approved 2026-11-08): `pushExchangeDispatch` classifies like `pushTransferOut` — only HTTP 4xx, userErrors
+    and THROTTLED-only-with-no-data are definite ('failed', re-sendable); 5xx, timeout, refused / reset, any other
+    top-level GraphQL error, no / null data and an unreadable body → `ShopifyAmbiguousException` → `failed_ambiguous`
+    (alert, never auto re-sent, manual re-push refused). `ExchangeDispatchClassificationWireTest` x1–x13.
+  - `ShopifyAdjustClassificationWireTest.c3` renamed `c3_graphqlError_ambiguous`, expects AMBIGUOUS (approved).
+  - Tests: full suite run once alone before Fix 7 (4,230, 2 failures: ExchangeBackfillTest — known — and c3, since
+    approved and changed); after Fix 7 the touched classes re-run green (69). Every new test revert-checked.
+- **P2 (not built):** the inactive-level guard (read `inventoryLevels(includeInactive: true)` before every Main write;
+  increments activate with a NEW key and need a baseline; decrements / moves skip + alert). Waits for the dev-store
+  run with Traced's own app — scripts in `scripts/dev/part-d-p2/` (not run): `activation.py` (does `inventoryActivate`
+  re-activate an inactive level; does a re-used key replay as a no-op; +1 on an inactive level and whether it shows
+  after re-activation), `key_retention.py plant|check` (how long Shopify keeps a key: 1 / 6 / 20 / 24 / 48 / 72 h),
+  `s0_bc.py` (S0's b / b2 / b3 / c). `traced_dev.py` refuses any shop but the dev store and any app but
+  `P2_APP_HANDLE`, one request per call, no retry, token in memory only, log `p2-log.jsonl` with the token redacted;
+  every probe puts the quantity back.
+
 **"Same address" without a district (2026-11-07; branch `feat/same-address-no-district` off main 057263a8, merged to main,
 NOT deployed; migration V224 — main and prod ended at V223 (prod checked by Marawan 00:59)).** See CLAUDE.md ("No-district Same address").
 - Original delivery with no district → no area question; booked with city + lines, no districtId. Bosta refusing it for

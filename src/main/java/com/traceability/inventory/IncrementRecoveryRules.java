@@ -50,18 +50,32 @@ public final class IncrementRecoveryRules {
     public static final String FAILED_LIVE_SQL =
         "sia.status = 'failed' AND NOT sia.legacy AND sia.trigger_type IN " + INCREMENT_TRIGGERS_SQL;
 
+    /** The payload key a recovery check that came back without replaying a success sets (P1, 2026-11-08). */
+    public static final String PROBE_STALE_KEY = "probeStale";
+
+    /**
+     * An ambiguous claim whose recovery check (the identical re-send) answered STALE / an idempotency code / an
+     * error instead of replaying a success (ShopifyAdjustFailedException.probeStale). The first send may have
+     * landed: it is never sent again automatically — a person checks Shopify, and a manual re-push needs
+     * confirmOld. No migration: a payload key on the claim row, cleared when a person re-claims it.
+     */
+    public static final String PROBE_STALE_SQL =
+        "(sia.failure_class = 'ambiguous' AND COALESCE(sia.payload ->> '" + PROBE_STALE_KEY + "', '') = 'true')";
+
     /** Due for an automatic retry now. */
     public static final String DUE_SQL =
         FAILED_LIVE_SQL + " AND sia.attempt_count BETWEEN 1 AND " + (MAX_ATTEMPTS - 1) +
-        " AND sia.next_attempt_at IS NOT NULL AND sia.next_attempt_at <= now()";
+        " AND sia.next_attempt_at IS NOT NULL AND sia.next_attempt_at <= now() AND NOT " + PROBE_STALE_SQL;
 
     /** An ambiguous claim whose sent key is too old to resend identically. */
     public static final String AMBIGUOUS_EXPIRED_SQL =
         "(sia.failure_class = 'ambiguous' AND sia.sent_key_first_at < now() - interval '" + AMBIGUOUS_WINDOW_HOURS + " hours')";
 
-    /** Nothing left to try automatically: attempts exhausted, or ambiguous past the window. */
+    /** Nothing left to try automatically: attempts exhausted, ambiguous past the window, or a recovery check that
+     *  came back stale. */
     public static final String GAVE_UP_SQL =
-        FAILED_LIVE_SQL + " AND (sia.attempt_count >= " + MAX_ATTEMPTS + " OR " + AMBIGUOUS_EXPIRED_SQL + ")";
+        FAILED_LIVE_SQL + " AND (sia.attempt_count >= " + MAX_ATTEMPTS + " OR " + AMBIGUOUS_EXPIRED_SQL +
+        " OR " + PROBE_STALE_SQL + ")";
 
     /** Legacy backlog (failed before V121). */
     public static final String LEGACY_SQL =
