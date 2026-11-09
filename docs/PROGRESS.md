@@ -7,10 +7,11 @@
 **Order drawer courier wording (2026-11-09; branch `fix/drawer-courier-wording` off main f1315843; no migration).**
 Bug A: the drawer header's `OrderStatus` badge never passed the carrier → "With {{carrier}}" on non-Bosta orders
 (the Current-state card did pass it). Bug B: Bosta copy on orders another courier carries.
-- `GET /orders/{id}` → `courier {kind, name}` (`OrderController.OrderCourier`): kind = the NEWEST forward shipment's
-  provider; with none, 'bosta' when the tenant ships with Bosta (`tenantShipsWithBosta`), else null. Frontend
-  `isBostaCourier(order)`: Bosta wording when kind 'bosta' OR the block is absent (older payloads / fixtures —
-  approved, existing drawer tests unchanged). The drawer's `forward` was already the newest (server orders forward
+- `GET /orders/{id}` → `courier {kind, name}` (`OrderController.OrderCourier`) for a NON-Bosta order only: kind =
+  the NEWEST forward shipment's provider ('generic' + carrier name); no forward shipment on a store without Bosta
+  (`tenantShipsWithBosta` false) → kind null. A Bosta order has NO block (NON_NULL) — its detail is byte-identical
+  (GenericG3IsolationGoldenTest golden unchanged). Frontend `isBostaCourier(order)`: Bosta wording when the block is
+  absent (or kind 'bosta') — approved, existing drawer tests unchanged. The drawer's `forward` was already the newest (server orders forward
   shipments created_at DESC) — comment only.
 - Fixed: header + OrderDetail badges pass the carrier (fallback `status.the_courier` "the courier" / "شركة الشحن");
   `courierGatedReasonOther`, `noWaybillYetOther`; timeline `waybill_linked` / `return_waybill_linked` for generic legs
