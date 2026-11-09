@@ -4,6 +4,29 @@
 
 ## Current state
 
+**Order drawer courier wording (2026-11-09; branch `fix/drawer-courier-wording` off main f1315843; no migration).**
+Bug A: the drawer header's `OrderStatus` badge never passed the carrier → "With {{carrier}}" on non-Bosta orders
+(the Current-state card did pass it). Bug B: Bosta copy on orders another courier carries.
+- `GET /orders/{id}` → `courier {kind, name}` (`OrderController.OrderCourier`): kind = the NEWEST forward shipment's
+  provider; with none, 'bosta' when the tenant ships with Bosta (`tenantShipsWithBosta`), else null. Frontend
+  `isBostaCourier(order)`: Bosta wording when kind 'bosta' OR the block is absent (older payloads / fixtures —
+  approved, existing drawer tests unchanged). The drawer's `forward` was already the newest (server orders forward
+  shipments created_at DESC) — comment only.
+- Fixed: header + OrderDetail badges pass the carrier (fallback `status.the_courier` "the courier" / "شركة الشحن");
+  `courierGatedReasonOther`, `noWaybillYetOther`; timeline `waybill_linked` / `return_waybill_linked` for generic legs
+  (Bosta keeps awb_linked); sold-out exchange `soldOutFallbackOther`; Returns list reason for booking 'manual'
+  (`awaiting_items.reasonManual`, `on_the_way.reasonTrackingManual`); `return_leg_unscanned` "back per the courier"
+  unless the leg is Bosta (provider read as `leg_provider`, removed in enrich).
+- Guard: `frontend/src/test/i18nPlaceholders.test.ts` — any `t('key', {...})` missing a placeholder its EN / AR text
+  uses goes red; a carrier-naming `status.*` key must be in `CARRIER_STATUS_KEYS` (ui.tsx; OrderStatus, LegStatusBadge
+  and the drawer card all use it).
+- NOT changed (asked first): LegStatusBadge's "another carrier" fallback is pinned by genericCarrierBadge.test.tsx:40
+  ("With another carrier") — switching it to "the courier" needs that test edited.
+- Tests: OrderCourierWordingTest (c1, c2, t1, u1), orderDrawerCourierWording (12), courierWordingReturns (13),
+  i18nPlaceholders (3); revert-checked per fix (backend 4/4 red; frontend 9 mutations each red).
+- `npm run test:browser`: all tests pass; its 6 "getMe().then" unhandled errors in scannerBurst.browser.test.tsx are
+  pre-existing (same on main f1315843).
+
 **S5b — exchanges to Shopify as return only + the Try again fix (2026-11-08; branch `feat/s5b-exchange-returns` off main 5baf3287; NOT merged, NOT deployed; no migration).** S5a verified in prod on the test store (RR-D49WDJ / #1016-R1: created on the 1st attempt with the catch-all reason, read-back verified; grading → NOT_RESTOCKED with no location; Shopify auto-closed after processing → close=already_closed, no call). (1) Try again: RR-ZMCAUG (failed, 5/5) — a press after the deploy left no attempt. The backend path (retry → job → create) works in tests, so the prod cause is NOT reproduced; the fix makes it explicit — fresh cycle (attempts 0, error cleared), enqueued at once, audited with the actor, coded refusals shown in the drawer, 202 with a JSON body, one INFO line per job run. After deploy: press Try again on RR-ZMCAUG, then `grep "manual retry\|Shopify return sync job\|returnCreate"`. (2) S5b: portal + Lookup exchanges create a return for the item coming back (never an exchange line), note names the replacement + collect + "don't refund in Shopify" (no return-level note exists in 2026-04 ReturnInput). **Approved 2026-11-09 (review):** e1 edited for S5b; "via courier" for manual booking; A — a Shopify return is never closed / cancelled before its grading (end pending while an item is awaited or back ungraded, x8); B — no money part for 0 / negative, "refund EGP X to customer" when the store owes the customer (x9, n2).
 
 **Main reconcile rollout: "everyone except" + big-change brake (2026-11-08; branch `feat/main-reconcile-exclude-brake`
