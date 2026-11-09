@@ -5,11 +5,11 @@ import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
 import {
   getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder, markShippedOutsideTraced,
-  getOrderNotes, addOrderNote, ServerMessageError,
+  getOrderNotes, addOrderNote, ServerMessageError, isBostaCourier,
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
-import { Button, OrderPieceBadge, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
+import { Button, CARRIER_STATUS_KEYS, OrderPieceBadge, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
 import { ShopifyReturnCard } from './ShopifyReturnCard'
 
 // ── Relative time — same pattern as Overview.tsx/StockTake.tsx/Transfers.tsx (each
@@ -114,6 +114,14 @@ export default function OrderDrawer({
     catch { /* noop — reload regardless */ }
   }
 
+  // 2026-11-09: whose courier this order is with — Bosta wording only for a Bosta order (or an older payload
+  // without the courier block); any other courier is named, or "the courier".
+  const bosta = order ? isBostaCourier(order) : true
+  const carrierName = order?.courier?.name || order?.shippingBadge?.carrier || null
+  const courierGatedReason = bosta
+    ? t('orderDetail.courierGatedReason')
+    : t('orderDetail.courierGatedReasonOther', { carrier: carrierName || t('status.the_courier') })
+
   const handleCancel = async () => {
     if (!orderId) return
     setCancelBusy(true); setCancelErr('')
@@ -131,7 +139,7 @@ export default function OrderDrawer({
       // C2: a refusal with its own server copy (a Lookup exchange's order — use Cancel exchange) is shown as sent.
       if (err instanceof ServerMessageError && err.code) { setCancelErr(err.messageFor(i18n.language)); return }
       const msg = err instanceof Error ? err.message : ''
-      setCancelErr(msg.startsWith('409') ? t('orderDetail.courierGatedReason') : t('orderDetail.cancelError'))
+      setCancelErr(msg.startsWith('409') ? courierGatedReason : t('orderDetail.cancelError'))
     } finally {
       setCancelBusy(false)
     }
@@ -212,6 +220,7 @@ export default function OrderDrawer({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
+  // The server lists shipments forward first, newest first within each leg — so this is the NEWEST forward leg.
   const forward = order?.shipments.find(s => s.shipmentLeg === 'forward') ?? null
   // Hold and Cancel both hide on the same terminal statuses — there is nothing left to
   // hold or cancel once an order is delivered/cancelled/returned/lost.
@@ -260,7 +269,7 @@ export default function OrderDrawer({
               </button>
               <div className="flex items-center gap-3 pe-10">
                 <h2 className="text-h3 text-primary font-mono">{order.number}</h2>
-                <OrderStatus derived={order.derivedStatus} />
+                <OrderStatus derived={order.derivedStatus} carrier={carrierName} />
               </div>
               {extra}
               <div className="mt-3">
@@ -321,8 +330,8 @@ export default function OrderDrawer({
                       </span>
                       <div>
                         <p className="text-body font-semibold text-primary">
-                          {order.derivedStatus.primaryKey === 'status.with_carrier' || order.derivedStatus.primaryKey === 'status.delivered_with_carrier'
-                            ? t(order.derivedStatus.primaryKey, { carrier: order.shippingBadge?.carrier || t('status.another_carrier') })
+                          {CARRIER_STATUS_KEYS.has(order.derivedStatus.primaryKey)
+                            ? t(order.derivedStatus.primaryKey, { carrier: carrierName || t('status.the_courier') })
                             : t(order.derivedStatus.primaryKey, { defaultValue: order.derivedStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
                         </p>
                         {stateSub && <p className="text-small text-muted">{stateSub}</p>}
@@ -351,7 +360,7 @@ export default function OrderDrawer({
                             say so rather than leave a dead button unexplained. */}
                         {!forward && (
                           <p className="text-caption text-muted text-center" data-testid="drawer-no-waybill">
-                            {t('orders.drawer.noWaybillYet')}
+                            {bosta ? t('orders.drawer.noWaybillYet') : t('orders.drawer.noWaybillYetOther')}
                           </p>
                         )}
                       </div>
@@ -392,7 +401,7 @@ export default function OrderDrawer({
                       </div>
                     )}
                     {order.physicallyWithCourier && (
-                      <p className="text-caption text-muted mt-2">{t('orderDetail.courierGatedReason')}</p>
+                      <p className="text-caption text-muted mt-2">{courierGatedReason}</p>
                     )}
                   </div>
 

@@ -370,6 +370,7 @@
       "contactCustomer": "التواصل مع العميل",
       "viewShipment": "عرض الشحنة",
       "noWaybillYet": "لا توجد بوليصة بوستا بعد",
+      "noWaybillYetOther": "لا توجد بوليصة بعد",
       "viewInShopify": "عرض في Shopify",
       "viewAllItems": "عرض جميع المنتجات",
       "removedInShopify": "أُزيل في Shopify",
@@ -393,7 +394,9 @@
       "picked_up": "تم الالتقاط بواسطة {{name}}",
       "packed": "تم التغليف",
       "awb_linked": "تم ربط بوليصة شحن بوسطة",
+      "waybill_linked": "تم ربط بوليصة الشحن",
       "return_awb_linked": "تم ربط بوليصة إرجاع بوسطة",
+      "return_waybill_linked": "تم ربط بوليصة الإرجاع",
       "back_at_bosta_hub": "عادت إلى مركز بوسطة",
       "waybill_changed_in_shopify": "تغيّرت البوليصة في شوبيفاي",
       "waybill_change_not_followed": "لم يتبع Traced تغيير البوليصة في شوبيفاي",
@@ -648,6 +651,7 @@
     "cancelSuccess": "تم إلغاء الطلب",
     "cancelError": "تعذر إلغاء الطلب — حاول مرة أخرى",
     "courierGatedReason": "تم تسليم الطلب للمندوب — يرجى التواصل مع Bosta لترتيب الإلغاء. سيتم تحرير القطع بعد استرجاعها من المندوب.",
+    "courierGatedReasonOther": "تم تسليم الطلب إلى {{carrier}} — يرجى التواصل معها لترتيب الإلغاء. سيتم تحرير القطع بعد استرجاعها من المندوب.",
     "codEdit": "تعديل الدفع عند الاستلام",
     "codSave": "حفظ",
     "codCancel": "إلغاء",
@@ -2310,6 +2314,7 @@
         "outOfStock": "نفد من المخزون",
         "soldOutTitle": "نفد {{variant}} بعد طلب العميل",
         "soldOutFallback": "وافق العميل على استرداد المبلغ بدلاً من ذلك. التحويل يجعل هذا إرجاعاً عادياً: تستلم بوستا {{variant}} وتردّ المبلغ بعد فحصه.",
+        "soldOutFallbackOther": "وافق العميل على استرداد المبلغ بدلاً من ذلك. التحويل يجعل هذا إرجاعاً عادياً: تستلم {{carrier}} {{variant}} وتردّ المبلغ بعد فحصه.",
         "soldOutNoFallback": "لم يوافق العميل على استرداد المبلغ بدلاً من ذلك، لذا يمكن رفض هذا الاستبدال فقط.",
         "fallback": "وافق العميل على استرداد المبلغ إذا نفد المقاس الجديد أولاً.",
         "approveHelper": "الموافقة تحجز رحلة استبدال واحدة مع بوسطة وتضيف المقاس الجديد إلى التجهيز والتغليف.",
@@ -4199,6 +4204,7 @@
     "label_created": "بوليصة تم إنشاؤها",
     "with_carrier": "مع {{carrier}}",
     "another_carrier": "شركة شحن أخرى",
+    "the_courier": "شركة الشحن",
     "in_transit": "في الطريق",
     "delivery_failed": "فشل التوصيل — إعادة المحاولة",
     "delivered": "تم التوصيل",
@@ -4435,13 +4441,15 @@
       },
       "awaiting_items": {
         "label": "بانتظار القطع",
-        "reason": "احجز الاستلام في بوسطة"
+        "reason": "احجز الاستلام في بوسطة",
+        "reasonManual": "بانتظار القطع من {{carrier}}"
       },
       "on_the_way": {
         "label_refund": "المندوب في الطريق للاستلام",
         "label_exchange": "الاستبدال في الطريق",
         "label_leg": "في طريق العودة",
-        "reasonTracking": "بوسطة {{tracking}}"
+        "reasonTracking": "بوسطة {{tracking}}",
+        "reasonTrackingManual": "{{carrier}} {{tracking}}"
       },
       "refunded": {
         "label": "تم الاسترداد",

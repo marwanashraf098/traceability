@@ -374,6 +374,7 @@
       "contactCustomer": "Contact customer",
       "viewShipment": "View shipment",
       "noWaybillYet": "No Bosta waybill yet",
+      "noWaybillYetOther": "No waybill yet",
       "viewInShopify": "View in Shopify",
       "viewAllItems": "View all items",
       "removedInShopify": "Removed in Shopify",
@@ -397,7 +398,9 @@
       "picked_up": "Picked by {{name}}",
       "packed": "Packed",
       "awb_linked": "Bosta AWB Linked",
+      "waybill_linked": "Waybill Linked",
       "return_awb_linked": "Bosta Return AWB Linked",
+      "return_waybill_linked": "Return Waybill Linked",
       "back_at_bosta_hub": "Back at Bosta hub",
       "waybill_changed_in_shopify": "Waybill changed in Shopify",
       "waybill_change_not_followed": "Waybill change in Shopify not followed",
@@ -648,6 +651,7 @@
     "cancelSuccess": "Order cancelled",
     "cancelError": "Couldn't cancel this order — try again",
     "courierGatedReason": "Order has been handed to courier — contact Bosta to arrange cancellation. Pieces will be released once the courier returns them.",
+    "courierGatedReasonOther": "Order has been handed to {{carrier}} — contact them to arrange cancellation. Pieces will be released once the courier returns them.",
     "codEdit": "Edit COD",
     "codSave": "Save",
     "codCancel": "Cancel",
@@ -2218,6 +2222,7 @@
         "outOfStock": "Out of stock",
         "soldOutTitle": "{{variant}} sold out since the customer asked",
         "soldOutFallback": "The customer agreed to a refund instead. Switching it makes this a normal return: Bosta collects the {{variant}} and you refund once it's checked.",
+        "soldOutFallbackOther": "The customer agreed to a refund instead. Switching it makes this a normal return: {{carrier}} collects the {{variant}} and you refund once it's checked.",
         "soldOutNoFallback": "The customer didn't agree to a refund instead, so this exchange can only be rejected.",
         "fallback": "The customer agreed to a refund if the new size sells out first.",
         "approveHelper": "Approving books one Bosta exchange trip and adds the new size to Pick & Pack.",
@@ -4079,6 +4084,7 @@
     "label_created": "Label created",
     "with_carrier": "With {{carrier}}",
     "another_carrier": "another carrier",
+    "the_courier": "the courier",
     "in_transit": "In transit",
     "delivery_failed": "Delivery failed — retrying",
     "delivered": "Delivered",
@@ -4297,13 +4303,15 @@
       },
       "awaiting_items": {
         "label": "Waiting for the items",
-        "reason": "Book the pickup in Bosta"
+        "reason": "Book the pickup in Bosta",
+        "reasonManual": "Waiting for the items from {{carrier}}"
       },
       "on_the_way": {
         "label_refund": "Courier collecting",
         "label_exchange": "Exchange on the way",
         "label_leg": "Coming back",
-        "reasonTracking": "Bosta {{tracking}}"
+        "reasonTracking": "Bosta {{tracking}}",
+        "reasonTrackingManual": "{{carrier}} {{tracking}}"
       },
       "refunded": {
         "label": "Refunded",

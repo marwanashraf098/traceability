@@ -257,19 +257,28 @@ const CONFLICT_EXCEPTION_TYPE: Record<string, string> = {
   'status.conflict.cancelled_but_delivered': 'cancelled_but_delivered',
 }
 
+/** The status keys that name a carrier ("With {{carrier}}", "Delivered · {{carrier}}") — every render passes one. */
+export const CARRIER_STATUS_KEYS: ReadonlySet<string> = new Set(['status.with_carrier', 'status.delivered_with_carrier'])
+
 export function OrderStatus({
   derived,
   className = '',
+  carrier,
 }: {
   derived: import('../api').DerivedOrderStatus
   className?: string
+  // 2026-11-09: the carrier name for status.with_carrier / status.delivered_with_carrier — without it the
+  // header showed the literal "With {{carrier}}". No name → "the courier".
+  carrier?: string | null
 }) {
   const { t } = useTranslation()
 
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-1.5', className)}>
       <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[derived.tone]])}>
-        {t(derived.primaryKey, { defaultValue: derived.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+        {CARRIER_STATUS_KEYS.has(derived.primaryKey)
+          ? t(derived.primaryKey, { carrier: carrier || t('status.the_courier') })
+          : t(derived.primaryKey, { defaultValue: derived.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
       </span>
 
       {/* A3/B2: cancelled-order conflict flag — always DANGER-toned, links to the matching
@@ -337,7 +346,7 @@ export function LegStatusBadge({
   const { t } = useTranslation()
   return (
     <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[legStatus.tone]], className)}>
-      {labelOverride ?? ((legStatus.primaryKey === 'status.with_carrier' || legStatus.primaryKey === 'status.delivered_with_carrier')
+      {labelOverride ?? (CARRIER_STATUS_KEYS.has(legStatus.primaryKey)
         ? t(legStatus.primaryKey, { carrier: carrier || t('status.another_carrier') })
         : t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') }))}
     </span>

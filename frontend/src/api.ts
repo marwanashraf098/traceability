@@ -423,6 +423,17 @@ export interface OrderDetail {
    * courier has (Shopify fulfilled it). target = what the pieces become.
    */
   shippedOutsideTraced?: { pieces: number; target: 'with_courier' | 'delivered' }
+  /**
+   * 2026-11-09: the courier this order is with (OrderController.OrderCourier) — present only for a non-Bosta
+   * order: kind = the newest forward shipment's provider ('generic'); with no shipment on a store without Bosta,
+   * null (no courier yet). name = the carrier's name. Absent = a Bosta order (or an older payload) — see isBostaCourier.
+   */
+  courier?: { kind: 'bosta' | 'generic' | null; name: string | null }
+}
+
+/** 2026-11-09: Bosta wording for this order? Absent courier block = Bosta (today's wording). */
+export function isBostaCourier(order: Pick<OrderDetail, 'courier'>): boolean {
+  return order.courier == null || order.courier.kind === 'bosta'
 }
 
 export interface OrderListParams {
