@@ -611,8 +611,17 @@ export function reasonLine(t: TFunction, c: ReturnCase): string | null {
       return c.caseType === 'A' ? t(`${k}.reason`, { count: r.arrivedCount ?? 1 }) : t(`${k}.reasonLeg`)
     case 'on_the_way':
       // A request's Bosta AWB (a dashboard exchange / courier return already shows it as its reference).
+      // 2026-11-09: a request booked with the merchant's own courier names that courier, never Bosta.
       return r.trackingNumber && c.reference !== r.trackingNumber
-        ? t(`${k}.reasonTracking`, { tracking: r.trackingNumber }) : null
+        ? (r.bookingStatus === 'manual'
+          ? t(`${k}.reasonTrackingManual`, { tracking: r.trackingNumber, carrier: r.carrierName || t('status.the_courier') })
+          : t(`${k}.reasonTracking`, { tracking: r.trackingNumber }))
+        : null
+    case 'awaiting_items':
+      // 2026-11-09: booked with the merchant's own courier — the items come back with it, not "Book in Bosta".
+      return r.bookingStatus === 'manual'
+        ? t(`${k}.reasonManual`, { carrier: r.carrierName || t('status.the_courier') })
+        : t(`${k}.reason`)
     default: {
       const key = `${k}.reason`
       const text = t(key, { defaultValue: '' })

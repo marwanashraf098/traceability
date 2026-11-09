@@ -138,7 +138,7 @@ export default function OrderDetail() {
             <dl className="space-y-2">
               <div className="flex items-start gap-2">
                 <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.status')}</dt>
-                <dd><OrderStatus derived={order.derivedStatus} /></dd>
+                <dd><OrderStatus derived={order.derivedStatus} carrier={order.courier?.name || order.shippingBadge?.carrier} /></dd>
               </div>
               {order.onHold && (
                 <div className="flex items-start gap-2 flex-wrap">
@@ -491,7 +491,7 @@ export function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
         </h2>
         {/* A3.1: leg-scoped badge, return leg ONLY — the forward leg's status lives
             solely in the order header above (never re-add a raw state badge here). */}
-        {isReturn && <LegStatusBadge legStatus={shipment.legStatus} />}
+        {isReturn && <LegStatusBadge legStatus={shipment.legStatus} carrier={shipment.carrierName} />}
       </div>
 
       {/* Facts only — the derived headline above is the single status source (A1/A2). */}
