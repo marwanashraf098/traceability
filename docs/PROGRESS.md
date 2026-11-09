@@ -4,6 +4,40 @@
 
 ## Current state
 
+**Try again 404 + "no transaction = no tenant" sweep (2026-11-09; branch `fix/shopify-sync-tenant-tx` off main
+f1315843; no migration).** Prod after f1315843: Try again on RR-ZMCAUG answered a bare 404 every time (nginx `→ 404 0`).
+Root cause: `ShopifyReturnSyncController.own()` read `return_requests` with a bare JdbcTemplate outside any transaction;
+TenantAwareConnection sets `app.current_tenant` only at transaction start, so on app_user RLS hid the row → 404 before
+any handler logic (Try again, Check again and "I checked it in Shopify" all). The S5a/S5b tests post the same URLs over
+real HTTP but run the app as postgres (BYPASSRLS) — they couldn't see it.
+- Fix: `ShopifyReturnSyncService.ownedBy` inside `inTenant(...)`; the drawer shows a code-less 404 as "Traced couldn't
+  find this request for Shopify…" (EN + AR) instead of the generic message.
+- Sweep (static scan of every controller + the services they call, plus a full-suite run with a temporary probe in
+  TenantAwareConnection logging every statement run in autocommit with a tenant set). Fixed (live buttons):
+  - `GET /return-requests/{id}/refund-suggestion` — RefundSuggestionService had no transaction at all → 404 on every
+    request in prod (refund form never prefilled). DB part now in a read-only TransactionTemplate on its own
+    DataSource (joins a caller's); the Shopify read stays outside.
+  - `POST /shopify-exchanges/{orderId}/release-reservation` and `POST /shopify/location/resend-failed` — the action
+    happened, then `audit.record` outside a transaction failed audit_log's RLS WITH CHECK → 500, no audit row.
+    `AuditService.record` is now `@Transactional` (joins the caller's, else opens one) — covers every caller.
+  - Listed, NOT fixed (Marawan to decide): (a) `BostaWebhookJob` step 9.6 (and `reinterpretExchangeForwardLeg`)
+    `ShipmentLinkService.populateConsigneePii` outside a transaction → on app_user the fill-only UPDATE matches 0 rows:
+    later webhooks never fill an existing shipment's order name / phone (first arrival is fine — it runs in the link
+    transaction). One-line wrap in `tx.execute`. (b) `ShopifyInventoryService.isReviewFixtureVariant` on the
+    exchange-dispatch path (lines ~547 / 567) reads outside a transaction → for a review (simulated) tenant the fixture
+    variant isn't recognised there. Review tenants only.
+  - Every other probe hit was a test calling a service directly without a transaction / without its Spring proxy
+    (prod callers are `@Transactional` or wrap it), a DEFINER hatch (resolve_tenant_by_shop_domain /
+    resolve_tenant_by_portal_slug / resolve_scan_pairing), or a test stub's own callback.
+- Tests: ShopifyReturnSyncHttpAppUserTest (h0–h4) and TenantTxSweepHttpAppUserTest (t1–t3) run the WHOLE app as
+  app_user over HTTP at api.ts's URLs; frontend shopifySyncHttpPath.test.tsx pins the three drawer URLs + the 404
+  message. Revert-checked: bare read back in own() → h1 / h2 / h3-control 404; no readTx → t1 404; no @Transactional
+  on record → t2 / t3 500; no 404 branch in the drawer → red. ShopifyExchangeReturnSyncTest x7: comment corrected only.
+- Guard (recommended, NOT built): TenantAwareConnection flags a statement run in autocommit while TenantContext is set
+  — fail in tests, WARN (once per call site) in prod. Never set the GUC at session level for autocommit (it would
+  stay on the pooled connection → cross-tenant leak).
+- After deploy: Try again on RR-ZMCAUG → `grep "manual retry\|Shopify return sync job\|returnCreate"`.
+
 **S5b — exchanges to Shopify as return only + the Try again fix (2026-11-08; branch `feat/s5b-exchange-returns` off main 5baf3287; NOT merged, NOT deployed; no migration).** S5a verified in prod on the test store (RR-D49WDJ / #1016-R1: created on the 1st attempt with the catch-all reason, read-back verified; grading → NOT_RESTOCKED with no location; Shopify auto-closed after processing → close=already_closed, no call). (1) Try again: RR-ZMCAUG (failed, 5/5) — a press after the deploy left no attempt. The backend path (retry → job → create) works in tests, so the prod cause is NOT reproduced; the fix makes it explicit — fresh cycle (attempts 0, error cleared), enqueued at once, audited with the actor, coded refusals shown in the drawer, 202 with a JSON body, one INFO line per job run. After deploy: press Try again on RR-ZMCAUG, then `grep "manual retry\|Shopify return sync job\|returnCreate"`. (2) S5b: portal + Lookup exchanges create a return for the item coming back (never an exchange line), note names the replacement + collect + "don't refund in Shopify" (no return-level note exists in 2026-04 ReturnInput). **Approved 2026-11-09 (review):** e1 edited for S5b; "via courier" for manual booking; A — a Shopify return is never closed / cancelled before its grading (end pending while an item is awaited or back ungraded, x8); B — no money part for 0 / negative, "refund EGP X to customer" when the store owes the customer (x9, n2).
 
 **Main reconcile rollout: "everyone except" + big-change brake (2026-11-08; branch `feat/main-reconcile-exclude-brake`

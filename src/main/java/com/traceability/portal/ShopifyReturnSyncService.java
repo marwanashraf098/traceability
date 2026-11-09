@@ -935,6 +935,18 @@ public class ShopifyReturnSyncService {
         }
     }
 
+    /**
+     * Whether the request is the tenant's — read inside {@link #inTenant} so RLS sees the tenant. A bare JdbcTemplate
+     * read outside a transaction runs with app.current_tenant unset (TenantAwareConnection sets it only when a
+     * transaction starts), so on app_user it saw no row and every drawer action answered 404 in prod (2026-11-09,
+     * RR-ZMCAUG).
+     */
+    public boolean ownedBy(UUID tenantId, UUID requestId) {
+        return Boolean.TRUE.equals(inTenant(tenantId, () -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM return_requests WHERE id = ? AND tenant_id = ?)",
+            Boolean.class, requestId, tenantId)));
+    }
+
     private <T> T inTenant(UUID tenantId, Supplier<T> body) {
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> body.get()));
     }

@@ -43,7 +43,10 @@ export default function ShopifySyncState({ detail, onChanged }: {
     } catch (e) {
       const message = e instanceof TransferCommandError
         ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
-        : t(`${k}.actionFailed`)
+        // A 404 without a code (request not found for this tenant) gets its own message, never the generic one.
+        : e instanceof Error && e.message.startsWith('404')
+          ? t(`${k}.notFound`)
+          : t(`${k}.actionFailed`)
       setRefused(message)
       toast({ tone: 'error', message })
     } finally {

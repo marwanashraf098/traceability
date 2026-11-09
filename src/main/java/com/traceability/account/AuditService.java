@@ -41,7 +41,13 @@ public class AuditService {
      * @param targetType   entity type, e.g. "user", "order" — null if not entity-scoped
      * @param targetId     entity UUID as string — null if not entity-scoped
      * @param metadata     additional context (serialised to JSON); null allowed
+     *
+     * Joins the caller's transaction, or opens one: outside a transaction app.current_tenant is never set
+     * (TenantAwareConnection sets it at transaction start), so on app_user the INSERT failed audit_log's RLS
+     * WITH CHECK — the action had already happened and the endpoint answered 500 with no audit row (found
+     * 2026-11-09: Release reservation, Re-send failed updates).
      */
+    @Transactional
     public void record(UUID actorUserId, String action,
                        String targetType, String targetId,
                        Map<String, Object> metadata) {

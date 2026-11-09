@@ -9,7 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -39,52 +41,34 @@ public class RefundSuggestionService {
     private final ShopifyOrderPriceGateway shopify;
     private final ShopifyTokenProvider     tokens;
     private final ObjectMapper             mapper = new ObjectMapper();
+    /**
+     * The DB reads run in a read-only transaction on jdbc's own DataSource (joins a caller's transaction on it).
+     * Without one, app.current_tenant is never set (TenantAwareConnection sets it at transaction start) and RLS hid
+     * the request: GET …/refund-suggestion answered 404 on every request in prod (found 2026-11-09). The Shopify read
+     * stays outside it.
+     */
+    private final TransactionTemplate      readTx;
 
     public RefundSuggestionService(JdbcTemplate jdbc, ShopifyOrderPriceGateway shopify, ShopifyTokenProvider tokens) {
         this.jdbc    = jdbc;
         this.shopify = shopify;
         this.tokens  = tokens;
+        this.readTx  = new TransactionTemplate(new DataSourceTransactionManager(jdbc.getDataSource()));
+        this.readTx.setReadOnly(true);
     }
+
+    /** What the DB part decided: a finished body (exchange / frozen), or the request + lines to price. */
+    private record Loaded(Map<String, Object> body, Map<String, Object> rr, List<Line> lines) {}
 
     private record Line(UUID variantId, String variantGid, String productTitle, String variantTitle,
                         BigDecimal catalogPrice, int quantity) {}
 
     public Map<String, Object> suggest(UUID requestId) {
         UUID tenantId = TenantContext.require();
-        Map<String, Object> rr = jdbc.queryForList(
-            // P4b: a portal pre-connect order's Shopify order is its shopify_order_gid (external_id is internal:portal:…).
-            "SELECT rr.id, rr.type, o.id AS order_id, COALESCE(o.shopify_order_gid, o.external_id) AS external_id, " +
-            "       o.store_id, o.raw::text AS raw, s.shop_domain, " +
-            "       s.status::text AS store_status " +
-            "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
-            "LEFT JOIN stores s ON s.id = o.store_id AND s.tenant_id = o.tenant_id " +
-            "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId)
-            .stream().findFirst()
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
-        // Step 5c: an exchange has no refund.
-        if ("exchange".equals(rr.get("type"))) {
-            // F3: an exchange that leaves the customer owed money suggests exactly that (frozen at submit).
-            BigDecimal owed = new RequestAmounts(jdbc).customerOwed(tenantId, requestId);
-            if (owed.signum() <= 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("amount", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
-            body.put("currency", PortalAmounts.CURRENCY);
-            body.put("source", "frozen");
-            body.put("approximate", false);
-            body.put("customerOwed", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
-            body.put("lines", List.of());
-            return body;
-        }
-
-        // Items that came back; before anything arrived, the items still expected.
-        String scope = "('arrived', 'done')";
-        List<Line> lines = lines(tenantId, requestId, scope);
-        if (lines.isEmpty()) lines = lines(tenantId, requestId, scope = "('awaiting')");
-
-        // Returns portal fees F2: a request with frozen refund amounts is suggested from them — the paid prices
-        // frozen at submit minus the request's fee, floored at 0. No Shopify read. Every other request: as before.
-        Map<String, Object> frozen = frozen(tenantId, requestId, scope);
-        if (frozen != null) return frozen;
+        Loaded loaded = readTx.execute(st -> suggest(tenantId, requestId));
+        if (loaded.body() != null) return loaded.body();
+        Map<String, Object> rr = loaded.rr();
+        List<Line> lines = loaded.lines();
 
         JsonNode raw = parse((String) rr.get("raw"));
         String storedCurrency = raw == null ? null : text(raw.path("currency"));
@@ -115,6 +99,48 @@ public class RefundSuggestionService {
         }
         body.put("lines", out);
         return body;
+    }
+
+    /**
+     * The DB part of suggest — inside readTx. Kept under the name {@code suggest}: its read of the orders table is
+     * the member OrdersTableAccessGuardTest classifies (MUST_INCLUDE, portal pre-connect orders included).
+     */
+    private Loaded suggest(UUID tenantId, UUID requestId) {
+        Map<String, Object> rr = jdbc.queryForList(
+            // P4b: a portal pre-connect order's Shopify order is its shopify_order_gid (external_id is internal:portal:…).
+            "SELECT rr.id, rr.type, o.id AS order_id, COALESCE(o.shopify_order_gid, o.external_id) AS external_id, " +
+            "       o.store_id, o.raw::text AS raw, s.shop_domain, " +
+            "       s.status::text AS store_status " +
+            "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "LEFT JOIN stores s ON s.id = o.store_id AND s.tenant_id = o.tenant_id " +
+            "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId)
+            .stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
+        // Step 5c: an exchange has no refund.
+        if ("exchange".equals(rr.get("type"))) {
+            // F3: an exchange that leaves the customer owed money suggests exactly that (frozen at submit).
+            BigDecimal owed = new RequestAmounts(jdbc).customerOwed(tenantId, requestId);
+            if (owed.signum() <= 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("amount", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
+            body.put("currency", PortalAmounts.CURRENCY);
+            body.put("source", "frozen");
+            body.put("approximate", false);
+            body.put("customerOwed", owed.setScale(2, RoundingMode.HALF_UP).toPlainString());
+            body.put("lines", List.of());
+            return new Loaded(body, null, null);
+        }
+
+        // Items that came back; before anything arrived, the items still expected.
+        String scope = "('arrived', 'done')";
+        List<Line> lines = lines(tenantId, requestId, scope);
+        if (lines.isEmpty()) lines = lines(tenantId, requestId, scope = "('awaiting')");
+
+        // Returns portal fees F2: a request with frozen refund amounts is suggested from them — the paid prices
+        // frozen at submit minus the request's fee, floored at 0. No Shopify read. Every other request: as before.
+        Map<String, Object> frozen = frozen(tenantId, requestId, scope);
+        if (frozen != null) return new Loaded(frozen, null, null);
+        return new Loaded(null, rr, lines);
     }
 
     private record Priced(String source, String currency, List<BigDecimal> units, BigDecimal total) {}

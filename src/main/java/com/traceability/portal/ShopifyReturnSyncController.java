@@ -3,7 +3,6 @@ package com.traceability.portal;
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -25,16 +24,13 @@ public class ShopifyReturnSyncController {
     private final ShopifyReturnSyncScheduler scheduler;
     private final ShopifyReturnSyncSettingsService settings;
     private final ShopifyReturnSyncRollout rollout;
-    private final JdbcTemplate jdbc;
 
     public ShopifyReturnSyncController(ShopifyReturnSyncService sync, ShopifyReturnSyncScheduler scheduler,
-                                       ShopifyReturnSyncSettingsService settings, ShopifyReturnSyncRollout rollout,
-                                       JdbcTemplate jdbc) {
+                                       ShopifyReturnSyncSettingsService settings, ShopifyReturnSyncRollout rollout) {
         this.sync = sync;
         this.scheduler = scheduler;
         this.settings = settings;
         this.rollout = rollout;
-        this.jdbc = jdbc;
     }
 
     public record SwitchRequest(Boolean enabled) {}
@@ -90,9 +86,8 @@ public class ShopifyReturnSyncController {
     private UUID own(UUID id) {
         UUID tenantId = TenantContext.require();
         if (!rollout.listed(tenantId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        Boolean exists = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM return_requests WHERE id = ? AND tenant_id = ?)", Boolean.class, id, tenantId);
-        if (!Boolean.TRUE.equals(exists)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        // Inside the service's tenant transaction — never a bare read here (RLS: no transaction = no tenant).
+        if (!sync.ownedBy(tenantId, id)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         return tenantId;
     }
 }
