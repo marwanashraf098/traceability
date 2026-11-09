@@ -223,7 +223,9 @@ public class OrderController {
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
         Map<String, Object> shippedOutsideTraced,
         // 2026-11-09: whose courier this order is with — the drawer's courier wording (never "Bosta" for a
-        // non-Bosta order). See {@link OrderCourier}.
+        // non-Bosta order). See {@link OrderCourier}. Absent for a Bosta order — its detail is byte-identical to
+        // before, and the drawer reads "absent" as Bosta.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
         OrderCourier courier) {
 
         /** Before 2026-11-09 — no courier block. */
@@ -262,7 +264,8 @@ public class OrderController {
      * order's NEWEST forward shipment ('bosta' | 'generic', same ordering as
      * {@code GenericShipments.newestForwardIsGenericSql}); with no forward shipment, 'bosta' when the tenant ships
      * with Bosta (active account or simulated courier), else null (no courier yet — neutral wording).
-     * {@code name}: that shipment's carrier name (generic legs only), else null.
+     * {@code name}: that shipment's carrier name (generic legs only), else null. A Bosta order gets no block at
+     * all (null → omitted): the drawer keeps its Bosta wording and the Bosta payload is unchanged.
      */
     public record OrderCourier(String kind, String name) {}
 
@@ -1230,7 +1233,7 @@ public class OrderController {
         });
     }
 
-    /** 2026-11-09: the drawer's courier block — see {@link OrderCourier}. */
+    /** 2026-11-09: the drawer's courier block — see {@link OrderCourier}; null (omitted) for a Bosta order. */
     private OrderCourier courier(UUID orderId) {
         UUID tenantId = TenantContext.require();
         Map<String, Object> fwd = jdbc.query(
@@ -1240,10 +1243,11 @@ public class OrderController {
             rs -> rs.next() ? Map.<String, Object>of("provider", rs.getString(1),
                 "name", rs.getString(2) == null ? "" : rs.getString(2)) : null, orderId, tenantId);
         if (fwd != null) {
+            if ("bosta".equals(fwd.get("provider"))) return null;
             String name = (String) fwd.get("name");
             return new OrderCourier((String) fwd.get("provider"), name.isBlank() ? null : name);
         }
-        return new OrderCourier(tenantShipsWithBosta(tenantId) ? "bosta" : null, null);
+        return tenantShipsWithBosta(tenantId) ? null : new OrderCourier(null, null);
     }
 
     /** V139: the detail page's shipping badge — same inputs and derivation as the list. */

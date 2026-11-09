@@ -30,8 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 2026-11-09 — the drawer's courier wording (Bug A "{{carrier}}", Bug B "Bosta" on non-Bosta orders):
- *   c*  GET /orders/{id} carries {@code courier}: the NEWEST forward shipment's provider + carrier name; with no
- *       forward shipment, 'bosta' for a store that ships with Bosta, else kind null
+ *   c*  GET /orders/{id} carries {@code courier} for a non-Bosta order: the NEWEST forward shipment's provider +
+ *       carrier name; with no forward shipment on a store without Bosta, kind null. A Bosta order (its newest
+ *       forward shipment is Bosta, or none on a Bosta store) has no block — its payload is unchanged
  *   t*  the timeline names a non-Bosta waybill "waybill_linked" / "return_waybill_linked"; a Bosta one keeps
  *       "awb_linked" / "return_awb_linked"
  *   u*  return_leg_unscanned reads "per Bosta" only for a Bosta leg — any other courier reads "per the courier"
@@ -156,9 +157,8 @@ class OrderCourierWordingTest {
 
         assertThat(femine.courier(generic).path("kind").asText()).isEqualTo("generic");
         assertThat(femine.courier(generic).path("name").asText()).isEqualTo("Aramex");
-        assertThat(femine.courier(bosta).path("kind").asText()).isEqualTo("bosta");
-        assertThat(femine.courier(bosta).path("name").isNull()).isTrue();
-        assertThat(femine.courier(none).path("kind").asText()).as("no shipment, Bosta store").isEqualTo("bosta");
+        assertThat(femine.courier(bosta).isMissingNode()).as("a Bosta order has no courier block").isTrue();
+        assertThat(femine.courier(none).isMissingNode()).as("no shipment, Bosta store → no block").isTrue();
         assertThat(femine.courier(unnamed).path("name").isNull()).as("blank carrier name → null").isTrue();
 
         Shop marwan = new Shop("Marwan", false);
@@ -179,7 +179,7 @@ class OrderCourierWordingTest {
 
         assertThat(s.courier(toGeneric).path("kind").asText()).isEqualTo("generic");
         assertThat(s.courier(toGeneric).path("name").asText()).isEqualTo("Mylerz");
-        assertThat(s.courier(toBosta).path("kind").asText()).isEqualTo("bosta");
+        assertThat(s.courier(toBosta).isMissingNode()).as("newest forward is Bosta → no block").isTrue();
     }
 
     // ── t: timeline ─────────────────────────────────────────────────────────────────────────────

@@ -424,9 +424,9 @@ export interface OrderDetail {
    */
   shippedOutsideTraced?: { pieces: number; target: 'with_courier' | 'delivered' }
   /**
-   * 2026-11-09: the courier this order is with (OrderController.OrderCourier) — kind = the newest forward
-   * shipment's provider; with none, 'bosta' when the store ships with Bosta, else null (no courier yet).
-   * name = a non-Bosta carrier's name. Absent (older payloads) reads as Bosta — see isBostaCourier.
+   * 2026-11-09: the courier this order is with (OrderController.OrderCourier) — present only for a non-Bosta
+   * order: kind = the newest forward shipment's provider ('generic'); with no shipment on a store without Bosta,
+   * null (no courier yet). name = the carrier's name. Absent = a Bosta order (or an older payload) — see isBostaCourier.
    */
   courier?: { kind: 'bosta' | 'generic' | null; name: string | null }
 }
