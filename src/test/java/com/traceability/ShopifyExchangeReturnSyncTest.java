@@ -62,7 +62,9 @@ import static org.mockito.Mockito.*;
  *       even mirrored WITH an exchange line, makes no S3b shadow and expects nothing back (S4); control: a native one does
  *   x5  Lookup cancel-exchange before anything came back → returnCancel
  *   x6  switched to refund before approval → synced as a refund (reason label), still one return
- *   x7  cross-tenant (HTTP, app_user + RLS): B can't retry / sync A's exchange; A can (same-tenant control)
+ *   x7  cross-tenant: B can't retry / sync A's exchange; A can (same-tenant control). The HTTP calls run on this
+ *       class's postgres app (BYPASSRLS — their 404 is the tenant_id filter, not RLS); only the service check runs
+ *       as app_user. The real HTTP path on app_user + RLS is ShopifyReturnSyncHttpAppUserTest.
  *   x8  the end arrives BEFORE the grading (exchanged while the old item is still awaited / back but ungraded): no
  *       close, no cancel, no Shopify read while pending; once graded → process THEN close (in that order)
  *   x9  customer owed (cheaper replacement) → "refund EGP X to customer"; nothing owed / to collect → no money part
@@ -672,6 +674,7 @@ class ShopifyExchangeReturnSyncTest {
         approve(a, rr);
         jdbc.update("UPDATE return_requests SET shopify_sync_status = 'failed', shopify_sync_attempts = 5 WHERE id = ?", rr);
 
+        // HTTP on this class's postgres app: the 404 comes from the tenant_id filter (RLS is bypassed here).
         assertThat(post(b.ownerToken, "/api/v1/return-requests/" + rr + "/shopify-sync/retry").getStatusCode().value()).isEqualTo(404);
         assertThat(syncRow(rr).get("shopify_sync_attempts")).isEqualTo(5);
         // The service as app_user under B's tenant sees nothing of A's request.
