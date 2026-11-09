@@ -221,7 +221,25 @@ public class OrderController {
         // 2026-11-07: {pieces, target} when "Shipped outside Traced" applies now (ShippedOutsideTraced.offer); absent
         // otherwise — every other order's detail is byte-identical.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-        Map<String, Object> shippedOutsideTraced) {
+        Map<String, Object> shippedOutsideTraced,
+        // 2026-11-09: whose courier this order is with — the drawer's courier wording (never "Bosta" for a
+        // non-Bosta order). See {@link OrderCourier}.
+        OrderCourier courier) {
+
+        /** Before 2026-11-09 — no courier block. */
+        public OrderDetail(String id, String number, String customerName, String customerPhone,
+                           Object address, String paymentMethod, BigDecimal codAmount,
+                           String status, boolean onHold, String holdReason,
+                           Instant placedAt, Instant createdAt,
+                           List<OrderItem> items, List<ShipmentDetail> shipments,
+                           String bostaLinkStatus, Instant notTracedAt, boolean isExchange,
+                           OrderStatusDeriver.DerivedOrderStatus derivedStatus, String shopifyOrderUrl,
+                           boolean physicallyWithCourier, OrderShippingBadge shippingBadge,
+                           List<Map<String, Object>> shopifyReturns, Map<String, Object> shippedOutsideTraced) {
+            this(id, number, customerName, customerPhone, address, paymentMethod, codAmount, status, onHold, holdReason,
+                placedAt, createdAt, items, shipments, bostaLinkStatus, notTracedAt, isExchange, derivedStatus,
+                shopifyOrderUrl, physicallyWithCourier, shippingBadge, shopifyReturns, shippedOutsideTraced, null);
+        }
 
         /** Before 2026-11-07 — no "Shipped outside Traced" offer. */
         public OrderDetail(String id, String number, String customerName, String customerPhone,
@@ -235,9 +253,18 @@ public class OrderController {
                            List<Map<String, Object>> shopifyReturns) {
             this(id, number, customerName, customerPhone, address, paymentMethod, codAmount, status, onHold, holdReason,
                 placedAt, createdAt, items, shipments, bostaLinkStatus, notTracedAt, isExchange, derivedStatus,
-                shopifyOrderUrl, physicallyWithCourier, shippingBadge, shopifyReturns, null);
+                shopifyOrderUrl, physicallyWithCourier, shippingBadge, shopifyReturns, null, null);
         }
     }
+
+    /**
+     * 2026-11-09 — the courier an order is with, for the drawer's wording. {@code kind}: the provider of the
+     * order's NEWEST forward shipment ('bosta' | 'generic', same ordering as
+     * {@code GenericShipments.newestForwardIsGenericSql}); with no forward shipment, 'bosta' when the tenant ships
+     * with Bosta (active account or simulated courier), else null (no courier yet — neutral wording).
+     * {@code name}: that shipment's carrier name (generic legs only), else null.
+     */
+    public record OrderCourier(String kind, String name) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
@@ -1198,8 +1225,25 @@ public class OrderController {
                 order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier,
                 shippingBadge(orderId),
                 new com.traceability.returncases.ShopifyReturnsView(jdbc).cardsForOrder(orderId),
-                com.traceability.inventory.ShippedOutsideTraced.offer(jdbc, TenantContext.require(), orderId));
+                com.traceability.inventory.ShippedOutsideTraced.offer(jdbc, TenantContext.require(), orderId),
+                courier(orderId));
         });
+    }
+
+    /** 2026-11-09: the drawer's courier block — see {@link OrderCourier}. */
+    private OrderCourier courier(UUID orderId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> fwd = jdbc.query(
+            "SELECT sh.provider::text AS provider, sh.carrier_name FROM shipments sh " +
+            "WHERE sh.order_id = ? AND sh.tenant_id = ? AND sh.shipment_leg = 'forward' " +
+            "ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1",
+            rs -> rs.next() ? Map.<String, Object>of("provider", rs.getString(1),
+                "name", rs.getString(2) == null ? "" : rs.getString(2)) : null, orderId, tenantId);
+        if (fwd != null) {
+            String name = (String) fwd.get("name");
+            return new OrderCourier((String) fwd.get("provider"), name.isBlank() ? null : name);
+        }
+        return new OrderCourier(tenantShipsWithBosta(tenantId) ? "bosta" : null, null);
     }
 
     /** V139: the detail page's shipping badge — same inputs and derivation as the list. */
@@ -1398,7 +1442,9 @@ public class OrderController {
                     ? ((Timestamp) s.get("created_at")).toInstant()
                     : ((Timestamp) historyRows.get(0).get("occurred_at")).toInstant();
                 items.add(new TimelineItem(
-                    awbAt, isReturn ? "return_awb_linked" : "awb_linked",
+                    // 2026-11-09: a generic (non-Bosta courier) leg says "Waybill linked", never "Bosta AWB Linked".
+                    awbAt, generic ? (isReturn ? "return_waybill_linked" : "waybill_linked")
+                                   : (isReturn ? "return_awb_linked" : "awb_linked"),
                     null, null, tracking, "done"));
 
                 // The earliest history row is subsumed into the AWB-linked marker above
@@ -1586,7 +1632,8 @@ public class OrderController {
     // is classified automatically by which eventKey-building branch produced it.
     private static int phaseRank(String eventKey) {
         if ("order_created".equals(eventKey)) return 0;
-        if ("return_awb_linked".equals(eventKey) || eventKey.startsWith("return_shipment_state_")) return 2;
+        if ("return_awb_linked".equals(eventKey) || "return_waybill_linked".equals(eventKey)
+            || eventKey.startsWith("return_shipment_state_")) return 2;
         return 1; // picked_up, packed, awb_linked, delivery_attempt_failed, back_at_bosta_hub, shipment_state_*
     }
 

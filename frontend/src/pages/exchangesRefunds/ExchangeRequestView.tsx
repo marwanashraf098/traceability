@@ -134,7 +134,12 @@ export default function ExchangeRequestView({
               </p>
               <p className="text-body text-primary">
                 {detail.refundFallbackOk
-                  ? t('exchangesRefunds.requests.exchange.soldOutFallback', { variant: item.variantTitle ?? '' })
+                  ? (detail.otherCourier
+                    // 2026-11-09: another courier's order — never "Bosta collects".
+                    ? t('exchangesRefunds.requests.exchange.soldOutFallbackOther', {
+                        variant: item.variantTitle ?? '',
+                        carrier: detail.otherCourier.forwardCarrierName || t('status.the_courier') })
+                    : t('exchangesRefunds.requests.exchange.soldOutFallback', { variant: item.variantTitle ?? '' }))
                   : t('exchangesRefunds.requests.exchange.soldOutNoFallback')}
               </p>
             </div>

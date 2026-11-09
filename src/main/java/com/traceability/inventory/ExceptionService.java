@@ -747,7 +747,7 @@ public class ExceptionService {
     private List<Map<String, Object>> detectReturnLegUnscanned(UUID tid, int windowDays) {
         return jdbc.queryForList(
             "SELECT 'return_leg_unscanned' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
-            "       s.id AS shipment_id, s.tracking_number, " +
+            "       s.id AS shipment_id, s.tracking_number, s.provider::text AS leg_provider, " +
             "       o.id AS order_id, o.number AS order_number, " +
             "       x.entered_returned_at AS occurred_at, " +
             "       " + ReturnCaseRules.RETURN_LEG_UNSCANNED_KEY_SQL + " AS subject_key " +
@@ -2683,10 +2683,15 @@ public class ExceptionService {
             case "return_leg_unscanned" -> {
                 String t = str(item, "tracking_number");
                 String n = str(item, "order_number");
-                item.put("descriptionEn",
-                    "Return " + t + " for order " + n + " is back per Bosta but was never scanned in");
-                item.put("descriptionAr",
-                    "المرتجع " + t + " للطلب " + n + " عاد وفق بوسطة ولكن لم يتم مسحه عند الاستلام");
+                // 2026-11-09: "per Bosta" only for a Bosta leg — any other courier's leg reads neutrally. The
+                // provider is read for this wording only and never leaves the detector.
+                boolean bosta = "bosta".equals(item.remove("leg_provider"));
+                item.put("descriptionEn", bosta
+                    ? "Return " + t + " for order " + n + " is back per Bosta but was never scanned in"
+                    : "Return " + t + " for order " + n + " is back per the courier but was never scanned in");
+                item.put("descriptionAr", bosta
+                    ? "المرتجع " + t + " للطلب " + n + " عاد وفق بوسطة ولكن لم يتم مسحه عند الاستلام"
+                    : "المرتجع " + t + " للطلب " + n + " عاد وفق شركة الشحن ولكن لم يتم مسحه عند الاستلام");
                 item.put("suggestedAction", "intake_return");
                 item.put("actionUrl", "/returns");
             }
