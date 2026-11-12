@@ -48,6 +48,12 @@ import static com.traceability.analytics.AnalyticsSql.money;
  * settled legs always, and every leg that isn't cancelled or terminated before pickup — of
  * SettlementSql.fee (settled bosta_fees, else the quote × 1.14); feesEstimated when any of them
  * is a quote. Null when no leg has a fee.
+ *
+ * Exchange trips (2026-11-12): a Bosta exchange trip (type 30) sits on its internal EXC- order, which is
+ * never a row; its money is shown on the ORIGINAL order (SettlementSql.exchangeOriginal) as its own
+ * figures — exchangeFees (what Bosta charged for the trip, the same charged rule) and exchangeCod (the
+ * COD Bosta collected on a delivered trip) — never in that order's bostaFees, total or net. A trip with no
+ * original found stays on its EXC- order and so on no row (the Bosta money views still count it by leg).
  */
 @Service
 public class OrderFinanceService {
@@ -66,13 +72,15 @@ public class OrderFinanceService {
                            String financialStatus, BigDecimal bostaFees, boolean feesEstimated,
                            BigDecimal netToYou, boolean refundAmountUnknown, List<String> trackingNumbers,
                            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                           BigDecimal exchangeCod) {
+                           BigDecimal exchangeCod,
+                           @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                           BigDecimal exchangeFees) {
         public OrderRow(UUID orderId, String name, Instant placedAt, String customer, Governorate governorate,
                         long items, BigDecimal total, String paymentGroup, DeliveryStatus deliveryStatus,
                         String financialStatus, BigDecimal bostaFees, boolean feesEstimated,
                         BigDecimal netToYou, boolean refundAmountUnknown, List<String> trackingNumbers) {
             this(orderId, name, placedAt, customer, governorate, items, total, paymentGroup, deliveryStatus,
-                financialStatus, bostaFees, feesEstimated, netToYou, refundAmountUnknown, trackingNumbers, null);
+                financialStatus, bostaFees, feesEstimated, netToYou, refundAmountUnknown, trackingNumbers, null, null);
         }
     }
 
@@ -109,18 +117,18 @@ public class OrderFinanceService {
     record Row(OrderRow out, Set<UUID> variantIds) {}
 
     /*
-     * Parameters: OrderFacts' 13 (soldLines 7, outcomes 2, returns 4), then the deciding leg's
-     * now, weekday, now, now, weekday (deliveredNotPaid), now (stuckWithBosta), tenant id; the
-     * order's Bosta legs: tenant id; refunds: tenant id; exchange COD: tenant id.
+     * Parameters: OrderFacts' 13 (soldLines 7, outcomes 2, returns 4), then exchange trips: tenant id;
+     * the deciding leg's now, weekday, now, now, weekday (deliveredNotPaid), now (stuckWithBosta),
+     * tenant id; the order's Bosta legs: tenant id; refunds: tenant id.
      */
     static final String ORDERS_SQL = OrderFacts.SQL.substring(0, OrderFacts.SQL.indexOf("SELECT om.order_id, om.placed_at,"))
-        + """
+        + ", exchange_trips " + SettlementSql.EXCHANGE_TRIPS + """
         SELECT om.order_id, om.placed_at, om.booked, om.outcome, om.city_id, om.city, om.returned_rev,
                om.item_count, om.variant_ids,
                o.number, o.customer_name, o.payment_group, o.ship_province AS province_code,
                lg.internal_state AS leg_state, lg.cod, lg.leg_cod, lg.leg_provider, lg.cashout_txn_id, lg.zero_cycle, lg.deposited_amt, lg.not_paid, lg.stuck,
                fe.fees, fe.fees_estimated, fe.tracking_numbers,
-               rf.refunded, xc.exchange_cod
+               rf.refunded, xc.exchange_cod, xc.exchange_fees
         FROM order_money om
         JOIN merchant_orders o ON o.id = om.order_id
         LEFT JOIN LATERAL (
@@ -147,11 +155,11 @@ public class OrderFinanceService {
                         AS fee,
                        """ + SettlementSql.settled("s") + """
                         AS settled,
-                       (""" + SettlementSql.settled("s") + """
-                        OR NOT (s.internal_state = 'cancelled'
-                                OR (s.internal_state = 'terminated' AND s.collected_from_business_at IS NULL))) AS charged
+                       """ + SettlementSql.charged("s") + """
+                        AS charged
                 FROM shipments s
                 WHERE s.order_id = om.order_id AND s.tenant_id = ? AND s.provider = 'bosta'
+                  AND s.id NOT IN (SELECT xt.shipment_id FROM exchange_trips xt)    -- shown on its original (xc)
             ) c
         ) fe ON true
         LEFT JOIN LATERAL (
@@ -163,17 +171,23 @@ public class OrderFinanceService {
                               WHERE v.voids_refund_id = r.id AND v.tenant_id = r.tenant_id)
         ) rf ON true
         LEFT JOIN LATERAL (
-            -- Returns portal fees F4: the COD Bosta collected on this order's Traced-booked exchanges (price difference
-            -- + customer fee), attributed to the ORIGINAL order — the type 30 leg itself sits on the internal
-            -- EXC- order, which is never a sale. Only exchanges booked WITH a COD (booking_cod, V215) and delivered.
-            -- Shown on its own: never in the order's total (not a sale) or its net, so nothing is counted twice —
-            -- the Bosta money views count the same leg once, by its own cod.
-            SELECT SUM(""" + SettlementSql.cod("xs") + """
-                   ) AS exchange_cod
-            FROM return_requests xr
-            JOIN shipments xs ON xs.tenant_id = xr.tenant_id AND xs.tracking_number = xr.bosta_tracking_number
-            WHERE xr.order_id = om.order_id AND xr.tenant_id = ? AND xr.type = 'exchange'
-              AND xr.booking_cod IS NOT NULL AND xs.provider = 'bosta' AND xs.internal_state = 'delivered'
+            -- Exchange trips (2026-11-12; F4's exchange COD folded in): the order's Bosta exchange trips
+            -- (SettlementSql.exchangeOriginal — the type 30 leg sits on the internal EXC- order, never a sale).
+            -- exchange_fees: what Bosta charged for them (the charged rule above); exchange_cod: the COD Bosta
+            -- collected on the delivered ones (price difference + customer fee). Shown on their own: never in
+            -- the order's bostaFees, total or net, so nothing is counted twice — the Bosta money views count
+            -- the same leg once, by leg.
+            SELECT NULLIF(SUM(x.cod) FILTER (WHERE xs.internal_state = 'delivered'), 0) AS exchange_cod,
+                   SUM(x.fee) FILTER (WHERE x.charged)                                  AS exchange_fees
+            FROM exchange_trips xt
+            JOIN shipments xs ON xs.id = xt.shipment_id
+            CROSS JOIN LATERAL (SELECT """ + SettlementSql.cod("xs") + """
+                                        AS cod,
+                                       """ + SettlementSql.fee("xs") + """
+                                        AS fee,
+                                       """ + SettlementSql.charged("xs") + """
+                                        AS charged) x
+            WHERE xt.original_id = om.order_id
         ) xc ON true
         """;
 
@@ -361,6 +375,7 @@ public class OrderFinanceService {
         List<Row> rows = jdbc.query(ORDERS_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
             for (int k = 0; k < 6; k++) ps.setObject(i++, tid);        // outcomes 2, returns 4
+            ps.setObject(i++, tid);                                    // exchange trips
             ps.setTimestamp(i++, t);                                   // deliveredNotPaid
             ps.setObject(i++, weekday, java.sql.Types.INTEGER);
             ps.setTimestamp(i++, t);
@@ -369,8 +384,7 @@ public class OrderFinanceService {
             ps.setTimestamp(i++, t);                                   // stuckWithBosta
             ps.setObject(i++, tid);                                    // deciding leg
             ps.setObject(i++, tid);                                    // the order's legs
-            ps.setObject(i++, tid);                                    // refunds
-            ps.setObject(i, tid);                                      // exchange COD (F4)
+            ps.setObject(i, tid);                                      // refunds
         }, (rs, n) -> row(rs, cities));
         rows.sort(Comparator.comparing((Row r) -> r.out.placedAt()).reversed()
             .thenComparing((Row r) -> r.out.orderId().toString(), Comparator.reverseOrder()));
@@ -417,7 +431,8 @@ public class OrderFinanceService {
             new Governorate(g[0], g[1], g[2]), rs.getLong("item_count"), total, payment,
             deliveryStatus(outcome, rs.getString("leg_state")), status, fees,
             rs.getBoolean("fees_estimated") && fees != null, net == null ? null : money(net), refundUnknown,
-            List.copyOf(tracking), moneyOrNull(rs.getBigDecimal("exchange_cod")));
+            List.copyOf(tracking), moneyOrNull(rs.getBigDecimal("exchange_cod")),
+            moneyOrNull(rs.getBigDecimal("exchange_fees")));
         return new Row(out, variants);
     }
 

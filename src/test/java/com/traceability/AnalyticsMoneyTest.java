@@ -845,6 +845,120 @@ class AnalyticsMoneyTest {
         assertThat(list(ok(t, "/api/v1/analytics/money/stuck"), "deliveredNotPaid")).isEmpty();
     }
 
+    // ── exchange trips (Bosta type 30) — 2026-11-12 ─────────────────────────
+
+    static String exchangeRaw(String city, int cod, int quote) {
+        return "{\"type\":{\"code\":30,\"value\":\"Exchange\"},\"cod\":" + cod + ",\"shipmentFees\":" + quote +
+               ",\"dropOffAddress\":{\"city\":{\"_id\":\"id-" + city + "\",\"name\":\"" + city + "\"}}}";
+    }
+
+    /** An exchange trip on its internal EXC-<AWB> order (as ExchangeService.commit makes it), with the replacement line. */
+    Leg exchangeTrip(T t, Instant placedAt, String state, String raw, UUID replacement) {
+        UUID exc = t.order(placedAt);
+        if (replacement != null) t.line(exc, replacement, 1, "300.00");
+        Leg l = t.leg(exc, "forward", state, raw);
+        jdbc.update("UPDATE orders SET external_id = ?, number = ? WHERE id = ?",
+                    "internal:exchange:" + l.tn(), "EXC-" + l.tn(), exc);
+        return l;
+    }
+
+    /** A dashboard exchange: the exchanges row Bosta's webhook made, matched to the customer's original order. */
+    void matched(T t, Leg trip, UUID original) {
+        jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, outbound_order_id, matched_order_id, " +
+                    "match_method, raw) VALUES (?, ?, 'matched', (SELECT order_id FROM shipments WHERE id = ?), ?, 'reference', '{}')",
+                    t.id, trip.tn(), trip.id(), original);
+    }
+
+    String number(UUID order) {
+        return jdbc.queryForObject("SELECT number FROM orders WHERE id = ?", String.class, order);
+    }
+
+    @Test
+    void inTransit_countsAnExchangeTripWithItsCod_notCancelledOrDeliveredTrips_notType25() {
+        T t = new T("An3-TransitExchange");
+        Instant recent = ago(Duration.ofDays(3));
+        // Cairo rate 1 delivered / 1 refused → 0.5.
+        t.leg(t.order(recent), "forward", "delivered", sendRaw("Cairo", 500, 50));
+        t.leg(t.order(recent), "forward", "returned", typedRaw(20, "Cairo", 50));
+
+        t.leg(t.order(recent), "forward", "with_courier", sendRaw("Cairo", 1000, 50));   // a delivery: counts
+        exchangeTrip(t, recent, "with_courier", exchangeRaw("Cairo", 85, 94), null);      // exchange trip: counts, its COD
+        exchangeTrip(t, recent, "exception", exchangeRaw("Cairo", 0, 94), null);          // COD 0: counts, adds nothing
+        exchangeTrip(t, recent, "cancelled", exchangeRaw("Cairo", 280, 94), null);        // Bosta cancelled it: never
+        exchangeTrip(t, recent, "delivered", exchangeRaw("Cairo", 90, 94), null);         // delivered: not in transit
+        t.leg(t.order(recent), "forward", "with_courier",                                  // a type 25 pickup: still never
+              "{\"type\":{\"code\":25},\"cod\":100,\"dropOffAddress\":{\"city\":{\"_id\":\"id-Cairo\",\"name\":\"Cairo\"}}}");
+
+        Map<String, Object> it = m(ok(t, "/api/v1/analytics/money/pipeline?period=7d"), "inTransit");
+        assertThat(n(it, "count")).isEqualTo(3);
+        assertThat(dec(it, "value")).isEqualByComparingTo("1085.00");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("542.50");                   // × the Cairo rate, like a delivery
+    }
+
+    @Test
+    void feesExtra_anExchangeTripShowsItsOriginalOrder_bySkuSplitsOverTheOriginalsLines_unmatchedKeepsItsExcOrder() {
+        T t = new T("An3-ExtraExchange");
+        UUID a = t.variant("SKU-A"), b = t.variant("SKU-B"), r = t.variant("SKU-R");
+        UUID original = t.order(SEPT_10);
+        t.line(original, a, 1, "300.00");
+        t.line(original, b, 1, "100.00");
+        Leg own = t.leg(original, "forward", "delivered", sendRaw("Cairo", 400, 81));
+        set(own, "delivered_at = ?", ts(cairo(2026, 9, 5, 12)));
+
+        Leg trip = exchangeTrip(t, SEPT_10, "delivered", exchangeRaw("Cairo", 85, 89), r);   // 89 × 1.14 = 101.46
+        set(trip, "delivered_at = ?", ts(cairo(2026, 9, 9, 12)));
+        matched(t, trip, original);
+        Leg lone = exchangeTrip(t, SEPT_10, "delivered", exchangeRaw("Cairo", 0, 50), r);    // no original: 57.00
+        set(lone, "delivered_at = ?", ts(cairo(2026, 9, 8, 12)));
+
+        Map<String, Object> awb = ok(t, "/api/v1/analytics/money/fees/extra?groupBy=awb&" + SEPT);
+        List<Map<String, Object>> rows = list(awb, "shipments");
+        assertThat(rows).extracting(x -> x.get("trackingNumber")).containsExactly(trip.tn(), lone.tn());
+        assertThat(rows.get(0)).containsEntry("orderNumber", number(original)).containsEntry("type", "exchange");
+        assertThat((List<Object>) rows.get(0).get("skus")).containsExactly("SKU-A", "SKU-B");
+        assertThat(dec(rows.get(0), "fee")).isEqualByComparingTo("101.46");
+        assertThat(rows.get(1)).containsEntry("orderNumber", "EXC-" + lone.tn()).containsEntry("type", "exchange");
+        assertThat((List<Object>) rows.get(1).get("skus")).containsExactly("SKU-R");
+        assertThat(dec(awb, "total")).isEqualByComparingTo("158.46");
+
+        Map<String, Object> sku = ok(t, "/api/v1/analytics/money/fees/extra?groupBy=sku&" + SEPT);
+        Map<String, Map<String, Object>> by = new HashMap<>();
+        for (Map<String, Object> x : list(sku, "skus")) by.put((String) x.get("sku"), x);
+        assertThat(dec(by.get("SKU-A"), "extraFees")).isEqualByComparingTo("76.10");      // 101.46 × 0.75
+        assertThat(dec(by.get("SKU-B"), "extraFees")).isEqualByComparingTo("25.37");      // 101.46 × 0.25
+        assertThat(n(by.get("SKU-A"), "exchanges")).isEqualTo(1);
+        assertThat(dec(by.get("SKU-R"), "extraFees")).as("only the unmatched trip").isEqualByComparingTo("57.00");
+        assertThat(dec(sku, "total")).isEqualByComparingTo("158.46");
+
+        // /money/fees stays keyed by leg: both trips, once each.
+        Map<String, Object> exch = m(ok(t, "/api/v1/analytics/money/fees?" + SEPT), "exchange");
+        assertThat(n(exch, "legs")).isEqualTo(2);
+        assertThat(dec(exch, "amount")).isEqualByComparingTo("158.46");
+    }
+
+    @Test
+    void stuck_anExchangeTripShowsItsOriginalOrder_flaggedExchange_unmatchedKeepsItsExcOrder() {
+        T t = new T("An3-StuckExchange");
+        UUID original = t.order(ago(Duration.ofDays(20)));
+        Leg trip = exchangeTrip(t, ago(Duration.ofDays(15)), "with_courier", exchangeRaw("Giza", 85, 94), null);
+        matched(t, trip, original);
+        Leg lone = exchangeTrip(t, ago(Duration.ofDays(15)), "with_courier", exchangeRaw("Giza", 60, 94), null);
+        Leg send = t.forward(ago(Duration.ofDays(15)), "with_courier", sendRaw("Giza", 800, 50));
+        for (Leg l : List.of(trip, lone, send)) {
+            jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, occurred_at) " +
+                        "VALUES (?, ?, 'with_courier', ?)", t.id, l.id(), ts(ago(Duration.ofDays(9))));
+        }
+
+        Map<String, Map<String, Object>> by = new HashMap<>();
+        for (Map<String, Object> x : list(ok(t, "/api/v1/analytics/money/stuck"), "stuckWithBosta")) {
+            by.put((String) x.get("trackingNumber"), x);
+        }
+        assertThat(by).hasSize(3);
+        assertThat(by.get(trip.tn())).containsEntry("orderNumber", number(original)).containsEntry("exchange", true);
+        assertThat(by.get(lone.tn())).containsEntry("orderNumber", "EXC-" + lone.tn()).containsEntry("exchange", true);
+        assertThat(by.get(send.tn())).doesNotContainKey("exchange");
+    }
+
     // ── roles + isolation ────────────────────────────────────────────────────
 
     @Test

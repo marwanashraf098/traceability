@@ -23,7 +23,10 @@ import static com.traceability.analytics.AnalyticsSql.rate;
  *   COGS         = kept units × unit_cost (costed lines only);
  *   fees         = the order's Bosta fees (SettlementSql.fee — settled, else quote × 1.14 — over the
  *                  legs Bosta charges for, the s7 rule), shipping legs and the rest (failed, return,
- *                  exchange) apart, split across the order's lines by line value.
+ *                  exchange) apart, split across the order's lines by line value. An exchange trip
+ *                  (type 30) is a cost of its ORIGINAL order (SettlementSql.exchangeOriginal, in "other"),
+ *                  never of its internal EXC- order (never a sale) — counted once (2026-11-12); a trip with
+ *                  no original found is on no sold order, as before.
  * Gross margin = (realized − COGS) ÷ realized, costed lines; contribution profit = realized − COGS −
  * fees, costed lines; true net per SKU = realized − COGS − allocated shipping − allocated other fees.
  */
@@ -49,9 +52,9 @@ public class ProfitAnalyticsService {
 
     public record Skus(AnalyticsPeriod.Range range, Coverage coverage, String sort, long total, List<SkuProfit> skus) {}
 
-    /* Parameters: the shared 13, then tenant id (the orders' legs). */
+    /* Parameters: the shared 13, then tenant id (exchange trips), tenant id (the orders' legs). */
     private static final String PROFIT_SQL = SalesAnalyticsService.soldLines(false) + SalesAnalyticsService.ORDER_OUTCOMES
-        + SalesAnalyticsService.LINE_RETURNS + """
+        + SalesAnalyticsService.LINE_RETURNS + ", exchange_trips " + SettlementSql.EXCHANGE_TRIPS + """
         , order_val AS (
             SELECT order_id, SUM(qty * unit_price) AS val FROM line_facts GROUP BY order_id
         ),
@@ -66,11 +69,22 @@ public class ProfitAnalyticsService {
                             AS kind,
                            """ + SettlementSql.fee("s") + """
                             AS fee,
-                           (""" + SettlementSql.settled("s") + """
-                            OR NOT (s.internal_state = 'cancelled'
-                                    OR (s.internal_state = 'terminated' AND s.collected_from_business_at IS NULL))) AS charged
+                           """ + SettlementSql.charged("s") + """
+                            AS charged
                     FROM shipments s
                     WHERE s.order_id = ov.order_id AND s.tenant_id = ? AND s.provider = 'bosta'
+                      AND s.id NOT IN (SELECT xt.shipment_id FROM exchange_trips xt)   -- costed on its original
+                    UNION ALL
+                    -- The order's exchange trips (their legs sit on internal EXC- orders).
+                    SELECT """ + SettlementSql.legKind("s") + """
+                            AS kind,
+                           """ + SettlementSql.fee("s") + """
+                            AS fee,
+                           """ + SettlementSql.charged("s") + """
+                            AS charged
+                    FROM exchange_trips xt
+                    JOIN shipments s ON s.id = xt.shipment_id
+                    WHERE xt.original_id = ov.order_id
                 ) c
             ) f
         ),
@@ -116,7 +130,8 @@ public class ProfitAnalyticsService {
         return jdbc.query(PROFIT_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
             for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
-            ps.setObject(i, tid);
+            ps.setObject(i++, tid);                       // exchange trips
+            ps.setObject(i, tid);                         // the orders' legs
         }, (rs, n) -> new Row(rs.getObject("variant_id", UUID.class), rs.getString("product_title"), rs.getString("variant_title"),
             rs.getString("sku"), rs.getString("ptype"), rs.getBigDecimal("unit_cost"), rs.getLong("kept"),
             OrderFacts.nz(rs.getBigDecimal("realized")), rs.getBigDecimal("cogs"), OrderFacts.nz(rs.getBigDecimal("ship")),

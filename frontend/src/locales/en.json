@@ -5083,6 +5083,7 @@
         "scheduled": "Scheduled",
         "untracked": "Bosta's batch also includes {{value}} from shipments not tracked in Traced"
       },
+      "exchangeTag": "Exchange",
       "stuck": {
         "title": "Shipments stuck for more than 7 days",
         "desc": "Never picked up, stuck with Bosta, or delivered but not paid after 7 days. Total cash at risk.",
@@ -5161,6 +5162,7 @@
       "pending": "pending",
       "refundUnknown": "refund amount unknown",
       "exchangeCod": "+ {{amount}} collected on an exchange",
+      "exchangeFees": "+ {{amount}} exchange trip fee",
       "pageOf": "Page {{page}} of {{pages}} · {{total}} orders",
       "prev": "Previous",
       "next": "Next",

@@ -16,6 +16,30 @@ Traced-booked (11) already had the right request items, but their card listed th
 - After deploy: the read-only shelf list of type 30 parcels at Bosta state 46 with no intake (per store) — query in
   the hand-off report.
 
+**Bosta money — exchange trips (type 30) (2026-11-12; merged 2c654317 off main efbc755c; no migration; deployed by
+Marawan 2026-11-12).** Two owner-only analytics bugs. (A) In transit left exchange trips out; (B) a trip's fee sat on its
+internal EXC-<AWB> order (never a row) instead of the customer's original order.
+- THE rule: `SettlementSql.exchangeOriginal(s)` — for type 30, the order of `exchanges.matched_order_id` (by tenant +
+  tracking number), else `return_requests.order_id` (by bosta_tracking_number), else the return request named by
+  `exchanges.return_request_id`; only a real order (never `internal:%`, never the leg's own). NULL = unmatched (stays
+  on its EXC order). `moneyOrder(s)` = original else own order; `EXCHANGE_TRIPS` = MATERIALIZED CTE (shipment_id,
+  original_id), one tenant param; `charged(s)` = the slice-7 charged rule. Never re-derive any of them.
+- In transit (`MoneyAnalyticsService.IN_TRANSIT_LEGS`): `NOT IN ('20','25')` — type 30 counts at its own COD; the
+  cash forecast follows (count / value / expected only).
+- Order finances: new `exchangeFees` (charged trips' fees) beside `exchangeCod` (now every DELIVERED attributed trip —
+  widened from Traced-booked-with-booking_cod, so dashboard exchanges count too); neither in bostaFees / total / net;
+  own-leg fees exclude attributed trips. CSV unchanged; the exchange AWB is NOT in trackingNumbers (search).
+- Profit: an attributed trip is a cost of its original ("other" fees), never of the EXC order. Unmatched trips stay
+  on no sold order, as before. Money › fees total = orders' fees + unmatched trips (test).
+- Extra fees (by AWB / by SKU) and stuck lists show the original's number + an "Exchange" tag (`exchange: true`,
+  NON_NULL; EN + AR). /fees, Awaiting payout, In your bank unchanged.
+- Prod at merge (approx.): In transit BROEK 138 legs / EGP 243,317.87 (18 trips / 2,117), Dolt.eg 133 / 270,237 (9 /
+  1,000), HERNAMEIS JAMILA 6 / 365 (all trips), Nuvira 9 / 11,550.50 (2 / 300). BRK-46870-EG: bostaFees 92.34, net
+  1,291.66 unchanged, + exchange trip fee 101.46, + exchange COD 85.
+- Tests: AnalyticsMoneyTest (3 new), AnalyticsFinancesTest (3 new), frontend exchangeTripMoney.test.tsx (5); every
+  fix revert-checked. Follow-up (2026-11-12): ShadowSafetyNetTest.w1 pinned its approval to the detector's clock (the
+  DB's now()) — it hard-coded 2026-11-04 and failed on every run after 2026-11-11 (test only).
+
 **Try again 404 + "no transaction = no tenant" sweep (2026-11-09; branch `fix/shopify-sync-tenant-tx` off main
 f1315843; no migration).** Prod after f1315843: Try again on RR-ZMCAUG answered a bare 404 every time (nginx `→ 404 0`).
 Root cause: `ShopifyReturnSyncController.own()` read `return_requests` with a bare JdbcTemplate outside any transaction;
