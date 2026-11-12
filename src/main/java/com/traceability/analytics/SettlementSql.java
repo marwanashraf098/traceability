@@ -35,6 +35,49 @@ final class SettlementSql {
             + "ELSE 'shipping' END) ";
     }
 
+    /**
+     * Exchange trips (2026-11-12) — THE rule for the customer order a Bosta exchange trip (type 30)
+     * belongs to. Every exchange trip sits on its internal {@code internal:exchange:<AWB>} order
+     * (number EXC-<AWB>), which is never a sale; its money belongs to the order the customer is
+     * exchanging from: the exchanges row's matched_order_id, else the order of the return request
+     * that booked it (by its tracking number, or by the exchanges row's return_request_id). Only a
+     * real merchant order counts (never an internal:* order, never a portal pre-connect row) and
+     * never the leg's own order. NULL = not an exchange trip, or no original found ("unmatched" —
+     * it stays on its EXC order). Callers never re-derive this.
+     */
+    static String exchangeOriginal(String s) {
+        String match = "xe.tenant_id = " + s + ".tenant_id AND xe.tracking_number = " + s + ".tracking_number";
+        return " (CASE WHEN " + s + ".type_code = '30' THEN (SELECT xo.id FROM merchant_orders xo WHERE xo.id = COALESCE("
+            + "(SELECT xe.matched_order_id FROM exchanges xe WHERE " + match + "), "
+            + "(SELECT xr.order_id FROM return_requests xr WHERE xr.tenant_id = " + s + ".tenant_id "
+            + "    AND xr.bosta_tracking_number = " + s + ".tracking_number), "
+            + "(SELECT xr.order_id FROM exchanges xe JOIN return_requests xr ON xr.id = xe.return_request_id "
+            + "    WHERE " + match + ")) "
+            + " AND xo.external_id NOT LIKE 'internal:%' AND xo.id <> " + s + ".order_id) END) ";
+    }
+
+    /** The order a leg's money is shown on: its exchange original ({@link #exchangeOriginal}), else its own order. */
+    static String moneyOrder(String s) {
+        return " COALESCE(" + exchangeOriginal(s) + ", " + s + ".order_id) ";
+    }
+
+    /**
+     * A CTE body: the tenant's exchange trips that belong to an original order ({@link #exchangeOriginal}
+     * not NULL) — columns shipment_id, original_id. Order-level money adds these to the original and
+     * leaves them off the leg's own (EXC) order. One parameter: tenant id.
+     */
+    static final String EXCHANGE_TRIPS =
+        " AS MATERIALIZED (SELECT t.shipment_id, t.original_id FROM ("
+        + " SELECT s.id AS shipment_id, " + exchangeOriginal("s") + " AS original_id "
+        + " FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.type_code = '30') t "
+        + " WHERE t.original_id IS NOT NULL) ";
+
+    /** Bosta charges for the leg (slice 7's rule): settled, or not cancelled / terminated before pickup. */
+    static String charged(String s) {
+        return " (" + settled(s) + " OR NOT (" + s + ".internal_state = 'cancelled' "
+            + " OR (" + s + ".internal_state = 'terminated' AND " + s + ".collected_from_business_at IS NULL))) ";
+    }
+
     /** The leg settled — Bosta's own figures exist. */
     static String settled(String s) {
         return " (" + s + ".settlement_status IN ('deposited', 'paid') AND " + s + ".bosta_fees IS NOT NULL) ";

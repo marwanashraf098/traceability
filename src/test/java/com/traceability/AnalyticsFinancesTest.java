@@ -778,6 +778,136 @@ class AnalyticsFinancesTest {
 
     // ── roles + isolation ────────────────────────────────────────────────────
 
+    // ── exchange trips (Bosta type 30) on the original order — 2026-11-12 ─────
+
+    /** An exchange trip on its internal EXC-<AWB> order (as ExchangeService.commit makes it), with the replacement line. */
+    Leg exchangeTrip(T t, Instant placedAt, String state, int cod, int quote, UUID replacement) {
+        O exc = t.order(placedAt);
+        if (replacement != null) t.line(exc, replacement, 1, "300.00");
+        UUID s = UUID.randomUUID();
+        String tn = "8" + SEQ.incrementAndGet();
+        String raw = "{\"type\":{\"code\":30,\"value\":\"Exchange\"},\"cod\":" + cod + ",\"shipmentFees\":" + quote +
+                     ",\"dropOffAddress\":{\"city\":{\"_id\":\"id-Cairo\",\"name\":\"Cairo\"}}}";
+        jdbc.update("INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw) " +
+                    "VALUES (?, ?, ?, ?, ?::shipment_internal_state, 'forward', ?::jsonb)", s, t.id, exc.id(), tn, state, raw);
+        ShipmentSettlement.apply(jdbc, s, ShipmentSettlementTest.json(raw));
+        jdbc.update("UPDATE orders SET external_id = ?, number = ? WHERE id = ?", "internal:exchange:" + tn, "EXC-" + tn, exc.id());
+        return new Leg(s, tn);
+    }
+
+    /** A dashboard exchange: the exchanges row Bosta's webhook made, matched to the customer's original order. */
+    void matched(T t, Leg trip, O original) {
+        jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, outbound_order_id, matched_order_id, " +
+                    "match_method, raw) VALUES (?, ?, 'matched', (SELECT order_id FROM shipments WHERE id = ?), ?, 'reference', '{}')",
+                    t.id, trip.tn(), trip.id(), original.id());
+    }
+
+    /** A Traced-booked exchange: the return request that booked the trip (no exchanges row matched yet). */
+    void booked(T t, Leg trip, O original) {
+        jdbc.update("INSERT INTO return_requests (id, tenant_id, order_id, type, status, reference, booking_status, " +
+                    "bosta_tracking_number) VALUES (?, ?, ?, 'exchange', 'pickup_booked', ?, 'booked', ?)",
+                    UUID.randomUUID(), t.id, original.id(), reference(), trip.tn());
+    }
+
+    /** BRK-46870-EG's shape: delivery 92.34; its exchange trip COD 85, fee 101.46, deposited −16.46. */
+    record ExchangeScene(T t, UUID a, UUID c, O original, O booked, O cancelled, Leg unmatched) {}
+
+    ExchangeScene exchangeScene(String name) {
+        T t = new T(name);
+        UUID a = t.variant("SKU-A"), c = t.variant("SKU-C"), r = t.variant("SKU-R");
+        O original = t.order(daysAgo(10));
+        t.line(original, a, 1, "300.00");
+        Leg own = t.leg(original, "delivered", "Cairo", 300, 81);
+        set(own, "delivered_at = ?", Timestamp.from(daysAgo(8)));
+        paid(own, "207.66", "92.34");
+        Leg trip = exchangeTrip(t, daysAgo(6), "delivered", 85, 89, r);
+        set(trip, "delivered_at = ?", Timestamp.from(daysAgo(4)));
+        paid(trip, "-16.46", "101.46");
+        matched(t, trip, original);
+
+        // Traced-booked, still with Bosta: the quote (50 × 1.14), no COD yet.
+        O booked = t.order(daysAgo(10));
+        t.line(booked, c, 1, "200.00");
+        booked(t, exchangeTrip(t, daysAgo(3), "with_courier", 0, 50, r), booked);
+
+        // Bosta cancelled the trip (RR-LR48WZ): never charged, never shown.
+        O cancelled = t.order(daysAgo(10));
+        t.line(cancelled, c, 1, "200.00");
+        matched(t, exchangeTrip(t, daysAgo(3), "cancelled", 280, 94, r), cancelled);
+
+        // No original found: stays on its EXC- order.
+        Leg unmatched = exchangeTrip(t, daysAgo(6), "delivered", 0, 50, r);
+        set(unmatched, "delivered_at = ?", Timestamp.from(daysAgo(4)));
+        paid(unmatched, "-30.00", "30.00");
+        return new ExchangeScene(t, a, c, original, booked, cancelled, unmatched);
+    }
+
+    @Test
+    void exchangeTrip_onTheOriginalOrder_asItsOwnFigures_neverInBostaFeesOrNet_cancelledNever() {
+        ExchangeScene x = exchangeScene("An7-ExchangeTrip");
+        Map<String, Map<String, Object>> rows = byName(ok(x.t(), "/api/v1/analytics/orders?" + period()));
+        assertThat(rows.keySet()).as("the EXC- orders are never rows").noneMatch(n -> n.startsWith("EXC-"))
+            .containsExactlyInAnyOrder(x.original().number(), x.booked().number(), x.cancelled().number());
+
+        Map<String, Object> o = rows.get(x.original().number());
+        assertThat(dec(o, "bostaFees")).isEqualByComparingTo("92.34");
+        assertThat(dec(o, "exchangeFees")).isEqualByComparingTo("101.46");
+        assertThat(dec(o, "exchangeCod")).isEqualByComparingTo("85.00");
+        assertThat(o.get("financialStatus")).isEqualTo("paid");
+        assertThat(dec(o, "netToYou")).as("never in the net").isEqualByComparingTo("207.66");
+        assertThat(dec(o, "total")).isEqualByComparingTo("300.00");
+
+        Map<String, Object> b = rows.get(x.booked().number());
+        assertThat(dec(b, "exchangeFees")).isEqualByComparingTo("57.00");
+        assertThat(b).doesNotContainKey("exchangeCod");
+        assertThat(b.get("bostaFees")).isNull();
+
+        assertThat(rows.get(x.cancelled().number())).doesNotContainKeys("exchangeFees", "exchangeCod");
+    }
+
+    @Test
+    void exchangeTrip_profit_aCostOfTheOriginalOnce_inOtherFees_theExcOrderNever() {
+        ExchangeScene x = exchangeScene("An7-ExchangeProfit");
+        Map<String, Object> summary = ok(x.t(), "/api/v1/analytics/profit/summary?" + period());
+        // 92.34 + 101.46 (original) + 57.00 (booked trip); the cancelled and the unmatched trips cost no sold order.
+        assertThat(dec(summary, "feesTotal")).isEqualByComparingTo("250.80");
+
+        Map<String, Map<String, Object>> skus = new HashMap<>();
+        for (Map<String, Object> r : list(ok(x.t(), "/api/v1/analytics/profit/skus?limit=50&" + period()), "skus")) {
+            skus.put((String) r.get("sku"), r);
+        }
+        assertThat(skus.keySet()).as("the replacement on the EXC- order is never a sale").containsExactlyInAnyOrder("SKU-A", "SKU-C");
+        assertThat(dec(skus.get("SKU-A"), "shippingFees")).isEqualByComparingTo("92.34");
+        assertThat(dec(skus.get("SKU-A"), "otherFees")).isEqualByComparingTo("101.46");
+        assertThat(dec(skus.get("SKU-C"), "otherFees")).isEqualByComparingTo("57.00");
+    }
+
+    @Test
+    void exchangeTrip_noDoubleCounting_orderFeesPlusUnmatchedTripsEqualTheMoneyFeesTotal() {
+        ExchangeScene x = exchangeScene("An7-ExchangeTotals");
+        // Only finished legs here, so the order list (charged legs) and /money/fees (finished legs) cover the same legs:
+        // drop the still-moving trip.
+        jdbc.update("DELETE FROM return_requests WHERE tenant_id = ? AND order_id = ?", x.t().id, x.booked().id());
+        jdbc.update("UPDATE shipments SET internal_state = 'delivered', delivered_at = ? WHERE tenant_id = ? " +
+                    "AND internal_state = 'with_courier'", Timestamp.from(daysAgo(1)), x.t().id);
+
+        BigDecimal orderLevel = BigDecimal.ZERO;
+        for (Map<String, Object> r : list(ok(x.t(), "/api/v1/analytics/orders?" + period()), "orders")) {
+            for (String k : List.of("bostaFees", "exchangeFees")) if (dec(r, k) != null) orderLevel = orderLevel.add(dec(r, k));
+        }
+        BigDecimal unmatched = jdbc.queryForObject(
+            "SELECT SUM(COALESCE(bosta_fees, ROUND(shipment_fees_quoted * 1.14, 2))) FROM shipments s " +
+            "WHERE tenant_id = ? AND type_code = '30' AND internal_state <> 'cancelled' " +
+            "  AND NOT EXISTS (SELECT 1 FROM exchanges e WHERE e.tracking_number = s.tracking_number AND e.matched_order_id IS NOT NULL) " +
+            "  AND NOT EXISTS (SELECT 1 FROM return_requests r WHERE r.bosta_tracking_number = s.tracking_number)",
+            BigDecimal.class, x.t().id);
+        assertThat(unmatched).isEqualByComparingTo("87.00");                 // 30.00 + the now-unbooked 57.00
+
+        Map<String, Object> fees = ok(x.t(), "/api/v1/analytics/money/fees?" + period());
+        assertThat(orderLevel.add(unmatched)).isEqualByComparingTo(dec(m(fees, "total"), "amount"));
+        assertThat(dec(m(fees, "total"), "amount")).isEqualByComparingTo("280.80");   // 92.34 + 101.46 + 30 + 57
+    }
+
     @Test
     void ownerOnly_everyEndpoint() {
         T t = new T("An7-Roles");

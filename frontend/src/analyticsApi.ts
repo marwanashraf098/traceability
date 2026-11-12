@@ -125,8 +125,9 @@ export interface ExtraFees {
   total: number; estimatedCount: number
 }
 
-export interface StuckShipment { trackingNumber: string; orderNumber: string | null; lastStatus: string | null; days: number; cod: number | null }
-export interface NotPaidShipment { trackingNumber: string; orderNumber: string | null; depositedOn: string | null; deposited: number | null; days: number }
+/** exchange: true for a Bosta exchange trip — orderNumber is then the order it belongs to (else its EXC- order); absent otherwise. */
+export interface StuckShipment { trackingNumber: string; orderNumber: string | null; lastStatus: string | null; days: number; cod: number | null; exchange?: boolean }
+export interface NotPaidShipment { trackingNumber: string; orderNumber: string | null; depositedOn: string | null; deposited: number | null; days: number; exchange?: boolean }
 export interface Stuck {
   asOf: string; neverPickedUp: StuckShipment[]; stuckWithBosta: StuckShipment[]; deliveredNotPaid: NotPaidShipment[]
   payoutWeekday: number | null; unresolved: number
@@ -338,6 +339,8 @@ export interface OrderRow {
   bostaFees: number | null; feesEstimated: boolean; netToYou: number | null; refundAmountUnknown: boolean
   /** F4 — COD Bosta collected on this order's exchanges (price difference + fee). Never in total or net; absent when none. */
   exchangeCod?: number | null
+  /** What Bosta charged for this order's exchange trips (their legs sit on internal EXC- orders). Never in bostaFees or net; absent when none. */
+  exchangeFees?: number | null
   trackingNumbers: string[]
 }
 export interface OrdersPage {

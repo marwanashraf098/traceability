@@ -82,7 +82,7 @@ function StuckCard({ on }: { on: boolean }) {
                       {rows.map(r => (
                         <tr key={r.trackingNumber} className="border-b border-line last:border-0">
                           <td className="py-[9px] ps-0 pe-2.5 font-mono text-[12px]">{r.trackingNumber}</td>
-                          <td className="py-[9px] px-2.5">{r.orderNumber ?? '—'}</td>
+                          <td className="py-[9px] px-2.5">{r.orderNumber ?? '—'}{r.exchange && <span className="ms-1.5" data-testid="stuck-exchange-tag"><Pill kind="neutral">{t('analytics.money.exchangeTag')}</Pill></span>}</td>
                           <td className="py-[9px] px-2.5">{'depositedOn' in r ? fmt.day(r.depositedOn) : r.lastStatus ? t(`analytics.orders.delivery.${r.lastStatus}`, { defaultValue: r.lastStatus }) : '—'}</td>
                           <td className="py-[9px] px-2.5 text-end"><Pill kind={r.days >= 10 ? 'crit' : 'warn'}>{t('analytics.kpi.days', { count: r.days, value: fmt.num(r.days) })}</Pill></td>
                           <td className="py-[9px] ps-2.5 pe-0 text-end tabular-nums">{fmt.money(amount(r))}</td>

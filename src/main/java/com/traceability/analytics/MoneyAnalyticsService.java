@@ -79,11 +79,24 @@ public class MoneyAnalyticsService {
     public record ExtraFees(AnalyticsPeriod.Range range, String groupBy, List<ExtraByAwb> shipments,
                             List<ExtraBySku> skus, BigDecimal total, long estimatedCount) {}
 
+    /** {@code exchange}: TRUE for an exchange trip (orderNumber is then its original order's, else its EXC- order's); absent otherwise. */
     public record StuckShipment(String trackingNumber, String orderNumber, String lastStatus, long days,
-                                BigDecimal cod) {}
+                                BigDecimal cod,
+                                @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                                Boolean exchange) {}
 
     public record NotPaidShipment(String trackingNumber, String orderNumber, LocalDate depositedOn,
-                                  BigDecimal deposited, long days) {}
+                                  BigDecimal deposited, long days,
+                                  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                                  Boolean exchange) {}
+
+    /** An exchange trip's order number on the money lists: its original's (SettlementSql.exchangeOriginal), else its own. */
+    static final String LIST_ORDER_NUMBER =
+        " COALESCE((SELECT xn.number FROM merchant_orders xn WHERE xn.id = " + SettlementSql.exchangeOriginal("s") + "), fo.number) ";
+
+    private static Boolean exchangeFlag(java.sql.ResultSet rs) throws SQLException {
+        return rs.getBoolean("is_exchange") ? Boolean.TRUE : null;
+    }
 
     public record Stuck(Instant asOf, List<StuckShipment> neverPickedUp, List<StuckShipment> stuckWithBosta,
                         List<NotPaidShipment> deliveredNotPaid, Integer payoutWeekday, long unresolved) {}
@@ -162,7 +175,9 @@ public class MoneyAnalyticsService {
 
     /*
      * In transit with Bosta (the pipeline's stage, shared with the cash forecast): forward legs picked
-     * up and still moving, not turned Return to Origin, post-floor, order not cancelled. Columns cod,
+     * up and still moving, not turned Return to Origin (20), not a customer return pickup (25),
+     * post-floor, order not cancelled. An exchange trip (30) counts (2026-11-12): it carries real COD
+     * (price difference / fee), valued at its city's success rate like any delivery. Columns cod,
      * city. Parameters: override domains, override days, tenant id.
      */
     static final String IN_TRANSIT_LEGS = """
@@ -170,7 +185,7 @@ public class MoneyAnalyticsService {
                         AS cod, s.city_name AS city
                 FROM shipments s""" + SettlementSql.floorJoin("s") + """
                 WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25', '30')
+                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25')
                   AND s.internal_state IN ('with_courier', 'exception')
                   AND fo.status <> 'cancelled'::order_status
                   AND """ + SettlementSql.POST_FLOOR;
@@ -444,16 +459,20 @@ public class MoneyAnalyticsService {
         UUID tid = TenantContext.require();
         if ("awb".equals(groupBy)) {
             String sql = finishedLegs() + """
-                SELECT l.tracking_number, o.number AS order_number, l.kind, l.fee, l.estimated,
+                SELECT l.tracking_number, COALESCE(orig.number, o.number) AS order_number, l.kind, l.fee, l.estimated,
                        l.last_failure_reason AS reason,
                        (l.terminal_at AT TIME ZONE 'Africa/Cairo')::date AS day,
                        s.city_name AS city,
                        (SELECT array_agg(DISTINCT COALESCE(v.sku, v.title) ORDER BY COALESCE(v.sku, v.title))
                           FROM order_items oi JOIN variants v ON v.id = oi.variant_id
-                          WHERE oi.order_id = l.order_id) AS skus
+                          WHERE oi.order_id = COALESCE(x.original_id, l.order_id)) AS skus
                 FROM legs l
                 JOIN shipments s ON s.id = l.id
+                -- An exchange trip is shown on its original order (SettlementSql.exchangeOriginal), else its EXC- order.
+                CROSS JOIN LATERAL (SELECT """ + SettlementSql.exchangeOriginal("s") + """
+                     AS original_id) x
                 JOIN merchant_orders o ON o.id = l.order_id
+                LEFT JOIN merchant_orders orig ON orig.id = x.original_id
                 WHERE l.kind IN ('failed', 'exchange', 'return')
                 ORDER BY l.terminal_at DESC, l.tracking_number
                 """;
@@ -472,10 +491,15 @@ public class MoneyAnalyticsService {
         }
 
         // By SKU: each leg's fee split over its order's lines by line value share (qty × net unit
-        // price, raw price else variants.price).
+        // price, raw price else variants.price). An exchange trip's order is its original
+        // (SettlementSql.moneyOrder), else its own EXC- order.
         String sql = finishedLegs() + """
             , extra AS (
-                SELECT * FROM legs WHERE kind IN ('failed', 'exchange', 'return')
+                SELECT l.id, l.kind, l.fee, l.estimated,
+                       """ + SettlementSql.moneyOrder("s") + """
+                        AS order_id
+                FROM legs l JOIN shipments s ON s.id = l.id
+                WHERE l.kind IN ('failed', 'exchange', 'return')
             ),
             line_values AS (
                 SELECT e.id AS leg_id, e.kind, e.fee, e.estimated, oi.variant_id,
@@ -531,17 +555,19 @@ public class MoneyAnalyticsService {
             + SettlementSql.POST_FLOOR;
 
         List<StuckShipment> never = jdbc.query(
-            "SELECT s.tracking_number, fo.number, s.internal_state::text AS st, " +
+            "SELECT s.tracking_number, " + LIST_ORDER_NUMBER + " AS number, s.internal_state::text AS st, " +
+            "       COALESCE(s.type_code = '30', false) AS is_exchange, " +
             "       EXTRACT(DAY FROM (?::timestamptz - s.created_at))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
             base + " AND " + SettlementSql.neverPickedUp("s", "?::timestamptz") +
             "ORDER BY s.created_at, s.tracking_number",
             ps -> stuckParams(ps, now, tid),
             (rs, n) -> new StuckShipment(rs.getString(1), rs.getString(2), "Booked, never picked up",
-                rs.getLong("days"), money(rs.getBigDecimal("cod"))));
+                rs.getLong("days"), money(rs.getBigDecimal("cod")), exchangeFlag(rs)));
 
         List<StuckShipment> withBosta = jdbc.query(
-            "SELECT s.tracking_number, fo.number, " +
+            "SELECT s.tracking_number, " + LIST_ORDER_NUMBER + " AS number, " +
             "       COALESCE(s.state_value, s.internal_state::text) AS st, " +
+            "       COALESCE(s.type_code = '30', false) AS is_exchange, " +
             "       EXTRACT(DAY FROM (?::timestamptz - lc.last_change))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
             " FROM shipments s" + SettlementSql.floorJoin("s") +
             " CROSS JOIN LATERAL (SELECT " + SettlementSql.lastChange("s") + " AS last_change) lc" +
@@ -551,11 +577,12 @@ public class MoneyAnalyticsService {
             "ORDER BY lc.last_change, s.tracking_number",
             ps -> stuckParams(ps, now, tid),
             (rs, n) -> new StuckShipment(rs.getString(1), rs.getString(2), rs.getString("st"),
-                rs.getLong("days"), money(rs.getBigDecimal("cod"))));
+                rs.getLong("days"), money(rs.getBigDecimal("cod")), exchangeFlag(rs)));
 
         // Delivered, not paid — per shipment only (SettlementSql.deliveredNotPaid).
         List<NotPaidShipment> notPaid = jdbc.query(
-            "SELECT s.tracking_number, fo.number, (s.deposited_at AT TIME ZONE 'Africa/Cairo')::date AS dep_day, " +
+            "SELECT s.tracking_number, " + LIST_ORDER_NUMBER + " AS number, (s.deposited_at AT TIME ZONE 'Africa/Cairo')::date AS dep_day, " +
+            "       COALESCE(s.type_code = '30', false) AS is_exchange, " +
             "       s.deposited_amt, EXTRACT(DAY FROM (?::timestamptz - s.deposited_at))::bigint AS days" +
             base + " AND " + SettlementSql.deliveredNotPaid("s", "?::timestamptz", "?::int") +
             "ORDER BY s.deposited_at, s.tracking_number",
@@ -572,7 +599,7 @@ public class MoneyAnalyticsService {
                 ps.setObject(9, weekday, java.sql.Types.INTEGER);
             },
             (rs, n) -> new NotPaidShipment(rs.getString(1), rs.getString(2), rs.getDate("dep_day").toLocalDate(),
-                money(rs.getBigDecimal("deposited_amt")), rs.getLong("days")));
+                money(rs.getBigDecimal("deposited_amt")), rs.getLong("days"), exchangeFlag(rs)));
 
         Long unresolved = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.settlement_status = 'unresolved' " +
