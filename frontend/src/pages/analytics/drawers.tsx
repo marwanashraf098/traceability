@@ -315,7 +315,7 @@ function DrillBody({ kind, view }: { kind: 'extra' | 'failed'; view: 'sku' | 'aw
           {list.map(r => (
             <tr key={r.trackingNumber} className="border-b border-line last:border-0" data-testid="drill-awb-row">
               <td className="py-[9px] ps-0 pe-2.5 font-mono text-[12px]">{r.trackingNumber}</td>
-              <td className="py-[9px] px-2.5">{r.orderNumber ?? '—'}</td>
+              <td className="py-[9px] px-2.5">{r.orderNumber ?? '—'}{r.type === 'exchange' && <span className="ms-1.5" data-testid="drill-exchange-tag"><Pill kind="neutral">{t('analytics.money.exchangeTag')}</Pill></span>}</td>
               <td className="py-[9px] px-2.5 font-mono text-[12px]">{r.skus.join(', ') || '—'}</td>
               <td className="py-[9px] px-2.5">{r.city ?? '—'}</td>
               {!failedOnly && <td className="py-[9px] px-2.5"><Pill kind={TYPE_PILL[r.type] ?? 'neutral'}>{t(`analytics.drill.type.${r.type}`, { defaultValue: r.type })}</Pill></td>}

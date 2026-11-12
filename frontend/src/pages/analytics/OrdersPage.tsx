@@ -148,9 +148,19 @@ export default function OrdersPage() {
                       { key: 'delivery', header: t('analytics.orders.cols.delivery'), render: r => t(`analytics.orders.delivery.${r.deliveryStatus.label}`, { defaultValue: r.deliveryStatus.label }) },
                       { key: 'fin', header: t('analytics.orders.cols.financial'), sortable: true, render: r => <Pill kind={FIN_PILL[r.financialStatus] ?? 'neutral'}>{t(`analytics.orders.fin.${r.financialStatus}`)}</Pill> },
                       {
-                        key: 'fees', header: t('analytics.orders.cols.fees'), align: 'end', sortable: true, render: r => (
-                          <span className="inline-flex items-center gap-1.5 justify-end">{fmt.money(r.bostaFees)}{r.feesEstimated && <SourceChip title={t('analytics.chip.estimatedTip')}>{t('analytics.chip.estimated')}</SourceChip>}</span>
-                        ),
+                        key: 'fees', header: t('analytics.orders.cols.fees'), align: 'end', sortable: true, render: r => {
+                          const fees = <span className="inline-flex items-center gap-1.5 justify-end">{fmt.money(r.bostaFees)}{r.feesEstimated && <SourceChip title={t('analytics.chip.estimatedTip')}>{t('analytics.chip.estimated')}</SourceChip>}</span>
+                          // The order's exchange trips (their Bosta legs sit on internal EXC- orders): their own line, never in the fees.
+                          if (r.exchangeFees == null) return fees
+                          return (
+                            <span className="inline-flex flex-col items-end">
+                              {fees}
+                              <span className="text-caption text-muted" data-testid="order-exchange-fees">
+                                {t('analytics.orders.exchangeFees', { amount: fmt.money(r.exchangeFees) })}
+                              </span>
+                            </span>
+                          )
+                        },
                       },
                       {
                         key: 'net', header: t('analytics.orders.cols.net'), align: 'end', sortable: true, render: r => {
