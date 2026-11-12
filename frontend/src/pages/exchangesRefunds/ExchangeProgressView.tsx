@@ -12,6 +12,7 @@ import { BookingState } from './ReturnRequestDrawer'
 import CustomerRefundChoice from './CustomerRefundChoice'
 import ManualCourierPanel from './ManualCourierPanel'
 import LookupExchangePanel from './LookupExchangePanel'
+import { replacementLabel } from './replacementLabel'
 
 /**
  * Step 5c (mockup X5) — an approved exchange request: what goes out, the Bosta exchange trip,
@@ -113,7 +114,10 @@ export default function ExchangeProgressView({
               <bdi>{item.productTitle}</bdi>
               {item.variantTitle && <> · <bdi>{item.variantTitle}</bdi></>}
               {' '}<span aria-hidden="true" className="inline-block rtl:rotate-180">→</span>{' '}
-              <bdi>{item.replacementVariantTitle}</bdi>
+              {/* 2026-11-13: another product is named in full; a same-product swap keeps "→ <variant>". */}
+              <bdi data-testid="exchange-summary-replacement">
+                {item.replacementProductTitle != null ? replacementLabel(item) : item.replacementVariantTitle}
+              </bdi>
             </p>
             <ItemPhotos requestId={detail.id} item={item} />
             {generic && ex?.orderNumber && (
