@@ -183,6 +183,7 @@ public class ExchangeMatchService {
                 "    matched_at = now(), status = 'matched', updated_at = now() " +
                 "WHERE id = ? AND tenant_id = ?",
                 resolved.get().orderId(), ex.id(), tenantId);
+            ExchangeInbound.fill(jdbc, tenantId, ex.id());
         } else {
             setStatus(ex.id(), tenantId, "needs_confirmation");
         }
@@ -259,6 +260,7 @@ public class ExchangeMatchService {
             "  AND status IN " + REFERENCE_ELIGIBLE_STATUSES,
             orderId, ex.get("id"), tenantId);
         if (updated == 0) return new ReferenceMatch(ReferenceVerdict.ALREADY_MATCHED, ref, null, null);
+        ExchangeInbound.fill(jdbc, tenantId, (UUID) ex.get("id"));
         markFulfillmentLinkedViaExchange(tenantId, orderId, trackingNumber);
         return new ReferenceMatch(ReferenceVerdict.MATCHED, ref, orderId, number);
     }
@@ -523,6 +525,24 @@ public class ExchangeMatchService {
             orderId, tenantId);
         if (ex == null) return;
 
+        // 2026-11-12: once the inbound variant is known (stored, else V227's resolver — the ONE rule), the exchange
+        // resolves on exactly a piece of that variant; the description narrowing below is only for an unknown one.
+        UUID inboundVariant = jdbc.queryForObject(
+            "SELECT " + ExchangeInbound.variantSql("e") + " FROM exchanges e WHERE e.id = ? AND e.tenant_id = ?",
+            UUID.class, ex.id(), tenantId);
+        if (inboundVariant != null) {
+            Boolean same = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pieces WHERE id = ? AND tenant_id = ? AND variant_id = ?)",
+                Boolean.class, dispositionedPieceId, tenantId, inboundVariant);
+            if (Boolean.TRUE.equals(same)) {
+                jdbc.update(
+                    "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                    "WHERE id = ? AND tenant_id = ? AND status = 'matched'",
+                    ex.id(), tenantId);
+            }
+            return;
+        }
+
         Candidate dispositioned = jdbc.query(
             "SELECT v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
@@ -588,6 +608,7 @@ public class ExchangeMatchService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Exchange is not open for manual attach");
         }
+        ExchangeInbound.fill(jdbc, tenantId, exchangeId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());

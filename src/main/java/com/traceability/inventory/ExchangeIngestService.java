@@ -110,6 +110,8 @@ public class ExchangeIngestService {
             "    updated_at = now()",
             tenantId, trackingNumber, outboundDesc, inboundDesc, inboundDescAr,
             cod, goodsValue, raw.toString());
+        // 2026-11-12: the inbound (old) item, when its description / original order names it (never overwrites).
+        ExchangeInbound.fill(jdbc, tenantId, trackingNumber);
 
         // FR-EXCHANGE Phase 3/4 §3.5 structural hook: derive exchanges.status from
         // return-leg timeline progress. interpretReturnLeg() always returns empty this
