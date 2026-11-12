@@ -87,7 +87,7 @@ const exchangeParcel = (o: Record<string, unknown> = {}) => parcel({
   bosta: { itemsCount: 1, description: 'x1 Contrast Trim Knit Sweater - Burgundy - L - SKU: BRK-CTK-2627-BRG-L', descriptionAr: null },
   exchange: { originalOrderNumber: 'BRK-45979-EG', tracedRequest: false, inboundKnown: true,
     inboundProductTitle: 'Contrast Trim Knit Sweater', inboundVariantTitle: 'L', inboundSku: 'BRK-CTK-2627-BRG-L' },
-  untrackedUnits: [{ orderItemId: 'oi-l', orderId: 'o-1', unitNo: 1, units: 1, productTitle: 'Contrast Trim Knit Sweater',
+  untrackedUnits: [{ orderItemId: 'oi-l', unitNo: 1, units: 1, productTitle: 'Contrast Trim Knit Sweater',
     variantTitle: 'L', sku: 'BRK-CTK-2627-BRG-L', intakeId: null, condition: null, viaPhone: false, markedBy: null,
     markedAt: null, markedInSession: null }],
   unitsIn: 0, canMarkReceived: false,

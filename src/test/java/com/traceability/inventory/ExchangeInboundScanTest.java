@@ -156,7 +156,7 @@ class ExchangeInboundScanTest {
         assertThat(((Map<String, Object>) card.get("bosta")).get("description")).isEqualTo(SWEATER_DESC);
         List<Map<String, Object>> units = (List<Map<String, Object>>) card.get("untrackedUnits");
         assertThat(units).extracting(u -> u.get("orderItemId") + "#" + u.get("unitNo")).containsExactly(lLine + "#1");
-        assertThat(units.get(0).get("orderId")).isEqualTo(original.toString());
+        assertThat(units.get(0)).as("the unit row shape is unchanged").doesNotContainKey("orderId");
         assertThat(xlLine).isNotNull();
 
         TenantContext.runAs(t.id(), () -> sessions.unitArrived(s, x.shipment(), lLine, 1, "sellable", t.owner()));
