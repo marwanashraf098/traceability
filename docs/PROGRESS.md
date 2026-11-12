@@ -4,6 +4,18 @@
 
 ## Current state
 
+**Exchange trip (type 30) — Scan returns expects the inbound item (2026-11-12; branch `fix/exchange-inbound-expected` off
+main efbc755c; V227 data migration, no schema change).** Bug: BROEK AWB 4955034034 opened the EXC order and expected the
+jeans sent out; the parcel held the sweater (inbound_variant_id NULL). See CLAUDE.md ("Bosta exchange trip"). Prod
+numbers (2026-11-12, before V227): BROEK 120 dashboard exchanges, all inbound NULL, 115 resolve by SKU (all on the
+original order), 4 stay unknown; other tenants 161 NULL, 40 resolve (23 SKU, 17 single original line), 113 have no
+original order. Of BROEK's 117 known inbound items only 32 have a tracked piece — 85 are untracked lines (unit rows).
+Traced-booked (11) already had the right request items, but their card listed the replacement too — fixed.
+- Follow-up (not built, needs a decision): marking a dashboard exchange's inbound UNIT Arrived leaves the exchanges row
+  'matched' (only a graded piece moves it to return_received), so hasActiveReturnLeg keeps covering that order.
+- After deploy: the read-only shelf list of type 30 parcels at Bosta state 46 with no intake (per store) — query in
+  the hand-off report.
+
 **Try again 404 + "no transaction = no tenant" sweep (2026-11-09; branch `fix/shopify-sync-tenant-tx` off main
 f1315843; no migration).** Prod after f1315843: Try again on RR-ZMCAUG answered a bare 404 every time (nginx `→ 404 0`).
 Root cause: `ShopifyReturnSyncController.own()` read `return_requests` with a bare JdbcTemplate outside any transaction;
