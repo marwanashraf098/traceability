@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Exchange replacement named in full (2026-11-13; branch `fix/exchange-replacement-name`; no migration; NOT
+deployed).** A portal exchange to a DIFFERENT product (F3) showed only the variant ("L") for the replacement in the
+drawer. Rule: the replacement is named "Product · Variant" in the drawer's going-out card always (+ image, + SKU when
+Traced has one); one-line summaries (approved summary line, Returns list label) name another product in full and keep
+"→ <variant>" for a same-product swap (the returned product is already on that line). Server: the request detail adds
+`replacementProductTitle` / `replacementImageUrl` / `replacementSku` ONLY when the replacement is another product, so
+same-product details and the G4a / G4b goldens are byte-identical. Returns list cases A and B (dashboard exchanges with
+known variants) name another product in full. Checked and already full: portal review / done screens, Lookup exchange
+dialog, Pick & Pack (product title from the variant), Bosta type 30 description, S5b Shopify line note
+(`ShopifyReturnSyncService.exchangeNote`: "Product / Variant"). No customer / merchant email names a replacement (the
+only emails are exception alerts). The Returns list's Arabic label for a portal request still reuses the English label
+(pre-existing). Tests: ExchangeReplacementNameTest (4), exchangeReplacementName.test.tsx (6), both revert-checked.
+
 **Bosta money — exchange trips (type 30) (2026-11-12; merged 2c654317 off main efbc755c; no migration; deployed by
 Marawan 2026-11-12).** Two owner-only analytics bugs. (A) In transit left exchange trips out; (B) a trip's fee sat on its
 internal EXC-<AWB> order (never a row) instead of the customer's original order.
