@@ -177,6 +177,11 @@ public class ReturnRequestService {
             "       i.unit_no AS \"unitNo\", i.arrived_condition AS \"arrivedCondition\", " +
             // Step 5b: the variant an exchange sends out instead.
             "       i.replacement_variant_id AS \"replacementVariantId\", rv.title AS \"replacementVariantTitle\", " +
+            // 2026-11-13: a replacement from ANOTHER product (F3 / Lookup) — its own product, image and SKU (nulls
+            // for a same-product swap, whose keys are then dropped below so its detail is unchanged).
+            "       CASE WHEN rv.product_id <> v.product_id THEN rpr.title END AS \"replacementProductTitle\", " +
+            "       CASE WHEN rv.product_id <> v.product_id THEN rpr.image_url END AS \"replacementImageUrl\", " +
+            "       CASE WHEN rv.product_id <> v.product_id THEN rv.sku END AS \"replacementSku\", " +
             // Step 4d-2: the inspection outcome of the scan attributed to this item (latest).
             "       (SELECT si.disposition FROM return_session_items si WHERE si.request_item_id = i.id " +
             "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"disposition\", " +
@@ -192,9 +197,23 @@ public class ReturnRequestService {
             "JOIN variants v  ON v.id = i.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
+            "LEFT JOIN products rpr ON rpr.id = rv.product_id AND rpr.tenant_id = rv.tenant_id " +
             "WHERE i.request_id = ? AND i.tenant_id = ? " +
             "ORDER BY pr.title, v.title, COALESCE(p.created_at, i.created_at), i.unit_no NULLS FIRST, i.id",
             id, tenantId);
+
+        // The replacement's own product keys exist only when it is another product (a same-product swap's
+        // detail stays exactly as before); its image / SKU only when Traced has one.
+        for (Map<String, Object> it : items) {
+            if (it.get("replacementProductTitle") == null) {
+                it.remove("replacementProductTitle");
+                it.remove("replacementImageUrl");
+                it.remove("replacementSku");
+            } else {
+                if (it.get("replacementImageUrl") == null) it.remove("replacementImageUrl");
+                if (it.get("replacementSku") == null || it.get("replacementSku").toString().isBlank()) it.remove("replacementSku");
+            }
+        }
 
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("id", r.get("id").toString());

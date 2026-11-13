@@ -4,11 +4,12 @@ import FeeBreakdown from './FeeBreakdown'
 import ItemPhotos from './ItemPhotos'
 import { AlertCircle, ArrowRight } from 'lucide-react'
 import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } from '../../api'
-import { Button, cn, useToast } from '../../components/ui'
+import { Button, ProductThumb, cn, useToast } from '../../components/ui'
 import { reasonLabel, shortCustomerName } from './requestFormat'
 import { PieceCode } from './RequestLifecycle'
 import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 import CustomerRefundChoice from './CustomerRefundChoice'
+import { replacementImage, replacementLabel } from './replacementLabel'
 
 /**
  * Step 5b — the request drawer for an exchange (mockups X4 / X6): what comes back → what goes
@@ -114,7 +115,20 @@ export default function ExchangeRequestView({
               <p className={cn('text-caption', inStock ? 'text-muted' : 'text-critical-text')}>
                 {t('exchangesRefunds.requests.exchange.goingOut')}
               </p>
-              <p className="text-body font-semibold text-primary"><bdi>{item.replacementVariantTitle}</bdi></p>
+              {/* 2026-11-13: always the replacement's product + variant (another product's own name, image, SKU). */}
+              <div className="flex items-start gap-2.5">
+                <ProductThumb src={replacementImage(item)} alt={replacementLabel(item)} size={40} />
+                <div className="min-w-0">
+                  <p className="text-body font-semibold text-primary" data-testid="exchange-going-out-name">
+                    <bdi>{replacementLabel(item)}</bdi>
+                  </p>
+                  {item.replacementSku && (
+                    <p className="text-small text-muted" data-testid="exchange-going-out-sku">
+                      {t('exchangesRefunds.requests.exchange.sku')}{' '}<bdi className="font-mono" dir="ltr">{item.replacementSku}</bdi>
+                    </p>
+                  )}
+                </div>
+              </div>
               <p className={cn('text-small', inStock ? 'text-success-text' : 'text-critical-text font-semibold')}
                 data-testid="exchange-stock">
                 {inStock
@@ -130,7 +144,7 @@ export default function ExchangeRequestView({
             <AlertCircle size={18} strokeWidth={2} className="flex-shrink-0 mt-0.5 text-warning-text" />
             <div className="min-w-0 space-y-1">
               <p className="text-body font-semibold text-warning-text">
-                {t('exchangesRefunds.requests.exchange.soldOutTitle', { variant: item.replacementVariantTitle ?? '' })}
+                {t('exchangesRefunds.requests.exchange.soldOutTitle', { variant: replacementLabel(item) })}
               </p>
               <p className="text-body text-primary">
                 {detail.refundFallbackOk

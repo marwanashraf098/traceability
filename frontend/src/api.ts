@@ -3588,6 +3588,10 @@ export interface ReturnRequestItem {
   /** Step 5b — the variant an exchange sends out, with its live stock at render time. */
   replacementVariantId?: string | null
   replacementVariantTitle?: string | null
+  /** 2026-11-13 — present only when the replacement is ANOTHER product (F3 / Lookup): its product, image, SKU. */
+  replacementProductTitle?: string
+  replacementImageUrl?: string
+  replacementSku?: string
   replacementAvailable?: number
   replacementInStock?: boolean
   disposition?: 'pending' | 'restocked' | 'damaged' | 'mismatch' | null

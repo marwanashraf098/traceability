@@ -106,11 +106,18 @@ public class ReturnCaseService {
         "       a.booking AS a_booking, a.refund AS a_refund, a.items AS a_items, ir.open AS a_item_receive, " +
         "       false AS a_mapping, false AS a_link, false AS a_unscanned, false AS a_to_receive, " +
         "       COALESCE((" + LABEL_AGG +
-        "           SELECT pr.title || COALESCE(' ' || NULLIF(v.title, ''), '') || COALESCE(' → ' || NULLIF(rv.title, ''), '') " +
+        "           SELECT pr.title || COALESCE(' ' || NULLIF(v.title, ''), '') " +
+        // A replacement from another product is named in full (2026-11-13); a same-product swap keeps "→ <variant>".
+        "                  || CASE WHEN rv.title IS NULL THEN '' " +
+        "                          WHEN rv.product_id <> v.product_id " +
+        "                          THEN ' → ' || rpr.title || COALESCE(' ' || NULLIF(NULLIF(rv.title, ''), 'Default Title'), '') " +
+        "                          ELSE COALESCE(' → ' || NULLIF(rv.title, ''), '') END " +
         "                  || CASE WHEN COUNT(*) > 1 THEN ' × ' || COUNT(*) ELSE '' END AS label " +
         "           FROM return_request_items i JOIN variants v ON v.id = i.variant_id JOIN products pr ON pr.id = v.product_id " +
         "           LEFT JOIN variants rv ON rv.id = i.replacement_variant_id " +
-        "           WHERE i.request_id = rr.id AND i.tenant_id = rr.tenant_id GROUP BY pr.title, v.title, rv.title) x), '{}') AS items_en, " +
+        "           LEFT JOIN products rpr ON rpr.id = rv.product_id " +
+        "           WHERE i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
+        "           GROUP BY pr.title, v.title, v.product_id, rv.title, rv.product_id, rpr.title) x), '{}') AS items_en, " +
         "       NULL::text[] AS items_ar, false AS not_scanned, " +
         "       array_remove(ARRAY[rr.bosta_tracking_number, " +
         "         (SELECT sl.tracking_number FROM shipments sl WHERE sl.id = rr.return_shipment_id AND sl.tenant_id = rr.tenant_id), " +
@@ -157,10 +164,14 @@ public class ReturnCaseService {
         "       0, 0, 1, 0, NULL::text, NULL::int, " +
         "       false, false, false, false, (" + ReturnCaseRules.EXCHANGE_NEEDS_MAPPING_SQL + "), false, false, false, " +
         "       ARRAY[CASE WHEN iv.id IS NOT NULL AND ov.id IS NOT NULL " +
-        "                  THEN ipr.title || COALESCE(' ' || NULLIF(iv.title, ''), '') || ' → ' || COALESCE(ov.title, '') " +
+        "                  THEN ipr.title || COALESCE(' ' || NULLIF(iv.title, ''), '') || ' → ' " +
+        "                       || CASE WHEN ov.product_id <> iv.product_id THEN opr.title || COALESCE(' ' || NULLIF(NULLIF(ov.title, ''), 'Default Title'), '') " +
+        "                               ELSE COALESCE(ov.title, '') END " +
         "                  ELSE COALESCE(NULLIF(e.inbound_description, ''), '?') || ' → ' || COALESCE(NULLIF(e.outbound_description, ''), '?') END], " +
         "       ARRAY[CASE WHEN iv.id IS NOT NULL AND ov.id IS NOT NULL " +
-        "                  THEN ipr.title || COALESCE(' ' || NULLIF(iv.title, ''), '') || ' ← ' || COALESCE(ov.title, '') " +
+        "                  THEN ipr.title || COALESCE(' ' || NULLIF(iv.title, ''), '') || ' ← ' " +
+        "                       || CASE WHEN ov.product_id <> iv.product_id THEN opr.title || COALESCE(' ' || NULLIF(NULLIF(ov.title, ''), 'Default Title'), '') " +
+        "                               ELSE COALESCE(ov.title, '') END " +
         "                  ELSE COALESCE(NULLIF(e.inbound_description_ar, ''), NULLIF(e.inbound_description, ''), '?') || ' ← ' " +
         "                       || COALESCE(NULLIF(e.outbound_description, ''), '?') END], " +
         "       false, ARRAY[e.tracking_number], e.updated_at, NULL::uuid, e.id, NULL::uuid, " +
@@ -171,6 +182,7 @@ public class ReturnCaseService {
         "LEFT JOIN variants iv ON iv.id = e.inbound_variant_id " +
         "LEFT JOIN products ipr ON ipr.id = iv.product_id " +
         "LEFT JOIN variants ov ON ov.id = e.outbound_variant_id " +
+        "LEFT JOIN products opr ON opr.id = ov.product_id " +
         "WHERE e.tenant_id = ? AND e.return_request_id IS NULL ";
 
     /** C — courier-return legs no request holds. Param: tenant. */
