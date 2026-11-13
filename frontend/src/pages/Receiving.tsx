@@ -336,6 +336,7 @@ function CreateSessionForm({ locations, flexibleLabeling, onCreated, onCancel }:
         </button>
       )}
       <h1 className="text-h1 text-primary">{t('receiving.newTitle')}</h1>
+      {/* TODO(M3): when "Moving from my Shopify location" ships, point this line to that option instead of "contact us". */}
       <p className="text-small text-muted" data-testid="receiving-new-stock-only">{t('receiving.newStockOnly')}</p>
       {error && <Alert tone="critical" title={error} />}
       <form onSubmit={submit} className="card p-5 space-y-4">

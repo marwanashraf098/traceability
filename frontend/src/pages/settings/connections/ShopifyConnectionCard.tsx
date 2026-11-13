@@ -373,6 +373,7 @@ function FulfillmentActivationItem({
               className="mt-0.5 flex-shrink-0"
               data-testid="fulfillment-confirm-checkbox"
             />
+            {/* TODO(M3): when "Moving from my Shopify location" ships, point this warning to that option instead of "contact us". */}
             <span>{t('connections.shopify.fulfillmentActivation.confirmCopy')}</span>
           </label>
 

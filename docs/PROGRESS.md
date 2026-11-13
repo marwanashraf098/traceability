@@ -20,9 +20,9 @@ silent flip. The manual "Activate fulfillment" button stays as the retry / fix p
   Location" have shipsInventory=false; Traced Main is in the General profile (origin unknown).
 - One-off audit: `TRACED_LOCATION_SETTINGS_AUDIT_TENANTS=<ids>` → restart → `grep LOCATION_SETTINGS_AUDIT` (active,
   fulfills_online, in_default_profile, Traced's recorded statuses, flagged) → unset. Read only, no auto-change.
-- Copy: Receiving's new-session form says it is for stock not in Shopify yet; the Activate-fulfillment confirmation now
-  points to "Moving from my Shopify location" — **that option ships with M3; don't deploy L1's copy before M3 (or soften
-  it) — see the L1 report.**
+- Copy (EN + AR, Marawan 2026-11-13): Receiving's new-session form and the Activate-fulfillment warning say "Only for stock
+  that isn't in Shopify yet. If this stock is already counted in another Shopify location, don't receive it here —
+  contact us." `TODO(M3)` at both usages (Receiving.tsx, ShopifyConnectionCard.tsx): switch to the move option.
 - Guards: TracedLocationEditGuardTest (locationEdit only address or literal fulfillsOnlineOrders: true; target only the
   is_fulfillment row; turn-back-on takes no input), LocationSettingsAuditReadOnlyGuardTest. Revert-checked R1–R6.
 - Count gates: MigrationSmokeTest 227 files (V1–V228 minus V38), NotTracedBackfillTest 172 (origin/main merged in, V227 present).

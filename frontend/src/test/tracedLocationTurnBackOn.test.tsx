@@ -103,7 +103,8 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
 
     await waitFor(() => expect(screen.getByTestId('fulfillment-activation')).toBeTruthy())
     expect(screen.queryByTestId('traced-location-off')).toBeNull()
-    expect(screen.getByText(/Moving from my Shopify location/)).toBeTruthy()
+    expect(screen.getByText(/already counted in another Shopify location, don.t receive it here — contact us/)).toBeTruthy()
+    expect(screen.queryByText(/Moving from my Shopify location/)).toBeNull()
   })
 
   test('predicate: only a linked fulfillment row that is off / taken out', () => {
