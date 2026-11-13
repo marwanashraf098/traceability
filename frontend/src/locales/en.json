@@ -2224,6 +2224,7 @@
         "inStock": "{{count}} in stock",
         "inStock_other": "{{count}} in stock",
         "outOfStock": "Out of stock",
+        "sku": "SKU",
         "soldOutTitle": "{{variant}} sold out since the customer asked",
         "soldOutFallback": "The customer agreed to a refund instead. Switching it makes this a normal return: Bosta collects the {{variant}} and you refund once it's checked.",
         "soldOutFallbackOther": "The customer agreed to a refund instead. Switching it makes this a normal return: {{carrier}} collects the {{variant}} and you refund once it's checked.",
