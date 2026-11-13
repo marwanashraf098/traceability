@@ -1680,6 +1680,10 @@
       "parcel": {
         "courierReturn": "Courier return",
         "returnToSender": "Return to sender",
+        "exchange": "Exchange",
+        "exchangeBack": "Coming back",
+        "exchangeUnknown": "Bosta's note doesn't tell us which item this is. Open the parcel and scan any piece of order {{order}}.",
+        "exchangeUnknownNoOrder": "Bosta's note doesn't tell us which item this is, and the exchange isn't matched to an order yet. Open the parcel and scan its piece.",
         "order": "Order",
         "customer": "Customer",
         "backAtWarehouse": "Back at warehouse",

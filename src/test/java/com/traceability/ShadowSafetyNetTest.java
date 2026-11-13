@@ -394,6 +394,9 @@ class ShadowSafetyNetTest {
         Shop s = new Shop("W1");
         s.unexplained1009();
         assertThat(s.shadow()).containsEntry("state", "live");
+        // Pinned to the detector's clock (the database's now()), not the fixture's fixed APPROVED date —
+        // otherwise this check fails on every run more than 7 days after 2026-11-04.
+        s.approvedDaysAgo(6);
         assertThat(s.alerts()).as("not before 7 days").isEmpty();
         s.approvedDaysAgo(8);
 

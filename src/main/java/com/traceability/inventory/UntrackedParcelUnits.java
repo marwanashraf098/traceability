@@ -20,6 +20,14 @@ import java.util.UUID;
  * order lines with no allocation of any status ({@link PortalService#LINE_UNTRACKED_SQL}); units
  * 1..{@link #PARCEL_UNIT_CAP_SQL}. A parcel with a linked request keeps its request items.
  *
+ * 2026-11-12 — a dashboard Bosta exchange trip ({@link ExchangeInbound#tripSql}, no request): the lines are the
+ * ORIGINAL order's ({@code exchanges.matched_order_id}), never the replacement order the AWB belongs to — the
+ * untracked lines of the inbound variant ({@link ExchangeInbound#variantSql}); while that is unknown, every untracked
+ * line of the original except the outbound variant (never guessed — the worker marks what is in the parcel). One unit
+ * per line (an exchange carries one item each way — ExchangeIngestService only routes itemsCount 1). A mark records
+ * the ORIGINAL order ({@code untracked_unit_intakes.order_id}), so Return To Receive, Receiving and the order's return
+ * state name the order the item came back from.
+ *
  * Partial returns are normal (signed off): the leg is HANDLED once at least one unit is marked —
  * stamped return_intake_outcome 'untracked_units_arrived' through the canonical evidence rule
  * ({@link ShipmentLinkService#returnLegScanEvidenceSql}); undoing the last mark clears it. Unmarked
@@ -61,16 +69,30 @@ public class UntrackedParcelUnits {
      */
     public List<Map<String, Object>> units(UUID tenantId, UUID shipmentId) {
         List<Map<String, Object>> lines = jdbc.queryForList(
-            "SELECT oi.id AS order_item_id, COALESCE(pr.title, oi.raw->>'title') AS product_title, v.title AS variant_title, " +
-            "       v.sku, " + PARCEL_UNIT_CAP_SQL + " AS cap " +
+            "SELECT oi.id AS order_item_id, COALESCE(pr.title, oi.raw->>'title') AS product_title, " +
+            "       v.title AS variant_title, v.sku, " + PARCEL_UNIT_CAP_SQL + " AS cap " +
             "FROM shipments s " +
             "JOIN order_items oi ON oi.order_id = s.order_id AND oi.tenant_id = s.tenant_id " +
             "LEFT JOIN variants v ON v.id = oi.variant_id " +
             "LEFT JOIN products pr ON pr.id = v.product_id " +
             "WHERE s.id = ? AND s.tenant_id = ? AND " + eligibleLegSql() +
             "  AND " + PortalService.LINE_UNTRACKED_SQL +
-            "ORDER BY COALESCE(pr.title, oi.raw->>'title'), v.title, oi.id",
-            shipmentId, tenantId);
+            "UNION ALL " +
+            // A dashboard exchange trip: the original order's untracked line(s) of the item coming back.
+            "SELECT oi.id, COALESCE(pr.title, oi.raw->>'title'), v.title, v.sku, 1 " +
+            "FROM shipments s " +
+            "JOIN exchanges xt ON xt.tenant_id = s.tenant_id AND xt.tracking_number = s.tracking_number " +
+            "                 AND xt.return_request_id IS NULL AND " + ExchangeInbound.tripSql("s") +
+            "JOIN order_items oi ON oi.order_id = xt.matched_order_id AND oi.tenant_id = s.tenant_id " +
+            "LEFT JOIN variants v ON v.id = oi.variant_id " +
+            "LEFT JOIN products pr ON pr.id = v.product_id " +
+            "WHERE s.id = ? AND s.tenant_id = ? " +
+            "  AND " + PortalService.LINE_UNTRACKED_SQL +
+            "  AND CASE WHEN " + ExchangeInbound.variantSql("xt") + " IS NOT NULL " +
+            "           THEN oi.variant_id = " + ExchangeInbound.variantSql("xt") + " " +
+            "           ELSE oi.variant_id IS DISTINCT FROM xt.outbound_variant_id END " +
+            "ORDER BY 2, 3, 1",
+            shipmentId, tenantId, shipmentId, tenantId);
         if (lines.isEmpty()) return List.of();
 
         Map<String, Map<String, Object>> marks = new LinkedHashMap<>();
@@ -151,6 +173,11 @@ public class UntrackedParcelUnits {
                 "This item is already marked " + unit.get("condition") + " — undo it first.");
         }
 
+        // The unit's own order (its line's) — for an exchange trip the ORIGINAL order, not the AWB's replacement order.
+        // Read here, not exposed on the unit rows (the parcel response stays as it was).
+        UUID unitOrder = jdbc.queryForObject("SELECT order_id FROM order_items WHERE id = ? AND tenant_id = ?",
+            UUID.class, orderItemId, tenantId);
+
         // via phone: this parcel's AWB was a verified phone scan in this session (scanAwb sets it).
         boolean viaPhone = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT COALESCE(bool_or(via_phone), false) FROM return_session_shipments " +
@@ -162,7 +189,7 @@ public class UntrackedParcelUnits {
             "INSERT INTO untracked_unit_intakes (tenant_id, return_session_id, shipment_id, order_id, order_item_id, " +
             "    unit_no, condition, actor_user_id, via_phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
             "ON CONFLICT (shipment_id, order_item_id, unit_no) WHERE undone_at IS NULL DO NOTHING",
-            tenantId, sessionId, shipmentId, leg.get("order_id"), orderItemId, unitNo, condition, actorUserId, viaPhone);
+            tenantId, sessionId, shipmentId, unitOrder, orderItemId, unitNo, condition, actorUserId, viaPhone);
         if (inserted == 0) {
             String existing = jdbc.queryForObject(
                 "SELECT condition FROM untracked_unit_intakes WHERE tenant_id = ? AND shipment_id = ? " +

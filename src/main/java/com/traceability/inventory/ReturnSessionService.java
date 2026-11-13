@@ -464,6 +464,20 @@ public class ReturnSessionService {
             result.put("itemsCount",    crp.get(0).get("itemsCount"));
             result.put("description",   crp.get(0).get("description"));
             result.put("descriptionAr", crp.get(0).get("descriptionAr"));
+        } else {
+            // 2026-11-12: an exchange trip — Bosta's note of the item coming BACK (keys only on such an AWB).
+            List<Map<String, Object>> x = jdbc.queryForList(
+                "SELECT (s.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int AS \"itemsCount\", " +
+                "       COALESCE(s.raw #>> '{returnSpecs,packageDetails,description}', xt.inbound_description) AS \"description\", " +
+                "       COALESCE(s.raw #>> '{returnSpecs,packageDetails,descriptionAr}', xt.inbound_description_ar) AS \"descriptionAr\" " +
+                "FROM shipments s JOIN exchanges xt ON xt.tenant_id = s.tenant_id AND xt.tracking_number = s.tracking_number " +
+                "WHERE s.tenant_id = ? AND s.tracking_number = ? AND " + ExchangeInbound.tripSql("s"),
+                tenantId, trackingNumber);
+            if (!x.isEmpty()) {
+                result.put("itemsCount",    x.get(0).get("itemsCount"));
+                result.put("description",   x.get(0).get("description"));
+                result.put("descriptionAr", x.get(0).get("descriptionAr"));
+            }
         }
         return result;
     }
@@ -1072,7 +1086,14 @@ public class ReturnSessionService {
             "       CASE WHEN s.provider = 'generic' THEN COALESCE(s.carrier_name, '') END AS generic_carrier, " +
             // Step 6a: the return request whose items this parcel carries — the linked courier-return
             // leg's request, or for a Traced-booked exchange AWB the exchange's request.
-            "       COALESCE(rq.id, xrq.id) AS items_request_id, COALESCE(rq.reference, xrq.reference) AS items_request_reference " +
+            "       COALESCE(rq.id, xrq.id) AS items_request_id, COALESCE(rq.reference, xrq.reference) AS items_request_reference, " +
+            // 2026-11-12: a Bosta exchange trip (type 30, not turned around) brings back the INBOUND item of the
+            // ORIGINAL order (ExchangeInbound) — never the replacement the AWB's own order holds.
+            "       xt.id AS x_id, xt.return_request_id AS x_request_id, xt.matched_order_id AS x_original_order_id, " +
+            "       xo.number AS x_original_number, xiv.id AS x_inbound_variant_id, xiv.title AS x_inbound_variant_title, " +
+            "       xipr.title AS x_inbound_product_title, xiv.sku AS x_inbound_sku, " +
+            "       xt.inbound_description AS x_inbound_description, xt.inbound_description_ar AS x_inbound_description_ar, " +
+            "       " + ShipmentLinkService.orderUntrackedSql("xt.matched_order_id") + " AS x_original_untracked " +
             "FROM return_session_shipments rss " +
             "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
             "                AND (s.provider = 'bosta' OR s.id = rss.shipment_id) " +
@@ -1082,6 +1103,10 @@ public class ReturnSessionService {
             "LEFT JOIN exchanges xe ON xe.tracking_number = s.tracking_number AND xe.tenant_id = s.tenant_id " +
             "                      AND xe.return_request_id IS NOT NULL " +
             "LEFT JOIN return_requests xrq ON xrq.id = xe.return_request_id AND xrq.tenant_id = s.tenant_id " +
+            ExchangeInbound.tripJoinSql("xt", "s") +
+            "LEFT JOIN orders xo ON xo.id = xt.matched_order_id AND xo.tenant_id = xt.tenant_id " +
+            "LEFT JOIN variants xiv ON xiv.id = " + ExchangeInbound.variantSql("xt") + " " +
+            "LEFT JOIN products xipr ON xipr.id = xiv.product_id " +
             "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
             "ORDER BY rss.linked_at DESC, rss.id DESC",
             sessionId, tenantId);
@@ -1109,7 +1134,11 @@ public class ReturnSessionService {
             (org.springframework.jdbc.core.RowCallbackHandler) rs -> itemRequest.put(rs.getObject("id"), rs.getObject("request_id")),
             sessionId, tenantId);
         Set<Object> linkedRequests = new HashSet<>();
-        for (Map<String, Object> leg : legs) if (leg.get("request_id") != null) linkedRequests.add(leg.get("request_id"));
+        for (Map<String, Object> leg : legs) {
+            if (leg.get("request_id") != null) linkedRequests.add(leg.get("request_id"));
+            // A Traced-booked exchange trip carries exactly its request's items, like a request-linked return leg.
+            if (leg.get("x_request_id") != null) linkedRequests.add(leg.get("x_request_id"));
+        }
 
         List<Map<String, Object>> parcels = new ArrayList<>();
         Set<Object> ordersTaken = new HashSet<>();
@@ -1119,9 +1148,11 @@ public class ReturnSessionService {
         }
         Set<Object> expectedTaken = new HashSet<>();
         for (Map<String, Object> leg : legs) {
-            Object orderId = leg.get("order_id");
+            boolean exchangeTrip = leg.get("x_id") != null;
+            // A dashboard exchange trip's items belong to the ORIGINAL order (null while it isn't matched yet).
+            Object orderId = exchangeTrip ? leg.get("x_original_order_id") : leg.get("order_id");
             String awb = (String) leg.get("awb");
-            Object requestId = leg.get("request_id");
+            Object requestId = leg.get("request_id") != null ? leg.get("request_id") : leg.get("x_request_id");
 
             List<Map<String, Object>> parcelExpected = new ArrayList<>();
             List<Map<String, Object>> scanned = new ArrayList<>();
@@ -1151,7 +1182,7 @@ public class ReturnSessionService {
                 for (Map<String, Object> e : expected) {
                     if (awb.equals(e.get("awb")) && expectedTaken.add(e.get("id"))) parcelExpected.add(e);
                 }
-                if (firstParcelForOrder) {
+                if (firstParcelForOrder && orderId != null) {
                     for (Map<String, Object> it : items) {
                         if (orderId != null && orderId.equals(itemOrder.get(it.get("id"))) && itemsTaken.add(it.get("id"))) {
                             scanned.add(it);
@@ -1191,15 +1222,18 @@ public class ReturnSessionService {
             parcel.put("shipmentId", leg.get("shipment_id").toString());
             parcel.put("awb", awb);
             parcel.put("leg", leg.get("shipment_leg"));
-            parcel.put("orderNumber", leg.get("order_number"));
+            parcel.put("orderNumber", exchangeTrip ? leg.get("x_original_number") : leg.get("order_number"));
             parcel.put("requestReference", leg.get("request_reference"));
             parcel.put("customerShortName", shortName((String) leg.get("customer_name")));
             parcel.put("returnedAt", leg.get("returned_at"));
-            if ("return".equals(leg.get("shipment_leg"))) {
+            if ("return".equals(leg.get("shipment_leg")) || exchangeTrip) {
+                // An exchange trip: Bosta's note of what comes BACK (returnSpecs), else the exchange's own copy.
                 Map<String, Object> bosta = new LinkedHashMap<>();
                 bosta.put("itemsCount", leg.get("items_count"));
-                bosta.put("description", leg.get("description"));
-                bosta.put("descriptionAr", leg.get("description_ar"));
+                bosta.put("description", leg.get("description") != null || !exchangeTrip
+                    ? leg.get("description") : leg.get("x_inbound_description"));
+                bosta.put("descriptionAr", leg.get("description_ar") != null || !exchangeTrip
+                    ? leg.get("description_ar") : leg.get("x_inbound_description_ar"));
                 parcel.put("bosta", bosta);
             } else if (leg.get("generic_carrier") != null) {
                 // G3: another courier's parcel — no Bosta block; the card names its carrier instead.
@@ -1218,7 +1252,18 @@ public class ReturnSessionService {
             } else {
                 parcel.put("bosta", null);
             }
-            parcel.put("tracked", !Boolean.TRUE.equals(leg.get("untracked")));
+            parcel.put("tracked", !Boolean.TRUE.equals(exchangeTrip ? leg.get("x_original_untracked") : leg.get("untracked")));
+            if (exchangeTrip) {
+                // Present only on an exchange trip (every other card is unchanged).
+                Map<String, Object> exchange = new LinkedHashMap<>();
+                exchange.put("originalOrderNumber", leg.get("x_original_number"));
+                exchange.put("tracedRequest", leg.get("x_request_id") != null);
+                exchange.put("inboundKnown", leg.get("x_inbound_variant_id") != null);
+                exchange.put("inboundProductTitle", leg.get("x_inbound_product_title"));
+                exchange.put("inboundVariantTitle", leg.get("x_inbound_variant_title"));
+                exchange.put("inboundSku", leg.get("x_inbound_sku"));
+                parcel.put("exchange", exchange);
+            }
             parcel.put("intakeOutcome", outcome);
             parcel.put("markedBy", outcome != null ? leg.get("marked_by") : null);
             parcel.put("markedAt", outcome != null ? leg.get("return_intake_completed_at") : null);
@@ -1425,35 +1470,70 @@ public class ReturnSessionService {
             tenantId, tenantId, lookup, lookup, lookup, tenantId);
     }
 
-    /** Expected-but-unscanned pieces for every AWB scanned into this session — recomputed on read. */
+    /** The piece statuses a returning piece can be in when its parcel is scanned. */
+    private static final String RETURNING_PIECE_STATUSES_SQL =
+        "p.status IN ('return_in_transit'::piece_status, 'with_courier'::piece_status, " +
+        "             'awaiting_pickup'::piece_status, 'delivered'::piece_status, " +
+        "             'return_pending_inspection'::piece_status) ";
+
+    /** The latest allocation of allocation {@code a}'s piece (allocations are never deleted). */
+    private static final String LATEST_ALLOCATION_SQL =
+        "a.status IN ('active','packed','released') " +
+        "AND a.id = (SELECT a2.id FROM allocations a2 WHERE a2.piece_id = a.piece_id ORDER BY a2.allocated_at DESC LIMIT 1) ";
+
+    /**
+     * Expected-but-unscanned pieces for every AWB scanned into this session — recomputed on read.
+     * 2026-11-12: a Bosta exchange trip ({@link ExchangeInbound#tripSql}) expects what comes BACK, never the
+     * replacement its own order holds: a Traced-booked exchange its request's awaiting pieces; a dashboard exchange the
+     * ORIGINAL order's pieces of the inbound variant (none while that is unknown — never guessed). Every other AWB:
+     * its order's pieces, as before.
+     */
     private List<Map<String, Object>> fetchExpectedPieces(UUID sessionId, UUID tenantId) {
-        return jdbc.queryForList(
-            "SELECT p.id, p.barcode, p.status::text AS status, " +
-            "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
-            "       rss.awb " +
+        String notScanned =
+            "NOT EXISTS (SELECT 1 FROM return_session_items i WHERE i.session_id = rss.session_id AND i.piece_id = p.id) ";
+        String scannedLeg =
             "FROM return_session_shipments rss " +
             "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
-            "                    AND (s.provider = 'bosta' OR s.id = rss.shipment_id) " +
+            "                    AND (s.provider = 'bosta' OR s.id = rss.shipment_id) ";
+        String pieceCols =
+            "SELECT p.id, p.barcode, p.status::text AS status, " +
+            "       v.title AS variant_title, pr.title AS product_title, v.sku, rss.awb, p.last_event_at ";
+        String pieceJoins =
+            "JOIN variants v     ON v.id = p.variant_id " +
+            "JOIN products pr    ON pr.id = v.product_id ";
+        return jdbc.queryForList(
+            "SELECT q.id, q.barcode, q.status, q.variant_title, q.product_title, q.sku, q.awb FROM (" +
+            // Every AWB that isn't an exchange trip: its order's pieces (unchanged).
+            pieceCols + scannedLeg +
             "JOIN orders o       ON o.id = s.order_id AND o.tenant_id = rss.tenant_id " +
             "JOIN order_items oi ON oi.order_id = o.id " +
-            "JOIN allocations a  ON a.order_item_id = oi.id " +
-            "                    AND a.status IN ('active','packed','released') " +
-            "                    AND a.id = ( " +
-            "                        SELECT a2.id FROM allocations a2 " +
-            "                        WHERE a2.piece_id = a.piece_id " +
-            "                        ORDER BY a2.allocated_at DESC LIMIT 1) " +
+            "JOIN allocations a  ON a.order_item_id = oi.id AND " + LATEST_ALLOCATION_SQL +
+            "JOIN pieces p       ON p.id = a.piece_id AND p.tenant_id = rss.tenant_id " + pieceJoins +
+            "WHERE rss.session_id = ? AND rss.tenant_id = ? AND NOT " + ExchangeInbound.tripSql("s") +
+            "  AND " + RETURNING_PIECE_STATUSES_SQL + " AND " + notScanned +
+            "UNION ALL " +
+            // A dashboard exchange trip: the original order's pieces of the inbound variant.
+            pieceCols + scannedLeg +
+            "JOIN exchanges xt   ON xt.tenant_id = s.tenant_id AND xt.tracking_number = s.tracking_number " +
+            "                    AND xt.return_request_id IS NULL AND " + ExchangeInbound.tripSql("s") +
+            "JOIN order_items oi ON oi.order_id = xt.matched_order_id AND oi.tenant_id = rss.tenant_id " +
+            "JOIN allocations a  ON a.order_item_id = oi.id AND " + LATEST_ALLOCATION_SQL +
             "JOIN pieces p       ON p.id = a.piece_id AND p.tenant_id = rss.tenant_id " +
-            "JOIN variants v     ON v.id = p.variant_id " +
-            "JOIN products pr    ON pr.id = v.product_id " +
+            "                    AND p.variant_id = " + ExchangeInbound.variantSql("xt") + " " + pieceJoins +
             "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
-            "  AND p.status IN ('return_in_transit'::piece_status, 'with_courier'::piece_status, " +
-            "                   'awaiting_pickup'::piece_status, 'delivered'::piece_status, " +
-            "                   'return_pending_inspection'::piece_status) " +
-            "  AND NOT EXISTS ( " +
-            "      SELECT 1 FROM return_session_items i " +
-            "      WHERE i.session_id = rss.session_id AND i.piece_id = p.id) " +
-            "ORDER BY p.last_event_at ASC",
-            sessionId, tenantId);
+            "  AND " + RETURNING_PIECE_STATUSES_SQL + " AND " + notScanned +
+            "UNION ALL " +
+            // A Traced-booked exchange trip: exactly its request's awaiting pieces.
+            pieceCols + scannedLeg +
+            "JOIN exchanges xt   ON xt.tenant_id = s.tenant_id AND xt.tracking_number = s.tracking_number " +
+            "                    AND xt.return_request_id IS NOT NULL AND " + ExchangeInbound.tripSql("s") +
+            "JOIN return_request_items ri ON ri.request_id = xt.return_request_id AND ri.tenant_id = xt.tenant_id " +
+            "                    AND ri.item_status = 'awaiting' " +
+            "JOIN pieces p       ON p.id = ri.piece_id AND p.tenant_id = rss.tenant_id " + pieceJoins +
+            "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
+            "  AND " + RETURNING_PIECE_STATUSES_SQL + " AND " + notScanned +
+            ") q ORDER BY q.last_event_at ASC",
+            sessionId, tenantId, sessionId, tenantId, sessionId, tenantId);
     }
 
     private Map<String, Object> itemRow(UUID itemId, UUID tenantId) {

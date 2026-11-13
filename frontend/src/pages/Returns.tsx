@@ -208,6 +208,16 @@ interface Parcel {
   unitsIn?: number
   /** Issue 1: the whole-parcel mark is offered (untracked order, no request, nothing marked yet). */
   canMarkReceived?: boolean
+  /** 2026-11-12: a Bosta exchange trip (type 30) — what comes back is the original order's inbound item, never the
+   *  replacement. Absent on every other parcel. orderNumber is then the ORIGINAL order. */
+  exchange?: {
+    originalOrderNumber: string | null
+    tracedRequest: boolean
+    inboundKnown: boolean
+    inboundProductTitle: string | null
+    inboundVariantTitle: string | null
+    inboundSku: string | null
+  }
 }
 
 /** Issue 1 — one unit of an untracked order line on a parcel card. */
@@ -1318,6 +1328,8 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   const untrackedOpen = (parcel.leg === 'return' || rts) && !parcel.tracked && !parcel.intakeOutcome
     && untrackedItems.length === 0 && units.length === 0
   const awaiting = parcel.expectedPieces.length
+  // A dashboard exchange whose returning item we can't name: never guessed — the worker scans what is in the parcel.
+  const exchangeUnknown = !!parcel.exchange && !parcel.exchange.tracedRequest && !parcel.exchange.inboundKnown
   const nothingToScan = parcel.tracked && awaiting === 0 && parcel.scannedItems.length === 0 && !parcel.intakeOutcome
     && untrackedItems.length === 0 && units.length === 0
   const shownCounts = {
@@ -1392,12 +1404,19 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </span>
         <div className="flex flex-col gap-0.5 w-56 shrink-0">
           <span className="text-caption font-semibold uppercase tracking-wider text-muted">
-            {parcel.leg === 'return' ? t('returns.openSession.parcel.courierReturn') : t('returns.openSession.parcel.returnToSender')}
+            {parcel.exchange ? t('returns.openSession.parcel.exchange')
+              : parcel.leg === 'return' ? t('returns.openSession.parcel.courierReturn') : t('returns.openSession.parcel.returnToSender')}
           </span>
           <bdi className="font-mono text-body-lg font-semibold text-primary">AWB {parcel.awb}</bdi>
         </div>
         <div className="flex gap-8 flex-1 min-w-0">
           <ParcelFact label={t('returns.openSession.parcel.order')} value={<bdi>{order}</bdi>} />
+          {parcel.exchange?.inboundKnown && (
+            <ParcelFact label={t('returns.openSession.parcel.exchangeBack')}
+              value={<bdi data-testid="parcel-exchange-inbound">
+                {[parcel.exchange.inboundProductTitle, parcel.exchange.inboundVariantTitle].filter(Boolean).join(' · ')}
+              </bdi>} />
+          )}
           {parcel.carrier != null && (
             <ParcelFact label={t('returns.openSession.parcel.carrier')}
               value={<bdi data-testid="parcel-carrier">{parcel.carrier || t('pickups.anotherCourier')}</bdi>} />
@@ -1444,6 +1463,17 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </div>
       )}
 
+      {exchangeUnknown && !parcel.complete && !received && (
+        <div className="px-5 py-3 border-t border-line flex gap-3 items-start" data-testid="parcel-exchange-unknown">
+          <AlertTriangle size={18} strokeWidth={2} className="text-warning shrink-0 mt-0.5" />
+          <p className="text-small text-primary leading-relaxed">
+            {parcel.exchange?.originalOrderNumber
+              ? t('returns.openSession.parcel.exchangeUnknown', { order: `\u2068${parcel.exchange.originalOrderNumber}\u2069` })
+              : t('returns.openSession.parcel.exchangeUnknownNoOrder')}
+          </p>
+        </div>
+      )}
+
       {received ? (
         <div className="px-5 py-4 border-t border-line flex items-center gap-4" data-testid="parcel-received-untracked">
           <div className="flex flex-col gap-1 flex-1">
@@ -1486,9 +1516,11 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
           </div>
         </div>
       ) : nothingToScan ? (
-        <div className="px-5 py-4 border-t border-line text-small text-muted" data-testid="parcel-nothing-to-scan">
-          {t('returns.openSession.parcel.forwardNothing')}
-        </div>
+        exchangeUnknown ? null : (
+          <div className="px-5 py-4 border-t border-line text-small text-muted" data-testid="parcel-nothing-to-scan">
+            {t('returns.openSession.parcel.forwardNothing')}
+          </div>
+        )
       ) : (
         <div className="border-t border-line">
           <div className="px-5 py-3 flex items-center gap-4">

@@ -5,7 +5,7 @@
 ## Current state
 
 **L1 — Traced Main Warehouse sells online from its first link (2026-11-12/13; branch `feat/l1-traced-location-online`
-off origin/main 2c654317; V228 — V227 is held by unmerged `fix/exchange-inbound-expected`; NOT merged, NOT deployed).**
+off origin/main 2c654317; V228 — V227 went to `fix/exchange-inbound-expected`, merged meanwhile; NOT merged, NOT deployed).**
 Decisions (Marawan 2026-11-12): at FIRST link (created or reused "Traced Main Warehouse") Traced makes sure the location
 fulfils online orders (read → locationEdit only when false → read back) and joins the default delivery profile through
 `ShopifyFulfillmentActivationService.joinWithReadBack` (advisory lock, membership first, read back) — automatic, the
@@ -25,8 +25,42 @@ silent flip. The manual "Activate fulfillment" button stays as the retry / fix p
   it) — see the L1 report.**
 - Guards: TracedLocationEditGuardTest (locationEdit only address or literal fulfillsOnlineOrders: true; target only the
   is_fulfillment row; turn-back-on takes no input), LocationSettingsAuditReadOnlyGuardTest. Revert-checked R1–R6.
-- Count gates: MigrationSmokeTest 226 files (V1–V228 minus V38, V227), NotTracedBackfillTest 171 — recompute when V227
-  merges.
+- Count gates: MigrationSmokeTest 227 files (V1–V228 minus V38), NotTracedBackfillTest 172 (origin/main merged in, V227 present).
+**Exchange trip (type 30) — Scan returns expects the inbound item (2026-11-12; branch `fix/exchange-inbound-expected` off
+main efbc755c; V227 data migration, no schema change).** Bug: BROEK AWB 4955034034 opened the EXC order and expected the
+jeans sent out; the parcel held the sweater (inbound_variant_id NULL). See CLAUDE.md ("Bosta exchange trip"). Prod
+numbers (2026-11-12, before V227): BROEK 120 dashboard exchanges, all inbound NULL, 115 resolve by SKU (all on the
+original order), 4 stay unknown; other tenants 161 NULL, 40 resolve (23 SKU, 17 single original line), 113 have no
+original order. Of BROEK's 117 known inbound items only 32 have a tracked piece — 85 are untracked lines (unit rows).
+Traced-booked (11) already had the right request items, but their card listed the replacement too — fixed.
+- Follow-up (not built, needs a decision): marking a dashboard exchange's inbound UNIT Arrived leaves the exchanges row
+  'matched' (only a graded piece moves it to return_received), so hasActiveReturnLeg keeps covering that order.
+- After deploy: the read-only shelf list of type 30 parcels at Bosta state 46 with no intake (per store) — query in
+  the hand-off report.
+
+**Bosta money — exchange trips (type 30) (2026-11-12; merged 2c654317 off main efbc755c; no migration; deployed by
+Marawan 2026-11-12).** Two owner-only analytics bugs. (A) In transit left exchange trips out; (B) a trip's fee sat on its
+internal EXC-<AWB> order (never a row) instead of the customer's original order.
+- THE rule: `SettlementSql.exchangeOriginal(s)` — for type 30, the order of `exchanges.matched_order_id` (by tenant +
+  tracking number), else `return_requests.order_id` (by bosta_tracking_number), else the return request named by
+  `exchanges.return_request_id`; only a real order (never `internal:%`, never the leg's own). NULL = unmatched (stays
+  on its EXC order). `moneyOrder(s)` = original else own order; `EXCHANGE_TRIPS` = MATERIALIZED CTE (shipment_id,
+  original_id), one tenant param; `charged(s)` = the slice-7 charged rule. Never re-derive any of them.
+- In transit (`MoneyAnalyticsService.IN_TRANSIT_LEGS`): `NOT IN ('20','25')` — type 30 counts at its own COD; the
+  cash forecast follows (count / value / expected only).
+- Order finances: new `exchangeFees` (charged trips' fees) beside `exchangeCod` (now every DELIVERED attributed trip —
+  widened from Traced-booked-with-booking_cod, so dashboard exchanges count too); neither in bostaFees / total / net;
+  own-leg fees exclude attributed trips. CSV unchanged; the exchange AWB is NOT in trackingNumbers (search).
+- Profit: an attributed trip is a cost of its original ("other" fees), never of the EXC order. Unmatched trips stay
+  on no sold order, as before. Money › fees total = orders' fees + unmatched trips (test).
+- Extra fees (by AWB / by SKU) and stuck lists show the original's number + an "Exchange" tag (`exchange: true`,
+  NON_NULL; EN + AR). /fees, Awaiting payout, In your bank unchanged.
+- Prod at merge (approx.): In transit BROEK 138 legs / EGP 243,317.87 (18 trips / 2,117), Dolt.eg 133 / 270,237 (9 /
+  1,000), HERNAMEIS JAMILA 6 / 365 (all trips), Nuvira 9 / 11,550.50 (2 / 300). BRK-46870-EG: bostaFees 92.34, net
+  1,291.66 unchanged, + exchange trip fee 101.46, + exchange COD 85.
+- Tests: AnalyticsMoneyTest (3 new), AnalyticsFinancesTest (3 new), frontend exchangeTripMoney.test.tsx (5); every
+  fix revert-checked. Follow-up (2026-11-12): ShadowSafetyNetTest.w1 pinned its approval to the detector's clock (the
+  DB's now()) — it hard-coded 2026-11-04 and failed on every run after 2026-11-11 (test only).
 
 **Try again 404 + "no transaction = no tenant" sweep (2026-11-09; branch `fix/shopify-sync-tenant-tx` off main
 f1315843; no migration).** Prod after f1315843: Try again on RR-ZMCAUG answered a bare 404 every time (nginx `→ 404 0`).

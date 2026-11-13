@@ -543,11 +543,14 @@ public class ExchangeService {
             shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
             shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
             jdbc.update(
-                "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, inbound_variant_id = ?, " +
+                "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, " +
+                // 2026-11-12: a person's pick wins; the auto path (null) never erases a resolved inbound variant.
+                "    inbound_variant_id = COALESCE(?, inbound_variant_id), " +
                 "    auto_matched = ?, " +
                 "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
                 "WHERE id = ? AND tenant_id = ?",
                 shadow, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
+            ExchangeInbound.fill(jdbc, tenantId, exchangeId);
             org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
                 .info("Exchange {} (AWB {}) attached to Shopify exchange shadow order {}", exchangeId, trackingNumber, shadow);
             Map<String, Object> result = new LinkedHashMap<>();
@@ -611,11 +614,14 @@ public class ExchangeService {
         // 2026-10-05: an exchange already matched to its original by reference (while it still needed
         // mapping) goes straight to 'matched' once its replacement is mapped.
         jdbc.update(
-            "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, inbound_variant_id = ?, " +
+            "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, " +
+                // 2026-11-12: a person's pick wins; the auto path (null) never erases a resolved inbound variant.
+                "    inbound_variant_id = COALESCE(?, inbound_variant_id), " +
             "    auto_matched = ?, " +
             "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
             "WHERE id = ? AND tenant_id = ?",
             orderId, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
+        ExchangeInbound.fill(jdbc, tenantId, exchangeId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());

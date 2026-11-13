@@ -1771,6 +1771,10 @@
       "parcel": {
         "courierReturn": "مرتجع من بوستا",
         "returnToSender": "مرتجع للمرسل",
+        "exchange": "استبدال",
+        "exchangeBack": "المرتجع",
+        "exchangeUnknown": "ملاحظة بوستا لا توضّح أي منتج هذا. افتح الطرد وامسح أي قطعة من الطلب {{order}}.",
+        "exchangeUnknownNoOrder": "ملاحظة بوستا لا توضّح أي منتج هذا، والاستبدال غير مربوط بطلب بعد. افتح الطرد وامسح القطعة التي فيه.",
         "order": "الطلب",
         "customer": "العميل",
         "backAtWarehouse": "وصل المستودع",
