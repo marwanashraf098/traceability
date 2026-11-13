@@ -740,6 +740,7 @@
     "title": "Receiving",
     "new": "New Session",
     "newTitle": "New Receiving Session",
+    "newStockOnly": "Only for stock that isn't in Shopify yet. If this stock is already counted in another Shopify location, don't receive it here — contact us.",
     "empty": "No receiving sessions yet",
     "back": "Back to Sessions",
     "untitled": "Untitled Session",
@@ -2513,12 +2514,22 @@
         "title": "Activate Traced as a fulfillment location",
         "live": "Traced Main Warehouse is live on your storefront",
         "waitingForSeed": "Waiting for initial stock to finish syncing to Shopify before this can be activated.",
-        "confirmCopy": "I have zeroed/removed inventory at my existing Shopify fulfillment location(s). Activating will make Traced Main Warehouse sell alongside any other active location — if the old location still has stock, my storefront will oversell.",
+        "confirmCopy": "Traced Main Warehouse sells online alongside your other Shopify locations. Only for stock that isn't in Shopify yet. If this stock is already counted in another Shopify location, don't receive it here — contact us.",
         "activateBtn": "Activate fulfillment",
         "activating": "Activating…",
         "genericError": "Could not activate. Try again.",
         "loadError": "Could not load fulfillment status.",
         "retry": "Retry"
+      },
+      "tracedLocationOff": {
+        "title": "Traced Main Warehouse isn't selling online",
+        "bodyOnline": "In Shopify, “Fulfill online orders from this location” is off for Traced Main Warehouse, so the stock Traced holds there can't be sold online. Traced didn't change it back on its own.",
+        "bodyProfile": "Traced Main Warehouse was taken out of your General shipping profile in Shopify, so online orders can't ship from it. Traced didn't change it back on its own.",
+        "button": "Turn back on",
+        "turning": "Turning on…",
+        "partial": "Shopify didn't confirm everything. Check the location in Shopify and try again.",
+        "error": "Could not turn it back on. Try again.",
+        "ownerOnly": "Ask the store owner to turn it back on from this page."
       },
       "actionNeeded": "Action needed",
       "merchant": {

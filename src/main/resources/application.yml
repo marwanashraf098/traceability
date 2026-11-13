@@ -128,6 +128,11 @@ traced:
   main-level-audit:
     tenants: ${TRACED_MAIN_LEVEL_AUDIT_TENANTS:}
     delay-ms: ${TRACED_MAIN_LEVEL_AUDIT_DELAY_MS:1000}
+  # One-off READ-ONLY audit of the Traced location's online-selling settings (L1, 2026-11-12) — never scheduled.
+  # TRACED_LOCATION_SETTINGS_AUDIT_TENANTS=<tenant ids, comma-separated> → runs once at startup; reads isActive,
+  # fulfillsOnlineOrders and default delivery profile membership; writes nothing. Logs: grep LOCATION_SETTINGS_AUDIT.
+  location-settings-audit:
+    tenants: ${TRACED_LOCATION_SETTINGS_AUDIT_TENANTS:}
   # One-off line paid price backfill (PaidPriceBackfill, 2026-11-06) — never scheduled.
   # TRACED_PAID_PRICE_BACKFILL_ON_STARTUP=fees|<tenant ids> → DRY RUN (counts per tenant, no Shopify call);
   # add TRACED_PAID_PRICE_BACKFILL_APPLY=true to read Shopify and store the prices. Logs: grep PAID_PRICE_BACKFILL.

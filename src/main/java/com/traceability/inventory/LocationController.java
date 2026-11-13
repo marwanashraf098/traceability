@@ -43,6 +43,7 @@ public class LocationController {
     private final StoreRepository        storeRepository;
     private final MainLocationAddressService addressService;
     private final MainLocationAddressSource  addressSource;
+    private final TracedLocationOnlineService online;
 
     public LocationController(JdbcTemplate jdbc, PlatformTransactionManager txm,
                               ShopifyLocationGateway shopifyLocations,
@@ -50,7 +51,9 @@ public class LocationController {
                               ShopifyFulfillmentActivationService fulfillmentActivationService,
                               StoreRepository storeRepository,
                               MainLocationAddressService addressService,
-                              MainLocationAddressSource addressSource) {
+                              MainLocationAddressSource addressSource,
+                              TracedLocationOnlineService online) {
+        this.online           = online;
         this.addressService   = addressService;
         this.addressSource    = addressSource;
         this.jdbc             = jdbc;
@@ -69,7 +72,10 @@ public class LocationController {
                 "       shopify_location_id, shopify_sync_status, " +
                 "       shopify_sync_error, shopify_synced_at, " +
                 "       shopify_delivery_profile_status, shopify_delivery_profile_error, " +
-                "       shopify_delivery_profile_activated_at, shopify_sync_mode " +
+                "       shopify_delivery_profile_activated_at, shopify_sync_mode, " +
+                "       shopify_delivery_profile_checked_at, " +
+                "       shopify_online_fulfillment_status, shopify_online_fulfillment_error, " +
+                "       shopify_online_fulfillment_checked_at " +
                 "FROM locations WHERE tenant_id = ? ORDER BY name",
                 TenantContext.require()));
     }
@@ -202,6 +208,8 @@ public class LocationController {
                 return null;
             });
             syncStatus = "linked";
+            // L1: a first link from here too — fulfils online orders + delivery profile, both read back (never throws).
+            online.atFirstLink(tenantId);
         } catch (Exception e) {
             syncError = e.getMessage();
             String finalError = syncError;
@@ -323,6 +331,19 @@ public class LocationController {
             "deliveryProfileId", result.deliveryProfileId(),
             "locationGroupId",   result.locationGroupId(),
             "alreadyMember",     result.alreadyMember());
+    }
+
+    /**
+     * L1 (2026-11-12) — "Turn back on": the owner's one click when a reconnect read found the Traced Main Warehouse not
+     * fulfilling online orders or out of the default delivery profile. Same write path as the first link (read → edit
+     * only when off → read back; membership first → join → read back). Owner only. Takes no input: the target is
+     * always the tenant's own is_fulfillment location.
+     */
+    @PostMapping("/shopify/turn-back-on")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> turnTracedLocationBackOn(@AuthenticationPrincipal CustomUserDetails principal) {
+        TracedLocationOnlineService.Outcome o = online.turnBackOn(principal.userId());
+        return Map.of("onlineStatus", o.onlineStatus(), "profile", o.profileOutcome());
     }
 
 }

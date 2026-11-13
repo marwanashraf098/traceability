@@ -4,6 +4,28 @@
 
 ## Current state
 
+**L1 — Traced Main Warehouse sells online from its first link (2026-11-12/13; branch `feat/l1-traced-location-online`
+off origin/main 2c654317; V228 — V227 went to `fix/exchange-inbound-expected`, merged meanwhile; NOT merged, NOT deployed).**
+Decisions (Marawan 2026-11-12): at FIRST link (created or reused "Traced Main Warehouse") Traced makes sure the location
+fulfils online orders (read → locationEdit only when false → read back) and joins the default delivery profile through
+`ShopifyFulfillmentActivationService.joinWithReadBack` (advisory lock, membership first, read back) — automatic, the
+location holds 0 stock then. Reconnect of an already-linked tenant = READ ONLY (`TracedLocationOnlineService.onReconnect`):
+records `shopify_online_fulfillment_status` on / off / error and V67 activated / not_activated (activated_at kept); the
+connection card shows "Turn back on" (owner only, `POST /locations/shopify/turn-back-on`) when either is off — never a
+silent flip. The manual "Activate fulfillment" button stays as the retry / fix path (no read-back there, unchanged).
+- Dev-store checks (marwan-nnrumxdy): 1 skipped (CLI session had no write_locations; Traced's app IP-restricted from the
+  Mac; nothing was created). 2 PASSED: routing "minimize splits → closest"; a continue-selling product with 0 everywhere,
+  order #1018 to Cairo went to "Shop location" (default), NOT the empty Traced Main (order cancelled, product Draft).
+  3 CLOSED: the Bosta plugin does not use the Shopify location address. Seen on the dev store: Traced Main and "My Custom
+  Location" have shipsInventory=false; Traced Main is in the General profile (origin unknown).
+- One-off audit: `TRACED_LOCATION_SETTINGS_AUDIT_TENANTS=<ids>` → restart → `grep LOCATION_SETTINGS_AUDIT` (active,
+  fulfills_online, in_default_profile, Traced's recorded statuses, flagged) → unset. Read only, no auto-change.
+- Copy (EN + AR, Marawan 2026-11-13): Receiving's new-session form and the Activate-fulfillment warning say "Only for stock
+  that isn't in Shopify yet. If this stock is already counted in another Shopify location, don't receive it here —
+  contact us." `TODO(M3)` at both usages (Receiving.tsx, ShopifyConnectionCard.tsx): switch to the move option.
+- Guards: TracedLocationEditGuardTest (locationEdit only address or literal fulfillsOnlineOrders: true; target only the
+  is_fulfillment row; turn-back-on takes no input), LocationSettingsAuditReadOnlyGuardTest. Revert-checked R1–R6.
+- Count gates: MigrationSmokeTest 227 files (V1–V228 minus V38), NotTracedBackfillTest 172 (origin/main merged in, V227 present).
 **Exchange replacement named in full (2026-11-13; branch `fix/exchange-replacement-name`; no migration; NOT
 deployed).** A portal exchange to a DIFFERENT product (F3) showed only the variant ("L") for the replacement in the
 drawer. Rule: the replacement is named "Product · Variant" in the drawer's going-out card always (+ image, + SKU when
