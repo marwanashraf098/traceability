@@ -48,18 +48,21 @@ public class ShopifyLocationProvisioningService {
     private final ShopifyTokenProvider tokenProvider;
     private final MainLocationAddressService addressService;
     private final MainLocationAddressSource addressSource;
+    private final TracedLocationOnlineService online;
 
     public ShopifyLocationProvisioningService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                                ShopifyLocationGateway shopifyLocations,
                                                ShopifyTokenProvider tokenProvider,
                                                MainLocationAddressService addressService,
-                                               MainLocationAddressSource addressSource) {
+                                               MainLocationAddressSource addressSource,
+                                               TracedLocationOnlineService online) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
         this.tokenProvider    = tokenProvider;
         this.addressService   = addressService;
         this.addressSource    = addressSource;
+        this.online           = online;
     }
 
     /**
@@ -143,7 +146,13 @@ public class ShopifyLocationProvisioningService {
 
         if (claimed == null || claimed == 0) {
             // Already linked, already pending (another caller has it in flight right now),
-            // or not found — either way, never call Shopify.
+            // or not found — never a location create. L1: an ALREADY-LINKED location gets the read-only
+            // online check (fulfils online orders + delivery profile) — never a write on reconnect.
+            Boolean linked = tx.execute(s -> jdbc.query(
+                "SELECT shopify_sync_status = 'linked' AND shopify_location_id IS NOT NULL FROM locations " +
+                "WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() && rs.getBoolean(1), locationId, tenantId));
+            if (Boolean.TRUE.equals(linked)) online.onReconnect(tenantId);
             return;
         }
 
@@ -179,17 +188,26 @@ public class ShopifyLocationProvisioningService {
             log.info("Traced Main Warehouse linked: tenant={} location={} shopifyLocationId={}",
                 tenantId, locationId, shopifyLocId);
         } catch (Exception e) {
-            final String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            tx.execute(s -> {
-                jdbc.update(
-                    "UPDATE locations SET shopify_sync_status = 'error', shopify_sync_error = ? " +
-                    "WHERE id = ? AND tenant_id = ?",
-                    errMsg, locationId, tenantId);
-                return null;
-            });
-            log.warn("Traced Main Warehouse provisioning failed: tenant={} location={} error={}",
-                tenantId, locationId, errMsg);
+            linkFailed(tenantId, locationId, e);
+            return;
         }
+        // L1 (2026-11-12): FIRST link only — created or reused, the location holds no stock yet: make sure it fulfils
+        // online orders and join it to the default delivery profile (both read back). Never throws; a failure is
+        // recorded on the location row and shown on the connection card, never blocks the import.
+        online.atFirstLink(tenantId);
+    }
+
+    private void linkFailed(UUID tenantId, UUID locationId, Exception e) {
+        final String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        tx.execute(s -> {
+            jdbc.update(
+                "UPDATE locations SET shopify_sync_status = 'error', shopify_sync_error = ? " +
+                "WHERE id = ? AND tenant_id = ?",
+                errMsg, locationId, tenantId);
+            return null;
+        });
+        log.warn("Traced Main Warehouse provisioning failed: tenant={} location={} error={}",
+            tenantId, locationId, errMsg);
     }
 
     private void fillExistingAddress(UUID tenantId, ShopifyLocationGateway.LocationAddress address) {

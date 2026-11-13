@@ -9,6 +9,7 @@ import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
   needsFulfillmentActivation, checkShopifyLocation, resendShopifyLocationFailures, getRoleFromToken,
+  tracedLocationNeedsTurnBackOn, turnTracedLocationBackOn,
   ConnectionsStatus, LocationRow,
 } from '../../../api'
 
@@ -177,11 +178,71 @@ export function NewPermissionsNotice({ shopify }: { shopify: ConnectionsStatus['
 
 // ── Fulfillment activation checklist item (FR-17 v2) ───────────────────────────
 //
-// Shown only once Part A has already linked the Traced Main Warehouse to Shopify
-// (automatic, at connect) — separate and deliberately NOT automatic itself. Disabled
-// until the reconcile report shows nothing left to seed, and behind an explicit
-// confirmation checkbox — activating makes the location count toward storefront
-// availability, so an un-zeroed old location oversells.
+// Shown only once Part A has already linked the Traced Main Warehouse to Shopify. Since L1 (2026-11-12) the
+// first link joins the delivery profile automatically, so this item is the RETRY / FIX path: disabled until the
+// reconcile report shows nothing left to seed, and behind an explicit confirmation checkbox — activating makes the
+// location count toward storefront availability, so stock left at an old location as well oversells.
+// When a reconnect READ found the location switched off in Shopify, the item shows TurnBackOnItem instead.
+
+// L1 (2026-11-12) — Traced's own location was found switched off in Shopify on a reconnect (read only). One click
+// for the owner; everyone else is told to ask the owner. Takes no input — the server always targets the tenant's own
+// Traced Main Warehouse.
+function TurnBackOnItem({ location, onDone }: { location: LocationRow; onDone: () => void }) {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const isOwner = getRoleFromToken() === 'owner'
+  const [busy, setBusy] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
+  const onlineOff = location.shopify_online_fulfillment_status === 'off'
+
+  async function handle() {
+    setErrorMsg('')
+    setBusy(true)
+    try {
+      const r = await turnTracedLocationBackOn()
+      if (r.onlineStatus !== 'on' || r.profile === 'FAILED') {
+        setErrorMsg(t('connections.shopify.tracedLocationOff.partial'))
+      }
+      onDone()
+    } catch (err) {
+      setErrorMsg(err instanceof TransferCommandError
+        ? (isAr ? err.messageAr : err.messageEn)
+        : t('connections.shopify.tracedLocationOff.error'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="pt-2 border-t border-line/40 space-y-2" data-testid="traced-location-off">
+      <p className="text-small font-medium text-primary flex items-center gap-1.5">
+        <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" aria-hidden="true" />
+        {t('connections.shopify.tracedLocationOff.title')}
+      </p>
+      <p className="text-xs text-muted">
+        {onlineOff
+          ? t('connections.shopify.tracedLocationOff.bodyOnline')
+          : t('connections.shopify.tracedLocationOff.bodyProfile')}
+      </p>
+      {errorMsg && <p role="alert" className="text-xs text-danger">{errorMsg}</p>}
+      {isOwner ? (
+        <button
+          type="button"
+          onClick={handle}
+          disabled={busy}
+          className="btn btn-brand text-small"
+          data-testid="turn-back-on-btn"
+        >
+          {busy ? t('connections.shopify.tracedLocationOff.turning') : t('connections.shopify.tracedLocationOff.button')}
+        </button>
+      ) : (
+        <p className="text-xs text-muted" data-testid="turn-back-on-owner-only">
+          {t('connections.shopify.tracedLocationOff.ownerOnly')}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function FulfillmentActivationItem({
   shopifyConnected, importStatus, lastSyncAt,
@@ -273,6 +334,9 @@ function FulfillmentActivationItem({
   // Nothing to show until Part A has linked the location — no automatic trigger exists
   // for that step from here, so a permanently-disabled item would just confuse.
   if (loading || !location || location.shopify_sync_status !== 'linked') return null
+
+  // L1 — a reconnect read found it switched off in Shopify: warn, owner turns it back on (never silent).
+  if (tracedLocationNeedsTurnBackOn(location)) return <TurnBackOnItem location={location} onDone={load} />
 
   // Shared predicate with Overview's prompt card (api.ts) — never a second derivation.
   const isActivated = !needsFulfillmentActivation(shopifyConnected, location)

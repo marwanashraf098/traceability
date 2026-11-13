@@ -199,6 +199,56 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
         }
     }
 
+    // ---- L1 (2026-11-12): fulfils online orders — read, and switch ON only ---------
+
+    static final String LOCATION_ONLINE_QUERY = """
+            query LocationOnlineFulfillment($id: ID!) {
+              location(id: $id) {
+                id
+                isActive
+                fulfillsOnlineOrders
+              }
+            }
+            """;
+
+    /** The value is a LITERAL true — the only variable is the location id (TracedLocationEditGuardTest). */
+    static final String LOCATION_ENABLE_ONLINE_MUTATION = """
+            mutation LocationEnableOnlineFulfillment($id: ID!) {
+              locationEdit(id: $id, input: { fulfillsOnlineOrders: true }) {
+                location { id fulfillsOnlineOrders }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    @Override
+    public Optional<OnlineFulfillment> readOnlineFulfillment(String shopDomain, String token, String shopifyLocationGid) {
+        ObjectNode vars = mapper.createObjectNode().put("id", shopifyLocationGid);
+        JsonNode loc = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_ONLINE_QUERY, vars).path("location");
+        if (loc.isMissingNode() || loc.isNull()) return Optional.empty();
+        if (!loc.path("fulfillsOnlineOrders").isBoolean() || !loc.path("isActive").isBoolean()) {
+            throw new ShopifyException("location fulfillsOnlineOrders / isActive missing from Shopify's answer");
+        }
+        return Optional.of(new OnlineFulfillment(loc.path("isActive").asBoolean(), loc.path("fulfillsOnlineOrders").asBoolean()));
+    }
+
+    @Override
+    public void enableOnlineFulfillment(String shopDomain, String token, String shopifyLocationGid) {
+        ObjectNode vars = mapper.createObjectNode().put("id", shopifyLocationGid);
+        JsonNode edit = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_ENABLE_ONLINE_MUTATION, vars)
+            .path("locationEdit");
+        JsonNode userErrors = edit.path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            JsonNode e = userErrors.get(0);
+            String code = e.path("code").asText("");
+            throw new ShopifyException("locationEdit (fulfillsOnlineOrders) failed: "
+                + (code.isEmpty() ? "" : code + " — ") + e.path("message").asText("unknown error"));
+        }
+        if (edit.path("location").path("id").asText("").isEmpty()) {
+            throw new ShopifyException("locationEdit (fulfillsOnlineOrders) failed: no location returned");
+        }
+    }
+
     /** Variables for the address edit — { id, input: { address } } and nothing else in input. */
     static ObjectNode editAddressVariables(ObjectMapper mapper, String shopifyLocationGid, LocationAddress address) {
         ObjectNode addr = mapper.createObjectNode();

@@ -116,4 +116,25 @@ public interface ShopifyLocationGateway {
      * @throws ShopifyException on Shopify userErrors or a transport failure
      */
     void editLocationAddress(String shopDomain, String token, String shopifyLocationGid, LocationAddress address);
+
+    /** L1 (2026-11-12): what readOnlineFulfillment returns — is the location active, does it fulfil online orders. */
+    record OnlineFulfillment(boolean active, boolean fulfillsOnlineOrders) {}
+
+    /**
+     * L1 (2026-11-12) — read only: the location's isActive and fulfillsOnlineOrders. Empty = Shopify has no location
+     * with that id.
+     *
+     * @throws ShopifyException on a Shopify / transport failure, or an answer without fulfillsOnlineOrders
+     */
+    Optional<OnlineFulfillment> readOnlineFulfillment(String shopDomain, String token, String shopifyLocationGid);
+
+    /**
+     * L1 (2026-11-12) — turns "fulfils online orders" ON for one location: locationEdit with input
+     * { fulfillsOnlineOrders: true } written as a literal in the mutation — no variable can carry false, a name, an
+     * address or metafields. Only TracedLocationOnlineService calls it, only with the Traced Main Warehouse GID read
+     * from the tenant's is_fulfillment row (TracedLocationEditGuardTest). Safe to repeat (same value).
+     *
+     * @throws ShopifyException on Shopify userErrors, a missing location, or a transport failure
+     */
+    void enableOnlineFulfillment(String shopDomain, String token, String shopifyLocationGid);
 }

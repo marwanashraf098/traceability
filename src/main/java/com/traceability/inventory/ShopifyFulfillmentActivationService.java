@@ -25,14 +25,12 @@ import java.util.UUID;
  * delivery profile's location group via deliveryProfileUpdate, making it live to the storefront
  * (Shopify sums on_hand across every location in a product's delivery profile).
  *
- * NOT CALLED FROM ANYWHERE YET. Deliberately left with zero call sites — see the flow proposal
- * delivered alongside this change. Part A's automatic seed (ShopifyLocationProvisioningService,
- * ShopifyCatalogActivationService, ShopifyInventoryReconcileService, all run unconditionally
- * from ShopifyImportJob) only creates the Location object and seeds its stock; it never makes
- * the location live to the storefront, so shipping Part A alone is safe on its own — this
- * service is the separate, deliberate step that changes that, and where its trigger lives
- * (an operator-facing endpoint gated on merchant confirmation vs. something automatic) is a
- * decision pending Marawan's call.
+ * AUTOMATIC AT FIRST LINK, MANUAL RETRY (L1, approved by Marawan 2026-11-12). When the Traced Main Warehouse is
+ * first linked to Shopify (created OR an existing "Traced Main Warehouse" reused) it holds no stock, so
+ * TracedLocationOnlineService joins it here automatically through {@link #joinWithReadBack} — same advisory lock,
+ * membership check first, then a read-back of the profile that decides the recorded status. On a reconnect of an
+ * already-linked tenant only {@link #readMembership} runs (read only, never a write). The owner's
+ * "Activate fulfillment" button ({@link #activate}) and "Turn back on" stay as the retry / fix paths.
  *
  * Manual, one-shot, one-tenant-at-a-time action — same trade-off as
  * ShopifyInventoryReconcileService.apply(): serialized via a per-tenant
@@ -205,6 +203,132 @@ public class ShopifyFulfillmentActivationService {
                 attempt.errorCode(), attempt.errorEn(), attempt.errorAr(), attempt.errorStatus());
         }
         return attempt.result();
+    }
+
+    /** L1 — the outcome of {@link #joinWithReadBack}. */
+    public enum JoinOutcome { ALREADY_MEMBER, JOINED, FAILED }
+
+    /**
+     * L1 — joins the Traced Main Warehouse to the default delivery profile's location group, AUTOMATICALLY (first
+     * link) or from the owner's "Turn back on". Same per-tenant advisory lock as {@link #activate}; membership is
+     * checked first (a member → no write); after deliveryProfileUpdate the profile is READ BACK and only a confirmed
+     * membership records 'activated' — anything else records 'error' with the reason. Never throws: every outcome is
+     * recorded on the location row (and in audit_log, actor null when automatic) and returned.
+     *
+     * @param actorUserId null when automatic
+     * @param source      'first_link' | 'turn_back_on' (audit metadata)
+     */
+    public JoinOutcome joinWithReadBack(UUID tenantId, UUID actorUserId, String source) {
+        try {
+            return tx.execute(status -> {
+                acquireTenantLock(tenantId);
+                Context ctx;
+                try {
+                    ctx = resolveContext(tenantId);
+                } catch (ResponseStatusException e) {
+                    log.info("Fulfillment auto-join skipped: tenant={} reason={}", tenantId, e.getReason());
+                    return JoinOutcome.FAILED;                     // no linked row to record against
+                }
+                try {
+                    if (!ShopifyGateway.isScopeGranted("write_shipping", ctx.grantedScopes())) {
+                        String why = ShopifyGateway.scopeGrantMessage(ctx.connectionType(), "write_shipping", ctx.grantedScopes());
+                        recordStatus(tenantId, ctx.locationId(), STATUS_ERROR, why);
+                        audit(actorUserId, ctx, source, "failed", why);
+                        return JoinOutcome.FAILED;
+                    }
+                    String token = tokenProvider.getValidToken(ctx.storeId());
+                    Optional<ShopifyDeliveryProfileGateway.LocationGroupInfo> found =
+                        deliveryProfiles.findDefaultProfileLocationGroup(ctx.shopDomain(), token);
+                    if (found.isEmpty()) {
+                        String why = "Shop has no default delivery profile — cannot activate fulfillment";
+                        recordStatus(tenantId, ctx.locationId(), STATUS_ERROR, why);
+                        audit(actorUserId, ctx, source, "failed", why);
+                        return JoinOutcome.FAILED;
+                    }
+                    ShopifyDeliveryProfileGateway.LocationGroupInfo group = found.get();
+                    if (group.memberLocationGids().contains(ctx.locationGid())) {
+                        recordStatus(tenantId, ctx.locationId(), STATUS_ACTIVATED, null);
+                        audit(actorUserId, ctx, source, "already_member", null);
+                        return JoinOutcome.ALREADY_MEMBER;
+                    }
+                    deliveryProfiles.addLocationToGroup(ctx.shopDomain(), token,
+                        group.deliveryProfileId(), group.locationGroupId(), ctx.locationGid());
+                    // Read back: only Shopify's own answer decides 'activated'.
+                    boolean member = deliveryProfiles.findDefaultProfileLocationGroup(ctx.shopDomain(), token)
+                        .map(g -> g.memberLocationGids().contains(ctx.locationGid()))
+                        .orElse(false);
+                    if (!member) {
+                        String why = "Traced Main Warehouse is not in the default delivery profile after the update";
+                        recordStatus(tenantId, ctx.locationId(), STATUS_ERROR, why);
+                        audit(actorUserId, ctx, source, "failed", why);
+                        return JoinOutcome.FAILED;
+                    }
+                    recordStatus(tenantId, ctx.locationId(), STATUS_ACTIVATED, null);
+                    audit(actorUserId, ctx, source, "joined", null);
+                    log.info("Fulfillment joined ({}): tenant={} location={} deliveryProfile={}",
+                        source, tenantId, ctx.locationId(), group.deliveryProfileId());
+                    return JoinOutcome.JOINED;
+                } catch (Exception e) {
+                    String why = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    recordStatus(tenantId, ctx.locationId(), STATUS_ERROR, why);
+                    audit(actorUserId, ctx, source, "failed", why);
+                    log.warn("Fulfillment auto-join failed ({}): tenant={} location={} error={}",
+                        source, tenantId, ctx.locationId(), why);
+                    return JoinOutcome.FAILED;
+                }
+            });
+        } catch (Exception e) {
+            log.warn("Fulfillment auto-join failed before it could be recorded: tenant={} error={}", tenantId, e.toString());
+            return JoinOutcome.FAILED;
+        }
+    }
+
+    /**
+     * L1 — READ ONLY (reconnect of an already-linked tenant): is the Traced Main Warehouse in the default delivery
+     * profile's location group? Records 'activated' / 'not_activated' (activated_at kept, so a location that was in
+     * the profile and was taken out reads as "turned off") with shopify_delivery_profile_checked_at. Never writes
+     * to Shopify, never throws; a failed read changes nothing but the checked error. Empty = unknown.
+     */
+    public Optional<Boolean> readMembership(UUID tenantId) {
+        try {
+            return tx.execute(status -> {
+                Context ctx;
+                try {
+                    ctx = resolveContext(tenantId);
+                } catch (ResponseStatusException e) {
+                    return Optional.<Boolean>empty();
+                }
+                try {
+                    String token = tokenProvider.getValidToken(ctx.storeId());
+                    Optional<ShopifyDeliveryProfileGateway.LocationGroupInfo> found =
+                        deliveryProfiles.findDefaultProfileLocationGroup(ctx.shopDomain(), token);
+                    if (found.isEmpty()) return Optional.<Boolean>empty();
+                    boolean member = found.get().memberLocationGids().contains(ctx.locationGid());
+                    jdbc.update(
+                        "UPDATE locations SET shopify_delivery_profile_status = ?, " +
+                        "  shopify_delivery_profile_error = NULL, shopify_delivery_profile_checked_at = now(), " +
+                        "  shopify_delivery_profile_activated_at = CASE WHEN ? THEN COALESCE(shopify_delivery_profile_activated_at, now()) " +
+                        "                                         ELSE shopify_delivery_profile_activated_at END " +
+                        "WHERE id = ? AND tenant_id = ?",
+                        member ? STATUS_ACTIVATED : STATUS_NOT_ACTIVATED, member, ctx.locationId(), tenantId);
+                    return Optional.of(member);
+                } catch (Exception e) {
+                    log.warn("Delivery profile read failed on reconnect: tenant={} error={}", tenantId, e.toString());
+                    return Optional.<Boolean>empty();
+                }
+            });
+        } catch (Exception e) {
+            log.warn("Delivery profile read failed on reconnect: tenant={} error={}", tenantId, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    private void audit(UUID actorUserId, Context ctx, String source, String outcome, String error) {
+        Map<String, Object> meta = new java.util.LinkedHashMap<>();
+        meta.put("outcome", outcome);
+        meta.put("source", source);
+        if (error != null) meta.put("error", error);
+        auditService.record(actorUserId, "shopify_fulfillment_activation", "location", ctx.locationId().toString(), meta);
     }
 
     /** pg_advisory_xact_lock is transaction-scoped — released automatically on commit/rollback. */

@@ -3000,6 +3000,12 @@ export interface LocationRow {
   shopify_delivery_profile_status: 'not_activated' | 'activated' | 'error'
   shopify_delivery_profile_error: string | null
   shopify_delivery_profile_activated_at: string | null
+  /** L1 (V228) — when Traced last read the delivery profile membership (reconnect read). */
+  shopify_delivery_profile_checked_at?: string | null
+  /** L1 (V228) — does Shopify say the Traced location fulfils online orders? 'unknown' = never checked. */
+  shopify_online_fulfillment_status?: 'unknown' | 'on' | 'off' | 'error'
+  shopify_online_fulfillment_error?: string | null
+  shopify_online_fulfillment_checked_at?: string | null
 }
 
 export function listLocations() {
@@ -3013,6 +3019,28 @@ export function listLocations() {
  * (Overview.tsx). Kept here, not duplicated in either component, so the two surfaces can
  * never drift into disagreeing about when activation is "needed".
  */
+/**
+ * L1 (2026-11-12) — the ONE rule for "Traced found its location switched off in Shopify": a read on reconnect saw
+ * "fulfils online orders" off, or the location out of the default delivery profile after it had been in it
+ * (activated_at kept). Then the connection card warns and the owner may "Turn back on" — Traced never flips it back on
+ * by itself on a reconnect.
+ */
+export function tracedLocationNeedsTurnBackOn(location: LocationRow | null | undefined): boolean {
+  return !!location
+    && location.is_fulfillment
+    && location.shopify_sync_status === 'linked'
+    && (location.shopify_online_fulfillment_status === 'off'
+        || (location.shopify_delivery_profile_status === 'not_activated'
+            && !!location.shopify_delivery_profile_activated_at))
+}
+
+export interface TurnBackOnResult { onlineStatus: 'on' | 'off' | 'error'; profile: 'ALREADY_MEMBER' | 'JOINED' | 'FAILED' }
+
+/** L1 — owner only: turn the Traced location's online selling back on (fulfils online orders + delivery profile). */
+export function turnTracedLocationBackOn() {
+  return transferCommandRequest<TurnBackOnResult>('/locations/shopify/turn-back-on', { method: 'POST' })
+}
+
 export function needsFulfillmentActivation(
   shopifyConnected: boolean,
   location: LocationRow | null | undefined,
