@@ -521,6 +521,7 @@ class ShadowOrderLeakTest {
         reg("POST /api/v1/locations",                    skip(R_CONFIG));
         reg("POST /api/v1/locations/shopify/activate-fulfillment", skip(R_OPS));
         reg("POST /api/v1/locations/shopify/turn-back-on", skip(R_OPS));
+        reg("POST /api/v1/locations/shopify/shipping-rates-confirmed", skip(R_CONFIG));
         reg("POST /api/v1/locations/{id}/shopify-cleanup", skip(R_OPS));
         reg("PUT /api/v1/locations/{id}/shopify-sync-mode",skip(R_CONFIG));
         reg("GET /api/v1/shopify/stores",                list());
