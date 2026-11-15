@@ -109,6 +109,7 @@ public class ConnectionsController {
      *                "status": "connected"|"needs_reauth"|"error"|"disconnected",
      *                "importStatus": str|null, "lastSyncAt": str|null,
      *                "locationState": "active"|"inactive"|"deleted"|null,   // the Traced location in Shopify (V196)
+     *                "tracedMainShipping": TracedShippingReadiness value|null, "tracedLocationNumber": str|null,  // L1b-1
      *                "resendableFailed": int },   // updates "Re-send failed updates" would send (owner action)
      *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null,
      *                "awbFormat": str|null, "awbLang": str|null, "simulated": bool },
@@ -187,6 +188,15 @@ public class ConnectionsController {
                 "SELECT shopify_location_state FROM locations WHERE tenant_id = ? AND is_fulfillment = true " +
                 "  AND shopify_sync_status = 'linked'", String.class, tenantId);
             shopify.put("locationState",    locationState.isEmpty() ? null : locationState.get(0));
+            // L1b-1 (2026-11-15): can Traced Main ship online orders — THE rule, TracedShippingReadiness.SQL (null without
+            // a linked main warehouse) — and its numeric Shopify id for the owner's "Open the location" link.
+            List<Map<String, Object>> shipping = jdbc.queryForList(
+                "SELECT " + com.traceability.inventory.TracedShippingReadiness.SQL + " AS readiness, " +
+                "       regexp_replace(l.shopify_location_id, '^.*/', '') AS location_number " +
+                "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true AND l.shopify_sync_status = 'linked' " +
+                "  AND l.shopify_location_id IS NOT NULL", tenantId);
+            shopify.put("tracedMainShipping", shipping.isEmpty() ? null : shipping.get(0).get("readiness"));
+            shopify.put("tracedLocationNumber", shipping.isEmpty() ? null : shipping.get(0).get("location_number"));
             shopify.put("resendableFailed", inventory.countLocationFailures(tenantId));
 
             // Bosta — active courier account. Review mode: a simulated tenant has no courier

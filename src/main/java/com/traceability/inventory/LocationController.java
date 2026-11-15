@@ -75,8 +75,10 @@ public class LocationController {
                 "       shopify_delivery_profile_activated_at, shopify_sync_mode, " +
                 "       shopify_delivery_profile_checked_at, " +
                 "       shopify_online_fulfillment_status, shopify_online_fulfillment_error, " +
-                "       shopify_online_fulfillment_checked_at " +
-                "FROM locations WHERE tenant_id = ? ORDER BY name",
+                "       shopify_online_fulfillment_checked_at, " +
+                "       shopify_shipping_model, shopify_shipping_model_checked_at, " +
+                "       CASE WHEN is_fulfillment THEN " + TracedShippingReadiness.SQL + " END AS shopify_shipping_readiness " +
+                "FROM locations l WHERE tenant_id = ? ORDER BY name",
                 TenantContext.require()));
     }
 
@@ -344,6 +346,18 @@ public class LocationController {
     public Map<String, Object> turnTracedLocationBackOn(@AuthenticationPrincipal CustomUserDetails principal) {
         TracedLocationOnlineService.Outcome o = online.turnBackOn(principal.userId());
         return Map.of("onlineStatus", o.onlineStatus(), "profile", o.profileOutcome());
+    }
+
+    /**
+     * L1b-1 review (2026-11-15) — market-driven stores until L1b-2: the owner says Traced Main Warehouse is in the
+     * store's shipping rates. Owner only, no input, no Shopify call. Hides the instruction ("Confirmed by you"); it is
+     * not Ready.
+     */
+    @PostMapping("/shopify/shipping-rates-confirmed")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> confirmTracedShippingRates(@AuthenticationPrincipal CustomUserDetails principal) {
+        online.confirmShippingRates(principal.userId());
+        return Map.of("readiness", TracedShippingReadiness.OWNER_CONFIRMED);
     }
 
 }

@@ -736,6 +736,23 @@
       "sold": "Sold (Off-book)"
     }
   },
+  "tracedShipping": {
+    "addRates": {
+      "title": "Make sure Traced Main Warehouse is added to your shipping rates in Shopify",
+      "body": "Your store uses Shopify’s market-based shipping: open the location in Shopify, then its Shipping row (“Select rates”), and make sure its shipping rates are selected.",
+      "cantConfirm": "Traced can’t check this from here yet. If it isn’t added, Shopify won’t ship online orders from this location.",
+      "openLocation": "Open the location in Shopify",
+      "openShipping": "Shipping settings",
+      "confirm": "I’ve added it",
+      "ownerOnly": "Only the store owner can confirm this.",
+      "confirmError": "Couldn’t save that — try again."
+    },
+    "unknown": "Traced couldn't confirm yet that Traced Main Warehouse can ship online orders. It checks again within the hour.",
+    "confirmed": {
+      "title": "Confirmed by you",
+      "body": "You said Traced Main Warehouse is added to your shipping rates in Shopify. Traced can’t check this itself yet."
+    }
+  },
   "receiving": {
     "title": "Receiving",
     "new": "New Session",
@@ -5439,7 +5456,11 @@
       "ready": "Ready",
       "settingUp": "Setting up…",
       "notActive": "Not active in Shopify",
-      "continue": "Continue"
+      "checking": "Checking…",
+      "needsAttention": "Needs attention",
+      "continue": "Continue",
+      "checkShippingRates": "Check shipping rates",
+      "confirmedByYou": "Confirmed by you"
     },
     "addressPanel": {
       "title": "Why we need it",

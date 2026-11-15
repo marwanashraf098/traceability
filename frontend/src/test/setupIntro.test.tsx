@@ -380,7 +380,7 @@ describe('Flow-1 — Connected', () => {
     setAccessToken(token('owner'))
     markShopifyStepSeen()
     const calls = stubApi({ me: { role: 'owner', name: 'Mona Adel', setupStep: 'address' },
-      connections: CONNECTIONS(false, { importStatus: 'pending' }) })
+      connections: CONNECTIONS(false, { importStatus: 'pending', tracedMainShipping: 'ready' }) })
     renderAt('/overview')
     const view = await screen.findByTestId('onboarding-shopify-connected')
     expect(within(view).getByRole('heading', { level: 1 })).toHaveTextContent("Welcome, Mona. Let's connect your store.")

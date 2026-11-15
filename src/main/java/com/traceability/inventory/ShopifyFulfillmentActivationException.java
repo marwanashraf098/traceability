@@ -18,7 +18,9 @@ public class ShopifyFulfillmentActivationException extends RuntimeException {
         MISSING_SCOPE,
         NO_DEFAULT_PROFILE,
         AMBIGUOUS_LOCATION_GROUPS,
-        MUTATION_FAILED
+        MUTATION_FAILED,
+        /** L1b-1: the store uses market-driven shipping — a delivery-profile join would change nothing live. */
+        MARKET_DRIVEN_SHIPPING
     }
 
     private final Code       code;

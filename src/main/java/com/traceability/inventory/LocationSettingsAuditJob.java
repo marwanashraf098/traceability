@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import com.traceability.integrations.shopify.ShopifyDeliveryProfileGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
+import com.traceability.integrations.shopify.ShopifyShippingModelGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
@@ -24,7 +25,9 @@ import java.util.UUID;
 /**
  * L1 (2026-11-12) — a ONE-OFF, READ-ONLY audit of the Traced Main Warehouse's online-selling settings for existing
  * tenants: is the location active in Shopify, does it fulfil online orders, is it in the default delivery profile's
- * location group? Never scheduled, no endpoint, NO auto-change (Marawan's decision: existing tenants are flagged,
+ * location group — and (L1b-1) which shipping model the store uses, Traced's recorded readiness, and whether Traced
+ * recorded the profile join as done on a market-driven store (wrongly_activated: a stale no-op, Shopify 2026-07)? On a
+ * market-driven store the profile read is a stale snapshot — read it only next to shipping_model. Never scheduled, no endpoint, NO auto-change (Marawan's decision: existing tenants are flagged,
  * never flipped).
  *
  * <p>Runs once at startup when {@code TRACED_LOCATION_SETTINGS_AUDIT_TENANTS} lists tenant ids (comma-separated; any
@@ -43,15 +46,22 @@ public class LocationSettingsAuditJob {
     private static final Logger log = LoggerFactory.getLogger(LocationSettingsAuditJob.class);
 
     static final String MAIN_SQL =
-        "SELECT shopify_location_id, shopify_delivery_profile_status, shopify_online_fulfillment_status FROM locations " +
-        "WHERE tenant_id = ? AND is_fulfillment AND shopify_sync_status = 'linked' AND shopify_location_id IS NOT NULL";
+        "SELECT l.shopify_location_id, l.shopify_delivery_profile_status, l.shopify_online_fulfillment_status, " +
+        "       l.shopify_shipping_model, " + TracedShippingReadiness.SQL + " AS readiness FROM locations l " +
+        "WHERE l.tenant_id = ? AND l.is_fulfillment AND l.shopify_sync_status = 'linked' AND l.shopify_location_id IS NOT NULL";
 
     /** One tenant's answer. Values: "true" / "false" / "unknown" / a short failure reason. */
     public record Report(UUID tenantId, String shop, String skipped, String active, String fulfillsOnline,
-                         String inDefaultProfile, String tracedProfileStatus, String tracedOnlineStatus) {
+                         String inDefaultProfile, String tracedProfileStatus, String tracedOnlineStatus,
+                         String shippingModel, String tracedShippingModel, String tracedReadiness) {
+        /** L1b-1: Traced recorded the profile join as done on a store Shopify says is market-driven (a stale no-op). */
+        boolean wronglyActivated() {
+            return "market_driven".equals(shippingModel) && "activated".equals(tracedProfileStatus);
+        }
+
         boolean flagged() {
             return skipped == null && ("false".equals(active) || "false".equals(fulfillsOnline)
-                || "false".equals(inDefaultProfile));
+                || "false".equals(inDefaultProfile) || !"legacy".equals(shippingModel));
         }
     }
 
@@ -59,6 +69,7 @@ public class LocationSettingsAuditJob {
     private final TransactionTemplate readOnly;
     private final ShopifyLocationGateway locations;
     private final ShopifyDeliveryProfileGateway profiles;
+    private final ShopifyShippingModelGateway models;
     private final ShopifyTokenProvider tokens;
     private final StoreRepository stores;
     private final String tenants;
@@ -66,7 +77,9 @@ public class LocationSettingsAuditJob {
     public LocationSettingsAuditJob(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                     ShopifyLocationGateway locations, ShopifyDeliveryProfileGateway profiles,
                                     ShopifyTokenProvider tokens, StoreRepository stores,
+                                    ShopifyShippingModelGateway models,
                                     @Value("${traced.location-settings-audit.tenants:}") String tenants) {
+        this.models = models;
         this.jdbc = jdbc;
         this.readOnly = new TransactionTemplate(txm);
         this.readOnly.setReadOnly(true);
@@ -120,7 +133,8 @@ public class LocationSettingsAuditJob {
             try {
                 r = audit(tenantId);
             } catch (RuntimeException e) {
-                r = new Report(tenantId, null, "error:" + e.getClass().getSimpleName(), null, null, null, null, null);
+                r = new Report(tenantId, null, "error:" + e.getClass().getSimpleName(), null, null, null, null, null,
+                    null, null, null);
             }
             if (r.flagged()) flagged++;
             log.info(line(r));
@@ -137,6 +151,10 @@ public class LocationSettingsAuditJob {
                  + " in_default_profile=" + r.inDefaultProfile()
                  + " traced_profile_status=" + r.tracedProfileStatus()
                  + " traced_online_status=" + r.tracedOnlineStatus()
+                 + " shipping_model=" + r.shippingModel()
+                 + " traced_shipping_model=" + r.tracedShippingModel()
+                 + " traced_readiness=" + r.tracedReadiness()
+                 + " wrongly_activated=" + r.wronglyActivated()
                  + " flagged=" + r.flagged());
     }
 
@@ -146,28 +164,31 @@ public class LocationSettingsAuditJob {
     }
 
     Report audit(UUID tenantId) {
-        record Setup(UUID storeId, String shop, String gid, String profileStatus, String onlineStatus, String skipped) {}
+        record Setup(UUID storeId, String shop, String gid, String profileStatus, String onlineStatus,
+                     String model, String readiness, String skipped) {}
         Setup s = TenantContext.runAs(tenantId, () -> readOnly.execute(st -> {
             Optional<StoreRepository.Store> store = stores.findActiveStoreByTenant(tenantId);
             if (store.isEmpty() || !"connected".equals(store.get().status())) {
-                return new Setup(null, null, null, null, null, "no_connected_store");
+                return new Setup(null, null, null, null, null, null, null, "no_connected_store");
             }
             List<Map<String, Object>> rows = jdbc.queryForList(MAIN_SQL, tenantId);
             if (rows.isEmpty()) {
-                return new Setup(store.get().id(), store.get().shopDomain(), null, null, null, "main_not_linked");
+                return new Setup(store.get().id(), store.get().shopDomain(), null, null, null, null, null, "main_not_linked");
             }
             Map<String, Object> m = rows.get(0);
             return new Setup(store.get().id(), store.get().shopDomain(), (String) m.get("shopify_location_id"),
-                (String) m.get("shopify_delivery_profile_status"), (String) m.get("shopify_online_fulfillment_status"), null);
+                (String) m.get("shopify_delivery_profile_status"), (String) m.get("shopify_online_fulfillment_status"),
+                (String) m.get("shopify_shipping_model"), (String) m.get("readiness"), null);
         }));
         if (s.skipped() != null) {
-            return new Report(tenantId, s.shop(), s.skipped(), null, null, null, null, null);
+            return new Report(tenantId, s.shop(), s.skipped(), null, null, null, null, null, null, null, null);
         }
         String token;
         try {
             token = TenantContext.runAs(tenantId, () -> tokens.getValidToken(s.storeId()));
         } catch (RuntimeException e) {
-            return new Report(tenantId, s.shop(), "token:" + e.getClass().getSimpleName(), null, null, null, null, null);
+            return new Report(tenantId, s.shop(), "token:" + e.getClass().getSimpleName(), null, null, null, null, null,
+                null, null, null);
         }
         String active;
         String online;
@@ -186,6 +207,9 @@ public class LocationSettingsAuditJob {
         } catch (RuntimeException e) {
             inProfile = "read_failed:" + e.getClass().getSimpleName();
         }
-        return new Report(tenantId, s.shop(), null, active, online, inProfile, s.profileStatus(), s.onlineStatus());
+        String model = models.read(s.shop(), token)
+            .map(x -> x == ShopifyShippingModelGateway.Model.MARKET_DRIVEN ? "market_driven" : "legacy").orElse("unknown");
+        return new Report(tenantId, s.shop(), null, active, online, inProfile, s.profileStatus(), s.onlineStatus(),
+            model, s.model(), s.readiness());
     }
 }

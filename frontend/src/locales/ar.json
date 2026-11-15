@@ -736,6 +736,23 @@
       "sold": "مباع (خارج السجل)"
     }
   },
+  "tracedShipping": {
+    "addRates": {
+      "title": "تأكّد من إضافة «Traced Main Warehouse» إلى أسعار الشحن في Shopify",
+      "body": "متجرك يستخدم الشحن حسب الأسواق في Shopify: افتح الموقع في Shopify، ثم صف الشحن («اختيار الأسعار»)، وتأكّد من اختيار أسعار الشحن له.",
+      "cantConfirm": "لا يستطيع Traced التحقق من ذلك من هنا بعد. إن لم يكن مضافًا، فلن يشحن Shopify الطلبات الأونلاين من هذا الموقع.",
+      "openLocation": "افتح الموقع في Shopify",
+      "openShipping": "إعدادات الشحن",
+      "confirm": "أضفته",
+      "ownerOnly": "يمكن لمالك المتجر فقط تأكيد ذلك.",
+      "confirmError": "تعذّر حفظ ذلك — حاول مرة أخرى."
+    },
+    "unknown": "لم يتمكن Traced بعد من التأكد من أن موقع Traced Main Warehouse يمكنه شحن الطلبات الأونلاين. سيتحقق مرة أخرى خلال ساعة.",
+    "confirmed": {
+      "title": "أكّدته أنت",
+      "body": "قلتَ إن «Traced Main Warehouse» مضاف إلى أسعار الشحن في Shopify. لا يستطيع Traced التحقق من ذلك بنفسه بعد."
+    }
+  },
   "receiving": {
     "title": "الاستلام",
     "new": "جلسة جديدة",
@@ -5697,7 +5714,11 @@
       "ready": "جاهز",
       "settingUp": "جارٍ الإعداد…",
       "notActive": "غير نشط في شوبيفاي",
-      "continue": "متابعة"
+      "checking": "جارٍ التحقق…",
+      "needsAttention": "يحتاج إلى مراجعة",
+      "continue": "متابعة",
+      "checkShippingRates": "راجِع أسعار الشحن",
+      "confirmedByYou": "أكّدته أنت"
     },
     "addressPanel": {
       "title": "لماذا نحتاجه",
