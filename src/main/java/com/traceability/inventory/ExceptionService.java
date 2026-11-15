@@ -181,6 +181,7 @@ public class ExceptionService {
         all.addAll(detectNeverReceived(tenantId, neverReceivedDays));
         all.addAll(detectUnmatched(tenantId));
         all.addAll(detectDiscoveryFailed(tenantId));
+        all.addAll(detectBostaKeyRejected(tenantId));
         all.addAll(detectFulfillmentLinkProblem(tenantId));
         all.addAll(detectBlocked(tenantId));
         if (!simulated) all.addAll(detectStuck(tenantId, stuckDays));   // muted: simulated legs never sync
@@ -359,6 +360,7 @@ public class ExceptionService {
         Map.entry("pack_cancelled_after_print/shipment",       OrderLink.DIRECT),         // the print-batch item's order_id
         Map.entry("warehouse_address_push_failed/location",    OrderLink.NONE),
         Map.entry("shopify_connection_lost/store",             OrderLink.NONE),
+        Map.entry("bosta_key_rejected/courier_account",        OrderLink.NONE),
         Map.entry("shopify_location_inactive/location",        OrderLink.NONE),
         Map.entry("transfer_stock_not_removed/transfer",       OrderLink.NONE),
         Map.entry("shopify_exchange_short/variant",            OrderLink.NONE),           // per variant (shadows are never in Orders)
@@ -479,6 +481,7 @@ public class ExceptionService {
         Map.entry("exchange_unmapped_state", "BOSTA_STATE_RECOGNISED"),
         Map.entry("warehouse_address_push_failed", "WAREHOUSE_ADDRESS_PUSHED"),
         Map.entry("shopify_connection_lost",       "SHOPIFY_RECONNECTED"),
+        Map.entry("bosta_key_rejected",            "BOSTA_KEY_UPDATED"),
         Map.entry("shopify_location_inactive",     "SHOPIFY_LOCATION_ACTIVE"),
         Map.entry("shopify_exchange_short",        "STOCK_COVERS_EXCHANGES"),
         Map.entry("shopify_exchange_still_waiting", "EXCHANGE_EXPLAINED_OR_RELEASED"),
@@ -1786,6 +1789,21 @@ public class ExceptionService {
      * token that worked — a reconnect always writes a new one, so a later loss is a new subject and the immediate
      * email (at most once per subject) goes out again. occurred_at ≈ that expiry, when the refresh was due.
      */
+    /**
+     * HIGH, condition-only (V229, 2026-11-15) — Bosta refuses the tenant's API key (BostaKeyHealth's known-bad rule): its
+     * Bosta webhooks are stored but not fetched and polling is paused. ONE per tenant (the subject carries the time the
+     * key went bad, so a later bad key is a new alert); clears when a new key is saved or Bosta accepts the key again.
+     */
+    private List<Map<String, Object>> detectBostaKeyRejected(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'bosta_key_rejected' AS type, 'HIGH' AS severity, 'courier_account' AS subject_type, " +
+            "       ca.key_auth_bad_at AS occurred_at, " +
+            "       'bosta_key_rejected:' || ca.id || ':' || floor(extract(epoch FROM ca.key_auth_bad_at))::bigint AS subject_key " +
+            "FROM courier_accounts ca WHERE ca.tenant_id = ? AND ca.provider = 'bosta' AND ca.status = 'active' " +
+            "  AND " + com.traceability.integrations.bosta.BostaKeyHealth.knownBadSql("ca"),
+            tid);
+    }
+
     private List<Map<String, Object>> detectShopifyConnectionLost(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'shopify_connection_lost' AS type, 'HIGH' AS severity, 'store' AS subject_type, " +
@@ -2845,6 +2863,14 @@ public class ExceptionService {
                     " بانتظار الاسترداد منذ " + days + " يوم");
                 item.put("suggestedAction", "record_refund");
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
+            case "bosta_key_rejected" -> {
+                item.put("descriptionEn", "Bosta is refusing your connected Bosta API key — Traced can't read your "
+                    + "Bosta deliveries. Paste a new API key in Settings › Connections; updates resume right away.");
+                item.put("descriptionAr", "بوسطة ترفض مفتاح API المربوط — لا يستطيع Traced قراءة شحناتك على بوسطة. "
+                    + "الصق مفتاح API جديدًا من الإعدادات › الاتصالات؛ تُستأنف التحديثات فورًا.");
+                item.put("suggestedAction", "reconnect_bosta");
+                item.put("actionUrl", "/settings?tab=connections");
             }
             case "shopify_connection_lost" -> {
                 String shop = str(item, "shop_domain");

@@ -25,8 +25,12 @@ import java.util.function.Supplier;
  *       {@code shopify_webhook_events_unprocessed_idx} has exactly this predicate).</li>
  *   <li>The liveness recurring job ({@code bosta-discovery-poll}): a job created for it within the window, or
  *       one of its jobs PROCESSING with a fresh updatedAt (a long run skips the next creation — that's
- *       not a stall). Window = max(configured, 2 × the job's own cron interval + 1 min), so a slower cron
- *       never reads as a stall. Skipped when the recurring job isn't registered.</li>
+ *       not a stall), or (2026-11-15) one that FINISHED within the window — a run slower than the window ends
+ *       after its creation fell out of it and the next one is only created at the next cron slot; without this a
+ *       slow-but-alive poll read as a stall in that gap. Window = max(configured, 2 × the job's own cron interval
+ *       + 1 min), so a slower cron never reads as a stall. A stopped server makes no job progress of any kind,
+ *       so it is still caught one window after its last job activity. Skipped when the recurring job isn't
+ *       registered.</li>
  *   <li>This server's row in {@code jobrunr_backgroundjobservers} exists and its lastHeartbeat is fresh.</li>
  * </ol>
  * JobRunr stores its timestamps as UTC wall time in {@code timestamp} columns, so they are read with a UTC
@@ -92,17 +96,20 @@ public final class WatchdogDbProbe implements JobServerWatchdog.Probe {
         if (Boolean.TRUE.equals(registered)) {
             Instant[] last = jdbc.query("""
                 SELECT max(createdAt) AS created,
-                       max(updatedAt) FILTER (WHERE state = 'PROCESSING') AS processing
+                       max(updatedAt) FILTER (WHERE state = 'PROCESSING') AS processing,
+                       max(updatedAt) FILTER (WHERE state IN ('SUCCEEDED', 'FAILED')) AS finished
                   FROM jobrunr_jobs WHERE recurringJobId = ?
                 """, rs -> {
                     rs.next();
                     return new Instant[] { instant(rs.getTimestamp("created", UTC)),
-                                           instant(rs.getTimestamp("processing", UTC)) };
+                                           instant(rs.getTimestamp("processing", UTC)),
+                                           instant(rs.getTimestamp("finished", UTC)) };
                 }, livenessJobId);
             Instant cutoff = now.minus(livenessWindow);
-            boolean created = last[0] != null && last[0].isAfter(cutoff);
-            boolean running = last[1] != null && last[1].isAfter(now.minus(Duration.ofMinutes(2)));
-            if (!created && !running) {
+            boolean created  = last[0] != null && last[0].isAfter(cutoff);
+            boolean running  = last[1] != null && last[1].isAfter(now.minus(Duration.ofMinutes(2)));
+            boolean finished = last[2] != null && last[2].isAfter(cutoff);
+            if (!created && !running && !finished) {
                 problems.add("no '" + livenessJobId + "' job created in the last " + livenessWindow.toMinutes()
                     + " min (last: " + (last[0] == null ? "none" : last[0]) + ")");
             }
