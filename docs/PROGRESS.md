@@ -20,7 +20,15 @@ follow-up below.
   runQueued skips while a sweep of the tenant runs or the lock is held (`tenantBusy`). Queue mark: ORDER BY v.id,
   `SET LOCAL lock_timeout` 2 s, a timeout / deadlock schedules `retryMark` (≤ 5, 15 s × n) with the ORIGINAL event time
   (`last_event_at = GREATEST(old, event)`). Two-run rule and changed_before_write unchanged; residual: a mark that
-  fails 5 retries is lost (WARN logged) — before, it would have waited (or deadlocked, which also lost it).
+  fails 5 retries is lost (WARN logged) — before, it would have waited (or deadlocked, which also lost it). Not
+  permanently missed: the 4-hourly sweep reads every Main level in Shopify plus every Traced variant at Main, queue or
+  not, so the variant is evaluated (and, under the two-run rule, confirmed by the next sweep) within ≤ 8 h.
+- **V229 on prod:** 5 nullable / constant-default columns on courier_accounts (28 rows, 264 kB) + one enum value —
+  metadata-only on Postgres 17.6, a brief ACCESS EXCLUSIVE on courier_accounts only. Count gates: MigrationSmokeTest
+  228 files, NotTracedBackfillTest 173.
+- **Flake to watch (not on the known-flakes list yet):** PortalOnDemandLookupTest.e1 failed once in the full suite under
+  load (2026-11-15), passed alone (27/27) — two concurrent lookups of one pre-connect order must store one row; if it
+  recurs under load, check whether the race guard or the test's own timing is at fault before listing it.
 - **Bosta:** V229 `courier_accounts.key_auth_*` + webhook_status 'skipped'. `BostaKeyHealth` = THE known-bad rule (3 ×
   401 over ≥ 10 min, hash of the stored ciphertext; a new key or any success clears it). Known bad: webhooks stored as
   'skipped' with no fetch, discovery skips, status poll probes one walk page every 6 h; HIGH condition-only
