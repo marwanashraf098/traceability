@@ -13,3 +13,11 @@ ALTER TABLE locations
     ADD COLUMN shopify_shipping_model text NOT NULL DEFAULT 'unknown'
         CHECK (shopify_shipping_model IN ('unknown', 'legacy', 'market_driven')),
     ADD COLUMN shopify_shipping_model_checked_at timestamptz;
+
+-- L1b-1 review (Marawan 2026-11-15) — market-driven stores until L1b-2: the owner's "I've added it". Records that the
+-- OWNER says Traced Main Warehouse is in the store's shipping rates; it hides the instruction (readiness
+-- 'owner_confirmed', shown "Confirmed by you"). It is NOT Ready and never satisfies the move-feature gate, which needs a
+-- status Traced verified itself. Written only by TracedLocationOnlineService.confirmShippingRates (owner-only endpoint).
+ALTER TABLE locations
+    ADD COLUMN shopify_shipping_owner_confirmed_at timestamptz,
+    ADD COLUMN shopify_shipping_owner_confirmed_by uuid;

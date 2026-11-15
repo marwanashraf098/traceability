@@ -132,9 +132,9 @@ class TracedShippingModelTest {
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, shopify_location_id, " +
                     "  shopify_sync_status, shopify_delivery_profile_status, shopify_delivery_profile_activated_at, " +
-                    "  shopify_shipping_model, shopify_online_fulfillment_status) " +
+                    "  shopify_shipping_model, shopify_online_fulfillment_status, shopify_delivery_profile_checked_at) " +
                     "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true, ?, 'linked', ?, " +
-                    (activatedBefore ? "now() - interval '3 days'" : "NULL") + ", ?, ?)",
+                    (activatedBefore ? "now() - interval '3 days'" : "NULL") + ", ?, ?, now())",
                     id, tenantId, GID, profileStatus, model, online);
         return id;
     }
@@ -262,6 +262,8 @@ class TracedShippingModelTest {
         linkedMain("unknown", "activated", true, "unknown");
         when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.LEGACY));
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok"))
+            .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of(GID))));
 
         online.refreshQuietly(tenantId);
 
@@ -273,7 +275,7 @@ class TracedShippingModelTest {
         online.refreshQuietly(tenantId);
         assertThat(readiness()).isEqualTo("online_off");
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
-        verifyNoInteractions(profiles);
+        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -290,6 +292,9 @@ class TracedShippingModelTest {
         assertThat(readiness()).as("never Ready on unknown").isEqualTo("unknown");
         jdbc.update("UPDATE locations SET shopify_online_fulfillment_status = 'on', shopify_shipping_model = 'unknown' WHERE id = ?", id);
         assertThat(readiness()).as("never Ready on an unknown model").isEqualTo("unknown");
+        jdbc.update("UPDATE locations SET shopify_shipping_model = 'legacy', shopify_delivery_profile_checked_at = NULL WHERE id = ?", id);
+        assertThat(readiness()).as("legacy: never Ready (nor 'can't') without a LIVE membership read").isEqualTo("unknown");
+        jdbc.update("UPDATE locations SET shopify_delivery_profile_checked_at = now() WHERE id = ?", id);
         jdbc.update("UPDATE locations SET shopify_shipping_model = 'legacy', shopify_delivery_profile_status = 'not_activated' WHERE id = ?", id);
         assertThat(readiness()).isEqualTo("profile_removed");
         jdbc.update("UPDATE locations SET shopify_delivery_profile_activated_at = NULL WHERE id = ?", id);
@@ -300,6 +305,84 @@ class TracedShippingModelTest {
         assertThat(readiness()).isEqualTo("location_inactive");
         jdbc.update("UPDATE locations SET shopify_sync_status = 'error' WHERE id = ?", id);
         assertThat(readiness()).isEqualTo("not_linked");
+    }
+
+    @Test
+    void m11_legacy_storedNotActivated_noLiveRead_isChecking_thenHourlyLiveReadDecides() {
+        // Before L1 joining was manual: V67 says not_activated, but the merchant added Traced Main by hand in Shopify.
+        UUID id = linkedMain("legacy", "not_activated", false, "on");
+        jdbc.update("UPDATE locations SET shopify_delivery_profile_checked_at = NULL WHERE id = ?", id);
+        assertThat(readiness()).as("right after deploy: Checking…, never \"can't ship\"").isEqualTo("unknown");
+
+        when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.LEGACY));
+        when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok"))
+            .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of(GID))));
+        online.refreshQuietly(tenantId);
+
+        assertThat(readiness()).as("the live read found it in the profile").isEqualTo("ready");
+        assertThat(jdbc.queryForObject("SELECT shopify_delivery_profile_checked_at IS NOT NULL FROM locations WHERE id = ?",
+            Boolean.class, id)).isTrue();
+        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
+
+        // Not in the profile per the live read, never joined before → the Activate item (and still no write).
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok"))
+            .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of())));
+        jdbc.update("UPDATE locations SET shopify_delivery_profile_activated_at = NULL WHERE id = ?", id);
+        online.refreshQuietly(tenantId);
+        assertThat(readiness()).isEqualTo("activate_needed");
+        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void m12_ownerConfirm_marketDriven_persists_notReady_auditLogged() {
+        UUID id = linkedMain("market_driven", "not_activated", false, "on");
+        UUID owner = owner();
+
+        Map<String, Object> res = as("OWNER", () -> locationController.confirmTracedShippingRates(
+            new CustomUserDetails(owner, tenantId, "OWNER", SHOP)));
+
+        assertThat(res).containsEntry("readiness", "owner_confirmed");
+        assertThat(readiness()).isEqualTo(TracedShippingReadiness.OWNER_CONFIRMED).isNotEqualTo("ready");
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT shopify_shipping_owner_confirmed_at, shopify_shipping_owner_confirmed_by FROM locations WHERE id = ?", id);
+        assertThat(row.get("shopify_shipping_owner_confirmed_at")).isNotNull();
+        assertThat(row.get("shopify_shipping_owner_confirmed_by")).isEqualTo(owner);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'shopify_shipping_rates_confirmed'",
+            Integer.class, tenantId)).isEqualTo(1);
+        verifyNoInteractions(profiles, locations, models);
+
+        // The gate row / card read it from /connections and /locations.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> shopify = (Map<String, Object>) as("OWNER", () -> connections.status(
+            new CustomUserDetails(owner, tenantId, "OWNER", SHOP))).get("shopify");
+        assertThat(shopify).containsEntry("tracedMainShipping", "owner_confirmed");
+        // Survives the hourly pass (it never clears it).
+        when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.MARKET_DRIVEN));
+        when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
+        online.refreshQuietly(tenantId);
+        assertThat(readiness()).isEqualTo("owner_confirmed");
+    }
+
+    @Test
+    void m13_ownerConfirm_ownerOnly_and_marketDrivenOnly() {
+        UUID id = linkedMain("market_driven", "not_activated", false, "on");
+        UUID manager = UUID.randomUUID();
+        jdbc.update("INSERT INTO users (id, tenant_id, name, role) VALUES (?, ?, 'L1b manager', 'manager'::user_role)", manager, tenantId);
+
+        assertThatThrownBy(() -> as("MANAGER", () -> locationController.confirmTracedShippingRates(
+                new CustomUserDetails(manager, tenantId, "MANAGER", SHOP))))
+            .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+        assertThat(readiness()).isEqualTo("add_to_shipping_rates");
+
+        jdbc.update("UPDATE locations SET shopify_shipping_model = 'legacy' WHERE id = ?", id);
+        UUID owner = owner();
+        assertThatThrownBy(() -> as("OWNER", () -> locationController.confirmTracedShippingRates(
+                new CustomUserDetails(owner, tenantId, "OWNER", SHOP))))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("409");
+        assertThat(jdbc.queryForObject("SELECT shopify_shipping_owner_confirmed_at FROM locations WHERE id = ?",
+            java.time.OffsetDateTime.class, id)).isNull();
     }
 
     @Test

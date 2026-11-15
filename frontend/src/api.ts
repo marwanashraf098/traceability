@@ -3010,7 +3010,7 @@ export interface LocationRow {
   shopify_online_fulfillment_status?: 'unknown' | 'on' | 'off' | 'error'
   shopify_online_fulfillment_error?: string | null
   shopify_online_fulfillment_checked_at?: string | null
-  /** L1b-1 (V229) — the store's shipping model as Traced last read it. */
+  /** L1b-1 (V230) — the store's shipping model as Traced last read it. */
   shopify_shipping_model?: 'unknown' | 'legacy' | 'market_driven'
   /** L1b-1 — THE readiness rule (TracedShippingReadiness.SQL), on the is_fulfillment row only. */
   shopify_shipping_readiness?: TracedShippingReadiness | null
@@ -3024,6 +3024,8 @@ export interface LocationRow {
 export type TracedShippingReadiness =
   | 'not_linked' | 'location_inactive' | 'online_off' | 'add_to_shipping_rates' | 'unknown'
   | 'profile_removed' | 'ready' | 'activate_needed'
+  /** L1b-1 review — market-driven, the OWNER said "I've added it": "Confirmed by you", never Ready. */
+  | 'owner_confirmed'
 
 /** L1b-1 — the Shopify admin links for the owner's fallback: the location's page (primary) and shipping settings. */
 export function tracedLocationAdminUrls(shopDomain: string | null | undefined, locationNumber: string | null | undefined) {
@@ -3057,9 +3059,13 @@ export function tracedLocationNeedsTurnBackOn(location: LocationRow | null | und
     && location.shopify_sync_status === 'linked'
     && (location.shopify_online_fulfillment_status === 'off'
         // L1b-1: the profile part is legacy-only — on a market-driven store the delivery profile means nothing.
-        || (location.shopify_shipping_model !== 'market_driven'
-            && location.shopify_delivery_profile_status === 'not_activated'
-            && !!location.shopify_delivery_profile_activated_at))
+        // L1b-1 review: when the server sends its readiness, the profile part is exactly 'profile_removed' (a LIVE
+        // read found it out of the profile) — a stored status nobody re-read since before L1 never warns.
+        || (location.shopify_shipping_readiness !== undefined
+            ? location.shopify_shipping_readiness === 'profile_removed'
+            : (location.shopify_shipping_model !== 'market_driven'
+               && location.shopify_delivery_profile_status === 'not_activated'
+               && !!location.shopify_delivery_profile_activated_at)))
 }
 
 export interface TurnBackOnResult { onlineStatus: 'on' | 'off' | 'error'; profile: 'ALREADY_MEMBER' | 'JOINED' | 'FAILED' }
@@ -3067,6 +3073,11 @@ export interface TurnBackOnResult { onlineStatus: 'on' | 'off' | 'error'; profil
 /** L1 — owner only: turn the Traced location's online selling back on (fulfils online orders + delivery profile). */
 export function turnTracedLocationBackOn() {
   return transferCommandRequest<TurnBackOnResult>('/locations/shopify/turn-back-on', { method: 'POST' })
+}
+
+/** L1b-1 review — owner only, market-driven stores: "I've added it" (records it; NOT Ready). */
+export function confirmTracedShippingRates() {
+  return transferCommandRequest<{ readiness: TracedShippingReadiness }>('/locations/shopify/shipping-rates-confirmed', { method: 'POST' })
 }
 
 export function needsFulfillmentActivation(
@@ -3079,7 +3090,11 @@ export function needsFulfillmentActivation(
     && location.shopify_sync_status === 'linked'
     // L1b-1: never on a market-driven store — the join can't make it ship there (the card shows the instruction).
     && location.shopify_shipping_model !== 'market_driven'
-    && location.shopify_delivery_profile_status !== 'activated'
+    // L1b-1 review: with the server's readiness, only 'activate_needed' (a LIVE read: not in the profile, never was) —
+    // a legacy store not re-read since before L1 shows "Checking…", not an Activate prompt.
+    && (location.shopify_shipping_readiness !== undefined
+        ? location.shopify_shipping_readiness === 'activate_needed'
+        : location.shopify_delivery_profile_status !== 'activated')
 }
 
 export function createTransfer(params: {

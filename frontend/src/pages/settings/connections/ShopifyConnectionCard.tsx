@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
 import { Badge, Button, Spinner, cn } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
-import ShippingRatesInstruction from './ShippingRatesInstruction'
+import ShippingRatesInstruction, { ShippingRatesConfirmed } from './ShippingRatesInstruction'
 import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
@@ -346,7 +346,14 @@ function FulfillmentActivationItem({
     return (
       <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
         <ShippingRatesInstruction shopDomain={shopDomain}
-          locationNumber={location.shopify_location_id?.replace(/^.*\//, '') ?? null} />
+          locationNumber={location.shopify_location_id?.replace(/^.*\//, '') ?? null} onConfirmed={load} />
+      </div>
+    )
+  }
+  if (readiness === 'owner_confirmed') {
+    return (
+      <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
+        <ShippingRatesConfirmed />
       </div>
     )
   }

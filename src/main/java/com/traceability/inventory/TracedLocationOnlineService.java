@@ -40,6 +40,7 @@ import java.util.UUID;
  * L1b-1 (2026-11-15): every delivery-profile call (join, membership read) runs ONLY when the store's shipping model is
  * confirmed LEGACY ({@link ShopifyShippingModelGateway}); market-driven or unknown → no call, recorded as skipped. The
  * readiness shown to merchants is TracedShippingReadiness.SQL.
+ * {@link #confirmShippingRates} — L1b-1 review: the owner's "I've added it" on a market-driven store (no Shopify call).
  * Every write targets ONLY the GID on the tenant's is_fulfillment row, read here — never a GID from a request, never
  * another location, never false, never a name / address / metafield (TracedLocationEditGuardTest). Nothing here
  * throws into provisioning or the import: a failure is recorded on the location row and shown on the card.
@@ -133,8 +134,8 @@ public class TracedLocationOnlineService {
     }
 
     /**
-     * L1b-1 — the hourly location check (ShopifyLocationCheckJob): READ ONLY — the shipping model and fulfils online
-     * orders, recorded. A store Shopify moves to market-driven shipping shows the instruction within the hour; tenants
+     * L1b-1 — the hourly location check (ShopifyLocationCheckJob): READ ONLY — the shipping model, fulfils online
+     * orders and (legacy only) the delivery-profile membership, recorded; it may update only the recorded statuses. A store Shopify moves to market-driven shipping shows the instruction within the hour; tenants
      * linked before L1b-1 get their model. Never a delivery-profile call, never a write to Shopify, never throws.
      */
     public void refreshQuietly(UUID tenantId) {
@@ -142,10 +143,37 @@ public class TracedLocationOnlineService {
             TenantContext.runAs(tenantId, () -> {
                 if (main(tenantId).isEmpty()) return;
                 readOnline(tenantId);
-                readModel(tenantId);
+                // Legacy only: the membership READ (no join, ever) — the live read readiness needs. Before L1 joining
+                // was manual, so a merchant may have added Traced Main by hand while the stored status says otherwise.
+                if (readModel(tenantId).orElse(null) == Model.LEGACY) activation.readMembership(tenantId);
             });
         } catch (Exception e) {
             log.warn("Traced Main Warehouse shipping refresh failed: tenant={} error={}", tenantId, e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * L1b-1 review (approved 2026-11-15) — the owner's "I've added it" on a MARKET-DRIVEN store: records who and when
+     * (once — a repeat keeps the first), audit-logged, no Shopify call. Readiness becomes 'owner_confirmed' ("Confirmed
+     * by you") — NOT Ready. 409 unless the Traced Main Warehouse is linked and its store reads market-driven.
+     */
+    public void confirmShippingRates(UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        Integer n = tx.execute(s -> {
+            List<UUID> ids = jdbc.query(
+                "UPDATE locations SET shopify_shipping_owner_confirmed_at = COALESCE(shopify_shipping_owner_confirmed_at, now()), " +
+                "  shopify_shipping_owner_confirmed_by = COALESCE(shopify_shipping_owner_confirmed_by, ?) " +
+                "WHERE tenant_id = ? AND is_fulfillment = true AND shopify_sync_status = 'linked' " +
+                "  AND shopify_location_id IS NOT NULL AND shopify_shipping_model = 'market_driven' RETURNING id",
+                (rs, i) -> rs.getObject(1, UUID.class), actorUserId, tenantId);
+            if (ids.isEmpty()) return 0;
+            audit.record(actorUserId, "shopify_shipping_rates_confirmed", "location", ids.get(0).toString(),
+                Map.of("source", "owner"));
+            return ids.size();
+        });
+        if (n == null || n == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a linked Traced Main Warehouse on a store with market-driven shipping can be confirmed");
         }
     }
 

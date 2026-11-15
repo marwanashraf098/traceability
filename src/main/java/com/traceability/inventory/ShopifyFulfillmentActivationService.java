@@ -300,7 +300,7 @@ public class ShopifyFulfillmentActivationService {
     }
 
     /**
-     * L1 — READ ONLY (reconnect of an already-linked tenant): is the Traced Main Warehouse in the default delivery
+     * L1 — READ ONLY (reconnect of an already-linked tenant; since L1b-1 also the hourly location check): is the Traced Main Warehouse in the default delivery
      * profile's location group? Records 'activated' / 'not_activated' (activated_at kept, so a location that was in
      * the profile and was taken out reads as "turned off") with shopify_delivery_profile_checked_at. Never writes
      * to Shopify, never throws; a failed read changes nothing but the checked error. Empty = unknown.
@@ -329,7 +329,7 @@ public class ShopifyFulfillmentActivationService {
                         member ? STATUS_ACTIVATED : STATUS_NOT_ACTIVATED, member, ctx.locationId(), tenantId);
                     return Optional.of(member);
                 } catch (Exception e) {
-                    log.warn("Delivery profile read failed on reconnect: tenant={} error={}", tenantId, e.toString());
+                    log.warn("Delivery profile read failed: tenant={} error={}", tenantId, e.toString());
                     return Optional.<Boolean>empty();
                 }
             });
@@ -361,8 +361,11 @@ public class ShopifyFulfillmentActivationService {
     private void recordStatus(UUID tenantId, UUID locationId, String status, String error) {
         if (STATUS_ACTIVATED.equals(status)) {
             jdbc.update(
+                // L1b-1 review: 'activated' is only ever recorded from Shopify's own answer (membership found, or the
+                // join succeeded / was read back) — a live read, so it stamps checked_at (TracedShippingReadiness).
                 "UPDATE locations SET shopify_delivery_profile_status = ?, shopify_delivery_profile_error = NULL, " +
-                "shopify_delivery_profile_activated_at = now() WHERE id = ? AND tenant_id = ?",
+                "shopify_delivery_profile_activated_at = now(), shopify_delivery_profile_checked_at = now() " +
+                "WHERE id = ? AND tenant_id = ?",
                 status, locationId, tenantId);
         } else {
             jdbc.update(

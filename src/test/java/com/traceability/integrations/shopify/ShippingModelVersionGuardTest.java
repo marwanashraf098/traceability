@@ -77,10 +77,15 @@ class ShippingModelVersionGuardTest {
         int joins = 0;
         java.util.regex.Matcher j = java.util.regex.Pattern.compile("activation\\.(joinWithReadBack|readMembership)\\(").matcher(online);
         while (j.find()) joins++;
-        assertThat(joins).isEqualTo(3);                                          // first link, reconnect, Turn back on
+        assertThat(joins).isEqualTo(4);                       // first link, reconnect, Turn back on, hourly (read only)
         assertThat(online).contains("model.orElse(null) == Model.LEGACY ? activation.joinWithReadBack(tenantId, null, \"first_link\")")
             .contains("model.orElse(null) != Model.LEGACY ? skipped(model) : activation.readMembership(tenantId)")
-            .contains("model.orElse(null) == Model.LEGACY ? activation.joinWithReadBack(tenantId, actorUserId, \"turn_back_on\")");
+            .contains("model.orElse(null) == Model.LEGACY ? activation.joinWithReadBack(tenantId, actorUserId, \"turn_back_on\")")
+            .contains("if (readModel(tenantId).orElse(null) == Model.LEGACY) activation.readMembership(tenantId);");
+        // The hourly pass never joins: its only profile call is the membership read.
+        int hourly = online.indexOf("public void refreshQuietly(");
+        String hourlyBody = online.substring(hourly, online.indexOf("private static String skipped(", hourly));
+        assertThat(hourlyBody).doesNotContain("joinWithReadBack").doesNotContain("ensureOnline");
         Set<String> callers = new TreeSet<>();
         for (Path p : sources()) {
             String src = Files.readString(p);

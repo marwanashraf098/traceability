@@ -54,7 +54,7 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
     vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
     vi.mocked(api.listLocations)
       .mockResolvedValueOnce([location({ shopify_online_fulfillment_status: 'off' })])
-      .mockResolvedValue([location()])
+      .mockResolvedValue([location({ shopify_shipping_readiness: 'ready' })])
     vi.mocked(api.turnTracedLocationBackOn).mockResolvedValue({ onlineStatus: 'on', profile: 'ALREADY_MEMBER' })
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)

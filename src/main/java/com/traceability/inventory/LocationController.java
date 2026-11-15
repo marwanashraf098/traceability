@@ -348,4 +348,16 @@ public class LocationController {
         return Map.of("onlineStatus", o.onlineStatus(), "profile", o.profileOutcome());
     }
 
+    /**
+     * L1b-1 review (2026-11-15) — market-driven stores until L1b-2: the owner says Traced Main Warehouse is in the
+     * store's shipping rates. Owner only, no input, no Shopify call. Hides the instruction ("Confirmed by you"); it is
+     * not Ready.
+     */
+    @PostMapping("/shopify/shipping-rates-confirmed")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> confirmTracedShippingRates(@AuthenticationPrincipal CustomUserDetails principal) {
+        online.confirmShippingRates(principal.userId());
+        return Map.of("readiness", TracedShippingReadiness.OWNER_CONFIRMED);
+    }
+
 }

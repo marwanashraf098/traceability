@@ -5,7 +5,7 @@ import { Check, Clock, Info, Store } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
-import ShippingRatesInstruction from '../settings/connections/ShippingRatesInstruction'
+import ShippingRatesInstruction, { ShippingRatesConfirmed } from '../settings/connections/ShippingRatesInstruction'
 import {
   getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress,
   ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupGovernorate, type SetupStep,
@@ -95,6 +95,7 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
     getConnections().then(c => { if (!cancelled) setConn(c.shopify) }).catch(() => {})
     return () => { cancelled = true }
   }, [])
+  const reload = () => getConnections().then(c => setConn(c.shopify)).catch(() => {})
 
   const imported = conn?.importStatus === 'completed'
   // L1b-1 — the server's readiness rule (TracedShippingReadiness): "Ready" ONLY on 'ready', never on unknown.
@@ -103,7 +104,8 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
     : shipping === null || shipping === 'not_linked' ? t('setupGate.connected.settingUp')
     : shipping === 'ready' ? t('setupGate.connected.ready')
     : shipping === 'location_inactive' ? t('setupGate.connected.notActive')
-    : shipping === 'add_to_shipping_rates' ? t('setupGate.connected.cantShipYet')
+    : shipping === 'add_to_shipping_rates' ? t('setupGate.connected.checkShippingRates')
+    : shipping === 'owner_confirmed' ? t('setupGate.connected.confirmedByYou')
     : shipping === 'unknown' ? t('setupGate.connected.checking')
     : t('setupGate.connected.needsAttention')
   const rows: { label: string; value: string | null; testId: string }[] = [
@@ -147,7 +149,13 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
         </ul>
         {shipping === 'add_to_shipping_rates' && (
           <div className="border border-line rounded-xl px-4 py-3">
-            <ShippingRatesInstruction shopDomain={conn?.shopDomain} locationNumber={conn?.tracedLocationNumber} />
+            <ShippingRatesInstruction shopDomain={conn?.shopDomain} locationNumber={conn?.tracedLocationNumber}
+              onConfirmed={reload} />
+          </div>
+        )}
+        {shipping === 'owner_confirmed' && (
+          <div className="border border-line rounded-xl px-4 py-3">
+            <ShippingRatesConfirmed />
           </div>
         )}
         <Button variant="primary" size="lg" className="w-full" onClick={onContinue}>{t('setupGate.connected.continue')}</Button>

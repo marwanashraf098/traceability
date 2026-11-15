@@ -1,4 +1,5 @@
 import { test, expect, describe, vi, beforeEach } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import i18next from 'i18next'
@@ -20,6 +21,7 @@ vi.mock('../api', async (importOriginal) => {
     listLocations: vi.fn(),
     getShopifyInventoryReconcileReport: vi.fn(),
     getRoleFromToken: vi.fn(),
+    confirmTracedShippingRates: vi.fn(),
   }
 })
 
@@ -54,12 +56,13 @@ const LOCATION_URL = 'https://admin.shopify.com/store/testl1location/settings/lo
 describe('onboarding gate — Traced Main row (L1b-1)', () => {
   beforeEach(() => { cleanup(); vi.clearAllMocks() })
 
-  test('market-driven: never Ready — "Can\'t ship yet" + the instruction + the location link first', async () => {
+  test('market-driven: never Ready — "Check shipping rates" + the "make sure" instruction + the location link first', async () => {
     vi.mocked(api.getConnections).mockResolvedValue(connections({ tracedMainShipping: 'add_to_shipping_rates' }))
     gate()
-    await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent("Can't ship yet"))
+    await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent('Check shipping rates'))
     expect(screen.getByTestId('setup-row-traced-main')).not.toHaveTextContent('Ready')
-    expect(screen.getByText(/add “Traced Main Warehouse” to your shipping rates/)).toBeTruthy()
+    expect(screen.getByText('Make sure Traced Main Warehouse is added to your shipping rates in Shopify')).toBeTruthy()
+    expect(screen.queryByText(/can.t ship/i)).toBeNull()
     const open = screen.getByTestId('traced-shipping-open-location')
     expect(open).toHaveAttribute('href', LOCATION_URL)
     expect(open).toHaveAttribute('target', '_blank')
@@ -70,9 +73,9 @@ describe('onboarding gate — Traced Main row (L1b-1)', () => {
   test('market-driven in Arabic (RTL): the row and the instruction translated', async () => {
     vi.mocked(api.getConnections).mockResolvedValue(connections({ tracedMainShipping: 'add_to_shipping_rates' }))
     gate('ar')
-    await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent('لا يمكنه الشحن بعد'))
+    await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent('راجِع أسعار الشحن'))
     expect(document.documentElement.dir).toBe('rtl')
-    expect(screen.getByText(/أضِف «Traced Main Warehouse» إلى أسعار الشحن/)).toBeTruthy()
+    expect(screen.getByText(/تأكّد من إضافة «Traced Main Warehouse» إلى أسعار الشحن/)).toBeTruthy()
     expect(screen.getByTestId('traced-shipping-open-location')).toHaveTextContent('افتح الموقع في Shopify')
     expect(screen.getByTestId('traced-shipping-open-location')).toHaveAttribute('href', LOCATION_URL)
   })
@@ -93,6 +96,30 @@ describe('onboarding gate — Traced Main row (L1b-1)', () => {
     vi.mocked(api.getConnections).mockResolvedValue(connections({ tracedMainShipping: null }))
     gate()
     await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent('Setting up…'))
+  })
+
+  test('owner: "I\'ve added it" records it → the row says "Confirmed by you", the instruction goes, never Ready', async () => {
+    vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
+    vi.mocked(api.getConnections)
+      .mockResolvedValueOnce(connections({ tracedMainShipping: 'add_to_shipping_rates' }))
+      .mockResolvedValue(connections({ tracedMainShipping: 'owner_confirmed' }))
+    vi.mocked(api.confirmTracedShippingRates).mockResolvedValue({ readiness: 'owner_confirmed' })
+    gate()
+    await userEvent.click(await screen.findByTestId('traced-shipping-confirm-btn'))
+    await waitFor(() => expect(api.confirmTracedShippingRates).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByTestId('setup-row-traced-main')).toHaveTextContent('Confirmed by you'))
+    expect(screen.getByTestId('setup-row-traced-main')).not.toHaveTextContent('Ready')
+    expect(screen.queryByTestId('traced-shipping-add-rates')).toBeNull()
+    expect(screen.getByTestId('traced-shipping-owner-confirmed')).toBeTruthy()
+  })
+
+  test('not the owner: no "I\'ve added it" button, an owner-only note', async () => {
+    vi.mocked(api.getRoleFromToken).mockReturnValue('manager')
+    vi.mocked(api.getConnections).mockResolvedValue(connections({ tracedMainShipping: 'add_to_shipping_rates' }))
+    gate()
+    await waitFor(() => expect(screen.getByTestId('traced-shipping-confirm-owner-only')).toBeTruthy())
+    expect(screen.queryByTestId('traced-shipping-confirm-btn')).toBeNull()
+    expect(api.confirmTracedShippingRates).not.toHaveBeenCalled()
   })
 })
 
@@ -132,6 +159,27 @@ describe('connection card — the "live" line (L1b-1)', () => {
     renderWithProviders(<ConnectionsTab readOnly={false} />)
     await waitFor(() => expect(screen.getByTestId('fulfillment-shipping-unknown')).toBeTruthy())
     expect(screen.queryByTestId('fulfillment-activated')).toBeNull()
+  })
+
+  test('owner confirmed: "Confirmed by you", no instruction, no "live", no Activate', async () => {
+    vi.mocked(api.listLocations).mockResolvedValue([location({
+      shopify_shipping_model: 'market_driven', shopify_shipping_readiness: 'owner_confirmed' })])
+    renderWithProviders(<ConnectionsTab readOnly={false} />)
+    await waitFor(() => expect(screen.getByTestId('traced-shipping-owner-confirmed')).toBeTruthy())
+    expect(screen.getByText('Confirmed by you')).toBeTruthy()
+    expect(screen.queryByTestId('traced-shipping-add-rates')).toBeNull()
+    expect(screen.queryByTestId('fulfillment-activated')).toBeNull()
+    expect(screen.queryByTestId('activate-fulfillment-btn')).toBeNull()
+  })
+
+  test('legacy, stored not_activated but never read live: "Checking…" — no Activate, no turned-off warning', async () => {
+    vi.mocked(api.listLocations).mockResolvedValue([location({
+      shopify_shipping_model: 'legacy', shopify_delivery_profile_status: 'not_activated',
+      shopify_delivery_profile_activated_at: '2026-10-01T00:00:00Z', shopify_shipping_readiness: 'unknown' })])
+    renderWithProviders(<ConnectionsTab readOnly={false} />)
+    await waitFor(() => expect(screen.getByTestId('fulfillment-shipping-unknown')).toBeTruthy())
+    expect(screen.queryByTestId('activate-fulfillment-btn')).toBeNull()
+    expect(screen.queryByTestId('traced-location-off')).toBeNull()
   })
 
   test('ready: live', async () => {
