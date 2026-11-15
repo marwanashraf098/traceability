@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Prod perf — Main reconcile lock contention + Bosta polls at half rate (2026-11-15; branch
+`perf/reconcile-locks-bosta-poll` off origin/main 5f81986a; V229; NOT merged, NOT deployed).** Closes the "fix 5"
+follow-up below.
+- **Phase 1 (prod, read-only, 2026-11-15):** discovery runs avg 136 s / p90 145 s / max 167 s (slot 120 s) and the
+  status poll avg 191 s / p90 239 s / max 300 s (slot 180 s), last 6 h. 28 active Bosta tenants, walked one after the
+  other (~5–10 s per tenant for 1–2 Bosta calls each, from webhook_events timestamps). Little Toes and Cozy are refused
+  by Bosta (lookup_auth_failed_at 2026-11-15 11:53): Little Toes 1,527 failed webhook fetches / 24 h, both still in
+  every discovery cycle, Cozy also in the status walk + safety net. 5 tenants have nothing in flight but were walked
+  every 3 min. No SSH from the session, so the per-call split (limiter wait vs HTTP) wasn't measured — the new run log
+  line gives it.
+- **Reconcile:** compute = Part 1 under the tenant lock (try-lock for a queued run → skipped `tenant_busy`), queue
+  cleared in ordered batches, evaluation in short read-only transactions (no lock), results written WRITE_BATCH (200)
+  per transaction in ascending variant_id (`MainReconcileService.VARIANT_ORDER` = Postgres uuid order = text order).
+  runQueued skips while a sweep of the tenant runs or the lock is held (`tenantBusy`). Queue mark: ORDER BY v.id,
+  `SET LOCAL lock_timeout` 2 s, a timeout / deadlock schedules `retryMark` (≤ 5, 15 s × n) with the ORIGINAL event time
+  (`last_event_at = GREATEST(old, event)`). Two-run rule and changed_before_write unchanged; residual: a mark that
+  fails 5 retries is lost (WARN logged) — before, it would have waited (or deadlocked, which also lost it).
+- **Bosta:** V229 `courier_accounts.key_auth_*` + webhook_status 'skipped'. `BostaKeyHealth` = THE known-bad rule (3 ×
+  401 over ≥ 10 min, hash of the stored ciphertext; a new key or any success clears it). Known bad: webhooks stored as
+  'skipped' with no fetch, discovery skips, status poll probes one walk page every 6 h; HIGH condition-only
+  `bosta_key_rejected` (one per tenant). Status poll: only tenants with a non-terminal Bosta shipment or a watched
+  replaced leg; a 401 stops the safety net for the cycle. Discovery: idle tenants (mark > 72 h old, not mid-walk, no
+  retry rows, nothing new last run) every 10 min. Both polls: `bosta.poll.tenant-parallelism` (2) via
+  BostaTenantFanOut (limiter unchanged), one INFO line per run (tenants, ms, Bosta calls, limiter wait ms).
+- **Watchdog:** liveness also counts a run that FINISHED within the window (5 min, unchanged) — the gap after a slow
+  run is no longer a stall; a stopped server is still caught one window after its last job activity.
+- **After deploy, check:** `grep "Discovery poll run:\|Status poll run:"` (want discovery < 90 s, status < 120 s);
+  jobrunr_jobs durations for both recurring jobs; Postgres logs for lock waits / deadlocks on main_reconcile_variant_state;
+  `grep "Bosta key health"`; the two refused tenants' alerts. If limiter waits dominate and BACKGROUND 5 s waits start
+  throwing, set `BOSTA_POLL_TENANT_PARALLELISM=1`.
+
 **L1 — Traced Main Warehouse sells online from its first link (2026-11-12/13; branch `feat/l1-traced-location-online`
 off origin/main 2c654317; V228 — V227 went to `fix/exchange-inbound-expected`, merged meanwhile; NOT merged, NOT deployed).**
 Decisions (Marawan 2026-11-12): at FIRST link (created or reused "Traced Main Warehouse") Traced makes sure the location

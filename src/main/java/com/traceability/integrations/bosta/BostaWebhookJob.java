@@ -149,6 +149,12 @@ public class BostaWebhookJob {
 
     private BostaListItemCache listItemCache;
 
+    /** V229: a tenant whose Bosta key is known bad gets no verify-by-fetch (the event is stored as 'skipped'). */
+    private BostaKeyHealth keyHealth;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKeyHealth(BostaKeyHealth keyHealth) { this.keyHealth = keyHealth; }
+
     /** Stored v0 fields never carried into a v2 list delivery (they describe the past, not now). */
     private static final java.util.Set<String> NOT_CARRIED_OVER =
         java.util.Set.of("exceptionCode", "exceptionReason", "exceptionDetails", BostaListItemCache.SHAPE_FIELD);
@@ -281,9 +287,15 @@ public class BostaWebhookJob {
                 if (item != null) fromList = fromListItem(tenantId, trackingNumber, item);
             }
             BostaDelivery delivery;
+            if (fromList == null && keyHealth != null && keyHealth.knownBad(tenantId)) {
+                // V229: Bosta refuses this tenant's key — stored, marked skipped, no Bosta call (no budget spent).
+                markSkipped(webhookEventId, BostaKeyHealth.SKIP_REASON);
+                return;
+            }
             if (fromList != null) delivery = fromList;
             else try {
                 delivery = bostaGateway.fetchDelivery(rawApiKey, trackingNumber);
+                if (keyHealth != null) keyHealth.recordOk(tenantId);
             } catch (BostaTransientException e) {
                 log.warn("Transient Bosta fetch error for tracking {} — will retry: {}",
                     trackingNumber, e.getMessage());
@@ -295,6 +307,7 @@ public class BostaWebhookJob {
                 rescheduleRateLimited(webhookEventId, tenantId, trackingNumber, e.getRetryAfterSeconds());
                 return;
             } catch (BostaException e) {
+                if (keyHealth != null) keyHealth.onException(tenantId, e);
                 markFailed(webhookEventId, "Bosta fetch error: " + e.getMessage());
                 return;
             }
@@ -1065,6 +1078,14 @@ public class BostaWebhookJob {
             jdbc.update(
                 "UPDATE webhook_events SET status = 'failed', error = ?, processed_at = now() WHERE id = ?",
                 error, id);
+            return null;
+        });
+    }
+
+    private void markSkipped(long id, String reason) {
+        tx.execute(s -> {
+            jdbc.update("UPDATE webhook_events SET status = 'skipped', error = ?, processed_at = now() WHERE id = ?",
+                reason, id);
             return null;
         });
     }

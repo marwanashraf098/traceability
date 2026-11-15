@@ -4,7 +4,7 @@ topic: alerts
 title: Courier and shipment alerts
 roles: [owner, manager]
 related: [alerts-overview, connect-bosta, other-couriers, hand-over-parcels]
-alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
+alerts: [lost, unmatched_delivery, bosta_discovery_failed, bosta_key_rejected, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -21,6 +21,10 @@ A Bosta delivery couldn't be connected to any order, or it belongs to an order t
 ## Bosta Fetch Failed
 
 Traced saw a Bosta delivery but couldn't load it after several tries. It clears by itself once the delivery reaches Traced; check it in Bosta if it stays.
+
+## Bosta Key Refused
+
+Bosta is refusing the API key you connected, so Traced can't read your Bosta deliveries. Traced stops asking Bosta with that key (it checks again every few hours). Paste a new API key in **Settings › Connections** — the alert clears and updates resume right away.
 
 ## Bosta Link Needed
 

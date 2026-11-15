@@ -80,10 +80,21 @@ public class BostaStatusPollJob {
     /** The walk's stamp is written at most this often per shipment (capped by {@link #stampEveryMinutes()}). */
     static final int STAMP_EVERY_MINUTES = 60;
 
-    private static final String ACTIVE_BOSTA_TENANTS =
-        "SELECT ca.tenant_id, ca.api_key_encrypted " +
+    /**
+     * 2026-11-15: only tenants with something to keep current — a Bosta shipment not yet terminal, or a replaced leg
+     * still watched (BostaSupersede) — everything else on Bosta's list is discovery's. {@code known_bad}: Bosta refuses
+     * the key (V229, BostaKeyHealth) — polled only as a probe, one walk page every bosta.key-health.probe-hours.
+     */
+    private static final String ACTIVE_BOSTA_TENANTS_SQL =
+        "SELECT ca.tenant_id, ca.api_key_encrypted, " + BostaKeyHealth.knownBadSql("ca") + " AS known_bad, %s AS probe_due " +
         "FROM courier_accounts ca " +
-        "WHERE ca.provider = 'bosta' AND ca.status = 'active'";
+        "WHERE ca.provider = 'bosta' AND ca.status = 'active' " +
+        "  AND (EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = ca.tenant_id AND s.provider = 'bosta' " +
+        "                 AND s.tracking_number IS NOT NULL " +
+        "                 AND s.internal_state NOT IN ('delivered','returned','lost','terminated','cancelled')) " +
+        "       OR EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = ca.tenant_id AND s.provider = 'bosta' " +
+        "                 AND " + BostaSupersede.watchedSql("s") + ")) " +
+        "ORDER BY ca.tenant_id";
 
     private final JdbcTemplate        ownerJdbc;
     private final JdbcTemplate        jdbc;
@@ -94,6 +105,17 @@ public class BostaStatusPollJob {
     private final boolean              statusEnabled;
     private BostaV2Client              bostaV2;
     private int pageLimit = 50, maxPages = 10, overlapMinutes = 10, safetyNetHours = 4;
+    private int parallelism = 2;
+    private BostaKeyHealth keyHealth;
+
+    /** Tenants processed at once (BostaTenantFanOut); 1 = one after the other, as before 2026-11-15. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setParallelism(@Value("${bosta.poll.tenant-parallelism:2}") int parallelism) {
+        this.parallelism = Math.max(1, parallelism);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKeyHealth(BostaKeyHealth keyHealth) { this.keyHealth = keyHealth; }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setWalk(BostaV2Client bostaV2,
@@ -152,16 +174,22 @@ public class BostaStatusPollJob {
             log.info("Status poll disabled via bosta.poll.status-enabled=false — skipping");
             return;
         }
-        List<Map<String, Object>> accounts = ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS);
+        long started = System.currentTimeMillis();
+        List<Map<String, Object>> accounts = ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS_SQL.formatted(
+            keyHealth != null ? keyHealth.probeDueSql("ca") : "true"));
         if (accounts.isEmpty()) {
-            log.debug("Status poll: no active Bosta accounts");
+            log.debug("Status poll: no active Bosta accounts with anything to keep current");
             return;
         }
 
+        List<Map<String, Object>> due = new java.util.ArrayList<>();
+        int keySkipped = 0;
         for (Map<String, Object> row : accounts) {
-            UUID tenantId       = (UUID) row.get("tenant_id");
-            String encryptedKey = (String) row.get("api_key_encrypted");
-
+            UUID tenantId = (UUID) row.get("tenant_id");
+            if (Boolean.TRUE.equals(row.get("known_bad")) && !Boolean.TRUE.equals(row.get("probe_due"))) {
+                keySkipped++;
+                continue;
+            }
             // Per-tenant rate-limit backoff: skip this tenant until the window clears.
             Long retryUntil = rateLimitRetryUntilByTenant.get(tenantId);
             if (retryUntil != null && System.currentTimeMillis() < retryUntil) {
@@ -169,14 +197,44 @@ public class BostaStatusPollJob {
                 log.info("Status poll tenant {}: rate-limited — backing off {}s more", tenantId, waitSecs);
                 continue;
             }
+            due.add(row);
+        }
 
+        long[] stats = BostaTenantFanOut.forEach(due, parallelism, "bosta-status", row -> {
+            UUID tenantId       = (UUID) row.get("tenant_id");
+            String encryptedKey = (String) row.get("api_key_encrypted");
             try {
                 String apiKey = encryptionService.decrypt(encryptedKey);
-                pollTenant(tenantId, apiKey);
+                if (Boolean.TRUE.equals(row.get("known_bad"))) {
+                    // A known-bad key: one walk page as a probe, nothing else (a success clears the state).
+                    if (keyHealth != null) TenantContext.runAs(tenantId, (Runnable) () -> keyHealth.stampProbe(tenantId));
+                    log.info("Status poll tenant {}: Bosta refused the key earlier — probing with one walk page", tenantId);
+                    probeTenant(tenantId, apiKey);
+                } else {
+                    pollTenant(tenantId, apiKey);
+                }
             } catch (Exception e) {
                 log.warn("Status poll failed for tenant {}: {}", tenantId, e.getMessage());
             }
-        }
+        });
+        log.info("Status poll run: {} tenant(s) in {} ms ({} skipped — Bosta refuses the key; parallelism {}); {} Bosta " +
+            "call(s), {} ms waiting on the rate limiter", due.size(), System.currentTimeMillis() - started, keySkipped,
+            parallelism, stats[0], stats[1]);
+    }
+
+    /** A known-bad key's probe: the first walk page only, read and dropped (the next real cycle walks normally). */
+    private void probeTenant(UUID tenantId, String apiKey) {
+        if (bostaV2 == null) return;
+        TenantContext.runAs(tenantId, (Runnable) () -> {
+            try {
+                bostaV2.searchDeliveriesPage(apiKey, 1, 1, "-updatedAt");
+                if (keyHealth != null) keyHealth.recordOk(tenantId);
+                log.info("Status poll tenant {}: Bosta accepts the key again — polling resumes", tenantId);
+            } catch (BostaException e) {
+                if (keyHealth != null) keyHealth.onException(tenantId, e);
+                log.info("Status poll tenant {}: probe — Bosta still refuses the key: {}", tenantId, e.getMessage());
+            }
+        });
     }
 
     private void pollTenant(UUID tenantId, String apiKey) {
@@ -251,9 +309,13 @@ public class BostaStatusPollJob {
                             "WHERE id = ? AND tenant_id = ?", fShipId, tenantId));
                     }
                 } catch (BostaAuthException e) {
-                    // The key, not this delivery: inconclusive, and confirmation pauses for the tenant.
+                    // The key, not this delivery: inconclusive, and confirmation pauses for the tenant. The rest of the
+                    // safety net would be refused the same way (2026-11-15) — stop it for this cycle.
                     if (deletion != null) deletion.recordKeyAuthFailure(tenantId);
-                    log.warn("Status poll tenant {}: Bosta refused the key on {} — {}", tenantId, trackingNumber, e.getMessage());
+                    if (keyHealth != null) keyHealth.recordAuthFailure(tenantId, e.httpStatus());
+                    log.warn("Status poll tenant {}: Bosta refused the key on {} — {}; safety net stops this cycle",
+                        tenantId, trackingNumber, e.getMessage());
+                    return;
                 } catch (BostaRateLimitException e) {
                     // Rate-limited: stop fetching ALL remaining shipments for this tenant
                     // (more calls would extend the blackout window). Record the backoff
@@ -343,11 +405,13 @@ public class BostaStatusPollJob {
                     break;
                 } catch (BostaException e) {
                     if (e instanceof BostaAuthException && deletion != null) deletion.recordKeyAuthFailure(tenantId);
+                    if (keyHealth != null) keyHealth.onException(tenantId, e);
                     log.warn("Status poll tenant {}: search page {} failed — walk stops, mark kept: {}", tenantId, page, e.getMessage());
                     stopped = true;
                     break;
                 }
                 if (pagesRead == 0 && deletion != null) deletion.recordKeyOk(tenantId);   // positive control
+                if (pagesRead == 0 && keyHealth != null) keyHealth.recordOk(tenantId);
                 pagesRead++;
                 if (items.isEmpty()) { endOfList = true; break; }
 

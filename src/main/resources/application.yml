@@ -214,6 +214,9 @@ traced:
     confirm-after-minutes: ${TRACED_MAIN_RECONCILE_CONFIRM_AFTER_MINUTES:10}
     part1-window-days: 30
     queue-batch: 500
+    # 2026-11-15: the webhook queue mark never waits longer than this for a row lock; a timeout is retried later.
+    mark-lock-timeout-ms: ${TRACED_MAIN_RECONCILE_MARK_LOCK_TIMEOUT_MS:2000}
+    mark-retry-base-seconds: 15
     cancelled-fulfillment-window-minutes: ${TRACED_MAIN_RECONCILE_CANCELLED_WINDOW_MINUTES:60}
     store-skip-row-minutes: 60
     retention-days: ${TRACED_MAIN_RECONCILE_RETENTION_DAYS:14}
@@ -389,7 +392,18 @@ bosta:
     page-size: 50
     inter-fetch-delay-ms: 2000  # throttle between per-delivery fetches — increased after 429 incident
     default-lookback-days: 90   # reserved; not used for filtering in v1
+  # V229 (2026-11-15): a key Bosta refuses (401) this many times in a row over at least this many minutes is known
+  # bad — webhooks stored without a fetch, discovery skipped, the status poll probes it every probe-hours.
+  key-health:
+    bad-after-failures: 3
+    bad-after-minutes: 10
+    probe-hours: ${BOSTA_KEY_HEALTH_PROBE_HOURS:6}
   poll:
+    # 2026-11-15: tenants polled at once by discovery and the status poll (the shared rate limiter still paces every
+    # call); 1 = one after the other. Idle discovery tenants (nothing new for idle-hours) are checked every N minutes.
+    tenant-parallelism: ${BOSTA_POLL_TENANT_PARALLELISM:2}
+    discovery-idle-hours: ${BOSTA_POLL_DISCOVERY_IDLE_HOURS:72}
+    discovery-idle-every-minutes: ${BOSTA_POLL_DISCOVERY_IDLE_EVERY_MINUTES:10}
     # Tier 1 — Status poll: fetches every known in-flight shipment by tracking number.
     # Keeps current state without relying on the Bosta list order.
     status-enabled: true
