@@ -4,6 +4,7 @@ import com.traceability.account.AuditService;
 import com.traceability.integrations.shopify.ShopifyDeliveryProfileGateway;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyShippingModelGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
@@ -56,12 +57,15 @@ public class ShopifyFulfillmentActivationService {
     private final ShopifyTokenProvider tokenProvider;
     private final AuditService auditService;
     private final StoreRepository storeRepository;
+    private final ShopifyShippingModelGateway shippingModel;
 
     public ShopifyFulfillmentActivationService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                                 ShopifyDeliveryProfileGateway deliveryProfiles,
                                                 ShopifyTokenProvider tokenProvider,
                                                 AuditService auditService,
-                                                StoreRepository storeRepository) {
+                                                StoreRepository storeRepository,
+                                                ShopifyShippingModelGateway shippingModel) {
+        this.shippingModel    = shippingModel;
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.deliveryProfiles = deliveryProfiles;
@@ -142,6 +146,18 @@ public class ShopifyFulfillmentActivationService {
             }
 
             String token = tokenProvider.getValidToken(ctx.storeId());
+
+            // L1b-1: on a market-driven store the merchant delivery profile is stale — the join would "succeed" and
+            // change nothing live. Refused before any delivery-profile call (an unknown model stays the owner's call:
+            // the readiness rule never shows such a store as shipping anyway).
+            if (shippingModel.read(ctx.shopDomain(), token).orElse(null) == ShopifyShippingModelGateway.Model.MARKET_DRIVEN) {
+                return Attempt.fail(ShopifyFulfillmentActivationException.Code.MARKET_DRIVEN_SHIPPING,
+                    "Your store uses market-driven shipping. Add “Traced Main Warehouse” to your shipping rates in "
+                        + "Shopify: open the location and choose its shipping rates.",
+                    "متجرك يستخدم الشحن حسب الأسواق. أضِف «Traced Main Warehouse» إلى أسعار الشحن في Shopify: "
+                        + "افتح الموقع واختر أسعار الشحن الخاصة به.",
+                    HttpStatus.CONFLICT);
+            }
 
             Optional<ShopifyDeliveryProfileGateway.LocationGroupInfo> found;
             try {

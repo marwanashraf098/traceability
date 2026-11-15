@@ -5,6 +5,7 @@ import { Check, Clock, Info, Store } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
+import ShippingRatesInstruction from '../settings/connections/ShippingRatesInstruction'
 import {
   getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress,
   ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupGovernorate, type SetupStep,
@@ -85,7 +86,7 @@ function ConnectStep({ name }: { name: string | null }) {
 }
 
 /** Flow-1 after the store is connected — read-only, from /connections (no Shopify call). */
-function ConnectedSummary({ name, onContinue }: { name: string | null; onContinue: () => void }) {
+export function ConnectedSummary({ name, onContinue }: { name: string | null; onContinue: () => void }) {
   const { t } = useTranslation()
   const [conn, setConn] = useState<ConnectionsStatus['shopify'] | null>(null)
 
@@ -96,15 +97,22 @@ function ConnectedSummary({ name, onContinue }: { name: string | null; onContinu
   }, [])
 
   const imported = conn?.importStatus === 'completed'
-  const location = conn?.locationState ?? null
+  // L1b-1 — the server's readiness rule (TracedShippingReadiness): "Ready" ONLY on 'ready', never on unknown.
+  const shipping = conn?.tracedMainShipping ?? null
+  const tracedMainValue = !conn ? null
+    : shipping === null || shipping === 'not_linked' ? t('setupGate.connected.settingUp')
+    : shipping === 'ready' ? t('setupGate.connected.ready')
+    : shipping === 'location_inactive' ? t('setupGate.connected.notActive')
+    : shipping === 'add_to_shipping_rates' ? t('setupGate.connected.cantShipYet')
+    : shipping === 'unknown' ? t('setupGate.connected.checking')
+    : t('setupGate.connected.needsAttention')
   const rows: { label: string; value: string | null; testId: string }[] = [
     { label: t('setupGate.connected.products'), testId: 'setup-row-products',
       value: conn ? (imported ? t('setupGate.connected.imported') : t('setupGate.connected.importing')) : null },
     // No count without a Shopify call (O2): the line alone.
     { label: t('setupGate.connected.locations'), value: null, testId: 'setup-row-locations' },
     { label: t('setupGate.connected.tracedMain'), testId: 'setup-row-traced-main',
-      value: location === 'active' ? t('setupGate.connected.ready')
-        : location === null ? (conn ? t('setupGate.connected.settingUp') : null) : t('setupGate.connected.notActive') },
+      value: tracedMainValue },
   ]
 
   return (
@@ -137,6 +145,11 @@ function ConnectedSummary({ name, onContinue }: { name: string | null; onContinu
             </li>
           ))}
         </ul>
+        {shipping === 'add_to_shipping_rates' && (
+          <div className="border border-line rounded-xl px-4 py-3">
+            <ShippingRatesInstruction shopDomain={conn?.shopDomain} locationNumber={conn?.tracedLocationNumber} />
+          </div>
+        )}
         <Button variant="primary" size="lg" className="w-full" onClick={onContinue}>{t('setupGate.connected.continue')}</Button>
       </SetupCard>
     </SetupColumns>

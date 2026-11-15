@@ -736,6 +736,16 @@
       "sold": "Sold (Off-book)"
     }
   },
+  "tracedShipping": {
+    "addRates": {
+      "title": "Traced Main Warehouse can't ship online orders yet",
+      "body": "Your store uses Shopify's market-based shipping, so add “Traced Main Warehouse” to your shipping rates: open the location in Shopify, then its Shipping row (“Select rates”).",
+      "cantConfirm": "Traced can't check this from here yet. Until it's added, Shopify won't ship online orders from this location.",
+      "openLocation": "Open the location in Shopify",
+      "openShipping": "Shipping settings"
+    },
+    "unknown": "Traced couldn't confirm yet that Traced Main Warehouse can ship online orders. It checks again within the hour."
+  },
   "receiving": {
     "title": "Receiving",
     "new": "New Session",
@@ -5438,6 +5448,9 @@
       "ready": "Ready",
       "settingUp": "Setting up…",
       "notActive": "Not active in Shopify",
+      "cantShipYet": "Can't ship yet",
+      "checking": "Checking…",
+      "needsAttention": "Needs attention",
       "continue": "Continue"
     },
     "addressPanel": {

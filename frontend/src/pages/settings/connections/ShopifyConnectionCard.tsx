@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
 import { Badge, Button, Spinner, cn } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
+import ShippingRatesInstruction from './ShippingRatesInstruction'
 import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
@@ -245,11 +246,12 @@ function TurnBackOnItem({ location, onDone }: { location: LocationRow; onDone: (
 }
 
 function FulfillmentActivationItem({
-  shopifyConnected, importStatus, lastSyncAt,
+  shopifyConnected, importStatus, lastSyncAt, shopDomain,
 }: {
   shopifyConnected: boolean
   importStatus: string | null
   lastSyncAt: string | null
+  shopDomain?: string | null
 }) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
@@ -338,8 +340,21 @@ function FulfillmentActivationItem({
   // L1 — a reconnect read found it switched off in Shopify: warn, owner turns it back on (never silent).
   if (tracedLocationNeedsTurnBackOn(location)) return <TurnBackOnItem location={location} onDone={load} />
 
-  // Shared predicate with Overview's prompt card (api.ts) — never a second derivation.
-  const isActivated = !needsFulfillmentActivation(shopifyConnected, location)
+  // L1b-1 — market-driven shipping: no profile join can make it ship; the owner adds it to its rates in Shopify.
+  const readiness = location.shopify_shipping_readiness
+  if (readiness === 'add_to_shipping_rates') {
+    return (
+      <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
+        <ShippingRatesInstruction shopDomain={shopDomain}
+          locationNumber={location.shopify_location_id?.replace(/^.*\//, '') ?? null} />
+      </div>
+    )
+  }
+
+  // L1b-1 — "live" ONLY when the server's readiness rule says 'ready' (never on unknown). The Activate item stays for a
+  // legacy store that was never joined (shared predicate with Overview's prompt card, api.ts).
+  const isActivated = readiness === 'ready'
+  const showActivate = !isActivated && needsFulfillmentActivation(shopifyConnected, location)
   const canActivate  = seedingDone && confirmed && !activating
 
   return (
@@ -355,6 +370,10 @@ function FulfillmentActivationItem({
         >
           <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
           {t('connections.shopify.fulfillmentActivation.live')}
+        </p>
+      ) : !showActivate ? (
+        <p className="text-xs text-muted" data-testid="fulfillment-shipping-unknown">
+          {t('tracedShipping.unknown')}
         </p>
       ) : (
         <div className="space-y-2">
@@ -778,6 +797,7 @@ export default function ShopifyConnectionCard({
             shopifyConnected={shopify.connected}
             importStatus={shopify.importStatus}
             lastSyncAt={shopify.lastSyncAt}
+            shopDomain={shopify.shopDomain}
           />
 
           {uiState === 'connected-ea' && oauthAvailable && (

@@ -4,6 +4,40 @@
 
 ## Current state
 
+**L1b-1 — market-driven shipping: honest "Ready", no stale delivery-profile writes (2026-11-15; branch
+`feat/l1b-shipping-model` off main 5f81986a; V229; NOT merged, NOT deployed).** Found live on testl1location (fresh tenant
+"L1 Location Test", 2026-11-13): the store uses Shopify's MARKET-DRIVEN shipping; L1's General-profile join recorded
+`activated` / audit `joined` (read-back saw it) but changed nothing live — on market-driven shops merchant
+delivery-profile reads are a stale snapshot and writes succeed without updating live settings (Shopify changelog
+2026-07-01). The gate said "Location added · Ready" (it only checked locationState).
+- Decisions (Marawan 2026-11-15): L1b-1 now, no new scopes. L1b-2 (read_markets — confirm Traced Main is in a rate)
+  approved in principle, later, separate. L1b-3 (Traced edits merchant shipping rates) REJECTED. 2026-07 only for the
+  shipping-model read, in its own class; everything else stays on 2026-04.
+- Built: `ShopifyShippingModelGateway` (the ONLY 2026-07 caller: `shop { features { marketDrivenShipping } }`, read
+  only, never throws; `TRACED_SHIPPING_MODEL_READ_ENABLED=false` = kill switch → every store read as legacy = L1). V229
+  `locations.shopify_shipping_model` unknown / legacy / market_driven (+ checked_at). Every delivery-profile call
+  (first-link join, reconnect membership read, Turn back on join) runs ONLY on a confirmed legacy model; the manual
+  Activate fulfillment refuses a market-driven store (409 MARKET_DRIVEN_SHIPPING) before any profile call.
+  `TracedShippingReadiness.SQL` is THE rule (onboarding gate row via /connections `tracedMainShipping`, the card's
+  "live" line via /locations `shopify_shipping_readiness`, the audit): ready only on legacy + active + fulfils online
+  + activated; market-driven → `add_to_shipping_rates` (never ready until L1b-2); unknown → never ready. Owner fallback
+  (EN/AR): "can't ship online orders yet" + "Open the location in Shopify" (…/settings/locations/<id>, whose Shipping
+  row opens "Select rates for Traced Main Warehouse" — verified live by Marawan) + secondary "Shipping settings". The
+  hourly ShopifyLocationCheckJob pass also re-reads model + fulfils online (read only), so stores Shopify moves to
+  market-driven show the instruction within the hour. Legacy stores: L1 unchanged.
+- Audit: `TRACED_LOCATION_SETTINGS_AUDIT_TENANTS` now also logs `shipping_model` (live), `traced_shipping_model`,
+  `traced_readiness`, `wrongly_activated` (market-driven + recorded activated — the stale no-op since 2026-10-01).
+- After deploy: Marawan submits Shopify's market-driven shipping compatibility self-attestation (steps in the L1b-1
+  report). Note: the manual Activate on an UNKNOWN model is still allowed (owner's explicit click); readiness never
+  shows such a store as shipping.
+
+**Receiving move (M1) — decisions recorded for M1 (Marawan 2026-11-15; enforce in M1, see also branch
+`feat/receiving-move` for the approved amendment and S0).** A "Moving from my Shopify location" session may be created
+only when Traced Main's shipping is CONFIRMED: legacy model → `TracedShippingReadiness` = 'ready' (activated with a valid
+read-back); market-driven → 'ships', which needs L1b-2 (read_markets). Until then the option is shown DISABLED with the
+same instruction as the gate ("add Traced Main Warehouse to your shipping rates" + the location link). Moving stock into
+a location Shopify can't ship from would take it off the storefront.
+
 **L1 — Traced Main Warehouse sells online from its first link (2026-11-12/13; branch `feat/l1-traced-location-online`
 off origin/main 2c654317; V228 — V227 went to `fix/exchange-inbound-expected`, merged meanwhile; NOT merged, NOT deployed).**
 Decisions (Marawan 2026-11-12): at FIRST link (created or reused "Traced Main Warehouse") Traced makes sure the location

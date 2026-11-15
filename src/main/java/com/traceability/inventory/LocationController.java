@@ -75,8 +75,10 @@ public class LocationController {
                 "       shopify_delivery_profile_activated_at, shopify_sync_mode, " +
                 "       shopify_delivery_profile_checked_at, " +
                 "       shopify_online_fulfillment_status, shopify_online_fulfillment_error, " +
-                "       shopify_online_fulfillment_checked_at " +
-                "FROM locations WHERE tenant_id = ? ORDER BY name",
+                "       shopify_online_fulfillment_checked_at, " +
+                "       shopify_shipping_model, shopify_shipping_model_checked_at, " +
+                "       CASE WHEN is_fulfillment THEN " + TracedShippingReadiness.SQL + " END AS shopify_shipping_readiness " +
+                "FROM locations l WHERE tenant_id = ? ORDER BY name",
                 TenantContext.require()));
     }
 
