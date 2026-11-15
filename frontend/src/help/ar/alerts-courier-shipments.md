@@ -4,7 +4,7 @@ topic: alerts
 title: تنبيهات شركات الشحن والشحنات
 roles: [owner, manager]
 related: [alerts-overview, connect-bosta, other-couriers, hand-over-parcels]
-alerts: [lost, unmatched_delivery, bosta_discovery_failed, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
+alerts: [lost, unmatched_delivery, bosta_discovery_failed, bosta_key_rejected, fulfillment_link_problem, stuck_shipment, delivery_limbo, ndr_failed, high_attempts, waybill_deleted_in_bosta, unexpected_return, generic_bosta_conflict, generic_multiple_parcels, generic_delivered_without_pickup, missing_awb, missing_provider_id, exchange_needs_mapping, exchange_unmapped_state]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -21,6 +21,10 @@ video:
 ## تعذّر الجلب من بوسطة
 
 رأى Traced شحنة في بوسطة لكنه لم يتمكن من تحميلها بعد عدة محاولات. يختفي التنبيه وحده عندما تصل الشحنة إلى Traced؛ راجعها في بوسطة إذا استمر.
+
+## بوسطة ترفض المفتاح
+
+بوسطة ترفض مفتاح API الذي ربطته، لذلك لا يستطيع Traced قراءة شحناتك على بوسطة. يتوقف Traced عن سؤال بوسطة بهذا المفتاح (ويعيد المحاولة كل بضع ساعات). الصق مفتاح API جديدًا من **الإعدادات › الاتصالات** — يختفي التنبيه وتُستأنف التحديثات فورًا.
 
 ## ربط بوسطة مطلوب
 

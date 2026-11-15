@@ -135,10 +135,31 @@ public class BostaRateLimiter {
         if (PRIORITY_OVERRIDE.get() != null) priority = PRIORITY_OVERRIDE.get();
         long wait = priority == Priority.BACKGROUND ? backgroundMaxWaitMs : maxWaitMs;
         if (MAX_WAIT_OVERRIDE.get() != null) wait = Math.min(wait, MAX_WAIT_OVERRIDE.get());
-        long deadline = System.nanoTime() + wait * 1_000_000L;
-        if (perSecond > 0) bucket(apiKey).acquire(priority, deadline);
-        if (global != null) global.acquire(priority, deadline);
+        long start = System.nanoTime();
+        long deadline = start + wait * 1_000_000L;
+        long[] counts = COUNTS.get();
+        try {
+            if (perSecond > 0) bucket(apiKey).acquire(priority, deadline);
+            if (global != null) global.acquire(priority, deadline);
+        } finally {
+            if (counts != null) { counts[0]++; counts[1] += System.nanoTime() - start; }
+        }
     }
+
+    /**
+     * Observability (2026-11-15): counts this thread's acquires and the time they waited, from {@link #startCounting}
+     * until {@link #stopCounting} — the polls log them per run (Bosta calls and limiter wait). Nothing else reads it.
+     */
+    public static void startCounting() { COUNTS.set(new long[2]); }
+
+    /** {calls, waitNanos} since {@link #startCounting} on this thread ({0, 0} when not counting); stops counting. */
+    public static long[] stopCounting() {
+        long[] c = COUNTS.get();
+        COUNTS.remove();
+        return c == null ? new long[2] : c;
+    }
+
+    private static final ThreadLocal<long[]> COUNTS = new ThreadLocal<>();
 
     /**
      * P4d — would a USER_FACING request with this key get a token within {@code maxWaitMs}? Takes

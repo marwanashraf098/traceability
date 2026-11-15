@@ -53,6 +53,32 @@ public class MainReconcileService {
 
     private static final Logger log = LoggerFactory.getLogger(MainReconcileService.class);
     private static final int EVAL_CHUNK = 1000;
+    /** Variants per write transaction in a run's results phase (2026-11-15: short row-lock holds). */
+    static final int WRITE_BATCH = 200;
+    /** A queued run that found the tenant lock held (sweep / seed / activation): skipped, its variants stay queued. */
+    static final String TENANT_BUSY = "tenant_busy";
+    /** Postgres uuid order (unsigned bytes) = lowercase text order; THE lock order for main_reconcile_variant_state. */
+    static final Comparator<UUID> VARIANT_ORDER = Comparator.comparing(UUID::toString);
+
+    private static final String INSERT_DIFF_SQL =
+        "INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
+        "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
+        "shopify_available, shopify_committed, shopify_damaged, traced_damaged, delta, delta_since, " +
+        "unfulfilled_shipped, unfulfilled_shipped_raw, note, fulfilled_unpicked) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+    private static final String UPSERT_STATE_SQL =
+        "INSERT INTO main_reconcile_variant_state AS s (tenant_id, variant_id, last_checked_at, " +
+        "  last_run_id, last_delta, delta_since, pending_since, pending_touched_at, pending_source) " +
+        "VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ?::timestamptz IS NULL THEN NULL ELSE now() END, ?, " +
+        "        CASE WHEN ?::timestamptz IS NULL THEN NULL ELSE 'recheck' END) " +
+        "ON CONFLICT (tenant_id, variant_id) DO UPDATE SET last_checked_at = EXCLUDED.last_checked_at, " +
+        "  last_run_id = EXCLUDED.last_run_id, last_delta = EXCLUDED.last_delta, delta_since = EXCLUDED.delta_since, " +
+        "  pending_since = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_since " +
+        "                       ELSE COALESCE(s.pending_since, now()) END, " +
+        "  pending_touched_at = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_touched_at " +
+        "                       ELSE LEAST(COALESCE(s.pending_touched_at, EXCLUDED.pending_touched_at), EXCLUDED.pending_touched_at) END, " +
+        "  pending_source = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_source ELSE 'recheck' END";
 
     public record Level(boolean stocked, int onHand, int available, int committed, int damaged) {
         static final Level UNSTOCKED = new Level(false, 0, 0, 0, 0);
@@ -253,17 +279,32 @@ public class MainReconcileService {
     /** The debounced per-variant run: variants queued and untouched for debounce-seconds. Returns the run id or null. */
     public UUID runQueued(UUID tenantId) {
         requireTenant(tenantId);
+        // 2026-11-15 (prod lock waits / pile-up): a queued run never waits behind a sweep, the seed or an activation —
+        // while one of them runs for this tenant it is skipped, its variants stay queued, and the next minute retries.
+        if (tenantBusy(tenantId)) {
+            log.debug("Main reconcile queue tenant={}: a sweep / seed holds the tenant — skipped, variants stay queued", tenantId);
+            return null;
+        }
         List<UUID> due = tx.execute(s -> jdbc.queryForList(
             "SELECT variant_id FROM main_reconcile_variant_state WHERE tenant_id = ? AND pending_since IS NOT NULL " +
             "  AND pending_touched_at < now() - ? * interval '1 second' ORDER BY pending_since LIMIT ?",
             UUID.class, tenantId, debounceSeconds, queueBatch));
         if (due == null || due.isEmpty()) return null;
-        return run(tenantId, "variant", due, null);
+        return run(tenantId, "variant", due, null, true);
     }
 
     public UUID runVariants(UUID tenantId, Collection<UUID> variantIds) {
         requireTenant(tenantId);
-        return run(tenantId, "variant", new ArrayList<>(variantIds), null);
+        return run(tenantId, "variant", new ArrayList<>(variantIds), null, false);
+    }
+
+    /** A sweep of this tenant is running (started in the last 2 h), or the tenant's lock is held right now. */
+    boolean tenantBusy(UUID tenantId) {
+        return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM main_reconcile_runs WHERE tenant_id = ? AND kind = 'sweep' " +
+            "               AND status = 'running' AND started_at > now() - interval '2 hours') " +
+            "    OR NOT pg_try_advisory_xact_lock(hashtext(?)::bigint)",
+            Boolean.class, tenantId, tenantId.toString())));
     }
 
     public UUID runSweep(UUID tenantId) {
@@ -278,7 +319,7 @@ public class MainReconcileService {
     public UUID runSweep(UUID tenantId, int attempt) {
         requireTenant(tenantId);
         if (attempt != 1 && attempt != 2) throw new IllegalArgumentException("sweep attempt must be 1 or 2");
-        return run(tenantId, "sweep", null, attempt);
+        return run(tenantId, "sweep", null, attempt, false);
     }
 
     /** True when this run ended 'failed' (a store-level skip, or no run row at all, is not a failure). */
@@ -335,14 +376,12 @@ public class MainReconcileService {
         String numeric() { return gid == null ? null : gid.replaceAll("^.*/", ""); }
     }
 
-    private UUID run(UUID tenantId, String kind, List<UUID> variantIds, Integer sweepAttempt) {
+    private UUID run(UUID tenantId, String kind, List<UUID> variantIds, Integer sweepAttempt, boolean tryLock) {
         if (!enabled) return null;   // global kill switch: no reads, no writes
         StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store != null && !allowlisted(store.shopDomain())) {
             // Not in the staged rollout: no run row; drop what was queued so the queue job doesn't re-pick it every minute.
-            tx.executeWithoutResult(s -> jdbc.update(
-                "UPDATE main_reconcile_variant_state SET pending_since = NULL, pending_touched_at = NULL, pending_source = NULL " +
-                "WHERE tenant_id = ? AND pending_since IS NOT NULL", tenantId));
+            clearQueue(tenantId, null, tx.execute(s -> jdbc.queryForObject("SELECT now()", Timestamp.class)));
             return null;
         }
         Main main = tx.execute(s -> jdbc.query(
@@ -410,7 +449,8 @@ public class MainReconcileService {
                     MainReconcileRules.SHOPIFY_EXCHANGE_IN_CUSTODY);
             }
             List<MainReconcileWriter.Candidate> candidates =
-                compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write, exchangeHold);
+                compute(tenantId, runId, kind, main, items, levels, readItems, readAt, startedAt, write, exchangeHold, tryLock);
+            if (candidates == null) return runId;   // tenant busy: run skipped, nothing cleared, nothing written
             if (write && !exchangeHold) {
                 // The big-change brake: weighed after the compute committed, before any write.
                 int ownOnHand = 0;
@@ -456,7 +496,7 @@ public class MainReconcileService {
         // A brake-held run is not a store-level skip: it must not hide one.
         return Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM main_reconcile_runs WHERE tenant_id = ? AND status = 'skipped' " +
-            "  AND skip_reason <> '" + MainReconcileBrake.LARGE_CHANGE_HELD + "' " +
+            "  AND skip_reason NOT IN ('" + MainReconcileBrake.LARGE_CHANGE_HELD + "', '" + TENANT_BUSY + "') " +
             "  AND started_at > now() - make_interval(mins => ?))", Boolean.class, tenantId, storeSkipRowMinutes)));
     }
 
@@ -539,15 +579,36 @@ public class MainReconcileService {
         });
     }
 
-    /** Variants queued before this run started are taken off the queue (anything touched since stays queued). */
+    /**
+     * Variants queued before this run started are taken off the queue (anything touched since stays queued).
+     * 2026-11-15: rows are locked in ascending variant_id ({@link #VARIANT_ORDER} — ORDER BY … FOR UPDATE locks after
+     * the sort), CLEAR_BATCH at a time, each batch its own transaction when called outside one — never one long
+     * multi-row UPDATE in heap order (the prod deadlocks against MainReconcileQueue's mark).
+     */
     private void clearQueue(UUID tenantId, List<UUID> variantIds, Timestamp startedAt) {
         if (variantIds == null) {
-            jdbc.update("UPDATE main_reconcile_variant_state SET pending_since = NULL, pending_touched_at = NULL, pending_source = NULL " +
-                        "WHERE tenant_id = ? AND pending_since IS NOT NULL AND pending_touched_at <= ?", tenantId, startedAt);
-        } else if (!variantIds.isEmpty()) {
-            jdbc.update("UPDATE main_reconcile_variant_state SET pending_since = NULL, pending_touched_at = NULL, pending_source = NULL " +
-                        "WHERE tenant_id = ? AND variant_id = ANY(CAST(? AS uuid[])) AND pending_touched_at <= ?",
-                        tenantId, uuidArray(variantIds), startedAt);
+            while (true) {
+                Integer n = tx.execute(st -> jdbc.update(
+                    "WITH c AS (SELECT variant_id FROM main_reconcile_variant_state WHERE tenant_id = ? " +
+                    "             AND pending_since IS NOT NULL AND pending_touched_at <= ? " +
+                    "           ORDER BY variant_id LIMIT ? FOR UPDATE) " +
+                    "UPDATE main_reconcile_variant_state s SET pending_since = NULL, pending_touched_at = NULL, pending_source = NULL " +
+                    "FROM c WHERE s.tenant_id = ? AND s.variant_id = c.variant_id",
+                    tenantId, startedAt, WRITE_BATCH, tenantId));
+                if (n == null || n < WRITE_BATCH) return;
+            }
+        }
+        List<UUID> sorted = new ArrayList<>(variantIds);
+        sorted.sort(VARIANT_ORDER);
+        for (int i = 0; i < sorted.size(); i += WRITE_BATCH) {
+            String arr = uuidArray(sorted.subList(i, Math.min(sorted.size(), i + WRITE_BATCH)));
+            tx.executeWithoutResult(st -> jdbc.update(
+                "WITH c AS (SELECT variant_id FROM main_reconcile_variant_state WHERE tenant_id = ? " +
+                "             AND variant_id = ANY(CAST(? AS uuid[])) AND pending_touched_at <= ? " +
+                "           ORDER BY variant_id FOR UPDATE) " +
+                "UPDATE main_reconcile_variant_state s SET pending_since = NULL, pending_touched_at = NULL, pending_source = NULL " +
+                "FROM c WHERE s.tenant_id = ? AND s.variant_id = c.variant_id",
+                tenantId, arr, startedAt, tenantId));
         }
     }
 
@@ -600,36 +661,66 @@ public class MainReconcileService {
 
     private List<MainReconcileWriter.Candidate> compute(UUID tenantId, UUID runId, String kind, Main main,
                          Map<UUID, String> items, Map<String, Level> levels, Set<String> readItems, Timestamp readAt,
-                         Timestamp startedAt, boolean write, boolean exchangeHold) {
+                         Timestamp startedAt, boolean write, boolean exchangeHold, boolean tryLock) {
         List<MainReconcileWriter.Candidate> candidates = new ArrayList<>();
-        tx.executeWithoutResult(st -> {
-            // The seed's lock (ShopifyInventoryReconcileService.acquireTenantLock): one Main writer/reader at a time.
-            jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", rs -> null, tenantId.toString());
-            preparePart1(tenantId, write);
+        boolean sweep = "sweep".equals(kind);
+        // Lock order (2026-11-15, prod deadlocks vs MainReconcileQueue): every writer of main_reconcile_variant_state
+        // touches its rows in ascending variant_id — Postgres uuid order, i.e. the lowercase text order (Java's
+        // UUID.compareTo is signed and differs).
+        List<UUID> ids = new ArrayList<>(items.keySet());
+        ids.sort(VARIANT_ORDER);
 
-            List<UUID> ids = new ArrayList<>(items.keySet());
-            ObjectNode part1 = part1(tenantId, runId, main, "sweep".equals(kind) ? null : ids, write);
-
-            Map<UUID, State> states = new HashMap<>();
-            for (List<UUID> chunk : chunks(ids)) {
-                jdbc.query("SELECT variant_id, last_delta, delta_since, last_event_at FROM main_reconcile_variant_state " +
-                           "WHERE tenant_id = ? AND variant_id = ANY(CAST(? AS uuid[]))",
-                    rs -> { states.put(rs.getObject(1, UUID.class), new State((Integer) rs.getObject(2),
-                                rs.getTimestamp(3), rs.getTimestamp(4))); },
-                    tenantId, uuidArray(chunk));
+        // Phase A — under the tenant lock, the seed's (ShopifyInventoryReconcileService.acquireTenantLock): Part 1 only.
+        // A queued run only TRIES the lock: held (a sweep / seed / activation) → this run is skipped, nothing cleared.
+        ObjectNode[] part1Holder = new ObjectNode[1];
+        boolean locked = Boolean.TRUE.equals(tx.execute(st -> {
+            if (tryLock) {
+                Boolean got = jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(hashtext(?)::bigint)", Boolean.class,
+                    tenantId.toString());
+                if (!Boolean.TRUE.equals(got)) return false;
+            } else {
+                jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", rs -> null, tenantId.toString());
             }
-            clearQueue(tenantId, "sweep".equals(kind) ? null : ids, startedAt);
+            preparePart1(tenantId, write);
+            part1Holder[0] = part1(tenantId, runId, main, sweep ? null : ids, write);
+            return true;
+        }));
+        if (!locked) {
+            tx.executeWithoutResult(st -> jdbc.update(
+                "UPDATE main_reconcile_runs SET status = 'skipped', skip_reason = ?, finished_at = now() " +
+                "WHERE id = ? AND tenant_id = ? AND status = 'running'", TENANT_BUSY, runId, tenantId));
+            log.info("Main reconcile run {} tenant={}: {} — the tenant lock is held; variants stay queued", runId, tenantId, TENANT_BUSY);
+            return null;
+        }
+        ObjectNode part1 = part1Holder[0];
 
+        // The queue is cleared as before (variants touched before the run started), in its own short ordered transactions.
+        clearQueue(tenantId, sweep ? null : ids, startedAt);
+
+        Map<UUID, State> states = new HashMap<>();
+        for (List<UUID> chunk : chunks(ids)) {
+            tx.executeWithoutResult(st -> jdbc.query(
+                "SELECT variant_id, last_delta, delta_since, last_event_at FROM main_reconcile_variant_state " +
+                "WHERE tenant_id = ? AND variant_id = ANY(CAST(? AS uuid[]))",
+                rs -> { states.put(rs.getObject(1, UUID.class), new State((Integer) rs.getObject(2),
+                            rs.getTimestamp(3), rs.getTimestamp(4))); },
+                tenantId, uuidArray(chunk)));
+        }
+
+        // Phase B — the evaluation: read-only, one short transaction per chunk, no lock held. Results kept in memory.
+        Map<UUID, Object[]> diffRows = new HashMap<>();
+        Map<UUID, Object[]> stateRows = new HashMap<>();
+        {
             int checked = 0, inSync = 0, skipped = 0, differences = 0, confirmed = 0, up = 0, down = 0, damagedMismatch = 0;
             Map<String, Integer> byReason = new TreeMap<>();
             long confirmMillis = confirmAfterMinutes * 60_000L;
 
             for (List<UUID> chunk : chunks(ids)) {
-                List<Map<String, Object>> rows = named.queryForList(MainReconcileRules.EVALUATE_SQL,
+                List<Map<String, Object>> rows = tx.execute(st -> named.queryForList(MainReconcileRules.EVALUATE_SQL,
                     new MapSqlParameterSource("t", tenantId).addValue("main", main.id()).addValue("mainGid", main.gid())
                         .addValue("mainNum", main.numeric()).addValue("ids", uuidArray(chunk))
                         .addValue("cancelWindowMinutes", cancelledFulfillmentWindowMinutes)
-                        .addValue("settle", write && !exchangeHold).addValue("holdMinutes", ambiguousHoldMinutes));
+                        .addValue("settle", write && !exchangeHold).addValue("holdMinutes", ambiguousHoldMinutes)));
                 for (Map<String, Object> r : rows) {
                     checked++;
                     UUID variantId = (UUID) r.get("variant_id");
@@ -707,41 +798,42 @@ public class MainReconcileService {
                     }
 
                     if (status != null) {
-                        jdbc.update("INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
-                            "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
-                            "shopify_available, shopify_committed, shopify_damaged, traced_damaged, delta, delta_since, " +
-                            "unfulfilled_shipped, unfulfilled_shipped_raw, note, fulfilled_unpicked) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            tenantId, runId, variantId, status, skip, custody, away, fulfilled, owed, target, onHand,
+                        diffRows.put(variantId, new Object[]{tenantId, runId, variantId, status, skip, custody, away, fulfilled, owed, target, onHand,
                             lv == null || onHand == null ? null : lv.available(), lv == null || onHand == null ? null : lv.committed(),
                             lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince,
-                            unfulfilled, unfulfilledRaw, note, unpicked);
+                            unfulfilled, unfulfilledRaw, note, unpicked});
                     }
                     Integer keepDelta = skip != null ? null : delta;
-                    jdbc.update("INSERT INTO main_reconcile_variant_state AS s (tenant_id, variant_id, last_checked_at, " +
-                        "  last_run_id, last_delta, delta_since, pending_since, pending_touched_at, pending_source) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ?::timestamptz IS NULL THEN NULL ELSE now() END, ?, " +
-                        "        CASE WHEN ?::timestamptz IS NULL THEN NULL ELSE 'recheck' END) " +
-                        "ON CONFLICT (tenant_id, variant_id) DO UPDATE SET last_checked_at = EXCLUDED.last_checked_at, " +
-                        "  last_run_id = EXCLUDED.last_run_id, last_delta = EXCLUDED.last_delta, delta_since = EXCLUDED.delta_since, " +
-                        "  pending_since = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_since " +
-                        "                       ELSE COALESCE(s.pending_since, now()) END, " +
-                        "  pending_touched_at = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_touched_at " +
-                        "                       ELSE LEAST(COALESCE(s.pending_touched_at, EXCLUDED.pending_touched_at), EXCLUDED.pending_touched_at) END, " +
-                        "  pending_source = CASE WHEN EXCLUDED.pending_touched_at IS NULL THEN s.pending_source ELSE 'recheck' END",
-                        tenantId, variantId, readAt, runId, keepDelta, deltaSince, recheckAt, recheckAt, recheckAt);
+                    stateRows.put(variantId, new Object[]{tenantId, variantId, readAt, runId, keepDelta, deltaSince,
+                        recheckAt, recheckAt, recheckAt});
                 }
+            }
+
+            // Phase C — the results, WRITE_BATCH variants per transaction, ascending variant_id (the lock order).
+            List<UUID> written = new ArrayList<>(stateRows.keySet());
+            written.sort(VARIANT_ORDER);
+            for (int i = 0; i < written.size(); i += WRITE_BATCH) {
+                List<UUID> batch = written.subList(i, Math.min(written.size(), i + WRITE_BATCH));
+                tx.executeWithoutResult(st -> {
+                    for (UUID v : batch) {
+                        Object[] d = diffRows.get(v);
+                        if (d != null) jdbc.update(INSERT_DIFF_SQL, d);
+                        jdbc.update(UPSERT_STATE_SQL, stateRows.get(v));
+                    }
+                });
             }
 
             ObjectNode reasons = mapper.createObjectNode();
             byReason.forEach(reasons::put);
-            jdbc.update("UPDATE main_reconcile_runs SET status = 'completed', shopify_read_at = ?, finished_at = now(), " +
+            final int fChecked = checked, fInSync = inSync, fSkipped = skipped, fDiff = differences, fConf = confirmed,
+                fUp = up, fDown = down, fDmg = damagedMismatch;
+            tx.executeWithoutResult(st -> jdbc.update("UPDATE main_reconcile_runs SET status = 'completed', shopify_read_at = ?, finished_at = now(), " +
                 "variants_checked = ?, variants_in_sync = ?, variants_skipped = ?, differences = ?, confirmed = ?, " +
                 "confirmed_units_up = ?, confirmed_units_down = ?, damaged_mismatches = ?, skipped_by_reason = ?::jsonb, " +
                 "part1_summary = ?::jsonb WHERE id = ? AND tenant_id = ?",
-                readAt, checked, inSync, skipped, differences, confirmed, up, down, damagedMismatch,
-                reasons.toString(), part1.toString(), runId, tenantId);
-        });
+                readAt, fChecked, fInSync, fSkipped, fDiff, fConf, fUp, fDown, fDmg,
+                reasons.toString(), part1.toString(), runId, tenantId));
+        }
         return candidates;
     }
 

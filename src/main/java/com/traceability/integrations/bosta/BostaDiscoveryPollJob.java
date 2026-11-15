@@ -85,10 +85,20 @@ public class BostaDiscoveryPollJob {
 
     private static final Logger log = LoggerFactory.getLogger(BostaDiscoveryPollJob.class);
 
+    /**
+     * 2026-11-15: a tenant whose key Bosta refuses (V229, BostaKeyHealth) is left out — the status poll probes it.
+     * {@code idle}: nothing new created in Bosta for discovery-idle-hours (its mark is that old) and no retry row due —
+     * checked every discovery-idle-every-minutes instead of every run.
+     */
     private static final String ACTIVE_BOSTA_TENANTS =
-        "SELECT ca.tenant_id, ca.api_key_encrypted " +
+        "SELECT ca.tenant_id, ca.api_key_encrypted, " +
+        "       (ca.discovery_mark_at IS NOT NULL AND ca.discovery_walk_page IS NULL " +
+        "        AND ca.discovery_mark_at < now() - make_interval(hours => ?) " +
+        "        AND NOT EXISTS (SELECT 1 FROM bosta_discovery_failures f WHERE f.tenant_id = ca.tenant_id " +
+        "                          AND f.retries_stopped_at IS NULL)) AS idle " +
         "FROM courier_accounts ca " +
-        "WHERE ca.provider = 'bosta' AND ca.status = 'active'";
+        "WHERE ca.provider = 'bosta' AND ca.status = 'active' AND NOT " + BostaKeyHealth.knownBadSql("ca") + " " +
+        "ORDER BY ca.tenant_id";
 
 
     /** Newest created first — proven by BostaSearchProbe (page 2 continues exactly after page 1). */
@@ -111,6 +121,30 @@ public class BostaDiscoveryPollJob {
     private final int                  slowRetryMinutes;
     private final int                  retryCapHours;
     private int                        leaseMinutes = 15;
+    private int                        parallelism = 2;
+    private int                        idleHours = 72;
+    private int                        idleEveryMinutes = 10;
+    private BostaKeyHealth             keyHealth;
+    /** Idle tenants: when each was last discovered (in memory; a restart just checks them once more). */
+    private final java.util.Map<UUID, Long> idleLastRunMs = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Tenants whose last run (in this JVM) enqueued a new delivery — never idle on their next run. */
+    private final Set<UUID> foundNewLastRun = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Tenants processed at once (BostaTenantFanOut); 1 = one after the other, as before 2026-11-15. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setParallelism(@Value("${bosta.poll.tenant-parallelism:2}") int parallelism) {
+        this.parallelism = Math.max(1, parallelism);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setIdle(@Value("${bosta.poll.discovery-idle-hours:72}") int idleHours,
+                        @Value("${bosta.poll.discovery-idle-every-minutes:10}") int idleEveryMinutes) {
+        this.idleHours = idleHours;
+        this.idleEveryMinutes = idleEveryMinutes;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKeyHealth(BostaKeyHealth keyHealth) { this.keyHealth = keyHealth; }
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setLeaseMinutes(@Value("${bosta.poll.discovery-lease-minutes:15}") int leaseMinutes) {
@@ -169,13 +203,28 @@ public class BostaDiscoveryPollJob {
             return;
         }
 
-        List<Map<String, Object>> accounts = ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS);
+        long started = System.currentTimeMillis();
+        List<Map<String, Object>> accounts = ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS, idleHours);
         if (accounts.isEmpty()) {
             log.debug("Discovery poll: no active Bosta accounts");
             return;
         }
 
+        List<Map<String, Object>> due = new ArrayList<>();
+        int idleSkipped = 0;
         for (Map<String, Object> row : accounts) {
+            UUID tenantId = (UUID) row.get("tenant_id");
+            if (Boolean.TRUE.equals(row.get("idle")) && !foundNewLastRun.contains(tenantId)) {
+                Long last = idleLastRunMs.get(tenantId);
+                if (last != null && started - last < idleEveryMinutes * 60_000L) { idleSkipped++; continue; }
+                idleLastRunMs.put(tenantId, started);
+            } else {
+                idleLastRunMs.remove(tenantId);
+            }
+            due.add(row);
+        }
+
+        long[] stats = BostaTenantFanOut.forEach(due, parallelism, "bosta-discovery", row -> {
             UUID tenantId        = (UUID) row.get("tenant_id");
             String encryptedKey  = (String) row.get("api_key_encrypted");
             try {
@@ -184,7 +233,10 @@ public class BostaDiscoveryPollJob {
             } catch (Exception e) {
                 log.warn("Discovery poll failed for tenant {}: {}", tenantId, e.getMessage());
             }
-        }
+        });
+        log.info("Discovery poll run: {} tenant(s) in {} ms ({} idle skipped this run; parallelism {}); {} Bosta call(s), " +
+            "{} ms waiting on the rate limiter", due.size(), System.currentTimeMillis() - started, idleSkipped,
+            parallelism, stats[0], stats[1]);
     }
 
     /**
@@ -276,11 +328,13 @@ public class BostaDiscoveryPollJob {
                     rateLimited = true;
                     break;
                 } catch (BostaException e) {
+                    if (keyHealth != null) keyHealth.onException(tenantId, e);
                     log.warn("Discovery poll tenant {}: search page {} failed — stopping, mark kept: {}",
                         tenantId, page, e.getMessage());
                     transientError = true;
                     break;
                 }
+                if (pagesRead == 0 && keyHealth != null) keyHealth.recordOk(tenantId);
                 pagesRead++;
                 if (items.isEmpty()) { endOfList = true; break; }
 
@@ -365,6 +419,7 @@ public class BostaDiscoveryPollJob {
                 saveState(tenantId, state.markAt(), state.walkPage(), state.walkNewestAt());   // persist the seed
             }
 
+            if (enqueued > 0) foundNewLastRun.add(tenantId); else foundNewLastRun.remove(tenantId);
             if (enqueued > 0) {
                 log.info("Discovery poll tenant {}: {} page(s), {} seen, {} new deliveries enqueued",
                     tenantId, pagesRead, total, enqueued);

@@ -62,6 +62,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   never_received:     { en: 'Never Received',   ar: 'لم يُستلم' },
   unmatched_delivery: { en: 'Unmatched',        ar: 'غير مرتبط' },
   bosta_discovery_failed: { en: 'Bosta Fetch Failed', ar: 'تعذّر الجلب من بوسطة' },
+  bosta_key_rejected: { en: 'Bosta Key Refused', ar: 'بوسطة ترفض المفتاح' },
   fulfillment_link_problem: { en: 'Bosta Link Needed', ar: 'ربط بوسطة مطلوب' },
   blocked_customer:   { en: 'On Hold',          ar: 'معلَّق' },
   stuck_shipment:     { en: 'Stuck',            ar: 'متوقف' },
