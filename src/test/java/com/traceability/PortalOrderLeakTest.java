@@ -577,6 +577,15 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/ops/shopify-shadows/backfill",  skip(R_OPS));   // S3b one-off, per tenant, under that tenant
         reg("POST /api/v1/admin/incidents/2212102474-pick-error/reverse", skip("one fixed incident order by number — reads merchant_orders"));
         reg("GET /api/v1/test/probe",                    skip("test-only probe controller (src/test/java)"));
+        // Bazar POS B1 — events, their linked transfer and per-event prices; no order is read or written.
+        for (String k : List.of(
+                "GET /api/v1/bazar-events", "POST /api/v1/bazar-events", "GET /api/v1/bazar-events/{eventId}",
+                "POST /api/v1/bazar-events/{eventId}/scan-out", "POST /api/v1/bazar-events/{eventId}/mark-sent",
+                "POST /api/v1/bazar-events/{eventId}/start", "GET /api/v1/bazar-events/{eventId}/prices",
+                "PUT /api/v1/bazar-events/{eventId}/bulk-rule", "PUT /api/v1/bazar-events/{eventId}/prices/{variantId}",
+                "DELETE /api/v1/bazar-events/{eventId}/prices/{variantId}/override")) {
+            reg(k, skip("Bazar POS B1 — bazar events, their transfer and prices; touches no orders"));
+        }
     }
 
     // ── per-tenant fixture ────────────────────────────────────────────────────

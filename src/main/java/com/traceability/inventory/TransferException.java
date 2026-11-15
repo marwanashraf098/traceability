@@ -34,7 +34,9 @@ public class TransferException extends RuntimeException {
         TRANSFER_SOURCE_NOT_FOUND,
         TRANSFER_SOURCE_IS_FULFILLMENT,
         TRANSFER_SOURCE_EQUALS_DESTINATION,
-        TRANSFER_RETURN_DESTINATION_NOT_FULFILLMENT
+        TRANSFER_RETURN_DESTINATION_NOT_FULFILLMENT,
+        /** Bazar POS B1: a generic Transfers action on a bazar event's linked transfer. */
+        BAZAR_TRANSFER_LOCKED
     }
 
     private final Code       code;

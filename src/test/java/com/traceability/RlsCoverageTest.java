@@ -256,7 +256,12 @@ class RlsCoverageTest {
             "/api/v1/inventory/movements",
             // Q1 phone as scanner, per station — phoneScannerPairing_returnsOwnPairing below
             "/api/v1/station/pairings/current",
-            "/api/v1/scan-pair/status"
+            "/api/v1/scan-pair/status",
+            // Bazar POS B1 — bazarEvents_listDetailPrices_reflectSeededEvent below (TenantContext + RLS);
+            // app_user isolation with a same-tenant positive control in BazarEventServiceTest.
+            "/api/v1/bazar-events",
+            "/api/v1/bazar-events/{eventId}",
+            "/api/v1/bazar-events/{eventId}/prices"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -3499,6 +3504,44 @@ class RlsCoverageTest {
             assertThat((Map<String, Object>) theirs.getBody().get("stages")).as("other tenant's leg is never counted").containsEntry("all", 0);
         } finally {
             cleanReturnCaseLegs(seeded);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void bazarEvents_listDetailPrices_reflectSeededEvent() {
+        jdbc.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenantId);
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(ownerToken);
+        h.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<Map> created = rest.exchange(base() + "/api/v1/bazar-events", HttpMethod.POST,
+            new HttpEntity<>(Map.of("name", "CVG Bazar", "startsOn", "2026-12-01", "endsOn", "2026-12-02",
+                "locationName", "CVG Bazar Hall"), h), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        UUID eventId = UUID.fromString((String) created.getBody().get("id"));
+        UUID transferId = UUID.fromString((String) created.getBody().get("transfer_id"));
+        UUID hallId = UUID.fromString((String) created.getBody().get("location_id"));
+        jdbc.update("INSERT INTO bazar_event_prices (tenant_id, event_id, variant_id, price, source) " +
+                    "VALUES (?, ?, ?, 100, 'override')", tenantId, eventId, variantId);
+        try {
+            ResponseEntity<List> list = get("/api/v1/bazar-events", List.class);
+            assertThat(list.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat((List<Map<String, Object>>) list.getBody())
+                .anyMatch(e -> eventId.toString().equals(e.get("id")));
+
+            ResponseEntity<Map> detail = get("/api/v1/bazar-events/" + eventId, Map.class);
+            assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(detail.getBody().get("name")).isEqualTo("CVG Bazar");
+
+            ResponseEntity<List> prices = get("/api/v1/bazar-events/" + eventId + "/prices", List.class);
+            assertThat(prices.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(prices.getBody()).hasSize(1);
+        } finally {
+            jdbc.update("DELETE FROM bazar_event_prices WHERE event_id = ?", eventId);
+            jdbc.update("DELETE FROM bazar_events WHERE id = ?", eventId);
+            jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
+            jdbc.update("DELETE FROM locations WHERE id = ?", hallId);
+            jdbc.update("UPDATE tenants SET bazar_enabled = false WHERE id = ?", tenantId);
         }
     }
 

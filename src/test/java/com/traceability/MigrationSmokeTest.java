@@ -81,7 +81,9 @@ class MigrationSmokeTest {
             "portal_fee_rules",
             "portal_fee_area_overrides",
             "return_request_amounts",
-            "user_ui_state"
+            "user_ui_state",
+            "bazar_events",
+            "bazar_event_prices"
     );
 
     @Test
@@ -99,8 +101,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V230 must execute (V38 was never used — 229 files, not 230)")
-                .isEqualTo(229);
+                .as("all migrations V1–V231 must execute (V38 was never used — 230 files, not 231)")
+                .isEqualTo(230);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),
