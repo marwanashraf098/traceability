@@ -146,7 +146,15 @@ public class InventoryLedger {
         // refuses any sold piece whose sale was not a Lookup sold_offline (a transfer's off-book sale,
         // out_on_transfer:sold, has no way back). The Shopify side is decided by PieceShopifyRules.
         "available:sold",
-        "sold:available"
+        "sold:available",
+
+        // Bazar POS B2 (approved by Marawan 2026-11-16): undo a bazar sale. The sale itself is the
+        // existing out_on_transfer:sold edge (event bazar_sold); sold:out_on_transfer (event
+        // bazar_sale_undone) is legal ONLY through BazarSaleService.undo(), which reopens the piece's
+        // transfer_pieces row on the event's transfer in the same transaction and refuses any piece
+        // whose live sale isn't a bazar sale. BazarSaleGuardTest keeps the edge's callers and both
+        // event literals inside BazarSaleService. No Shopify write.
+        "sold:out_on_transfer"
     );
 
     // ---- SQL ---------------------------------------------------------------

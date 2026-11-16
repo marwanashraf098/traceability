@@ -348,7 +348,7 @@ public class BazarService {
             "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId));
         out.put("payment_methods", toList(out.get("payment_methods")));
         out.put("seller_roles", toList(out.get("seller_roles")));
-        // Counts from the transfer's pieces (sold stays 0 until B2 records bazar sales per piece).
+        // Counts from the transfer's pieces (sold = pieces sold at the bazar, B2 — transfer_pieces outcome 'sold').
         Map<String, Object> c = jdbc.queryForMap(
             "SELECT COUNT(*) AS sent, " +
             "       COUNT(*) FILTER (WHERE outcome IS NULL) AS at_bazar, " +
@@ -361,6 +361,10 @@ public class BazarService {
             counts.put(k, ((Number) c.get(k)).intValue());
         }
         out.put("counts", counts);
+        // B2: today's (Africa/Cairo) takings by payment method.
+        @SuppressWarnings("unchecked")
+        List<String> methods = (List<String>) out.get("payment_methods");
+        out.put("today", BazarSaleService.today(jdbc, tenantId, eventId, methods));
         return out;
     }
 
