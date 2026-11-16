@@ -3010,7 +3010,7 @@ export interface LocationRow {
   shopify_shipping_model?: 'unknown' | 'legacy' | 'market_driven'
   /** L1b-1 — THE readiness rule (TracedShippingReadiness.SQL), on the is_fulfillment row only. */
   shopify_shipping_readiness?: TracedShippingReadiness | null
-  /** L1b-2 (V232) — market-driven: what Traced READ from the primary market's rates. null = no verdict / never read. */
+  /** L1b-2 (V233) — market-driven: what Traced READ from the primary market's rates. null = no verdict / never read. */
   shopify_market_shipping_status?: 'covered' | 'not_covered' | 'no_access' | null
   shopify_market_shipping_checked_at?: string | null
   shopify_market_shipping_covered_by?: string | null
