@@ -3,10 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ScanLine } from 'lucide-react'
 import { currentUserId, managesBazar } from '../../../bazar/api'
-import { formatMoney, summarize } from '../../../bazar/format'
+import { formatMoney } from '../../../bazar/format'
 import { Spinner } from '../../../components/ui'
 import {
-  ComingSoonSheet, LivePill, NotLiveScreen, PhoneBrandRow, PhoneFrame, restOfTracedPath, useBazarLive, useTodaySales,
+  ComingSoonSheet, LivePill, NotLiveScreen, PhoneBrandRow, PhoneFrame, restOfTracedPath, useBazarLive, useBazarToday,
 } from './shared'
 import type { BazarLive } from '../../../capabilities'
 
@@ -21,15 +21,13 @@ export default function BazarPhoneHome() {
 function Home({ live }: { live: BazarLive }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { sales } = useTodaySales(live.eventId, live.businessDay)
+  const { today } = useBazarToday(live.eventId)
   const [soon, setSoon] = useState<string | null>(null)
   const manager = managesBazar()
   const me = currentUserId()
-  const sum = sales ? summarize(sales) : null
-
-  const sellers = sum?.sellers.map(s => (s.id === me
-    ? t('bazar.phone.sellerYou', { count: s.count })
-    : t('bazar.phone.sellerCount', { name: s.name, count: s.count }))) ?? []
+  const sellers = today?.per_seller.map(s => (s.seller_id === me
+    ? t('bazar.phone.sellerYou', { count: s.sale_count })
+    : t('bazar.phone.sellerCount', { name: s.seller_name, count: s.sale_count }))) ?? []
 
   const secondary = 'h-[52px] rounded-xl border border-line bg-surface font-semibold text-primary flex items-center justify-center'
 
@@ -53,13 +51,13 @@ function Home({ live }: { live: BazarLive }) {
       <section className="card p-3.5 flex flex-col gap-2" data-testid="bazar-today">
         <div className="flex items-baseline justify-between gap-2">
           <span className="font-semibold text-primary">{t('bazar.phone.today')}</span>
-          {sum
-            ? <span className="text-h4 font-bold text-primary tabular-nums" data-testid="bazar-today-total">{formatMoney(sum.total)}</span>
+          {today
+            ? <span className="text-h4 font-bold text-primary tabular-nums" data-testid="bazar-today-total">{formatMoney(today.total)}</span>
             : <Spinner size={18} />}
         </div>
-        {sum && (
+        {today && (
           <span className="text-small text-muted">
-            {[t('bazar.phone.pieces', { count: sum.count }), ...sellers].join(' · ')}
+            {[t('bazar.phone.pieces', { count: today.sale_count }), ...sellers].join(' · ')}
           </span>
         )}
       </section>

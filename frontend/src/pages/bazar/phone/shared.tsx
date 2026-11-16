@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { loadCapabilities, type BazarLive } from '../../../capabilities'
 import { getRoleFromToken } from '../../../api'
-import { listBazarSalesOfDay, type BazarSale } from '../../../bazar/api'
+import { getBazarToday, listRecentBazarSales, type BazarSale, type BazarTodaySummary } from '../../../bazar/api'
 import { Button, Spinner, cn } from '../../../components/ui'
 import { Logo } from '../../../components/Logo'
 import { liveLabel } from '../../../bazar/format'
@@ -23,12 +23,12 @@ export function useBazarLive(eventId: string | undefined): { loading: boolean; l
   return state
 }
 
-/** Today's sales of the event (newest first), reloaded on demand and every 30 s (other sellers' sales). */
+/** The newest sales of today (one page), reloaded on demand and every 30 s (other sellers' sales). */
 export function useTodaySales(eventId: string, businessDay: string) {
   const [sales, setSales] = useState<BazarSale[] | null>(null)
   const [failed, setFailed] = useState(false)
   const reload = useCallback(() => {
-    return listBazarSalesOfDay(eventId, businessDay)
+    return listRecentBazarSales(eventId, businessDay)
       .then(s => { setSales(s); setFailed(false) })
       .catch(() => setFailed(true))
   }, [eventId, businessDay])
@@ -38,6 +38,20 @@ export function useTodaySales(eventId: string, businessDay: string) {
     return () => window.clearInterval(id)
   }, [reload])
   return { sales, failed, reload, setSales }
+}
+
+/** Today's numbers (GET /today — the server's totals), reloaded on demand and every 30 s. */
+export function useBazarToday(eventId: string) {
+  const [today, setToday] = useState<BazarTodaySummary | null>(null)
+  const reload = useCallback(() => {
+    return getBazarToday(eventId).then(setToday).catch(() => {})
+  }, [eventId])
+  useEffect(() => {
+    reload()
+    const id = window.setInterval(reload, 30_000)
+    return () => window.clearInterval(id)
+  }, [reload])
+  return { today, reload }
 }
 
 /** Where "the rest of Traced" is for this role (never "/" — that would bring the phone straight back here). */

@@ -6,10 +6,10 @@ import { useScanner, MAX_QUEUED_SCANS } from '../../../hooks/useScanner'
 import CameraReader, { type CameraError } from '../../scanpair/CameraReader'
 import { BazarError, defaultMethod, orderedMethods, undoBazarSale, type BazarSale } from '../../../bazar/api'
 import { sellTiming, useQuickSell, type SellCard } from '../../../bazar/useQuickSell'
-import { formatMoney, pieceTitle, saleTime, sellErrorText, summarize } from '../../../bazar/format'
+import { formatMoney, pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
 import { cn } from '../../../components/ui'
 import type { BazarLive } from '../../../capabilities'
-import { NotLiveScreen, PhoneFrame, useBazarLive, useTodaySales } from './shared'
+import { NotLiveScreen, PhoneFrame, useBazarLive, useBazarToday, useTodaySales } from './shared'
 import {
   CustomerSheet, ErrorLine, MethodChips, SaleSheet, canEditSale, canUndoSale, usePaymentChange,
 } from './SaleSheets'
@@ -32,6 +32,7 @@ function Sell({ live }: { live: BazarLive }) {
   const methods = useMemo(() => orderedMethods(live.paymentMethods), [live.paymentMethods])
   const method = defaultMethod(live.paymentMethods)
   const { sales, setSales, reload } = useTodaySales(eventId, live.businessDay)
+  const { today, reload: reloadToday } = useBazarToday(eventId)
 
   const upsert = useCallback((s: BazarSale) => {
     setSales(prev => {
@@ -40,14 +41,15 @@ function Sell({ live }: { live: BazarLive }) {
     })
   }, [setSales])
 
-  const quick = useQuickSell({ eventId, method, onSold: s => { upsert(s); reload() } })
+  const quick = useQuickSell({ eventId, method, onSold: s => { upsert(s); reload(); reloadToday() } })
   const [sheet, setSheet] = useState<{ kind: 'sale' | 'customer'; sale: BazarSale } | null>(null)
   const [typing, setTyping] = useState(false)
   const [cameraOn, setCameraOn] = useState(true)
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
   const [dropped, setDropped] = useState<string | null>(null)
 
-  const changed = useCallback((s: BazarSale) => { upsert(s); quick.updateSale(s) }, [upsert, quick])
+  const changed = useCallback((s: BazarSale) => { upsert(s); quick.updateSale(s); reloadToday() },
+    [upsert, quick, reloadToday])
 
   const scanner = useScanner({
     onScan: quick.sell,
@@ -79,7 +81,6 @@ function Sell({ live }: { live: BazarLive }) {
   }, [submit])
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
 
-  const sum = sales ? summarize(sales) : null
   const recent = (sales ?? []).slice(0, 20)
   const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
 
@@ -99,10 +100,10 @@ function Sell({ live }: { live: BazarLive }) {
               data-testid="bazar-sell-footer">
         <span className="flex flex-col">
           <span className="text-small text-muted">{t('bazar.phone.today')}</span>
-          <span className="text-body-lg font-bold text-primary tabular-nums">{sum ? formatMoney(sum.total) : '…'}</span>
+          <span className="text-body-lg font-bold text-primary tabular-nums">{today ? formatMoney(today.total) : '…'}</span>
         </span>
         <span className="text-small text-muted text-end">
-          {sum ? t('bazar.sell.salesCount', { count: sum.count }) : ''}
+          {today ? t('bazar.sell.salesCount', { count: today.sale_count }) : ''}
           <br />{t('bazar.sell.defaultPay', { method: t(`bazar.method.${method}`) })}
         </span>
       </footer>

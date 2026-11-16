@@ -597,6 +597,8 @@ class ShadowOrderLeakTest {
                 "GET /api/v1/bazar-events/{eventId}/sales")) {
             reg(k, skip("Bazar POS B2 — bazar sales and payments; touches no orders"));
         }
+        reg("GET /api/v1/bazar-events/{eventId}/today",
+            skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
     }
 
     // ── shadow classification (on top of the shared registry) ─────────────────

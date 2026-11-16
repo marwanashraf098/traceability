@@ -264,7 +264,10 @@ class RlsCoverageTest {
             "/api/v1/bazar-events/{eventId}/prices",
             // Bazar POS B2 — bazarSales_list_reflectsSeededSale below; app_user isolation with a same-tenant
             // positive control in BazarSaleServiceTest.
-            "/api/v1/bazar-events/{eventId}/sales"
+            "/api/v1/bazar-events/{eventId}/sales",
+            // Bazar POS B6 — bazarToday_reflectsSeededSale below; seller-role / tenant checks in
+            // BazarTodayCustomerHttpTest.
+            "/api/v1/bazar-events/{eventId}/today"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -3587,6 +3590,55 @@ class RlsCoverageTest {
             assertThat(items).hasSize(1);
             assertThat(items.get(0).get("id")).isEqualTo(saleId.toString());
             assertThat(items.get(0).get("method")).isEqualTo("cash");
+        } finally {
+            jdbc.update("DELETE FROM bazar_payments WHERE sale_id = ?", saleId);
+            jdbc.update("DELETE FROM bazar_sales WHERE id = ?", saleId);
+            jdbc.update("DELETE FROM transfer_pieces WHERE id = ?", tpId);
+            jdbc.update("DELETE FROM transfer_lines WHERE id = ?", lineId);
+            jdbc.update("DELETE FROM piece_events WHERE piece_id = ?", pieceId);
+            jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
+            jdbc.update("DELETE FROM bazar_events WHERE id = ?", eventId);
+            jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
+            jdbc.update("DELETE FROM locations WHERE id = ?", hallId);
+            jdbc.update("UPDATE tenants SET bazar_enabled = false WHERE id = ?", tenantId);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void bazarToday_reflectsSeededSale() {
+        jdbc.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenantId);
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(ownerToken);
+        h.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<Map> created = rest.exchange(base() + "/api/v1/bazar-events", HttpMethod.POST,
+            new HttpEntity<>(Map.of("name", "CVG Today Bazar", "startsOn", "2026-12-01", "endsOn", "2026-12-02",
+                "locationName", "CVG Today Hall"), h), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        UUID eventId = UUID.fromString((String) created.getBody().get("id"));
+        UUID transferId = UUID.fromString((String) created.getBody().get("transfer_id"));
+        UUID hallId = UUID.fromString((String) created.getBody().get("location_id"));
+        String pieceId = com.traceability.inventory.UlidGenerator.generate();
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'sold', ?)",
+            pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, hallId);
+        UUID lineId = jdbc.queryForObject("INSERT INTO transfer_lines (tenant_id, transfer_id, variant_id, qty_out, qty_sold) " +
+            "VALUES (?, ?, ?, 1, 1) RETURNING id", UUID.class, tenantId, transferId, variantId);
+        UUID tpId = jdbc.queryForObject("INSERT INTO transfer_pieces (tenant_id, transfer_id, line_id, piece_id, outcome) " +
+            "VALUES (?, ?, ?, ?, 'sold') RETURNING id", UUID.class, tenantId, transferId, lineId, pieceId);
+        UUID saleId = jdbc.queryForObject("INSERT INTO bazar_sales (tenant_id, event_id, transfer_piece_id, piece_id, " +
+            "variant_id, price, price_source, sale_number, sold_by, business_day, client_request_id) " +
+            "VALUES (?, ?, ?, ?, ?, 100, 'override', 900002, ?, (now() AT TIME ZONE 'Africa/Cairo')::date, 'cvg-today-1') RETURNING id",
+            UUID.class, tenantId, eventId, tpId, pieceId, variantId, ownerUserId);
+        jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by) " +
+            "VALUES (?, ?, 'cash', 100, 'payment', ?)", tenantId, saleId, ownerUserId);
+        try {
+            ResponseEntity<Map> today = get("/api/v1/bazar-events/" + eventId + "/today", Map.class);
+            assertThat(today.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(today.getBody().get("sale_count")).isEqualTo(1);
+            assertThat(new java.math.BigDecimal(String.valueOf(today.getBody().get("total"))))
+                .isEqualByComparingTo("100");
+            assertThat((List<?>) today.getBody().get("per_seller")).hasSize(1);
         } finally {
             jdbc.update("DELETE FROM bazar_payments WHERE sale_id = ?", saleId);
             jdbc.update("DELETE FROM bazar_sales WHERE id = ?", saleId);

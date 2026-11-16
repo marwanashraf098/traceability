@@ -10,6 +10,7 @@ import Login from '../pages/Login'
 import BazarSell from '../pages/bazar/phone/BazarSell'
 import BazarPhoneHome from '../pages/bazar/phone/BazarPhoneHome'
 import BazarNewEvent from '../pages/bazar/BazarNewEvent'
+import { CustomerSheet } from '../pages/bazar/phone/SaleSheets'
 import Sidebar from '../components/Sidebar'
 import { StationProvider } from '../components/StationProvider'
 import { ToastProvider } from '../components/ui'
@@ -214,11 +215,17 @@ describe('Login goes through RootRoute', () => {
 
 // ── Quick sell ────────────────────────────────────────────────────────────────
 
-function sellBase(role: 'worker' | 'owner' | 'manager' = 'worker', list: unknown[] = []): Handler[] {
+function todaySummary(over: Partial<Record<string, unknown>> = {}) {
+  return { business_day: TODAY, total: '0.00', sale_count: 0, by_method: { cash: '0.00' }, per_seller: [], ...over }
+}
+
+function sellBase(role: 'worker' | 'owner' | 'manager' = 'worker', list: unknown[] = [],
+                  today: unknown = todaySummary()): Handler[] {
   setAccessToken(fakeJwt(role))
   return [
     on('GET', '/api/v1/me', () => json(200, me(role))),
     on('GET', `/bazar-events/${EVENT}/sales`, () => json(200, { items: list, next_cursor: null })),
+    on('GET', `/bazar-events/${EVENT}/today`, () => json(200, today)),
   ]
 }
 
@@ -421,20 +428,38 @@ describe('Recent sales — what each role may do', () => {
     expect(await within(sheet).findByTestId('sale-undone')).toBeInTheDocument()
   })
 
-  test('footer: today total and count of active sales', async () => {
-    install(...sellBase('worker', [sale({ price: '100.00' }), sale({ price: '250.50' }), sale({ price: '999', status: 'undone' })]))
+  test('footer: today total and count come from GET /today, not from the (paged) sales list', async () => {
+    // The list holds one page; the server's totals cover the whole day.
+    install(...sellBase('worker', [sale({ price: '100.00' }), sale({ price: '250.50' })],
+                        todaySummary({ total: '12000.00', sale_count: 60 })))
     renderAt(`/bazar/${EVENT}/sell`, sellRoutes)
     const footer = await screen.findByTestId('bazar-sell-footer')
-    await waitFor(() => expect(footer).toHaveTextContent('EGP 350.50'))
-    expect(footer).toHaveTextContent('2 sales')
+    await waitFor(() => expect(footer).toHaveTextContent('EGP 12,000'))
+    expect(footer).toHaveTextContent('60 sales')
     expect(footer).toHaveTextContent('default pay: Cash')
+  })
+
+  test('a sale reloads the server totals', async () => {
+    const s = sale({ price: '960.00' })
+    let today = todaySummary({ total: '0.00', sale_count: 0 })
+    install(...sellBase('worker', [], undefined).slice(0, 2),
+      on('GET', `/bazar-events/${EVENT}/today`, () => json(200, today)),
+      on('POST', '/sell', () => { today = todaySummary({ total: '960.00', sale_count: 1 }); return json(200, s) }))
+    renderAt(`/bazar/${EVENT}/sell`, sellRoutes)
+    const footer = await screen.findByTestId('bazar-sell-footer')
+    await waitFor(() => expect(footer).toHaveTextContent('0 sales'))
+    await scan('P0000001')
+    await screen.findByTestId('sell-card-sold')
+    await waitFor(() => expect(footer).toHaveTextContent('EGP 960'))
+    expect(footer).toHaveTextContent('1 sale')
   })
 })
 
 describe('Phone home', () => {
   test('Start selling, today total with per-seller counts; Return shows Coming soon; workers get no Close day', async () => {
-    install(...sellBase('worker', [sale({ price: '100' }), sale({ price: '200', seller_id: 'u-other', seller_name: 'Hana' }),
-                                   sale({ price: '50', seller_id: 'u-other', seller_name: 'Hana' })]))
+    install(...sellBase('worker', [], todaySummary({ total: '350.00', sale_count: 3, per_seller: [
+      { seller_id: 'u-other', seller_name: 'Hana', sale_count: 2, total: '250.00' },
+      { seller_id: 'u-worker', seller_name: 'Omar', sale_count: 1, total: '100.00' }] })))
     renderAt(`/bazar/${EVENT}/home`, <Route path="/bazar/:id/home" element={<BazarPhoneHome />} />)
     expect(await screen.findByRole('button', { name: /Start selling/ })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('bazar-today-total')).toHaveTextContent('EGP 350'))
@@ -449,6 +474,59 @@ describe('Phone home', () => {
     install(on('GET', '/api/v1/me', () => json(200, me('worker', null))))
     renderAt(`/bazar/${EVENT}/home`, <Route path="/bazar/:id/home" element={<BazarPhoneHome />} />)
     expect(await screen.findByTestId('bazar-not-live')).toBeInTheDocument()
+  })
+})
+
+describe('Customer sheet — a field left empty is not sent', () => {
+  function renderSheet(s: ReturnType<typeof sale>, onSaved = vi.fn()) {
+    renderAt(`/bazar/${EVENT}/sell`, <Route path="/bazar/:id/sell" element={
+      <CustomerSheet eventId={EVENT} sale={s as never} onSaved={onSaved} onClose={() => {}} />} />)
+    return onSaved
+  }
+  const customerPut = () => calls.find(c => c.method === 'PUT' && c.url.includes('/customer'))
+
+  test('worker, masked phone: the field starts empty with the keep hint; saving a new name sends the name only', async () => {
+    setAccessToken(fakeJwt('worker'))
+    const s = sale({ customer_name: 'Laila', customer_phone: '015*****678' })
+    install(on('PUT', `/sales/${s.id}/customer`, () => json(200, { ...s, customer_name: 'Laila Hassan' })))
+    const onSaved = renderSheet(s)
+    const sheet = await screen.findByTestId('bazar-customer-sheet')
+    expect(within(sheet).getByLabelText('Mobile number')).toHaveValue('')
+    expect(within(sheet).getByTestId('bazar-customer-keep-hint')).toHaveTextContent('Leave empty to keep the current number: 015*****678')
+    const user = userEvent.setup()
+    const name = within(sheet).getByDisplayValue('Laila')
+    await user.clear(name)
+    await user.type(name, 'Laila Hassan')
+    await user.click(within(sheet).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(customerPut()?.body).toEqual({ name: 'Laila Hassan' })
+  })
+
+  test('worker, masked phone: typing a new number sends it', async () => {
+    setAccessToken(fakeJwt('worker'))
+    const s = sale({ customer_name: 'Laila', customer_phone: '015*****678' })
+    install(on('PUT', `/sales/${s.id}/customer`, () => json(200, s)))
+    const onSaved = renderSheet(s)
+    const sheet = await screen.findByTestId('bazar-customer-sheet')
+    const user = userEvent.setup()
+    await user.type(within(sheet).getByLabelText('Mobile number'), '01098765432')
+    await user.click(within(sheet).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(customerPut()?.body).toEqual({ name: 'Laila', phone: '01098765432' })
+  })
+
+  test('owner sees the full number; emptying it sends an explicit clear', async () => {
+    setAccessToken(fakeJwt('owner'))
+    const s = sale({ customer_name: 'Laila', customer_phone: '01512345678' })
+    install(on('PUT', `/sales/${s.id}/customer`, () => json(200, s)))
+    const onSaved = renderSheet(s)
+    const sheet = await screen.findByTestId('bazar-customer-sheet')
+    expect(within(sheet).queryByTestId('bazar-customer-keep-hint')).not.toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.clear(within(sheet).getByLabelText('Mobile number'))
+    await user.click(within(sheet).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(customerPut()?.body).toEqual({ name: 'Laila', phone: null })
   })
 })
 

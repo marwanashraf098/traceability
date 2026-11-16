@@ -244,10 +244,31 @@ export function changeBazarPayment(eventId: string, saleId: string, method: Paym
   })
 }
 
-export function setBazarCustomer(eventId: string, saleId: string, name: string | null, phone: string | null) {
+/**
+ * A field left out stays as it is; a field sent as null (or "") is cleared. A worker sees the phone masked, so they
+ * send the name alone and the stored number is kept.
+ */
+export function setBazarCustomer(eventId: string, saleId: string,
+                                 fields: { name?: string | null; phone?: string | null }) {
+  const body: Record<string, string | null> = {}
+  if ('name' in fields) body.name = fields.name ?? null
+  if ('phone' in fields) body.phone = fields.phone ?? null
   return bazarFetch<BazarSale>(`${base(eventId)}/sales/${encodeURIComponent(saleId)}/customer`, {
-    method: 'PUT', body: JSON.stringify({ name, phone }),
+    method: 'PUT', body: JSON.stringify(body),
   })
+}
+
+/** Today's numbers from the server (active sales only) — never summed from the paged sales list. */
+export interface BazarTodaySummary {
+  business_day: string
+  total: string | number
+  sale_count: number
+  by_method: Record<string, string | number>
+  per_seller: { seller_id: string; seller_name: string; sale_count: number; total: string | number }[]
+}
+
+export function getBazarToday(eventId: string) {
+  return bazarFetch<BazarTodaySummary>(`${base(eventId)}/today`)
 }
 
 export function listBazarSales(eventId: string, limit = 50, cursor?: string | null) {
@@ -256,23 +277,10 @@ export function listBazarSales(eventId: string, limit = 50, cursor?: string | nu
   return bazarFetch<BazarSalesPage>(`${base(eventId)}/sales?${q}`)
 }
 
-/**
- * Every sale of {@code businessDay} (newest first): pages through the list (created_at DESC) until it reaches an
- * earlier day. Undone sales included — callers filter.
- */
-export async function listBazarSalesOfDay(eventId: string, businessDay: string, maxPages = 10): Promise<BazarSale[]> {
-  const out: BazarSale[] = []
-  let cursor: string | null = null
-  for (let i = 0; i < maxPages; i++) {
-    const page: BazarSalesPage = await listBazarSales(eventId, 200, cursor)
-    for (const s of page.items) {
-      if (s.business_day < businessDay) return out
-      if (s.business_day === businessDay) out.push(s)
-    }
-    if (!page.next_cursor) return out
-    cursor = page.next_cursor
-  }
-  return out
+/** The newest sales of {@code businessDay} (one page) — the Sell screen's recent list, not its totals. */
+export async function listRecentBazarSales(eventId: string, businessDay: string, limit = 20): Promise<BazarSale[]> {
+  const page = await listBazarSales(eventId, limit)
+  return page.items.filter(s => s.business_day === businessDay)
 }
 
 // ── Who am I (from the access token) ──────────────────────────────────────────

@@ -48,26 +48,6 @@ export function toNumber(v: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0
 }
 
-/** Today's takings from a list of sales: active sales only, by method, plus per-seller piece counts. */
-export function summarize(sales: BazarSale[]) {
-  const byMethod: Record<string, number> = {}
-  const bySeller = new Map<string, { name: string; count: number }>()
-  let total = 0
-  let count = 0
-  for (const s of sales) {
-    if (s.status !== 'active') continue
-    const p = toNumber(s.price)
-    total += p
-    count += 1
-    const m = s.method ?? 'cash'
-    byMethod[m] = (byMethod[m] ?? 0) + p
-    const cur = bySeller.get(s.seller_id)
-    bySeller.set(s.seller_id, { name: s.seller_name, count: (cur?.count ?? 0) + 1 })
-  }
-  const sellers = [...bySeller.entries()].map(([id, v]) => ({ id, ...v })).sort((a, b) => b.count - a.count)
-  return { total, count, byMethod, sellers }
-}
-
 /**
  * The phone's sell errors — short, clear copy per B2 code (EN + AR in the locales); anything else shows the server's
  * own message. Already sold names the sale, its time and the seller.

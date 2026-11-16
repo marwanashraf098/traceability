@@ -83,7 +83,10 @@ export function ErrorLine({ error }: { error: BazarError | null }) {
   return <p role="alert" className="text-small text-critical">{text}</p>
 }
 
-/** "+ Customer": name and Egyptian mobile, both optional. A worker sees the phone masked and can only replace it. */
+/**
+ * "+ Customer": name and Egyptian mobile, both optional. A worker sees a saved phone masked: the field starts empty
+ * and, left empty, isn't sent — the server keeps the stored number (a field not sent stays as it is).
+ */
 export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
   eventId: string
   sale: BazarSale
@@ -93,19 +96,17 @@ export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
   const { t } = useTranslation()
   const masked = !!sale.customer_phone && sale.customer_phone.includes('*')
   const [name, setName] = useState(sale.customer_name ?? '')
-  const [replacing, setReplacing] = useState(!masked)
   const [phone, setPhone] = useState(masked ? '' : sale.customer_phone ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<BazarError | null>(null)
-  // The API sets name AND phone together: with a masked phone kept as it is there is no way to send it back, so a
-  // worker who wants to change the name re-enters the number (or removes it).
-  const blocked = masked && !replacing
 
   async function save() {
     setSaving(true)
     setError(null)
+    const fields: { name: string | null; phone?: string | null } = { name: name.trim() || null }
+    if (!masked || phone.trim()) fields.phone = phone.trim() || null
     try {
-      onSaved(await setBazarCustomer(eventId, sale.id, name.trim() || null, phone.trim() || null))
+      onSaved(await setBazarCustomer(eventId, sale.id, fields))
       onClose()
     } catch (e) {
       setError(e instanceof BazarError ? e : new BazarError(0, { code: 'NETWORK' }))
@@ -123,20 +124,16 @@ export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
       </label>
       <div className="flex flex-col gap-1">
         <label htmlFor="bazar-customer-phone" className="text-small font-medium text-muted">{t('bazar.customer.phone')}</label>
-        {replacing ? (
-          <Input id="bazar-customer-phone" value={phone} inputMode="tel" autoComplete="off" dir="ltr"
-                 onChange={e => setPhone(e.target.value)} placeholder="01012345678" />
-        ) : (
-          <div className="flex items-center justify-between gap-2 h-11 px-3 rounded-lg border border-line bg-charcoal">
-            <span className="font-mono text-primary" dir="ltr">{sale.customer_phone}</span>
-            <button type="button" className="text-small font-semibold text-trace-blue min-h-[44px]"
-                    onClick={() => setReplacing(true)}>{t('bazar.customer.replace')}</button>
-          </div>
+        <Input id="bazar-customer-phone" value={phone} inputMode="tel" autoComplete="off" dir="ltr"
+               onChange={e => setPhone(e.target.value)} placeholder="01012345678" />
+        {masked && (
+          <p className="text-small text-muted" data-testid="bazar-customer-keep-hint">
+            {t('bazar.customer.keepPhoneHint')} <span className="font-mono" dir="ltr">{sale.customer_phone}</span>
+          </p>
         )}
-        {blocked && <p className="text-small text-muted">{t('bazar.customer.maskedHint')}</p>}
       </div>
       <ErrorLine error={error} />
-      <Button className="w-full" onClick={save} loading={saving} disabled={blocked}>{t('bazar.customer.save')}</Button>
+      <Button className="w-full" onClick={save} loading={saving}>{t('bazar.customer.save')}</Button>
     </Sheet>
   )
 }

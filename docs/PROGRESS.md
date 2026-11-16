@@ -5,7 +5,8 @@
 ## Current state
 
 **Bazar POS B6 — screens: desktop setup + phone selling (2026-11-16; branch `feat/bazar-b6` from main a2854627; no
-migration; NOT merged — awaiting review).** Frontend on the B1 + B2 API; the only backend change is GET /me:
+migration; review fixes 2026-11-16, merged).** Frontend on the B1 + B2 API; backend: GET /me (below), GET
+/bazar-events/{id}/today and the customer edit's partial update (review fixes). GET /me:
 `bazar: true` (tenant flag on — the sidebar's Bazar item, like places) and `bazarLive` {eventId, name, day, dayCount,
 businessDay, paymentMethods} when the tenant has a live event whose seller_roles hold the caller's role (most recently
 started wins) — both keys absent with the flag off (`Bazar.liveFor`, BazarMeTest). Desktop (owner / manager, in-shell):
@@ -15,16 +16,19 @@ with a confirm; prices: bulk % + round-to, per-variant override / clear, "No pri
 once sent) and live (today by method, sold / at-bazar counts, recent sales, a QR to /bazar/:id/sell). Phone
 (full-screen, any seller role, not behind SetupGate): RootRoute sends a non-station device with bazarLive to
 /bazar/:id/home (station mode wins); Login now navigates to "/" (RootRoute) instead of /overview. Home: Start selling,
-Return / Exchange / Close day / End event = "Coming soon" sheets (B3–B5), today total + per-seller counts from the
-sales list (paged by business_day — a worker can't read the event). Sell (quick mode): camera (CameraReader, 2 s
+Return / Exchange / Close day / End event = "Coming soon" sheets (B3–B5), today total + per-seller counts from GET
+/bazar-events/{id}/today (`BazarSaleService.todaySummary`: business_day, total, sale_count, by_method, per_seller —
+active sales only, Cairo day; any seller role or owner / manager; never summed from the paged list; the Sell footer
+reads it too and reloads it after every sale / change). PUT …/sales/{id}/customer: a field not sent stays, a field
+sent null / "" is cleared (`editCustomer`; the old 5-arg `setCustomer` = both sent). Sell (quick mode): camera (CameraReader, 2 s
 duplicate suppression) + HID / typed code into ONE scan input (inputMode none until "Type"); useScanner's single
 flight; `bazar/useQuickSell` = one client_request_id per scan, re-sent on no answer / timeout / 5xx ("Checking…") until
 the server answers, a code already in flight or queued is dropped (never a second request); SOLD card (method chips,
 + Customer, Undo for 8 s), errors per B2 code (EN + AR), recent list → sale sheet (method / customer / undo by the B2
-rules; a worker can't send back a masked phone, so changing the name means re-entering the number). Cart mode and
-no-barcode tap not in this slice. Pending: the 4 existing Login-path tests (deviceSession ×3, workerExperienceFrontend
-(d)) need a "/" → RootRoute route in their routers (1 also an assertion: a worker token lands on /worker-home) —
-awaiting approval to edit them.
+rules; a worker's masked phone: the field starts empty, "Leave empty to keep the current number", left empty it isn't
+sent). Cart mode and no-barcode tap not in this slice. The 4 Login-path tests (deviceSession ×3, workerExperienceFrontend
+(d)) got a "/" → RootRoute route (approved); deviceSession's silent-refresh test (a worker token) now expects
+/worker-home.
 
 **BROEK deleted-waybill / Scan returns fixes (2026-11-16; branch `fix/brk-deleted-waybill-reopen` off origin/main f56131b5,
 worktree `~/Documents/traceability-brk`; NO migration; merged into main 2026-11-16, NOT deployed; no prod writes).** From the Step 0
