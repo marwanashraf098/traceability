@@ -42,8 +42,11 @@ and 5028197718 ("#2922:#2922-R1") → NOT_FOUND: `PreConnectDeliveryFilter.below
 - "Exchanges to map" stays pre-connect-only (Marawan 2026-11-16). **Possible later widening:** every unmapped dashboard
   exchange with an open trip (prod 2026-11-16: MagRina 20, BROEK 8, ROMA 7 … in the last 14 days) — one predicate,
   `FulfillService.EXCHANGES_TO_MAP_SQL`.
-- Waiting (2026-11-16): rebase onto main once `fix/brk-deleted-waybill-reopen` is merged; then the combined test
-  (pre-connect CRP → untracked lines, label parser pre-select, Undo arrival) and the full suites.
+- Rebased 2026-11-16 onto main 647e5c33 (BRK D1–D4, L1b-2 V233). Combined test PreConnectExchangeTest.d1: a
+  pre-connect CRP → Scan returns lists the parent's lines as untracked units (D4), the Bosta label line first / onLabel,
+  mark arrived, Undo inside the session, close. **Open question:** "Undo arrival" AFTER the session closed is on the
+  order drawer (`/orders/{id}/untracked-arrivals`), which reads warehouse_orders and is 404 for a pre-connect parent by
+  the P4a rule — making it work for these parents is a behaviour change, not done.
 - Shopify writes: none new. -R refs → the dispatch −1 is skipped `shopify_native_exchange` (tested). Storm is a Main
   reconcile WRITE store: while a native replacement is reserved / packed, EXCHANGE_HOLD_SQL holds the store's reconcile
   writes (existing interim hold); a replacement Shopify fulfils from a non-Main location is corrected at Main by the

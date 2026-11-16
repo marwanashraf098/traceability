@@ -53,6 +53,7 @@ import static org.mockito.Mockito.*;
  *   c1  CRP (type 25) of a pre-connect order → return leg linked to the imported parent; Scan returns ("A-06-…")
  *       lists the parent's line as an untracked unit row
  *   c2  CRP, Shopify fails → still ingested (unlinked, as before)
+ *   d1  combined (post BRK D1–D4): pre-connect CRP → untracked units, label pre-selects, arrived, in-session undo
  *   r1–r5 PreConnectReprocessService: dry run writes nothing and reports type / createdAt / state / reference / item
  *       counts / decision; apply → the exchange lane, a second apply is a no-op; picked-up → NOT_OPEN, pre-cutoff →
  *       STILL_IGNORED (both kept ignored on apply); Little Toes excluded; cross-tenant untouched; explicit list
@@ -272,6 +273,72 @@ class PreConnectExchangeTest {
         crp.putObject("type").put("code", 25).put("value", "Customer Return Pickup");
         crp.remove("returnSpecs");
         assertThat(note(process(s.tenant, crp))).isEqualTo("unlinked: 6252401153");
+    }
+
+    /**
+     * 2026-11-16 combined (after the BRK D1–D4 merge): a pre-connect CRP arrives → Scan returns lists the parent's lines
+     * as untracked units (D4: no allocation → untracked) → the Bosta label parser puts the line its SKU names first,
+     * flagged onLabel → mark arrived → Undo inside the session → mark again → close.
+     * NOT covered: "Undo arrival" AFTER the session closed — it lives on the order drawer, which (with its undo
+     * endpoints) reads warehouse_orders and is 404 for a pre-connect parent by the P4a rule. Decision pending.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void d1_preConnectCrp_untrackedLines_labelPreselects_arrived_undoInSession() {
+        Shop s = new Shop("d1");
+        // The pre-connect order in Shopify: both sizes; only the 30 is coming back.
+        ObjectNode raw = mapper.createObjectNode();
+        raw.put("name", "#2978");
+        ArrayNode edges = raw.putObject("lineItems").putArray("edges");
+        for (String gid : List.of(s.jeans32Gid, s.jeans30Gid)) {
+            ObjectNode node = edges.addObject().putObject("node");
+            node.put("id", "gid://shopify/LineItem/" + UUID.randomUUID());
+            node.put("quantity", 1);
+            node.put("currentQuantity", 1);
+            node.putObject("variant").put("id", gid);
+        }
+        when(shopify.findOrdersByName(eq(s.shop), anyString(), anyString())).thenReturn(new ShopifyGateway.PortalOrderSearch(
+            List.of(new ShopifyGateway.Order("gid://shopify/Order/" + UUID.randomUUID(), "#2978", null, null, null, "PENDING",
+                List.of("Cash on Delivery (COD)"), new BigDecimal("1900.00"), List.of(), Instant.parse("2026-11-02T10:00:00Z"), raw)),
+            true));
+
+        ObjectNode crp = exchange("3201727169", "#2978:#2978-R1", AFTER, 1, 1);
+        crp.putObject("type").put("code", 25).put("value", "Customer Return Pickup");
+        crp.putObject("returnSpecs").putObject("packageDetails").put("itemsCount", 1)
+            .put("description", "x1 Jeans - 30 - SKU: JN-30-d1");
+        assertThat(note(process(s.tenant, crp))).isNull();
+        UUID parent = jdbc.queryForObject("SELECT id FROM orders WHERE tenant_id = ? AND number = '#2978'", UUID.class, s.tenant);
+        UUID leg = jdbc.queryForObject("SELECT id FROM shipments WHERE tenant_id = ? AND tracking_number = '3201727169' " +
+            "AND shipment_leg = 'return' AND order_id = ?", UUID.class, s.tenant, parent);
+        UUID line30 = jdbc.queryForObject("SELECT id FROM order_items WHERE order_id = ? AND variant_id = ?", UUID.class, parent, s.jeans30);
+
+        // The courier brings it back.
+        jdbc.update("UPDATE shipments SET internal_state = 'returned' WHERE id = ?", leg);
+        UUID session = TenantContext.runAs(s.tenant, () -> returns.createSession(null, s.owner));
+        TenantContext.runAs(s.tenant, () -> returns.scan(session, "A-06-3201727169", s.warehouse, s.owner));
+
+        Map<String, Object> parcel = ((List<Map<String, Object>>) TenantContext.runAs(s.tenant,
+            () -> returns.getSession(session)).get("parcels")).get(0);
+        List<Map<String, Object>> units = (List<Map<String, Object>>) parcel.get("untrackedUnits");
+        assertThat(units).as("D4: both lines of the pre-connect parent are untracked").hasSize(2);
+        assertThat(parcel).containsKey("bostaLabel");
+        assertThat(units.get(0).get("orderItemId")).as("the label's line comes first").isEqualTo(line30.toString());
+        assertThat(units.get(0).get("onLabel")).isEqualTo(true);
+        assertThat(units.get(1).get("onLabel")).as("not on the Bosta label").isEqualTo(false);
+
+        // Mark the pre-selected line arrived, undo it inside the session, mark it again.
+        TenantContext.runAs(s.tenant, () -> returns.unitArrived(session, leg, line30, 1, "sellable", s.owner));
+        assertThat(count("SELECT COUNT(*) FROM untracked_unit_intakes WHERE shipment_id = ? AND undone_at IS NULL", leg)).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM untracked_unit_intakes WHERE order_id = ? AND undone_at IS NULL", parent))
+            .as("the intake is on the pre-connect parent").isEqualTo(1);
+        TenantContext.runAs(s.tenant, () -> returns.undoUnitArrived(session, leg, line30, 1, s.owner));
+        assertThat(count("SELECT COUNT(*) FROM untracked_unit_intakes WHERE shipment_id = ? AND undone_at IS NULL", leg)).isZero();
+        TenantContext.runAs(s.tenant, () -> returns.unitArrived(session, leg, line30, 1, "sellable", s.owner));
+        TenantContext.runAs(s.tenant, () -> returns.close(session, s.owner));
+        assertThat(jdbc.queryForObject("SELECT return_intake_outcome FROM shipments WHERE id = ?", String.class, leg))
+            .isEqualTo("untracked_units_arrived");
+        assertThat(count("SELECT COUNT(*) FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id WHERE oi.order_id = ?",
+            parent)).as("no piece, no allocation").isZero();
     }
 
     // ── reprocess (P5) ───────────────────────────────────────────────────────
