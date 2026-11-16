@@ -2,6 +2,8 @@ package com.traceability.bazar;
 
 import org.springframework.http.HttpStatus;
 
+import java.util.Map;
+
 /** Bazar POS command failures. ApiExceptionHandler maps it to {code, message_en, message_ar}, like TransferException. */
 public class BazarException extends RuntimeException {
 
@@ -18,24 +20,47 @@ public class BazarException extends RuntimeException {
         BAZAR_TRANSFER_NOT_SENT,
         BAZAR_LOCATION_HAS_LIVE_EVENT,
         BAZAR_VARIANT_NOT_FOUND,
-        BAZAR_NO_DEFAULT_PRICE
+        BAZAR_NO_DEFAULT_PRICE,
+        // B2 — selling
+        BAZAR_EVENT_NOT_LIVE,
+        BAZAR_NOT_A_SELLER,
+        BAZAR_PIECE_NOT_FOUND,
+        BAZAR_PIECE_NOT_HERE,
+        BAZAR_PIECE_UNTAGGED,
+        BAZAR_ALREADY_SOLD,
+        BAZAR_NO_PRICE,
+        BAZAR_PAYMENT_METHOD_REQUIRED,
+        BAZAR_PAYMENT_METHOD_NOT_ALLOWED,
+        BAZAR_SALE_NOT_FOUND,
+        BAZAR_SALE_UNDONE,
+        BAZAR_UNDO_NOT_ALLOWED,
+        BAZAR_INVALID_PHONE
     }
 
     private final Code       code;
     private final String     messageEn;
     private final String     messageAr;
     private final HttpStatus httpStatus;
+    private final Map<String, Object> details;
 
     public BazarException(Code code, String messageEn, String messageAr, HttpStatus httpStatus) {
+        this(code, messageEn, messageAr, httpStatus, null);
+    }
+
+    /** {@code details}: extra fields for the client (e.g. BAZAR_ALREADY_SOLD's sale); omitted from the body when null. */
+    public BazarException(Code code, String messageEn, String messageAr, HttpStatus httpStatus,
+                          Map<String, Object> details) {
         super(code.name() + ": " + messageEn);
         this.code       = code;
         this.messageEn  = messageEn;
         this.messageAr  = messageAr;
         this.httpStatus = httpStatus;
+        this.details    = details;
     }
 
     public Code       code()       { return code; }
     public String     messageEn()  { return messageEn; }
     public String     messageAr()  { return messageAr; }
     public HttpStatus httpStatus() { return httpStatus; }
+    public Map<String, Object> details() { return details; }
 }

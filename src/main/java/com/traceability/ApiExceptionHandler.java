@@ -153,11 +153,19 @@ public class ApiExceptionHandler {
             .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
-    // Bazar POS B1: same {code, message_en, message_ar} shape as TransferException.
+    // Bazar POS: same {code, message_en, message_ar} shape as TransferException; B2 adds an optional
+    // {details} (e.g. BAZAR_ALREADY_SOLD's sale), absent when the exception carries none.
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    record BazarErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            Map<String, Object> details) {}
+
     @ExceptionHandler(com.traceability.bazar.BazarException.class)
-    ResponseEntity<TransferErrorBody> handleBazarException(com.traceability.bazar.BazarException ex) {
+    ResponseEntity<BazarErrorBody> handleBazarException(com.traceability.bazar.BazarException ex) {
         return ResponseEntity.status(ex.httpStatus())
-            .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+            .body(new BazarErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
     record ReturnSessionErrorBody(

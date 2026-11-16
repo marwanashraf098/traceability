@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Bazar POS B2 — quick sell, undo, edit (2026-11-16; branch `feat/bazar-b2` from main f56131b5; V232; count gates
+MigrationSmokeTest 231 files, NotTracedBackfillTest 176; NOT merged, NOT deployed; bazar_enabled off for every tenant).**
+Backend + API only (phone screens are B6). `BazarSaleService` is the ONE writer of `bazar_sales` / `bazar_payments` /
+`bazar_sale_counters` and the only caller of the bazar sale edges (BazarSaleGuardTest, source scan).
+- Sell = ledger `out_on_transfer → sold` (event `bazar_sold`) + the piece's `transfer_pieces` outcome 'sold' (verified) +
+  the line's qty_sold +1, one transaction. The ledger's race-guarded UPDATE is the referee (concurrent double scan → one
+  sale, the other BAZAR_ALREADY_SOLD with {sale_number, sold_at, seller_name} in the error's `details`). Same
+  `client_request_id` → the first sale (`replayed: true`); a per-request advisory lock makes an in-flight retry wait for
+  the first instead of racing it.
+- Undo = NEW ledger edge `sold → out_on_transfer` (event `bazar_sale_undone`, approved 2026-11-16): outcome cleared,
+  qty_sold −1, live payment rows voided, sale row kept as 'undone'. Lookup "Not sold" still refuses a bazar sale.
+- NO Shopify write of any kind (remove mode: the −N went at send). NamedDecrementSetGuardTest unchanged.
+- No bazar price row → BAZAR_NO_PRICE ("Set a price first"), never 0. Price snapshotted on the sale. An explicit 0
+  override still sells at 0 (that's a set price).
+- Payments append-only (app_user: INSERT / SELECT): kind payment | refund | void, a void row points at the row it cancels
+  (`voids_payment_id`, once). Method change = void + new. Default cash; no cash on the event → method required.
+- Sale numbers per tenant (`bazar_sale_counters`, row lock), shown B-0001. business_day = Africa/Cairo date of sold_at.
+- Who: sell needs the role in the event's seller_roles. Undo / payment change: owner or manager any time while live, else
+  the seller who made it within 2 min. Customer edit: owner / manager, or the seller who made it (no window). GET /sales:
+  a seller role or owner / manager; workers see the phone masked (010*****678). Every write needs the event live.
+- Customer phone stored 01XXXXXXXXX (010/011/012/015; +20 / 0020 / Arabic digits accepted; anything else refused).
+  New personal data → privacy policy 1.5 (PolicyVersions.PRIVACY). Not covered yet: GDPR export / redaction of bazar
+  customers (they don't come from Shopify, so no Shopify webhook reaches them) — follow-up.
+- GET event (B1) now: counts.sold real; `today` {business_day, by_method (every enabled method), total, sales}.
+
 **Bazar POS B1 — event + linked transfer + prices (2026-11-15; branch `feat/bazar-b1`, rebased onto main ba6b91e8; V231 —
 V229 went to `perf/reconcile-locks-bosta-poll` and V230 to L1b-1, both merged first; renumbered V230 → V231 (approved
 2026-11-16, prod highest = V230); count gates MigrationSmokeTest 230 files, NotTracedBackfillTest 175. Reviewed + approved
