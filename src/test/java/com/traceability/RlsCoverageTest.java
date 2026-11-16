@@ -324,6 +324,10 @@ class RlsCoverageTest {
                     "OrderStatusListDetailParityTest's real app_user same-tenant positive " +
                     "control + cross-tenant negative control (stronger than this class's " +
                     "own BYPASSRLS pattern for a genuinely RLS-sensitive read)"),
+            entry("/api/v1/orders/{orderId}/untracked-arrivals",
+                    "Bug 2 (2026-11-16); UntrackedArrivalUndoService @Transactional + TenantContext.require(); empty valid " +
+                    "for new tenant; RLS-covered by UntrackedArrivalUndoTest's real app_user same-tenant positive control + " +
+                    "cross-tenant negative control"),
             entry("/api/v1/orders/{orderId}/notes",
                     "delegates to OrderNotesService (@Transactional); RLS-covered by " +
                     "OrderStatusListDetailParityTest's real app_user same-tenant positive " +

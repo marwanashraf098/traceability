@@ -155,6 +155,8 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/orders/{orderId}/notes",        byOrder());
         reg("POST /api/v1/orders/{orderId}/notes",       byOrder("{\"body\":\"leak\"}"));
         reg("POST /api/v1/orders/{orderId}/shipped-outside-traced", byOrder("{}"));
+        reg("GET /api/v1/orders/{orderId}/untracked-arrivals", byOrder());
+        reg("POST /api/v1/orders/{orderId}/untracked-arrivals/{intakeId}/undo", byOrder("{}"));
         reg("GET /api/v1/embedded/orders/list",          embedded("", "?q=PPCLEAK"));
         reg("GET /api/v1/embedded/orders/funnel",        embedded());
         reg("GET /api/v1/embedded/orders/daily-counts",  embedded());

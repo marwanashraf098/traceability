@@ -1970,6 +1970,34 @@ export async function markShippedOutsideTraced(orderId: string): Promise<{ piece
   return res.json()
 }
 
+/** Bug 2 (2026-11-16): an untracked unit marked Arrived in Scan returns, for the order drawer (owner / manager). */
+export interface UntrackedArrival {
+  intakeId: string
+  orderItemId: string
+  unitNo: number
+  condition: 'sellable' | 'damaged'
+  awb: string
+  markedBy: string | null
+  markedAt: string
+  /** Why it can't be undone from the drawer: received into stock, or its Scan returns session is still open. */
+  undoBlocked: 'received' | 'session_open' | null
+}
+
+/** null when the caller may not see them (a worker: 403). */
+export async function getUntrackedArrivals(orderId: string): Promise<UntrackedArrival[] | null> {
+  const res = await authFetch(`/orders/${orderId}/untracked-arrivals`, { credentials: 'include' })
+  if (res.status === 403) return null
+  if (!res.ok) throw new Error(`${res.status}`)
+  return res.json()
+}
+
+export async function undoUntrackedArrival(orderId: string, intakeId: string): Promise<void> {
+  const res = await authFetch(`/orders/${orderId}/untracked-arrivals/${intakeId}/undo`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  })
+  if (!res.ok) throw new Error(`${res.status}`)
+}
+
 export async function cancelOrder(orderId: string) {
   const res = await authFetch(`/fulfill/${orderId}/cancel`, {
     method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },

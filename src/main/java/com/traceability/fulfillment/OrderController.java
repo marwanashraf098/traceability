@@ -1608,6 +1608,34 @@ public class OrderController {
         return shippedOutsideTraced.apply(orderId, principal.userId());
     }
 
+    private com.traceability.inventory.UntrackedArrivalUndoService untrackedArrivals;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setUntrackedArrivals(com.traceability.inventory.UntrackedArrivalUndoService s) { this.untrackedArrivals = s; }
+
+    /**
+     * Bug 2 (approved 2026-11-16) — the order's live untracked unit arrivals (Scan returns marks), each with why it
+     * can't be undone here (undoBlocked: received | session_open | null). Owner / manager; 404 not a merchant order.
+     */
+    @GetMapping("/{orderId}/untracked-arrivals")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public List<Map<String, Object>> untrackedArrivals(@PathVariable UUID orderId) {
+        return untrackedArrivals.arrivals(orderId);
+    }
+
+    /**
+     * Bug 2 — "Undo arrival" for one unit marked in a Scan returns session that has closed: the mark is undone (audited),
+     * the parcel's handled stamp cleared when it was its last. 409 when a Receiving line used it or its session is open;
+     * 404 not a live mark of this order. No stock, no Shopify. Owner / manager.
+     */
+    @PostMapping("/{orderId}/untracked-arrivals/{intakeId}/undo")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public org.springframework.http.ResponseEntity<Void> undoUntrackedArrival(@PathVariable UUID orderId, @PathVariable UUID intakeId,
+                                                     @AuthenticationPrincipal CustomUserDetails principal) {
+        untrackedArrivals.undo(orderId, intakeId, principal.userId());
+        return org.springframework.http.ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{orderId}/notes")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public OrderNoteResponse addNote(@PathVariable UUID orderId,
