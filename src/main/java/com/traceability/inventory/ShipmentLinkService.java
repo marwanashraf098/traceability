@@ -1410,13 +1410,17 @@ public class ShipmentLinkService {
      * D4 (approved 2026-11-16, BRK-47431-EG) — THE one definition of "this allocation ({@code a}) makes its order line
      * tracked": it is live (active / packed), or it was released after its piece really left with the order
      * ({@code orderIdExpr}) — a with_courier / delivered event on the order's forward leg (OrderLineFreeze
-     * .pieceLeftWithOrderSql, D1: the returned-and-restocked piece keeps its line tracked). A released allocation whose
-     * piece never left with the order (picked then unpicked, unpacked, a parcel taken apart) does NOT count.
+     * .pieceLeftWithOrderSql, D1: the returned-and-restocked piece keeps its line tracked), or it came BACK for the order
+     * from outside custody (a return_received event from with_courier / delivered / return_in_transit — the scan-back
+     * of a piece that was out with the order). A released allocation whose piece never left with the order (picked
+     * then unpicked, unpacked, a parcel taken apart — its intake was from packed / awaiting_pickup) does NOT count.
      */
     public static String trackingAllocationSql(String a, String orderIdExpr) {
         return "(" + a + ".status <> 'released' OR EXISTS (SELECT 1 FROM piece_events pe_tr " +
-               "   WHERE pe_tr.piece_id = " + a + ".piece_id AND pe_tr.order_id = " + orderIdExpr + " AND " +
-               OrderLineFreeze.pieceLeftWithOrderSql("pe_tr", orderIdExpr) + "))";
+               "   WHERE pe_tr.piece_id = " + a + ".piece_id AND pe_tr.order_id = " + orderIdExpr + " AND (" +
+               OrderLineFreeze.pieceLeftWithOrderSql("pe_tr", orderIdExpr) +
+               "     OR (pe_tr.event_type = 'return_received' " +
+               "         AND pe_tr.from_status::text IN ('with_courier', 'delivered', 'return_in_transit')))))";
     }
 
     /**
