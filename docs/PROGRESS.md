@@ -4,6 +4,50 @@
 
 ## Current state
 
+**BROEK deleted-waybill / Scan returns fixes (2026-11-16; branch `fix/brk-deleted-waybill-reopen` off origin/main f56131b5,
+worktree `~/Documents/traceability-brk`; NO migration; NOT merged, NOT deployed; no prod writes).** From the Step 0
+diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6e1ffe7-…). Decisions (Marawan 2026-11-16):
+- **D1** `OrderLineFreeze` clause 3: a piece counts as having left custody only with a with_courier / delivered event FOR
+  THE ORDER on a FORWARD leg of the order (`OrderLineFreeze.pieceLeftWithOrderSql`; a NULL shipment = the self-pickup
+  handover). A return-intake event from packed / awaiting_pickup never freezes. Root cause: BROEK took parcels apart
+  through Scan returns ('rto' intake from awaiting_pickup + Restock) after Bosta deleted the waybill, which froze the
+  order → Shopify's new waybill refused "tracking change not applied (frozen)" and the edit line stored at 0.
+- **D2** `OrderReopen.reopen` — the 4th approved backward status write (OrderStatusBackwardWriteGuardTest): packed /
+  awaiting_pickup → 'new' only when the old forward leg is deleted / never moved (`OrderReopen.legDeadSql`), no piece of
+  the order is held packed / awaiting_pickup / with_courier, and the order isn't frozen. Called from the supersede path
+  (`ShipmentLinkService.reopenAfterSupersede`) only when the NEW waybill is at Bosta state ≤ 10; past 10 → link +
+  supersede only and HIGH condition-only `shipped_without_scan` ("waybill X left with items Traced never scanned — check
+  stock"; old leg had Traced-scanned pieces, nothing scanned onto the new one; never a stock change). On reopen (and on
+  unpackOrder) lines at 0 with current_quantity > 0 take it (`ShopifySyncService.restoreAddedLineQuantities`).
+  PICKABLE_ORDERS_FILTER unchanged.
+- **D3** Scan returns: a packed / awaiting_pickup piece whose order's forward leg never moved → unpack, not RTO (existing
+  ledger edges, event 'unpacked' {via return_scan, session_id}, allocation released, order reopened under D2 with its last
+  held piece; no session item, no Shopify +1; feedback "Back on shelf — order X needs repacking" EN + AR, lastScan kind
+  'unpacked'). `unpackOrder` allows a deleted, never-moved waybill when the order isn't frozen.
+  Prod side effect worth checking later: each old 'rto' Restock of a never-departed piece sent a Shopify +1 (6 pieces on
+  BRK-47903 / BRK-47954) — Main reconcile should have corrected it; not investigated.
+- **D4** `ShipmentLinkService.trackingAllocationSql` is THE "allocation tracks its line" rule: live, or released after its
+  piece really left with the order. `PortalService.LINE_UNTRACKED_SQL` and `orderUntrackedSql` read it. A line picked then
+  unpicked is untracked again: the portal offers it as units (before: not returnable at all), Scan returns lists its unit
+  rows (BRK-47431: Gray now listed), Lookup exchange can take it.
+- **Bug 2/3** `BostaLabelLines` parses Bosta's label lines (type 25 returnSpecs "xN … - SKU: …" joined by //; forward / RTO
+  specs "… x N (SKU)" per line; exact SKU; unreadable → today's behaviour; NEVER itemsCount). Parcel view `bostaLabel`
+  + `onLabel` rows; screen: label rows first, the rest under "Not on the Bosta label", confirm (not block) past the label
+  total / off-label; tracked no-request parcels "{{scanned}} scanned · up to {{count}} could come back" + "Bosta label: N
+  items" + highlighted pieces. Arabic "بوستا" → "بوسطة" everywhere (64 strings). Owner / manager "Undo arrival" on the order
+  drawer for untracked unit marks after the session closed (`GET/POST /orders/{id}/untracked-arrivals[/{intakeId}/undo]`,
+  `UntrackedParcelUnits.undoArrival`; 409 when Receiving used the unit or the session is open; audit
+  'untracked_arrival_undone'; no stock / Shopify).
+- **Known red, awaiting approval to edit (existing assertions the decisions reverse):** UnpackOrderTest.u4 line 341
+  (#G-DELETED expects WAYBILL_ENDED — D3 allows it; u4's later guards don't run until fixed); returnsParcelCards pc1:151
+  (old "1 of 2 items scanned"); old spelling بوستا in getStartedCard:416, orderDrawerCourierWording:122,
+  orderDrawerNoWaybill:92, returnsAwaitingScanCallout:156, returnsParcelCards:279, setupIntro:437.
+- **Repairs (plan only):** R1 BRK-47903-EG after deploy: re-read Bosta 2109710882 (stop if > 10), catch-up dry run
+  (`BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d`, `…_ORDERS=BRK-47903-EG`) → WOULD_LINK
+  "replaces 6855433207" → apply → 'new', sweatpants qty 1, 4 units; merchant must pick + scan 4 pieces against the sealed
+  2109710882 parcel. R2 BRK-47431-EG: drawer "Undo arrival" on intake 7671830b-7aa3-4cd4-a6c1-d466e7e15d6b. R3
+  BRK-47954-EG: catch-up → link + supersede + shipped_without_scan (697507445 already at Bosta 24).
+
 **Bazar POS B1 — event + linked transfer + prices (2026-11-15; branch `feat/bazar-b1`, rebased onto main ba6b91e8; V231 —
 V229 went to `perf/reconcile-locks-bosta-poll` and V230 to L1b-1, both merged first; renumbered V230 → V231 (approved
 2026-11-16, prod highest = V230); count gates MigrationSmokeTest 230 files, NotTracedBackfillTest 175. Reviewed + approved
