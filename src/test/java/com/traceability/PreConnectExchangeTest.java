@@ -53,6 +53,9 @@ import static org.mockito.Mockito.*;
  *   c1  CRP (type 25) of a pre-connect order → return leg linked to the imported parent; Scan returns ("A-06-…")
  *       lists the parent's line as an untracked unit row
  *   c2  CRP, Shopify fails → still ingested (unlinked, as before)
+ *   r1–r5 PreConnectReprocessService: dry run writes nothing and reports type / createdAt / state / reference / item
+ *       counts / decision; apply → the exchange lane, a second apply is a no-op; picked-up → NOT_OPEN, pre-cutoff →
+ *       STILL_IGNORED (both kept ignored on apply); Little Toes excluded; cross-tenant untouched; explicit list
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -88,6 +91,7 @@ class PreConnectExchangeTest {
     @Autowired ExchangeService exchangeService;
     @Autowired PreConnectParentImport parentImport;
     @Autowired com.traceability.inventory.ReturnSessionService returns;
+    @Autowired com.traceability.integrations.bosta.PreConnectReprocessService reprocess;
     @MockBean BostaGateway bostaGateway;
     @MockBean JobScheduler jobScheduler;
     @MockBean ShopifyGateway shopify;
@@ -270,18 +274,132 @@ class PreConnectExchangeTest {
         assertThat(note(process(s.tenant, crp))).isEqualTo("unlinked: 6252401153");
     }
 
+    // ── reprocess (P5) ───────────────────────────────────────────────────────
+
+    @Test
+    void r1_dryRun_reportsTheDelivery_writesNothing() {
+        Shop s = new Shop("r1");
+        shopifyReturns(s, "#2739", "2026-11-01T10:00:00Z", s.jeans30);
+        long ev = ignored(s, exchange("2472100001", "#2739:#2739-R1", AFTER, 1, 1));
+
+        var rows = reprocess.run(s.tenant, List.of("2472100001"), false);
+        assertThat(rows).hasSize(1);
+        var r = rows.get(0);
+        assertThat(r.verdict()).isEqualTo("WOULD_REPROCESS");
+        assertThat(r.typeCode()).isEqualTo(30);
+        assertThat(r.createdAt()).isEqualTo("2026-11-15T22:43:11Z");
+        assertThat(r.state()).isEqualTo(10);
+        assertThat(r.reference()).isEqualTo("#2739:#2739-R1");
+        assertThat(r.outItems()).isEqualTo(1);
+        assertThat(r.inItems()).isEqualTo(1);
+        assertThat(r.decision()).isEqualTo("KEEP");
+        assertThat(note(ev)).isEqualTo("ignored_pre_connect: 2472100001");
+        assertThat(count("SELECT COUNT(*) FROM exchanges WHERE tenant_id = ?", s.tenant)).isZero();
+        verify(shopify, never()).findOrdersByName(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void r2_apply_reprocessesIntoTheExchangeLane_secondApplyIsANoOp() {
+        Shop s = new Shop("r2");
+        shopifyReturns(s, "#2922", "2026-11-01T10:00:00Z", s.jeans30);
+        long ev = ignored(s, exchange("5028100002", "#2922:#2922-R1", AFTER, 1, 1));
+
+        var first = reprocess.run(s.tenant, List.of(), true);
+        assertThat(first).extracting(com.traceability.integrations.bosta.PreConnectReprocessService.Row::verdict).containsExactly("REPROCESSED");
+        assertThat(first.get(0).detail()).isEqualTo("exchange: 5028100002");
+        assertThat(note(ev)).isEqualTo("exchange: 5028100002");
+        UUID parent = jdbc.queryForObject("SELECT id FROM orders WHERE tenant_id = ? AND number = '#2922'", UUID.class, s.tenant);
+        assertThat(jdbc.queryForObject("SELECT matched_order_id FROM exchanges WHERE tracking_number = '5028100002'", UUID.class))
+            .isEqualTo(parent);
+
+        var second = reprocess.run(s.tenant, List.of(), true);
+        assertThat(second).isEmpty();
+        assertThat(count("SELECT COUNT(*) FROM exchanges WHERE tenant_id = ?", s.tenant)).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND origin = 'portal_pre_connect'", s.tenant)).isEqualTo(1);
+    }
+
+    @Test
+    void r3_pickedUp_isNotOpen_preCutoff_staysIgnored_evenOnApply() {
+        Shop s = new Shop("r3");
+        ObjectNode picked = exchange("3251200003", "#2906:#2906-R1", AFTER, 1, 1);
+        picked.putObject("state").put("code", 21).put("value", "Picked up");
+        long evPicked = ignored(s, picked);
+        long evOld = ignored(s, exchange("4545100004", "#2950:#2950-R1",
+            "Wed Nov 12 2026 10:00:00 GMT+0000 (Coordinated Universal Time)", 1, 1));
+
+        var rows = reprocess.run(s.tenant, List.of(), true);
+        assertThat(rows).extracting(com.traceability.integrations.bosta.PreConnectReprocessService.Row::trackingNumber, com.traceability.integrations.bosta.PreConnectReprocessService.Row::verdict)
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("3251200003", "NOT_OPEN"),
+                org.assertj.core.groups.Tuple.tuple("4545100004", "STILL_IGNORED"));
+        assertThat(note(evPicked)).startsWith("ignored_pre_connect:");
+        assertThat(note(evOld)).startsWith("ignored_pre_connect:");
+    }
+
+    @Test
+    void r4_excludedTenant_andCrossTenant_untouched() {
+        Shop little = new Shop("r4lt", UUID.fromString("fbc7e946-12d9-4a3b-a396-387c0dacf9f5"));
+        long evLt = ignored(little, exchange("1111000001", "#2700:#2700-R1", AFTER, 1, 1));
+        assertThat(reprocess.run(little.tenant, List.of(), true))
+            .extracting(com.traceability.integrations.bosta.PreConnectReprocessService.Row::verdict, com.traceability.integrations.bosta.PreConnectReprocessService.Row::detail)
+            .containsExactly(org.assertj.core.groups.Tuple.tuple("SKIP", "tenant excluded"));
+        assertThat(note(evLt)).startsWith("ignored_pre_connect:");
+
+        Shop a = new Shop("r4a");
+        Shop b = new Shop("r4b");
+        long evB = ignored(b, exchange("1111000002", "#2701:#2701-R1", AFTER, 1, 1));
+        shopifyReturns(a, "#2702", "2026-11-01T10:00:00Z", a.jeans30);
+        ignored(a, exchange("1111000003", "#2702:#2702-R1", AFTER, 1, 1));
+        assertThat(reprocess.run(a.tenant, List.of(), true))
+            .extracting(com.traceability.integrations.bosta.PreConnectReprocessService.Row::trackingNumber).containsExactly("1111000003");
+        assertThat(note(evB)).as("tenant B's row is never a candidate of tenant A").startsWith("ignored_pre_connect:");
+    }
+
+    @Test
+    void r5_explicitList_onlyThose_unknownReported() {
+        Shop s = new Shop("r5");
+        shopifyReturns(s, "#2945", "2026-11-01T10:00:00Z", s.jeans30);
+        ignored(s, exchange("7779500005", "#2945:#2945-R1", AFTER, 1, 1));
+        long other = ignored(s, exchange("1332700006", "#2955:#2955-R1", AFTER, 1, 1));
+        var rows = reprocess.run(s.tenant, List.of("7779500005", "9999999999"), false);
+        assertThat(rows).extracting(com.traceability.integrations.bosta.PreConnectReprocessService.Row::trackingNumber, com.traceability.integrations.bosta.PreConnectReprocessService.Row::verdict)
+            .containsExactly(org.assertj.core.groups.Tuple.tuple("7779500005", "WOULD_REPROCESS"),
+                             org.assertj.core.groups.Tuple.tuple("9999999999", "SKIP"));
+        assertThat(note(other)).startsWith("ignored_pre_connect:");
+    }
+
+    /** The row discovery wrote for an ignored delivery (same shape as BostaIngestionHelper.recordIgnoredPreConnect). */
+    long ignored(Shop s, ObjectNode raw) {
+        String tracking = raw.path("trackingNumber").asText();
+        when(bostaGateway.fetchDelivery(eq("key-" + s.tenant), eq(tracking))).thenReturn(BostaDelivery.fromRaw(tracking, raw));
+        ObjectNode payload = mapper.createObjectNode();
+        payload.put("trackingNumber", tracking);
+        payload.put("state", raw.path("state").path("code").asInt());
+        payload.put("type", "EXCHANGE");
+        payload.put("updatedAt", raw.path("updatedAt").asText());
+        payload.put("businessReference", raw.path("businessReference").asText());
+        String key = BostaWebhookJob.sha256(tracking + ":" + raw.path("state").path("code").asInt() + ":" + raw.path("updatedAt").asText());
+        return jdbc.queryForObject(
+            "INSERT INTO webhook_events (source, tenant_id, topic, payload, status, received_at, processed_at, external_event_id, error) " +
+            "VALUES ('bosta_poll_discovery'::webhook_source, ?, 'delivery_update', ?::jsonb, 'processed', now(), now(), ?, ?) RETURNING id",
+            Long.class, s.tenant, payload.toString(), key, "ignored_pre_connect: " + tracking);
+    }
+
     // ── fixtures ─────────────────────────────────────────────────────────────
 
     /** A Storm-shaped tenant: cutoff 2026-11-13 17:15Z, lowest ingested order #3018, two catalog variants. */
     class Shop {
-        final UUID tenant = UUID.randomUUID();
+        final UUID tenant;
         final UUID store = UUID.randomUUID();
         final String shop;
         final UUID jeans30, jeans32;
         final String jeans30Gid, jeans32Gid;
         final UUID owner = UUID.randomUUID(), warehouse = UUID.randomUUID();
 
-        Shop(String name) {
+        Shop(String name) { this(name, UUID.randomUUID()); }
+
+        Shop(String name, UUID id) {
+            tenant = id;
             shop = "pc-" + name + "-" + tenant.toString().substring(0, 8) + ".myshopify.com";
             jdbc.update("INSERT INTO tenants (id, name) VALUES (?, ?)", tenant, "Storm-" + name);
             jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, 'Owner', ?, 'h', 'owner')",
