@@ -338,7 +338,21 @@ class UnpackOrderTest {
         Order deleted = s.order("#G-DELETED", false);
         s.pack(deleted);
         jdbc.update("UPDATE shipments SET provider_deleted_at = now(), provider_deleted_reason = 'deleted_in_bosta' WHERE tracking_number = ?", deleted.tracking());
-        refused(s, deleted, "WAYBILL_ENDED");
+        // D3 (approved edit 2026-11-16): a waybill deleted in Bosta before anything left custody no longer blocks.
+        ResponseEntity<Map> deletedOk = s.unpack(s.managerToken, deleted, Map.of());
+        assertThat(deletedOk.getStatusCode()).as("#G-DELETED → " + deletedOk.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ?", String.class, deleted.id())).isEqualTo("new");
+
+        // …but a deleted waybill a piece DID leave on (its with_courier event on that forward leg; the piece came
+        // back and was packed again, the leg's own history never moved) still refuses.
+        Order deletedLeft = s.order("#G-DELETED-LEFT", false);
+        s.pack(deletedLeft);
+        UUID leftLeg = jdbc.queryForObject("SELECT id FROM shipments WHERE tracking_number = ?", UUID.class, deletedLeft.tracking());
+        jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, order_id, shipment_id, from_status, to_status) " +
+            "VALUES (?, ?, 'handed_to_courier', ?, ?, 'packed', 'with_courier')",
+            s.f.tenant, s.f.pieceId(deletedLeft.pieceA()), deletedLeft.id(), leftLeg);
+        jdbc.update("UPDATE shipments SET provider_deleted_at = now(), provider_deleted_reason = 'deleted_in_bosta' WHERE id = ?", leftLeg);
+        refused(s, deletedLeft, "WAYBILL_ENDED");
 
         Order inPickup = s.order("#G-PICKUP", false);
         s.pack(inPickup);

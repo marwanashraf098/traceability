@@ -288,11 +288,13 @@ public class ReturnSessionService {
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
         UUID pieceVariantId   = (UUID) piece.get("variant_id");
-        // D3 (approved 2026-11-16, BRK-47903-EG): a piece still packed / awaiting pickup whose order's forward leg never
-        // moved (deleted in Bosta or not) never left Traced — the parcel was taken apart. It goes back on the shelf
-        // (an unpack), never a return: no 'rto', no inspection, no Shopify +1, the order's demand intact.
+        // D3 (approved 2026-11-16, BRK-47903-EG; narrowed 2026-11-16): a piece still packed / awaiting pickup whose
+        // order's waybill is DEAD — deleted in Bosta, or cancelled / terminated — and no forward leg of the order ever
+        // moved never left Traced: the parcel was taken apart. It goes back on the shelf (an unpack), never a return:
+        // no 'rto', no inspection, no Shopify +1, the order's demand intact. A live 'created' waybill keeps today's
+        // path (flagged unexpected) — ReturnsExpectedBackTest e5 / w2.
         if ((current == PieceStatus.PACKED || current == PieceStatus.AWAITING_PICKUP) && orderId != null
-                && !forwardLegEverMoved(orderId, tenantId)) {
+                && waybillDiedBeforeItMoved(orderId, tenantId)) {
             return unpackByScan(sessionId, tenantId, pieceId, current, orderId, locationId, actorUserId, viaPhone);
         }
         // D3 idempotent re-scan: the piece this session already put back on the shelf — same answer, nothing written.
@@ -468,12 +470,16 @@ public class ReturnSessionService {
         return itemRow(itemId, tenantId);
     }
 
-    /** D3 — the order's forward leg has moved: a movement row in its history, or a live state past 'created'
-     *  (OrderLineFreeze.legMovedSql — a leg ended / deleted before it moved never counts). */
-    private boolean forwardLegEverMoved(UUID orderId, UUID tenantId) {
+    /** D3 — the order's NEWEST forward leg is dead (deleted in Bosta, or cancelled / terminated) and NO forward leg of
+     *  the order ever moved (OrderLineFreeze.legMovedSql). A live 'created' waybill, or no forward leg at all, is false. */
+    private boolean waybillDiedBeforeItMoved(UUID orderId, UUID tenantId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
-            "  AND " + OrderLineFreeze.legMovedSql("s") + ")", Boolean.class, orderId, tenantId));
+            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? " +
+            "    AND " + OrderLineFreeze.newestForwardLegSql("s") +
+            "    AND (s.provider_deleted_at IS NOT NULL OR s.internal_state IN ('cancelled', 'terminated'))) " +
+            "AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "    AND " + OrderLineFreeze.legMovedSql("s") + ")",
+            Boolean.class, orderId, tenantId, orderId, tenantId));
     }
 
     /**
