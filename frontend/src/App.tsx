@@ -7,6 +7,7 @@ import Layout from './components/Layout'
 import { StationProvider, useStation } from './components/StationProvider'
 import StationGate from './components/StationGate'
 import { PhoneScanProvider } from './phone/PhoneScanProvider'
+import { loadCapabilities } from './capabilities'
 import PhoneControl from './phone/PhoneControl'
 // StyleGuide is DEV-only — lazy import ensures Rollup dead-code-eliminates
 // the entire module when import.meta.env.DEV === false (production build).
@@ -17,6 +18,14 @@ import Login from './pages/Login'
 // S6 phone as scanner — the phone's page (public, no login). Lazy so @zxing/* stays in its own
 // chunk, never in the main bundle.
 const ScanPairPage = lazy(() => import('./pages/scanpair/ScanPairPage'))
+// Bazar POS B6 — the phone screens use the camera reader (@zxing): lazy, like ScanPairPage, so it stays out of the
+// main bundle. The desktop setup screens are lazy too (only bazar tenants ever open them).
+const BazarEvents     = lazy(() => import('./pages/bazar/BazarEvents'))
+const BazarNewEvent   = lazy(() => import('./pages/bazar/BazarNewEvent'))
+const BazarEventPage  = lazy(() => import('./pages/bazar/BazarEventPage'))
+const BazarScanOut    = lazy(() => import('./pages/bazar/BazarScanOut'))
+const BazarPhoneHome  = lazy(() => import('./pages/bazar/phone/BazarPhoneHome'))
+const BazarSell       = lazy(() => import('./pages/bazar/phone/BazarSell'))
 // Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
 const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
 import { analyticsEnabled } from './analytics/flag'
@@ -197,6 +206,17 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
 export function RootRoute() {
   const state = useAuthRefresh()
   const { stationMode, currentWorker } = useStation()
+  // Bazar POS B6: a live bazar the caller may sell at opens first (GET /me bazarLive). undefined = not known yet.
+  // Never on a station tablet — station mode keeps its own routing.
+  const [bazarHome, setBazarHome] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (state !== 'authenticated' || stationMode) return
+    let cancelled = false
+    loadCapabilities().then(c => {
+      if (!cancelled) setBazarHome(c.bazarLive ? `/bazar/${encodeURIComponent(c.bazarLive.eventId)}/home` : null)
+    })
+    return () => { cancelled = true }
+  }, [state, stationMode])
 
   if (state === 'loading') {
     return <AuthLoadingSpinner />
@@ -211,6 +231,10 @@ export function RootRoute() {
   // Same precedence as RequireAuth: station-mode gate wins over role routing.
   if (stationMode && !currentWorker) {
     return <Navigate to="/overview" replace />
+  }
+  if (!stationMode) {
+    if (bazarHome === undefined) return <AuthLoadingSpinner />
+    if (bazarHome) return <Navigate to={bazarHome} replace />
   }
   if (getRoleFromToken() === 'worker') {
     return <Navigate to="/worker-home" replace />
@@ -646,6 +670,27 @@ export default function App() {
         {import.meta.env.DEV && StyleGuide && (
           <Route path="/_styleguide" element={<Suspense fallback={null}><StyleGuide /></Suspense>} />
         )}
+        {/* Bazar POS B6. Setup (owner / manager): the list, New event and the event page are in-shell; the scan-out
+            is the transfer scan loop, full-screen. The phone (every seller role; the API decides who sells): home and
+            quick sell, full-screen like /fulfill — not behind SetupGate, a bazar phone must never be stopped there. */}
+        <Route path="/bazar" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarEvents /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/new" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarNewEvent /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/:id" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarEventPage /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/:id/scan-out" element={<RequireAuth><OwnerOnlyRoute>
+          <Suspense fallback={null}><BazarScanOut /></Suspense>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/:id/home" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarPhoneHome /></Suspense>
+        </RequireAuth>} />
+        <Route path="/bazar/:id/sell" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarSell /></Suspense>
+        </RequireAuth>} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
       </ToastProvider>
