@@ -62,7 +62,7 @@ export const ALERT_GROUPS: Record<string, string[]> = {
   ],
   'alerts-tracking-changes': [
     'tracking_changed_after_custody', 'tracking_change_needs_review', 'tracking_changed_relabel',
-    'superseded_waybill_moving',
+    'superseded_waybill_moving', 'shipped_without_scan',
   ],
 }
 
