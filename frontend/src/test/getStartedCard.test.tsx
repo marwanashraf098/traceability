@@ -413,7 +413,7 @@ describe('AR / RTL', () => {
     renderCard(progress({ skipped: ['courier'], tried: ['receive'] }), 'ar')
     const card = screen.getByTestId('get-started-card')
     expect(within(card).getByRole('heading', { level: 2 })).toHaveTextContent('ابدأ مع Traced')
-    expect(screen.getByTestId('get-started-step-courier')).toHaveTextContent('بوستا · لاحقًا')
+    expect(screen.getByTestId('get-started-step-courier')).toHaveTextContent('بوسطة · لاحقًا')
     expect(screen.getByTestId('get-started-tried')).toHaveTextContent('جرّبت 1 من 8')
     expect(screen.getByRole('button', { name: 'تصغير' })).toBeInTheDocument()
   })

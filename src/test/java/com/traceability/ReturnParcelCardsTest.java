@@ -144,7 +144,7 @@ class ReturnParcelCardsTest {
 
     @Test
     void markReceived_409s_trackedOrder_notScannedHere_closedSession_alreadyComplete() {
-        // Tracked: an order with a (released) allocation — Traced tracked it once.
+        // Tracked: the order's piece was delivered on a forward leg (then returned + restocked, allocation released).
         Crp tracked = trackedCrp(a);
         UUID s = open(a);
         scan(a, s, tracked.awb());
@@ -442,10 +442,23 @@ class ReturnParcelCardsTest {
         return crp(t, awb, order, null, null);
     }
 
-    /** A CRP leg on an order that HAS a (released) allocation — tracked, even with no live piece. */
+    /**
+     * A CRP leg on an order whose piece left with it on a forward leg and was delivered, then came back
+     * (return_received) and was restocked — allocation released, no live piece. Tracked under D4: a released
+     * allocation still counts once its piece was delivered on a forward leg of the order.
+     */
     private Crp trackedCrp(Tenant t) {
         UUID order = order(t, "Mariam Samir");
         String piece = piece(t, order, "available", 0);
+        shipment(t, order, "forward", "delivered", "{}");
+        UUID fwd = jdbc.queryForObject(
+            "SELECT id FROM shipments WHERE order_id = ? AND shipment_leg = 'forward'", UUID.class, order);
+        String ev = "INSERT INTO piece_events (tenant_id, piece_id, event_type, order_id, shipment_id, from_status, to_status) " +
+                    "VALUES (?, ?, ?, ?, ?, ?::piece_status, ?::piece_status)";
+        jdbc.update(ev, t.id(), piece, "handed_to_courier", order, fwd, "packed", "with_courier");
+        jdbc.update(ev, t.id(), piece, "delivered", order, fwd, "with_courier", "delivered");
+        jdbc.update(ev, t.id(), piece, "return_received", order, fwd, "delivered", "return_pending_inspection");
+        jdbc.update(ev, t.id(), piece, "restocked", order, fwd, "return_pending_inspection", "available");
         jdbc.update("UPDATE allocations SET status = 'released' WHERE piece_id = ?", piece);
         jdbc.update("UPDATE pieces SET current_order_id = NULL WHERE id = ?", piece);
         String awb = shipment(t, order, "return", "returned", crpRaw(1, "Flipped Pants in Black - XL x 1 (1001-Black-XL)"));

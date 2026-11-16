@@ -157,6 +157,8 @@ class ShadowOrderLeakTest {
         reg("GET /api/v1/orders/{orderId}/notes",        byOrder());
         reg("POST /api/v1/orders/{orderId}/notes",       byOrder("{\"body\":\"leak\"}"));
         reg("POST /api/v1/orders/{orderId}/shipped-outside-traced", byOrder("{}"));
+        reg("GET /api/v1/orders/{orderId}/untracked-arrivals", byOrder());
+        reg("POST /api/v1/orders/{orderId}/untracked-arrivals/{intakeId}/undo", byOrder("{}"));
         reg("GET /api/v1/embedded/orders/list",          embedded("", "?q=PPCLEAK"));
         reg("GET /api/v1/embedded/orders/funnel",        embedded());
         reg("GET /api/v1/embedded/orders/daily-counts",  embedded());
@@ -1057,7 +1059,9 @@ class ShadowOrderLeakTest {
                    .replace("{pieceId}", t.pieceId.toString())
                    .replace("{variantId}", t.variantId.toString())
                    .replace("{sessionId}", t.packSessionId.toString())
-                   .replace("{storeId}", t.storeId.toString());
+                   .replace("{storeId}", t.storeId.toString())
+                   // Undo arrival (BRK-47431): no intake of the order exists — the order check answers first.
+                   .replace("{intakeId}", "7671830b-7aa3-4cd4-a6c1-d466e7e15d6b");
         if (path.startsWith("/api/v1/pack-sessions/")) path = path.replace("{id}", t.packSessionId.toString());
         if (path.startsWith("/api/v1/exchanges/"))     path = path.replace("{id}", t.exchangeId.toString());
         if (path.startsWith("/api/v1/shipments/unlinked/")) path = path.replace("{id}", Long.toString(t.unlinkedId));

@@ -211,6 +211,66 @@ public class UntrackedParcelUnits {
     }
 
     /**
+     * Bug 2 (approved 2026-11-16) — why a live mark ({@code u}, alias of untracked_unit_intakes) can't be undone from the
+     * order drawer: 'received' — a Receiving line already took this unit (return_source untracked_unit:&lt;id&gt;; its stock
+     * may have moved, an undo would not move it back); 'session_open' — its Scan returns session is still open (undo it
+     * there). NULL = can be undone.
+     */
+    public static String arrivalUndoBlockSql(String u) {
+        return "(CASE WHEN EXISTS (SELECT 1 FROM receipt_lines rl_u WHERE rl_u.tenant_id = " + u + ".tenant_id " +
+               "          AND rl_u.return_source = 'untracked_unit:' || " + u + ".id::text) THEN 'received' " +
+               "      WHEN EXISTS (SELECT 1 FROM return_sessions rs_u WHERE rs_u.id = " + u + ".return_session_id " +
+               "          AND rs_u.status = 'open') THEN 'session_open' END)";
+    }
+
+    /** The order's live unit marks, for the drawer: one row per mark with the parcel and why it can't be undone. */
+    public List<Map<String, Object>> arrivals(UUID tenantId, UUID orderId) {
+        return jdbc.queryForList(
+            "SELECT u.id::text AS \"intakeId\", u.order_item_id::text AS \"orderItemId\", u.unit_no AS \"unitNo\", " +
+            "       u.condition, s.tracking_number AS awb, us.name AS \"markedBy\", u.created_at AS \"markedAt\", " +
+            "       " + arrivalUndoBlockSql("u") + " AS \"undoBlocked\" " +
+            "FROM untracked_unit_intakes u JOIN shipments s ON s.id = u.shipment_id AND s.tenant_id = u.tenant_id " +
+            "LEFT JOIN users us ON us.id = u.actor_user_id " +
+            "WHERE u.tenant_id = ? AND u.order_id = ? AND u.undone_at IS NULL ORDER BY u.order_item_id, u.unit_no",
+            tenantId, orderId);
+    }
+
+    /**
+     * Bug 2 — owner / manager "Undo arrival" from the order drawer, for a mark whose Scan returns session has closed: the
+     * same writes as {@link #undo} (undone_at / undone_by only — app_user may update nothing else; the leg's
+     * 'untracked_units_arrived' intake cleared when no live mark is left). Refused 409 while a Receiving line used the
+     * unit or its session is open; 404 when it isn't a live mark of this order. No piece, no stock, no Shopify. Returns
+     * the undone mark (for the caller's audit row).
+     */
+    public Map<String, Object> undoArrival(UUID tenantId, UUID orderId, UUID intakeId, UUID actorUserId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT u.id, u.shipment_id, u.order_item_id, u.unit_no, u.condition, u.return_session_id, " +
+            "       " + arrivalUndoBlockSql("u") + " AS blocked " +
+            "FROM untracked_unit_intakes u WHERE u.id = ? AND u.tenant_id = ? AND u.order_id = ? AND u.undone_at IS NULL " +
+            "FOR UPDATE", intakeId, tenantId, orderId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Arrival not found");
+        Map<String, Object> mark = rows.get(0);
+        if ("received".equals(mark.get("blocked"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This item was already received into stock — it can't be undone here.");
+        }
+        if ("session_open".equals(mark.get("blocked"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Its Scan returns session is still open — undo it there.");
+        }
+        jdbc.update("UPDATE untracked_unit_intakes SET undone_at = now(), undone_by = ? WHERE id = ? AND tenant_id = ? " +
+            "AND undone_at IS NULL", actorUserId, intakeId, tenantId);
+        jdbc.update(
+            "UPDATE shipments SET return_intake_completed_at = NULL, return_intake_outcome = NULL, " +
+            "    return_intake_by = NULL, return_intake_session_id = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND return_intake_outcome = 'untracked_units_arrived' " +
+            "  AND NOT EXISTS (SELECT 1 FROM untracked_unit_intakes u WHERE u.tenant_id = shipments.tenant_id " +
+            "                  AND u.shipment_id = shipments.id AND u.undone_at IS NULL)",
+            mark.get("shipment_id"), tenantId);
+        return mark;
+    }
+
+    /**
      * Undoes a unit's mark — only one made in THIS session (the session is open; the caller checks).
      * When no live mark is left on the parcel, the leg's 'untracked_units_arrived' intake is cleared,
      * so the parcel is back to "waiting" and its Return To Receive exceptions are gone.

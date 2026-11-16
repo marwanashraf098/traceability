@@ -260,6 +260,21 @@ public class ShopifySyncService {
             """;
 
     /**
+     * D2 (2026-11-16) — an order reopened for picking (OrderReopen, FulfillService.unpackOrder) follows Shopify again:
+     * a line stored at 0 because it arrived while the order looked frozen ("Added after shipping") takes Shopify's
+     * current quantity — the number an unfrozen upsert stores ({@link #restLineQuantity}; the GraphQL import stores
+     * {@code current_quantity} in the line raw too). Only lines at 0 with a current quantity &gt; 0 — a line removed in
+     * Shopify (current 0) stays 0. Runs on the caller's connection / transaction / tenant; returns the lines changed.
+     */
+    public static int restoreAddedLineQuantities(JdbcTemplate jdbc, UUID tenantId, UUID orderId) {
+        return jdbc.update(
+            "UPDATE order_items SET quantity = (raw->>'current_quantity')::int " +
+            "WHERE tenant_id = ? AND order_id = ? AND quantity = 0 " +
+            "  AND raw->>'current_quantity' ~ '^[0-9]+$' AND (raw->>'current_quantity')::int > 0",
+            tenantId, orderId);
+    }
+
+    /**
      * A REST line's quantity as Traced stores it: Shopify's CURRENT quantity ({@code current_quantity} —
      * removed / refunded units excluded; an edit keeps a removed line with current_quantity 0), falling
      * back to {@code quantity} when the key is absent. Used by the ingest and by the FR-3.6 edit diff

@@ -4,7 +4,7 @@ topic: alerts
 title: تغيّر رقم التتبع في Shopify
 roles: [owner, manager]
 related: [alerts-courier-shipments, reprint-labels, hand-over-parcels, orders-edited-in-shopify]
-alerts: [tracking_changed_after_custody, tracking_change_needs_review, tracking_changed_relabel, superseded_waybill_moving]
+alerts: [tracking_changed_after_custody, tracking_change_needs_review, tracking_changed_relabel, superseded_waybill_moving, shipped_without_scan]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -31,5 +31,9 @@ video:
 ## البوليصة القديمة ما زالت تتحرك في Bosta
 
 استبدل Shopify بوليصة بوسطة الخاصة بالطلب، لكن القديمة تتحرك في بوسطة رغم ذلك، فقد يكون الطرد مع المندوب بالبوليصة القديمة. تحقّق مع بوسطة من الطرد الذي مع المندوب. يختفي التنبيه وحده عندما تُظهر بوسطة أن الشحنة القديمة انتهت أو حُذفت.
+
+## خرج دون مسح في Traced
+
+جهّز Traced هذا الطلب على بوليصة حُذفت (أو انتهت) قبل أن يستلمها المندوب، ثم فُكّ الطرد. بعدها أعطى Shopify الطلب بوليصة جديدة، والمندوب معه بالفعل طرد بها لم يمسحه Traced. تحقّق من القطع التي خرجت وصحّح المخزون إن لزم — Traced لا يغيّر المخزون وحده هنا. يختفي التنبيه عند مسح قطعة على البوليصة الجديدة، أو إلغاء الطلب، أو معالجته.
 
 في التنبيهات الثلاثة الأولى، لا يعود التنبيه الذي عالجته إلا إذا تغيّر رقم التتبع مرة أخرى.

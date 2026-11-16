@@ -148,7 +148,7 @@ describe('Return session — parcel cards (Step 5)', () => {
     expect(card).toHaveTextContent('AWB 8987563471')
     expect(card).toHaveTextContent('#1047')
     expect(card).toHaveTextContent('Mariam S.')
-    expect(within(card).getByTestId('parcel-pill')).toHaveTextContent('1 of 2 items scanned')
+    expect(within(card).getByTestId('parcel-pill')).toHaveTextContent('1 scanned · up to 2 could come back')
     expect(within(card).getByTestId('parcel-bosta-note')).toHaveTextContent('2 items — Flipped Pants in Black - XL x 1 (1001-Black-XL)')
     expect(within(card).getByTestId('item-piece-1')).toBeInTheDocument()          // scanned, existing controls
     expect(within(card).getByTestId('expected-piece-2')).toBeInTheDocument()      // awaiting scan, reprint
@@ -276,7 +276,7 @@ describe('Return session — parcel cards (Step 5)', () => {
     await openSessionWith(detail({ parcels: [untrackedParcel()] }), true)
     await i18n.changeLanguage('ar')
     const card = await screen.findByTestId('parcel-card-6136538746')
-    expect(card).toHaveTextContent('مرتجع من بوستا')
+    expect(card).toHaveTextContent('مرتجع من بوسطة')
     expect(within(card).getByTestId('parcel-mark-received')).toHaveTextContent('تسجيل الشحنة كمستلمة')
     expect(card.querySelector('bdi')).not.toBeNull()
   })

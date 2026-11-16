@@ -4,7 +4,7 @@ topic: alerts
 title: Tracking number changed in Shopify
 roles: [owner, manager]
 related: [alerts-courier-shipments, reprint-labels, hand-over-parcels, orders-edited-in-shopify]
-alerts: [tracking_changed_after_custody, tracking_change_needs_review, tracking_changed_relabel, superseded_waybill_moving]
+alerts: [tracking_changed_after_custody, tracking_change_needs_review, tracking_changed_relabel, superseded_waybill_moving, shipped_without_scan]
 screens: [/exceptions, /orders]
 video:
 ---
@@ -31,5 +31,9 @@ Traced switched to the new number, but the parcel is already packed or printed w
 ## Old Waybill Still Moving At Bosta
 
 Shopify replaced the order's Bosta waybill, but the old one is moving at Bosta anyway, so the courier may have the parcel under the old waybill. Check with Bosta which parcel the courier has. It clears by itself once Bosta shows the old delivery ended or deleted.
+
+## Shipped Without A Traced Scan
+
+Traced packed this order onto a waybill that was deleted (or ended) before the courier took it, and the parcel was taken apart. Shopify then gave the order a new waybill, and the courier already has a parcel under it that Traced never scanned. Check which pieces went out and correct your stock if needed — Traced never changes stock by itself here. It clears once a piece is scanned onto the new waybill, the order is cancelled, or you resolve it.
 
 For the first three alerts, a resolved alert comes back only if the tracking number changes again.

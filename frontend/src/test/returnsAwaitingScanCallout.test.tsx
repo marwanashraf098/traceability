@@ -153,8 +153,8 @@ describe('Returns landing — courier returns awaiting scan callout', () => {
     awaitingBody = awaitingScan(5)
     renderWithAppI18n()
     const callout = await screen.findByTestId('awaiting-scan-callout')
-    expect(callout).toHaveTextContent('5 مرتجعات من بوستا بانتظار المسح')
-    expect(callout).toHaveTextContent('أعادتها بوستا إلى مستودعك. امسح ملصق الشحنة للبدء.')
+    expect(callout).toHaveTextContent('5 مرتجعات من بوسطة بانتظار المسح')
+    expect(callout).toHaveTextContent('أعادتها بوسطة إلى مستودعك. امسح ملصق الشحنة للبدء.')
   })
 
   test('ac6 owner Review → resumes the open session (no POST)', async () => {

@@ -26,9 +26,14 @@ import java.util.stream.Collectors;
  *      ever moved doesn't count ({@link #movementRowSql}, D7);
  *   2. a piece on a live packed allocation of the order is in a {@link PieceStatus#LEFT_CUSTODY} status
  *      (self-pickup has no forward leg; a courier path whose history lags);
- *   3. a piece allocated to the order has a piece_events row FOR THIS ORDER into a LEFT_CUSTODY status —
- *      history, like clause 1, so the freeze stays once a returned piece is restocked (its allocation is
- *      released and the piece is 'available' again).
+ *   3. a piece allocated to the order has REALLY left with it: a piece_events row FOR THIS ORDER into
+ *      'with_courier' or 'delivered' on a FORWARD leg of this order ({@link #pieceLeftWithOrderSql}; a NULL
+ *      shipment is the self-pickup handover — self-pickup has no leg) — history, like clause 1, so the freeze
+ *      stays once a returned piece is restocked (its allocation is released and the piece is 'available'
+ *      again). D1 (approved 2026-11-16, BRK-47903-EG): a return-intake event alone (into return_in_transit /
+ *      return_pending_inspection from packed / awaiting_pickup — a parcel taken apart before the courier had
+ *      it) never freezes; a leg that really moved and then came back still does (its with_courier /
+ *      delivered event).
  */
 public final class OrderLineFreeze {
 
@@ -117,8 +122,21 @@ public final class OrderLineFreeze {
                "    JOIN allocations a_fh ON a_fh.order_item_id = oi_fh.id " +
                "    JOIN piece_events pe_fh ON pe_fh.piece_id = a_fh.piece_id AND pe_fh.order_id = oi_fh.order_id " +
                "    WHERE oi_fh.order_id = " + orderIdExpr + " AND oi_fh.tenant_id = " + tenantIdExpr + " " +
-               "      AND pe_fh.to_status::text IN (" + left + ")" +
+               "      AND " + pieceLeftWithOrderSql("pe_fh", "oi_fh.order_id") +
                "))";
+    }
+
+    /**
+     * D1 (2026-11-16) — THE one definition of "this piece_events row ({@code pe}) is the piece really leaving with
+     * the order {@code orderIdExpr}": into 'with_courier' / 'delivered' on a FORWARD leg of that order (a NULL
+     * shipment = the self-pickup handover, which has no leg). A return-intake event (into return_in_transit /
+     * return_pending_inspection) is never a departure on its own — a piece that really left already has its
+     * with_courier / delivered row.
+     */
+    public static String pieceLeftWithOrderSql(String pe, String orderIdExpr) {
+        return "(" + pe + ".to_status::text IN ('with_courier', 'delivered') AND (" + pe + ".shipment_id IS NULL " +
+               "  OR EXISTS (SELECT 1 FROM shipments s_lw WHERE s_lw.id = " + pe + ".shipment_id " +
+               "             AND s_lw.order_id = " + orderIdExpr + " AND s_lw.shipment_leg = 'forward')))";
     }
 
     /**

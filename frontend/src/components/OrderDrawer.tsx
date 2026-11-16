@@ -7,6 +7,7 @@ import {
   getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder, markShippedOutsideTraced,
   getOrderNotes, addOrderNote, ServerMessageError, isBostaCourier,
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
+  getUntrackedArrivals, undoUntrackedArrival, type UntrackedArrival,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
 import { Button, CARRIER_STATUS_KEYS, OrderPieceBadge, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
@@ -91,6 +92,31 @@ export default function OrderDrawer({
       const msg = err instanceof Error ? err.message : ''
       setSoErr(msg.startsWith('409') ? t('orders.shippedOutside.conflict') : t('orders.shippedOutside.error'))
     } finally { setSoBusy(false) }
+  }
+
+  // Bug 2 (2026-11-16): untracked units marked Arrived in Scan returns — "Undo arrival" for one marked by mistake
+  // after its session closed. Owner / manager only (a worker's 403 hides the block).
+  const [arrivals, setArrivals] = useState<UntrackedArrival[]>([])
+  const [undoTarget, setUndoTarget] = useState<UntrackedArrival | null>(null)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoErr, setUndoErr] = useState('')
+  const loadArrivals = (id: string) => {
+    getUntrackedArrivals(id).then(a => setArrivals(Array.isArray(a) ? a : [])).catch(() => setArrivals([]))
+  }
+  useEffect(() => {
+    setArrivals([])
+    if (orderId) loadArrivals(orderId)
+  }, [orderId])
+  const handleUndoArrival = async () => {
+    if (!orderId || !undoTarget) return
+    setUndoBusy(true); setUndoErr('')
+    try {
+      await undoUntrackedArrival(orderId, undoTarget.intakeId)
+      setUndoTarget(null); loadArrivals(orderId); reload()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      setUndoErr(msg.startsWith('409') ? t('orders.drawer.undoArrival.conflict') : t('common.error'))
+    } finally { setUndoBusy(false) }
   }
 
   const reload = () => {
@@ -516,6 +542,27 @@ export default function OrderDrawer({
                             ))}
                           </div>
                         )}
+                        {arrivals.filter(a => a.orderItemId === item.id).map(a => (
+                          <div key={a.intakeId} className="mt-1.5 flex flex-wrap items-center gap-2 text-caption"
+                               data-testid={`drawer-arrival-${a.intakeId}`}>
+                            <span className="text-muted">
+                              {t(a.condition === 'damaged' ? 'orders.drawer.undoArrival.arrivedDamaged' : 'orders.drawer.undoArrival.arrivedSellable',
+                                { unit: a.unitNo })}
+                              {' · '}<bdi dir="ltr" className="font-mono">{a.awb}</bdi>
+                            </span>
+                            {a.undoBlocked === null ? (
+                              <button type="button" className="text-trace-blue font-semibold hover:underline"
+                                      onClick={() => { setUndoErr(''); setUndoTarget(a) }} data-testid="drawer-undo-arrival">
+                                {t('orders.drawer.undoArrival.action')}
+                              </button>
+                            ) : (
+                              <span className="text-muted" data-testid="drawer-undo-arrival-blocked">
+                                {t(a.undoBlocked === 'received' ? 'orders.drawer.undoArrival.blockedReceived'
+                                  : 'orders.drawer.undoArrival.blockedSessionOpen')}
+                              </span>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </li>
                   ))}
@@ -673,6 +720,18 @@ export default function OrderDrawer({
               >
                 {t('orderDetail.cancelDialog.confirm')}
               </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {undoTarget && (
+        <Modal title={t('orders.drawer.undoArrival.title')} onClose={() => setUndoTarget(null)}>
+          <div className="space-y-4" data-testid="drawer-undo-arrival-dialog">
+            <p className="text-small text-muted">{t('orders.drawer.undoArrival.body', { awb: undoTarget.awb })}</p>
+            {undoErr && <p className="text-critical text-small" role="alert">{undoErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setUndoTarget(null)}>{t('common.cancel')}</Button>
+              <Button loading={undoBusy} onClick={handleUndoArrival}>{t('orders.drawer.undoArrival.confirm')}</Button>
             </div>
           </div>
         </Modal>

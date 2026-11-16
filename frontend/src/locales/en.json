@@ -378,7 +378,18 @@
       "viewInShopify": "View in Shopify",
       "viewAllItems": "View all items",
       "removedInShopify": "Removed in Shopify",
-      "addedAfterShipping": "Added after shipping — not in this parcel",
+      "undoArrival": {
+          "arrivedSellable": "Unit {{unit}} came back · sellable",
+          "arrivedDamaged": "Unit {{unit}} came back · damaged",
+          "action": "Undo arrival",
+          "blockedReceived": "Already received into stock",
+          "blockedSessionOpen": "Undo it in Scan returns (session still open)",
+          "title": "Undo this arrival?",
+          "body": "Use this when the item didn't actually come back in parcel {{awb}}. Stock and Shopify don't change.",
+          "confirm": "Undo arrival",
+          "conflict": "This arrival can't be undone any more — reload the order."
+        },
+        "addedAfterShipping": "Added after shipping — not in this parcel",
       "traceTimeline": "Trace timeline",
       "timelineEmpty": "No activity recorded yet",
       "timelineError": "Couldn't load activity",
@@ -525,6 +536,7 @@
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta",
+      "shipped_without_scan": "Shipped without a Traced scan — check stock",
       "shipped_outside_traced": "Shipped outside Traced, pieces still held",
       "shopify_exchange_still_waiting": "Shopify exchange still waiting",
       "shopify_return_open_after_intake": "Received in Traced, return still open in Shopify",
@@ -1712,7 +1724,8 @@
       "feedback": {
         "itemScanned": "Item scanned",
         "awbRecognised": "Parcel label recognised",
-        "markedReceived": "Parcel marked received"
+        "markedReceived": "Parcel marked received",
+        "unpacked": "Back on shelf — order {{order}} needs repacking"
       },
       "parcel": {
         "courierReturn": "Courier return",
@@ -1726,6 +1739,18 @@
         "backAtWarehouse": "Back at warehouse",
         "progress": "{{scanned}} of {{count}} item scanned",
         "progress_other": "{{scanned}} of {{count}} items scanned",
+        "upTo": "{{scanned}} scanned · up to {{count}} could come back",
+        "label": {
+          "items": "Bosta label: {{count}} item",
+          "items_other": "Bosta label: {{count}} items",
+          "onLabel": "On Bosta's label × {{count}}",
+          "onLabelShort": "On Bosta's label",
+          "notOnLabel": "Not on the Bosta label ({{count}})",
+          "confirmTitle": "Mark another item?",
+          "confirmBody": "Bosta's label says {{count}} item — mark another?",
+          "confirmBody_other": "Bosta's label says {{count}} items — mark another?",
+          "confirmYes": "Mark it"
+        },
         "allIn": "All {{count}} item in",
         "allIn_other": "All {{count}} items in",
         "allInShort": "All items in",

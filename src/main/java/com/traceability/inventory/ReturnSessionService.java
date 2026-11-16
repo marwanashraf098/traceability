@@ -288,6 +288,33 @@ public class ReturnSessionService {
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
         UUID pieceVariantId   = (UUID) piece.get("variant_id");
+        // D3 (approved 2026-11-16, BRK-47903-EG; narrowed 2026-11-16): a piece still packed / awaiting pickup whose
+        // order's waybill is DEAD — deleted in Bosta, or cancelled / terminated — and no forward leg of the order ever
+        // moved never left Traced: the parcel was taken apart. It goes back on the shelf (an unpack), never a return:
+        // no 'rto', no inspection, no Shopify +1, the order's demand intact. A live 'created' waybill keeps today's
+        // path (flagged unexpected) — ReturnsExpectedBackTest e5 / w2.
+        if ((current == PieceStatus.PACKED || current == PieceStatus.AWAITING_PICKUP) && orderId != null
+                && waybillDiedBeforeItMoved(orderId, tenantId)) {
+            return unpackByScan(sessionId, tenantId, pieceId, current, orderId, locationId, actorUserId, viaPhone);
+        }
+        // D3 idempotent re-scan: the piece this session already put back on the shelf — same answer, nothing written.
+        if (current == PieceStatus.AVAILABLE) {
+            List<Map<String, Object>> unpacked = jdbc.queryForList(
+                "SELECT pe.order_id, o.number FROM piece_events pe LEFT JOIN warehouse_orders o ON o.id = pe.order_id AND o.tenant_id = pe.tenant_id " +
+                "WHERE pe.piece_id = ? AND pe.tenant_id = ? AND pe.event_type = 'unpacked' " +
+                "  AND pe.metadata->>'via' = 'return_scan' AND pe.metadata->>'session_id' = ? " +
+                "  AND pe.occurred_at = (SELECT max(x.occurred_at) FROM piece_events x WHERE x.piece_id = pe.piece_id)",
+                pieceId, tenantId, sessionId.toString());
+            if (!unpacked.isEmpty()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("scanType", "unpacked");
+                result.put("pieceId", pieceId);
+                result.put("orderId", unpacked.get(0).get("order_id"));
+                result.put("orderNumber", unpacked.get(0).get("number"));
+                result.put("orderReopened", false);
+                return result;
+            }
+        }
         // G3: a piece of an order whose GENERIC forward leg is with the courier or delivered — the scan is the
         // return evidence (same rule as its waybill): the leg becomes 'returned', the piece is expected back.
         // Never a Bosta leg (returnableGenericLeg reads provider = 'generic' only).
@@ -441,6 +468,47 @@ public class ReturnSessionService {
         }
 
         return itemRow(itemId, tenantId);
+    }
+
+    /** D3 — the order's NEWEST forward leg is dead (deleted in Bosta, or cancelled / terminated) and NO forward leg of
+     *  the order ever moved (OrderLineFreeze.legMovedSql). A live 'created' waybill, or no forward leg at all, is false. */
+    private boolean waybillDiedBeforeItMoved(UUID orderId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? " +
+            "    AND " + OrderLineFreeze.newestForwardLegSql("s") +
+            "    AND (s.provider_deleted_at IS NOT NULL OR s.internal_state IN ('cancelled', 'terminated'))) " +
+            "AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "    AND " + OrderLineFreeze.legMovedSql("s") + ")",
+            Boolean.class, orderId, tenantId, orderId, tenantId));
+    }
+
+    /**
+     * D3 — a piece of a parcel taken apart before the courier had it, scanned in Scan returns: back to 'available'
+     * through the ledger's existing unwind edges (packed:available / awaiting_pickup:available), event 'unpacked'
+     * (metadata via return_scan + the session), its live allocation released, put at the session's location. When it
+     * was the order's last held piece the order goes back to Pick &amp; Pack under D2's rule (OrderReopen) — demand
+     * intact. No return_session_items row (not a return); the feedback strip reads the event ("Back on shelf — order X
+     * needs repacking"). No Shopify write — packing never changed Shopify.
+     */
+    private Map<String, Object> unpackByScan(UUID sessionId, UUID tenantId, String pieceId, PieceStatus current, UUID orderId,
+                                             UUID locationId, UUID actorUserId, boolean viaPhone) {
+        String meta = "{\"via\":\"return_scan\",\"scope\":\"piece\",\"session_id\":\"" + sessionId + "\""
+            + (viaPhone ? ",\"scan\":\"phone\"" : "") + "}";
+        ledger.transition(pieceId, current, PieceStatus.AVAILABLE, "unpacked", actorUserId,
+            new TransitionContext(orderId, null, locationId, null, meta));
+        jdbc.update("UPDATE allocations SET status = 'released' WHERE piece_id = ? AND tenant_id = ? AND status IN ('active', 'packed')",
+            pieceId, tenantId);
+        if (locationId != null) jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?", locationId, pieceId);
+        boolean reopened = OrderReopen.reopen(jdbc, tenantId, orderId, actorUserId, "return_scan_unpack", null);
+        String number = jdbc.queryForObject("SELECT number FROM warehouse_orders WHERE id = ? AND tenant_id = ?",
+            String.class, orderId, tenantId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanType", "unpacked");
+        result.put("pieceId", pieceId);
+        result.put("orderId", orderId);
+        result.put("orderNumber", number);
+        result.put("orderReopened", reopened);
+        return result;
     }
 
     private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber, boolean viaPhone) {
@@ -1218,6 +1286,20 @@ public class ReturnSessionService {
             }
             boolean returnedToSender = Boolean.TRUE.equals(leg.get("returned_to_sender"));
 
+            // Bug 2 / 3 (2026-11-16): the item lines Bosta printed on this parcel's label (BostaLabelLines — never
+            // itemsCount). A return pickup / exchange trip: what comes back (returnSpecs); a returned-to-sender leg:
+            // what was sent (specs). Unreadable → no key, every count as before.
+            String labelText = ("return".equals(leg.get("shipment_leg")) || exchangeTrip)
+                ? (String) (leg.get("description") != null || !exchangeTrip ? leg.get("description") : leg.get("x_inbound_description"))
+                : returnedToSender && leg.get("generic_carrier") == null ? (String) leg.get("fwd_description") : null;
+            com.traceability.integrations.bosta.BostaLabelLines.Label label =
+                com.traceability.integrations.bosta.BostaLabelLines.parse(labelText);
+            if (label != null) {
+                units = onLabel(units, label);
+                parcelExpected = onLabel(parcelExpected, label);
+                scanned = onLabel(scanned, label);
+            }
+
             Map<String, Object> parcel = new LinkedHashMap<>();
             parcel.put("shipmentId", leg.get("shipment_id").toString());
             parcel.put("awb", awb);
@@ -1282,6 +1364,21 @@ public class ReturnSessionService {
                 && Boolean.TRUE.equals(leg.get("untracked")) && requestId == null && itemsRequestId == null
                 && outcome == null && unitsIn == 0);
             parcel.put("counts", counts);
+            if (label != null) {
+                // Present only when the label reads (exact-key screens elsewhere unchanged).
+                Map<String, Object> bl = new LinkedHashMap<>();
+                bl.put("total", label.total());
+                List<Map<String, Object>> blLines = new ArrayList<>();
+                for (com.traceability.integrations.bosta.BostaLabelLines.Line l : label.lines()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("sku", l.sku());
+                    m.put("quantity", l.quantity());
+                    m.put("name", l.name());
+                    blLines.add(m);
+                }
+                bl.put("lines", blLines);
+                parcel.put("bostaLabel", bl);
+            }
             parcel.put("complete", complete);
             parcel.put("itemsRequestId", itemsRequestId == null ? null : itemsRequestId.toString());
             parcel.put("itemsRequestReference", leg.get("items_request_reference"));
@@ -1296,6 +1393,24 @@ public class ReturnSessionService {
         result.put("parcels", parcels);
         result.put("otherItems", otherItems);
         result.put("lastScan", lastScan(sessionId, tenantId, items, legs));
+    }
+
+    /**
+     * Bug 2 / 3 — copies of {@code rows} (never the shared item maps) with {@code onLabel} (its SKU is on the Bosta label)
+     * and {@code labelQuantity}; rows on the label first, the rest after in their own order ("Not on the Bosta label").
+     */
+    private static List<Map<String, Object>> onLabel(List<Map<String, Object>> rows,
+                                                     com.traceability.integrations.bosta.BostaLabelLines.Label label) {
+        List<Map<String, Object>> on = new ArrayList<>(), off = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> copy = new LinkedHashMap<>(r);
+            int qty = label.quantityOf((String) r.get("sku"));
+            copy.put("onLabel", qty > 0);
+            copy.put("labelQuantity", qty);
+            (qty > 0 ? on : off).add(copy);
+        }
+        on.addAll(off);
+        return on;
     }
 
     /** Step 6a — a request's items for its parcel card: tracked (piece) and untracked (order-line unit) alike. */
@@ -1338,6 +1453,18 @@ public class ReturnSessionService {
                     && marked != null && (bestAt == null || marked.after(bestAt))) {
                 bestAt = marked;
                 best = scanEntry("marked_received", leg.get("awb"), null, marked);
+            }
+        }
+        // D3: a piece this session put back on the shelf (unpacked, not returned) — label = the order to repack.
+        for (Map<String, Object> u : jdbc.queryForList(
+                "SELECT COALESCE(p.short_code, p.barcode) AS code, o.number, pe.occurred_at FROM piece_events pe " +
+                "JOIN pieces p ON p.id = pe.piece_id LEFT JOIN warehouse_orders o ON o.id = pe.order_id AND o.tenant_id = pe.tenant_id " +
+                "WHERE pe.tenant_id = ? AND pe.event_type = 'unpacked' AND pe.metadata->>'via' = 'return_scan' " +
+                "  AND pe.metadata->>'session_id' = ? ORDER BY pe.occurred_at DESC LIMIT 1",
+                tenantId, sessionId.toString())) {
+            java.sql.Timestamp at = (java.sql.Timestamp) u.get("occurred_at");
+            if (at != null && (bestAt == null || at.after(bestAt))) {
+                best = scanEntry("unpacked", u.get("code"), u.get("number"), at);
             }
         }
         return best;
