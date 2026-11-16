@@ -489,9 +489,11 @@ class BazarSaleServiceTest {
         // Past 2 minutes the seller can't either…
         jdbc.update("UPDATE bazar_sales SET sold_at = now() - interval '3 minutes' WHERE id IN (?, ?)", s1, s2);
         assertThat(codeOf(() -> sales.undo(f.eventId(), s1, worker1))).isEqualTo(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED);
-        assertThat(codeOf(() -> sales.changePayment(f.eventId(), s1, "card", worker1)))
+        // …but they CAN still change how it was paid, for as long as the event is live; another worker can't.
+        assertThat(sales.changePayment(f.eventId(), s1, "card", worker1).get("method")).isEqualTo("card");
+        assertThat(codeOf(() -> sales.changePayment(f.eventId(), s2, "card", worker2)))
             .isEqualTo(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED);
-        // …but a manager / owner can, any time while live.
+        // …and a manager / owner can, any time while live.
         assertThat(sales.undo(f.eventId(), s1, manager).get("status")).isEqualTo("undone");
         assertThat(sales.undo(f.eventId(), s2, owner).get("status")).isEqualTo("undone");
         // Within the window the seller can.

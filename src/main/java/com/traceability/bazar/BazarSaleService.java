@@ -43,9 +43,9 @@ import java.util.UUID;
  *       snapshotted onto the sale.</li>
  *   <li>Payments are append-only: a method change is a void row + a new payment row.</li>
  * </ul>
- * Who: sell needs the caller's role in the event's {@code seller_roles}. Undo / payment change: owner or manager
- * any time while the event is live, else the seller who made the sale within {@link #UNDO_WINDOW_SECONDS}. Customer
- * edit: owner or manager, or the seller who made the sale (while live). The sales list: a seller role, or owner /
+ * Who: sell needs the caller's role in the event's {@code seller_roles}. Undo: owner or manager any time while the
+ * event is live, else the seller who made the sale within {@link #UNDO_WINDOW_SECONDS}. Payment method change and
+ * customer edit: owner or manager, or the seller who made the sale, while the event is live. The sales list: a seller role, or owner /
  * manager; a worker sees the customer's phone masked.
  */
 @Service
@@ -210,7 +210,15 @@ public class BazarSaleService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> sale = lockActiveSale(tenantId, eventId, saleId);
-        requireOwnRecentOrManager(ev, sale, actor);
+        // The seller may fix the method of their own sale for as long as the event is live (approved 2026-11-16;
+        // B4 tightens it to "until that business day is closed"). Owner / manager: any time while live.
+        boolean mine = actor.userId().equals(sale.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
+        if (!actor.manages() && !mine) {
+            throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
+                "Only the seller who made this sale, or an owner or manager, can change how it was paid.",
+                "يمكن فقط للبائع الذي أجرى عملية البيع، أو المالك أو المدير، تغيير طريقة الدفع.",
+                HttpStatus.FORBIDDEN);
+        }
         if (method == null || method.isBlank()) throw methodRequired();
         String chosen = resolveMethod(ev, method);
 

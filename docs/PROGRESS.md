@@ -5,8 +5,8 @@
 ## Current state
 
 **Bazar POS B2 — quick sell, undo, edit (2026-11-16; branch `feat/bazar-b2` from main f56131b5; V232; count gates
-MigrationSmokeTest 231 files, NotTracedBackfillTest 176; NOT merged, NOT deployed; bazar_enabled off for every tenant).**
-Backend + API only (phone screens are B6). `BazarSaleService` is the ONE writer of `bazar_sales` / `bazar_payments` /
+MigrationSmokeTest 231 files, NotTracedBackfillTest 176; reviewed + approved 2026-11-16 with one change (decision 2); merged, NOT deployed — B1 + B2 deploy together;
+bazar_enabled off for every tenant).** Backend + API only (phone screens are B6). `BazarSaleService` is the ONE writer of `bazar_sales` / `bazar_payments` /
 `bazar_sale_counters` and the only caller of the bazar sale edges (BazarSaleGuardTest, source scan).
 - Sell = ledger `out_on_transfer → sold` (event `bazar_sold`) + the piece's `transfer_pieces` outcome 'sold' (verified) +
   the line's qty_sold +1, one transaction. The ledger's race-guarded UPDATE is the referee (concurrent double scan → one
@@ -21,8 +21,9 @@ Backend + API only (phone screens are B6). `BazarSaleService` is the ONE writer 
 - Payments append-only (app_user: INSERT / SELECT): kind payment | refund | void, a void row points at the row it cancels
   (`voids_payment_id`, once). Method change = void + new. Default cash; no cash on the event → method required.
 - Sale numbers per tenant (`bazar_sale_counters`, row lock), shown B-0001. business_day = Africa/Cairo date of sold_at.
-- Who: sell needs the role in the event's seller_roles. Undo / payment change: owner or manager any time while live, else
-  the seller who made it within 2 min. Customer edit: owner / manager, or the seller who made it (no window). GET /sales:
+- Who: sell needs the role in the event's seller_roles. Undo: owner or manager any time while live, else the seller who
+  made it within 2 min. Payment method change (review change, approved 2026-11-16) and customer edit: owner / manager, or
+  the seller who made it, any time while live — B4 tightens the method change to "until that business day is closed". GET /sales:
   a seller role or owner / manager; workers see the phone masked (010*****678). Every write needs the event live.
 - Customer phone stored 01XXXXXXXXX (010/011/012/015; +20 / 0020 / Arabic digits accepted; anything else refused).
   New personal data → privacy policy 1.5 (PolicyVersions.PRIVACY). Not covered yet: GDPR export / redaction of bazar
