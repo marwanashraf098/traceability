@@ -5,7 +5,7 @@
 ## Current state
 
 **BROEK deleted-waybill / Scan returns fixes (2026-11-16; branch `fix/brk-deleted-waybill-reopen` off origin/main f56131b5,
-worktree `~/Documents/traceability-brk`; NO migration; merged into main 2026-11-16, NOT deployed; no prod writes).** From the Step 0
+NO migration; DEPLOYED 2026-11-16 (merge 647e5c33, prod at V233 applied 22:32); branch + worktree deleted).** From the Step 0
 diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6e1ffe7-…). Decisions (Marawan 2026-11-16):
 - **D1** `OrderLineFreeze` clause 3: a piece counts as having left custody only with a with_courier / delivered event FOR
   THE ORDER on a FORWARD leg of the order (`OrderLineFreeze.pieceLeftWithOrderSql`; a NULL shipment = the self-pickup
@@ -94,6 +94,22 @@ diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6
     7671830b-7aa3-4cd4-a6c1-d466e7e15d6b (409 if Receiving used it or its session is open).
   - **R3 — BRK-47954-EG:** catch-up (same env, `_ORDERS=BRK-47954-EG`; dry run then apply) → link + supersede +
     `shipped_without_scan` (697507445 already past 10 — Bosta 24); no reopen, no stock change.
+- **Repair status (2026-11-16, prod):**
+  - **R0 done:** claims 5093 / 5232 / 5246 / 5249 / 5420 / 5456 → 'skipped' `never_departed_unpack (BRK repair 2026-11)`;
+    4776 (BRK-46535-EG) untouched, still 'failed' (re-read 2026-11-16).
+  - **R1 / R3 applied 22:39:** both LINKED — BRK-47903-EG 2109710882 supersedes 6855433207, BRK-47954-EG 697507445
+    supersedes 5004536440; both new legs delivered at Bosta 45 (past 10 → no reopen); the HIGH `shipped_without_scan`
+    alert is live for both (condition-only, derived by `ExceptionService.detectShippedWithoutScan` — every predicate
+    checked on prod).
+  - **Stored `awaiting_pickup` with a delivered leg — by design, no fix.** No Bosta path moves a courier order's stored
+    status past awaiting_pickup; every display reads the leg (`OrderStatusDeriver`, Orders tabs) and every
+    stored-status reader is guarded by the leg / pieces / a cancel request / `frozenSql`. Prod: 3,944 orders in that
+    shape across tenants (3,933 awaiting_pickup, 11 packed).
+  - **Still open:** R2 (Raw Denim undo, BRK-47431-EG — drawer "Undo arrival" on intake
+    7671830b-7aa3-4cd4-a6c1-d466e7e15d6b). Optional tidy-ups: `TrackingChanges.relabelReasons` reads the stored
+    packed / awaiting_pickup for its 'packed' reason (check the live leg instead; the alert is already hidden by
+    `frozenSql`); the 11 stored-'packed' orders whose leg moved (skipped the link's packed → awaiting_pickup step;
+    harmless — every 'packed'-only reader also needs a cancel request).
 
 **Bazar POS B2 — quick sell, undo, edit (2026-11-16; branch `feat/bazar-b2` from main f56131b5; V232; count gates
 MigrationSmokeTest 231 files, NotTracedBackfillTest 176; reviewed + approved 2026-11-16 with one change (decision 2); merged, NOT deployed — B1 + B2 deploy together;
