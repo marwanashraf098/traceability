@@ -594,7 +594,8 @@ describe('Overview dashboard', () => {
     })
 
     const card = await screen.findByTestId('fulfillment-activation-prompt')
-    expect(within(card).getByText('Activate your warehouse location')).toBeInTheDocument()
+    // L1b-2 (2026-11-16): Traced never adds the location itself — the prompt says to add it to the shipping profile.
+    expect(within(card).getByText('Add your warehouse to your shipping profile')).toBeInTheDocument()
     expect(within(card).getByTestId('fulfillment-activation-prompt-link'))
       .toHaveAttribute('href', '/settings?tab=connections')
   })

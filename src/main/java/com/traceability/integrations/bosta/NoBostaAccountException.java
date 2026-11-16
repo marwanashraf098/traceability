@@ -3,7 +3,7 @@ package com.traceability.integrations.bosta;
 /**
  * Thrown when AWB printing is requested for a tenant with no active Bosta courier
  * account. Same {code, message_en, message_ar} contract as
- * ShopifyFulfillmentActivationException (see ApiExceptionHandler) — a typed exception
+ * TransferException (see ApiExceptionHandler) — a typed exception
  * + its own @ExceptionHandler, not a plain ResponseStatusException, because
  * ApiExceptionHandler.handleResponseStatus() deliberately discards the reason string
  * for the generic ResponseStatusException case (returns a bodyless response).

@@ -175,9 +175,9 @@
       "lookup": "Look up"
     },
     "fulfillmentPrompt": {
-      "title": "Activate your warehouse location",
-      "body": "Traced Main Warehouse is linked to Shopify but isn't live on your storefront yet.",
-      "cta": "Activate now"
+      "title": "Add your warehouse to your shipping profile",
+      "body": "Traced Main Warehouse is linked to Shopify but isn’t in your shipping profile yet, so online orders can’t ship from it.",
+      "cta": "See how"
     }
   },
   "inventory": {
@@ -745,13 +745,33 @@
       "openShipping": "Shipping settings",
       "confirm": "I’ve added it",
       "ownerOnly": "Only the store owner can confirm this.",
-      "confirmError": "Couldn’t save that — try again."
+      "confirmError": "Couldn’t save that — try again.",
+      "notCovered": "Traced checked your shipping rates: no active rate in your main market ships from Traced Main Warehouse yet.",
+      "allowMarkets": "Let Traced check this for you",
+      "allowMarketsBody": "Give Traced read-only access to your store’s markets and it checks your shipping rates itself."
     },
     "unknown": "Traced couldn't confirm yet that Traced Main Warehouse can ship online orders. It checks again within the hour.",
     "confirmed": {
       "title": "Confirmed by you",
       "body": "You said Traced Main Warehouse is added to your shipping rates in Shopify. Traced can’t check this itself yet."
-    }
+    },
+    "addProfile": {
+      "title": "Add Traced Main Warehouse to your shipping profile in Shopify",
+      "removedTitle": "Traced Main Warehouse was taken out of your shipping profile in Shopify",
+      "body": "Open your General shipping profile in Shopify and add Traced Main Warehouse to the locations it ships from.",
+      "cantShip": "Until it’s in the profile, Shopify won’t ship online orders from this location. Traced never changes your shipping settings itself.",
+      "openProfile": "Open the shipping profile"
+    },
+    "check": {
+      "button": "Check again",
+      "checking": "Checking…",
+      "rateLimited": "Checked a moment ago — you can check again at {{time}}.",
+      "rateLimitedSoon": "Checked a moment ago — try again in a couple of minutes.",
+      "error": "Couldn’t check — try again."
+    },
+    "coveredBy": "Ships with: {{rate}}",
+    "notAddedFor": "Not added for: {{markets}}",
+    "notAddedForHint": "For your information — orders from these markets won’t ship from Traced Main Warehouse."
   },
   "receiving": {
     "title": "Receiving",
@@ -2528,20 +2548,14 @@
       "disconnectConfirm": "Disconnect {{shop}}? You'll need to reconnect the same store to resume syncing.",
       "disconnectError": "Could not disconnect. Try again.",
       "fulfillmentActivation": {
-        "title": "Activate Traced as a fulfillment location",
+        "title": "Selling online from Traced Main Warehouse",
         "live": "Traced Main Warehouse is live on your storefront",
-        "waitingForSeed": "Waiting for initial stock to finish syncing to Shopify before this can be activated.",
-        "confirmCopy": "Traced Main Warehouse sells online alongside your other Shopify locations. Only for stock that isn't in Shopify yet. If this stock is already counted in another Shopify location, don't receive it here — contact us.",
-        "activateBtn": "Activate fulfillment",
-        "activating": "Activating…",
-        "genericError": "Could not activate. Try again.",
         "loadError": "Could not load fulfillment status.",
         "retry": "Retry"
       },
       "tracedLocationOff": {
         "title": "Traced Main Warehouse isn't selling online",
         "bodyOnline": "In Shopify, “Fulfill online orders from this location” is off for Traced Main Warehouse, so the stock Traced holds there can't be sold online. Traced didn't change it back on its own.",
-        "bodyProfile": "Traced Main Warehouse was taken out of your General shipping profile in Shopify, so online orders can't ship from it. Traced didn't change it back on its own.",
         "button": "Turn back on",
         "turning": "Turning on…",
         "partial": "Shopify didn't confirm everything. Check the location in Shopify and try again.",
@@ -2667,7 +2681,10 @@
       "newPermissions": {
         "title": "Approve Traced's new Shopify permissions",
         "body": "Traced now asks Shopify for read access to returns and fulfillment orders, so it can follow returns and exchanges made in Shopify. Open Traced in your Shopify admin and approve the new permissions — nothing changes until you do.",
-        "cta": "Open Traced in Shopify"
+        "cta": "Open Traced in Shopify",
+        "marketsTitle": "Let Traced check your shipping rates",
+        "marketsBody": "Your store uses Shopify’s market-based shipping. Allow Traced to read your markets (read only) so it can confirm Traced Main Warehouse is in your shipping rates. Nothing changes until you allow it.",
+        "marketsCta": "Allow in Shopify"
       },
       "attention": {
         "title": "Reconnect your store",
@@ -5462,7 +5479,8 @@
       "needsAttention": "Needs attention",
       "continue": "Continue",
       "checkShippingRates": "Check shipping rates",
-      "confirmedByYou": "Confirmed by you"
+      "confirmedByYou": "Confirmed by you",
+      "checkShippingProfile": "Add to shipping profile"
     },
     "addressPanel": {
       "title": "Why we need it",

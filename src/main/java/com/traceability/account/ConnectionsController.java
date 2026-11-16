@@ -77,10 +77,28 @@ public class ConnectionsController {
      * approval prompt. Custom-app stores configure scopes on their own app — never offered.
      */
     static boolean newPermissionsNeeded(boolean noticeOn, String role, StoreRepository.Store store) {
-        return noticeOn && "owner".equalsIgnoreCase(role) && store != null
-            && "connected".equals(store.status()) && "oauth".equals(store.connectionType())
+        return noticeOn && ownerOfOauthStore(role, store)
             && !com.traceability.integrations.shopify.ShopifyReturnsScopes.granted(store.accessTokenScopes());
     }
+
+    /**
+     * L1b-2 (approved 2026-11-16) — the OPTIONAL scope read_markets, asked only on a MARKET-DRIVEN store that hasn't
+     * granted it (owner, connected OAuth store): it lets Traced read whether Traced Main is in the store's shipping
+     * rates. OFF until `shopify app deploy` has released optional_scopes = ["read_markets"] (before that Shopify has
+     * nothing to grant). Opening the app does NOT ask for an optional scope — only the request URL does.
+     */
+    static boolean marketsScopeNeeded(boolean requestOn, String role, StoreRepository.Store store, String shippingModel) {
+        return requestOn && ownerOfOauthStore(role, store) && "market_driven".equals(shippingModel)
+            && !com.traceability.integrations.shopify.ShopifyGateway.isScopeGranted("read_markets", store.accessTokenScopes());
+    }
+
+    private static boolean ownerOfOauthStore(String role, StoreRepository.Store store) {
+        return "owner".equalsIgnoreCase(role) && store != null
+            && "connected".equals(store.status()) && "oauth".equals(store.connectionType());
+    }
+
+    @Value("${shopify.markets-scope-request:false}")
+    private boolean marketsScopeRequest;
 
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
@@ -178,8 +196,20 @@ public class ConnectionsController {
                 shopify.put("status",         store.status());
                 shopify.put("importStatus",   store.importStatus());
                 shopify.put("lastSyncAt",     store.lastSyncAt() != null ? Timestamp.from(store.lastSyncAt()) : null);
-                if (newPermissionsNeeded(newScopesNotice, principal.role(), store) && oauthService != null) {
-                    shopify.put("newPermissions", Map.of("openAppUrl", oauthService.buildAdminAppUrl(store.shopDomain(), null)));
+                // The owner's "Approve Traced's new Shopify permissions" (generalised, L1b-2): the returns scopes (opening
+                // the app asks for required scopes) and/or the optional read_markets (only its request URL asks for it).
+                if (oauthService != null) {
+                    Map<String, Object> perms = new LinkedHashMap<>();
+                    if (newPermissionsNeeded(newScopesNotice, principal.role(), store)) {
+                        perms.put("openAppUrl", oauthService.buildAdminAppUrl(store.shopDomain(), null));
+                    }
+                    List<String> model = jdbc.queryForList(
+                        "SELECT shopify_shipping_model FROM locations WHERE tenant_id = ? AND is_fulfillment = true " +
+                        "  AND shopify_sync_status = 'linked' LIMIT 1", String.class, tenantId);
+                    if (marketsScopeNeeded(marketsScopeRequest, principal.role(), store, model.isEmpty() ? null : model.get(0))) {
+                        perms.put("marketsRequestUrl", oauthService.buildOptionalScopesUrl(store.shopDomain(), "read_markets"));
+                    }
+                    if (!perms.isEmpty()) shopify.put("newPermissions", perms);
                 }
             }
             // The Traced location in Shopify (2026-10-30): its state (null without a linked main warehouse) and the
@@ -192,11 +222,20 @@ public class ConnectionsController {
             // a linked main warehouse) — and its numeric Shopify id for the owner's "Open the location" link.
             List<Map<String, Object>> shipping = jdbc.queryForList(
                 "SELECT " + com.traceability.inventory.TracedShippingReadiness.SQL + " AS readiness, " +
-                "       regexp_replace(l.shopify_location_id, '^.*/', '') AS location_number " +
+                "       regexp_replace(l.shopify_location_id, '^.*/', '') AS location_number, " +
+                "       l.shopify_shipping_model AS model, l.shopify_market_shipping_covered_by AS covered_by, " +
+                "       to_json(l.shopify_market_shipping_missing)::text AS missing, " +
+                "       regexp_replace(l.shopify_delivery_profile_id, '^.*/', '') AS profile_number " +
                 "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true AND l.shopify_sync_status = 'linked' " +
                 "  AND l.shopify_location_id IS NOT NULL", tenantId);
             shopify.put("tracedMainShipping", shipping.isEmpty() ? null : shipping.get(0).get("readiness"));
             shopify.put("tracedLocationNumber", shipping.isEmpty() ? null : shipping.get(0).get("location_number"));
+            // L1b-2: which wording (legacy "shipping profile" / market-driven "shipping rates"), what covers it, the
+            // other markets that miss it (info), and the General profile's number for the legacy deep link.
+            shopify.put("tracedShippingModel", shipping.isEmpty() ? null : shipping.get(0).get("model"));
+            shopify.put("tracedCoveredBy", shipping.isEmpty() ? null : shipping.get(0).get("covered_by"));
+            shopify.put("tracedNotAddedFor", shipping.isEmpty() ? List.of() : missingList((String) shipping.get(0).get("missing")));
+            shopify.put("deliveryProfileNumber", shipping.isEmpty() ? null : shipping.get(0).get("profile_number"));
             shopify.put("resendableFailed", inventory.countLocationFailures(tenantId));
 
             // Bosta — active courier account. Review mode: a simulated tenant has no courier
@@ -249,5 +288,17 @@ public class ConnectionsController {
         m.put("awbLang",      null);
         m.put("simulated",    true);
         return m;
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** shopify_market_shipping_missing as to_json text → a list of market names (empty on null / anything odd). */
+    static List<String> missingList(String json) {
+        if (json == null || json.isBlank() || "null".equals(json)) return List.of();
+        try {
+            return List.of(JSON.readValue(json, String[].class));
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 }

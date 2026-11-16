@@ -1,0 +1,116 @@
+{
+  "data": {
+    "market": {
+      "id": "gid://shopify/Market/2002",
+      "delivery": {
+        "shipping": {
+          "optionDefinitions": {
+            "nodes": [
+              {
+                "__typename": "DeliveryFlatRateOptionDefinition",
+                "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3002",
+                "rateGroups": {
+                  "nodes": [
+                    {
+                      "id": "gid://shopify/DeliveryFlatRateGroup/3006",
+                      "conditions": {
+                        "originLocationsCount": {
+                          "count": 1
+                        },
+                        "originLocations": {
+                          "nodes": [
+                            {
+                              "id": "gid://shopify/Location/1001"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "__typename": "DeliveryFlatRateOptionDefinition",
+                "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3003",
+                "rateGroups": {
+                  "nodes": [
+                    {
+                      "id": "gid://shopify/DeliveryFlatRateGroup/3007",
+                      "conditions": {
+                        "originLocationsCount": {
+                          "count": 1
+                        },
+                        "originLocations": {
+                          "nodes": [
+                            {
+                              "id": "gid://shopify/Location/1001"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "__typename": "DeliveryFlatRateOptionDefinition",
+                "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3004",
+                "rateGroups": {
+                  "nodes": [
+                    {
+                      "id": "gid://shopify/DeliveryFlatRateGroup/3008",
+                      "conditions": {
+                        "originLocationsCount": {
+                          "count": 4
+                        },
+                        "originLocations": {
+                          "nodes": [
+                            {
+                              "id": "gid://shopify/Location/1001"
+                            },
+                            {
+                              "id": "gid://shopify/Location/1002"
+                            },
+                            {
+                              "id": "gid://shopify/Location/1003"
+                            },
+                            {
+                              "id": "gid://shopify/Location/1004"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "__typename": "DeliveryFlatRateOptionDefinition",
+                "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3005",
+                "rateGroups": {
+                  "nodes": [
+                    {
+                      "id": "gid://shopify/DeliveryFlatRateGroup/3009",
+                      "conditions": {
+                        "originLocationsCount": {
+                          "count": 1
+                        },
+                        "originLocations": {
+                          "nodes": [
+                            {
+                              "id": "gid://shopify/Location/1004"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ package com.traceability.inventory;
 import com.traceability.account.AuditService;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
+import com.traceability.integrations.shopify.MarketShippingCoverage;
 import com.traceability.integrations.shopify.ShopifyShippingModelGateway;
 import com.traceability.integrations.shopify.ShopifyShippingModelGateway.Model;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -29,17 +30,19 @@ import java.util.UUID;
  * <ul>
  *   <li>{@link #atFirstLink} — when ShopifyLocationProvisioningService links the location for the FIRST time (created
  *       or an existing "Traced Main Warehouse" reused; it holds no stock then): fulfils online orders — read, a
- *       locationEdit only when Shopify says false, read back — then joins the default delivery profile through
- *       {@link ShopifyFulfillmentActivationService#joinWithReadBack} (lock, membership first, read back).</li>
- *   <li>{@link #onReconnect} — an ALREADY-linked tenant connects / reconnects / re-syncs: READ ONLY. Both settings are
- *       read and recorded; nothing is ever written to Shopify here. The connection card shows "Turn back on" when
- *       Traced finds either one off.</li>
- *   <li>{@link #turnBackOn} — the owner's one click (owner-only endpoint): the same write path as first link.</li>
- *   <li>{@link #refreshQuietly} — the hourly check: shipping model + fulfils online orders, read only.</li>
+ *       locationEdit only when Shopify says false, read back — then the shipping READ ({@link #readShipping}).</li>
+ *   <li>{@link #onReconnect} — an ALREADY-linked tenant connects / reconnects / re-syncs: READ ONLY. The connection
+ *       card shows "Turn back on" when Traced finds online selling off.</li>
+ *   <li>{@link #turnBackOn} — the owner's one click (owner-only endpoint): ONLY the fulfils-online-orders location
+ *       edit, then the shipping READ.</li>
+ *   <li>{@link #refreshQuietly} — the hourly check: fulfils online orders + the shipping READ.</li>
+ *   <li>{@link #checkAgain} — the owner / manager "Check again": one per 2 minutes per tenant, then the same reads.</li>
  * </ul>
- * L1b-1 (2026-11-15): every delivery-profile call (join, membership read) runs ONLY when the store's shipping model is
- * confirmed LEGACY ({@link ShopifyShippingModelGateway}); market-driven or unknown → no call, recorded as skipped. The
- * readiness shown to merchants is TracedShippingReadiness.SQL.
+ * The shipping READ ({@link #readShipping}): the store's shipping model ({@link ShopifyShippingModelGateway}); LEGACY →
+ * the default delivery profile membership (read only, {@link ShopifyFulfillmentActivationService#readMembership});
+ * MARKET_DRIVEN → the Markets read (L1b-2, optional scope read_markets, MarketShippingCoverage); unknown → nothing.
+ * L1b-2 (approved 2026-11-16): Traced NEVER writes a delivery profile or a shipping rate (DeliveryProfileMutationGuardTest)
+ * — the owner adds the location in Shopify. The readiness shown to merchants is TracedShippingReadiness.SQL.
  * {@link #confirmShippingRates} — L1b-1 review: the owner's "I've added it" on a market-driven store (no Shopify call).
  * Every write targets ONLY the GID on the tenant's is_fulfillment row, read here — never a GID from a request, never
  * another location, never false, never a name / address / metafield (TracedLocationEditGuardTest). Nothing here
@@ -88,15 +91,10 @@ public class TracedLocationOnlineService {
     public Outcome atFirstLink(UUID tenantId) {
         try {
             String online = ensureOnline(tenantId, null, "first_link");
-            Optional<Model> model = readModel(tenantId);
-            // L1b-1: the General-profile join is valid ONLY on a confirmed legacy store — on a market-driven store the
-            // write "succeeds" and changes nothing live; on an unknown model Traced does nothing.
-            String profile = model.orElse(null) == Model.LEGACY
-                ? activation.joinWithReadBack(tenantId, null, "first_link").name()
-                : skipped(model);
-            log.info("Traced Main Warehouse online setup at first link: tenant={} online={} model={} profile={}",
-                tenantId, online, model.map(Enum::name).orElse("UNKNOWN"), profile);
-            return new Outcome(online, profile);
+            String shipping = readShipping(tenantId);
+            log.info("Traced Main Warehouse online setup at first link: tenant={} online={} shipping={}",
+                tenantId, online, shipping);
+            return new Outcome(online, shipping);
         } catch (Exception e) {
             log.warn("Traced Main Warehouse online setup failed at first link: tenant={} error={}", tenantId, e.toString());
             return new Outcome(ERROR, "FAILED");
@@ -107,45 +105,41 @@ public class TracedLocationOnlineService {
     public Outcome onReconnect(UUID tenantId) {
         try {
             String online = readOnline(tenantId);
-            Optional<Model> model = readModel(tenantId);
-            String profile = model.orElse(null) != Model.LEGACY ? skipped(model)
-                : activation.readMembership(tenantId).map(m -> m ? "member" : "not_member").orElse("unknown");
-            log.info("Traced Main Warehouse online check on reconnect (read only): tenant={} online={} profile={}",
-                tenantId, online, profile);
-            return new Outcome(online, profile);
+            String shipping = readShipping(tenantId);
+            log.info("Traced Main Warehouse online check on reconnect (read only): tenant={} online={} shipping={}",
+                tenantId, online, shipping);
+            return new Outcome(online, shipping);
         } catch (Exception e) {
             log.warn("Traced Main Warehouse online check failed on reconnect: tenant={} error={}", tenantId, e.toString());
             return new Outcome(ERROR, "unknown");
         }
     }
 
-    /** The owner's "Turn back on" (owner-only endpoint). 409 when the location isn't linked. */
+    /**
+     * The owner's "Turn back on" (owner-only endpoint): ONLY the fulfils-online-orders location edit (L1b-2 — never a
+     * delivery-profile join), then the shipping READ. 409 when the location isn't linked.
+     */
     public Outcome turnBackOn(UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         if (main(tenantId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Traced Main Warehouse is not linked to Shopify yet");
         }
         String online = ensureOnline(tenantId, actorUserId, "turn_back_on");
-        Optional<Model> model = readModel(tenantId);
-        String profile = model.orElse(null) == Model.LEGACY
-            ? activation.joinWithReadBack(tenantId, actorUserId, "turn_back_on").name()
-            : skipped(model);
-        return new Outcome(online, profile);
+        return new Outcome(online, readShipping(tenantId));
     }
 
     /**
-     * L1b-1 — the hourly location check (ShopifyLocationCheckJob): READ ONLY — the shipping model, fulfils online
-     * orders and (legacy only) the delivery-profile membership, recorded; it may update only the recorded statuses. A store Shopify moves to market-driven shipping shows the instruction within the hour; tenants
-     * linked before L1b-1 get their model. Never a delivery-profile call, never a write to Shopify, never throws.
+     * L1b-1 — the hourly location check (ShopifyLocationCheckJob): READ ONLY — fulfils online orders and the shipping
+     * READ, recorded; it may update only the recorded statuses. A store Shopify moves to market-driven shipping shows
+     * the instruction within the hour; a rate the merchant adds shows Ready within the hour. Never a write to Shopify,
+     * never throws.
      */
     public void refreshQuietly(UUID tenantId) {
         try {
             TenantContext.runAs(tenantId, () -> {
                 if (main(tenantId).isEmpty()) return;
                 readOnline(tenantId);
-                // Legacy only: the membership READ (no join, ever) — the live read readiness needs. Before L1 joining
-                // was manual, so a merchant may have added Traced Main by hand while the stored status says otherwise.
-                if (readModel(tenantId).orElse(null) == Model.LEGACY) activation.readMembership(tenantId);
+                readShipping(tenantId);
             });
         } catch (Exception e) {
             log.warn("Traced Main Warehouse shipping refresh failed: tenant={} error={}", tenantId, e.getClass().getSimpleName());
@@ -177,9 +171,96 @@ public class TracedLocationOnlineService {
         }
     }
 
-    /** No delivery-profile call was made — why. */
-    private static String skipped(Optional<Model> model) {
-        return model.isEmpty() ? "SKIPPED_MODEL_UNKNOWN" : "SKIPPED_MARKET_DRIVEN";
+    // ── L1b-2: "Check again" ────────────────────────────────────────────────────────────────────────────────────
+
+    /** One "Check again" per tenant every this many minutes (approved 2026-11-16). */
+    public static final int CHECK_EVERY_MINUTES = 2;
+
+    /** allowed=false → nothing was read; nextAllowedAt says when. */
+    public record CheckResult(boolean allowed, java.time.Instant nextAllowedAt, String shipping) {}
+
+    /**
+     * L1b-2 — the owner / manager "Check again": READ ONLY (fulfils online orders + the shipping READ). Claimed first —
+     * a conditional UPDATE that succeeds once per {@link #CHECK_EVERY_MINUTES} per tenant; a second click inside the
+     * window reads nothing. No transaction is open during the Shopify calls. 409 when the location isn't linked.
+     */
+    public CheckResult checkAgain() {
+        UUID tenantId = TenantContext.require();
+        if (main(tenantId).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Traced Main Warehouse is not linked to Shopify yet");
+        }
+        List<UUID> claimed = tx.execute(s -> jdbc.query(
+            "UPDATE locations SET shopify_shipping_check_claimed_at = now() " +
+            "WHERE tenant_id = ? AND is_fulfillment = true AND shopify_sync_status = 'linked' " +
+            "  AND shopify_location_id IS NOT NULL " +
+            "  AND (shopify_shipping_check_claimed_at IS NULL " +
+            "       OR shopify_shipping_check_claimed_at <= now() - make_interval(mins => ?)) RETURNING id",
+            (rs, i) -> rs.getObject(1, UUID.class), tenantId, CHECK_EVERY_MINUTES));
+        if (claimed == null || claimed.isEmpty()) {
+            List<java.sql.Timestamp> next = tx.execute(s -> jdbc.queryForList(
+                "SELECT shopify_shipping_check_claimed_at + make_interval(mins => ?) FROM locations " +
+                "WHERE tenant_id = ? AND is_fulfillment = true AND shopify_sync_status = 'linked' LIMIT 1",
+                java.sql.Timestamp.class, CHECK_EVERY_MINUTES, tenantId));
+            java.time.Instant at = next == null || next.isEmpty() || next.get(0) == null ? null : next.get(0).toInstant();
+            return new CheckResult(false, at, null);
+        }
+        readOnline(tenantId);
+        return new CheckResult(true, null, readShipping(tenantId));
+    }
+
+    // ── the shipping READ ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Reads the shipping model, then (legacy) the default-profile membership or (market-driven) the Markets coverage.
+     * Read only, never throws. Returns a short outcome for logs: member / not_member / covered / not_covered /
+     * no_verdict / no_access / unknown / SKIPPED_MODEL_UNKNOWN.
+     */
+    String readShipping(UUID tenantId) {
+        try {
+            Optional<Model> model = readModel(tenantId);
+            if (model.isEmpty()) return "SKIPPED_MODEL_UNKNOWN";
+            if (model.get() == Model.LEGACY) {
+                return activation.readMembership(tenantId).map(m -> m ? "member" : "not_member").orElse("unknown");
+            }
+            return readMarketCoverage(tenantId);
+        } catch (Exception e) {
+            log.warn("Traced Main Warehouse shipping read failed: tenant={} error={}", tenantId, e.getClass().getSimpleName());
+            return "unknown";
+        }
+    }
+
+    /**
+     * L1b-2 — market-driven only: does an active rate of the PRIMARY market list Traced Main (MarketShippingCoverage)?
+     * Without read_markets → 'no_access', no call. A failed read changes nothing; a verdict (or no verdict) is recorded.
+     */
+    String readMarketCoverage(UUID tenantId) {
+        Optional<Main> m = main(tenantId);
+        if (m.isEmpty()) return "unknown";
+        Ctx c = ctx(tenantId);
+        if (!ShopifyGateway.isScopeGranted("read_markets", c.scopes)) {
+            recordMarket(tenantId, m.get().locationId(), "no_access", null, null);
+            return "no_access";
+        }
+        Optional<MarketShippingCoverage.Result> r = shippingModel.readMarketCoverage(c.shop, c.token, m.get().gid());
+        if (r.isEmpty()) return "unknown";
+        MarketShippingCoverage.Result res = r.get();
+        String status = switch (res.verdict()) {
+            case COVERED -> "covered";
+            case NOT_COVERED -> "not_covered";
+            case NO_ACCESS -> "no_access";
+            case NO_VERDICT -> null;
+        };
+        recordMarket(tenantId, m.get().locationId(), status, res.coveredBy(),
+            res.missing().isEmpty() ? null : res.missing().toArray(new String[0]));
+        return status == null ? "no_verdict" : status;
+    }
+
+    private void recordMarket(UUID tenantId, UUID locationId, String status, String coveredBy, String[] missing) {
+        tx.execute(s -> jdbc.update(
+            "UPDATE locations SET shopify_market_shipping_status = ?, shopify_market_shipping_checked_at = now(), " +
+            "  shopify_market_shipping_covered_by = ?, shopify_market_shipping_missing = ? " +
+            "WHERE id = ? AND tenant_id = ? AND is_fulfillment = true",
+            status, coveredBy, missing, locationId, tenantId));
     }
 
     /** Reads the store's shipping model (ShopifyShippingModelGateway) and records it; empty = unknown (recorded so). */

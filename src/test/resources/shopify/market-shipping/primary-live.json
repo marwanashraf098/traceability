@@ -1,0 +1,62 @@
+{
+  "data": {
+    "shop": {
+      "shopAddress": {
+        "countryCodeV2": "US"
+      },
+      "billingAddress": {
+        "countryCodeV2": "US"
+      }
+    },
+    "markets": {
+      "nodes": [
+        {
+          "id": "gid://shopify/Market/2001",
+          "name": "Canada",
+          "type": "REGION",
+          "status": "ACTIVE",
+          "primary": false,
+          "conditions": {
+            "conditionTypes": [
+              "REGION"
+            ],
+            "regionsCondition": {
+              "applicationLevel": "SPECIFIED",
+              "regions": {
+                "nodes": [
+                  {
+                    "__typename": "MarketRegionCountry",
+                    "code": "CA"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "gid://shopify/Market/2002",
+          "name": "United States",
+          "type": "REGION",
+          "status": "ACTIVE",
+          "primary": true,
+          "conditions": {
+            "conditionTypes": [
+              "REGION"
+            ],
+            "regionsCondition": {
+              "applicationLevel": "SPECIFIED",
+              "regions": {
+                "nodes": [
+                  {
+                    "__typename": "MarketRegionCountry",
+                    "code": "US"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

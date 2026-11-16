@@ -19,8 +19,12 @@ import java.util.Optional;
  * settings (Shopify changelog 2026-07-01), so Traced must not join a profile there or read "activated" from one.
  *
  * <p>The ONLY class that talks to Shopify at {@link #API_VERSION} (2026-07): {@code ShopFeatures.marketDrivenShipping}
- * doesn't exist in 2026-04, which every other call stays pinned to ({@code shopify.api-version}). One READ-only query,
- * its own HTTP client, no retry, no write of any kind (ShippingModelVersionGuardTest).
+ * and the Markets delivery API don't exist in 2026-04, which every other call stays pinned to
+ * ({@code shopify.api-version}). READ-only queries, its own HTTP client, no retry, no write of any kind
+ * (ShippingModelVersionGuardTest).
+ *
+ * <p>L1b-2 (2026-11-16): {@link #readMarketCoverage} — the store's markets and their shipping rates (optional scope
+ * read_markets), judged by {@link MarketShippingCoverage}.
  */
 @Component
 public class ShopifyShippingModelGateway {
@@ -37,6 +41,35 @@ public class ShopifyShippingModelGateway {
               }
             }
             """;
+
+    /**
+     * L1b-2 — the shop's country and its ACTIVE markets with their region countries and active shipping rates'
+     * locations. Ran live on a market-driven store with only read_markets + read_locations (+ read_shipping) granted
+     * (2026-11-16, fixture coverage-live.json). Carrier-calculated rates have no {@code name}.
+     */
+    static final String MARKET_COVERAGE_QUERY = """
+            query TracedMarketCoverage($after: String) {
+              shop { shopAddress { countryCodeV2 } }
+              markets(first: 10, after: $after, query: "status:ACTIVE") {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id name type status
+                  conditions { regionsCondition { regions(first: 250) { pageInfo { hasNextPage } nodes { ... on MarketRegionCountry { code } } } } }
+                  delivery { shipping { isEnabled
+                    optionDefinitions(first: 25, active: true) {
+                      pageInfo { hasNextPage }
+                      nodes { __typename id isActive
+                        ... on DeliveryFlatRateOptionDefinition { name }
+                        ... on DeliveryValueBasedOptionDefinition { name }
+                        ... on DeliveryWeightBasedOptionDefinition { name }
+                        includedLocations(first: 50) { pageInfo { hasNextPage } nodes { id } } } } } }
+                }
+              }
+            }
+            """;
+
+    /** Market pages read at most (10 markets each); more → the list is "cut short" → no verdict. */
+    static final int MAX_MARKET_PAGES = 10;
 
     /** What Shopify says. Empty = unknown (any failure, an error, or no such field): callers then do nothing. */
     public enum Model { LEGACY, MARKET_DRIVEN }
@@ -94,6 +127,69 @@ public class ShopifyShippingModelGateway {
         } catch (Exception e) {
             return unknown(e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * L1b-2 — READ ONLY: does an active shipping rate of the store's primary market list {@code locationGid}?
+     * Empty = the read failed (transport, HTTP or a GraphQL error other than ACCESS_DENIED): the caller changes
+     * nothing. ACCESS_DENIED / HTTP 403 → {@link MarketShippingCoverage.Verdict#NO_ACCESS}. Never throws, never logs a
+     * body or shop data. Disabled ({@code traced.shipping-model.read-enabled=false}) → empty, no call.
+     */
+    public Optional<MarketShippingCoverage.Result> readMarketCoverage(String shopDomain, String token, String locationGid) {
+        if (!enabled) return Optional.empty();
+        try {
+            String country = null;
+            java.util.List<JsonNode> markets = new java.util.ArrayList<>();
+            String after = null;
+            boolean complete = false;
+            for (int page = 0; page < MAX_MARKET_PAGES; page++) {
+                Map<String, Object> vars = new java.util.HashMap<>();
+                vars.put("after", after);
+                JsonNode root = post(shopDomain, token, MARKET_COVERAGE_QUERY, vars);
+                if (root == null) return failed("empty body");
+                JsonNode errors = root.path("errors");
+                if (errors.isArray() && !errors.isEmpty()) {
+                    java.util.List<String> codes = errors.findValuesAsText("code");
+                    if (codes.contains("ACCESS_DENIED")) return Optional.of(MarketShippingCoverage.Result.noAccess("access_denied"));
+                    return failed("graphql errors " + codes);
+                }
+                JsonNode data = root.path("data");
+                if (page == 0) country = data.path("shop").path("shopAddress").path("countryCodeV2").asText(null);
+                JsonNode conn = data.path("markets");
+                if (!conn.isObject()) return failed("no markets field");
+                conn.path("nodes").forEach(markets::add);
+                if (!conn.path("pageInfo").path("hasNextPage").asBoolean(false)) { complete = true; break; }
+                after = conn.path("pageInfo").path("endCursor").asText(null);
+                if (after == null) break;
+            }
+            MarketShippingCoverage.Result r = MarketShippingCoverage.evaluate(country, markets, complete, locationGid);
+            log.info("Shopify market shipping read: verdict={} reason={} markets={}", r.verdict(), r.reason(), markets.size());
+            return Optional.of(r);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            if (e.getStatusCode().value() == 403) return Optional.of(MarketShippingCoverage.Result.noAccess("http_403"));
+            return failed("HTTP " + e.getStatusCode().value());
+        } catch (Exception e) {
+            return failed(e.getClass().getSimpleName());
+        }
+    }
+
+    private JsonNode post(String shopDomain, String token, String query, Map<String, Object> variables) throws Exception {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("query", query);
+        if (variables != null) payload.put("variables", variables);
+        String body = http.post()
+            .uri("https://" + shopDomain + "/admin/api/" + API_VERSION + "/graphql.json")
+            .header("X-Shopify-Access-Token", token)
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(mapper.writeValueAsString(payload))
+            .retrieve()
+            .body(String.class);
+        return body == null ? null : mapper.readTree(body);
+    }
+
+    private static Optional<MarketShippingCoverage.Result> failed(String cause) {
+        log.warn("Shopify market shipping read failed: {}", cause);
+        return Optional.empty();
     }
 
     /** Logged with the cause only — never a body, a token or a shop's data. */

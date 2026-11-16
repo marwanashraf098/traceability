@@ -12,8 +12,7 @@ vi.mock('../api', async (importOriginal) => {
     ...actual,
     getConnections: vi.fn(),
     listLocations: vi.fn(),
-    getShopifyInventoryReconcileReport: vi.fn(),
-    activateShopifyFulfillment: vi.fn(),
+    getRoleFromToken: vi.fn(),
   }
 })
 
@@ -52,15 +51,18 @@ function locationFixture(overrides: Partial<api.LocationRow> = {}): api.Location
   }
 }
 
-const EMPTY_RECONCILE_REPORT: api.ShopifyReconcileReport = {
-  tracedLocationGid: 'gid://shopify/Location/1',
-  rows: [],
+// L1b-2 (2026-11-16): a linked legacy location a live read found outside the General profile — the item shows the
+// owner's instruction (deep link + Check again); there is no Activate button any more.
+const LINKED_NOT_IN_PROFILE: Partial<api.LocationRow> = {
+  shopify_sync_status: 'linked', shopify_shipping_model: 'legacy', shopify_shipping_readiness: 'activate_needed',
+  shopify_delivery_profile_number: '134823837987',
 }
 
 describe('FulfillmentActivationItem — race + refetch (Part 2 fix)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
   })
 
   afterEach(() => {
@@ -81,8 +83,7 @@ describe('FulfillmentActivationItem — race + refetch (Part 2 fix)', () => {
       .mockResolvedValueOnce(connectionsFixture('completed'))
     vi.mocked(api.listLocations)
       .mockResolvedValueOnce([locationFixture({ shopify_sync_status: 'unsynced' })])
-      .mockResolvedValueOnce([locationFixture({ shopify_sync_status: 'linked' })])
-    vi.mocked(api.getShopifyInventoryReconcileReport).mockResolvedValue(EMPTY_RECONCILE_REPORT)
+      .mockResolvedValueOnce([locationFixture(LINKED_NOT_IN_PROFILE)])
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
@@ -103,12 +104,15 @@ describe('FulfillmentActivationItem — race + refetch (Part 2 fix)', () => {
     await vi.waitFor(() => expect(api.listLocations).toHaveBeenCalledTimes(2))
     expect(api.getConnections).toHaveBeenCalledTimes(2)
     expect(screen.getByTestId('fulfillment-activation')).toBeTruthy()
+    expect(screen.getByTestId('traced-shipping-add-profile')).toBeTruthy()
+    expect(screen.getByTestId('traced-shipping-open-profile')).toHaveAttribute('href',
+      'https://admin.shopify.com/store/test-shop/settings/shipping/profiles/134823837987')
+    expect(screen.queryByTestId('activate-fulfillment-btn')).toBeNull()
   })
 
   test('polling stops once importStatus is already completed on mount — no extra getConnections calls', async () => {
     vi.mocked(api.getConnections).mockResolvedValue(connectionsFixture('completed'))
-    vi.mocked(api.listLocations).mockResolvedValue([locationFixture({ shopify_sync_status: 'linked' })])
-    vi.mocked(api.getShopifyInventoryReconcileReport).mockResolvedValue(EMPTY_RECONCILE_REPORT)
+    vi.mocked(api.listLocations).mockResolvedValue([locationFixture(LINKED_NOT_IN_PROFILE)])
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
@@ -125,8 +129,7 @@ describe('FulfillmentActivationItem — race + refetch (Part 2 fix)', () => {
     vi.mocked(api.getConnections).mockResolvedValue(connectionsFixture('completed'))
     vi.mocked(api.listLocations)
       .mockRejectedValueOnce(new Error('network error'))
-      .mockResolvedValueOnce([locationFixture({ shopify_sync_status: 'linked' })])
-    vi.mocked(api.getShopifyInventoryReconcileReport).mockResolvedValue(EMPTY_RECONCILE_REPORT)
+      .mockResolvedValueOnce([locationFixture(LINKED_NOT_IN_PROFILE)])
 
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     renderWithProviders(<ConnectionsTab readOnly={false} />)

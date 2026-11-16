@@ -4,12 +4,11 @@ import { useSearchParams } from 'react-router-dom'
 import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
 import { Badge, Button, Spinner, cn } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
-import ShippingRatesInstruction, { ShippingRatesConfirmed } from './ShippingRatesInstruction'
+import ShippingRatesInstruction, { ShippingRatesConfirmed, ShippingCoverage, ShippingCheckButton } from './ShippingRatesInstruction'
 import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
-  listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
-  needsFulfillmentActivation, checkShopifyLocation, resendShopifyLocationFailures, getRoleFromToken,
+  listLocations, checkShopifyLocation, resendShopifyLocationFailures, getRoleFromToken,
   tracedLocationNeedsTurnBackOn, turnTracedLocationBackOn,
   ConnectionsStatus, LocationRow,
 } from '../../../api'
@@ -154,54 +153,73 @@ function LocationStateNotice({ shopify, reload }: {
   return note
 }
 
-// ── New Shopify permissions (Shopify-native returns S1) ─────────────────────────
-// Owner only (the backend sends `newPermissions` only to an owner, only while the store hasn't granted the
-// returns / fulfillment-order scopes). Shopify shows its own approval prompt when the app is opened in the admin.
+// ── New Shopify permissions (Shopify-native returns S1; generalised L1b-2) ──────────
+// Owner only (the backend sends each key only to an owner, only while it applies):
+//  - openAppUrl: the store hasn't granted the returns / fulfillment-order scopes (required) — opening the app in the
+//    Shopify admin shows Shopify's own approval prompt.
+//  - marketsRequestUrl: a MARKET-DRIVEN store hasn't granted the OPTIONAL read_markets — Shopify's request URL asks for
+//    it (opening the app doesn't). Read only: Traced checks that Traced Main is in the store's shipping rates.
 
 export function NewPermissionsNotice({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
   const { t } = useTranslation()
   const url = shopify.newPermissions?.openAppUrl
-  if (!url || getRoleFromToken() !== 'owner') return null
+  const marketsUrl = shopify.newPermissions?.marketsRequestUrl
+  if ((!url && !marketsUrl) || getRoleFromToken() !== 'owner') return null
   return (
-    <div data-testid="shopify-new-permissions" className="rounded-xl border border-line bg-elevated p-4 space-y-3">
-      <div className="space-y-1">
-        <h4 className="text-body font-semibold text-primary">{t('connections.shopify.newPermissions.title')}</h4>
-        <p className="text-small text-muted">{t('connections.shopify.newPermissions.body')}</p>
-      </div>
-      <a href={url} target="_blank" rel="noopener noreferrer"
-         className="inline-flex items-center gap-1.5 text-small font-medium text-accent hover:underline">
-        {t('connections.shopify.newPermissions.cta')}
-        <ArrowUpRight size={14} />
-      </a>
-    </div>
+    <>
+      {url && (
+        <div data-testid="shopify-new-permissions" className="rounded-xl border border-line bg-elevated p-4 space-y-3">
+          <div className="space-y-1">
+            <h4 className="text-body font-semibold text-primary">{t('connections.shopify.newPermissions.title')}</h4>
+            <p className="text-small text-muted">{t('connections.shopify.newPermissions.body')}</p>
+          </div>
+          <a href={url} target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1.5 text-small font-medium text-accent hover:underline">
+            {t('connections.shopify.newPermissions.cta')}
+            <ArrowUpRight size={14} />
+          </a>
+        </div>
+      )}
+      {marketsUrl && (
+        <div data-testid="shopify-markets-permission" className="rounded-xl border border-line bg-elevated p-4 space-y-3">
+          <div className="space-y-1">
+            <h4 className="text-body font-semibold text-primary">{t('connections.shopify.newPermissions.marketsTitle')}</h4>
+            <p className="text-small text-muted">{t('connections.shopify.newPermissions.marketsBody')}</p>
+          </div>
+          <a href={marketsUrl} target="_blank" rel="noopener noreferrer" data-testid="shopify-markets-permission-link"
+             className="inline-flex items-center gap-1.5 text-small font-medium text-accent hover:underline">
+            {t('connections.shopify.newPermissions.marketsCta')}
+            <ArrowUpRight size={14} />
+          </a>
+        </div>
+      )}
+    </>
   )
 }
 
-// ── Fulfillment activation checklist item (FR-17 v2) ───────────────────────────
+// ── Selling online from Traced Main Warehouse (the shipping item) ───────────────
 //
-// Shown only once Part A has already linked the Traced Main Warehouse to Shopify. Since L1 (2026-11-12) the
-// first link joins the delivery profile automatically, so this item is the RETRY / FIX path: disabled until the
-// reconcile report shows nothing left to seed, and behind an explicit confirmation checkbox — activating makes the
-// location count toward storefront availability, so stock left at an old location as well oversells.
-// When a reconnect READ found the location switched off in Shopify, the item shows TurnBackOnItem instead.
+// Shown only once Part A has linked the Traced Main Warehouse to Shopify. L1b-2 (2026-11-16): Traced never adds the
+// location to a delivery profile or a shipping rate — the item shows what Traced READ (TracedShippingReadiness, from
+// the server) and, when the location isn't in the store's shipping yet, the owner's instruction + deep link + "Check
+// again". When "Fulfill online orders" is off, it shows TurnBackOnItem (the one setting Traced turns back on).
 
 // L1 (2026-11-12) — Traced's own location was found switched off in Shopify on a reconnect (read only). One click
 // for the owner; everyone else is told to ask the owner. Takes no input — the server always targets the tenant's own
 // Traced Main Warehouse.
-function TurnBackOnItem({ location, onDone }: { location: LocationRow; onDone: () => void }) {
+function TurnBackOnItem({ onDone }: { onDone: () => void }) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
   const isOwner = getRoleFromToken() === 'owner'
   const [busy, setBusy] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
-  const onlineOff = location.shopify_online_fulfillment_status === 'off'
 
   async function handle() {
     setErrorMsg('')
     setBusy(true)
     try {
       const r = await turnTracedLocationBackOn()
-      if (r.onlineStatus !== 'on' || r.profile === 'FAILED') {
+      if (r.onlineStatus !== 'on') {
         setErrorMsg(t('connections.shopify.tracedLocationOff.partial'))
       }
       onDone()
@@ -220,11 +238,7 @@ function TurnBackOnItem({ location, onDone }: { location: LocationRow; onDone: (
         <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" aria-hidden="true" />
         {t('connections.shopify.tracedLocationOff.title')}
       </p>
-      <p className="text-xs text-muted">
-        {onlineOff
-          ? t('connections.shopify.tracedLocationOff.bodyOnline')
-          : t('connections.shopify.tracedLocationOff.bodyProfile')}
-      </p>
+      <p className="text-xs text-muted">{t('connections.shopify.tracedLocationOff.bodyOnline')}</p>
       {errorMsg && <p role="alert" className="text-xs text-danger">{errorMsg}</p>}
       {isOwner ? (
         <button
@@ -246,41 +260,23 @@ function TurnBackOnItem({ location, onDone }: { location: LocationRow; onDone: (
 }
 
 function FulfillmentActivationItem({
-  shopifyConnected, importStatus, lastSyncAt, shopDomain,
+  importStatus, lastSyncAt, shopDomain,
 }: {
-  shopifyConnected: boolean
   importStatus: string | null
   lastSyncAt: string | null
   shopDomain?: string | null
 }) {
-  const { t, i18n } = useTranslation()
-  const isAr = i18n.language === 'ar'
+  const { t } = useTranslation()
 
-  const [loading,    setLoading]    = useState(true)
-  const [loadError,  setLoadError]  = useState(false)
-  const [location,   setLocation]   = useState<LocationRow | null>(null)
-  const [seedingDone, setSeedingDone] = useState(false)
-  const [confirmed,  setConfirmed]  = useState(false)
-  const [activating, setActivating] = useState(false)
-  const [errorMsg,   setErrorMsg]   = useState('')
+  const [loading,   setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [location,  setLocation]  = useState<LocationRow | null>(null)
 
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const locations   = await listLocations()
-      const fulfillment = locations.find(l => l.is_fulfillment) ?? null
-      setLocation(fulfillment)
-
-      if (fulfillment
-          && fulfillment.shopify_sync_status === 'linked'
-          && fulfillment.shopify_delivery_profile_status !== 'activated') {
-        try {
-          const report = await getShopifyInventoryReconcileReport()
-          setSeedingDone(report.rows.every(r => r.action !== 'seed'))
-        } catch {
-          setSeedingDone(false)
-        }
-      }
+      const locations = await listLocations()
+      setLocation(locations.find(l => l.is_fulfillment) ?? null)
     } catch {
       setLocation(null)
       setLoadError(true)
@@ -295,25 +291,7 @@ function FulfillmentActivationItem({
   // instead of forever reflecting whatever `listLocations()` returned at first mount.
   useEffect(() => { load() }, [load, importStatus, lastSyncAt])
 
-  async function handleActivate() {
-    setErrorMsg('')
-    setActivating(true)
-    try {
-      await activateShopifyFulfillment()
-      setConfirmed(false)
-      await load()
-    } catch (err) {
-      if (err instanceof TransferCommandError) {
-        setErrorMsg(isAr ? err.messageAr : err.messageEn)
-      } else {
-        setErrorMsg(t('connections.shopify.fulfillmentActivation.genericError'))
-      }
-    } finally {
-      setActivating(false)
-    }
-  }
-
-  // A failed listLocations()/reconcile fetch must not look identical to "not ready yet" —
+  // A failed listLocations() must not look identical to "not ready yet" —
   // distinct state, with its own retry, checked before the "nothing to show" early return.
   if (loadError) {
     return (
@@ -333,92 +311,60 @@ function FulfillmentActivationItem({
     )
   }
 
-  // Nothing to show until Part A has linked the location — no automatic trigger exists
-  // for that step from here, so a permanently-disabled item would just confuse.
+  // Nothing to show until Part A has linked the location.
   if (loading || !location || location.shopify_sync_status !== 'linked') return null
 
-  // L1 — a reconnect read found it switched off in Shopify: warn, owner turns it back on (never silent).
-  if (tracedLocationNeedsTurnBackOn(location)) return <TurnBackOnItem location={location} onDone={load} />
+  // L1 — "Fulfill online orders" is off in Shopify: warn, the owner turns it back on (never silent).
+  if (tracedLocationNeedsTurnBackOn(location)) return <TurnBackOnItem onDone={load} />
 
-  // L1b-1 — market-driven shipping: no profile join can make it ship; the owner adds it to its rates in Shopify.
   const readiness = location.shopify_shipping_readiness
-  if (readiness === 'add_to_shipping_rates') {
+  const locationNumber = location.shopify_location_id?.replace(/^.*\//, '') ?? null
+
+  // Not in the store's shipping yet: legacy → the General profile; market-driven → its shipping rates. The server's
+  // readiness decides; the instruction only says what to do and links to it.
+  if (readiness === 'add_to_shipping_rates' || readiness === 'activate_needed' || readiness === 'profile_removed') {
     return (
       <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
-        <ShippingRatesInstruction shopDomain={shopDomain}
-          locationNumber={location.shopify_location_id?.replace(/^.*\//, '') ?? null} onConfirmed={load} />
+        <ShippingRatesInstruction shopDomain={shopDomain} locationNumber={locationNumber}
+          profileNumber={location.shopify_delivery_profile_number}
+          model={readiness === 'add_to_shipping_rates' ? location.shopify_shipping_model : 'legacy'}
+          removed={readiness === 'profile_removed'}
+          marketStatus={location.shopify_market_shipping_status}
+          notAddedFor={location.shopify_market_shipping_missing}
+          onConfirmed={load} onChecked={load} />
       </div>
     )
   }
   if (readiness === 'owner_confirmed') {
     return (
       <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
-        <ShippingRatesConfirmed />
+        <ShippingRatesConfirmed onChecked={load} />
       </div>
     )
   }
 
-  // L1b-1 — "live" ONLY when the server's readiness rule says 'ready' (never on unknown). The Activate item stays for a
-  // legacy store that was never joined (shared predicate with Overview's prompt card, api.ts).
-  const isActivated = readiness === 'ready'
-  const showActivate = !isActivated && needsFulfillmentActivation(shopifyConnected, location)
-  const canActivate  = seedingDone && confirmed && !activating
-
+  // "live" ONLY when the server's readiness rule says 'ready' (never on unknown).
   return (
     <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
       <p className="text-small font-medium text-primary">
         {t('connections.shopify.fulfillmentActivation.title')}
       </p>
-
-      {isActivated ? (
-        <p
-          data-testid="fulfillment-activated"
-          className="text-small text-success flex items-center gap-1.5"
-        >
-          <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
-          {t('connections.shopify.fulfillmentActivation.live')}
-        </p>
-      ) : !showActivate ? (
-        <p className="text-xs text-muted" data-testid="fulfillment-shipping-unknown">
-          {t('tracedShipping.unknown')}
-        </p>
+      {readiness === 'ready' ? (
+        <>
+          <p data-testid="fulfillment-activated" className="text-small text-success flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
+            {t('connections.shopify.fulfillmentActivation.live')}
+          </p>
+          <ShippingCoverage coveredBy={location.shopify_market_shipping_covered_by}
+            notAddedFor={location.shopify_market_shipping_missing} />
+        </>
       ) : (
-        <div className="space-y-2">
-          {!seedingDone && (
-            <p className="text-xs text-muted" data-testid="fulfillment-waiting-seed">
-              {t('connections.shopify.fulfillmentActivation.waitingForSeed')}
-            </p>
-          )}
-
-          <label className="flex items-start gap-2 text-xs text-muted">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={e => setConfirmed(e.target.checked)}
-              disabled={!seedingDone || activating}
-              className="mt-0.5 flex-shrink-0"
-              data-testid="fulfillment-confirm-checkbox"
-            />
-            {/* TODO(M3): when "Moving from my Shopify location" ships, point this warning to that option instead of "contact us". */}
-            <span>{t('connections.shopify.fulfillmentActivation.confirmCopy')}</span>
-          </label>
-
-          {errorMsg && (
-            <p role="alert" className="text-xs text-danger">{errorMsg}</p>
-          )}
-
-          <button
-            type="button"
-            onClick={handleActivate}
-            disabled={!canActivate}
-            className="btn btn-brand text-small"
-            data-testid="activate-fulfillment-btn"
-          >
-            {activating
-              ? t('connections.shopify.fulfillmentActivation.activating')
-              : t('connections.shopify.fulfillmentActivation.activateBtn')}
-          </button>
-        </div>
+        <>
+          <p className="text-xs text-muted" data-testid="fulfillment-shipping-unknown">
+            {t('tracedShipping.unknown')}
+          </p>
+          <ShippingCheckButton onChecked={load} />
+        </>
       )}
     </div>
   )
@@ -801,7 +747,6 @@ export default function ShopifyConnectionCard({
           <LocationStateNotice shopify={shopify} reload={reload} />
 
           <FulfillmentActivationItem
-            shopifyConnected={shopify.connected}
             importStatus={shopify.importStatus}
             lastSyncAt={shopify.lastSyncAt}
             shopDomain={shopify.shopDomain}

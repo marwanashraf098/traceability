@@ -726,13 +726,12 @@ function QuickActions() {
   )
 }
 
-// ── Fulfillment-activation prompt card ──────────────────────────────────────────
+// ── "Add your warehouse to your shipping profile" prompt card ───────────────────
 //
-// Visibility predicate is needsFulfillmentActivation() (api.ts) — the SAME helper
-// ShopifyConnectionCard's FulfillmentActivationItem uses to decide whether to show its
-// own "Activate fulfillment" UI. Deliberately rendered outside the isFreshTenant/
-// Get started card: a brand-new store can legitimately need activation with zero pieces
-// received yet (the reconcile report has nothing to seed when Traced holds no on-hand stock).
+// Visibility predicate is needsFulfillmentActivation() (api.ts): a legacy store whose LIVE read found Traced Main out
+// of the General shipping profile. The link goes to Settings → Connections, where the owner gets the instruction and a
+// deep link to the profile (L1b-2: Traced never adds the location itself). Deliberately rendered outside the
+// isFreshTenant / Get started card: a brand-new store can need this with zero pieces received yet.
 
 function FulfillmentActivationPromptCard() {
   const { t } = useTranslation()
@@ -785,9 +784,8 @@ export default function Overview() {
     return () => { alive = false }
   }, [])
 
-  // Feeds the fulfillment-activation prompt card below — same two calls
-  // FulfillmentActivationItem (Settings > Connections) already makes, independently
-  // fetched here since this page doesn't otherwise touch either endpoint.
+  // Feeds the shipping-profile prompt card below — getConnections + listLocations, fetched here since this page doesn't
+  // otherwise touch either endpoint.
   const connections        = useZoneFetch<ConnectionsStatus>(getConnections)
   const fulfillmentLocations = useZoneFetch<LocationRow[]>(listLocations)
 

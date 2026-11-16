@@ -12,7 +12,6 @@ import com.traceability.inventory.PieceCommittedException;
 import com.traceability.inventory.PieceOutOnTransferException;
 import com.traceability.inventory.ReturnSessionException;
 import com.traceability.integrations.bosta.NoBostaAccountException;
-import com.traceability.inventory.ShopifyFulfillmentActivationException;
 import com.traceability.inventory.StateConflictException;
 import com.traceability.inventory.TransferException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -207,19 +206,6 @@ public class ApiExceptionHandler {
     ResponseEntity<LabelCodeErrorBody> handlePlaceChangeException(com.traceability.inventory.PlaceChangeException ex) {
         return ResponseEntity.status(ex.status())
             .body(new LabelCodeErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), List.of()));
-    }
-
-    record FulfillmentActivationErrorBody(
-            String code,
-            @JsonProperty("message_en") String messageEn,
-            @JsonProperty("message_ar") String messageAr) {}
-
-    @ExceptionHandler(ShopifyFulfillmentActivationException.class)
-    ResponseEntity<FulfillmentActivationErrorBody> handleFulfillmentActivation(
-            ShopifyFulfillmentActivationException ex) {
-        log.warn("Fulfillment activation guard: {}", ex.getMessage());
-        return ResponseEntity.status(ex.httpStatus())
-            .body(new FulfillmentActivationErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
     record NoBostaAccountErrorBody(
