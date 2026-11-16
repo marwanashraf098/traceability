@@ -434,7 +434,7 @@ describe('AR / RTL', () => {
     renderAt('/setup/ready', 'ar')
     await screen.findByTestId('setup-ready')
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('تم الربط')
-    expect(screen.getByTestId('chip-courier')).toHaveTextContent('بوستا · لاحقًا')
+    expect(screen.getByTestId('chip-courier')).toHaveTextContent('بوسطة · لاحقًا')
     expect(screen.getByText('سلّم الطرود لشركة الشحن')).toBeInTheDocument()
   })
 })

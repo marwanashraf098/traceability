@@ -89,5 +89,5 @@ test('forward shipment present (positive control) → button enabled, no hint', 
 
 test('ar/RTL — hint resolves to Arabic', async () => {
   renderDrawer(order([]), 'ar')
-  expect(await screen.findByTestId('drawer-no-waybill')).toHaveTextContent('لا توجد بوليصة بوستا بعد')
+  expect(await screen.findByTestId('drawer-no-waybill')).toHaveTextContent('لا توجد بوليصة بوسطة بعد')
 })

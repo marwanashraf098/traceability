@@ -120,7 +120,7 @@ describe.each(['en', 'ar'] as const)('%s', lang => {
   test('no shipment on a Bosta store (courier kind bosta): today\'s Bosta wording', async () => {
     renderDrawer(order({ courier: { kind: 'bosta', name: null } }), lang)
     expect(await screen.findByTestId('drawer-no-waybill')).toHaveTextContent(
-      lang === 'en' ? 'No Bosta waybill yet' : 'لا توجد بوليصة بوستا بعد')
+      lang === 'en' ? 'No Bosta waybill yet' : 'لا توجد بوليصة بوسطة بعد')
   })
 
   test('a Bosta order with its courier: "contact Bosta" stays', async () => {
