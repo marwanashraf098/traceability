@@ -458,9 +458,9 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
       <div className="card p-4 lg:w-72 flex-shrink-0 space-y-2" data-testid="order-card">
         <p className="text-caption text-muted uppercase tracking-wide">{t('fulfill.waybill.session.order')}</p>
         <p className="text-h2 font-mono text-primary">{order.number}</p>
-        {(order.exchangeFor || (order.shortBy ?? 0) > 0) && (
+        {(order.exchangeFor || order.replacementFor || (order.shortBy ?? 0) > 0) && (
           <div className="flex flex-wrap items-center gap-2">
-            <ExchangeForText exchangeFor={order.exchangeFor} />
+            <ExchangeForText exchangeFor={order.exchangeFor ?? order.replacementFor} />
             <ShortByChip shortBy={order.shortBy} />
           </div>
         )}

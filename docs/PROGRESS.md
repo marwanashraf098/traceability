@@ -4,6 +4,57 @@
 
 ## Current state
 
+**Pre-connect exchanges / CRPs — post-connect Bosta 25 / 30 of pre-connect orders tracked (2026-11-16; branch
+`fix/pre-connect-exchanges` off main a2854627; no migration; 4 commits; NOT merged, NOT deployed, nothing run in prod).**
+Bug (Step 0, 2026-11-16): Storm (cutoff 2026-11-13 17:15 UTC, lowest order #3018) scanned 2472106867 ("#2739:#2739-R1")
+and 5028197718 ("#2922:#2922-R1") → NOT_FOUND: `PreConnectDeliveryFilter.belowLowestOrderNumber` dropped them as
+`ignored_pre_connect` although Bosta created them after the connect (2739 < 3018).
+- (1/4) Filter: a 25 / 30 is ignored ONLY when Bosta created it before the cutoff; SEND / RTO and an unreadable
+  createdAt keep the number check (pf2 unchanged; pf3 / pf4 updated — approved). `PreConnectParentImport` imports the
+  parent from Shopify (`findOrdersByName`, no phone check, no portal Bosta budget, no Bosta call) and stores it through
+  `PreConnectOrderStore` — the portal's pre-connect row shape split out of `PortalOnDemandLookup` (origin
+  portal_pre_connect, untracked lines, outside merchant_orders / warehouse_orders; portal_delivery /
+  portal_delivered_at NULL → the returns portal never offers it). Never blocks ingest (miss / Shopify error → logged
+  reason, exchange unmatched); existing row reused with no Shopify call; misses cached 30 min. Exchange lane: ROUTED +
+  unmatched → `ExchangeMatchService.matchToPreConnectParent` (match_method 'reference'). Mapping → EXC-<AWB> + forward
+  leg is the existing path; multi-item stays EXCHANGE_MULTI_ITEM.
+- (2/4) CRP: the parent is imported before the link transaction; `ShipmentLinkService.linkPreConnectReturnLeg` links the
+  return leg to it (CRP only, pre-connect row only); OrderReference keeps skipping internal:% elsewhere. Scan returns
+  lists the parent's untracked lines as unit rows.
+- (3/4) `PreConnectReprocessService` + startup trigger: BOSTA_REPROCESS_PRE_CONNECT_ON_STARTUP=<tenant ids> ('all'
+  refused), BOSTA_REPROCESS_PRE_CONNECT_TRACKINGS=<tns> (empty = every open one), dry run unless
+  BOSTA_REPROCESS_PRE_CONNECT_APPLY=true. Logs BOSTA_PRECONNECT_REPROCESS / _SUMMARY (type, createdAt, state, reference,
+  item counts both ways, filter decision). Open = Bosta state 10 / 11 / 20 (both modes); Little Toes excluded by default
+  (`bosta.reprocess-pre-connect.excluded-tenants`); a known-bad key is skipped; a rate limit stops the run.
+- (4/4) Pick & Pack + printing (addendum E1–E4): a mapped EXC order was already pickable / printable (queue gate,
+  print batches, mass-awb, waybill resolver — no change); new `replacementFor` {orderId, number} on EXC rows / the
+  order card ("Exchange for #2739"; any Bosta exchange with a known original; never on a shadow — S3c's held logic
+  keys on exchangeFor). New `GET /fulfill/exchanges-to-map` (`FulfillService.EXCHANGES_TO_MAP_SQL`: unmapped dashboard
+  exchanges whose original IS a pre-connect row, trip not picked up, inside the lookback) → "Exchanges to map" beside the
+  queue (both modes, "Needs mapping" badge, "Map items" owner / manager → /exchanges/<id>?from=fulfill → "Start
+  picking" → /fulfill?pick=<order>). Not pickable until mapped; PICKABLE_ORDERS_FILTER untouched. Other tenants'
+  unmapped exchanges (MagRina 20 etc.) are NOT shown — one predicate to widen if wanted. The waybill scan of an
+  unmapped one answers the resolver's existing EXCHANGE_NOT_MAPPED.
+- **Decided 2026-11-16 (option (a), narrowed):** `replacementFor` carries the original's order NUMBER only — the one
+  field of a pre-connect row allowed in Pick & Pack (queue, pick card, exchanges-to-map), plain text, never a link. Never
+  its id / GID / customer / totals / lines. PortalOrderLeakTest b_ / i_ allow exactly the `"replacementFor":{"number":…}`
+  fragment and fail on anything more (revert-checked: putting the id back → 2 red); EN + AR pick card tested.
+- "Exchanges to map" stays pre-connect-only (Marawan 2026-11-16). **Possible later widening:** every unmapped dashboard
+  exchange with an open trip (prod 2026-11-16: MagRina 20, BROEK 8, ROMA 7 … in the last 14 days) — one predicate,
+  `FulfillService.EXCHANGES_TO_MAP_SQL`.
+- Rebased 2026-11-16 onto main 647e5c33 (BRK D1–D4, L1b-2 V233). Combined test PreConnectExchangeTest.d1: a
+  pre-connect CRP → Scan returns lists the parent's lines as untracked units (D4), the Bosta label line first / onLabel,
+  mark arrived, Undo inside the session, close. **Open question:** "Undo arrival" AFTER the session closed is on the
+  order drawer (`/orders/{id}/untracked-arrivals`), which reads warehouse_orders and is 404 for a pre-connect parent by
+  the P4a rule — making it work for these parents is a behaviour change, not done.
+- Shopify writes: none new. -R refs → the dispatch −1 is skipped `shopify_native_exchange` (tested). Storm is a Main
+  reconcile WRITE store: while a native replacement is reserved / packed, EXCHANGE_HOLD_SQL holds the store's reconcile
+  writes (existing interim hold); a replacement Shopify fulfils from a non-Main location is corrected at Main by the
+  reconcile write (9) after it leaves custody.
+- Repair (not run): Storm 2472106867 + 5028197718 first, then Storm's other open ones (13 total in the last 7 days),
+  then tenant by tenant (open in the last 7 days, excl. Little Toes: MagRina 6, TagFit 1; older BROEK / Femine rows are
+  almost certainly picked up — the dry run decides).
+
 **BROEK deleted-waybill / Scan returns fixes (2026-11-16; branch `fix/brk-deleted-waybill-reopen` off origin/main f56131b5,
 NO migration; DEPLOYED 2026-11-16 (merge 647e5c33, prod at V233 applied 22:32); branch + worktree deleted).** From the Step 0
 diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6e1ffe7-…). Decisions (Marawan 2026-11-16):

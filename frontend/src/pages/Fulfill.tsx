@@ -14,7 +14,7 @@ import {
   LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
   scanRejectionText, usePackLineHighlight,
 } from './fulfill/packLabels'
-import type { PackOrderLabels, ShadowExchangeFor } from '../api'
+import type { PackOrderLabels, ReplacementForLabel, ShadowExchangeFor } from '../api'
 import { getAccessToken } from '../auth'
 import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
@@ -27,6 +27,7 @@ import { TourHelpButton } from '../tours/TourCard'
 import {
   ExchangeForText, HeldForReleaseNotice, ShortByChip, WaitingForReleaseSection, useWaitingForRelease,
 } from './fulfill/ShadowExchange'
+import { ExchangesToMapSection, useExchangesToMap } from './fulfill/ExchangesToMap'
 
 
 function authHeaders(): Record<string, string> {
@@ -67,6 +68,8 @@ interface QueueOrder {
   awb_printed?: boolean
   /** S3c — Shopify-native exchange shadows only: the original order, and units the warehouse is short. */
   exchangeFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces (number only). Never on a shadow. */
+  replacementFor?: ReplacementForLabel
   shortBy?: number
 }
 
@@ -118,6 +121,8 @@ interface OrderDetail {
   labels?: PackOrderLabels
   /** S3c — Shopify-native exchange shadows only. heldForRelease: Shopify hasn't released it (can't be packed). */
   exchangeFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces (number only). Never on a shadow. */
+  replacementFor?: ReplacementForLabel
   shortBy?: number
   heldForRelease?: boolean
 }
@@ -701,6 +706,8 @@ function QueueView({
   // S3c — "Waiting for release": Shopify-native exchanges Shopify hasn't released yet. A separate list beside
   // the queue (never mixed into its rows), reloaded with it; any failure simply hides the section.
   const waitingForRelease = useWaitingForRelease(queue, !loading && tab !== 'packed')
+  // 2026-11-16 — Bosta exchanges of pre-connect orders still to be mapped (beside the queue, never in it).
+  const exchangesToMap = useExchangesToMap(queue, !loading && tab !== 'packed')
 
   if (loading) return (
     <div className="space-y-3">
@@ -865,7 +872,7 @@ function QueueView({
                     <span className="font-mono text-small font-semibold text-primary">
                       {order.number ?? order.id.slice(-8)}
                     </span>
-                    <ExchangeForText exchangeFor={order.exchangeFor} />
+                    <ExchangeForText exchangeFor={order.exchangeFor ?? order.replacementFor} />
                   </div>
 
                   <div className="flex items-center gap-2 min-w-0">
@@ -906,6 +913,7 @@ function QueueView({
           </div>
         </>
       )}
+      <ExchangesToMapSection rows={exchangesToMap} />
       <WaitingForReleaseSection rows={waitingForRelease} />
       </>)}
 
@@ -1306,7 +1314,7 @@ function PickScreen({
   const itemsList = (
     <div className="flex-1 overflow-y-auto p-6 space-y-3">
       {order.exchangeFor && (
-        <p className="sm:hidden"><ExchangeForText exchangeFor={order.exchangeFor} /></p>
+        <p className="sm:hidden"><ExchangeForText exchangeFor={order.exchangeFor ?? order.replacementFor} /></p>
       )}
       <HeldForReleaseNotice held={order.heldForRelease} />
       {completeHeld && (
@@ -1465,7 +1473,7 @@ function PickScreen({
           {order.is_exchange && (
             <Badge tone="info" label={t('exchange.badge')} />
           )}
-          <ExchangeForText exchangeFor={order.exchangeFor} className="hidden sm:inline" />
+          <ExchangeForText exchangeFor={order.exchangeFor ?? order.replacementFor} className="hidden sm:inline" />
           <ShortByChip shortBy={order.shortBy} />
         </p>
         {/* Phone as scanner — in the header flow, next to the header actions. */}
@@ -1687,15 +1695,19 @@ type View =
   | { type: 'pick'; orderId: string }
   | { type: 'handover'; order: QueueOrder }
 
-export default function Fulfill({ selfPickupOnly = false, unpackOrderId }: {
+export default function Fulfill({ selfPickupOnly = false, unpackOrderId, openOrderId }: {
   /** Pick & Pack S3 — waybill mode's "Self-pickup orders" entry: the same queue, self-pickup only. */
   selfPickupOnly?: boolean
   /** O6-fixes — ?guidedUnpack=<orderId> (the Unpack Required alert): open that order straight away; its screen shows the
    *  "unpack these pieces" panel for a cancelled packed order. Back leaves it (drops ?guidedUnpack) to the normal page. */
   unpackOrderId?: string
+  /** 2026-11-16 — ?pick=<orderId> (an exchange just mapped from "Exchanges to map"): open its pick screen straight
+   *  away. Back drops ?pick and returns to the queue. */
+  openOrderId?: string
 } = {}) {
   const { t } = useTranslation()
-  const [view, setView] = useState<View>(unpackOrderId ? { type: 'pick', orderId: unpackOrderId } : { type: 'queue' })
+  const startOrderId = unpackOrderId ?? openOrderId
+  const [view, setView] = useState<View>(startOrderId ? { type: 'pick', orderId: startOrderId } : { type: 'queue' })
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [queueLoading, setQueueLoading] = useState(true)
   const [highlightOrderId, setHighlightOrderId] = useState<string | null>(null)
@@ -1730,6 +1742,9 @@ export default function Fulfill({ selfPickupOnly = false, unpackOrderId }: {
   // pick session (completed or not), highlight whichever order was "next" from
   // there, so the queue makes it obvious where to resume.
   const backFromPick = useCallback((fromOrderId?: string) => {
+    if (openOrderId) {
+      setSearchParams(prev => { const next = new URLSearchParams(prev); next.delete('pick'); return next }, { replace: true })
+    }
     if (unpackOrderId) {
       // Opened from the alert: back goes to the store's normal Pick & Pack page (FulfillRoute, by mode).
       setSearchParams(prev => { const next = new URLSearchParams(prev); next.delete('guidedUnpack'); return next }, { replace: true })
@@ -1739,7 +1754,7 @@ export default function Fulfill({ selfPickupOnly = false, unpackOrderId }: {
     setHighlightOrderId(fromOrderId ? nextPickableOrderId(fromOrderId) : null)
     loadQueue()
     setView({ type: 'queue' })
-  }, [loadQueue, nextPickableOrderId, unpackOrderId, setSearchParams])
+  }, [loadQueue, nextPickableOrderId, unpackOrderId, openOrderId, setSearchParams])
 
   if (view.type === 'pick') {
     return (

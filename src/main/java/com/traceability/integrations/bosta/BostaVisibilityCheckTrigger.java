@@ -55,6 +55,28 @@ public class BostaVisibilityCheckTrigger {
     private String referenceCatchUpOnStartup = "";
     private boolean referenceCatchUpApply;
 
+    private PreConnectReprocessService preConnectReprocess;
+    private String preConnectOnStartup = "";
+    private String preConnectTrackings = "";
+    private boolean preConnectApply;
+
+    /**
+     * 2026-11-16 — re-process 25 / 30 deliveries dropped as ignored_pre_connect although created after the connect
+     * (PreConnectReprocessService). BOSTA_REPROCESS_PRE_CONNECT_ON_STARTUP=<tenant ids> ('all' is refused — tenant by
+     * tenant), BOSTA_REPROCESS_PRE_CONNECT_TRACKINGS=<tracking numbers> (empty = every open one of the tenant), dry run
+     * unless BOSTA_REPROCESS_PRE_CONNECT_APPLY=true. One-shot per startup; remove the lines after the run.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPreConnectReprocess(PreConnectReprocessService preConnectReprocess,
+                                       @Value("${bosta.reprocess-pre-connect.on-startup:}") String onStartup,
+                                       @Value("${bosta.reprocess-pre-connect.trackings:}") String trackings,
+                                       @Value("${bosta.reprocess-pre-connect.apply:false}") boolean apply) {
+        this.preConnectReprocess = preConnectReprocess;
+        this.preConnectOnStartup = onStartup;
+        this.preConnectTrackings = trackings;
+        this.preConnectApply = apply;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public void setReferenceCatchUp(ExchangeReferenceCatchUpService referenceCatchUp,
                                     @Value("${bosta.exchange-reference.catch-up.on-startup:}") String onStartup,
@@ -133,6 +155,28 @@ public class BostaVisibilityCheckTrigger {
                 log.info("Exchange reference catch-up enqueued for tenant {} (apply={})", t, refApply);
             }
         }
+        if (preConnectReprocess != null) {
+            final boolean pcApply = preConnectApply;
+            final String pcCsv = String.join(",", orderNumbers(preConnectTrackings));
+            final List<String> pcTrackings = orderNumbers(preConnectTrackings);
+            final PreConnectReprocessService svc = preConnectReprocess;
+            for (UUID tenantId : preConnectTenants()) {
+                final UUID t = tenantId;
+                jobScheduler.enqueue(() -> svc.runAndLog(t, pcCsv, pcApply));
+                log.info("Bosta pre-connect re-process enqueued for tenant {} ({} tracking number(s), apply={})",
+                    t, pcTrackings.isEmpty() ? "open only" : pcTrackings.size(), pcApply);
+            }
+        }
+    }
+
+    /** The pre-connect re-process's tenants: explicit ids only ('all' is refused). */
+    List<UUID> preConnectTenants() {
+        String v = preConnectOnStartup == null ? "" : preConnectOnStartup.trim();
+        if (v.equalsIgnoreCase("all")) {
+            log.warn("bosta.reprocess-pre-connect.on-startup: 'all' is not accepted — name each tenant id; nothing enqueued");
+            return List.of();
+        }
+        return tenants(v);
     }
 
     List<UUID> tenantsToCheck() {

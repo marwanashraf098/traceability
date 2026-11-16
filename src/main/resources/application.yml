@@ -371,6 +371,16 @@ bosta:
   reprocess-rate-limited:
     on-startup: ""
     apply: false
+  # 2026-11-16 — one-off re-process of customer return pickups (25) / exchanges (30) dropped as ignored_pre_connect
+  # although Bosta created them after the connect (PreConnectReprocessService). Env
+  # BOSTA_REPROCESS_PRE_CONNECT_ON_STARTUP=<tenant ids> ('all' refused), BOSTA_REPROCESS_PRE_CONNECT_TRACKINGS=<tracking
+  # numbers> (empty = every still-open one), dry run unless BOSTA_REPROCESS_PRE_CONNECT_APPLY=true. Little Toes is
+  # excluded by default (excluded-tenants). Remove the lines after the run.
+  reprocess-pre-connect:
+    on-startup: ""
+    trackings: ""
+    apply: false
+    excluded-tenants: "fbc7e946-12d9-4a3b-a396-387c0dacf9f5"
   # Fulfillment-driven linking (V131, BostaFulfillmentLinkService): a Bosta tracking number on an
   # order's Shopify fulfillment is linked to that order. Not-found / errors retry with backoff for
   # retry-window-hours, then raise fulfillment_link_problem. Catch-up: one-off, never scheduled —

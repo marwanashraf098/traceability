@@ -652,6 +652,26 @@ public class ShipmentLinkService {
         return ids.size() == 1 ? ids.get(0) : null;
     }
 
+    /**
+     * 2026-11-16 — a customer return pickup (25) Bosta created after the connect for an order placed before it: the
+     * leg links to that order's pre-connect row, imported on demand by the caller (PreConnectParentImport — no
+     * transaction may be open around that Shopify read, so it happens before this). Explicit, never by reference:
+     * {@link com.traceability.integrations.bosta.OrderReference} keeps skipping internal:% orders for every other
+     * path. The return leg then lists the parent's (untracked) lines as unit rows in Scan returns, like any courier
+     * return no request holds. Accepted only for a CRP and only when the order IS a pre-connect row of this tenant;
+     * otherwise null → the caller falls back to {@link #tryMatchDelivery}. Same caller transaction rules.
+     */
+    public LinkResult linkPreConnectReturnLeg(UUID tenantId, UUID parentOrderId, String trackingNumber,
+                                              BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
+        if (parentOrderId == null || !isCrpDelivery(delivery)) return null;
+        Boolean isParent = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM orders WHERE id = ? AND tenant_id = ? AND origin = 'portal_pre_connect')",
+            Boolean.class, parentOrderId, tenantId);
+        if (!Boolean.TRUE.equals(isParent)) return null;
+        log.info("linkPreConnectReturnLeg: tracking={} is a return leg of pre-connect order {}", trackingNumber, parentOrderId);
+        return linkMatchedDelivery(tenantId, parentOrderId, trackingNumber, delivery, mapped);
+    }
+
     /** tryMatchDelivery()'s step 3 onward, shared with {@link #linkDeliveryToOrder}. */
     private LinkResult linkMatchedDelivery(UUID tenantId, UUID orderId, String trackingNumber,
                                            BostaDelivery delivery, BostaStateMapper.MappedState mapped) {

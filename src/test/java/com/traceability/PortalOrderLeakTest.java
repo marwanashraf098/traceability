@@ -181,6 +181,7 @@ class PortalOrderLeakTest {
         reg("GET /api/v1/fulfill/queue/awaiting-waybill-count", list());
         reg("GET /api/v1/fulfill/gather",                list());
         reg("GET /api/v1/fulfill/waiting-for-release",   list());   // S3c: held Shopify-native exchange shadows only
+        reg("GET /api/v1/fulfill/exchanges-to-map",      list());   // 2026-11-16: unmapped Bosta exchanges of pre-connect orders only
         reg("POST /api/v1/shopify-exchanges/{orderId}/release-reservation", byOrder());   // S3d: shadow orders only
         reg("GET /api/v1/fulfill/mode",                  list());
         reg("GET /api/v1/fulfill/print-batches/options", list());
@@ -679,7 +680,7 @@ class PortalOrderLeakTest {
                 for (int i = 0; i < s.queries().size(); i++) {
                     String q = s.queries().get(i);
                     ResponseEntity<String> r = call(e.getKey(), q, a, role, null);
-                    String body = Objects.toString(r.getBody(), "");
+                    String body = stripAllowedLabel(Objects.toString(r.getBody(), ""));
                     String before = baseline.get(e.getKey() + q + "|" + role);
                     for (T t : List.of(a, b)) {
                         for (String sentinel : t.sentinels()) {
@@ -786,8 +787,20 @@ class PortalOrderLeakTest {
         for (String ep : List.of("GET /api/v1/orders", "GET /api/v1/fulfill/queue")) {
             String body = Objects.toString(call(ep, "", a, "owner", null).getBody(), "");
             assertThat(body).as(ep + " lists the replacement").contains(a.replacementNumber);
-            assertThat(a.sentinels()).as(ep + " never the portal original").noneMatch(body::contains);
+            // 2026-11-16: the queue may name the original by its NUMBER only, as the replacement's plain-text label.
+            String rest = stripAllowedLabel(body);
+            assertThat(a.sentinels()).as(ep + " never the portal original beyond its number label").noneMatch(rest::contains);
         }
+        // The label is there, carries the number and nothing else (no id, no GID, no customer, no link target).
+        String queue = Objects.toString(call("GET /api/v1/fulfill/queue", "", a, "owner", null).getBody(), "");
+        assertThat(ALLOWED_PRECONNECT_LABEL.matcher(queue).find()).as("the replacement row says which order it replaces").isTrue();
+        assertThat(queue).doesNotContain("\"replacementFor\":{\"orderId\"");
+        // The pick card of the replacement: the same one field.
+        String card = Objects.toString(call("GET /api/v1/fulfill/{orderId}", "", a, "owner", a.replacementOrder).getBody(), "");
+        assertThat(card).contains(a.replacementNumber);
+        assertThat(ALLOWED_PRECONNECT_LABEL.matcher(card).find()).as("the pick card names the original by number").isTrue();
+        String cardRest = stripAllowedLabel(card);
+        assertThat(a.sentinels()).as("the pick card never shows more of the portal original").noneMatch(cardRest::contains);
         String orders = Objects.toString(call("GET /api/v1/orders", "?q=" + a.replacementNumber, a, "owner", null).getBody(), "");
         assertThat(orders).as("flagged as an exchange, like any replacement").contains("\"isExchange\":true");
     }
@@ -1130,6 +1143,20 @@ class PortalOrderLeakTest {
     }
 
     /** Timestamps generated per request (e.g. "generatedAt", "now") are the only per-call noise. */
+    /**
+     * 2026-11-16 (approved, option (a) narrowed): the ONE place a pre-connect original may appear in Pick &amp; Pack — its
+     * order NUMBER, as the plain-text {@code "replacementFor":{"number":"…"}} label of a Bosta exchange's replacement
+     * row. Exactly that fragment (nothing else inside it: no orderId, no GID, no customer) is removed before the
+     * sentinel / byte-identity checks; anything more — e.g. the original's id beside the number — stays in the body and
+     * fails them.
+     */
+    static final java.util.regex.Pattern ALLOWED_PRECONNECT_LABEL =
+        java.util.regex.Pattern.compile(",?\"replacementFor\":\\{\"number\":\"#PPCLEAK[AB][0-9]+\"\\}");
+
+    static String stripAllowedLabel(String body) {
+        return body == null ? null : ALLOWED_PRECONNECT_LABEL.matcher(body).replaceAll("");
+    }
+
     static String normalize(String body) {
         if (body == null) return "";
         return body.replaceAll("\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}(:\\d{2})?)?", "<ts>")

@@ -31,9 +31,10 @@ import static org.mockito.Mockito.*;
  *   pf1  pre-connect SEND (createdAt before the cutoff, BROEK reference) → ignored
  *   pf2  pre-connect SEND booked AFTER the cutoff for a plain-numbered pre-connect order
  *        (Femine "70348" < lowest ingested "70370") → ignored
- *   pf3  pre-connect CRP (type 25, plain reference) → ignored, no return leg, no unlinked row
- *   pf4  pre-connect EXCHANGE with a ':' reference ("BRK-44719-EG:BRK-44719-EG-R1"), booked
- *        after the cutoff → ignored: no exchanges row, no EXC- order, no unlinked row
+ *   pf3  (2026-11-16, approved) a CRP (type 25) of a pre-connect order CREATED after the cutoff
+ *        → kept (no longer ignored): its order number says nothing about when Bosta made the trip
+ *   pf4  (2026-11-16, approved) an EXCHANGE of a pre-connect order ("BRK-44736-EG:BRK-44736-EG-R1")
+ *        created after the cutoff → kept: one exchanges row (needs mapping), no EXC- order yet
  *   pf5  post-connect delivery with a NULL reference → still stored as unlinked
  *   pf6  post-connect delivery whose reference matches → still links
  *   pf7  Jumi-style tenant (NULL orders_ingest_from) → never filtered
@@ -44,6 +45,10 @@ import static org.mockito.Mockito.*;
  *   pf10 a redelivery of an ignored event is deduplicated
  *   pf11 blnco-shaped reference "blncoeg:#515960" resolves through the part after the ':' and
  *        is kept even with a pre-cutoff createdAt
+ *   pf12 (2026-11-16) an exchange / CRP of a pre-connect order CREATED before the cutoff → still ignored
+ *   pf13 (2026-11-16) Storm shape: a SEND created after the cutoff for a pre-connect order ("#2739",
+ *        lowest "#3018") → still ignored; a type 30 for the same order → kept
+ *   pf14 (2026-11-16) a type 30 / 25 with an unreadable createdAt keeps the number check (ignored)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -116,22 +121,24 @@ class PreConnectFilterTest {
     }
 
     @Test
-    void pf3_preConnectCrp_isIgnored() {
+    void pf3_crpOfPreConnectOrder_createdAfterCutoff_isKept() {
         long ev = process(femine, delivery("2407690225", 25, "Customer Return Pickup", 10, "69751", AFTER_FEMINE));
-        assertIgnored(femine, ev, "2407690225");
+        assertThat(eventNote(ev)).as("no longer ignored").isNotEqualTo("ignored_pre_connect: 2407690225");
+        assertThat(eventNote(ev)).isEqualTo("unlinked: 2407690225");
     }
 
     @Test
-    void pf4_preConnectExchange_colonReference_isIgnored_noExchangeRowNoExcOrder() {
+    void pf4_exchangeOfPreConnectOrder_createdAfterCutoff_isKept_exchangeRowNoExcOrderYet() {
         ObjectNode raw = delivery("1010896713", 30, "Exchange", 10, "BRK-44736-EG:BRK-44736-EG-R1", AFTER_BROEK);
         raw.putObject("specs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt M");
         raw.putObject("returnSpecs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt L");
         long ev = process(broek, raw);
-        assertIgnored(broek, ev, "1010896713");
+        assertThat(eventNote(ev)).isEqualTo("exchange: 1010896713");
         assertThat(count("SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
-            broek, "1010896713")).isZero();
+            broek, "1010896713")).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND number = ?",
-            broek, "EXC-1010896713")).isZero();
+            broek, "EXC-1010896713")).as("needs mapping first").isZero();
+        assertThat(unlinked(broek, "1010896713")).isZero();
     }
 
     @Test
@@ -212,6 +219,39 @@ class PreConnectFilterTest {
         assertThat(eventNote(ev)).isNull();
         assertThat(count("SELECT COUNT(*) FROM shipments WHERE tenant_id = ? AND tracking_number = ?",
             broek, "713968132")).isEqualTo(1);
+    }
+
+    @Test
+    void pf12_exchangeAndCrpOfPreConnectOrder_createdBeforeCutoff_stillIgnored() {
+        ObjectNode ex = delivery("4545184373", 30, "Exchange", 10, "BRK-44700-EG:BRK-44700-EG-R1", BEFORE_BROEK);
+        ex.putObject("specs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt M");
+        ex.putObject("returnSpecs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt L");
+        assertIgnored(broek, process(broek, ex), "4545184373");
+        assertIgnored(broek, process(broek, delivery("3741531660", 25, "Customer Return Pickup", 10,
+            "BRK-44701-EG:BRK-44701-EG-R1", BEFORE_BROEK)), "3741531660");
+    }
+
+    @Test
+    void pf13_stormShape_postConnectSendOfPreConnectOrder_stillIgnored_exchangeKept() {
+        UUID storm = tenant("Storm-test");
+        UUID stormStore = store(storm, Instant.parse("2026-11-13T17:15:08Z"));
+        order(storm, stormStore, "#3018", "2026-11-13T18:00:00Z");
+        String afterStorm = "Sun Nov 15 2026 22:43:11 GMT+0000 (Coordinated Universal Time)";
+
+        assertIgnored(storm, process(storm, delivery("6110002739", 10, "Send", 10, "#2739", afterStorm)), "6110002739");
+
+        ObjectNode ex = delivery("2472106867", 30, "Exchange", 10, "#2739:#2739-R1", afterStorm);
+        ex.putObject("specs").putObject("packageDetails").put("itemsCount", 1).put("description", "Jeans 32");
+        ex.putObject("returnSpecs").putObject("packageDetails").put("itemsCount", 1).put("description", "Jeans 30");
+        assertThat(eventNote(process(storm, ex))).isEqualTo("exchange: 2472106867");
+    }
+
+    @Test
+    void pf14_unreadableCreatedAt_keepsTheNumberCheck() {
+        ObjectNode ex = delivery("5028197718", 30, "Exchange", 10, "BRK-44702-EG:BRK-44702-EG-R1", "not a date");
+        ex.putObject("specs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt M");
+        ex.putObject("returnSpecs").putObject("packageDetails").put("itemsCount", 1).put("description", "Shirt L");
+        assertIgnored(broek, process(broek, ex), "5028197718");
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────

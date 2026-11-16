@@ -266,6 +266,45 @@ public class ExchangeMatchService {
     }
 
     /**
+     * 2026-11-16 — the exchange's original order is a pre-connect order imported on demand
+     * ({@code PreConnectParentImport}: origin 'portal_pre_connect', which {@link com.traceability.integrations.bosta.OrderReference}
+     * never resolves). Same write as {@link #matchByReference} (match_method 'reference', needs_mapping stays,
+     * dashboard rows only, conditional on matched_order_id IS NULL) — the order id comes from the import, and is
+     * accepted only when it IS a pre-connect row of this tenant. True when this call set it.
+     */
+    @Transactional
+    public boolean matchToPreConnectParent(UUID tenantId, String trackingNumber, UUID parentOrderId) {
+        Boolean isParent = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM orders WHERE id = ? AND tenant_id = ? AND origin = 'portal_pre_connect')",
+            Boolean.class, parentOrderId, tenantId);
+        if (!Boolean.TRUE.equals(isParent)) return false;
+        UUID exchangeId = jdbc.queryForList(
+            "SELECT id FROM exchanges WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL " +
+            "  AND matched_order_id IS NULL",
+            UUID.class, tenantId, trackingNumber).stream().findFirst().orElse(null);
+        if (exchangeId == null) return false;
+        int updated = jdbc.update(
+            "UPDATE exchanges SET matched_order_id = ?, match_method = 'reference', matched_at = now(), " +
+            "    status = CASE WHEN status IN ('mapped', 'unmatched', 'needs_confirmation') THEN 'matched' ELSE status END, " +
+            "    updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND matched_order_id IS NULL AND return_request_id IS NULL " +
+            "  AND status IN " + REFERENCE_ELIGIBLE_STATUSES,
+            parentOrderId, exchangeId, tenantId);
+        if (updated == 0) return false;
+        ExchangeInbound.fill(jdbc, tenantId, exchangeId);
+        return true;
+    }
+
+    /** True when the dashboard exchange with this AWB still has no original order. Current tenant, any transaction. */
+    @Transactional(readOnly = true)
+    public boolean unmatched(UUID tenantId, String trackingNumber) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM exchanges WHERE tenant_id = ? AND tracking_number = ? " +
+            "  AND return_request_id IS NULL AND matched_order_id IS NULL AND status IN " + REFERENCE_ELIGIBLE_STATUSES + ")",
+            Boolean.class, tenantId, trackingNumber));
+    }
+
+    /**
      * The original order's Shopify fulfillment carrying the exchange's AWB (BROEK's plugin fulfills the
      * original with it) was skipped / flagged by fulfillment linking because the number is a shipment on
      * the EXC-… order. Once the exchange is matched to that order it is linked via the exchange — no new
