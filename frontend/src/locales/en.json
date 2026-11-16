@@ -3990,7 +3990,8 @@
       "showroom": "Showroom",
       "dryclean": "Dry Clean",
       "repair": "Repair",
-      "other": "Other"
+      "other": "Other",
+      "bazar": "Bazar"
     },
     "time": {
       "justNow": "just now",
@@ -4023,6 +4024,7 @@
       "done": "Done — View Transfer"
     },
     "detail": {
+      "bazarLocked": "This transfer belongs to the bazar \"{{name}}\". It's managed from the bazar, so it's read-only here.",
       "back": "Back to Transfers",
       "notFound": "Transfer not found",
       "destination": "Destination",

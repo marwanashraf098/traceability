@@ -2974,8 +2974,12 @@ export function getPhoneStatus(secret: string) {
 }
 
 export type TransferStatus = 'preparing' | 'sent' | 'reconciling' | 'closed' | 'cancelled'
-export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
-export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']
+/** 'bazar' (V231) is the linked transfer of a bazar event: created by the bazar, never from the Transfers create form,
+ *  and read-only on the Transfers screens (every generic action answers BAZAR_TRANSFER_LOCKED). */
+export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other' | 'bazar'
+/** The types the Transfers create form offers — never 'bazar'. */
+export type CreatableTransferType = Exclude<TransferType, 'bazar'>
+export const TRANSFER_TYPES: CreatableTransferType[] = ['showroom', 'dryclean', 'repair', 'other']
 export type TransferCondition = 'good' | 'condemned'
 export type TransferMode = 'round_trip' | 'relocate_out' | 'relocate_return'
 
@@ -3185,6 +3189,9 @@ export interface TransferSummary {
   destination_location_id: string
   destination_location_name: string
   outstanding_count: number
+  /** Set only on a bazar transfer — the event it belongs to. */
+  bazar_event_id?: string | null
+  bazar_event_name?: string | null
 }
 
 export type TransferListView = 'open' | 'closed' | 'all'
@@ -3231,6 +3238,9 @@ export interface TransferDetail {
   /** Set only for transfer_mode='relocate_return' — the return's origin B. */
   source_location_id: string | null
   source_location_name: string | null
+  /** Set only on a bazar transfer — the event it belongs to (the transfer is read-only here). */
+  bazar_event_id?: string | null
+  bazar_event_name?: string | null
   lines: TransferLine[]
   outstandingCount: number
   /** Every piece ever scanned onto the transfer, whatever its outcome — Mark as sent needs

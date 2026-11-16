@@ -88,8 +88,13 @@ public class TransferService {
 
     // ── Create ────────────────────────────────────────────────────────────────
 
+    /** Bazar POS B1 (V231): the transfer linked to a bazar event. Created and driven ONLY by the bazar service
+     *  (the *ForBazar methods below; BazarTransferLockTest guards their one caller) — every generic Transfers
+     *  action refuses it with BAZAR_TRANSFER_LOCKED. */
+    public static final String BAZAR_TYPE = "bazar";
+
     private static final Set<String> VALID_TRANSFER_TYPES =
-        Set.of("showroom", "dryclean", "repair", "other");
+        Set.of("showroom", "dryclean", "repair", "other", BAZAR_TYPE);
 
     private static final Set<String> VALID_TRANSFER_MODES =
         Set.of("round_trip", "relocate_out", "relocate_return");
@@ -135,6 +140,23 @@ public class TransferService {
     public UUID createTransfer(String transferType, UUID destinationLocationId,
                                Instant expectedReturnAt, String note, UUID actorUserId,
                                String transferMode, UUID sourceLocationId) {
+        if (BAZAR_TYPE.equals(transferType)) {
+            throw bazarLocked();
+        }
+        return createTransferCore(transferType, destinationLocationId, expectedReturnAt, note, actorUserId,
+            transferMode, sourceLocationId);
+    }
+
+    /** Bazar POS B1: the event's linked transfer — round_trip, type 'bazar', main warehouse → the event location,
+     *  status preparing. Same destination validation as every other transfer. ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UUID createBazarTransfer(UUID destinationLocationId, UUID actorUserId) {
+        return createTransferCore(BAZAR_TYPE, destinationLocationId, null, null, actorUserId, "round_trip", null);
+    }
+
+    private UUID createTransferCore(String transferType, UUID destinationLocationId,
+                                    Instant expectedReturnAt, String note, UUID actorUserId,
+                                    String transferMode, UUID sourceLocationId) {
         UUID tenantId = TenantContext.require();
 
         // transfer_type already has a DB CHECK constraint (V64) restricting it to the same
@@ -240,6 +262,18 @@ public class TransferService {
     /** Q1b: {@code viaPhone} (verified by the caller — PhoneScanSource) adds {"via":"phone"} to the event's metadata. */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanOutResult scanOut(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone) {
+        return scanOutCore(transferId, barcode, actorUserId, viaPhone, false);
+    }
+
+    /** Bazar POS B1: the bazar event's send-out scan — the same scan as scanOut(), allowed on a bazar transfer.
+     *  ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanOutResult scanOutForBazar(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone) {
+        return scanOutCore(transferId, barcode, actorUserId, viaPhone, true);
+    }
+
+    private ScanOutResult scanOutCore(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone,
+                                      boolean bazarCaller) {
         UUID tenantId = TenantContext.require();
 
         // 1. Transfer must exist (tenant-scoped via RLS + explicit predicate) and be preparing.
@@ -254,6 +288,12 @@ public class TransferService {
                 "لم يتم العثور على عملية النقل");
         }
         Map<String, Object> transfer = transferRows.get(0);
+        if (BAZAR_TYPE.equals(transfer.get("transfer_type")) != bazarCaller) {
+            // A bazar transfer outside the bazar service, or a normal transfer through the bazar path.
+            return bazarCaller ? ScanOutResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+                                     "لم يتم العثور على عملية النقل")
+                               : ScanOutResult.rejected("BAZAR_TRANSFER_LOCKED", BAZAR_LOCKED_EN, BAZAR_LOCKED_AR);
+        }
         String transferStatus = (String) transfer.get("status");
         if (!"preparing".equals(transferStatus)) {
             return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
@@ -389,6 +429,9 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanOutResult returnScanOut(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone) {
         UUID tenantId = TenantContext.require();
+        if (isBazarTransfer(transferId, tenantId)) {
+            return ScanOutResult.rejected("BAZAR_TRANSFER_LOCKED", BAZAR_LOCKED_EN, BAZAR_LOCKED_AR);
+        }
 
         // 1. Transfer must exist, be preparing, and be a relocate_return transfer. FOR SHARE,
         //    same reason as scanOut().
@@ -541,9 +584,23 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void markSent(UUID transferId, UUID actorUserId) {
+        markSentCore(transferId, actorUserId, false);
+    }
+
+    /** Bazar POS B1: preparing → sent for the bazar's linked transfer — exactly markSent() (the existing
+     *  pushTransferOut claim, mode snapshot at send). ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void markSentForBazar(UUID transferId, UUID actorUserId) {
+        markSentCore(transferId, actorUserId, true);
+    }
+
+    private void markSentCore(UUID transferId, UUID actorUserId, boolean bazarCaller) {
         UUID tenantId = TenantContext.require();
 
         Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        if (BAZAR_TYPE.equals(transfer.get("transfer_type")) != bazarCaller) {
+            throw bazarCaller ? transferNotFound() : bazarLocked();
+        }
         String status = (String) transfer.get("status");
         String mode   = (String) transfer.get("transfer_mode");
         if (!RETURNING_MODES.contains(mode)) {
@@ -583,6 +640,7 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
 
         Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        refuseBazar(transfer);
         String status = (String) transfer.get("status");
         if (!"preparing".equals(status)) {
             throw transferNotPreparing(status);
@@ -617,6 +675,7 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
 
         Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        refuseBazar(transfer);
         String status = (String) transfer.get("status");
         String mode   = (String) transfer.get("transfer_mode");
         if (!RETURNING_MODES.contains(mode)) {
@@ -674,6 +733,9 @@ public class TransferService {
             return ScanBackResult.rejected("INVALID_CONDITION",
                 "condition must be 'good' or 'condemned'",
                 "يجب أن تكون الحالة 'good' أو 'condemned'");
+        }
+        if (isBazarTransfer(transferId, tenantId)) {
+            return ScanBackResult.rejected("BAZAR_TRANSFER_LOCKED", BAZAR_LOCKED_EN, BAZAR_LOCKED_AR);
         }
 
         // 1. Transfer must exist and be reconciling.
@@ -791,6 +853,9 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void classifyShortfall(UUID transferId, UUID lineId, ShortfallCounts counts, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        if (isBazarTransfer(transferId, tenantId)) {
+            throw bazarLocked();
+        }
 
         if (counts.sold() < 0 || counts.lost() < 0 || counts.condemnedNotReturned() < 0) {
             throw new TransferException(TransferException.Code.SHORTFALL_INVALID_COUNTS,
@@ -926,6 +991,9 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void closeTransfer(UUID transferId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        if (isBazarTransfer(transferId, tenantId)) {
+            throw bazarLocked();
+        }
 
         List<String> transferStatusRows = jdbc.queryForList(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
@@ -997,6 +1065,7 @@ public class TransferService {
         // Transfer row FOR UPDATE first (class javadoc): a scan in flight finishes before the
         // outstanding-rows SELECT below runs, so its piece is relocated too, never stranded.
         Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        refuseBazar(transfer);
         String status = (String) transfer.get("status");
         String mode   = (String) transfer.get("transfer_mode");
 
@@ -1129,12 +1198,15 @@ public class TransferService {
             "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, " +
             "       t.destination_location_id, loc.name AS destination_location_name, " +
+            // Bazar POS B1: a bazar transfer is shown read-only, tagged, with its event.
+            "       be.id AS bazar_event_id, be.name AS bazar_event_name, " +
             "       (SELECT COUNT(*) FROM transfer_pieces tp " +
             "        WHERE tp.transfer_id = t.id AND tp.outcome IS NULL) AS outstanding_count " +
             "FROM transfers t " +
             "JOIN locations loc ON loc.id = t.destination_location_id " +
+            "LEFT JOIN bazar_events be ON be.transfer_id = t.id AND be.tenant_id = t.tenant_id " +
             "WHERE t.tenant_id = ? AND " + statusPredicate + " " +
-            "ORDER BY t.created_at DESC",
+            "ORDER BY t.created_at DESC, t.id DESC",
             tenantId);
     }
 
@@ -1147,10 +1219,12 @@ public class TransferService {
             "       t.sent_at, t.sent_by, t.cancelled_at, t.cancelled_by, " +
             "       t.reconcile_started_at, t.reconcile_started_by, " +
             "       t.destination_location_id, loc.name AS destination_location_name, " +
-            "       t.source_location_id, srcloc.name AS source_location_name " +
+            "       t.source_location_id, srcloc.name AS source_location_name, " +
+            "       be.id AS bazar_event_id, be.name AS bazar_event_name " +
             "FROM transfers t " +
             "JOIN locations loc ON loc.id = t.destination_location_id " +
             "LEFT JOIN locations srcloc ON srcloc.id = t.source_location_id " +
+            "LEFT JOIN bazar_events be ON be.transfer_id = t.id AND be.tenant_id = t.tenant_id " +
             "WHERE t.id = ? AND t.tenant_id = ?",
             transferId, tenantId);
         if (rows.isEmpty()) {
@@ -1221,7 +1295,7 @@ public class TransferService {
      *  (see the class javadoc). Throws TRANSFER_NOT_FOUND when absent. */
     private Map<String, Object> lockTransfer(UUID transferId, UUID tenantId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT status, transfer_mode FROM transfers WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            "SELECT status, transfer_mode, transfer_type FROM transfers WHERE id = ? AND tenant_id = ? FOR UPDATE",
             transferId, tenantId);
         if (rows.isEmpty()) {
             throw transferNotFound();
@@ -1236,6 +1310,31 @@ public class TransferService {
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ?",
             Integer.class, transferId, tenantId);
         return n == null ? 0 : n;
+    }
+
+    // ── Bazar lock (Bazar POS B1) ─────────────────────────────────────────────
+
+    private static final String BAZAR_LOCKED_EN =
+        "This transfer belongs to a bazar event. Manage it from the bazar.";
+    private static final String BAZAR_LOCKED_AR =
+        "عملية النقل هذه تابعة لبازار. أدِرها من شاشة البازار.";
+
+    private TransferException bazarLocked() {
+        return new TransferException(TransferException.Code.BAZAR_TRANSFER_LOCKED,
+            BAZAR_LOCKED_EN, BAZAR_LOCKED_AR, HttpStatus.CONFLICT);
+    }
+
+    /** transfer_type never changes after create, so this needs no lock. */
+    private boolean isBazarTransfer(UUID transferId, UUID tenantId) {
+        List<String> t = jdbc.queryForList(
+            "SELECT transfer_type FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+        return !t.isEmpty() && BAZAR_TYPE.equals(t.get(0));
+    }
+
+    private void refuseBazar(Map<String, Object> lockedTransfer) {
+        if (BAZAR_TYPE.equals(lockedTransfer.get("transfer_type"))) {
+            throw bazarLocked();
+        }
     }
 
     private TransferException transferNotReconciling(String status) {

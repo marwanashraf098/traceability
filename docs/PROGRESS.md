@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Bazar POS B1 — event + linked transfer + prices (2026-11-15; branch `feat/bazar-b1`, rebased onto main ba6b91e8; V231 —
+V229 went to `perf/reconcile-locks-bosta-poll` and V230 to L1b-1, both merged first; renumbered V230 → V231 (approved
+2026-11-16, prod highest = V230); count gates MigrationSmokeTest 230 files, NotTracedBackfillTest 175. Reviewed + approved
+2026-11-16 (decisions 1–6); merged, NOT deployed; bazar_enabled off for every tenant).** Backend + API;
+the only screen change is the Transfers tag / read-only detail. Approved (Step 0 review): location type 'event', transfer
+type 'bazar' (round_trip only, DB CHECK), remove mode only (refused at create AND, under a share lock on the location, at
+Mark sent), flag `tenants.bazar_enabled` (default off → every `/api/v1/bazar-events` endpoint 404 BAZAR_NOT_ENABLED).
+- `TransferService` lock: every generic action (scan-out, return scan-out, mark-sent, cancel, begin-reconcile, scan-back,
+  classify, close, close-one-way, create of type 'bazar') refuses a bazar transfer — commands 409 BAZAR_TRANSFER_LOCKED,
+  scans a rejected result with that code. The bazar's own paths are `createBazarTransfer` / `scanOutForBazar` /
+  `markSentForBazar` (same code, one caller: `BazarService`, source-guarded in BazarTransferLockTest). Reprint stays open.
+- Prices: `BazarPricing` is THE rule — default = `variants.price` (Shopify); rule = pct off then NEAREST multiple of
+  round_to (half up; a positive price never rounds to 0 → one round_to); override wins and survives rule changes; clearing
+  it recomputes. Rows are written when a variant is first scanned out and recomputed on every rule change; a later Shopify
+  price change is NOT followed (snapshot). Never sent to Shopify.
+- Next: B2 (per-piece sale `out_on_transfer:sold`, event `bazar_sold`, `sold:out_on_transfer` undo — edge needs approval).
+  B2 rule (Marawan 2026-11-16): a variant with no bazar price row is NOT sellable — clear "set a price first" error
+  (EN + AR), never sell at 0.
+
 **L1b-1 — market-driven shipping: honest "Ready", no stale delivery-profile writes (2026-11-15; branch
 `feat/l1b-shipping-model` off main 5f81986a; V230 — V229 went to `perf/reconcile-locks-bosta-poll`, merged to main first; count gates
 MigrationSmokeTest 229 files, NotTracedBackfillTest 174; merged, NOT deployed).** Found live on testl1location (fresh tenant

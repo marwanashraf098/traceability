@@ -153,6 +153,13 @@ public class ApiExceptionHandler {
             .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
+    // Bazar POS B1: same {code, message_en, message_ar} shape as TransferException.
+    @ExceptionHandler(com.traceability.bazar.BazarException.class)
+    ResponseEntity<TransferErrorBody> handleBazarException(com.traceability.bazar.BazarException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
     record ReturnSessionErrorBody(
             String code,
             @JsonProperty("message_en") String messageEn,

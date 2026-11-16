@@ -139,6 +139,7 @@ export default function TransferDetail() {
   const preparing = transfer.status === 'preparing'
   const sent = transfer.status === 'sent'
   const reconciling = transfer.status === 'reconciling'
+  const bazarLocked = transfer.transfer_type === 'bazar'
   const returning = transfer.transfer_mode === 'round_trip' || transfer.transfer_mode === 'relocate_return'
 
   return (
@@ -263,8 +264,15 @@ export default function TransferDetail() {
         </Card>
       )}
 
+      {/* Bazar POS B1: a bazar's linked transfer is driven by the bazar only — read-only here. */}
+      {bazarLocked && (
+        <div data-testid="transfer-bazar-locked">
+          <Alert tone="info" title={t('transfers.detail.bazarLocked', { name: transfer.bazar_event_name ?? '' })} />
+        </div>
+      )}
+
       {/* Actions */}
-      {(preparing || sent || reconciling) && (
+      {!bazarLocked && (preparing || sent || reconciling) && (
         <div data-testid="transfer-actions">
           <Card className="flex flex-wrap gap-3">
             {preparing && (
