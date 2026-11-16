@@ -10,8 +10,12 @@ import type { ShadowExchangeFor, WaitingForReleaseOrder } from '../../api'
 // released it for fulfilment — that it can't be packed yet (heldForRelease / the "Waiting for release" list).
 // Display only: every rule is the server's (scan / complete / the waybill resolver refuse HELD_FOR_RELEASE).
 
-/** "Exchange for #1010" — plain text (Pick & Pack never links out to an order). */
-export function ExchangeForText({ exchangeFor, className = '' }: { exchangeFor?: ShadowExchangeFor | null; className?: string }) {
+/** "Exchange for #1010" — plain text (Pick & Pack never links out to an order). Reads the number only — a Bosta
+ *  exchange's replacement passes its number-only label (2026-11-16). */
+export function ExchangeForText({ exchangeFor, className = '' }: {
+  exchangeFor?: Pick<ShadowExchangeFor, 'number'> | null
+  className?: string
+}) {
   const { t } = useTranslation()
   if (!exchangeFor) return null
   return (

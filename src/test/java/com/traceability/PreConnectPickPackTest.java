@@ -116,6 +116,7 @@ class PreConnectPickPackTest {
         List<Map<String, Object>> toMap = as(s, () -> fulfill.getExchangesToMap());
         assertThat(toMap).hasSize(1);
         assertThat(toMap.get(0).get("trackingNumber")).isEqualTo("2472106867");
+        assertThat(((Map<?, ?>) toMap.get(0).get("replacementFor")).keySet().toString()).as("the number only").isEqualTo("[number]");
         assertThat(((Map<?, ?>) toMap.get(0).get("replacementFor")).get("number")).isEqualTo("#2739");
 
         assertThat(as(s, () -> fulfill.getQueue())).extracting(r -> r.get("number")).containsExactly("#3018");
@@ -147,10 +148,11 @@ class PreConnectPickPackTest {
         assertThat(row.get("number")).isEqualTo("EXC-5028197718");
         assertThat(row.get("is_exchange")).isEqualTo(true);
         assertThat(((Number) row.get("total_units")).intValue()).isEqualTo(1);
-        assertThat(((Map<String, Object>) row.get("replacementFor")).get("number")).isEqualTo("#2922");
+        assertThat((Map<String, Object>) row.get("replacementFor")).as("the number only — never the pre-connect id")
+            .containsOnlyKeys("number").containsEntry("number", "#2922");
         assertThat(row).doesNotContainKey("exchangeFor");
         Map<String, Object> card = as(s, () -> fulfill.getOrder(exc));
-        assertThat(((Map<String, Object>) card.get("replacementFor")).get("number")).isEqualTo("#2922");
+        assertThat((Map<String, Object>) card.get("replacementFor")).containsOnlyKeys("number").containsEntry("number", "#2922");
         assertThat(card).doesNotContainKey("heldForRelease");
 
         assertThat(as(s, () -> fulfill.getExchangesToMap())).isEmpty();

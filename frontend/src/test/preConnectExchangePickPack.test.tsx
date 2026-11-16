@@ -38,7 +38,7 @@ function tokenFor(role: 'owner' | 'manager' | 'worker'): string {
 const EXC_ROW = {
   id: 'exc-order-1', number: 'EXC-5028197718', customer_name: 'Mariam', status: 'new', payment_method: null,
   cod_amount: null, total_units: 1, scanned_units: 0, locked_by: null, locked_at: null, is_self_pickup: false,
-  is_exchange: true, replacementFor: { orderId: 'parent-2922', number: '#2922' },
+  is_exchange: true, replacementFor: { number: '#2922' },
 }
 const PLAIN_ROW = {
   id: 'plain-1', number: '#3018', customer_name: 'Omar', status: 'new', payment_method: null, cod_amount: null,
@@ -47,7 +47,7 @@ const PLAIN_ROW = {
 const TO_MAP: ExchangeToMap[] = [{
   exchangeId: 'ex-1', trackingNumber: '2472106867', createdAt: '2026-11-15T22:43:11Z',
   outboundDescription: 'Jeans 32', inboundDescription: 'Jeans 30',
-  replacementFor: { orderId: 'parent-2739', number: '#2739' },
+  replacementFor: { number: '#2739' },
 }]
 
 let toMap: ExchangeToMap[]
@@ -106,8 +106,9 @@ describe('mapped exchange — a normal queue row', () => {
     const row = cell.closest('[class*="card"], li, button, div[role="button"]') ?? cell.parentElement!.parentElement!
     expect(row).toHaveTextContent('Exchange for #2922')
     expect(row).toHaveTextContent('Exchange')
-    // A plain order says nothing of the kind.
+    // A plain order says nothing of the kind; the label is plain text, never a link.
     expect(screen.getAllByTestId('shadow-exchange-for')).toHaveLength(1)
+    expect(screen.getByTestId('shadow-exchange-for').closest('a')).toBeNull()
   })
 
   test('AR: the same row renders in Arabic', async () => {
@@ -123,7 +124,18 @@ test('?pick=<order> (after mapping) opens its pick screen straight away, saying 
   renderWithProviders(<Fulfill openOrderId="exc-order-1" />, { initialEntries: ['/fulfill?pick=exc-order-1'] })
   expect(await screen.findAllByText('EXC-5028197718')).not.toHaveLength(0)
   expect(screen.getAllByTestId('shadow-exchange-for')[0]).toHaveTextContent('Exchange for #2922')
+  expect(screen.getAllByTestId('shadow-exchange-for')[0].closest('a')).toBeNull()
   expect(screen.queryByTestId('exchanges-to-map')).toBeNull()
+})
+
+test('AR: the pick card says which order it replaces, in Arabic, as plain text', async () => {
+  await i18n.changeLanguage('ar')
+  renderAr(<Fulfill openOrderId="exc-order-1" />)
+  expect(await screen.findAllByText('EXC-5028197718')).not.toHaveLength(0)
+  const label = (ar as { fulfill: { shadow: { exchangeFor: string } } }).fulfill.shadow.exchangeFor.replace('{{number}}', '#2922')
+  const el = screen.getAllByTestId('shadow-exchange-for')[0]
+  expect(el).toHaveTextContent(label)
+  expect(el.closest('a')).toBeNull()
 })
 
 describe('unmapped exchange — "Exchanges to map", beside the queue and not in it', () => {

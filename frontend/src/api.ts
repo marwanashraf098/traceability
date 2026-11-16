@@ -2599,8 +2599,8 @@ export interface PackOrderCard {
   labels?: PackOrderLabels
   /** S3c — present only on a Shopify-native exchange shadow order: the original order it replaces. */
   exchangeFor?: ShadowExchangeFor
-  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces. Never on a shadow. */
-  replacementFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces (number only). Never on a shadow. */
+  replacementFor?: ReplacementForLabel
   /** S3c — shadows only: units the warehouse is short for this exchange (0 = fine). */
   shortBy?: number
   /** S3c — shadows only: Shopify hasn't released the exchange for fulfilment yet (it can't be packed). */
@@ -2840,7 +2840,15 @@ export interface ExchangeToMap {
   createdAt: string
   outboundDescription: string | null
   inboundDescription: string | null
-  replacementFor: ShadowExchangeFor
+  replacementFor: ReplacementForLabel
+}
+
+/**
+ * 2026-11-16 — "Exchange for #2739" on a Bosta exchange's replacement: the original's order NUMBER only. The original
+ * may be a pre-connect order — its id, customer and lines never reach Pick & Pack. Plain text, never a link.
+ */
+export interface ReplacementForLabel {
+  number: string | null
 }
 
 /** GET /fulfill/exchanges-to-map — failure = none (the section is simply hidden). */

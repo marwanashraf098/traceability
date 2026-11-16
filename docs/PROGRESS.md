@@ -35,10 +35,15 @@ and 5028197718 ("#2922:#2922-R1") → NOT_FOUND: `PreConnectDeliveryFilter.below
   picking" → /fulfill?pick=<order>). Not pickable until mapped; PICKABLE_ORDERS_FILTER untouched. Other tenants'
   unmapped exchanges (MagRina 20 etc.) are NOT shown — one predicate to widen if wanted. The waybill scan of an
   unmapped one answers the resolver's existing EXCHANGE_NOT_MAPPED.
-- **OPEN DECISION (2026-11-16): PortalOrderLeakTest b_ / i_ are RED on this branch.** P4b's invariant says the Pick
-  queue never shows a portal pre-connect order (its number / id are sentinels); E1's `replacementFor` ("Exchange for
-  #2739") on the EXC row is exactly that. Not edited without approval. Either approve updating b_ / i_ (allow
-  `replacementFor` on an EXC row to name its pre-connect original), or drop replacementFor for pre-connect originals.
+- **Decided 2026-11-16 (option (a), narrowed):** `replacementFor` carries the original's order NUMBER only — the one
+  field of a pre-connect row allowed in Pick & Pack (queue, pick card, exchanges-to-map), plain text, never a link. Never
+  its id / GID / customer / totals / lines. PortalOrderLeakTest b_ / i_ allow exactly the `"replacementFor":{"number":…}`
+  fragment and fail on anything more (revert-checked: putting the id back → 2 red); EN + AR pick card tested.
+- "Exchanges to map" stays pre-connect-only (Marawan 2026-11-16). **Possible later widening:** every unmapped dashboard
+  exchange with an open trip (prod 2026-11-16: MagRina 20, BROEK 8, ROMA 7 … in the last 14 days) — one predicate,
+  `FulfillService.EXCHANGES_TO_MAP_SQL`.
+- Waiting (2026-11-16): rebase onto main once `fix/brk-deleted-waybill-reopen` is merged; then the combined test
+  (pre-connect CRP → untracked lines, label parser pre-select, Undo arrival) and the full suites.
 - Shopify writes: none new. -R refs → the dispatch −1 is skipped `shopify_native_exchange` (tested). Storm is a Main
   reconcile WRITE store: while a native replacement is reserved / packed, EXCHANGE_HOLD_SQL holds the store's reconcile
   writes (existing interim hold); a replacement Shopify fulfils from a non-Main location is corrected at Main by the

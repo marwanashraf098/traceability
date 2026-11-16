@@ -14,7 +14,7 @@ import {
   LineLabelStatus, PackLabelsBar, PrintLabelsDialog, hasLabelFields, lineDisplayName, lineHighlightClass,
   scanRejectionText, usePackLineHighlight,
 } from './fulfill/packLabels'
-import type { PackOrderLabels, ShadowExchangeFor } from '../api'
+import type { PackOrderLabels, ReplacementForLabel, ShadowExchangeFor } from '../api'
 import { getAccessToken } from '../auth'
 import { authFetch, TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
@@ -68,8 +68,8 @@ interface QueueOrder {
   awb_printed?: boolean
   /** S3c — Shopify-native exchange shadows only: the original order, and units the warehouse is short. */
   exchangeFor?: ShadowExchangeFor
-  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces. Never on a shadow. */
-  replacementFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces (number only). Never on a shadow. */
+  replacementFor?: ReplacementForLabel
   shortBy?: number
 }
 
@@ -121,8 +121,8 @@ interface OrderDetail {
   labels?: PackOrderLabels
   /** S3c — Shopify-native exchange shadows only. heldForRelease: Shopify hasn't released it (can't be packed). */
   exchangeFor?: ShadowExchangeFor
-  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces. Never on a shadow. */
-  replacementFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces (number only). Never on a shadow. */
+  replacementFor?: ReplacementForLabel
   shortBy?: number
   heldForRelease?: boolean
 }

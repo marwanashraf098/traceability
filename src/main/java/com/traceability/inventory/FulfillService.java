@@ -209,10 +209,12 @@ public class FulfillService {
 
     /**
      * 2026-11-16 — a Bosta exchange's replacement order (internal:exchange:&lt;AWB&gt;, named by an exchanges row's
-     * outbound_order_id) says which order it replaces: {@code replacementFor} {orderId, number} — the exchange's
-     * matched original, which may be a pre-connect order imported on demand (origin portal_pre_connect, so read from
-     * {@code orders}, never a merchant list). Present ONLY on such rows with a known original; never on a shadow
-     * (those carry exchangeFor — S3c's held / short logic keys on it). Display only. Rows need "id".
+     * outbound_order_id) says which order it replaces: {@code replacementFor} {number} — the exchange's matched
+     * original's order NUMBER and nothing else (approved 2026-11-16, PortalOrderLeakTest b_ / i_): the original may be a
+     * pre-connect order imported on demand (origin portal_pre_connect, so read from {@code orders}, never a merchant
+     * list), whose id, GID, customer, totals and lines never reach Pick &amp; Pack. Plain text, never a link. Present ONLY
+     * on such rows with a known original; never on a shadow (those carry exchangeFor — S3c's held / short logic keys
+     * on it). Rows need "id".
      */
     void decorateReplacements(UUID tenantId, List<Map<String, Object>> rows) {
         if (rows.isEmpty()) return;
@@ -222,7 +224,7 @@ public class FulfillService {
         Map<UUID, Map<String, Object>> info = new HashMap<>();
         jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement(
-                "SELECT e.outbound_order_id, e.matched_order_id, po.number AS original_number " +
+                "SELECT e.outbound_order_id, po.number AS original_number " +
                 "FROM exchanges e " +
                 "JOIN orders po ON po.id = e.matched_order_id AND po.tenant_id = e.tenant_id " +
                 "WHERE e.tenant_id = ? AND e.outbound_order_id = ANY(?)");
@@ -231,8 +233,7 @@ public class FulfillService {
             return ps;
         }, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("orderId", rs.getObject("matched_order_id", UUID.class));
-            m.put("number", rs.getString("original_number"));
+            m.put("number", rs.getString("original_number"));   // the number only — never the original's id
             info.put(rs.getObject("outbound_order_id", UUID.class), m);
         });
         for (Map<String, Object> r : rows) {
@@ -261,7 +262,7 @@ public class FulfillService {
 
     /**
      * GET /fulfill/exchanges-to-map — {@link #EXCHANGES_TO_MAP_SQL}, oldest first. Each row: exchangeId,
-     * trackingNumber, createdAt, outboundDescription, inboundDescription, replacementFor {orderId, number}. Beside the
+     * trackingNumber, createdAt, outboundDescription, inboundDescription, replacementFor {number}. Beside the
      * queue, never in it (its rows open the mapping screen, not the pick screen).
      */
     @Transactional(readOnly = true)
@@ -269,7 +270,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT e.id, e.tracking_number, e.created_at, e.outbound_description, e.inbound_description, " +
-            "       po.id AS original_id, po.number AS original_number " + EXCHANGES_TO_MAP_SQL +
+            "       po.number AS original_number " + EXCHANGES_TO_MAP_SQL +
             "ORDER BY e.created_at ASC, e.id ASC",
             tenantId, lookbackDays);
         List<Map<String, Object>> out = new ArrayList<>();
@@ -281,8 +282,7 @@ public class FulfillService {
             m.put("outboundDescription", r.get("outbound_description"));
             m.put("inboundDescription", r.get("inbound_description"));
             Map<String, Object> f = new LinkedHashMap<>();
-            f.put("orderId", r.get("original_id"));
-            f.put("number", r.get("original_number"));
+            f.put("number", r.get("original_number"));   // the number only — never the pre-connect row's id
             m.put("replacementFor", f);
             out.add(m);
         }
