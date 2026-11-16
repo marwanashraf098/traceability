@@ -1483,6 +1483,14 @@
       "releaseConfirm": "Release the piece kept aside for {{number}}? Traced stops keeping it for this exchange.",
       "releaseYes": "Release",
       "unexplained": "Traced can't see why Shopify hasn't released this exchange — check it in Shopify."
+    },
+    "toMap": {
+      "title": "Exchanges to map",
+      "hint": "Bosta exchanges for orders placed before you connected. Map the new item first — then it can be picked.",
+      "badge": "Needs mapping",
+      "mapItems": "Map items",
+      "managerMaps": "A manager maps the items first",
+      "awb": "Waybill {{tracking}}"
     }
   },
   "lookup": {
@@ -1846,7 +1854,9 @@
       "notFound": "Exchange not found",
       "successTitle": "Exchange mapped",
       "successBody": "Order {{order}} was created for the outbound leg.",
-      "backToExceptions": "Back to Alerts"
+      "backToExceptions": "Back to Alerts",
+      "startPicking": "Start picking",
+      "backToPickPack": "Back to Pick & Pack"
     },
     "picker": {
       "title": "Select a variant",

@@ -340,6 +340,9 @@ class RlsCoverageTest {
             entry("/api/v1/fulfill/waiting-for-release",
                     "S3c; @Transactional + TenantContext.require(); empty valid for new tenant; RLS-covered by " +
                     "ShadowPickPackTest.q8's real app_user same-tenant positive control + cross-tenant negative control"),
+            entry("/api/v1/fulfill/exchanges-to-map",
+                    "2026-11-16; @Transactional + TenantContext.require(); empty valid for new tenant; RLS-covered by " +
+                    "PreConnectPickPackAppUserTest's real app_user same-tenant positive control + cross-tenant negative control"),
             entry("/api/v1/fulfill/queue/awaiting-waybill-count",
                     "@Transactional + TenantContext.require(); zero valid for new tenant; " +
                     "tenant scoping covered by AwaitingWaybillCountTest"),

@@ -203,7 +203,90 @@ public class FulfillService {
             "ORDER BY o.created_at ASC",
             tenantId, tenantId, lookbackDays, tenantId, lookbackDays);
         decorateShadows(tenantId, rows);
+        decorateReplacements(tenantId, rows);
         return rows;
+    }
+
+    /**
+     * 2026-11-16 — a Bosta exchange's replacement order (internal:exchange:&lt;AWB&gt;, named by an exchanges row's
+     * outbound_order_id) says which order it replaces: {@code replacementFor} {orderId, number} — the exchange's
+     * matched original, which may be a pre-connect order imported on demand (origin portal_pre_connect, so read from
+     * {@code orders}, never a merchant list). Present ONLY on such rows with a known original; never on a shadow
+     * (those carry exchangeFor — S3c's held / short logic keys on it). Display only. Rows need "id".
+     */
+    void decorateReplacements(UUID tenantId, List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return;
+        UUID[] ids = rows.stream().filter(r -> !r.containsKey("exchangeFor"))
+            .map(r -> (UUID) r.get("id")).toArray(UUID[]::new);
+        if (ids.length == 0) return;
+        Map<UUID, Map<String, Object>> info = new HashMap<>();
+        jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                "SELECT e.outbound_order_id, e.matched_order_id, po.number AS original_number " +
+                "FROM exchanges e " +
+                "JOIN orders po ON po.id = e.matched_order_id AND po.tenant_id = e.tenant_id " +
+                "WHERE e.tenant_id = ? AND e.outbound_order_id = ANY(?)");
+            ps.setObject(1, tenantId);
+            ps.setArray(2, con.createArrayOf("uuid", ids));
+            return ps;
+        }, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("orderId", rs.getObject("matched_order_id", UUID.class));
+            m.put("number", rs.getString("original_number"));
+            info.put(rs.getObject("outbound_order_id", UUID.class), m);
+        });
+        for (Map<String, Object> r : rows) {
+            if (r.containsKey("exchangeFor")) continue;
+            Map<String, Object> m = info.get((UUID) r.get("id"));
+            if (m != null) r.put("replacementFor", m);
+        }
+    }
+
+    /**
+     * 2026-11-16 — THE "exchange to map" rule for Pick &amp; Pack: a dashboard Bosta exchange (no return request) still
+     * needing its replacement mapped, whose original is a PRE-CONNECT order imported on demand (Storm "#2739:#2739-R1"),
+     * whose trip Bosta hasn't picked up yet (state 10 / 11 / 20 — the replacement still has to leave the warehouse),
+     * inside the queue's lookback. Never pickable: there is no order until it is mapped (ExchangeService.map →
+     * EXC-&lt;AWB&gt; + its forward leg, which then enters the queue through the unchanged gate). Other unmapped
+     * exchanges stay on Returns &amp; exchanges only. Alias {@code e}; binds (tenantId, lookbackDays).
+     */
+    static final String EXCHANGES_TO_MAP_SQL =
+        "FROM exchanges e " +
+        "JOIN orders po ON po.id = e.matched_order_id AND po.tenant_id = e.tenant_id " +
+        "WHERE e.tenant_id = ? AND e.status = 'needs_mapping' AND e.return_request_id IS NULL " +
+        "  AND e.outbound_order_id IS NULL " +
+        "  AND po.origin = 'portal_pre_connect' " +
+        "  AND COALESCE((e.raw -> 'state' ->> 'code')::int, -1) IN (10, 11, 20) " +
+        "  AND e.created_at > now() - (? * INTERVAL '1 day') ";
+
+    /**
+     * GET /fulfill/exchanges-to-map — {@link #EXCHANGES_TO_MAP_SQL}, oldest first. Each row: exchangeId,
+     * trackingNumber, createdAt, outboundDescription, inboundDescription, replacementFor {orderId, number}. Beside the
+     * queue, never in it (its rows open the mapping screen, not the pick screen).
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getExchangesToMap() {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT e.id, e.tracking_number, e.created_at, e.outbound_description, e.inbound_description, " +
+            "       po.id AS original_id, po.number AS original_number " + EXCHANGES_TO_MAP_SQL +
+            "ORDER BY e.created_at ASC, e.id ASC",
+            tenantId, lookbackDays);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("exchangeId", r.get("id"));
+            m.put("trackingNumber", r.get("tracking_number"));
+            m.put("createdAt", r.get("created_at"));
+            m.put("outboundDescription", r.get("outbound_description"));
+            m.put("inboundDescription", r.get("inbound_description"));
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("orderId", r.get("original_id"));
+            f.put("number", r.get("original_number"));
+            m.put("replacementFor", f);
+            out.add(m);
+        }
+        return out;
     }
 
     /**
@@ -515,6 +598,7 @@ public class FulfillService {
         if (order.containsKey("exchangeFor")) {
             order.put("heldForRelease", ShopifyShadowOrders.pickState(jdbc, tenantId, orderId) == ShopifyShadowOrders.PickState.HELD);
         }
+        decorateReplacements(tenantId, self);
         List<Map<String, Object>> items = getItemsWithAllocations(orderId, tenantId);
         order.put("items", items);
         // Flexible labeling slice 4: per-line label status + the order's label counter (switched-on tenants only).

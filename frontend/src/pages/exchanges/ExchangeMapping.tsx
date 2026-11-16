@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2 } from 'lucide-react'
 import {
@@ -21,6 +21,11 @@ function trimTrailing(s: string | null): string {
 export default function ExchangeMapping() {
   const { t } = useTranslation()
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  // 2026-11-16: opened from Pick & Pack's "Exchanges to map" — success goes back there, straight to picking.
+  const [searchParams] = useSearchParams()
+  const fromFulfill = searchParams.get('from') === 'fulfill'
+  const [mappedOrderId, setMappedOrderId] = useState<string | null>(null)
 
   const [exchange, setExchange] = useState<ExchangeSummary | null>(null)
   const [loading, setLoading]   = useState(true)
@@ -81,6 +86,7 @@ export default function ExchangeMapping() {
     try {
       const result = await mapExchange(id, outbound.variant.id, inbound.variant.id)
       setMappedOrderNumber(`EXC-${exchange?.tracking_number ?? ''}` || result.orderId)
+      setMappedOrderId(result.orderId ?? null)
     } catch (e: unknown) {
       setConfirmError((e as Error).message ?? t('common.error'))
     } finally {
@@ -110,9 +116,22 @@ export default function ExchangeMapping() {
         <p className="text-body text-muted">
           {t('exchange.mapping.successBody', { order: mappedOrderNumber })}
         </p>
-        <Link to="/exceptions" className="text-trace-blue hover:underline text-small">
-          {t('exchange.mapping.backToExceptions')}
-        </Link>
+        {fromFulfill ? (
+          <div className="flex flex-wrap justify-center gap-3">
+            {mappedOrderId && (
+              <Button onClick={() => navigate(`/fulfill?pick=${encodeURIComponent(mappedOrderId)}`)}>
+                {t('exchange.mapping.startPicking')}
+              </Button>
+            )}
+            <Link to="/fulfill" className="text-trace-blue hover:underline text-small self-center">
+              {t('exchange.mapping.backToPickPack')}
+            </Link>
+          </div>
+        ) : (
+          <Link to="/exceptions" className="text-trace-blue hover:underline text-small">
+            {t('exchange.mapping.backToExceptions')}
+          </Link>
+        )}
       </div>
     )
   }

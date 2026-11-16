@@ -58,6 +58,10 @@ export default function FulfillRoute() {
   // (Its own param — `?order=<id>&unpack=1` is the Packed list's edit-conflict dialog and must stay as it was.)
   const guidedUnpack = searchParams.get('guidedUnpack')
   if (guidedUnpack) return <Fulfill unpackOrderId={guidedUnpack} />
+  // 2026-11-16: an exchange just mapped from "Exchanges to map" opens straight on its pick screen (order-queue mode);
+  // in waybill mode the worker scans its waybill on the normal page.
+  const pick = searchParams.get('pick')
+  if (pick && mode === 'order_queue') return <Fulfill openOrderId={pick} />
   if (mode === 'order_queue') return <Fulfill />
   if (searchParams.get('view') === 'self-pickup') return <Fulfill selfPickupOnly />
   return <WaybillPackPage />

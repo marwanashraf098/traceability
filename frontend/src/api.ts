@@ -2599,6 +2599,8 @@ export interface PackOrderCard {
   labels?: PackOrderLabels
   /** S3c — present only on a Shopify-native exchange shadow order: the original order it replaces. */
   exchangeFor?: ShadowExchangeFor
+  /** 2026-11-16 — a Bosta exchange's replacement (EXC-<AWB>) names the order it replaces. Never on a shadow. */
+  replacementFor?: ShadowExchangeFor
   /** S3c — shadows only: units the warehouse is short for this exchange (0 = fine). */
   shortBy?: number
   /** S3c — shadows only: Shopify hasn't released the exchange for fulfilment yet (it can't be packed). */
@@ -2827,6 +2829,30 @@ export function startPackSession() {
 }
 
 /** S3c — exchanges Shopify hasn't released for fulfilment yet. Anything unexpected reads as none (section hidden). */
+/**
+ * 2026-11-16 — a Bosta exchange of a pre-connect order whose replacement hasn't been mapped to an item yet
+ * (GET /fulfill/exchanges-to-map). Shown beside the Pick & Pack queue, never in it: there is nothing to pick until
+ * a manager maps it (the existing mapping screen), which creates EXC-<AWB> and puts it in the queue.
+ */
+export interface ExchangeToMap {
+  exchangeId: string
+  trackingNumber: string
+  createdAt: string
+  outboundDescription: string | null
+  inboundDescription: string | null
+  replacementFor: ShadowExchangeFor
+}
+
+/** GET /fulfill/exchanges-to-map — failure = none (the section is simply hidden). */
+export async function getExchangesToMap(): Promise<ExchangeToMap[]> {
+  try {
+    const rows = await request<ExchangeToMap[] | null>('/fulfill/exchanges-to-map')
+    return Array.isArray(rows) ? rows.filter(r => r && typeof r.exchangeId === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export async function getWaitingForRelease(): Promise<WaitingForReleaseOrder[]> {
   try {
     const rows = await request<WaitingForReleaseOrder[] | null>('/fulfill/waiting-for-release')

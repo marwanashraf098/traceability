@@ -53,6 +53,13 @@ public class FulfillController {
     }
 
     /** FR-8.7 — read-only consolidated gather list across all ready_to_pick orders. */
+    /** 2026-11-16 — unmapped Bosta exchanges of pre-connect orders ({@link FulfillService#EXCHANGES_TO_MAP_SQL}). */
+    @GetMapping("/exchanges-to-map")
+    @PreAuthorize("isAuthenticated()")
+    public java.util.List<java.util.Map<String, Object>> exchangesToMap() {
+        return svc.getExchangesToMap();
+    }
+
     @GetMapping("/gather")
     @PreAuthorize("isAuthenticated()")
     public FulfillService.GatherListResponse gather(

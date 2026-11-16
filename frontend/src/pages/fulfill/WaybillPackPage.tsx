@@ -16,6 +16,7 @@ import SessionSummaryScreen from './SessionSummaryScreen'
 import { PrintBatchesToday, PrintedNotPacked } from './PackLists'
 import { PackedOrdersList } from './PackedOrdersList'
 import { TourHelpButton } from '../../tours/TourCard'
+import { ExchangesToMapSection, useExchangesToMap } from './ExchangesToMap'
 
 // Pick & Pack S3/S4 — the Pick & Pack page in waybill-scan mode (design/pick-pack-waybill-mockup/
 // Main.html: header, tiles, print batches today, printed but not packed). Three internal views:
@@ -74,6 +75,8 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listsKey, setListsKey] = useState(0)
+  // 2026-11-16 — Bosta exchanges of pre-connect orders still to be mapped (nothing to scan until they are).
+  const exchangesToMap = useExchangesToMap(listsKey)
   // Switch on: ONE "Print" (waybills + piece labels — label printing in waybill mode). Off: exactly as before.
   const { flexibleLabeling } = useCapabilities()
   const isOwner = getRoleFromToken() === 'owner'
@@ -185,6 +188,7 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
           </Link>
         )}
 
+        <ExchangesToMapSection rows={exchangesToMap} />
         <PrintBatchesToday refreshKey={listsKey} />
         <PrintedNotPacked refreshKey={listsKey} />
         <PackedOrdersList refreshKey={listsKey} focusOrderId={searchParams.get('order')}

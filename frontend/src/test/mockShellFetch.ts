@@ -67,6 +67,9 @@ export function stubFetchWithShellDefaults(
     /** S3c: the Pick & Pack queue's background GET /api/v1/fulfill/waiting-for-release answers [] by default (it
      *  would otherwise take a response from a page's sequential queue). true = let the test's own fetch answer it. */
     passWaitingForRelease?: boolean
+    /** 2026-11-16: the queue's background GET /api/v1/fulfill/exchanges-to-map answers [] by default, like
+     *  waiting-for-release. true = let the test's own fetch answer it. */
+    passExchangesToMap?: boolean
   },
 ): void {
   vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
@@ -87,6 +90,10 @@ export function stubFetchWithShellDefaults(
     if (shell === '/api/v1/me/ui-state') return shellDefaultResponse({ toursDone: [], pagesSeen: [] })
     if (!overrides?.passWaitingForRelease && typeof url === 'string'
         && url.split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/, '') === '/api/v1/fulfill/waiting-for-release') {
+      return shellDefaultResponse([])
+    }
+    if (!overrides?.passExchangesToMap && typeof url === 'string'
+        && url.split(/[?#]/)[0].replace(/^https?:\/\/[^/]+/, '') === '/api/v1/fulfill/exchanges-to-map') {
       return shellDefaultResponse([])
     }
     return appFetch(url, opts)
