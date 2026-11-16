@@ -269,7 +269,7 @@ function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
           )}
           {item.bosta_description && (
             <span className="text-small text-muted font-mono">
-              {isAr ? 'بوستا' : 'Bosta'}: <bdi>{item.bosta_description}</bdi>
+              {isAr ? 'بوسطة' : 'Bosta'}: <bdi>{item.bosta_description}</bdi>
             </span>
           )}
         </div>
