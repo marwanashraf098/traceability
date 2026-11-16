@@ -525,6 +525,7 @@
       "tracking_change_needs_review": "Shopify shows a different waybill",
       "tracking_changed_relabel": "Put the new waybill on the parcel",
       "superseded_waybill_moving": "Old waybill still moving at Bosta",
+      "shipped_without_scan": "Shipped without a Traced scan — check stock",
       "shipped_outside_traced": "Shipped outside Traced, pieces still held",
       "shopify_exchange_still_waiting": "Shopify exchange still waiting",
       "shopify_return_open_after_intake": "Received in Traced, return still open in Shopify",

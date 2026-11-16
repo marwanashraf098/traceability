@@ -612,7 +612,24 @@ public class ShipmentLinkService {
             (String) fids.get("old_fid"), (String) fids.get("new_fid"), null, "applied", null, relabel);
         log.info("Tracking edit: order {} — Bosta leg {} replaced by {} ({}), relabel {}", orderId, oldTn, trackingNumber,
             supersedeKind, relabel);
+        reopenAfterSupersede(tenantId, orderId, supersedes, trackingNumber, delivery);
         return r;
+    }
+
+    /**
+     * D2 (approved 2026-11-16, BRK-47903-EG) — the replaced waybill was dead (deleted in Bosta / ended or waiting without
+     * ever moving: OrderReopen.legDeadSql) and the parcel was taken apart (no piece held — OrderReopen's rule): with the
+     * NEW waybill still at Bosta state &lt;= 10 the order goes back to Pick &amp; Pack ('new') so it is packed against it.
+     * Past 10 the courier already has a parcel Traced never scanned: link + supersede only, no reopen — the HIGH
+     * shipped_without_scan alert (ExceptionService.detectShippedWithoutScan) says so from the data. Never a stock change.
+     */
+    private void reopenAfterSupersede(UUID tenantId, UUID orderId, UUID oldLeg, String trackingNumber, BostaDelivery delivery) {
+        if (delivery.stateCode() > 10) return;
+        Boolean dead = jdbc.queryForObject(
+            "SELECT " + OrderReopen.legDeadSql("s") + " FROM shipments s WHERE s.id = ? AND s.tenant_id = ?",
+            Boolean.class, oldLeg, tenantId);
+        if (!Boolean.TRUE.equals(dead)) return;
+        OrderReopen.reopen(jdbc, tenantId, orderId, null, "tracking_supersede", trackingNumber);
     }
 
     /** V202 — a replacement that must not happen after all: thrown inside the link transaction so it rolls back. */

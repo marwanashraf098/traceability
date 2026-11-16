@@ -20,7 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (new / confirmed / ready_to_pick / picking) only in FulfillService.unpackOrder. Two pre-existing sites are listed:
  * PickErrorReversalService — the 2026-08-23 one-shot reversal, hardcoded to one order of one tenant — and
  * LookupExchangeService.create — the replacement order it has just created goes new → 'confirmed' (C2, 2026-10-28;
- * never from a packed status).
+ * never from a packed status). D2 (approved by Marawan 2026-11-16, BRK-47903-EG) adds OrderReopen.reopen — an order
+ * whose waybill died before it moved and whose parcel was taken apart goes back to 'new' (packed / awaiting_pickup only).
  *
  * A SOURCE-TEXT SCAN of src/main/java (run from the project root, like NamedDecrementSetGuardTest): Java string
  * concatenations are joined first, then every {@code UPDATE orders | merchant_orders | warehouse_orders (S3a) … SET … status = '<pickable>'}
@@ -39,14 +40,16 @@ class OrderStatusBackwardWriteGuardTest {
     static final Pattern PARAMETERISED = Pattern.compile(
         "(?is)UPDATE\\s+(?:merchant_|warehouse_)?orders\\b[^;\"]*?\\bSET\\b[^\"]*?\\bstatus\\s*=\\s*\\?");
 
-    /** Exactly three writers, each one method of one file (path under src/main/java) — never a whole class or pattern. */
+    /** Exactly four writers, each one method of one file (path under src/main/java) — never a whole class or pattern. */
     private static final Map<String, String> BACKWARD_ALLOWED = Map.of(
         // Unpack-order (approved 2026-10-31): packed / awaiting_pickup / self_pickup_pending → new, to repack.
         "com/traceability/inventory/FulfillService.java", "public UnpackOrderResult unpackOrder(",
         // 2026-08-23 incident one-shot (#2212102474): hardcoded tenant / order / piece, refuses anything else.
         "com/traceability/inventory/PickErrorReversalService.java", "public void reverse(",
         // C2 Lookup exchange: the replacement order it just created goes new → confirmed (never from packed).
-        "com/traceability/portal/LookupExchangeService.java", "public Created create(");
+        "com/traceability/portal/LookupExchangeService.java", "public Created create(",
+        // D2 (approved 2026-11-16): dead waybill + parcel taken apart → new (packed / awaiting_pickup only).
+        "com/traceability/inventory/OrderReopen.java", "public static boolean reopen(");
     private static final Map<String, String> PARAMETERISED_ALLOWED = Map.of(
         // complete(): reserved → packed / self_pickup_pending — forward only.
         "com/traceability/inventory/FulfillService.java", "public int complete(");
@@ -60,8 +63,9 @@ class OrderStatusBackwardWriteGuardTest {
             .containsExactlyInAnyOrder(
                 new Hit("com/traceability/inventory/FulfillService.java", "public UnpackOrderResult unpackOrder("),
                 new Hit("com/traceability/inventory/PickErrorReversalService.java", "public void reverse("),
-                new Hit("com/traceability/portal/LookupExchangeService.java", "public Created create("));
-        assertThat(BACKWARD_ALLOWED).as("the allowlist itself: exactly three writers").hasSize(3);
+                new Hit("com/traceability/portal/LookupExchangeService.java", "public Created create("),
+                new Hit("com/traceability/inventory/OrderReopen.java", "public static boolean reopen("));
+        assertThat(BACKWARD_ALLOWED).as("the allowlist itself: exactly four writers").hasSize(4);
     }
 
     @Test

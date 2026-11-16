@@ -239,6 +239,8 @@ public class ExceptionService {
         // Shopify tracking-number edits (V200) — the decisions Traced recorded in shipment_tracking_changes.
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
+        // D2 (2026-11-16): a replacing waybill left with a parcel Traced never scanned (the old one's pieces were taken apart).
+        all.addAll(detectShippedWithoutScan(tenantId));
         // Main reconcile R2 fix 2 (V203): Traced delivered it, Shopify still shows it unfulfilled.
         if (!simulated) all.addAll(detectDeliveredNotFulfilledInShopify(tenantId));
         // 2026-11-07: pieces still held in Traced on an order shipped outside its pack / pickup flow.
@@ -378,6 +380,7 @@ public class ExceptionService {
         Map.entry("tracking_change_needs_review/order",        OrderLink.DIRECT),
         Map.entry("tracking_changed_relabel/order",            OrderLink.DIRECT),
         Map.entry("superseded_waybill_moving/shipment",        OrderLink.VIA_SHIPMENT),
+        Map.entry("shipped_without_scan/shipment",             OrderLink.VIA_SHIPMENT),
         Map.entry("delivered_not_fulfilled_in_shopify/order",  OrderLink.DIRECT),
         Map.entry("shipped_outside_traced/order",              OrderLink.DIRECT));
 
@@ -432,6 +435,7 @@ public class ExceptionService {
         Map.entry("generic_delivered_without_pickup", "other"),
         Map.entry("tracking_changed_after_custody",   "other"),
         Map.entry("superseded_waybill_moving",        "other"),
+        Map.entry("shipped_without_scan",             "other"),
         Map.entry("delivered_not_fulfilled_in_shopify", "other"),
         Map.entry("shipped_outside_traced",           "other"),
         Map.entry("shopify_exchange_shipped_in_shopify", "other"),
@@ -1440,6 +1444,37 @@ public class ExceptionService {
             "    OR ('printed' = ANY (c.relabel) AND NOT EXISTS (SELECT 1 FROM pack_print_batch_items bi " +
             "          WHERE bi.shipment_id = s.id AND bi.tenant_id = s.tenant_id AND bi.tracking_number = c.new_tracking_number)) " +
             "    OR ('claimed' = ANY (c.relabel) AND o.locked_by IS NOT NULL)) " + notResolved,
+            tid);
+    }
+
+    /**
+     * HIGH — D2 (approved 2026-11-16, BRK-47954-EG): Traced packed this order onto a waybill (piece events on the OLD
+     * leg), that waybill died before it moved (deleted in Bosta / ended or replaced without moving — OrderReopen.legDeadSql)
+     * and the parcel was taken apart; the REPLACING waybill then moved past Bosta state 10 with no piece Traced ever
+     * scanned onto it and none held for the order. The courier has a parcel Traced never scanned — check stock.
+     * Condition-only; clears when a piece is scanned onto the new waybill, the order is cancelled, or it is resolved.
+     * Never adjusts stock.
+     */
+    private List<Map<String, Object>> detectShippedWithoutScan(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT ON (n.id) 'shipped_without_scan' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
+            "       n.order_id, o.number AS order_number, n.id AS shipment_id, n.tracking_number, " +
+            "       s.tracking_number AS old_tracking_number, n.provider_state, s.superseded_at AS occurred_at, " +
+            "       'shipped_without_scan:' || n.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN shipments n ON n.id = s.superseded_by_shipment_id AND n.tenant_id = s.tenant_id " +
+            "JOIN merchant_orders o ON o.id = n.order_id AND o.tenant_id = n.tenant_id " +
+            "WHERE s.tenant_id = ? AND n.provider = 'bosta' AND n.shipment_leg = 'forward' " +
+            "  AND o.status::text <> 'cancelled' " +
+            "  AND " + OrderLineFreeze.newestForwardLegSql("n") + " " +
+            "  AND " + OrderReopen.legDeadSql("s") + " " +
+            "  AND EXISTS (SELECT 1 FROM piece_events pe_o WHERE pe_o.shipment_id = s.id AND pe_o.order_id = s.order_id) " +
+            "  AND (coalesce(n.provider_state, 0) > 10 OR " + OrderLineFreeze.legMovedSql("n") + ") " +
+            "  AND NOT EXISTS (SELECT 1 FROM piece_events pe_n WHERE pe_n.shipment_id = n.id) " +
+            "  AND " + OrderReopen.noPieceHeldSql("o") + " " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = n.tenant_id " +
+            "        AND er.exception_type = 'shipped_without_scan' AND er.subject_key = 'shipped_without_scan:' || n.id) " +
+            "ORDER BY n.id, s.superseded_at DESC",
             tid);
     }
 
@@ -2467,6 +2502,15 @@ public class ExceptionService {
                        : live ? "البوليصة القديمة " + was + " ما زالت فعّالة في Bosta. ألغِها في Bosta وسيبدّل Traced"
                        : "أكثر من رقم جديد، ولم يخمّن Traced")
                     + "؛ أبقى Traced الرقم " + was);
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "shipped_without_scan" -> {
+                String n = str(item, "order_number"), tn = str(item, "tracking_number"), was = str(item, "old_tracking_number");
+                item.put("descriptionEn", "Order " + n + ": waybill " + tn + " left with items Traced never scanned"
+                    + " (it replaced " + was + ", whose parcel was taken apart) — check stock");
+                item.put("descriptionAr", "الطلب " + n + ": البوليصة " + tn + " خرجت بقطع لم يمسحها Traced"
+                    + " (حلّت محل " + was + " التي فُكّ طردها) — راجع المخزون");
                 item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
             }

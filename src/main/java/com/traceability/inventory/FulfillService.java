@@ -1550,9 +1550,14 @@ public class FulfillService {
             "WHERE id = ? AND tenant_id = ? AND status::text IN ('packed', 'awaiting_pickup', 'self_pickup_pending')",
             orderId, tenantId);
         if (updated != 1) throw new IllegalStateException("Order " + orderId + " changed status during unpack");
+        // D2 (2026-11-16): reopened → follows Shopify again; a line stored at 0 while the order looked frozen takes
+        // Shopify's current quantity (the ingest's code path).
+        int linesRestored = com.traceability.integrations.shopify.ShopifySyncService
+            .restoreAddedLineQuantities(jdbc, tenantId, orderId);
 
         Map<String, Object> audit = new LinkedHashMap<>();
         audit.put("reason", reason);
+        if (linesRestored > 0) audit.put("linesRestored", linesRestored);
         if (cleanNote != null) audit.put("note", cleanNote);
         audit.put("previousStatus", status);
         audit.put("pieceIds", pieceIds);
