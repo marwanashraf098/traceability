@@ -20,16 +20,27 @@ diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6
   stock"; old leg had Traced-scanned pieces, nothing scanned onto the new one; never a stock change). On reopen (and on
   unpackOrder) lines at 0 with current_quantity > 0 take it (`ShopifySyncService.restoreAddedLineQuantities`).
   PICKABLE_ORDERS_FILTER unchanged.
-- **D3** Scan returns: a packed / awaiting_pickup piece whose order's forward leg never moved → unpack, not RTO (existing
-  ledger edges, event 'unpacked' {via return_scan, session_id}, allocation released, order reopened under D2 with its last
-  held piece; no session item, no Shopify +1; feedback "Back on shelf — order X needs repacking" EN + AR, lastScan kind
-  'unpacked'). `unpackOrder` allows a deleted, never-moved waybill when the order isn't frozen.
-  Prod side effect worth checking later: each old 'rto' Restock of a never-departed piece sent a Shopify +1 (6 pieces on
-  BRK-47903 / BRK-47954) — Main reconcile should have corrected it; not investigated.
+- **D3** Scan returns: a packed / awaiting_pickup piece whose order's waybill is DEAD → unpack, not RTO (existing ledger
+  edges, event 'unpacked' {via return_scan, session_id}, allocation released, order reopened under D2 with its last held
+  piece; no session item, no Shopify write; feedback "Back on shelf — order X needs repacking" EN + AR, lastScan kind
+  'unpacked'). **Narrowed in the fix-up pass (Marawan 2026-11-16):** dead = the order's NEWEST forward leg is deleted in
+  Bosta or cancelled / terminated, AND no forward leg of the order ever moved (`ReturnSessionService.waybillDiedBeforeItMoved`).
+  A live 'created' waybill keeps today's path (flagged unexpected → return_pending_inspection) — ReturnsExpectedBackTest
+  e5 / w2 unchanged, DeletedWaybillReopenTest u7. `unpackOrder` allows a deleted waybill when nothing left custody
+  (OrderLineFreeze); a deleted waybill a piece DID leave on still refuses WAYBILL_ENDED (UnpackOrderTest.u4).
+  **Shopify check (prod read-only, 2026-11-16):** none of the old 'rto' Restock +1s reached Shopify — BROEK's Traced Main
+  location is `inactive` in Shopify (nothing applied since 2026-10-24; 1,387 held / failed claims); the 6 pieces' claims
+  (`return_inspection`, `piece:restock_event`) are 'failed' "Held — the Traced location is inactive", and the voided
+  PIP piece's `void_correction` is skipped `arrival_unconfirmed`. Main reconcile: BROEK is report-only and every run is
+  skipped `location_inactive` (0 writes, 0 Part 1). Shopify's own fulfillments of both orders were at location
+  83647889687, not the Traced Main location. Nothing to correct in Shopify today; the risk is the held +1s being released
+  if the location is reactivated (see the follow-up).
 - **D4** `ShipmentLinkService.trackingAllocationSql` is THE "allocation tracks its line" rule: live, or released after its
-  piece really left with the order. `PortalService.LINE_UNTRACKED_SQL` and `orderUntrackedSql` read it. A line picked then
-  unpicked is untracked again: the portal offers it as units (before: not returnable at all), Scan returns lists its unit
-  rows (BRK-47431: Gray now listed), Lookup exchange can take it.
+  piece really left with the order — a with_courier / delivered event on a forward leg, or (fix-up pass) a
+  return_received FROM with_courier / delivered / return_in_transit for the order (the scan-back of a piece that was out
+  with it; intake from packed / awaiting_pickup still doesn't count). `PortalService.LINE_UNTRACKED_SQL` and
+  `orderUntrackedSql` read it. A line picked then unpicked is untracked again: the portal offers it as units (before: not
+  returnable at all), Scan returns lists its unit rows (BRK-47431: Gray now listed), Lookup exchange can take it.
 - **Bug 2/3** `BostaLabelLines` parses Bosta's label lines (type 25 returnSpecs "xN … - SKU: …" joined by //; forward / RTO
   specs "… x N (SKU)" per line; exact SKU; unreadable → today's behaviour; NEVER itemsCount). Parcel view `bostaLabel`
   + `onLabel` rows; screen: label rows first, the rest under "Not on the Bosta label", confirm (not block) past the label
@@ -38,15 +49,51 @@ diagnosis of BRK-47903-EG / BRK-47954-EG / BRK-47431-EG / BRK-47247-EG (BROEK d6
   drawer for untracked unit marks after the session closed (`GET/POST /orders/{id}/untracked-arrivals[/{intakeId}/undo]`,
   `UntrackedParcelUnits.undoArrival`; 409 when Receiving used the unit or the session is open; audit
   'untracked_arrival_undone'; no stock / Shopify).
-- **Known red, awaiting approval to edit (existing assertions the decisions reverse):** UnpackOrderTest.u4 line 341
-  (#G-DELETED expects WAYBILL_ENDED — D3 allows it; u4's later guards don't run until fixed); returnsParcelCards pc1:151
-  (old "1 of 2 items scanned"); old spelling بوستا in getStartedCard:416, orderDrawerCourierWording:122,
-  orderDrawerNoWaybill:92, returnsAwaitingScanCallout:156, returnsParcelCards:279, setupIntro:437.
-- **Repairs (plan only):** R1 BRK-47903-EG after deploy: re-read Bosta 2109710882 (stop if > 10), catch-up dry run
-  (`BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d`, `…_ORDERS=BRK-47903-EG`) → WOULD_LINK
-  "replaces 6855433207" → apply → 'new', sweatpants qty 1, 4 units; merchant must pick + scan 4 pieces against the sealed
-  2109710882 parcel. R2 BRK-47431-EG: drawer "Undo arrival" on intake 7671830b-7aa3-4cd4-a6c1-d466e7e15d6b. R3
-  BRK-47954-EG: catch-up → link + supersede + shipped_without_scan (697507445 already at Bosta 24).
+- **Assertion edits (approved 2026-11-16, done in the fix-up pass):** UnpackOrderTest.u4 (#G-DELETED → 200 'new'; new
+  sibling #G-DELETED-LEFT → WAYBILL_ENDED); returnsParcelCards pc1:151 → "1 scanned · up to 2 could come back"; بوستا →
+  بوسطة in getStartedCard:416, orderDrawerCourierWording:123, orderDrawerNoWaybill:92, returnsAwaitingScanCallout:156
+  (+ :157, the same string, hidden behind :156), returnsParcelCards:279, setupIntro:437. Leak registries resolve
+  `{intakeId}`; WarehouseOrdersAccessGuardTest allowlists the 5 new warehouse_orders reads (each by id + tenant).
+- **ReturnParcelCardsTest.markReceived_409s (option (a), approved 2026-11-16):** the `trackedCrp` fixture's piece now has a
+  delivered forward history (handed_to_courier → delivered on a forward leg, then return_received + restocked, allocation
+  released) — tracked under D4, the 409 still fires; assertion unchanged. Touched classes 125 / 125 green.
+- **Post-deploy repair runbook (PREPARED, NOT RUN — each step needs Marawan's go):**
+  - **R0 — settle the 6 held never-departed +1s (DB write only, no Shopify call).** BROEK's 6 `return_inspection` claims
+    from the 'rto' intake + Restock of pieces that never left (all 'failed' "Held — the Traced location is inactive",
+    1 attempt): 5093 PIP-WHT-L 01M782KAT2J1P9TT157WX8T20A, 5232 Beige 01M660C1F3M48E929CCTRKD178, 5249 Light Blue
+    01M555KZJKP318NKSBBM4VY2J0 (BRK-47954-EG); 5246 Raw Denim 01M59PK1S4DC3HHE6JNG0FM8NQ, 5420 Dark Washed
+    01M660C1F5KV93ZTRVAK4DVMXZ, 5456 Gray 01M660C1F49NZCHK5HJ48FNAXT (BRK-47903-EG). **4776** (Raw Denim, event
+    e8bd35a1, BRK-46535-EG's earlier return) is NOT touched. Do this BEFORE any reactivation of BROEK's Traced location
+    (else the hold releases them → Shopify +6 too high). No CHECK blocks it (piece_skip_reason_check doesn't cover
+    return_inspection); the `main_reconcile_queue` trigger queues the variants (BROEK is report-only — no write).
+    ```sql
+    -- before (expect 6 rows, all failed, attempt_count 1)
+    SELECT id, trigger_id, status, skip_reason, attempt_count, next_attempt_at, error
+    FROM shopify_inventory_adjustments
+    WHERE tenant_id = 'd6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d' AND trigger_type = 'return_inspection'
+      AND id IN (5093, 5232, 5246, 5249, 5420, 5456) ORDER BY id;
+    -- the write (expect UPDATE 6; anything else → ROLLBACK)
+    BEGIN;
+    UPDATE shopify_inventory_adjustments
+       SET status = 'skipped', skip_reason = 'never_departed_unpack (BRK repair 2026-11)', next_attempt_at = NULL
+     WHERE tenant_id = 'd6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d' AND trigger_type = 'return_inspection'
+       AND status = 'failed' AND id IN (5093, 5232, 5246, 5249, 5420, 5456);
+    COMMIT;
+    -- after (expect 6 skipped with that reason; 4776 still 'failed')
+    SELECT id, status, skip_reason, next_attempt_at FROM shopify_inventory_adjustments
+    WHERE tenant_id = 'd6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d' AND id IN (4776, 5093, 5232, 5246, 5249, 5420, 5456) ORDER BY id;
+    ```
+  - **R1 — BRK-47903-EG.** Re-read Bosta 2109710882 (v0 fetch, read only). **State ≤ 10:** catch-up dry run
+    (`BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=d6e1ffe7-cdb4-4e57-9287-f6f9a6322d2d`,
+    `BOSTA_FULFILLMENT_LINK_CATCH_UP_ORDERS=BRK-47903-EG`, no `_APPLY`) → expect WOULD_LINK "replaces 6855433207"; then
+    `_APPLY=true` → LINKED; remove the lines and recreate the app. Verify: order status 'new'; demand 4 units
+    (order_items, incl. the sweatpants line at qty 1); the 2109710882 Bosta row link_status 'linked'; order in the Pick &
+    Pack queue. The merchant picks + scans the 4 pieces against the sealed 2109710882 parcel. **State > 10:** same
+    catch-up → link + supersede only (no reopen) and the HIGH `shipped_without_scan` alert; no stock change.
+  - **R2 — BRK-47431-EG:** an owner / manager opens the order drawer → "Undo arrival" on untracked intake
+    7671830b-7aa3-4cd4-a6c1-d466e7e15d6b (409 if Receiving used it or its session is open).
+  - **R3 — BRK-47954-EG:** catch-up (same env, `_ORDERS=BRK-47954-EG`; dry run then apply) → link + supersede +
+    `shipped_without_scan` (697507445 already past 10 — Bosta 24); no reopen, no stock change.
 
 **Bazar POS B1 — event + linked transfer + prices (2026-11-15; branch `feat/bazar-b1`, rebased onto main ba6b91e8; V231 —
 V229 went to `perf/reconcile-locks-bosta-poll` and V230 to L1b-1, both merged first; renumbered V230 → V231 (approved
