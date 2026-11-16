@@ -1,0 +1,34 @@
+{
+  "data": {
+    "market": {
+      "id": "gid://shopify/Market/2001",
+      "delivery": {
+        "shipping": {
+          "optionDefinitions": {
+            "nodes": [
+              {
+                "__typename": "DeliveryFlatRateOptionDefinition",
+                "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3001",
+                "rateGroups": {
+                  "nodes": [
+                    {
+                      "id": "gid://shopify/DeliveryFlatRateGroup/3010",
+                      "conditions": {
+                        "originLocationsCount": {
+                          "count": 0
+                        },
+                        "originLocations": {
+                          "nodes": []
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

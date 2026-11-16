@@ -351,6 +351,18 @@ public class ShopifyOAuthService {
             "&state=" + nonce;
     }
 
+    /**
+     * L1b-2 — Shopify's request URL for OPTIONAL scopes (shopify.dev "Manage access scopes", browser redirect URL):
+     * {@code https://admin.shopify.com/store/{store}/oauth/install?client_id=…&optional_scopes=…}. The scopes must be a
+     * subset of the deployed optional_scopes (shopify.app.toml). The merchant grants or declines in Shopify admin;
+     * app/scopes_update then refreshes the stored scopes (ShopifyScopesUpdateHandler).
+     */
+    public String buildOptionalScopesUrl(String shopDomain, String scopesCsv) {
+        String handle = shopDomain.toLowerCase(java.util.Locale.ROOT).replaceFirst("\\.myshopify\\.com$", "");
+        return "https://admin.shopify.com/store/" + handle + "/oauth/install?client_id=" + clientId
+            + "&optional_scopes=" + scopesCsv;
+    }
+
     public String getAppUrl()        { return appUrl; }
     public String getClientSecret()  { return clientSecret; }
 

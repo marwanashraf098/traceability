@@ -2,8 +2,6 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashSet;
@@ -11,11 +9,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Real Shopify delivery-profile gateway using deliveryProfiles + deliveryProfileUpdate
- * (FR-17 v2 fulfillment activation). No @Primary/Stub split — unlike ShopifyLocationGateway's
- * historical transition period, ShopifyFulfillmentActivationService guards on write_shipping
- * scope inline before ever calling this bean (same pattern as ShopifyInventoryService's
- * write_inventory check), so a single implementation is sufficient.
+ * Real Shopify delivery-profile gateway: the deliveryProfiles READ only (legacy shipping membership). L1b-2: no
+ * delivery-profile mutation exists in Traced (DeliveryProfileMutationGuardTest).
  */
 @Service
 class ShopifyDeliveryProfileGatewayImpl implements ShopifyDeliveryProfileGateway {
@@ -40,20 +35,6 @@ class ShopifyDeliveryProfileGatewayImpl implements ShopifyDeliveryProfileGateway
                       }
                     }
                   }
-                }
-              }
-            }
-            """;
-
-    private static final String DELIVERY_PROFILE_UPDATE_MUTATION = """
-            mutation DeliveryProfileUpdate($id: ID!, $profile: DeliveryProfileInput!) {
-              deliveryProfileUpdate(id: $id, profile: $profile) {
-                profile {
-                  id
-                }
-                userErrors {
-                  field
-                  message
                 }
               }
             }
@@ -96,27 +77,5 @@ class ShopifyDeliveryProfileGatewayImpl implements ShopifyDeliveryProfileGateway
                 node.path("id").asText(), group.path("id").asText(), members));
         }
         return Optional.empty();
-    }
-
-    @Override
-    public void addLocationToGroup(String shopDomain, String token, String deliveryProfileId,
-                                    String locationGroupId, String locationGid) {
-        ArrayNode locationsToAdd = mapper.createArrayNode().add(locationGid);
-        ObjectNode locationGroupUpdate = mapper.createObjectNode().put("id", locationGroupId);
-        locationGroupUpdate.set("locationsToAdd", locationsToAdd);
-        ArrayNode locationGroupsToUpdate = mapper.createArrayNode().add(locationGroupUpdate);
-        ObjectNode profileInput = mapper.createObjectNode();
-        profileInput.set("locationGroupsToUpdate", locationGroupsToUpdate);
-
-        ObjectNode vars = mapper.createObjectNode().put("id", deliveryProfileId);
-        vars.set("profile", profileInput);
-
-        JsonNode response = shopify.executeGraphQLPublic(
-            shopDomain, token, DELIVERY_PROFILE_UPDATE_MUTATION, vars);
-        JsonNode userErrors = response.path("deliveryProfileUpdate").path("userErrors");
-        if (userErrors.isArray() && !userErrors.isEmpty()) {
-            String msg = userErrors.get(0).path("message").asText("unknown error");
-            throw new ShopifyException("deliveryProfileUpdate failed: " + msg);
-        }
     }
 }

@@ -1010,8 +1010,20 @@ export interface ConnectionsStatus {
     tracedLocationNumber?: string | null
     /** Updates that used up their attempts while the location wasn't active — the owner's "Re-send failed updates". */
     resendableFailed?: number
-    /** Shopify-native returns S1: owner only, while the store hasn't approved Traced's new Shopify permissions. */
-    newPermissions?: { openAppUrl: string }
+    /** L1b-2 — the store's shipping model, for the wording: legacy "shipping profile", otherwise "shipping rates". */
+    tracedShippingModel?: 'unknown' | 'legacy' | 'market_driven' | null
+    /** L1b-2 — market-driven: the primary market's rate that lists Traced Main ("United States — Standard"). */
+    tracedCoveredBy?: string | null
+    /** L1b-2 — other active markets whose rates don't list Traced Main. Information, never a blocker. */
+    tracedNotAddedFor?: string[]
+    /** L1b-2 — legacy: the General shipping profile's numeric id (the owner's deep link to it). */
+    deliveryProfileNumber?: string | null
+    /**
+     * Owner only. openAppUrl: the store hasn't approved Traced's new REQUIRED permissions (Shopify-native returns S1) —
+     * opening the app shows Shopify's prompt. marketsRequestUrl (L1b-2): a market-driven store hasn't granted the
+     * OPTIONAL read_markets — Shopify's request URL asks for it. Each key is present only when it applies.
+     */
+    newPermissions?: { openAppUrl?: string; marketsRequestUrl?: string }
   }
   bosta: {
     connected: boolean
@@ -1043,11 +1055,10 @@ export function bostaUpdateSettings(settings: { awbFormat?: 'A4' | 'A6'; awbLang
   })
 }
 
-// ── FR-17 v2: fulfillment activation (deliveryProfileUpdate) ─────────────────
+// ── Shopify initial-seed reconcile report (read only) ────────────────────────
 //
-// Joins the Traced Main Warehouse to the shop's default delivery profile's location
-// group — the step that makes it live to the storefront. Explicit, owner-triggered,
-// never automatic (see LocationController.activateShopifyFulfillment's javadoc).
+// L1b-2 (2026-11-16): Traced no longer joins its location to a delivery profile — there is no activation call here or
+// anywhere (DeliveryProfileMutationGuardTest). The owner adds it in Shopify; see ShippingRatesInstruction.
 
 export interface ShopifyReconcileRow {
   variantId: string
@@ -1063,28 +1074,9 @@ export interface ShopifyReconcileReport {
   rows: ShopifyReconcileRow[]
 }
 
-/** Read-only — used here only to gate the activation checklist item on "nothing left to seed". */
+/** Read-only — the initial-seed report. */
 export function getShopifyInventoryReconcileReport() {
   return request<ShopifyReconcileReport>('/shopify/inventory/reconcile')
-}
-
-export interface FulfillmentActivationResult {
-  status: 'activated'
-  locationGid: string
-  deliveryProfileId: string
-  locationGroupId: string
-  alreadyMember: boolean
-}
-
-/**
- * Same {code, message_en, message_ar} error contract as TransferException (see
- * ApiExceptionHandler.handleFulfillmentActivation) — reuses transferCommandRequest's
- * generic error-body sniffing (and throws the same TransferCommandError) rather than
- * duplicating that logic for one more call site.
- */
-export function activateShopifyFulfillment() {
-  return transferCommandRequest<FulfillmentActivationResult>(
-    '/locations/shopify/activate-fulfillment', { method: 'POST' })
 }
 
 // ── Shopify custom-app connect (custom_app_cc pilot path) ─────────────────────
@@ -3018,6 +3010,14 @@ export interface LocationRow {
   shopify_shipping_model?: 'unknown' | 'legacy' | 'market_driven'
   /** L1b-1 — THE readiness rule (TracedShippingReadiness.SQL), on the is_fulfillment row only. */
   shopify_shipping_readiness?: TracedShippingReadiness | null
+  /** L1b-2 (V233) — market-driven: what Traced READ from the primary market's rates. null = no verdict / never read. */
+  shopify_market_shipping_status?: 'covered' | 'not_covered' | 'no_access' | null
+  shopify_market_shipping_checked_at?: string | null
+  shopify_market_shipping_covered_by?: string | null
+  /** L1b-2 — other active markets whose rates don't list Traced Main (information only). */
+  shopify_market_shipping_missing?: string[] | null
+  /** L1b-2 — legacy: the General shipping profile's numeric id (deep link). */
+  shopify_delivery_profile_number?: string | null
 }
 
 /**
@@ -3031,13 +3031,20 @@ export type TracedShippingReadiness =
   /** L1b-1 review — market-driven, the OWNER said "I've added it": "Confirmed by you", never Ready. */
   | 'owner_confirmed'
 
-/** L1b-1 — the Shopify admin links for the owner's fallback: the location's page (primary) and shipping settings. */
-export function tracedLocationAdminUrls(shopDomain: string | null | undefined, locationNumber: string | null | undefined) {
+/**
+ * L1b-1 — the Shopify admin links for the owner: the location's page (market-driven: its Shipping row opens "Select
+ * rates"), shipping settings, and (L1b-2, legacy) the General shipping profile itself — falls back to shipping settings
+ * when Traced has no profile id yet. Only numeric ids and a plain myshopify handle are ever put in a URL.
+ */
+export function tracedLocationAdminUrls(shopDomain: string | null | undefined, locationNumber: string | null | undefined,
+                                        profileNumber?: string | null) {
   if (!shopDomain || !locationNumber || !/^\d+$/.test(locationNumber)) return null
   const handle = shopDomain.replace(/\.myshopify\.com$/i, '')
   if (!/^[a-z0-9][a-z0-9-]*$/i.test(handle)) return null
   const base = `https://admin.shopify.com/store/${handle}/settings`
-  return { location: `${base}/locations/${locationNumber}`, shipping: `${base}/shipping` }
+  const shipping = `${base}/shipping`
+  const profile = profileNumber && /^\d+$/.test(profileNumber) ? `${shipping}/profiles/${profileNumber}` : shipping
+  return { location: `${base}/locations/${locationNumber}`, shipping, profile }
 }
 
 export function listLocations() {
@@ -3058,23 +3065,18 @@ export function listLocations() {
  * by itself on a reconnect.
  */
 export function tracedLocationNeedsTurnBackOn(location: LocationRow | null | undefined): boolean {
+  // L1b-2 (2026-11-16): only "Fulfill online orders" being OFF — the one setting Traced turns back on. A location taken
+  // out of the shipping profile gets the instruction + deep link instead (Traced never writes a delivery profile).
   return !!location
     && location.is_fulfillment
     && location.shopify_sync_status === 'linked'
-    && (location.shopify_online_fulfillment_status === 'off'
-        // L1b-1: the profile part is legacy-only — on a market-driven store the delivery profile means nothing.
-        // L1b-1 review: when the server sends its readiness, the profile part is exactly 'profile_removed' (a LIVE
-        // read found it out of the profile) — a stored status nobody re-read since before L1 never warns.
-        || (location.shopify_shipping_readiness !== undefined
-            ? location.shopify_shipping_readiness === 'profile_removed'
-            : (location.shopify_shipping_model !== 'market_driven'
-               && location.shopify_delivery_profile_status === 'not_activated'
-               && !!location.shopify_delivery_profile_activated_at)))
+    && location.shopify_online_fulfillment_status === 'off'
 }
 
-export interface TurnBackOnResult { onlineStatus: 'on' | 'off' | 'error'; profile: 'ALREADY_MEMBER' | 'JOINED' | 'FAILED' }
+/** shipping: what the read after the edit found (member / not_member / covered / not_covered / no_access / …). */
+export interface TurnBackOnResult { onlineStatus: 'on' | 'off' | 'error'; profile: string }
 
-/** L1 — owner only: turn the Traced location's online selling back on (fulfils online orders + delivery profile). */
+/** L1 — owner only: turn "Fulfill online orders" back on for the Traced location (L1b-2: that edit only). */
 export function turnTracedLocationBackOn() {
   return transferCommandRequest<TurnBackOnResult>('/locations/shopify/turn-back-on', { method: 'POST' })
 }
@@ -3084,6 +3086,35 @@ export function confirmTracedShippingRates() {
   return transferCommandRequest<{ readiness: TracedShippingReadiness }>('/locations/shopify/shipping-rates-confirmed', { method: 'POST' })
 }
 
+/** L1b-2 — "Check again" (owner / manager): one per 2 minutes per tenant; read only. */
+export type ShippingCheckResult =
+  | { rateLimited: false; readiness: TracedShippingReadiness | null; shippingModel: string | null;
+      coveredBy: string | null; notAddedFor: string[] }
+  | { rateLimited: true; nextAllowedAt: string | null }
+
+export async function checkTracedShipping(): Promise<ShippingCheckResult> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/locations/shopify/shipping-check`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  })
+  if (res.status === 429) {
+    const body = await res.json().catch(() => null) as { nextAllowedAt?: string | null } | null
+    return { rateLimited: true, nextAllowedAt: body?.nextAllowedAt ?? null }
+  }
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  const body = await res.json() as { readiness: TracedShippingReadiness | null; shippingModel: string | null;
+    coveredBy: string | null; notAddedFor?: string[] }
+  return { rateLimited: false, readiness: body.readiness, shippingModel: body.shippingModel,
+    coveredBy: body.coveredBy, notAddedFor: body.notAddedFor ?? [] }
+}
+
+/**
+ * The owner still has to add Traced Main to the store's shipping in Shopify: a legacy store whose location a LIVE read
+ * found out of the General profile (never in it) — the Overview prompt and the connection card share it. L1b-2:
+ * Traced shows the instruction + a deep link; it never adds the location itself.
+ */
 export function needsFulfillmentActivation(
   shopifyConnected: boolean,
   location: LocationRow | null | undefined,
@@ -3092,10 +3123,10 @@ export function needsFulfillmentActivation(
     && !!location
     && location.is_fulfillment
     && location.shopify_sync_status === 'linked'
-    // L1b-1: never on a market-driven store — the join can't make it ship there (the card shows the instruction).
+    // L1b-1: never on a market-driven store — a delivery profile means nothing there (the card shows the rates instruction).
     && location.shopify_shipping_model !== 'market_driven'
     // L1b-1 review: with the server's readiness, only 'activate_needed' (a LIVE read: not in the profile, never was) —
-    // a legacy store not re-read since before L1 shows "Checking…", not an Activate prompt.
+    // a legacy store not re-read since before L1 shows "Checking…", not this prompt.
     && (location.shopify_shipping_readiness !== undefined
         ? location.shopify_shipping_readiness === 'activate_needed'
         : location.shopify_delivery_profile_status !== 'activated')

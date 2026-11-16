@@ -277,14 +277,18 @@ shopify:
   # corresponding read_inventory/read_locations/read_returns aren't listed separately where
   # the write is. Shopify-native returns S1 added read_returns + write_returns (write used from
   # S5 only — no write call exists before then) + read_merchant_managed_fulfillment_orders.
-  # write_shipping (added for deliveryProfileUpdate / fulfillment activation, FR-17 v2)
-  # is the correct APP access scope per Shopify's per-mutation docs ("Requires Any of shipping
-  # access scopes or manage_delivery_settings user permission") — manage_delivery_settings is
-  # a merchant STAFF user permission, not an app-installable scope, and does not belong here.
+  # write_shipping: kept as it is (L1b-2, 2026-11-16 — dropping it is a separate decision). Since L1b-2 Traced makes
+  # NO delivery-profile write; the only shipping call is the default-profile membership READ, which read_shipping
+  # alone allows (verified live 2026-11-16).
   scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping,read_returns,write_returns,read_merchant_managed_fulfillment_orders}
   # Shopify-native returns S1: the owner's "Approve Traced's new Shopify permissions" notice (Settings →
   # Connections). Turn on only after `shopify app deploy` has released the new scopes.
   new-scopes-notice: ${SHOPIFY_NEW_SCOPES_NOTICE:false}
+  # L1b-2 (2026-11-16): read_markets is an OPTIONAL scope (shopify.app.toml optional_scopes) — never in `scopes`, so
+  # no merchant is re-prompted. The owner of a MARKET-DRIVEN store is offered "Allow Traced to check your shipping
+  # rates" (Shopify's optional-scope request URL). Turn on only after `shopify app deploy` has released
+  # optional_scopes — before that Shopify has nothing to grant.
+  markets-scope-request: ${SHOPIFY_MARKETS_SCOPE_REQUEST:false}
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
   # App handle from the Partner Dashboard (Apps > this app > the URL slug in

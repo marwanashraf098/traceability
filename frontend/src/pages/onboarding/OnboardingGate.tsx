@@ -5,7 +5,7 @@ import { Check, Clock, Info, Store } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
-import ShippingRatesInstruction, { ShippingRatesConfirmed } from '../settings/connections/ShippingRatesInstruction'
+import ShippingRatesInstruction, { ShippingRatesConfirmed, ShippingCoverage } from '../settings/connections/ShippingRatesInstruction'
 import {
   getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress,
   ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupGovernorate, type SetupStep,
@@ -105,6 +105,7 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
     : shipping === 'ready' ? t('setupGate.connected.ready')
     : shipping === 'location_inactive' ? t('setupGate.connected.notActive')
     : shipping === 'add_to_shipping_rates' ? t('setupGate.connected.checkShippingRates')
+    : shipping === 'activate_needed' || shipping === 'profile_removed' ? t('setupGate.connected.checkShippingProfile')
     : shipping === 'owner_confirmed' ? t('setupGate.connected.confirmedByYou')
     : shipping === 'unknown' ? t('setupGate.connected.checking')
     : t('setupGate.connected.needsAttention')
@@ -147,16 +148,25 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
             </li>
           ))}
         </ul>
-        {shipping === 'add_to_shipping_rates' && (
+        {(shipping === 'add_to_shipping_rates' || shipping === 'activate_needed' || shipping === 'profile_removed') && (
           <div className="border border-line rounded-xl px-4 py-3">
+            {/* L1b-2: legacy → the General shipping profile (deep link); market-driven → its shipping rates. */}
             <ShippingRatesInstruction shopDomain={conn?.shopDomain} locationNumber={conn?.tracedLocationNumber}
-              onConfirmed={reload} />
+              profileNumber={conn?.deliveryProfileNumber}
+              model={shipping === 'add_to_shipping_rates' ? conn?.tracedShippingModel : 'legacy'}
+              removed={shipping === 'profile_removed'}
+              notAddedFor={conn?.tracedNotAddedFor}
+              marketsRequestUrl={conn?.newPermissions?.marketsRequestUrl}
+              onConfirmed={reload} onChecked={reload} />
           </div>
         )}
         {shipping === 'owner_confirmed' && (
           <div className="border border-line rounded-xl px-4 py-3">
-            <ShippingRatesConfirmed />
+            <ShippingRatesConfirmed onChecked={reload} />
           </div>
+        )}
+        {shipping === 'ready' && (
+          <ShippingCoverage coveredBy={conn?.tracedCoveredBy} notAddedFor={conn?.tracedNotAddedFor} />
         )}
         <Button variant="primary" size="lg" className="w-full" onClick={onContinue}>{t('setupGate.connected.continue')}</Button>
       </SetupCard>

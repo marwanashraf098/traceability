@@ -175,9 +175,9 @@
       "lookup": "بحث"
     },
     "fulfillmentPrompt": {
-      "title": "فعّل موقع مستودعك",
-      "body": "موقع Traced الرئيسي مرتبط بـ Shopify لكنه لم يُفعَّل بعد على متجرك.",
-      "cta": "تفعيل الآن"
+      "title": "أضِف مستودعك إلى ملف الشحن",
+      "body": "موقع Traced الرئيسي مرتبط بـ Shopify لكنه غير مضاف إلى ملف الشحن بعد، لذا لا يمكن شحن الطلبات الأونلاين منه.",
+      "cta": "اعرف الطريقة"
     }
   },
   "inventory": {
@@ -745,13 +745,33 @@
       "openShipping": "إعدادات الشحن",
       "confirm": "أضفته",
       "ownerOnly": "يمكن لمالك المتجر فقط تأكيد ذلك.",
-      "confirmError": "تعذّر حفظ ذلك — حاول مرة أخرى."
+      "confirmError": "تعذّر حفظ ذلك — حاول مرة أخرى.",
+      "notCovered": "راجع Traced أسعار الشحن لديك: لا يوجد بعد سعر شحن نشط في سوقك الرئيسي يشحن من «Traced Main Warehouse».",
+      "allowMarkets": "دَع Traced يتحقق من ذلك بنفسه",
+      "allowMarketsBody": "امنح Traced صلاحية قراءة أسواق متجرك فقط، وسيتحقق من أسعار الشحن بنفسه."
     },
     "unknown": "لم يتمكن Traced بعد من التأكد من أن موقع Traced Main Warehouse يمكنه شحن الطلبات الأونلاين. سيتحقق مرة أخرى خلال ساعة.",
     "confirmed": {
       "title": "أكّدته أنت",
       "body": "قلتَ إن «Traced Main Warehouse» مضاف إلى أسعار الشحن في Shopify. لا يستطيع Traced التحقق من ذلك بنفسه بعد."
-    }
+    },
+    "addProfile": {
+      "title": "أضِف «Traced Main Warehouse» إلى ملف الشحن في Shopify",
+      "removedTitle": "تمت إزالة «Traced Main Warehouse» من ملف الشحن في Shopify",
+      "body": "افتح ملف الشحن العام (General) في Shopify وأضِف «Traced Main Warehouse» إلى المواقع التي يشحن منها.",
+      "cantShip": "إلى أن يُضاف إلى الملف، لن يشحن Shopify الطلبات الأونلاين من هذا الموقع. لا يغيّر Traced إعدادات الشحن لديك بنفسه أبدًا.",
+      "openProfile": "افتح ملف الشحن"
+    },
+    "check": {
+      "button": "تحقّق مرة أخرى",
+      "checking": "جارٍ التحقق…",
+      "rateLimited": "تم التحقق منذ لحظات — يمكنك التحقق مرة أخرى عند {{time}}.",
+      "rateLimitedSoon": "تم التحقق منذ لحظات — حاول مرة أخرى بعد دقيقتين.",
+      "error": "تعذّر التحقق — حاول مرة أخرى."
+    },
+    "coveredBy": "يشحن عبر: {{rate}}",
+    "notAddedFor": "غير مضاف إلى: {{markets}}",
+    "notAddedForHint": "للعلم فقط — طلبات هذه الأسواق لن تُشحن من «Traced Main Warehouse»."
   },
   "receiving": {
     "title": "الاستلام",
@@ -2620,20 +2640,14 @@
       "disconnectConfirm": "قطع الاتصال بـ {{shop}}؟ ستحتاج إلى إعادة الاتصال بنفس المتجر لاستئناف المزامنة.",
       "disconnectError": "تعذّر قطع الاتصال. حاول مرة أخرى.",
       "fulfillmentActivation": {
-        "title": "تفعيل Traced كموقع تنفيذ للطلبات",
+        "title": "البيع أونلاين من «Traced Main Warehouse»",
         "live": "موقع Traced الرئيسي مُفعّل الآن على متجرك",
-        "waitingForSeed": "بانتظار انتهاء مزامنة المخزون الأولي مع Shopify قبل إمكانية التفعيل.",
-        "confirmCopy": "يبيع موقع Traced Main Warehouse أونلاين إلى جانب مواقعك الأخرى في Shopify. فقط للمخزون غير الموجود في Shopify بعد. إذا كان هذا المخزون محسوبًا بالفعل في موقع آخر في Shopify، فلا تستلمه هنا — تواصل معنا.",
-        "activateBtn": "تفعيل التنفيذ",
-        "activating": "جارٍ التفعيل…",
-        "genericError": "تعذّر التفعيل. حاول مرة أخرى.",
         "loadError": "تعذّر تحميل حالة التنفيذ.",
         "retry": "إعادة المحاولة"
       },
       "tracedLocationOff": {
         "title": "موقع Traced Main Warehouse لا يبيع أونلاين",
         "bodyOnline": "في Shopify، خيار «تنفيذ الطلبات الأونلاين من هذا الموقع» متوقف لموقع Traced Main Warehouse، لذلك لا يمكن بيع المخزون الموجود فيه أونلاين. لم يُعِد Traced تشغيله من تلقاء نفسه.",
-        "bodyProfile": "تمت إزالة موقع Traced Main Warehouse من ملف الشحن العام في Shopify، لذلك لا يمكن شحن الطلبات الأونلاين منه. لم يُعِد Traced إضافته من تلقاء نفسه.",
         "button": "إعادة التشغيل",
         "turning": "جارٍ التشغيل…",
         "partial": "لم يؤكد Shopify كل شيء. راجع الموقع في Shopify وحاول مرة أخرى.",
@@ -2759,7 +2773,10 @@
       "newPermissions": {
         "title": "وافق على صلاحيات شوبيفاي الجديدة لـ Traced",
         "body": "يطلب Traced الآن من شوبيفاي صلاحية قراءة المرتجعات وأوامر التنفيذ، ليتابع المرتجعات والاستبدالات التي تتم في شوبيفاي. افتح Traced من لوحة تحكم شوبيفاي ووافق على الصلاحيات الجديدة — لا يتغير شيء حتى توافق.",
-        "cta": "افتح Traced في شوبيفاي"
+        "cta": "افتح Traced في شوبيفاي",
+        "marketsTitle": "دَع Traced يتحقق من أسعار الشحن لديك",
+        "marketsBody": "متجرك يستخدم الشحن حسب الأسواق في Shopify. اسمح لـ Traced بقراءة أسواقك (قراءة فقط) ليتأكد من أن «Traced Main Warehouse» مضاف إلى أسعار الشحن. لا يتغير شيء حتى تسمح بذلك.",
+        "marketsCta": "اسمح في Shopify"
       },
       "attention": {
         "title": "أعد ربط متجرك",
@@ -5720,7 +5737,8 @@
       "needsAttention": "يحتاج إلى مراجعة",
       "continue": "متابعة",
       "checkShippingRates": "راجِع أسعار الشحن",
-      "confirmedByYou": "أكّدته أنت"
+      "confirmedByYou": "أكّدته أنت",
+      "checkShippingProfile": "أضِفه إلى ملف الشحن"
     },
     "addressPanel": {
       "title": "لماذا نحتاجه",

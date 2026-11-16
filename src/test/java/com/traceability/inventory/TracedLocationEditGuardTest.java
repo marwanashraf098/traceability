@@ -35,8 +35,8 @@ import static org.mockito.Mockito.*;
  *   a3 no source file anywhere in src/main sends fulfillsOnlineOrders false / a locationEdit name
  * (b) WHICH location:
  *   b1 enableOnlineFulfillment( is called only by TracedLocationOnlineService, with main.gid(), and main() reads the
- *      tenant's is_fulfillment row; deliveryProfiles.addLocationToGroup( only by ShopifyFulfillmentActivationService
- *      with ctx.locationGid() from its is_fulfillment query
+ *      tenant's is_fulfillment row; L1b-2 (2026-11-16): nothing calls addLocationToGroup( any more — Traced writes no
+ *      delivery profile at all (DeliveryProfileMutationGuardTest is the codebase-wide guard)
  *   b2 the "Turn back on" endpoint takes no target from the request (no @RequestBody / @PathVariable / @RequestParam)
  */
 class TracedLocationEditGuardTest {
@@ -112,7 +112,7 @@ class TracedLocationEditGuardTest {
             if (src.contains(".addLocationToGroup(")) joinCallers.add(p.getFileName().toString());
         }
         assertThat(enableCallers).containsExactly("TracedLocationOnlineService.java");
-        assertThat(joinCallers).containsExactly("ShopifyFulfillmentActivationService.java");
+        assertThat(joinCallers).as("L1b-2: no delivery-profile join anywhere").isEmpty();
 
         String online = Files.readString(ONLINE);
         Matcher e = Pattern.compile("\\.enableOnlineFulfillment\\(([^;]*)\\);").matcher(online);
@@ -122,11 +122,8 @@ class TracedLocationEditGuardTest {
         assertThat(online.replaceAll("\\s+", " ")).contains("WHERE tenant_id = ? AND is_fulfillment = true AND shopify_sync_status = 'linked'");
         assertThat(online).doesNotContain("@RequestBody");
 
+        // The membership READ still reads only the tenant's own is_fulfillment row.
         String act = Files.readString(ACTIVATION);
-        Matcher j = Pattern.compile("\\.addLocationToGroup\\(([^;]*)\\);").matcher(act);
-        int k = 0;
-        while (j.find()) { k++; assertThat(j.group(1).replaceAll("\\s+", "")).endsWith(",ctx.locationGid()"); }
-        assertThat(k).isEqualTo(2);                                          // activate() + joinWithReadBack()
         assertThat(act.replaceAll("\\s+", " ")).contains("WHERE tenant_id = ? AND is_fulfillment = true AND shopify_sync_status = 'linked'");
     }
 

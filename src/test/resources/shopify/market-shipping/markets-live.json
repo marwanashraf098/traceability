@@ -1,0 +1,134 @@
+{
+  "data": {
+    "markets": {
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": null
+      },
+      "nodes": [
+        {
+          "id": "gid://shopify/Market/2001",
+          "name": "Canada",
+          "type": "REGION",
+          "status": "ACTIVE",
+          "delivery": {
+            "shipping": {
+              "isEnabled": true,
+              "optionDefinitionsCount": {
+                "count": 1
+              },
+              "optionDefinitions": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "__typename": "DeliveryFlatRateOptionDefinition",
+                    "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3001",
+                    "isActive": true,
+                    "includedLocations": {
+                      "nodes": [],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "gid://shopify/Market/2002",
+          "name": "United States",
+          "type": "REGION",
+          "status": "ACTIVE",
+          "delivery": {
+            "shipping": {
+              "isEnabled": true,
+              "optionDefinitionsCount": {
+                "count": 4
+              },
+              "optionDefinitions": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "__typename": "DeliveryFlatRateOptionDefinition",
+                    "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3002",
+                    "isActive": true,
+                    "includedLocations": {
+                      "nodes": [
+                        {
+                          "id": "gid://shopify/Location/1001"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
+                    }
+                  },
+                  {
+                    "__typename": "DeliveryFlatRateOptionDefinition",
+                    "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3003",
+                    "isActive": true,
+                    "includedLocations": {
+                      "nodes": [
+                        {
+                          "id": "gid://shopify/Location/1001"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
+                    }
+                  },
+                  {
+                    "__typename": "DeliveryFlatRateOptionDefinition",
+                    "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3004",
+                    "isActive": true,
+                    "includedLocations": {
+                      "nodes": [
+                        {
+                          "id": "gid://shopify/Location/1001"
+                        },
+                        {
+                          "id": "gid://shopify/Location/1002"
+                        },
+                        {
+                          "id": "gid://shopify/Location/1003"
+                        },
+                        {
+                          "id": "gid://shopify/Location/1004"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
+                    }
+                  },
+                  {
+                    "__typename": "DeliveryFlatRateOptionDefinition",
+                    "id": "gid://shopify/DeliveryFlatRateOptionDefinition/3005",
+                    "isActive": true,
+                    "includedLocations": {
+                      "nodes": [
+                        {
+                          "id": "gid://shopify/Location/1004"
+                        }
+                      ],
+                      "pageInfo": {
+                        "hasNextPage": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

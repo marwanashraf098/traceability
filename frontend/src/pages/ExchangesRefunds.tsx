@@ -120,7 +120,7 @@ export default function ExchangesRefunds() {
     if (getRoleFromToken() !== 'owner') return
     let live = true
     getConnections()
-      .then(c => { if (live) setPermissionsNote(!!c?.shopify?.newPermissions) })
+      .then(c => { if (live) setPermissionsNote(!!c?.shopify?.newPermissions?.openAppUrl) })
       .catch(() => {})
     return () => { live = false }
   }, [])

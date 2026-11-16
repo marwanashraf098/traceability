@@ -9,6 +9,7 @@ import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -39,7 +40,6 @@ public class LocationController {
     private final TransactionTemplate    tx;
     private final ShopifyLocationGateway shopifyLocations;
     private final ShopifyTokenProvider   tokenProvider;
-    private final ShopifyFulfillmentActivationService fulfillmentActivationService;
     private final StoreRepository        storeRepository;
     private final MainLocationAddressService addressService;
     private final MainLocationAddressSource  addressSource;
@@ -48,7 +48,6 @@ public class LocationController {
     public LocationController(JdbcTemplate jdbc, PlatformTransactionManager txm,
                               ShopifyLocationGateway shopifyLocations,
                               ShopifyTokenProvider tokenProvider,
-                              ShopifyFulfillmentActivationService fulfillmentActivationService,
                               StoreRepository storeRepository,
                               MainLocationAddressService addressService,
                               MainLocationAddressSource addressSource,
@@ -60,13 +59,12 @@ public class LocationController {
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
         this.tokenProvider    = tokenProvider;
-        this.fulfillmentActivationService = fulfillmentActivationService;
         this.storeRepository  = storeRepository;
     }
 
     @GetMapping
     public List<Map<String, Object>> list() {
-        return tx.execute(status ->
+        return tx.execute(status -> withLists(
             jdbc.queryForList(
                 "SELECT id, name, type, is_default, is_fulfillment, " +
                 "       shopify_location_id, shopify_sync_status, " +
@@ -77,9 +75,26 @@ public class LocationController {
                 "       shopify_online_fulfillment_status, shopify_online_fulfillment_error, " +
                 "       shopify_online_fulfillment_checked_at, " +
                 "       shopify_shipping_model, shopify_shipping_model_checked_at, " +
+                "       shopify_market_shipping_status, shopify_market_shipping_checked_at, " +
+                "       shopify_market_shipping_covered_by, shopify_market_shipping_missing, " +
+                "       regexp_replace(shopify_delivery_profile_id, '^.*/', '') AS shopify_delivery_profile_number, " +
                 "       CASE WHEN is_fulfillment THEN " + TracedShippingReadiness.SQL + " END AS shopify_shipping_readiness " +
                 "FROM locations l WHERE tenant_id = ? ORDER BY name",
-                TenantContext.require()));
+                TenantContext.require())));
+    }
+
+    /** L1b-2: a text[] column (shopify_market_shipping_missing) as a JSON list, never a driver object. */
+    private static List<Map<String, Object>> withLists(List<Map<String, Object>> rows) {
+        for (Map<String, Object> row : rows) row.replaceAll((k, v) -> v instanceof java.sql.Array a ? asList(a) : v);
+        return rows;
+    }
+
+    private static List<Object> asList(java.sql.Array a) {
+        try {
+            return List.of((Object[]) a.getArray());
+        } catch (java.sql.SQLException e) {
+            return List.of();
+        }
     }
 
     /**
@@ -315,31 +330,10 @@ public class LocationController {
     }
 
     /**
-     * FR-17 v2 fulfillment activation (deliveryProfileUpdate) — joins the Traced Main Warehouse
-     * to the shop's default delivery profile's location group, making it live to the storefront.
-     * Owner-only, explicit operator/merchant action; NEVER triggered automatically anywhere in
-     * the connect chain — see ShopifyFulfillmentActivationService's class comment. The merchant
-     * confirms client-side that their old fulfillment location's stock is zeroed before calling
-     * this; Traced has no read access to that location to verify it server-side.
-     */
-    @PostMapping("/shopify/activate-fulfillment")
-    @PreAuthorize("hasRole('OWNER')")
-    public Map<String, Object> activateShopifyFulfillment(@AuthenticationPrincipal CustomUserDetails principal) {
-        ShopifyFulfillmentActivationService.ActivationResult result =
-            fulfillmentActivationService.activate(principal.userId());
-        return Map.of(
-            "status",            result.status(),
-            "locationGid",       result.locationGid(),
-            "deliveryProfileId", result.deliveryProfileId(),
-            "locationGroupId",   result.locationGroupId(),
-            "alreadyMember",     result.alreadyMember());
-    }
-
-    /**
-     * L1 (2026-11-12) — "Turn back on": the owner's one click when a reconnect read found the Traced Main Warehouse not
-     * fulfilling online orders or out of the default delivery profile. Same write path as the first link (read → edit
-     * only when off → read back; membership first → join → read back). Owner only. Takes no input: the target is
-     * always the tenant's own is_fulfillment location.
+     * L1 (2026-11-12) — "Turn back on": the owner's one click when a read found the Traced Main Warehouse not
+     * fulfilling online orders. L1b-2: ONLY that location edit (read → edit only when off → read back), then the
+     * shipping READ — never a delivery-profile write. Owner only. Takes no input: the target is always the tenant's own
+     * is_fulfillment location.
      */
     @PostMapping("/shopify/turn-back-on")
     @PreAuthorize("hasRole('OWNER')")
@@ -349,9 +343,9 @@ public class LocationController {
     }
 
     /**
-     * L1b-1 review (2026-11-15) — market-driven stores until L1b-2: the owner says Traced Main Warehouse is in the
-     * store's shipping rates. Owner only, no input, no Shopify call. Hides the instruction ("Confirmed by you"); it is
-     * not Ready.
+     * L1b-1 review (2026-11-15) — market-driven stores Traced can't read (no verdict / no read_markets): the owner says
+     * Traced Main Warehouse is in the store's shipping rates. Owner only, no input, no Shopify call. Hides the
+     * instruction ("Confirmed by you"); it is not Ready, and a verified 'not_covered' (L1b-2) beats it.
      */
     @PostMapping("/shopify/shipping-rates-confirmed")
     @PreAuthorize("hasRole('OWNER')")
@@ -360,4 +354,33 @@ public class LocationController {
         return Map.of("readiness", TracedShippingReadiness.OWNER_CONFIRMED);
     }
 
+    /**
+     * L1b-2 (approved 2026-11-16) — "Check again": owner / manager, READ ONLY (fulfils online orders + the shipping
+     * read — delivery-profile membership on legacy, the Markets read on market-driven). One per
+     * {@value TracedLocationOnlineService#CHECK_EVERY_MINUTES} minutes per tenant: inside the window → 429
+     * RATE_LIMITED with nextAllowedAt, nothing read. Takes no input.
+     */
+    @PostMapping("/shopify/shipping-check")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<Map<String, Object>> checkTracedShipping() {
+        TracedLocationOnlineService.CheckResult r = online.checkAgain();
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        if (!r.allowed()) {
+            body.put("error", "RATE_LIMITED");
+            body.put("detail", "One check every " + TracedLocationOnlineService.CHECK_EVERY_MINUTES + " minutes");
+            body.put("nextAllowedAt", r.nextAllowedAt());
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+        }
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> row = tx.execute(s -> jdbc.queryForMap(
+            "SELECT " + TracedShippingReadiness.SQL + " AS readiness, l.shopify_shipping_model, " +
+            "       l.shopify_market_shipping_covered_by, l.shopify_market_shipping_missing " +
+            "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true LIMIT 1", tenantId));
+        body.put("readiness", row.get("readiness"));
+        body.put("shippingModel", row.get("shopify_shipping_model"));
+        body.put("coveredBy", row.get("shopify_market_shipping_covered_by"));
+        Object missing = row.get("shopify_market_shipping_missing");
+        body.put("notAddedFor", missing instanceof java.sql.Array a ? asList(a) : List.of());
+        return ResponseEntity.ok(body);
+    }
 }

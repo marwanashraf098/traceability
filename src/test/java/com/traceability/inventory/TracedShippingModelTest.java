@@ -40,10 +40,11 @@ import static org.mockito.Mockito.*;
  *   m1  first link on a MARKET-DRIVEN store: no delivery-profile call at all; model recorded; readiness
  *       add_to_shipping_rates (never ready); /connections carries it + the location number
  *   m2  first link, model UNKNOWN (the read failed): no delivery-profile call; readiness unknown
- *   m3  positive control — first link on a LEGACY store: L1 unchanged (joined, read back) → ready
+ *   m3  positive control — first link on a LEGACY store: membership READ (already a member) → ready; never a write
  *   m4  reconnect of a market-driven store: no membership read
- *   m5  the manual Activate fulfillment on a market-driven store → 409 MARKET_DRIVEN_SHIPPING before any profile call
- *   m6  Turn back on, market-driven: fulfils-online is turned on (a location setting), the profile is never touched
+ *   (m5 — the manual Activate fulfillment's market-driven refusal — removed with the endpoint, L1b-2 2026-11-16)
+ *   m6  Turn back on, market-driven: fulfils-online is turned on (a location setting), the profile is never touched;
+ *       without read_markets the Markets read records no_access (no call)
  *   m7  hourly refresh: records model + fulfils-online, never an edit, never a profile call
  *   m8  a market-driven store Traced had recorded as 'activated' (the stale no-op since Oct 1) is NOT ready
  *   m9  the readiness rule, case by case
@@ -200,16 +201,16 @@ class TracedShippingModelTest {
     }
 
     @Test
-    void m3_legacy_firstLink_L1Unchanged_ready() {
+    void m3_legacy_firstLink_memberRead_ready() {
         when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.LEGACY));
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
         when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(
-            Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of())),
             Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of(GID))));
 
         firstLink();
 
-        verify(profiles).addLocationToGroup(SHOP, "tok", "p", "g", GID);
+        verify(profiles, times(1)).findDefaultProfileLocationGroup(SHOP, "tok");
+        verifyNoMoreInteractions(profiles);
         assertThat(model()).isEqualTo("legacy");
         assertThat(readiness()).isEqualTo(TracedShippingReadiness.READY);
     }
@@ -228,20 +229,6 @@ class TracedShippingModelTest {
     }
 
     @Test
-    void m5_manualActivate_marketDriven_refusedBeforeAnyProfileCall() {
-        linkedMain("market_driven", "not_activated", false, "on");
-        when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.MARKET_DRIVEN));
-        UUID owner = owner();
-
-        assertThatThrownBy(() -> as("OWNER", () -> locationController.activateShopifyFulfillment(
-                new CustomUserDetails(owner, tenantId, "OWNER", SHOP))))
-            .isInstanceOf(ShopifyFulfillmentActivationException.class)
-            .extracting(e -> ((ShopifyFulfillmentActivationException) e).code())
-            .isEqualTo(ShopifyFulfillmentActivationException.Code.MARKET_DRIVEN_SHIPPING);
-        verifyNoInteractions(profiles);
-    }
-
-    @Test
     void m6_turnBackOn_marketDriven_onlineOnly_profileNeverTouched() {
         linkedMain("market_driven", "not_activated", false, "off");
         when(models.read(SHOP, "tok")).thenReturn(Optional.of(Model.MARKET_DRIVEN));
@@ -251,7 +238,7 @@ class TracedShippingModelTest {
         Map<String, Object> res = as("OWNER", () -> locationController.turnTracedLocationBackOn(
             new CustomUserDetails(owner, tenantId, "OWNER", SHOP)));
 
-        assertThat(res).containsEntry("onlineStatus", "on").containsEntry("profile", "SKIPPED_MARKET_DRIVEN");
+        assertThat(res).containsEntry("onlineStatus", "on").containsEntry("profile", "no_access");
         verify(locations).enableOnlineFulfillment(SHOP, "tok", GID);
         verifyNoInteractions(profiles);
         assertThat(readiness()).isEqualTo(TracedShippingReadiness.ADD_TO_SHIPPING_RATES);
@@ -275,7 +262,6 @@ class TracedShippingModelTest {
         online.refreshQuietly(tenantId);
         assertThat(readiness()).isEqualTo("online_off");
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -323,15 +309,13 @@ class TracedShippingModelTest {
         assertThat(readiness()).as("the live read found it in the profile").isEqualTo("ready");
         assertThat(jdbc.queryForObject("SELECT shopify_delivery_profile_checked_at IS NOT NULL FROM locations WHERE id = ?",
             Boolean.class, id)).isTrue();
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
 
-        // Not in the profile per the live read, never joined before → the Activate item (and still no write).
+        // Not in the profile per the live read, never in it before → the owner's add-to-profile instruction.
         when(profiles.findDefaultProfileLocationGroup(SHOP, "tok"))
             .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo("p", "g", Set.of())));
         jdbc.update("UPDATE locations SET shopify_delivery_profile_activated_at = NULL WHERE id = ?", id);
         online.refreshQuietly(tenantId);
         assertThat(readiness()).isEqualTo("activate_needed");
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -403,6 +387,5 @@ class TracedShippingModelTest {
             .contains("wrongly_activated=true").contains("traced_readiness=unknown");
         assertThat(jdbc.queryForMap("SELECT * FROM locations WHERE tenant_id = ?", tenantId)).isEqualTo(before);
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
     }
 }

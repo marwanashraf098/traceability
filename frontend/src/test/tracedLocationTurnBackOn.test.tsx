@@ -6,6 +6,8 @@ import ConnectionsTab from '../pages/settings/ConnectionsTab'
 
 // L1 (2026-11-12) — a reconnect READ found the Traced location switched off in Shopify: the connection card warns and
 // only the owner gets "Turn back on". Traced never turns it back on by itself.
+// L1b-2 (2026-11-16): Turn back on is ONLY "Fulfill online orders". A location out of the shipping profile gets the
+// owner's instruction + a deep link to the profile + Check again — Traced never adds it to a profile.
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -13,8 +15,6 @@ vi.mock('../api', async (importOriginal) => {
     ...actual,
     getConnections: vi.fn(),
     listLocations: vi.fn(),
-    getShopifyInventoryReconcileReport: vi.fn(),
-    activateShopifyFulfillment: vi.fn(),
     turnTracedLocationBackOn: vi.fn(),
     getRoleFromToken: vi.fn(),
   }
@@ -47,7 +47,6 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.getConnections).mockResolvedValue(CONNECTIONS)
-    vi.mocked(api.getShopifyInventoryReconcileReport).mockResolvedValue({ tracedLocationGid: 'gid://shopify/Location/1', rows: [] })
   })
 
   test('online off → warning; the owner clicks Turn back on, which calls the endpoint and reloads', async () => {
@@ -55,7 +54,7 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
     vi.mocked(api.listLocations)
       .mockResolvedValueOnce([location({ shopify_online_fulfillment_status: 'off' })])
       .mockResolvedValue([location({ shopify_shipping_readiness: 'ready' })])
-    vi.mocked(api.turnTracedLocationBackOn).mockResolvedValue({ onlineStatus: 'on', profile: 'ALREADY_MEMBER' })
+    vi.mocked(api.turnTracedLocationBackOn).mockResolvedValue({ onlineStatus: 'on', profile: 'member' })
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
@@ -70,14 +69,21 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
     expect(screen.queryByTestId('traced-location-off')).toBeNull()
   })
 
-  test('taken out of the shipping profile → profile wording', async () => {
+  test('taken out of the shipping profile → the instruction + a deep link to the profile, no Turn back on', async () => {
     vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
-    vi.mocked(api.listLocations).mockResolvedValue([location({ shopify_delivery_profile_status: 'not_activated' })])
+    vi.mocked(api.listLocations).mockResolvedValue([location({
+      shopify_delivery_profile_status: 'not_activated', shopify_shipping_model: 'legacy',
+      shopify_shipping_readiness: 'profile_removed', shopify_delivery_profile_number: '77' })])
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
-    await waitFor(() => expect(screen.getByTestId('traced-location-off')).toBeTruthy())
-    expect(screen.getByText(/General shipping profile/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('traced-shipping-add-profile')).toBeTruthy())
+    expect(screen.getByText('Traced Main Warehouse was taken out of your shipping profile in Shopify')).toBeTruthy()
+    expect(screen.getByTestId('traced-shipping-open-profile'))
+      .toHaveAttribute('href', 'https://admin.shopify.com/store/test-shop/settings/shipping/profiles/77')
+    expect(screen.getByTestId('traced-shipping-check-btn')).toBeTruthy()
+    expect(screen.queryByTestId('traced-location-off')).toBeNull()
+    expect(screen.queryByTestId('turn-back-on-btn')).toBeNull()
   })
 
   test('a manager sees the warning but no button — owner only', async () => {
@@ -92,27 +98,33 @@ describe('Traced location switched off in Shopify — Turn back on (L1)', () => 
     expect(api.turnTracedLocationBackOn).not.toHaveBeenCalled()
   })
 
-  test('never activated before (no activated_at) → the existing Activate item, not the warning', async () => {
+  test('never in the profile (no activated_at) → add-to-profile instruction, never an Activate button', async () => {
     vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
     vi.mocked(api.listLocations).mockResolvedValue([location({
       shopify_delivery_profile_status: 'not_activated', shopify_delivery_profile_activated_at: null,
-      shopify_online_fulfillment_status: 'unknown',
+      shopify_shipping_model: 'legacy', shopify_shipping_readiness: 'activate_needed',
     })])
 
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
-    await waitFor(() => expect(screen.getByTestId('fulfillment-activation')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('traced-shipping-add-profile')).toBeTruthy())
+    expect(screen.getByText('Add Traced Main Warehouse to your shipping profile in Shopify')).toBeTruthy()
+    // No profile id yet → the link falls back to shipping settings.
+    expect(screen.getByTestId('traced-shipping-open-profile'))
+      .toHaveAttribute('href', 'https://admin.shopify.com/store/test-shop/settings/shipping')
     expect(screen.queryByTestId('traced-location-off')).toBeNull()
-    expect(screen.getByText(/already counted in another Shopify location, don.t receive it here — contact us/)).toBeTruthy()
-    expect(screen.queryByText(/Moving from my Shopify location/)).toBeNull()
+    expect(screen.queryByTestId('activate-fulfillment-btn')).toBeNull()
   })
 
-  test('predicate: only a linked fulfillment row that is off / taken out', () => {
+  test('predicate: only a linked fulfillment row whose online selling is off', () => {
     expect(api.tracedLocationNeedsTurnBackOn(location())).toBe(false)
     expect(api.tracedLocationNeedsTurnBackOn(location({ shopify_online_fulfillment_status: 'off' }))).toBe(true)
     expect(api.tracedLocationNeedsTurnBackOn(location({ shopify_online_fulfillment_status: 'error' }))).toBe(false)
     expect(api.tracedLocationNeedsTurnBackOn(location({ shopify_online_fulfillment_status: 'off', is_fulfillment: false }))).toBe(false)
     expect(api.tracedLocationNeedsTurnBackOn(location({ shopify_online_fulfillment_status: 'off', shopify_sync_status: 'error' }))).toBe(false)
     expect(api.tracedLocationNeedsTurnBackOn(null)).toBe(false)
+    // L1b-2: out of the profile is never a Turn back on (the instruction handles it).
+    expect(api.tracedLocationNeedsTurnBackOn(location({ shopify_shipping_readiness: 'profile_removed',
+      shopify_delivery_profile_status: 'not_activated' }))).toBe(false)
   })
 })

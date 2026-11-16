@@ -36,18 +36,19 @@ import static org.mockito.Mockito.*;
  * L1 (2026-11-12) — the Traced Main Warehouse sells online from its first link.
  *
  *   o1  first link (created): fulfils-online read false → ONE edit → read back true ('on', turned_on_at); profile
- *       non-member → join → read back member ('activated')
- *   o2  first link, both already on → no edit, no join (read-first)
+ *       non-member → READ only: 'not_activated' + the profile's id (deep link), never a delivery-profile write (L1b-2)
+ *   o2  first link, both already on → no edit; membership read 'activated'
  *   o3  edit refused (userErrors) → 'error' recorded, provisioning still linked, nothing thrown; positive control: the
  *       same tenant's "Turn back on" with Shopify accepting → 'on'
  *   o4  edit accepted but the read-back still says false → 'error' (only the read-back decides)
- *   o5  join accepted but the profile read-back has no Traced location → V67 'error'
+ *   o5  (L1b-2) profile read without Traced → 'not_activated', nothing written to Shopify, activated_at stays NULL
  *   o6  first link REUSING an existing "Traced Main Warehouse" that doesn't fulfil online orders → turned on
  *   o7  reconnect of an already-linked tenant: READ ONLY — 'off' recorded, profile 'not_activated' with activated_at
- *       kept; never an edit, never a join
- *   o8  "Turn back on": a MANAGER is refused (owner only) and nothing reaches Shopify; the OWNER's click writes
+ *       kept; never an edit
+ *   o8  "Turn back on": a MANAGER is refused (owner only) and nothing reaches Shopify; the OWNER's click writes ONLY
+ *       the fulfils-online edit, then reads the profile (L1b-2: never a join)
  *   o9  the only edit target is the is_fulfillment row's GID, even with another linked location in the tenant
- *   o10 no write_shipping scope → profile 'error', never a join; online still handled
+ *   o10 no shipping scope → no profile read at all (Shopify would refuse it); online still handled
  *   o11 the one-off audit (TRACED_LOCATION_SETTINGS_AUDIT_TENANTS) reads and flags, and changes nothing — not in
  *       Shopify, not on the location row
  */
@@ -173,26 +174,27 @@ class TracedLocationOnlineTest {
     // ── tests ────────────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void o1_firstLink_turnsOnlineOn_andJoinsProfile_bothReadBack() {
+    void o1_firstLink_turnsOnlineOn_andReadsProfile_neverJoins() {
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(OFF), Optional.of(ON));
-        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group("gid://shopify/Location/shop")),
-            Optional.of(group("gid://shopify/Location/shop", GID)));
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group("gid://shopify/Location/shop")));
 
         firstLinkCreating();
 
         verify(locations, times(1)).enableOnlineFulfillment(SHOP, "tok", GID);
         verify(locations, times(2)).readOnlineFulfillment(SHOP, "tok", GID);
-        verify(profiles, times(1)).addLocationToGroup(SHOP, "tok", PROFILE, GROUP, GID);
-        verify(profiles, times(2)).findDefaultProfileLocationGroup(SHOP, "tok");
+        verify(profiles, times(1)).findDefaultProfileLocationGroup(SHOP, "tok");
+        verifyNoMoreInteractions(profiles);                                   // the gateway has no write to call
         Map<String, Object> r = row();
         assertThat(r.get("shopify_sync_status")).isEqualTo("linked");
         assertThat(r.get("shopify_online_fulfillment_status")).isEqualTo("on");
         assertThat(r.get("shopify_online_fulfillment_turned_on_at")).isNotNull();
-        assertThat(r.get("shopify_delivery_profile_status")).isEqualTo("activated");
-        assertThat(r.get("shopify_delivery_profile_activated_at")).isNotNull();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'shopify_fulfillment_activation' " +
-                                       "AND metadata->>'source' = 'first_link' AND metadata->>'outcome' = 'joined'", Long.class, tenantId))
-            .isEqualTo(1L);
+        assertThat(r.get("shopify_delivery_profile_status")).isEqualTo("not_activated");
+        assertThat(r.get("shopify_delivery_profile_activated_at")).isNull();
+        assertThat(r.get("shopify_delivery_profile_checked_at")).isNotNull();
+        assertThat(jdbc.queryForObject("SELECT shopify_delivery_profile_id FROM locations WHERE tenant_id = ? AND is_fulfillment",
+            String.class, tenantId)).isEqualTo(PROFILE);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'shopify_fulfillment_activation'",
+            Long.class, tenantId)).isZero();
     }
 
     @Test
@@ -203,7 +205,6 @@ class TracedLocationOnlineTest {
         firstLinkCreating();
 
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
         assertThat(row().get("shopify_online_fulfillment_status")).isEqualTo("on");
         assertThat(row().get("shopify_online_fulfillment_turned_on_at")).isNull();
         assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("activated");
@@ -247,15 +248,17 @@ class TracedLocationOnlineTest {
     }
 
     @Test
-    void o5_joinAccepted_butProfileReadBackWithoutUs_isAnError() {
+    void o5_profileWithoutUs_recordedNotActivated_nothingWritten() {
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
-        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group()), Optional.of(group()));
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group()));
 
         firstLinkCreating();
 
-        verify(profiles, times(1)).addLocationToGroup(SHOP, "tok", PROFILE, GROUP, GID);
-        assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("error");
-        assertThat((String) row().get("shopify_delivery_profile_error")).contains("not in the default delivery profile");
+        verify(profiles, times(1)).findDefaultProfileLocationGroup(SHOP, "tok");
+        verifyNoMoreInteractions(profiles);
+        assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("not_activated");
+        assertThat(row().get("shopify_delivery_profile_error")).isNull();
+        assertThat(row().get("shopify_delivery_profile_activated_at")).isNull();
     }
 
     @Test
@@ -283,7 +286,6 @@ class TracedLocationOnlineTest {
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
         verify(locations, never()).create(any(), any(), any());
         verify(locations, never()).findByName(any(), any(), any());
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
         Map<String, Object> r = row();
         assertThat(r.get("shopify_online_fulfillment_status")).isEqualTo("off");
         assertThat(r.get("shopify_online_fulfillment_checked_at")).isNotNull();
@@ -301,16 +303,18 @@ class TracedLocationOnlineTest {
         verifyNoInteractions(locations, profiles);
 
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(OFF), Optional.of(ON));
-        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group()), Optional.of(group(GID)));
+        when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group()));
         UUID owner = user("owner");
         Map<String, Object> res = as("OWNER", () -> controller.turnTracedLocationBackOn(
             new CustomUserDetails(owner, tenantId, "OWNER", SHOP)));
-        assertThat(res).containsEntry("onlineStatus", "on").containsEntry("profile", "JOINED");
+        assertThat(res).containsEntry("onlineStatus", "on").containsEntry("profile", "not_member");
         verify(locations).enableOnlineFulfillment(SHOP, "tok", GID);
-        verify(profiles).addLocationToGroup(SHOP, "tok", PROFILE, GROUP, GID);
-        assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("activated");
+        verify(profiles, times(1)).findDefaultProfileLocationGroup(SHOP, "tok");
+        verifyNoMoreInteractions(profiles);
+        assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("not_activated");
+        // Only the online edit is audited — there is no profile write to audit.
         assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND actor_user_id = ? " +
-                                       "AND metadata->>'source' = 'turn_back_on'", Long.class, tenantId, owner)).isEqualTo(2L);
+                                       "AND metadata->>'source' = 'turn_back_on'", Long.class, tenantId, owner)).isEqualTo(1L);
     }
 
     @Test
@@ -333,16 +337,15 @@ class TracedLocationOnlineTest {
     }
 
     @Test
-    void o10_noShippingScope_profileError_neverJoins() {
+    void o10_noShippingScope_noProfileRead() {
         jdbc.update("UPDATE stores SET access_token_scopes = 'read_products,write_locations,write_inventory' WHERE id = ?", storeId);
         when(locations.readOnlineFulfillment(SHOP, "tok", GID)).thenReturn(Optional.of(ON));
         when(profiles.findDefaultProfileLocationGroup(SHOP, "tok")).thenReturn(Optional.of(group()));
 
         firstLinkCreating();
 
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
-        verify(profiles, never()).findDefaultProfileLocationGroup(any(), any());
-        assertThat(row().get("shopify_delivery_profile_status")).isEqualTo("error");
+        verifyNoInteractions(profiles);
+        assertThat(row().get("shopify_delivery_profile_checked_at")).isNull();
         assertThat(row().get("shopify_online_fulfillment_status")).isEqualTo("on");
     }
 
@@ -362,7 +365,6 @@ class TracedLocationOnlineTest {
         assertThat(r.flagged()).isTrue();
         assertThat(LocationSettingsAuditJob.line(r)).contains("shop=l1-test").contains("fulfills_online=false").contains("flagged=true");
         verify(locations, never()).enableOnlineFulfillment(any(), any(), any());
-        verify(profiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
         assertThat(row()).isEqualTo(before);
         assertThat(LocationSettingsAuditJob.parse("not-a-uuid")).isNull();
     }

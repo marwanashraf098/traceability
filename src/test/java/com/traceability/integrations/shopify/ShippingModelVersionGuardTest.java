@@ -21,7 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   v2 ShopifyShippingModelGateway sends no mutation (read-only) and builds its URL from API_VERSION
  *   v3 the pinned version stays 2026-04 (application.yml default) and ShopifyHttpGateway — every inventory / location
  *      write — builds every URL from its configured apiVersion, never a literal version
- *   v4 the delivery-profile join / membership read run ONLY behind a confirmed LEGACY model
+ *   v4 the delivery-profile membership read runs ONLY behind a confirmed LEGACY model, and the Markets read only on a
+ *      MARKET_DRIVEN one — both in TracedLocationOnlineService.readShipping, the one place (L1b-2: no join exists)
  */
 class ShippingModelVersionGuardTest {
 
@@ -74,29 +75,26 @@ class ShippingModelVersionGuardTest {
     @Test
     void v4_profileCalls_onlyBehindLegacy() throws IOException {
         String online = Files.readString(ONLINE).replaceAll("\\s+", " ");
-        int joins = 0;
-        java.util.regex.Matcher j = java.util.regex.Pattern.compile("activation\\.(joinWithReadBack|readMembership)\\(").matcher(online);
-        while (j.find()) joins++;
-        assertThat(joins).isEqualTo(4);                       // first link, reconnect, Turn back on, hourly (read only)
-        assertThat(online).contains("model.orElse(null) == Model.LEGACY ? activation.joinWithReadBack(tenantId, null, \"first_link\")")
-            .contains("model.orElse(null) != Model.LEGACY ? skipped(model) : activation.readMembership(tenantId)")
-            .contains("model.orElse(null) == Model.LEGACY ? activation.joinWithReadBack(tenantId, actorUserId, \"turn_back_on\")")
-            .contains("if (readModel(tenantId).orElse(null) == Model.LEGACY) activation.readMembership(tenantId);");
-        // The hourly pass never joins: its only profile call is the membership read.
+        int reads = 0;
+        java.util.regex.Matcher j = java.util.regex.Pattern.compile("activation\\.readMembership\\(").matcher(online);
+        while (j.find()) reads++;
+        assertThat(reads).as("one membership read, in readShipping").isEqualTo(1);
+        assertThat(online).contains("if (model.isEmpty()) return \"SKIPPED_MODEL_UNKNOWN\";")
+            .contains("if (model.get() == Model.LEGACY) { return activation.readMembership(tenantId)")
+            .contains("return readMarketCoverage(tenantId);");
+        int shipping = online.indexOf("String readShipping(");
+        assertThat(online.indexOf("if (model.isEmpty())", shipping)).isLessThan(online.indexOf("activation.readMembership(", shipping));
+        assertThat(online.indexOf("activation.readMembership(", shipping)).isLessThan(online.indexOf("return readMarketCoverage(", shipping));
+        // The hourly pass never edits a location: reads only.
         int hourly = online.indexOf("public void refreshQuietly(");
-        String hourlyBody = online.substring(hourly, online.indexOf("private static String skipped(", hourly));
-        assertThat(hourlyBody).doesNotContain("joinWithReadBack").doesNotContain("ensureOnline");
+        String hourlyBody = online.substring(hourly, online.indexOf("public void confirmShippingRates(", hourly));
+        assertThat(hourlyBody).doesNotContain("ensureOnline");
         Set<String> callers = new TreeSet<>();
         for (Path p : sources()) {
             String src = Files.readString(p);
-            if (src.contains(".joinWithReadBack(") || src.contains(".readMembership(")) callers.add(p.getFileName().toString());
+            if (src.contains(".readMembership(") || src.contains(".readMarketCoverage(")) callers.add(p.getFileName().toString());
         }
         assertThat(callers).containsExactly("TracedLocationOnlineService.java");
-        // The manual Activate refuses a market-driven store before its first delivery-profile call.
-        String act = Files.readString(ACTIVATION);
-        int activate = act.indexOf("public ActivationResult activate(");
-        int refuse = act.indexOf("MARKET_DRIVEN_SHIPPING", activate);
-        int firstProfileCall = act.indexOf("deliveryProfiles.", activate);
-        assertThat(refuse).isPositive().isLessThan(firstProfileCall);
+        assertThat(Files.readString(ACTIVATION)).doesNotContain("joinWithReadBack").doesNotContain("public ActivationResult activate(");
     }
 }

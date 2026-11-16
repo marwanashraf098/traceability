@@ -27,9 +27,8 @@ import static org.mockito.Mockito.when;
  *   d2 — findDefaultProfileLocationGroup: >1 location group on the default profile throws
  *        ShopifyException rather than guessing
  *   d3 — findDefaultProfileLocationGroup: zero delivery profiles returns empty
- *   d4 — addLocationToGroup: exact mutation shape — id=deliveryProfileId,
- *        profile.locationGroupsToUpdate=[{id: locationGroupId, locationsToAdd: [locationGid]}]
- *   d5 — addLocationToGroup: userErrors throws ShopifyException
+ *   (d4 / d5 — addLocationToGroup — removed with the mutation, L1b-2 2026-11-16: Traced never writes a delivery
+ *    profile; DeliveryProfileMutationGuardTest)
  */
 class ShopifyDeliveryProfileGatewayImplTest {
 
@@ -107,39 +106,5 @@ class ShopifyDeliveryProfileGatewayImplTest {
             .thenReturn(json("{ \"deliveryProfiles\": { \"edges\": [] } }"));
 
         assertThat(gateway.findDefaultProfileLocationGroup("shop.myshopify.com", "tok")).isEmpty();
-    }
-
-    @Test
-    void d4_addLocationToGroup_sendsExactMutationShape() {
-        when(shopify.executeGraphQLPublic(any(), any(), any(), any()))
-            .thenReturn(json("{ \"deliveryProfileUpdate\": { \"profile\": { \"id\": \"x\" }, \"userErrors\": [] } }"));
-
-        gateway.addLocationToGroup("shop.myshopify.com", "tok",
-            "gid://shopify/DeliveryProfile/2", "gid://shopify/DeliveryLocationGroup/9",
-            "gid://shopify/Location/300");
-
-        ArgumentCaptor<JsonNode> varsCaptor = ArgumentCaptor.forClass(JsonNode.class);
-        verify(shopify).executeGraphQLPublic(
-            eq("shop.myshopify.com"), eq("tok"), any(), varsCaptor.capture());
-
-        JsonNode vars = varsCaptor.getValue();
-        assertThat(vars.path("id").asText()).isEqualTo("gid://shopify/DeliveryProfile/2");
-        JsonNode group = vars.path("profile").path("locationGroupsToUpdate").get(0);
-        assertThat(group.path("id").asText()).isEqualTo("gid://shopify/DeliveryLocationGroup/9");
-        assertThat(group.path("locationsToAdd")).hasSize(1);
-        assertThat(group.path("locationsToAdd").get(0).asText()).isEqualTo("gid://shopify/Location/300");
-    }
-
-    @Test
-    void d5_addLocationToGroup_userErrorsThrow() {
-        when(shopify.executeGraphQLPublic(any(), any(), any(), any()))
-            .thenReturn(json("""
-                { "deliveryProfileUpdate": { "profile": null,
-                    "userErrors": [ { "field": ["profile"], "message": "location already in group" } ] } }
-                """));
-
-        assertThrows(ShopifyException.class, () -> gateway.addLocationToGroup(
-            "shop.myshopify.com", "tok", "gid://shopify/DeliveryProfile/2",
-            "gid://shopify/DeliveryLocationGroup/9", "gid://shopify/Location/300"));
     }
 }
