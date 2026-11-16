@@ -1280,6 +1280,20 @@ public class ReturnSessionService {
             }
             boolean returnedToSender = Boolean.TRUE.equals(leg.get("returned_to_sender"));
 
+            // Bug 2 / 3 (2026-11-16): the item lines Bosta printed on this parcel's label (BostaLabelLines — never
+            // itemsCount). A return pickup / exchange trip: what comes back (returnSpecs); a returned-to-sender leg:
+            // what was sent (specs). Unreadable → no key, every count as before.
+            String labelText = ("return".equals(leg.get("shipment_leg")) || exchangeTrip)
+                ? (String) (leg.get("description") != null || !exchangeTrip ? leg.get("description") : leg.get("x_inbound_description"))
+                : returnedToSender && leg.get("generic_carrier") == null ? (String) leg.get("fwd_description") : null;
+            com.traceability.integrations.bosta.BostaLabelLines.Label label =
+                com.traceability.integrations.bosta.BostaLabelLines.parse(labelText);
+            if (label != null) {
+                units = onLabel(units, label);
+                parcelExpected = onLabel(parcelExpected, label);
+                scanned = onLabel(scanned, label);
+            }
+
             Map<String, Object> parcel = new LinkedHashMap<>();
             parcel.put("shipmentId", leg.get("shipment_id").toString());
             parcel.put("awb", awb);
@@ -1344,6 +1358,21 @@ public class ReturnSessionService {
                 && Boolean.TRUE.equals(leg.get("untracked")) && requestId == null && itemsRequestId == null
                 && outcome == null && unitsIn == 0);
             parcel.put("counts", counts);
+            if (label != null) {
+                // Present only when the label reads (exact-key screens elsewhere unchanged).
+                Map<String, Object> bl = new LinkedHashMap<>();
+                bl.put("total", label.total());
+                List<Map<String, Object>> blLines = new ArrayList<>();
+                for (com.traceability.integrations.bosta.BostaLabelLines.Line l : label.lines()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("sku", l.sku());
+                    m.put("quantity", l.quantity());
+                    m.put("name", l.name());
+                    blLines.add(m);
+                }
+                bl.put("lines", blLines);
+                parcel.put("bostaLabel", bl);
+            }
             parcel.put("complete", complete);
             parcel.put("itemsRequestId", itemsRequestId == null ? null : itemsRequestId.toString());
             parcel.put("itemsRequestReference", leg.get("items_request_reference"));
@@ -1358,6 +1387,24 @@ public class ReturnSessionService {
         result.put("parcels", parcels);
         result.put("otherItems", otherItems);
         result.put("lastScan", lastScan(sessionId, tenantId, items, legs));
+    }
+
+    /**
+     * Bug 2 / 3 — copies of {@code rows} (never the shared item maps) with {@code onLabel} (its SKU is on the Bosta label)
+     * and {@code labelQuantity}; rows on the label first, the rest after in their own order ("Not on the Bosta label").
+     */
+    private static List<Map<String, Object>> onLabel(List<Map<String, Object>> rows,
+                                                     com.traceability.integrations.bosta.BostaLabelLines.Label label) {
+        List<Map<String, Object>> on = new ArrayList<>(), off = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> copy = new LinkedHashMap<>(r);
+            int qty = label.quantityOf((String) r.get("sku"));
+            copy.put("onLabel", qty > 0);
+            copy.put("labelQuantity", qty);
+            (qty > 0 ? on : off).add(copy);
+        }
+        on.addAll(off);
+        return on;
     }
 
     /** Step 6a — a request's items for its parcel card: tracked (piece) and untracked (order-line unit) alike. */

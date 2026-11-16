@@ -1708,6 +1708,18 @@
         "backAtWarehouse": "Back at warehouse",
         "progress": "{{scanned}} of {{count}} item scanned",
         "progress_other": "{{scanned}} of {{count}} items scanned",
+        "upTo": "{{scanned}} scanned · up to {{count}} could come back",
+        "label": {
+          "items": "Bosta label: {{count}} item",
+          "items_other": "Bosta label: {{count}} items",
+          "onLabel": "On Bosta's label × {{count}}",
+          "onLabelShort": "On Bosta's label",
+          "notOnLabel": "Not on the Bosta label ({{count}})",
+          "confirmTitle": "Mark another item?",
+          "confirmBody": "Bosta's label says {{count}} item — mark another?",
+          "confirmBody_other": "Bosta's label says {{count}} items — mark another?",
+          "confirmYes": "Mark it"
+        },
         "allIn": "All {{count}} item in",
         "allIn_other": "All {{count}} items in",
         "allInShort": "All items in",

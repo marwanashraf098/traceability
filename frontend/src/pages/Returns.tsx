@@ -208,6 +208,9 @@ interface Parcel {
   unitsIn?: number
   /** Issue 1: the whole-parcel mark is offered (untracked order, no request, nothing marked yet). */
   canMarkReceived?: boolean
+  /** Bug 2 / 3 (2026-11-16): the item lines Bosta printed on this parcel's label — present only when they read
+   *  (BostaLabelLines). total = the label's items; never Bosta's itemsCount. */
+  bostaLabel?: { total: number; lines: { sku: string; quantity: number; name: string }[] }
   /** 2026-11-12: a Bosta exchange trip (type 30) — what comes back is the original order's inbound item, never the
    *  replacement. Absent on every other parcel. orderNumber is then the ORIGINAL order. */
   exchange?: {
@@ -232,6 +235,9 @@ interface ParcelUnit {
   condition: 'sellable' | 'damaged' | null
   viaPhone: boolean
   markedInSession: string | null
+  /** Present only when the parcel's Bosta label reads: this unit's SKU is on it. */
+  onLabel?: boolean
+  labelQuantity?: number
 }
 
 /** Step 6a — one request item on a parcel card. Untracked items (tracked:false) have no piece. */
@@ -681,6 +687,9 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   const [reprinting, setReprinting] = useState<string | null>(null)
   const [reprintErrors, setReprintErrors] = useState<Record<string, string>>({})
   const [showAbandonModal, setShowAbandonModal] = useState(false)
+  // Bug 2: the Bosta-label confirm (see requestUnitAction).
+  const [labelConfirm, setLabelConfirm] = useState<{ shipmentId: string; unit: ParcelUnit;
+    action: 'sellable' | 'damaged'; total: number } | null>(null)
   const [abandoning, setAbandoning] = useState(false)
   const [closing, setClosing] = useState(false)
   const [closeSummary, setCloseSummary] = useState<CloseSummary | null>(null)
@@ -764,11 +773,12 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       if (newest?.unexpected) return t('phone.notExpected')
       return newest?.order_number ? t('phone.received', { order: newest.order_number }) : t('phone.receivedNoOrder')
     },
-    paused: damageTarget !== null || showAbandonModal,
+    paused: damageTarget !== null || showAbandonModal || labelConfirm !== null,
   })
 
-  // A field or dialog owns focus while it's open: the damage-reason input, the abandon confirm.
-  const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan), focusPaused: damageTarget !== null || showAbandonModal }))
+  // A field or dialog owns focus while it's open: the damage-reason input, the abandon confirm, the Bosta-label confirm.
+  const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan),
+    focusPaused: damageTarget !== null || showAbandonModal || labelConfirm !== null }))
   const handleScan = scanner.handleScan
 
   // The damage-reason field holds focus while it's open: useScanner's click-refocus (marked)
@@ -836,6 +846,20 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     } finally {
       setParcelBusy(null)
     }
+  }
+
+  // Bug 2 (2026-11-16): marking more units than Bosta's label lists, or a unit not on it, asks first — a confirmation,
+  // never a block (labels can be wrong).
+  const requestUnitAction = (parcel: Parcel, unit: ParcelUnit, action: 'sellable' | 'damaged' | 'undo') => {
+    const label = parcel.bostaLabel
+    if (action !== 'undo' && label) {
+      const marked = (parcel.untrackedUnits ?? []).filter(u => u.intakeId != null).length
+      if (unit.onLabel === false || marked >= label.total) {
+        setLabelConfirm({ shipmentId: parcel.shipmentId, unit, action, total: label.total })
+        return
+      }
+    }
+    void unitAction(parcel.shipmentId, unit, action)
   }
 
   // Issue 1 — "Arrived" for one unit of an untracked order line on a parcel, and its undo.
@@ -1222,7 +1246,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             itemBusy={itemBusy}
             onItemAction={requestItemAction}
             sessionId={sessionId}
-            onUnitAction={(unit, action) => unitAction(parcel.shipmentId, unit, action)}
+            onUnitAction={(unit, action) => requestUnitAction(parcel, unit, action)}
             renderExpected={renderExpected}
             renderItem={renderItem}
           />
@@ -1288,6 +1312,24 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         </button>
       </div>
 
+      {labelConfirm && (
+        <Modal onClose={() => setLabelConfirm(null)} title={t('returns.openSession.parcel.label.confirmTitle')}>
+          <div className="space-y-4" data-testid="label-confirm">
+            <p className="text-small text-primary">
+              {t('returns.openSession.parcel.label.confirmBody', { count: labelConfirm.total })}
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="tertiary" onClick={() => setLabelConfirm(null)}>{t('common.cancel')}</Button>
+              <button className="btn-brand" data-testid="label-confirm-yes" onClick={() => {
+                const c = labelConfirm
+                setLabelConfirm(null)
+                void unitAction(c.shipmentId, c.unit, c.action)
+              }}>{t('returns.openSession.parcel.label.confirmYes')}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {showAbandonModal && (
         <Modal onClose={() => setShowAbandonModal(false)} title={t('returns.openSession.abandonConfirmTitle')}>
           <div className="space-y-4">
@@ -1350,10 +1392,15 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   const exchangeUnknown = !!parcel.exchange && !parcel.exchange.tracedRequest && !parcel.exchange.inboundKnown
   const nothingToScan = parcel.tracked && awaiting === 0 && parcel.scannedItems.length === 0 && !parcel.intakeOutcome
     && untrackedItems.length === 0 && units.length === 0
+  const label = parcel.bostaLabel ?? null
   const shownCounts = {
-    expected: parcel.counts.expected + untrackedItems.length + units.length,
+    // Bug 2: an untracked units parcel expects what Bosta's label lists when it reads (never itemsCount).
+    expected: parcel.counts.expected + untrackedItems.length + (units.length > 0 && label ? label.total : units.length),
     scanned: parcel.counts.scanned + untrackedArrived + unitsIn,
   }
+  // Bug 3: a tracked parcel no request holds — the order's pieces are only the most that could come back.
+  const upTo = parcel.tracked && !parcel.requestReference && !parcel.itemsRequestId && units.length === 0
+    && untrackedItems.length === 0
   const requestReference = parcel.requestReference ?? parcel.itemsRequestReference ?? null
 
   const pill: { tone: 'success' | 'warning' | 'neutral'; label: string } | null =
@@ -1366,8 +1413,8 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
     : parcel.complete ? { tone: 'success', label: expanded
         ? t('returns.openSession.parcel.allIn', { count: shownCounts.scanned })
         : t('returns.openSession.parcel.allInShort') }
-    : shownCounts.expected > 0 ? { tone: 'warning', label: t('returns.openSession.parcel.progress',
-        { scanned: shownCounts.scanned, count: shownCounts.expected }) }
+    : shownCounts.expected > 0 ? { tone: 'warning', label: t(upTo ? 'returns.openSession.parcel.upTo'
+        : 'returns.openSession.parcel.progress', { scanned: shownCounts.scanned, count: shownCounts.expected }) }
     : null
 
   const order = parcel.orderNumber ?? '—'
@@ -1470,7 +1517,15 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
             {t('returns.openSession.parcel.bostaNote')}
           </span>
           <span className="text-small text-primary" data-testid="parcel-bosta-note">
-            {parcel.bosta?.itemsCount != null
+            {label
+              ? <>
+                  <span className="font-semibold" data-testid="parcel-bosta-label">
+                    {t('returns.openSession.parcel.label.items', { count: label.total })}
+                  </span>
+                  {' — '}
+                  <bdi dir={bostaIsEnglishInAr ? 'ltr' : undefined}>{bostaDescription}</bdi>
+                </>
+              : parcel.bosta?.itemsCount != null
               ? <>
                   {/* description interpolated as '' then rendered in <bdi> — the key ends with it */}
                   {t('returns.openSession.bostaSays', { count: parcel.bosta.itemsCount, description: '' })}
@@ -1551,18 +1606,38 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
             </span>
           </div>
           <div className="px-5 pb-4 space-y-2.5">
-            {parcel.scannedItems.map(renderItem)}
-            {parcel.expectedPieces.map(renderExpected)}
+            {parcel.scannedItems.map(i => label
+              ? <LabelMark key={`s-${i.id}`} on={!!(i as SessionItem & { onLabel?: boolean }).onLabel}>{renderItem(i)}</LabelMark>
+              : renderItem(i))}
+            {parcel.expectedPieces.map(p => label
+              ? <LabelMark key={`e-${p.id}`} on={!!(p as ExpectedPiece & { onLabel?: boolean }).onLabel}>{renderExpected(p)}</LabelMark>
+              : renderExpected(p))}
             {untrackedItems.map(ri => (
               <UntrackedItemRow key={ri.id} item={ri} busy={itemBusy === ri.id}
                 onAction={action => onItemAction?.(ri.id, action)} />
             ))}
-            {units.map(u => (
+            {(label ? units.filter(u => u.onLabel) : units).map(u => (
               <UntrackedUnitRow key={`${u.orderItemId}:${u.unitNo}`} unit={u}
                 busy={itemBusy === `${u.orderItemId}:${u.unitNo}`}
                 canUndo={!!sessionId && u.markedInSession === sessionId}
                 onAction={action => onUnitAction?.(u, action)} />
             ))}
+            {label && units.some(u => !u.onLabel) && (
+              <details className="group" data-testid="parcel-units-off-label"
+                open={units.some(u => !u.onLabel && u.intakeId != null)}>
+                <summary className="cursor-pointer text-small font-semibold text-muted py-1.5">
+                  {t('returns.openSession.parcel.label.notOnLabel', { count: units.filter(u => !u.onLabel).length })}
+                </summary>
+                <div className="space-y-2.5 pt-2">
+                  {units.filter(u => !u.onLabel).map(u => (
+                    <UntrackedUnitRow key={`${u.orderItemId}:${u.unitNo}`} unit={u}
+                      busy={itemBusy === `${u.orderItemId}:${u.unitNo}`}
+                      canUndo={!!sessionId && u.markedInSession === sessionId}
+                      onAction={action => onUnitAction?.(u, action)} />
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
           {units.length > 0 && unitsIn < units.length && (
             <div className="px-5 pb-4 flex flex-col gap-3" data-testid="parcel-units-info">
@@ -1674,6 +1749,11 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
           </span>
           {arrived && unit.viaPhone && <ViaPhoneTag />}
         </p>
+        {unit.onLabel && (
+          <p className="text-caption font-semibold text-trace-blue" data-testid="untracked-unit-on-label">
+            {t('returns.openSession.parcel.label.onLabel', { count: unit.labelQuantity ?? 1 })}
+          </p>
+        )}
       </div>
       {arrived ? (
         <>
@@ -1704,6 +1784,16 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
       )}
     </div>
   )
+}
+
+/** Bug 3 — a tracked piece whose SKU is on the parcel's Bosta label: highlighted, the rest as they were. */
+function LabelMark({ on, children }: { on: boolean; children: React.ReactNode }) {
+  const { t } = useTranslation()
+  return on ? (
+    <div className="rounded-xl ring-2 ring-trace-blue/40" data-testid="piece-on-label" title={t('returns.openSession.parcel.label.onLabelShort')}>
+      {children}
+    </div>
+  ) : <>{children}</>
 }
 
 function ParcelFact({ label, value }: { label: string; value: React.ReactNode }) {
