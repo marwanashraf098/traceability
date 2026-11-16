@@ -4,8 +4,16 @@
 
 ## Current state
 
-**Pre-connect exchanges / CRPs — post-connect Bosta 25 / 30 of pre-connect orders tracked (2026-11-16; branch
-`fix/pre-connect-exchanges` off main a2854627; no migration; 4 commits; NOT merged, NOT deployed, nothing run in prod).**
+**Pre-connect exchanges / CRPs — post-connect Bosta 25 / 30 of pre-connect orders tracked (2026-11-16; DEPLOYED
+2026-11-17 — merge 9e880422, no migration; branch `fix/pre-connect-exchanges` deleted).**
+- **Storm repair DONE (2026-11-17):** auto-ingested on startup — EXC-2472106867 (#2739), EXC-5028197718 (#2922),
+  EXC-3549194002 (#2919), EXC-3251207139 (#2906), all matched by reference and pickable; CRPs 6233761156 (#2945) and
+  3907261340 (#2972) linked to imported parents. Via reprocess apply: 3201727169 (#2978). 10 others NOT_OPEN (they
+  ingest on their next Bosta update). 7779516755 became type 20 RTO → not eligible.
+- **Ops note:** the reprocess stops on Bosta RATE_LIMITED after ~30–85 rows. Rerun until the summary shows no
+  RATE_LIMITED, or target with BOSTA_REPROCESS_PRE_CONNECT_TRACKINGS.
+- **Still open:** repair (c) for MagRina, TagFit, Femine (one tenant at a time, dry run first); live check with Storm;
+  undo-after-close for pre-connect parents (deferred, see below); possible widening of "Exchanges to map".
 Bug (Step 0, 2026-11-16): Storm (cutoff 2026-11-13 17:15 UTC, lowest order #3018) scanned 2472106867 ("#2739:#2739-R1")
 and 5028197718 ("#2922:#2922-R1") → NOT_FOUND: `PreConnectDeliveryFilter.belowLowestOrderNumber` dropped them as
 `ignored_pre_connect` although Bosta created them after the connect (2739 < 3018).
@@ -44,14 +52,14 @@ and 5028197718 ("#2922:#2922-R1") → NOT_FOUND: `PreConnectDeliveryFilter.below
   `FulfillService.EXCHANGES_TO_MAP_SQL`.
 - Rebased 2026-11-16 onto main 647e5c33 (BRK D1–D4, L1b-2 V233). Combined test PreConnectExchangeTest.d1: a
   pre-connect CRP → Scan returns lists the parent's lines as untracked units (D4), the Bosta label line first / onLabel,
-  mark arrived, Undo inside the session, close. **Open question:** "Undo arrival" AFTER the session closed is on the
+  mark arrived, Undo inside the session, close. **Deferred (Marawan 2026-11-17):** "Undo arrival" AFTER the session closed is on the
   order drawer (`/orders/{id}/untracked-arrivals`), which reads warehouse_orders and is 404 for a pre-connect parent by
   the P4a rule — making it work for these parents is a behaviour change, not done.
 - Shopify writes: none new. -R refs → the dispatch −1 is skipped `shopify_native_exchange` (tested). Storm is a Main
   reconcile WRITE store: while a native replacement is reserved / packed, EXCHANGE_HOLD_SQL holds the store's reconcile
   writes (existing interim hold); a replacement Shopify fulfils from a non-Main location is corrected at Main by the
   reconcile write (9) after it leaves custody.
-- Repair (not run): Storm 2472106867 + 5028197718 first, then Storm's other open ones (13 total in the last 7 days),
+- Repair plan (Storm done 2026-11-17, see top of entry): Storm 2472106867 + 5028197718 first, then Storm's other open ones (13 total in the last 7 days),
   then tenant by tenant (open in the last 7 days, excl. Little Toes: MagRina 6, TagFit 1; older BROEK / Femine rows are
   almost certainly picked up — the dry run decides).
 
