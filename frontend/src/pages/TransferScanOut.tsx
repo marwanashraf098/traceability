@@ -12,6 +12,7 @@ import {
 } from '../api'
 import { useCapabilities } from '../capabilities'
 import TransferCollectList from './putaway/TransferCollectList'
+import { bazarScanOut } from '../bazar/api'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -19,8 +20,14 @@ import TransferCollectList from './putaway/TransferCollectList'
 // per-variant qty_out. NOT Layout-wrapped, matching /fulfill and
 // /stock-take/:id/scan.
 
-export default function TransferScanOut() {
-  const { id } = useParams<{ id: string }>()
+/** Bazar POS B6: the same screen drives a bazar event's linked transfer — its scans go through the bazar's own
+ *  scan-out endpoint (the generic one refuses a bazar transfer) and Back / Done return to the event. */
+export interface BazarScanOutTarget { eventId: string; transferId: string }
+
+export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget } = {}) {
+  const params = useParams<{ id: string }>()
+  const id = bazar ? bazar.transferId : params.id
+  const backTo = bazar ? `/bazar/${bazar.eventId}` : `/transfers/${id}`
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
   const navigate = useNavigate()
@@ -57,7 +64,9 @@ export default function TransferScanOut() {
       if (!id) return { success: false }
       // A phone scan names its relay event; the server decides whether it counts as one.
       const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
-      const send = transfer?.transfer_mode === 'relocate_return' ? returnScanOutTransferPiece : scanOutTransferPiece
+      const send = bazar
+        ? (_tid: string, code: string, relay?: string) => bazarScanOut(bazar.eventId, code, relay)
+        : transfer?.transfer_mode === 'relocate_return' ? returnScanOutTransferPiece : scanOutTransferPiece
       // relocate_return's send-out leg pulls transferred_out pieces off the terminal at B
       // (a different backend precondition than every other transfer's available->out_on_transfer
       // scan) — same screen, different API call, mirroring TransferDetail's mode branching.
@@ -104,7 +113,7 @@ export default function TransferScanOut() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-base gap-4 px-6 text-center">
         <p className="text-danger text-body">{loadError ?? t('transfers.scanOut.notFound')}</p>
-        <Button variant="secondary" onClick={() => navigate('/transfers')}>
+        <Button variant="secondary" onClick={() => navigate(bazar ? backTo : '/transfers')}>
           {t('transfers.scanOut.back')}
         </Button>
       </div>
@@ -115,7 +124,7 @@ export default function TransferScanOut() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-base gap-4 px-6 text-center">
         <p className="text-danger text-body">{t('transfers.scanOut.notOpenTitle')}</p>
-        <Button variant="secondary" onClick={() => navigate(`/transfers/${id}`)}>
+        <Button variant="secondary" onClick={() => navigate(backTo)}>
           {t('transfers.scanOut.viewTransfer')}
         </Button>
       </div>
@@ -124,14 +133,14 @@ export default function TransferScanOut() {
 
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="transfer-scan-out">
-      <PageTour tourId="transfers" />
+      {!bazar && <PageTour tourId="transfers" />}
       {/* Header */}
       <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between gap-3">
-        <Button variant="tertiary" size="sm" onClick={() => navigate(`/transfers/${id}`)}>
+        <Button variant="tertiary" size="sm" onClick={() => navigate(backTo)}>
           ← {t('transfers.scanOut.back')}
         </Button>
         <div className="flex items-center gap-3 min-w-0">
-        <TourHelpButton tourId="transfers" />
+        {!bazar && <TourHelpButton tourId="transfers" />}
         {/* Phone as scanner — in the header flow, next to the header actions. */}
         <PhoneScanButton />
         <div className="text-end min-w-0">
@@ -219,8 +228,8 @@ export default function TransferScanOut() {
 
       {/* Done */}
       <div className="bg-panel border-t border-line px-6 py-4">
-        <Button className="w-full" onClick={() => navigate(`/transfers/${id}`)}>
-          {t('transfers.scanOut.done')}
+        <Button className="w-full" onClick={() => navigate(backTo)}>
+          {bazar ? t('bazar.transfer.scanDone') : t('transfers.scanOut.done')}
         </Button>
       </div>
     </div>

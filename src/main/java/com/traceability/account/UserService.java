@@ -86,6 +86,13 @@ public class UserService {
         boolean places = com.traceability.places.Places.enabled(jdbc, tenantId);
         self.put("places", places);
         if (places) self.put("placesDormant", !com.traceability.places.Places.anySetUp(jdbc, tenantId));
+        // Bazar POS B6 — the sidebar's Bazar item (bazar) and the phone's landing (bazarLive: the live event the caller's
+        // role may sell at). Only sent with bazar on, so an off tenant's /me is unchanged.
+        if (com.traceability.bazar.Bazar.enabled(jdbc, tenantId)) {
+            self.put("bazar", true);
+            Map<String, Object> live = com.traceability.bazar.Bazar.liveFor(jdbc, tenantId, (String) self.get("role"));
+            if (live != null) self.put("bazarLive", live);
+        }
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a
         // station tablet that is the PIN-switched-in worker, never the owner who signed the tablet in.
         self.put("uiState", UserUiStateService.read(jdbc, tenantId, userId));
