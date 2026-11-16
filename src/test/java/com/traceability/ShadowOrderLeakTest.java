@@ -588,6 +588,13 @@ class ShadowOrderLeakTest {
                 "DELETE /api/v1/bazar-events/{eventId}/prices/{variantId}/override")) {
             reg(k, skip("Bazar POS B1 — bazar events, their transfer and prices; touches no orders"));
         }
+        for (String k : List.of(
+                "POST /api/v1/bazar-events/{eventId}/sell", "POST /api/v1/bazar-events/{eventId}/sales/{saleId}/undo",
+                "PUT /api/v1/bazar-events/{eventId}/sales/{saleId}/payment",
+                "PUT /api/v1/bazar-events/{eventId}/sales/{saleId}/customer",
+                "GET /api/v1/bazar-events/{eventId}/sales")) {
+            reg(k, skip("Bazar POS B2 — bazar sales and payments; touches no orders"));
+        }
     }
 
     // ── shadow classification (on top of the shared registry) ─────────────────

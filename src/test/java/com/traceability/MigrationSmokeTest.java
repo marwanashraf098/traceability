@@ -83,7 +83,10 @@ class MigrationSmokeTest {
             "return_request_amounts",
             "user_ui_state",
             "bazar_events",
-            "bazar_event_prices"
+            "bazar_event_prices",
+            "bazar_sale_counters",
+            "bazar_sales",
+            "bazar_payments"
     );
 
     @Test
