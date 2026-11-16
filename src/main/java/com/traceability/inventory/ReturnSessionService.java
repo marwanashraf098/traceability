@@ -298,7 +298,7 @@ public class ReturnSessionService {
         // D3 idempotent re-scan: the piece this session already put back on the shelf — same answer, nothing written.
         if (current == PieceStatus.AVAILABLE) {
             List<Map<String, Object>> unpacked = jdbc.queryForList(
-                "SELECT pe.order_id, o.number FROM piece_events pe LEFT JOIN warehouse_orders o ON o.id = pe.order_id " +
+                "SELECT pe.order_id, o.number FROM piece_events pe LEFT JOIN warehouse_orders o ON o.id = pe.order_id AND o.tenant_id = pe.tenant_id " +
                 "WHERE pe.piece_id = ? AND pe.tenant_id = ? AND pe.event_type = 'unpacked' " +
                 "  AND pe.metadata->>'via' = 'return_scan' AND pe.metadata->>'session_id' = ? " +
                 "  AND pe.occurred_at = (SELECT max(x.occurred_at) FROM piece_events x WHERE x.piece_id = pe.piece_id)",
@@ -1452,7 +1452,7 @@ public class ReturnSessionService {
         // D3: a piece this session put back on the shelf (unpacked, not returned) — label = the order to repack.
         for (Map<String, Object> u : jdbc.queryForList(
                 "SELECT COALESCE(p.short_code, p.barcode) AS code, o.number, pe.occurred_at FROM piece_events pe " +
-                "JOIN pieces p ON p.id = pe.piece_id LEFT JOIN warehouse_orders o ON o.id = pe.order_id " +
+                "JOIN pieces p ON p.id = pe.piece_id LEFT JOIN warehouse_orders o ON o.id = pe.order_id AND o.tenant_id = pe.tenant_id " +
                 "WHERE pe.tenant_id = ? AND pe.event_type = 'unpacked' AND pe.metadata->>'via' = 'return_scan' " +
                 "  AND pe.metadata->>'session_id' = ? ORDER BY pe.occurred_at DESC LIMIT 1",
                 tenantId, sessionId.toString())) {

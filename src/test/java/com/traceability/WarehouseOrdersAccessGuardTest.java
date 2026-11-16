@@ -31,6 +31,17 @@ class WarehouseOrdersAccessGuardTest {
 
     /** file (under com/traceability/) + '#' + member (method name, or field:NAME) → why a shadow order belongs. */
     static final Map<String, Entry> WAREHOUSE_ALLOWLIST = allowlist(
+        // BRK deleted-waybill fixes (approved 2026-11-16) — each by id + tenant_id, RLS on the security_invoker view
+        "inventory/OrderReopen.java#reopen",
+            "D2/D3: the approved backward write puts a packed order (a shadow included) back in Pick & Pack — by id + tenant",
+        "inventory/ReturnSessionService.java#scanPiece",
+            "D3: a re-scan of a piece this session unpacked names the order to repack (a shadow's number too) — tenant-joined",
+        "inventory/ReturnSessionService.java#unpackByScan",
+            "D3: the Scan returns unpack names the order to repack — any packed order, a shadow included — by id + tenant",
+        "inventory/ReturnSessionService.java#lastScan",
+            "D3: the session's last-scan strip names the order an unpacked piece belongs to — tenant-joined",
+        "inventory/UntrackedArrivalUndoService.java#requireOrder",
+            "Undo arrival: the drawer's own order set (OrderController#detail, Q3) — by id + tenant",
         // S3b (V219) — Shopify-native exchange shadow orders
         // S3d — safety net (unexplained holds)
         "inventory/ExceptionService.java#detectShopifyExchangeStillWaiting",
