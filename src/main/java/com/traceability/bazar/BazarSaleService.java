@@ -237,6 +237,16 @@ public class BazarSaleService {
     /** Sets both fields (null / blank clears one). The phone is stored as 01XXXXXXXXX; anything else is refused. */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> setCustomer(UUID eventId, UUID saleId, String name, String phone, Actor actor) {
+        return editCustomer(eventId, saleId, true, name, true, phone, actor);
+    }
+
+    /**
+     * B6 review: a field NOT sent stays as it is; a field sent empty (null / blank) is cleared. So a worker — who sees
+     * the phone masked and can't send it back — adds or changes the name without touching the stored number.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> editCustomer(UUID eventId, UUID saleId, boolean nameSent, String name,
+                                            boolean phoneSent, String phone, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> sale = lockActiveSale(tenantId, eventId, saleId);
@@ -248,12 +258,12 @@ public class BazarSaleService {
                 HttpStatus.FORBIDDEN);
         }
 
-        String n = name == null || name.isBlank() ? null : name.trim();
+        String n = !nameSent || name == null || name.isBlank() ? null : name.trim();
         if (n != null && n.length() > 80) {
             throw invalid("The customer's name can be up to 80 characters.", "اسم العميل حتى 80 حرفًا.");
         }
         String p = null;
-        if (phone != null && !phone.isBlank()) {
+        if (phoneSent && phone != null && !phone.isBlank()) {
             p = normalizePhone(phone);
             if (p == null) {
                 throw new BazarException(BazarException.Code.BAZAR_INVALID_PHONE,
@@ -261,8 +271,11 @@ public class BazarSaleService {
                     "أدخل رقم موبايل مصري، مثل 01012345678.", HttpStatus.BAD_REQUEST);
             }
         }
-        jdbc.update("UPDATE bazar_sales SET customer_name = ?, customer_phone = ?, updated_at = now() " +
-            "WHERE id = ? AND tenant_id = ?", n, p, saleId, tenantId);
+        if (!nameSent && !phoneSent) return saleView(tenantId, saleId, actor);
+        jdbc.update("UPDATE bazar_sales SET " +
+            "customer_name  = CASE WHEN ? THEN ? ELSE customer_name END, " +
+            "customer_phone = CASE WHEN ? THEN ? ELSE customer_phone END, updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ?", nameSent, n, phoneSent, p, saleId, tenantId);
         return saleView(tenantId, saleId, actor);
     }
 
@@ -294,6 +307,43 @@ public class BazarSaleService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("items", items);
         out.put("next_cursor", rows.size() > n ? encodeCursor(rows.get(n - 1)) : null);
+        return out;
+    }
+
+    // ── Today (B6 review) ────────────────────────────────────────────────────
+
+    /**
+     * The event's numbers for today (Africa/Cairo): total and by method from the live payments of ACTIVE sales (an
+     * undone sale is out), the count of active sales, and per seller their count and sum. Any role in the event's
+     * {@code seller_roles}, or owner / manager — the phone's Home and Sell footer read this, never a sum of the paged
+     * sales list.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> todaySummary(UUID eventId, Actor actor) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = event(tenantId, eventId, "");
+        if (!actor.manages() && !sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        Map<String, Object> t = today(jdbc, tenantId, eventId, toList(ev.get("payment_methods")));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("business_day", t.get("business_day"));
+        out.put("total", t.get("total"));
+        out.put("sale_count", t.get("sales"));
+        out.put("by_method", t.get("by_method"));
+        List<Map<String, Object>> perSeller = new ArrayList<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT s.sold_by, u.name AS seller_name, COUNT(*) AS sale_count, SUM(s.price) AS total " +
+                "FROM bazar_sales s JOIN users u ON u.id = s.sold_by " +
+                "WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' " +
+                "  AND s.business_day = (now() AT TIME ZONE 'Africa/Cairo')::date " +
+                "GROUP BY s.sold_by, u.name ORDER BY COUNT(*) DESC, u.name, s.sold_by", eventId, tenantId)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("seller_id", String.valueOf(r.get("sold_by")));
+            row.put("seller_name", r.get("seller_name"));
+            row.put("sale_count", ((Number) r.get("sale_count")).intValue());
+            row.put("total", ((BigDecimal) r.get("total")).setScale(2));
+            perSeller.add(row);
+        }
+        out.put("per_seller", perSeller);
         return out;
     }
 

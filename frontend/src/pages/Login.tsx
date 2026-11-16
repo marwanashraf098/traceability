@@ -30,7 +30,7 @@ export default function Login() {
     let cancelled = false
     refreshAccessToken()
       .then(token => {
-        if (!cancelled && token) navigate(returnPath(location.state) ?? '/overview', { replace: true })
+        if (!cancelled && token) navigate(returnPath(location.state) ?? '/', { replace: true })
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -48,10 +48,11 @@ export default function Login() {
       // bounces to /login, not /demo, and no stale demo token lingers.
       sessionStorage.removeItem(DEMO_SESSION_MARKER)
       sessionStorage.removeItem(DEMO_ACCESS_TOKEN_KEY)
+      // Through RootRoute ("/"), which picks the landing (a live bazar on the phone, else the role's home).
       // Station mode is NOT cleared here: a station tablet that bounced to /login stays a
       // station (RequireAuth shows its PIN gate). Station mode ends only through the gate's
       // Exit step (StationGate ExitStep, owner/manager password).
-      navigate(returnPath(location.state) ?? '/overview')
+      navigate(returnPath(location.state) ?? '/')
     } catch {
       setError(t('login.error'))
     } finally {

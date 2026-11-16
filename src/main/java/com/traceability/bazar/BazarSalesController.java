@@ -47,9 +47,24 @@ public class BazarSalesController {
 
     @PutMapping("/sales/{saleId}/customer")
     public Map<String, Object> customer(@PathVariable UUID eventId, @PathVariable UUID saleId,
-                                        @RequestBody CustomerRequest req,
+                                        @RequestBody com.fasterxml.jackson.databind.JsonNode req,
                                         @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.setCustomer(eventId, saleId, req.name(), req.phone(), actor(principal));
+        // A field not sent stays as it is; sent as null / "" it is cleared (B6 review).
+        boolean nameSent = req != null && req.has("name");
+        boolean phoneSent = req != null && req.has("phone");
+        return sales.editCustomer(eventId, saleId, nameSent, text(req, "name"), phoneSent, text(req, "phone"),
+            actor(principal));
+    }
+
+    @GetMapping("/today")
+    public Map<String, Object> today(@PathVariable UUID eventId,
+                                     @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.todaySummary(eventId, actor(principal));
+    }
+
+    private static String text(com.fasterxml.jackson.databind.JsonNode n, String field) {
+        if (n == null || !n.has(field) || n.get(field).isNull()) return null;
+        return n.get(field).asText();
     }
 
     @GetMapping("/sales")
@@ -72,6 +87,4 @@ public class BazarSalesController {
                               String method) {}
 
     public record PaymentRequest(String method) {}
-
-    public record CustomerRequest(String name, String phone) {}
 }

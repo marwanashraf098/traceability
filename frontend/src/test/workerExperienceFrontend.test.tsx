@@ -7,7 +7,7 @@ import i18next from 'i18next'
 import en from '../locales/en.json'
 import Layout from '../components/Layout'
 import Login from '../pages/Login'
-import { RequireAuth, OwnerOnlyRoute } from '../App'
+import { RequireAuth, OwnerOnlyRoute, RootRoute } from '../App'
 import { StationProvider } from '../components/StationProvider'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
@@ -226,6 +226,7 @@ describe('(d) Login — a real login no longer clears station mode', () => {
           <I18nextProvider i18n={testI18n}>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/" element={<RootRoute />} />
               <Route path="/overview" element={<div data-testid="overview-page">OVERVIEW</div>} />
             </Routes>
           </I18nextProvider>

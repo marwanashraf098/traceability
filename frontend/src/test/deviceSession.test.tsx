@@ -5,7 +5,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import i18next from 'i18next'
 import en from '../locales/en.json'
-import { RequireAuth } from '../App'
+import { RequireAuth, RootRoute } from '../App'
 import Login from '../pages/Login'
 import UsersTab from '../pages/settings/UsersTab'
 import { StationProvider } from '../components/StationProvider'
@@ -62,7 +62,9 @@ function renderLoginRoutes() {
         <I18nextProvider i18n={testI18n}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/" element={<RootRoute />} />
             <Route path="/overview" element={<RequireAuth><div data-testid="overview-page">OVERVIEW</div></RequireAuth>} />
+            <Route path="/worker-home" element={<RequireAuth><div data-testid="worker-home-page">WORKER HOME</div></RequireAuth>} />
           </Routes>
         </I18nextProvider>
       </MemoryRouter>
@@ -85,7 +87,8 @@ describe('/login silent refresh', () => {
   test('a still-valid refresh cookie goes straight back into the app — no password asked', async () => {
     const calls = stubFetch(200)
     renderLoginRoutes()
-    expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
+    // The refreshed token is a worker's: Login → / (RootRoute) → the worker's home (B6: Login goes through /).
+    expect(await screen.findByTestId('worker-home-page')).toBeInTheDocument()
     expect(calls.filter(u => u.includes('/auth/login'))).toHaveLength(0)
   })
 

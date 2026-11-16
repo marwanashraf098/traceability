@@ -8,7 +8,7 @@ import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, X,
   BarChart3, Workflow, PanelLeftClose, PanelLeftOpen, LifeBuoy,
-  Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt, PackagePlus,
+  Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt, PackagePlus, Store,
 } from 'lucide-react'
 import type { Me } from '../api'
 import { Logo } from './Logo'
@@ -24,7 +24,7 @@ import { pageKeyFor } from '../pageSeen'
 
 /** capability: shown only when /me grants it (a /me capability flag, e.g. flexibleLabeling).
  *  badge: a count shown beside the label ('putAway' = pieces waiting to be put away). */
-type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' | 'places'; badge?: 'putAway' }
+type NavItem = { to: string; icon: LucideIcon; labelKey: string; capability?: 'flexibleLabeling' | 'places' | 'bazar'; badge?: 'putAway' }
 type NavSection = { id: string; headerKey?: string; items: NavItem[] }
 
 const OWNER_SECTIONS: NavSection[] = [
@@ -42,6 +42,7 @@ const OWNER_SECTIONS: NavSection[] = [
     { to: '/receiving',  icon: Inbox,         labelKey: 'nav.receiving' },
     { to: '/put-away',   icon: PackagePlus,   labelKey: 'nav.putAway', capability: 'places', badge: 'putAway' },
     { to: '/transfers',  icon: Repeat,        labelKey: 'nav.transfers' },
+    { to: '/bazar',      icon: Store,         labelKey: 'nav.bazar', capability: 'bazar' },
     { to: '/stock-take', icon: ClipboardList, labelKey: 'nav.stocktake' },
   ] },
   { id: 'returns', headerKey: 'nav.sections.returns', items: [
