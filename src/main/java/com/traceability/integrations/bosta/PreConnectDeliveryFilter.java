@@ -36,10 +36,12 @@ import java.util.regex.Pattern;
  *       '#'-prefixed, as external_id, and (when it contains ':') the parts before and after the
  *       ':' the same ways (BROEK exchanges: "BRK-44719-EG:BRK-44719-EG-R1"; blnco:
  *       "blncoeg:#515956"); plus shopifyInfo.orderId as a Shopify order GID;</li>
- *   <li>and EITHER Bosta's createdAt is before the cutoff, OR the reference has the same
- *       prefix/suffix shape as the tenant's order numbers (e.g. "BRK-" + digits + "-EG",
+ *   <li>and EITHER Bosta's createdAt is before the cutoff, OR — for every type except a customer
+ *       return pickup (25) and an exchange (30) with a readable createdAt (2026-11-16) — the reference
+ *       has the same prefix/suffix shape as the tenant's order numbers (e.g. "BRK-" + digits + "-EG",
  *       or plain digits) and its number is below the tenant's lowest ingested order number of
- *       that shape.</li>
+ *       that shape. A 25 / 30 created after the cutoff is kept even when its order predates the
+ *       connect (its parent is then imported on demand — PreConnectParentImport).</li>
  * </ol>
  * A null reference created after the cutoff is never ignored. Must be called inside a
  * transaction under TenantContext (reads are RLS-scoped; every query is also tenant_id-bound).
@@ -72,8 +74,45 @@ public class PreConnectDeliveryFilter {
         Instant createdAt = parseCreatedAt(delivery.raw());
         if (createdAt != null && createdAt.isBefore(cutoff)) return true;
 
+        // 2026-11-16 (Storm 2472106867 "#2739:#2739-R1"): a customer return pickup (25) or an exchange (30)
+        // Bosta CREATED after the connect is tracked even when its order predates the connect — the order
+        // number says nothing about when the courier trip was made. Only a SEND / RTO (a pre-connect order
+        // booked late) keeps the number check. An unreadable createdAt keeps the number check for every type.
+        if (createdAt != null && createdAtDecides(delivery)) return false;
+
         return belowLowestOrderNumber(tenantId, reference);
     }
+
+    /**
+     * 2026-11-16: a kept customer return pickup (25) / exchange (30) that belongs to an order placed BEFORE the
+     * connect — created at / after the cutoff, not Traced's own, its reference resolving to no Traced order, and its
+     * number below the tenant's lowest ingested one (exactly what {@link #shouldIgnore} ignored before). Its parent
+     * order is then imported on demand (PreConnectParentImport). Same transaction / tenant rules as shouldIgnore.
+     */
+    public boolean needsPreConnectParent(UUID tenantId, String trackingNumber, BostaDelivery delivery) {
+        if (!createdAtDecides(delivery)) return false;
+        Instant cutoff = tenantCutoff(tenantId);
+        if (cutoff == null) return false;
+        Instant createdAt = parseCreatedAt(delivery.raw());
+        if (createdAt == null || createdAt.isBefore(cutoff)) return false;
+        if (isTracedOwned(tenantId, trackingNumber)) return false;
+        String reference = delivery.businessReference();
+        if (referenceResolves(tenantId, reference, delivery.shopifyOrderId())) return false;
+        return belowLowestOrderNumber(tenantId, reference);
+    }
+
+    /** Bosta types decided by their own creation time alone: customer return pickup (25), exchange (30). */
+    public static boolean createdAtDecides(BostaDelivery delivery) {
+        int code = delivery.typeCode();
+        if (code == CUSTOMER_RETURN_PICKUP || code == EXCHANGE) return true;
+        if (code != -1) return false;
+        // No type.code (a list item that carries only the label): Bosta's labels for the same two types.
+        String label = delivery.type() == null ? "" : delivery.type().trim().toUpperCase(Locale.ROOT).replace('_', ' ');
+        return label.equals("EXCHANGE") || label.equals("CUSTOMER RETURN PICKUP");
+    }
+
+    static final int CUSTOMER_RETURN_PICKUP = 25;
+    static final int EXCHANGE = 30;
 
     /** The tenant's connection boundary, or null when it has no store or any store has a NULL cutoff. */
     Instant tenantCutoff(UUID tenantId) {
@@ -153,7 +192,7 @@ public class PreConnectDeliveryFilter {
     }
 
     /** The order-number part of a reference: before any ':', '#'-stripped. */
-    static String orderNumberPart(String reference) {
+    public static String orderNumberPart(String reference) {
         if (reference == null || reference.isBlank()) return null;
         String r = reference.trim();
         int colon = r.indexOf(':');

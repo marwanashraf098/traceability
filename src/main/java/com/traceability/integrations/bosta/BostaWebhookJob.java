@@ -155,6 +155,37 @@ public class BostaWebhookJob {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setKeyHealth(BostaKeyHealth keyHealth) { this.keyHealth = keyHealth; }
 
+    /**
+     * 2026-11-16: the parent order of a post-connect exchange / customer return pickup whose order predates the
+     * connect, imported on demand from Shopify (PreConnectParentImport). Absent in hand-wired tests → never imported.
+     */
+    private com.traceability.portal.PreConnectParentImport parentImport;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setParentImport(com.traceability.portal.PreConnectParentImport parentImport) {
+        this.parentImport = parentImport;
+    }
+
+    /**
+     * The imported pre-connect parent of this kept 25 / 30 delivery, or null (not a pre-connect parent's trip,
+     * no importer, Shopify miss / failure — the reason is logged by the importer; ingest goes on either way).
+     * Called with NO transaction open: the importer reads Shopify.
+     */
+    java.util.UUID preConnectParent(java.util.UUID tenantId, String trackingNumber, BostaDelivery delivery) {
+        if (parentImport == null) return null;
+        if (!Boolean.TRUE.equals(tx.execute(s ->
+                preConnectFilter.needsPreConnectParent(tenantId, trackingNumber, delivery)))) {
+            return null;
+        }
+        try {
+            return parentImport.importParent(tenantId, delivery.businessReference()).orderId();
+        } catch (RuntimeException e) {
+            log.warn("Tracking {}: pre-connect parent import failed ({}) — ingested without it",
+                trackingNumber, e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
     /** Stored v0 fields never carried into a v2 list delivery (they describe the past, not now). */
     private static final java.util.Set<String> NOT_CARRIED_OVER =
         java.util.Set.of("exceptionCode", "exceptionReason", "exceptionDetails", BostaListItemCache.SHAPE_FIELD);
@@ -385,6 +416,13 @@ public class BostaWebhookJob {
                     }
                     ExchangeIngestService.IngestOutcome outcome =
                         exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
+                    // 2026-11-16: a post-connect exchange of a pre-connect order — its parent is imported
+                    // from Shopify and set as the original (never blocks: no parent → stays unmatched).
+                    if (outcome == ExchangeIngestService.IngestOutcome.ROUTED
+                            && exchangeMatchService.unmatched(tenantId, trackingNumber)) {
+                        java.util.UUID parent = preConnectParent(tenantId, trackingNumber, delivery);
+                        if (parent != null) exchangeMatchService.matchToPreConnectParent(tenantId, trackingNumber, parent);
+                    }
                     switch (outcome) {
                         case ROUTED -> markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
                         case HELD ->
