@@ -288,6 +288,31 @@ public class ReturnSessionService {
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
         UUID pieceVariantId   = (UUID) piece.get("variant_id");
+        // D3 (approved 2026-11-16, BRK-47903-EG): a piece still packed / awaiting pickup whose order's forward leg never
+        // moved (deleted in Bosta or not) never left Traced — the parcel was taken apart. It goes back on the shelf
+        // (an unpack), never a return: no 'rto', no inspection, no Shopify +1, the order's demand intact.
+        if ((current == PieceStatus.PACKED || current == PieceStatus.AWAITING_PICKUP) && orderId != null
+                && !forwardLegEverMoved(orderId, tenantId)) {
+            return unpackByScan(sessionId, tenantId, pieceId, current, orderId, locationId, actorUserId, viaPhone);
+        }
+        // D3 idempotent re-scan: the piece this session already put back on the shelf — same answer, nothing written.
+        if (current == PieceStatus.AVAILABLE) {
+            List<Map<String, Object>> unpacked = jdbc.queryForList(
+                "SELECT pe.order_id, o.number FROM piece_events pe LEFT JOIN warehouse_orders o ON o.id = pe.order_id " +
+                "WHERE pe.piece_id = ? AND pe.tenant_id = ? AND pe.event_type = 'unpacked' " +
+                "  AND pe.metadata->>'via' = 'return_scan' AND pe.metadata->>'session_id' = ? " +
+                "  AND pe.occurred_at = (SELECT max(x.occurred_at) FROM piece_events x WHERE x.piece_id = pe.piece_id)",
+                pieceId, tenantId, sessionId.toString());
+            if (!unpacked.isEmpty()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("scanType", "unpacked");
+                result.put("pieceId", pieceId);
+                result.put("orderId", unpacked.get(0).get("order_id"));
+                result.put("orderNumber", unpacked.get(0).get("number"));
+                result.put("orderReopened", false);
+                return result;
+            }
+        }
         // G3: a piece of an order whose GENERIC forward leg is with the courier or delivered — the scan is the
         // return evidence (same rule as its waybill): the leg becomes 'returned', the piece is expected back.
         // Never a Bosta leg (returnableGenericLeg reads provider = 'generic' only).
@@ -441,6 +466,43 @@ public class ReturnSessionService {
         }
 
         return itemRow(itemId, tenantId);
+    }
+
+    /** D3 — the order's forward leg has moved: a movement row in its history, or a live state past 'created'
+     *  (OrderLineFreeze.legMovedSql — a leg ended / deleted before it moved never counts). */
+    private boolean forwardLegEverMoved(UUID orderId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "  AND " + OrderLineFreeze.legMovedSql("s") + ")", Boolean.class, orderId, tenantId));
+    }
+
+    /**
+     * D3 — a piece of a parcel taken apart before the courier had it, scanned in Scan returns: back to 'available'
+     * through the ledger's existing unwind edges (packed:available / awaiting_pickup:available), event 'unpacked'
+     * (metadata via return_scan + the session), its live allocation released, put at the session's location. When it
+     * was the order's last held piece the order goes back to Pick &amp; Pack under D2's rule (OrderReopen) — demand
+     * intact. No return_session_items row (not a return); the feedback strip reads the event ("Back on shelf — order X
+     * needs repacking"). No Shopify write — packing never changed Shopify.
+     */
+    private Map<String, Object> unpackByScan(UUID sessionId, UUID tenantId, String pieceId, PieceStatus current, UUID orderId,
+                                             UUID locationId, UUID actorUserId, boolean viaPhone) {
+        String meta = "{\"via\":\"return_scan\",\"scope\":\"piece\",\"session_id\":\"" + sessionId + "\""
+            + (viaPhone ? ",\"scan\":\"phone\"" : "") + "}";
+        ledger.transition(pieceId, current, PieceStatus.AVAILABLE, "unpacked", actorUserId,
+            new TransitionContext(orderId, null, locationId, null, meta));
+        jdbc.update("UPDATE allocations SET status = 'released' WHERE piece_id = ? AND tenant_id = ? AND status IN ('active', 'packed')",
+            pieceId, tenantId);
+        if (locationId != null) jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?", locationId, pieceId);
+        boolean reopened = OrderReopen.reopen(jdbc, tenantId, orderId, actorUserId, "return_scan_unpack", null);
+        String number = jdbc.queryForObject("SELECT number FROM warehouse_orders WHERE id = ? AND tenant_id = ?",
+            String.class, orderId, tenantId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanType", "unpacked");
+        result.put("pieceId", pieceId);
+        result.put("orderId", orderId);
+        result.put("orderNumber", number);
+        result.put("orderReopened", reopened);
+        return result;
     }
 
     private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber, boolean viaPhone) {
@@ -1338,6 +1400,18 @@ public class ReturnSessionService {
                     && marked != null && (bestAt == null || marked.after(bestAt))) {
                 bestAt = marked;
                 best = scanEntry("marked_received", leg.get("awb"), null, marked);
+            }
+        }
+        // D3: a piece this session put back on the shelf (unpacked, not returned) — label = the order to repack.
+        for (Map<String, Object> u : jdbc.queryForList(
+                "SELECT COALESCE(p.short_code, p.barcode) AS code, o.number, pe.occurred_at FROM piece_events pe " +
+                "JOIN pieces p ON p.id = pe.piece_id LEFT JOIN warehouse_orders o ON o.id = pe.order_id " +
+                "WHERE pe.tenant_id = ? AND pe.event_type = 'unpacked' AND pe.metadata->>'via' = 'return_scan' " +
+                "  AND pe.metadata->>'session_id' = ? ORDER BY pe.occurred_at DESC LIMIT 1",
+                tenantId, sessionId.toString())) {
+            java.sql.Timestamp at = (java.sql.Timestamp) u.get("occurred_at");
+            if (at != null && (bestAt == null || at.after(bestAt))) {
+                best = scanEntry("unpacked", u.get("code"), u.get("number"), at);
             }
         }
         return best;

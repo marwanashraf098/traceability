@@ -1465,7 +1465,13 @@ public class FulfillService {
                 "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'forward' " +
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
                 orderId, tenantId);
-            if (!leg.isEmpty() && (!"created".equals(leg.get(0).get("state")) || leg.get(0).get("provider_deleted_at") != null)) {
+            // D3 (approved 2026-11-16, BRK-47903-EG): a waybill deleted in Bosta while still 'created' no longer blocks
+            // the unpack when no piece of the order ever left (OrderLineFreeze, D1) — the order goes back to 'new' and
+            // waits for its next waybill (Shopify's refulfill links it, D2). Other ended states still refuse.
+            boolean deletedBeforeItMoved = !leg.isEmpty() && "created".equals(leg.get(0).get("state"))
+                && leg.get(0).get("provider_deleted_at") != null && !OrderLineFreeze.isFrozen(jdbc, orderId, tenantId);
+            if (!leg.isEmpty() && !deletedBeforeItMoved
+                    && (!"created".equals(leg.get(0).get("state")) || leg.get(0).get("provider_deleted_at") != null)) {
                 throw new UnpackOrderException(UnpackOrderException.Code.WAYBILL_ENDED,
                     "The waybill for order " + n + " was cancelled or deleted at the courier. Sort out the waybill first — " +
                     "unpacking now would hide the order.",

@@ -1784,7 +1784,8 @@
       "feedback": {
         "itemScanned": "تم مسح القطعة",
         "awbRecognised": "تم التعرّف على ملصق الشحنة",
-        "markedReceived": "تم تسجيل الشحنة كمستلمة"
+        "markedReceived": "تم تسجيل الشحنة كمستلمة",
+        "unpacked": "رجعت للرف — الطلب {{order}} يحتاج إعادة تجهيز"
       },
       "parcel": {
         "courierReturn": "مرتجع من بوستا",

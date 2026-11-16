@@ -247,7 +247,7 @@ interface ParcelRequestItem {
 }
 
 interface LastScan {
-  kind: 'piece' | 'awb' | 'marked_received'
+  kind: 'piece' | 'awb' | 'marked_received' | 'unpacked'
   code: string | null
   label: string | null
   at: string
@@ -756,6 +756,9 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       if (detail?.lastScan?.kind === 'awb') {
         return `${t('returns.openSession.feedback.awbRecognised')} · ${detail.lastScan.code ?? code}`
       }
+      if (detail?.lastScan?.kind === 'unpacked') {
+        return t('returns.openSession.feedback.unpacked', { order: detail.lastScan.label ?? '' })
+      }
       const newest = [...(detail?.items ?? [])].sort((a, b) =>
         String(b.scanned_at ?? '').localeCompare(String(a.scanned_at ?? '')))[0]
       if (newest?.unexpected) return t('phone.notExpected')
@@ -1155,7 +1158,22 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         </div>
       )}
 
-      {detail?.lastScan && (
+      {detail?.lastScan?.kind === 'unpacked' && (
+        <div className="px-5 pt-3 flex" data-testid="scan-feedback">
+          {/* D3: a piece of a parcel taken apart before the courier had it — back on the shelf, not a return. */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-warning/10 text-warning text-small font-medium"
+            data-testid="scan-feedback-unpacked">
+            <CheckCircle2 size={16} strokeWidth={2.2} className="shrink-0" />
+            <span>
+              {t('returns.openSession.feedback.unpacked', { order: detail.lastScan.label ?? '' })}
+              {' · '}
+              <bdi className="font-mono">{detail.lastScan.code}</bdi>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {detail?.lastScan && detail.lastScan.kind !== 'unpacked' && (
         <div className="px-5 pt-3 flex" data-testid="scan-feedback">
           <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-success/10 text-success text-small font-medium">
             <CheckCircle2 size={16} strokeWidth={2.2} className="shrink-0" />

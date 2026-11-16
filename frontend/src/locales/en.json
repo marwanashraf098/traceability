@@ -1693,7 +1693,8 @@
       "feedback": {
         "itemScanned": "Item scanned",
         "awbRecognised": "Parcel label recognised",
-        "markedReceived": "Parcel marked received"
+        "markedReceived": "Parcel marked received",
+        "unpacked": "Back on shelf — order {{order}} needs repacking"
       },
       "parcel": {
         "courierReturn": "Courier return",
