@@ -528,12 +528,15 @@ public class PortalService {
 
     /**
      * Step 6a — THE per-line form of ShipmentLinkService.orderUntrackedSql (alias {@code oi}):
-     * the order line has NO allocation row of any status. Released allocations count as tracked,
-     * and so does a partially allocated line (piece-level only). Also the Scan returns parcel view's
-     * rule for which lines get per-unit rows (UntrackedParcelUnits) — never re-derive it.
+     * the order line has no tracking allocation (ShipmentLinkService.trackingAllocationSql). D4 (approved
+     * 2026-11-16, BRK-47431-EG): a released allocation counts only when its piece really left with the order
+     * (with_courier / delivered on its forward leg) — a line picked then unpicked is untracked again. A partially
+     * allocated line is still tracked (piece-level only). Also the Scan returns parcel view's rule for which lines
+     * get per-unit rows (UntrackedParcelUnits) — never re-derive it.
      */
     public static final String LINE_UNTRACKED_SQL =
-        "NOT EXISTS (SELECT 1 FROM allocations a_ln WHERE a_ln.order_item_id = oi.id) ";
+        "NOT EXISTS (SELECT 1 FROM allocations a_ln WHERE a_ln.order_item_id = oi.id AND " +
+        com.traceability.inventory.ShipmentLinkService.trackingAllocationSql("a_ln", "oi.order_id") + ") ";
 
     /**
      * Step 6a — how many units of an untracked order line a request can still take: the line's

@@ -1407,16 +1407,28 @@ public class ShipmentLinkService {
         "                  AND er.subject_key = " + UNIT_TO_RECEIVE_KEY_SQL + ") ";
 
     /**
-     * THE single definition of an order Traced never tracked: none of its order items has an
-     * allocation row of ANY status (active / packed / released). A restocked order still has
-     * its released allocations, so it counts as tracked. {@code orderIdExpr} is the SQL
-     * expression for the order id (a column reference or a bind '?'). Used by
-     * {@link #isOrderUntracked} and the return-session parcel view — never re-derive it.
+     * D4 (approved 2026-11-16, BRK-47431-EG) — THE one definition of "this allocation ({@code a}) makes its order line
+     * tracked": it is live (active / packed), or it was released after its piece really left with the order
+     * ({@code orderIdExpr}) — a with_courier / delivered event on the order's forward leg (OrderLineFreeze
+     * .pieceLeftWithOrderSql, D1: the returned-and-restocked piece keeps its line tracked). A released allocation whose
+     * piece never left with the order (picked then unpicked, unpacked, a parcel taken apart) does NOT count.
+     */
+    public static String trackingAllocationSql(String a, String orderIdExpr) {
+        return "(" + a + ".status <> 'released' OR EXISTS (SELECT 1 FROM piece_events pe_tr " +
+               "   WHERE pe_tr.piece_id = " + a + ".piece_id AND pe_tr.order_id = " + orderIdExpr + " AND " +
+               OrderLineFreeze.pieceLeftWithOrderSql("pe_tr", orderIdExpr) + "))";
+    }
+
+    /**
+     * THE single definition of an order Traced never tracked: none of its order items has a tracking allocation
+     * ({@link #trackingAllocationSql} — D4: live, or released after its piece left with the order; a restocked order
+     * keeps those, so it still counts as tracked). {@code orderIdExpr} is the SQL expression for the order id (a column
+     * reference or a bind '?'). Used by {@link #isOrderUntracked} and the return-session parcel view — never re-derive it.
      */
     public static String orderUntrackedSql(String orderIdExpr) {
         return "NOT EXISTS (SELECT 1 FROM order_items oi_ut " +
                "            JOIN allocations a_ut ON a_ut.order_item_id = oi_ut.id " +
-               "            WHERE oi_ut.order_id = " + orderIdExpr + ") ";
+               "            WHERE oi_ut.order_id = " + orderIdExpr + " AND " + trackingAllocationSql("a_ut", "oi_ut.order_id") + ") ";
     }
 
     public boolean isOrderUntracked(UUID orderId, UUID tenantId) {
