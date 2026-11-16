@@ -50,6 +50,9 @@ import static org.mockito.Mockito.*;
  *       positive control — B's own exchange matches B's row
  *   x6  an order Shopify says was placed after the connect is never stored as a pre-connect row
  *   x7  an exact outbound description auto-maps (existing tryAutoMap) → EXC order, matched to the parent
+ *   c1  CRP (type 25) of a pre-connect order → return leg linked to the imported parent; Scan returns ("A-06-…")
+ *       lists the parent's line as an untracked unit row
+ *   c2  CRP, Shopify fails → still ingested (unlinked, as before)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -84,6 +87,7 @@ class PreConnectExchangeTest {
     @Autowired BostaWebhookJob webhookJob;
     @Autowired ExchangeService exchangeService;
     @Autowired PreConnectParentImport parentImport;
+    @Autowired com.traceability.inventory.ReturnSessionService returns;
     @MockBean BostaGateway bostaGateway;
     @MockBean JobScheduler jobScheduler;
     @MockBean ShopifyGateway shopify;
@@ -225,6 +229,47 @@ class PreConnectExchangeTest {
             .isEqualTo("EXC-1332750001");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void c1_crpOfPreConnectOrder_legLinkedToParent_scanReturnsListsUntrackedUnits() {
+        Shop s = new Shop("c1");
+        shopifyReturns(s, "#2948", "2026-11-01T10:00:00Z", s.jeans30);
+
+        ObjectNode crp = exchange("3741531660", "#2948:#2948-R1", AFTER, 1, 1);
+        crp.putObject("type").put("code", 25).put("value", "Customer Return Pickup");
+        crp.remove("returnSpecs");
+        long ev = process(s.tenant, crp);
+        assertThat(note(ev)).isNull();
+
+        UUID parent = jdbc.queryForObject("SELECT id FROM orders WHERE tenant_id = ? AND number = '#2948'", UUID.class, s.tenant);
+        Map<String, Object> leg = jdbc.queryForMap(
+            "SELECT id, order_id, shipment_leg FROM shipments WHERE tenant_id = ? AND tracking_number = '3741531660'", s.tenant);
+        assertThat(leg.get("order_id")).isEqualTo(parent);
+        assertThat(leg.get("shipment_leg")).isEqualTo("return");
+        assertThat(count("SELECT COUNT(*) FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = '3741531660'",
+            s.tenant)).isZero();
+
+        // The courier brings it back; Scan returns lists the parent's line as one untracked unit row.
+        jdbc.update("UPDATE shipments SET internal_state = 'returned' WHERE id = ?", leg.get("id"));
+        UUID session = TenantContext.runAs(s.tenant, () -> returns.createSession(null, s.owner));
+        TenantContext.runAs(s.tenant, () -> returns.scan(session, "A-06-3741531660", s.warehouse, s.owner));
+        Map<String, Object> view = TenantContext.runAs(s.tenant, () -> returns.getSession(session));
+        List<Map<String, Object>> parcels = (List<Map<String, Object>>) view.get("parcels");
+        assertThat(parcels).hasSize(1);
+        List<Map<String, Object>> units = (List<Map<String, Object>>) parcels.get(0).get("untrackedUnits");
+        assertThat(units).hasSize(1);
+    }
+
+    @Test
+    void c2_crp_shopifyFails_stillIngested_unlinked() {
+        Shop s = new Shop("c2");
+        when(shopify.findOrdersByName(anyString(), anyString(), anyString())).thenThrow(new RuntimeException("Shopify 503"));
+        ObjectNode crp = exchange("6252401153", "#2917:#2917-R1", AFTER, 1, 1);
+        crp.putObject("type").put("code", 25).put("value", "Customer Return Pickup");
+        crp.remove("returnSpecs");
+        assertThat(note(process(s.tenant, crp))).isEqualTo("unlinked: 6252401153");
+    }
+
     // ── fixtures ─────────────────────────────────────────────────────────────
 
     /** A Storm-shaped tenant: cutoff 2026-11-13 17:15Z, lowest ingested order #3018, two catalog variants. */
@@ -234,10 +279,15 @@ class PreConnectExchangeTest {
         final String shop;
         final UUID jeans30, jeans32;
         final String jeans30Gid, jeans32Gid;
+        final UUID owner = UUID.randomUUID(), warehouse = UUID.randomUUID();
 
         Shop(String name) {
             shop = "pc-" + name + "-" + tenant.toString().substring(0, 8) + ".myshopify.com";
             jdbc.update("INSERT INTO tenants (id, name) VALUES (?, ?)", tenant, "Storm-" + name);
+            jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, 'Owner', ?, 'h', 'owner')",
+                owner, tenant, "owner-" + tenant + "@example.com");
+            jdbc.update("INSERT INTO locations (id, tenant_id, name, is_fulfillment) VALUES (?, ?, 'Main Warehouse', true)",
+                warehouse, tenant);
             jdbc.update("INSERT INTO courier_accounts (tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
                 "VALUES (?, 'bosta', ?, 'h', 'active')", tenant, encryption.encrypt("key-" + tenant));
             jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status, orders_ingest_from) " +

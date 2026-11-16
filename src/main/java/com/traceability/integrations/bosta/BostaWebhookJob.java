@@ -535,10 +535,22 @@ public class BostaWebhookJob {
                 // V202: the leg this delivery replaces (a Shopify tracking edit) — same source rule as the order hint.
                 UUID supersedes = hintedOrder != null ? parseUuid(payload.path("supersedes").asText(null)) : null;
                 String supersedeKind = payload.path("supersedeKind").asText(null);
-                ShipmentLinkService.LinkResult linkResult = tx.execute(s -> hintedOrder != null
-                    ? shipmentLinkService.linkDeliveryToOrder(tenantId, hintedOrder, trackingNumber, delivery, mapped,
-                        supersedes, supersedeKind)
-                    : shipmentLinkService.tryMatchDelivery(tenantId, trackingNumber, delivery, mapped));
+                // 2026-11-16: a customer return pickup created after the connect for a pre-connect order — its
+                // parent is imported from Shopify first (no transaction open: a Shopify read), then the leg links
+                // to it. No parent → the normal matchers below, unchanged.
+                final UUID preConnectParent = hintedOrder == null && delivery.typeCode() == 25
+                    ? preConnectParent(tenantId, trackingNumber, delivery) : null;
+                ShipmentLinkService.LinkResult linkResult = tx.execute(s -> {
+                    if (hintedOrder != null) {
+                        return shipmentLinkService.linkDeliveryToOrder(tenantId, hintedOrder, trackingNumber, delivery,
+                            mapped, supersedes, supersedeKind);
+                    }
+                    ShipmentLinkService.LinkResult parentLink = preConnectParent == null ? null
+                        : shipmentLinkService.linkPreConnectReturnLeg(tenantId, preConnectParent, trackingNumber,
+                            delivery, mapped);
+                    return parentLink != null && parentLink.orderId() != null ? parentLink
+                        : shipmentLinkService.tryMatchDelivery(tenantId, trackingNumber, delivery, mapped);
+                });
 
                 if (linkResult.orderId() != null) {
                     // Successfully matched — re-fetch shipment for steps 9–10.

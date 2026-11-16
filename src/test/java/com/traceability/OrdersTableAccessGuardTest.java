@@ -108,6 +108,8 @@ class OrdersTableAccessGuardTest {
           "2026-11-16: the concurrent winner's pre-connect row, by Shopify order GID"),
         e("portal/PreConnectParentImport.java#existingRow", MUST_INCLUDE,
           "2026-11-16: an already-stored pre-connect row of the number is reused (no Shopify call)"),
+        e("inventory/ShipmentLinkService.java#linkPreConnectReturnLeg", MUST_INCLUDE,
+          "2026-11-16: a CRP of a pre-connect order links to the imported pre-connect row — checked to BE one"),
         e("inventory/ExchangeMatchService.java#matchToPreConnectParent", MUST_INCLUDE,
           "2026-11-16: the imported parent must BE a pre-connect row of the tenant before it becomes the exchange's original"),
         e("portal/PortalService.java#deliveredWithinWindow", MUST_INCLUDE,
