@@ -87,6 +87,18 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
       return { title: t('bazar.sellError.saleUndone') }
     case 'BAZAR_INVALID_PHONE':
       return { title: t('bazar.sellError.invalidPhone') }
+    case 'BAZAR_NOT_SOLD_HERE':
+      return { title: t('bazar.sellError.notSoldHere'), detail: t('bazar.sellError.notSoldHereDetail') }
+    case 'BAZAR_ALREADY_RETURNED':
+      return {
+        title: t('bazar.sellError.alreadyReturned'),
+        detail: d.sale_number ? t('bazar.sellError.alreadyReturnedDetail', {
+          number: String(d.sale_number), name: String(d.returned_by_name ?? '') }) : undefined,
+      }
+    case 'BAZAR_SAME_PIECE':
+      return { title: t('bazar.sellError.samePiece') }
+    case 'NETWORK':
+      return { title: t('bazar.phone.networkError') }
     default:
       return { title: e.message_(lang) }
   }

@@ -6639,7 +6639,7 @@
       "roundToAria": "Round bazar prices to",
       "apply": "Apply",
       "clearRule": "Back to Shopify prices",
-      "ruleInvalid": "The discount must be more than 0% and less than 100%, and round-to more than 0.",
+      "ruleInvalid": "The discount must be more than 0% and less than 100%, and round-to a whole number of pounds, 1 or more.",
       "product": "Product",
       "atBazar": "At bazar",
       "shopify": "Shopify price",
@@ -6669,7 +6669,8 @@
       "recentSales": "Recent sales",
       "phoneTitle": "Sell from any phone",
       "phoneBody": "No laptop needed. Open Traced on your phone and sign in: the live bazar opens first.",
-      "qrHint": "Optional shortcut: scan to open selling on a phone."
+      "qrHint": "Optional shortcut: scan to open selling on a phone.",
+      "eventTotal": "Whole bazar"
     },
     "phone": {
       "startSelling": "Start selling",
@@ -6688,7 +6689,11 @@
       "close": "Close",
       "notLiveTitle": "This bazar isn't live",
       "notLiveBody": "Selling opens when an owner or manager starts the event — and only for the roles it lets sell.",
-      "networkError": "No connection — try again."
+      "networkError": "No connection — try again.",
+      "returnsCount_one": "{{count}} return",
+      "returnsCount_other": "{{count}} returns",
+      "exchangesCount_one": "{{count}} exchange",
+      "exchangesCount_other": "{{count}} exchanges"
     },
     "sell": {
       "home": "Home",
@@ -6729,7 +6734,13 @@
       "salesCount_other": "{{count}} sales",
       "defaultPay": "default pay: {{method}}",
       "byYou": "you",
-      "notYours": "Only the seller who made this sale, or an owner or manager, can change it."
+      "notYours": "Only the seller who made this sale, or an owner or manager, can change it.",
+      "returnedBadge": "Returned",
+      "exchangedBadge": "Exchanged",
+      "exchangeBadge": "Exchange",
+      "returnedLabel": "Returned at {{time}} by {{name}}",
+      "exchangedLabel": "Exchanged at {{time}} for {{number}}",
+      "exchangeOfLabel": "Exchange for {{number}}"
     },
     "customer": {
       "title": "Customer",
@@ -6761,7 +6772,61 @@
       "eventGone": "This bazar isn't available.",
       "undoNotAllowed": "Too late to change this one — ask an owner or manager.",
       "saleUndone": "This sale was already undone.",
-      "invalidPhone": "Enter an Egyptian mobile number, like 01012345678."
+      "invalidPhone": "Enter an Egyptian mobile number, like 01012345678.",
+      "notSoldHere": "Not sold at this bazar",
+      "notSoldHereDetail": "Only pieces sold here, while the bazar is running, can be returned or exchanged.",
+      "alreadyReturned": "Already returned",
+      "alreadyReturnedDetail": "{{number}} was returned by {{name}}.",
+      "samePiece": "That's the piece coming back — scan a different one."
+    },
+    "tabs": {
+      "label": "Bazar actions",
+      "sell": "Sell",
+      "return": "Return",
+      "exchange": "Exchange"
+    },
+    "ret": {
+      "intro": "Scan the piece the customer brought back.",
+      "scanHint": "Scan the piece coming back",
+      "looking": "Looking it up…",
+      "coming": "Coming back",
+      "refund": "Refund",
+      "rescan": "Change",
+      "soldAt": "{{number}} · sold {{time}} · {{seller}}",
+      "condition": "Its condition",
+      "cond": {
+        "good": "Good",
+        "goodHint": "Back on sale",
+        "damaged": "Damaged",
+        "damagedHint": "Won't be sold again"
+      },
+      "paidBackBy": "Give it back by",
+      "confirm": "Confirm return · {{amount}}",
+      "sending": "Saving the return…",
+      "checkingBody": "Weak signal — we're checking it went through. Don't give the money back until it says Returned.",
+      "doneTitle": "RETURNED · {{number}}",
+      "doneGiveBack": "Give back {{amount}} · {{method}}",
+      "doneGood": "It's back on sale at the bazar.",
+      "doneDamaged": "Marked damaged — it won't be sold again.",
+      "next": "Next return"
+    },
+    "exch": {
+      "step1": "1 · Scan the piece coming back",
+      "step2": "2 · Scan the new piece",
+      "scanOldHint": "Scan the piece coming back",
+      "scanNewHint": "Scan the new piece",
+      "difference": "Difference",
+      "noMoney": "No money changes hands",
+      "customerPays": "Customer pays {{amount}}",
+      "giveBack": "Give back {{amount}}",
+      "even": "Even swap",
+      "paidBy": "Customer pays by",
+      "damaged": "The returned piece is damaged (don't sell it again)",
+      "returnOnly": "Return only? Use the Return tab: scan the piece, pick how you paid them back.",
+      "confirm": "Complete exchange",
+      "doneTitle": "EXCHANGED · {{old}} → {{number}}",
+      "doneTook": "Take {{amount}} · {{method}}",
+      "next": "Next exchange"
     }
   }
 }

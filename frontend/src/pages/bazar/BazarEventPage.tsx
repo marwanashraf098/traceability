@@ -1,3 +1,4 @@
+import { SaleBadge } from './phone/SaleSheets'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -156,7 +157,8 @@ function PricesCard({ ev }: { ev: BazarEventDetail }) {
   const [rows, setRows] = useState<BazarPriceRow[] | null>(null)
   const [qty, setQty] = useState<Map<string, number>>(new Map())
   const [discount, setDiscount] = useState(ev.discount_pct != null ? String(toNumber(ev.discount_pct)) : '')
-  const [roundTo, setRoundTo] = useState(ev.round_to != null ? String(toNumber(ev.round_to)) : '')
+  // B3: prices are whole pounds; the rule's round-to starts at 5 (an empty field still rounds to 1 pound).
+  const [roundTo, setRoundTo] = useState(ev.round_to != null ? String(toNumber(ev.round_to)) : '5')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const ruleOn = ev.discount_pct != null || ev.round_to != null
@@ -179,7 +181,9 @@ function PricesCard({ ev }: { ev: BazarEventDetail }) {
   function applyRule() {
     const d = discount.trim() === '' ? null : Number(discount)
     const r = roundTo.trim() === '' ? null : Number(roundTo)
-    if ((d !== null && !(d > 0 && d < 100)) || (r !== null && !(r > 0))) { setError(t('bazar.prices.ruleInvalid')); return }
+    if ((d !== null && !(d > 0 && d < 100)) || (r !== null && !(r >= 1 && Number.isInteger(r)))) {
+      setError(t('bazar.prices.ruleInvalid')); return
+    }
     run(setBazarBulkRule(ev.id, d, r))
   }
 
@@ -202,7 +206,7 @@ function PricesCard({ ev }: { ev: BazarEventDetail }) {
           </label>
           <Button variant="secondary" size="sm" onClick={applyRule} loading={busy}>{t('bazar.prices.apply')}</Button>
           {ruleOn && (
-            <Button variant="ghost" size="sm" onClick={() => { setDiscount(''); setRoundTo(''); run(setBazarBulkRule(ev.id, null, null)) }}>
+            <Button variant="ghost" size="sm" onClick={() => { setDiscount(''); setRoundTo('5'); run(setBazarBulkRule(ev.id, null, null)) }}>
               {t('bazar.prices.clearRule')}
             </Button>
           )}
@@ -260,7 +264,8 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
     const v = value.trim()
     if (v === shown) return
     const n = Number(v)
-    if (v === '' || !Number.isFinite(n) || n < 0 || Math.round(n * 100) !== n * 100) { setInvalid(true); return }
+    // B3: whole pounds only — no piasters.
+    if (v === '' || !Number.isFinite(n) || n < 0 || !Number.isInteger(n)) { setInvalid(true); return }
     setInvalid(false)
     onSave(n)
   }
@@ -342,7 +347,17 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
 
       <section className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3" data-testid="bazar-kpis">
         <Kpi label={t('bazar.live.today')} value={formatMoney(ev.today.total) || formatMoney(0)}
-             sub={t('bazar.live.salesCount', { count: ev.today.sales })} testId="kpi-today" />
+             sub={[t('bazar.live.salesCount', { count: ev.today.sales }),
+                   ...(ev.today.returns ? [t('bazar.phone.returnsCount', { count: ev.today.returns })] : []),
+                   ...(ev.today.exchanges ? [t('bazar.phone.exchangesCount', { count: ev.today.exchanges })] : [])].join(' · ')}
+             testId="kpi-today" />
+        {ev.totals && (
+          <Kpi label={t('bazar.live.eventTotal')} value={formatMoney(ev.totals.total) || formatMoney(0)}
+               sub={[t('bazar.live.salesCount', { count: ev.totals.sales }),
+                     ...(ev.totals.returns ? [t('bazar.phone.returnsCount', { count: ev.totals.returns })] : []),
+                     ...(ev.totals.exchanges ? [t('bazar.phone.exchangesCount', { count: ev.totals.exchanges })] : [])].join(' · ')}
+               testId="kpi-event-total" />
+        )}
         <Kpi label={t('bazar.live.byMethod')} value={null}
              sub={methods.map(m => `${t(`bazar.method.${m}`)} ${formatMoney(toNumber(ev.today.by_method[m])).replace(/^EGP /, '')}`).join(' · ')}
              testId="kpi-methods" />
@@ -382,12 +397,10 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
                       <tr key={s.id} className="tbl-row">
                         <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{saleTime(s.sold_at)}</td>
                         <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{s.sale_number}</td>
-                        <td className={cn('tbl-cell text-primary', s.status === 'undone' && 'line-through text-muted')}>{pieceTitle(s)}</td>
-                        <td className="tbl-cell text-small text-muted">
-                          {s.status === 'undone' ? t('bazar.sell.undoneShort') : s.method ? t(`bazar.method.${s.method}`) : ''}
-                        </td>
+                        <td className={cn('tbl-cell text-primary', s.status !== 'active' && 'line-through text-muted')}>{pieceTitle(s)}</td>
+                        <td className="tbl-cell text-small text-muted"><SaleBadge sale={s} /></td>
                         <td className="tbl-cell text-small text-muted">{s.seller_name}</td>
-                        <td className={cn('tbl-cell text-end font-semibold tabular-nums', s.status === 'undone' && 'line-through text-muted')}>
+                        <td className={cn('tbl-cell text-end font-semibold tabular-nums', s.status !== 'active' && 'line-through text-muted')}>
                           {formatMoney(s.price)}
                         </td>
                       </tr>
