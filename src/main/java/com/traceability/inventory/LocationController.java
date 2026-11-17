@@ -64,7 +64,7 @@ public class LocationController {
 
     @GetMapping
     public List<Map<String, Object>> list() {
-        return tx.execute(status -> withLists(
+        return tx.execute(status -> withMarketCheck(withLists(
             jdbc.queryForList(
                 "SELECT id, name, type, is_default, is_fulfillment, " +
                 "       shopify_location_id, shopify_sync_status, " +
@@ -80,7 +80,24 @@ public class LocationController {
                 "       regexp_replace(shopify_delivery_profile_id, '^.*/', '') AS shopify_delivery_profile_number, " +
                 "       CASE WHEN is_fulfillment THEN " + TracedShippingReadiness.SQL + " END AS shopify_shipping_readiness " +
                 "FROM locations l WHERE tenant_id = ? ORDER BY name",
-                TenantContext.require())));
+                TenantContext.require()))));
+    }
+
+    /** L1b-2 fix (2026-11-17): the Traced Main row's {@code shopify_market_check} (TracedMarketCheck). */
+    private List<Map<String, Object>> withMarketCheck(List<Map<String, Object>> rows) {
+        String scopes = null;
+        boolean loaded = false;
+        for (Map<String, Object> row : rows) {
+            if (!Boolean.TRUE.equals(row.get("is_fulfillment"))) continue;
+            if (!loaded) {
+                scopes = storeRepository.findByTenant(TenantContext.require())
+                    .map(StoreRepository.Store::accessTokenScopes).orElse(null);
+                loaded = true;
+            }
+            row.put("shopify_market_check", TracedMarketCheck.of((String) row.get("shopify_market_shipping_status"),
+                row.get("shopify_market_shipping_checked_at"), scopes));
+        }
+        return rows;
     }
 
     /** L1b-2: a text[] column (shopify_market_shipping_missing) as a JSON list, never a driver object. */

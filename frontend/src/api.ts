@@ -1016,6 +1016,8 @@ export interface ConnectionsStatus {
     tracedCoveredBy?: string | null
     /** L1b-2 — other active markets whose rates don't list Traced Main. Information, never a blocker. */
     tracedNotAddedFor?: string[]
+    /** L1b-2 fix — what the market read said (TracedMarketCheck); null without a linked Traced Main. */
+    tracedMarketCheck?: TracedMarketCheck | null
     /** L1b-2 — legacy: the General shipping profile's numeric id (the owner's deep link to it). */
     deliveryProfileNumber?: string | null
     /**
@@ -3013,6 +3015,8 @@ export interface LocationRow {
   /** L1b-2 (V233) — market-driven: what Traced READ from the primary market's rates. null = no verdict / never read. */
   shopify_market_shipping_status?: 'covered' | 'not_covered' | 'no_access' | null
   shopify_market_shipping_checked_at?: string | null
+  /** L1b-2 fix — what the market read said, for the words under the instruction (server: TracedMarketCheck). */
+  shopify_market_check?: TracedMarketCheck | null
   shopify_market_shipping_covered_by?: string | null
   /** L1b-2 — other active markets whose rates don't list Traced Main (information only). */
   shopify_market_shipping_missing?: string[] | null
@@ -3025,6 +3029,12 @@ export interface LocationRow {
  * "live on your storefront"; 'unknown' is never Ready; 'add_to_shipping_rates' = market-driven shipping, the owner adds
  * the location to its shipping rates in Shopify.
  */
+/**
+ * L1b-2 fix (2026-11-17) — what Traced's read of the store's markets said (server: TracedMarketCheck). 'no_access' only
+ * while read_markets isn't granted; with it, 'no_verdict' (read, couldn't decide) or 'not_checked' (no read yet).
+ */
+export type TracedMarketCheck = 'covered' | 'not_covered' | 'no_verdict' | 'not_checked' | 'no_access'
+
 export type TracedShippingReadiness =
   | 'not_linked' | 'location_inactive' | 'online_off' | 'add_to_shipping_rates' | 'unknown'
   | 'profile_removed' | 'ready' | 'activate_needed'

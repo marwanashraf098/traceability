@@ -329,7 +329,7 @@ function FulfillmentActivationItem({
           profileNumber={location.shopify_delivery_profile_number}
           model={readiness === 'add_to_shipping_rates' ? location.shopify_shipping_model : 'legacy'}
           removed={readiness === 'profile_removed'}
-          marketStatus={location.shopify_market_shipping_status}
+          marketCheck={location.shopify_market_check ?? location.shopify_market_shipping_status}
           notAddedFor={location.shopify_market_shipping_missing}
           onConfirmed={load} onChecked={load} />
       </div>

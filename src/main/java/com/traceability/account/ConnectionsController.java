@@ -225,6 +225,8 @@ public class ConnectionsController {
                 "       regexp_replace(l.shopify_location_id, '^.*/', '') AS location_number, " +
                 "       l.shopify_shipping_model AS model, l.shopify_market_shipping_covered_by AS covered_by, " +
                 "       to_json(l.shopify_market_shipping_missing)::text AS missing, " +
+                "       l.shopify_market_shipping_status AS market_status, " +
+                "       l.shopify_market_shipping_checked_at AS market_checked_at, " +
                 "       regexp_replace(l.shopify_delivery_profile_id, '^.*/', '') AS profile_number " +
                 "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true AND l.shopify_sync_status = 'linked' " +
                 "  AND l.shopify_location_id IS NOT NULL", tenantId);
@@ -236,6 +238,11 @@ public class ConnectionsController {
             shopify.put("tracedCoveredBy", shipping.isEmpty() ? null : shipping.get(0).get("covered_by"));
             shopify.put("tracedNotAddedFor", shipping.isEmpty() ? List.of() : missingList((String) shipping.get(0).get("missing")));
             shopify.put("deliveryProfileNumber", shipping.isEmpty() ? null : shipping.get(0).get("profile_number"));
+            // L1b-2 fix (2026-11-17): what the market read said (TracedMarketCheck) — the gate's words under the
+            // instruction. Without it the gate showed "can't check from here" for a store Traced had read in full.
+            String scopes = storeOpt.map(StoreRepository.Store::accessTokenScopes).orElse(null);
+            shopify.put("tracedMarketCheck", shipping.isEmpty() ? null : com.traceability.inventory.TracedMarketCheck.of(
+                (String) shipping.get(0).get("market_status"), shipping.get(0).get("market_checked_at"), scopes));
             shopify.put("resendableFailed", inventory.countLocationFailures(tenantId));
 
             // Bosta — active courier account. Review mode: a simulated tenant has no courier
