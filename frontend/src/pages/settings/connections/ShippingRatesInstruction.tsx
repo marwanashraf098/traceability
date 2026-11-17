@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowUpRight, Check, RefreshCw } from 'lucide-react'
 import {
   tracedLocationAdminUrls, confirmTracedShippingRates, checkTracedShipping, getRoleFromToken, TransferCommandError,
 } from '../../../api'
+import type { TracedMarketCheck } from '../../../api'
 
 /**
  * The owner's instruction when Traced Main Warehouse isn't in the store's shipping yet. Traced never edits shipping
@@ -18,7 +19,7 @@ import {
  * Shown by the onboarding gate and the connection card — never a "Ready".
  */
 export default function ShippingRatesInstruction({
-  shopDomain, locationNumber, profileNumber, model, removed, marketStatus, notAddedFor, marketsRequestUrl,
+  shopDomain, locationNumber, profileNumber, model, removed, marketCheck, notAddedFor, marketsRequestUrl,
   onConfirmed, onChecked,
 }: {
   shopDomain: string | null | undefined
@@ -29,8 +30,9 @@ export default function ShippingRatesInstruction({
   model?: string | null
   /** Legacy: it was in the profile and was taken out. */
   removed?: boolean
-  /** Market-driven: what Traced read ('not_covered' → it checked and the rates miss it). */
-  marketStatus?: string | null
+  /** Market-driven: what Traced's market read said (TracedMarketCheck; 'not_covered' → it read the rates in full and
+   *  they miss it). Absent / 'no_access' → "can't check from here"; never that wording once read_markets is granted. */
+  marketCheck?: TracedMarketCheck | null
   notAddedFor?: string[] | null
   /** Owner, market-driven, read_markets not granted: Shopify's optional-scope request URL. */
   marketsRequestUrl?: string | null
@@ -67,7 +69,11 @@ export default function ShippingRatesInstruction({
     )
   }
 
-  const notCovered = marketStatus === 'not_covered'
+  const notCovered = marketCheck === 'not_covered'
+  const reason = notCovered ? 'notCovered'
+    : marketCheck === 'no_verdict' ? 'noVerdict'
+    : marketCheck === 'not_checked' ? 'notChecked'
+    : 'cantConfirm'
 
   async function confirm() {
     setError('')
@@ -91,8 +97,8 @@ export default function ShippingRatesInstruction({
         {t('tracedShipping.addRates.title')}
       </p>
       <p className="text-xs text-muted">{t('tracedShipping.addRates.body')}</p>
-      <p className="text-xs text-muted" data-testid={notCovered ? 'traced-shipping-not-covered' : undefined}>
-        {notCovered ? t('tracedShipping.addRates.notCovered') : t('tracedShipping.addRates.cantConfirm')}
+      <p className="text-xs text-muted" data-testid={notCovered ? 'traced-shipping-not-covered' : `traced-shipping-reason-${reason}`}>
+        {t(`tracedShipping.addRates.${reason}`)}
       </p>
       <NotAddedFor markets={notAddedFor} />
       {urls && (

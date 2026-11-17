@@ -155,6 +155,7 @@ export function ConnectedSummary({ name, onContinue }: { name: string | null; on
               profileNumber={conn?.deliveryProfileNumber}
               model={shipping === 'add_to_shipping_rates' ? conn?.tracedShippingModel : 'legacy'}
               removed={shipping === 'profile_removed'}
+              marketCheck={conn?.tracedMarketCheck}
               notAddedFor={conn?.tracedNotAddedFor}
               marketsRequestUrl={conn?.newPermissions?.marketsRequestUrl}
               onConfirmed={reload} onChecked={reload} />

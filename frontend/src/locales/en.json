@@ -760,6 +760,8 @@
       "ownerOnly": "Only the store owner can confirm this.",
       "confirmError": "Couldn’t save that — try again.",
       "notCovered": "Traced checked your shipping rates: no active rate in your main market ships from Traced Main Warehouse yet.",
+      "noVerdict": "Traced read your markets but couldn’t find your main market’s shipping — the active market that includes your store’s country, with shipping on. If Traced Main Warehouse isn’t in one of its rates, Shopify won’t ship online orders from it.",
+      "notChecked": "Traced hasn’t read your shipping rates yet — use Check again. If Traced Main Warehouse isn’t in a rate of your main market, Shopify won’t ship online orders from it.",
       "allowMarkets": "Let Traced check this for you",
       "allowMarketsBody": "Give Traced read-only access to your store’s markets and it checks your shipping rates itself."
     },
