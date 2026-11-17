@@ -267,7 +267,11 @@ class RlsCoverageTest {
             "/api/v1/bazar-events/{eventId}/sales",
             // Bazar POS B6 — bazarToday_reflectsSeededSale below; seller-role / tenant checks in
             // BazarTodayCustomerHttpTest.
-            "/api/v1/bazar-events/{eventId}/today"
+            "/api/v1/bazar-events/{eventId}/today",
+            // Bazar POS B3 — read-only piece lookup under TenantContext + RLS (findPiece / sales / transfer pieces
+            // all tenant-scoped); another tenant's event → 404 and another tenant's piece → not found in
+            // BazarReturnExchangeTest.lookup_*.
+            "/api/v1/bazar-events/{eventId}/piece"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

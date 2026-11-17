@@ -35,11 +35,18 @@ export interface BazarEventRow {
   created_at: string
 }
 
-export interface BazarToday {
-  business_day: string
+/** Money that moved (payments − refunds) and revenue (sales − returns); B3 adds returns / exchanges / revenue. */
+export interface BazarTotals {
   by_method: Record<string, string | number>
   total: string | number
   sales: number
+  returns?: number
+  exchanges?: number
+  revenue?: string | number
+}
+
+export interface BazarToday extends BazarTotals {
+  business_day: string
 }
 
 export interface BazarEventDetail extends BazarEventRow {
@@ -53,6 +60,8 @@ export interface BazarEventDetail extends BazarEventRow {
   ended_at: string | null
   counts: { sent: number; at_bazar: number; sold: number; back: number; lost: number }
   today: BazarToday
+  /** The whole event (B3). */
+  totals?: BazarTotals
 }
 
 export interface BazarPriceRow {
@@ -70,7 +79,7 @@ export interface BazarSale {
   sale_number: string
   sold_at: string
   business_day: string
-  status: 'active' | 'undone'
+  status: 'active' | 'undone' | 'returned'
   price: string | number
   price_source: string
   method: PaymentMethod | null
@@ -85,6 +94,14 @@ export interface BazarSale {
   /** Masked (010*****678) for a worker — the server decides. */
   customer_phone: string | null
   undone_at: string | null
+  /** B3: a returned sale (exchanged when exchanged_for_* is set), and the new half of an exchange. */
+  returned_at?: string | null
+  return_condition?: 'good' | 'damaged' | null
+  returned_by_name?: string | null
+  exchange_of_sale_id?: string | null
+  exchange_of_sale_number?: string | null
+  exchanged_for_sale_id?: string | null
+  exchanged_for_sale_number?: string | null
   replayed?: boolean
 }
 
@@ -263,8 +280,64 @@ export interface BazarTodaySummary {
   business_day: string
   total: string | number
   sale_count: number
+  returns?: number
+  exchanges?: number
+  revenue?: string | number
   by_method: Record<string, string | number>
   per_seller: { seller_id: string; seller_name: string; sale_count: number; total: string | number }[]
+}
+
+// ── B3 — return / exchange (any seller role) ──────────────────────────────────
+
+export type ReturnCondition = 'good' | 'damaged'
+
+/** What a scanned piece is at this event — the Return / Exchange screens' preview (nothing is written). */
+export interface BazarPieceLookup {
+  piece_id: string
+  piece_code: string | null
+  product_title: string
+  variant_title: string | null
+  /** The bazar price; null when it has none. */
+  price: string | number | null
+  state: 'sold' | 'for_sale' | 'returned' | 'not_here'
+  sale: BazarSale | null
+}
+
+export function lookupBazarPiece(eventId: string, code: string) {
+  return bazarFetch<BazarPieceLookup>(`${base(eventId)}/piece?${new URLSearchParams({ code })}`)
+}
+
+export interface BazarReturnResult {
+  sale: BazarSale
+  refund: { method: PaymentMethod; amount: string | number } | null
+  replayed?: boolean
+}
+
+/** One attempt (same contract as sellOnce): retried by the caller with the SAME client_request_id. */
+export function returnOnce(eventId: string, req: { code: string; condition: ReturnCondition; method: PaymentMethod },
+                           clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarReturnResult>(`${base(eventId)}/return`, {
+    method: 'POST', timeoutMs, body: JSON.stringify({ ...req, client_request_id: clientRequestId }),
+  })
+}
+
+export interface BazarExchangeResult {
+  old_sale: BazarSale
+  new_sale: BazarSale
+  /** new − old: positive = the customer pays it, negative = they get it back. */
+  difference: string | number
+  money: { kind: 'payment' | 'refund'; method: PaymentMethod; amount: string | number } | null
+  replayed?: boolean
+}
+
+export function exchangeOnce(eventId: string,
+                             req: { oldCode: string; newCode: string; method: PaymentMethod | null; condition: ReturnCondition },
+                             clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarExchangeResult>(`${base(eventId)}/exchange`, {
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ old_code: req.oldCode, new_code: req.newCode, condition: req.condition,
+                           ...(req.method ? { method: req.method } : {}), client_request_id: clientRequestId }),
+  })
 }
 
 export function getBazarToday(eventId: string) {

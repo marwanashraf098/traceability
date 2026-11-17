@@ -10,8 +10,9 @@ import { formatMoney, pieceTitle, saleTime, sellErrorText } from '../../../bazar
 import { cn } from '../../../components/ui'
 import type { BazarLive } from '../../../capabilities'
 import { NotLiveScreen, PhoneFrame, useBazarLive, useBazarToday, useTodaySales } from './shared'
+import { PhoneTabs } from './ReturnParts'
 import {
-  CustomerSheet, ErrorLine, MethodChips, SaleSheet, canEditSale, canUndoSale, usePaymentChange,
+  CustomerSheet, ErrorLine, MethodChips, SaleBadge, SaleSheet, canEditSale, canUndoSale, usePaymentChange,
 } from './SaleSheets'
 
 /** The camera reports the same code many times a second: one read per code per 2 s (ScanPairPage's rule). */
@@ -86,6 +87,7 @@ function Sell({ live }: { live: BazarLive }) {
 
   return (
     <PhoneFrame testId="bazar-sell" header={
+      <>
       <div className="flex items-center justify-between gap-3">
         <button type="button" onClick={() => navigate(`/bazar/${encodeURIComponent(eventId)}/home`)}
           className="min-h-[44px] -ms-2 px-2 flex items-center gap-1.5 text-sidebar-text hover:text-sidebar-active text-small font-semibold">
@@ -95,6 +97,8 @@ function Sell({ live }: { live: BazarLive }) {
           {live.day >= 1 && live.day <= live.dayCount ? t('bazar.sell.titleDay', { name: live.name, day: live.day }) : live.name}
         </span>
       </div>
+      <PhoneTabs eventId={eventId} active="sell" />
+      </>
     } footer={
       <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3"
               data-testid="bazar-sell-footer">
@@ -169,13 +173,11 @@ function Sell({ live }: { live: BazarLive }) {
               <button type="button" onClick={() => setSheet({ kind: 'sale', sale: s })}
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-line bg-surface text-start min-h-[44px]">
                 <span className="font-mono text-small text-muted w-11 shrink-0" dir="ltr">{saleTime(s.sold_at)}</span>
-                <span className={cn('flex-1 min-w-0 truncate font-medium', s.status === 'undone' && 'line-through text-muted')}>
+                <span className={cn('flex-1 min-w-0 truncate font-medium', s.status !== 'active' && 'line-through text-muted')}>
                   {pieceTitle(s)}
                 </span>
-                {s.status === 'undone'
-                  ? <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t('bazar.sell.undoneShort')}</span>
-                  : s.method && <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t(`bazar.method.${s.method}`)}</span>}
-                <span className={cn('font-semibold tabular-nums shrink-0', s.status === 'undone' && 'line-through text-muted')}>
+                <SaleBadge sale={s} />
+                <span className={cn('font-semibold tabular-nums shrink-0', s.status !== 'active' && 'line-through text-muted')}>
                   {formatMoney(s.price).replace(/^EGP /, '')}
                 </span>
               </button>

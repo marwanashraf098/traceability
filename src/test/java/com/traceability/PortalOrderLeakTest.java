@@ -598,6 +598,12 @@ class PortalOrderLeakTest {
         }
         reg("GET /api/v1/bazar-events/{eventId}/today",
             skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
+        for (String k : List.of(
+                "POST /api/v1/bazar-events/{eventId}/return", "POST /api/v1/bazar-events/{eventId}/exchange",
+                "GET /api/v1/bazar-events/{eventId}/piece")) {
+            reg(k, skip("Bazar POS B3 — return / exchange of bazar sales (bazar sales, payments, transfer pieces); "
+                + "touches no orders"));
+        }
     }
 
     // ── per-tenant fixture ────────────────────────────────────────────────────

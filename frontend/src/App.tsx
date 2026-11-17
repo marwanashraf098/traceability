@@ -26,6 +26,8 @@ const BazarEventPage  = lazy(() => import('./pages/bazar/BazarEventPage'))
 const BazarScanOut    = lazy(() => import('./pages/bazar/BazarScanOut'))
 const BazarPhoneHome  = lazy(() => import('./pages/bazar/phone/BazarPhoneHome'))
 const BazarSell       = lazy(() => import('./pages/bazar/phone/BazarSell'))
+const BazarReturn     = lazy(() => import('./pages/bazar/phone/BazarReturn'))
+const BazarExchange   = lazy(() => import('./pages/bazar/phone/BazarExchange'))
 // Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
 const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
 import { analyticsEnabled } from './analytics/flag'
@@ -690,6 +692,12 @@ export default function App() {
         </RequireAuth>} />
         <Route path="/bazar/:id/sell" element={<RequireAuth>
           <Suspense fallback={<AuthLoadingSpinner />}><BazarSell /></Suspense>
+        </RequireAuth>} />
+        <Route path="/bazar/:id/return" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarReturn /></Suspense>
+        </RequireAuth>} />
+        <Route path="/bazar/:id/exchange" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarExchange /></Suspense>
         </RequireAuth>} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
