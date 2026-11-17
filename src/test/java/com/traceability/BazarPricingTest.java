@@ -17,10 +17,11 @@ class BazarPricingTest {
     }
 
     @Test
-    void percentOff_withoutRounding_keepsTwoDecimalsHalfUp() {
-        assertThat(ruled("349.00", "20", null)).isEqualTo("279.20");
-        assertThat(ruled("99.99", "15", null)).isEqualTo("84.99");    // 84.9915 → 84.99
-        assertThat(ruled("10.01", "50", null)).isEqualTo("5.01");     // 5.005 → 5.01 (half up)
+    void percentOff_withoutRounding_roundsToWholePounds() {
+        // B3: no round-to still rounds to the nearest whole pound (half up) — a bazar price never has piasters.
+        assertThat(ruled("349.00", "20", null)).isEqualTo("279.00");  // 279.2 → 279
+        assertThat(ruled("99.99", "15", null)).isEqualTo("85.00");    // 84.9915 → 85
+        assertThat(ruled("10.01", "50", null)).isEqualTo("5.00");     // 5.005 → 5
     }
 
     @Test

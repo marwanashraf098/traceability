@@ -605,6 +605,26 @@ class BazarReturnExchangeTest {
     }
 
     @Test
+    void lookup_workerSeesTheCustomerPhoneMasked_ownerSeesItWhole_sameAsTheSalesList() {
+        Fixture f = live(1, varA);
+        UUID saleId = sell(f, f.p(varA, 0), null);
+        sales.setCustomer(f.eventId(), saleId, "Nour", "01012345678", owner);
+
+        assertThat(sub(sales.lookupPiece(f.eventId(), code(f.p(varA, 0)), worker), "sale").get("customer_phone"))
+            .isEqualTo("010*****678");
+        assertThat(sub(sales.lookupPiece(f.eventId(), code(f.p(varA, 0)), owner), "sale").get("customer_phone"))
+            .isEqualTo("01012345678");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list = (List<Map<String, Object>>) sales.list(f.eventId(), 10, null, worker).get("items");
+        assertThat(list.get(0).get("customer_phone")).isEqualTo("010*****678");
+        // A returned sale shown by the lookup is masked the same way.
+        sales.returnSale(f.eventId(), code(f.p(varA, 0)), null, "damaged", crid(), worker);
+        Map<String, Object> returned = sales.lookupPiece(f.eventId(), code(f.p(varA, 0)), worker);
+        assertThat(returned.get("state")).isEqualTo("returned");
+        assertThat(sub(returned, "sale").get("customer_phone")).isEqualTo("010*****678");
+    }
+
+    @Test
     void lookup_anotherTenantsEventOrPiece_isNotFound() {
         Fixture f = live(1, varA);
         UUID other = UUID.randomUUID();

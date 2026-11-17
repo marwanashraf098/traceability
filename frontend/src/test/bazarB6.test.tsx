@@ -9,6 +9,7 @@ import { RootRoute, RequireAuth } from '../App'
 import Login from '../pages/Login'
 import BazarSell from '../pages/bazar/phone/BazarSell'
 import BazarPhoneHome from '../pages/bazar/phone/BazarPhoneHome'
+import BazarReturn from '../pages/bazar/phone/BazarReturn'
 import BazarNewEvent from '../pages/bazar/BazarNewEvent'
 import { CustomerSheet } from '../pages/bazar/phone/SaleSheets'
 import Sidebar from '../components/Sidebar'
@@ -456,17 +457,20 @@ describe('Recent sales — what each role may do', () => {
 })
 
 describe('Phone home', () => {
-  test('Start selling, today total with per-seller counts; Return shows Coming soon; workers get no Close day', async () => {
+  test('Start selling, today total with per-seller counts; Return opens the Return screen; workers get no Close day', async () => {
     install(...sellBase('worker', [], todaySummary({ total: '350.00', sale_count: 3, per_seller: [
       { seller_id: 'u-other', seller_name: 'Hana', sale_count: 2, total: '250.00' },
       { seller_id: 'u-worker', seller_name: 'Omar', sale_count: 1, total: '100.00' }] })))
-    renderAt(`/bazar/${EVENT}/home`, <Route path="/bazar/:id/home" element={<BazarPhoneHome />} />)
+    renderAt(`/bazar/${EVENT}/home`, <>
+      <Route path="/bazar/:id/home" element={<BazarPhoneHome />} />
+      <Route path="/bazar/:id/return" element={<BazarReturn />} />
+    </>)
     expect(await screen.findByRole('button', { name: /Start selling/ })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('bazar-today-total')).toHaveTextContent('EGP 350'))
     expect(screen.getByTestId('bazar-today')).toHaveTextContent('3 pieces · Hana 2 · you 1')
     expect(screen.queryByRole('button', { name: 'Close day' })).not.toBeInTheDocument()
     await userEvent.setup().click(screen.getByRole('button', { name: 'Return' }))
-    expect(await screen.findByTestId('bazar-coming-soon')).toHaveTextContent('Coming soon')
+    expect(await screen.findByTestId('bazar-return')).toBeInTheDocument()
   })
 
   test('an event that is not live for this user → the not-live screen', async () => {
