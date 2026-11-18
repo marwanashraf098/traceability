@@ -386,6 +386,31 @@ class ReceivingMoveAppUserTest {
 
     @Test
     @SuppressWarnings("rawtypes")
+    void m1_countOnlyAndFactory_refusedUntilTested_printStickAllowed() {
+        Shop s = new Shop("m1m");
+        s.standardSources();
+        for (String mode : List.of("count_only", "factory")) {
+            Map<String, Object> body = new HashMap<>();
+            body.put("locationId", s.main.toString());
+            body.put("reference", "PO-1");
+            body.put("sourceLocationId", SHOP_FLOOR);
+            body.put("mode", mode);
+            refused(call(HttpMethod.POST, s.token(), "/api/v1/receiving/move-sessions", body), "MOVE_MODE_NOT_AVAILABLE");
+        }
+        assertThat(s.receipts()).isZero();
+        verifyNoInteractions(models, moveSources);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("locationId", s.main.toString());
+        body.put("reference", "PO-1");
+        body.put("sourceLocationId", SHOP_FLOOR);
+        body.put("mode", "print_stick");
+        ResponseEntity<Map> ok = call(HttpMethod.POST, s.token(), "/api/v1/receiving/move-sessions", body);
+        assertThat(ok.getStatusCode().value()).as("%s", ok.getBody()).isEqualTo(201);
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
     void r2_returnLineRefused_ordinaryLineKeep() {
         Shop s = new Shop("r2");
         s.standardSources();

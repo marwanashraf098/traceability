@@ -24,6 +24,8 @@ public class ReceivingMoveException extends RuntimeException {
         MOVE_RETURN_LINE,
         /** M1 only: finishing a move session arrives with M2's write. */
         MOVE_FINALIZE_NOT_AVAILABLE,
+        /** M1: a move session is print-and-stick only until count-only / factory moves are tested (2026-11-18). */
+        MOVE_MODE_NOT_AVAILABLE,
         /** The session isn't a move session. */
         NOT_A_MOVE_SESSION,
         /** Shopify couldn't be read right now (codes only, never a body). */
@@ -81,6 +83,12 @@ public class ReceivingMoveException extends RuntimeException {
         return new ReceivingMoveException(Code.MOVE_FINALIZE_NOT_AVAILABLE, HttpStatus.CONFLICT,
             "Finishing a session that moves stock from a Shopify location isn't available yet.",
             "إنهاء جلسة تنقل المخزون من موقع في Shopify غير متاح بعد.", null);
+    }
+
+    static ReceivingMoveException modeNotAvailable() {
+        return new ReceivingMoveException(Code.MOVE_MODE_NOT_AVAILABLE, HttpStatus.CONFLICT,
+            "Moving stock from a Shopify location works with printed labels only for now. Choose \"Print and stick labels\".",
+            "نقل المخزون من موقع في Shopify متاح حالياً مع طباعة الملصقات فقط. اختر \"طباعة الملصقات ولصقها\".", null);
     }
 
     static ReceivingMoveException notAMoveSession() {

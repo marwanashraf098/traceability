@@ -120,6 +120,9 @@ public class ReceivingMoveService {
     public UUID createSession(UUID actorUserId, UUID locationId, String reference, String supplierName, String note,
                               String mode, UUID labelRunId, String sourceLocationId) {
         UUID tenantId = TenantContext.require();
+        // M1 (Marawan 2026-11-18): print-and-stick only until count-only / factory moves are tested — refused before
+        // any Shopify read.
+        if (mode != null && !ReceivingService.MODE_PRINT_STICK.equals(mode)) throw ReceivingMoveException.modeNotAvailable();
         if (sourceLocationId == null || sourceLocationId.isBlank()) throw ReceivingMoveException.sourceNotEligible();
         Ctx c = ctx(tenantId);
         if (!isMainWarehouse(tenantId, locationId)) throw ReceivingMoveException.mainWarehouseOnly();
