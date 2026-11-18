@@ -880,17 +880,16 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
         if (!isBazarTransfer(transferId, tenantId)) throw transferNotFound();
         UUID main = fulfillmentLocationId(tenantId);
-        int moved = jdbc.update(
-            "UPDATE pieces p SET current_location_id = ?, last_event_at = now(), last_user_id = ? " +
-            "WHERE p.id = ? AND p.tenant_id = ? AND p.status = 'damaged' AND p.current_location_id IS DISTINCT FROM ? " +
-            "AND EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.transfer_id = ? AND tp.piece_id = p.id " +
-            "            AND tp.tenant_id = p.tenant_id AND tp.outcome = 'condemned')",
-            main, actorUserId, pieceId, tenantId, main, transferId);
-        if (moved == 0) return false;
+        // The transfer's own guard: this piece was taken back damaged ON this bazar transfer (row locked).
+        boolean condemned = !jdbc.queryForList(
+            "SELECT 1 FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ? AND tenant_id = ? " +
+            "AND outcome = 'condemned' FOR UPDATE", Integer.class, transferId, pieceId, tenantId).isEmpty();
+        if (!condemned) return false;
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         if (clientRequestId != null) m.put("client_request_id", clientRequestId);
-        ledger.recordBroughtBackDamaged(pieceId, main, actorUserId, writeJson(m));
+        // The location move + its event go through InventoryLedger — the one writer of piece changes.
+        if (!ledger.bringBackDamaged(pieceId, main, actorUserId, writeJson(m))) return false;
         return true;
     }
 

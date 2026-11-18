@@ -496,17 +496,26 @@ public class InventoryLedger {
     }
 
     /**
-     * Bazar POS B5: a piece taken back DAMAGED at a bazar arrives at the main warehouse — event
-     * 'bazar_damaged_brought_back', from = to = damaged (no status change; the caller,
-     * TransferService.bringBackDamagedForBazar, moved current_location_id in the same transaction). InventoryLedger stays
-     * the only writer of piece_events.
+     * Bazar POS B5: a piece taken back DAMAGED at a bazar arrives at the main warehouse. Moves current_location_id to
+     * {@code locationId} ONLY while the piece is damaged and not already there (conditional UPDATE — the race guard; a
+     * repeat or a piece no longer damaged moves nothing and records nothing), then writes event
+     * 'bazar_damaged_brought_back', from = to = damaged (no status change). Same transaction. The caller
+     * (TransferService.bringBackDamagedForBazar) checks the transfer piece is 'condemned' on its bazar transfer.
+     *
+     * @return true when the piece moved (and the event was written)
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public void recordBroughtBackDamaged(String pieceId, UUID locationId, UUID actorUserId, String metadata) {
+    public boolean bringBackDamaged(String pieceId, UUID locationId, UUID actorUserId, String metadata) {
+        int moved = jdbc.update(
+                "UPDATE pieces SET current_location_id = ?, last_event_at = now(), last_user_id = ? " +
+                "WHERE id = ? AND status = ? AND current_location_id IS DISTINCT FROM ?",
+                locationId, actorUserId, pieceId, PieceStatus.DAMAGED.db, locationId);
+        if (moved == 0) return false;
         jdbc.update(INSERT_EVENT,
                 pieceId, "bazar_damaged_brought_back", actorUserId,
                 null, null, locationId,
                 PieceStatus.DAMAGED.db, PieceStatus.DAMAGED.db, metadata, null);
+        return true;
     }
 
     /**

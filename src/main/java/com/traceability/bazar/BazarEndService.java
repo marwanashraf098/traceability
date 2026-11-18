@@ -109,8 +109,10 @@ public class BazarEndService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> leftovers(UUID eventId, BazarSaleService.Actor actor) {
-        UUID tenantId = requireManager(actor);
-        return leftovers(tenantId, event(tenantId, eventId, ""));
+        UUID tenantId = requireEnabledTenant(jdbc);
+        Map<String, Object> ev = event(tenantId, eventId, "");
+        requireSeller(actor, ev);
+        return leftovers(tenantId, ev);
     }
 
     /**
@@ -174,8 +176,9 @@ public class BazarEndService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> scanBack(UUID eventId, String code, String clientRequestId, BazarSaleService.Actor actor) {
-        UUID tenantId = requireManager(actor);
+        UUID tenantId = requireEnabledTenant(jdbc);
         Map<String, Object> ev = endedEvent(tenantId, eventId);
+        requireSeller(actor, ev);
         UUID transferId = (UUID) ev.get("transfer_id");
         String crid = clientRequestId == null ? "" : clientRequestId.trim();
         if (crid.isEmpty() || crid.length() > 100) {
@@ -332,12 +335,32 @@ public class BazarEndService {
         return rows.get(0);
     }
 
-    static UUID requireManagerTenant(JdbcTemplate jdbc, BazarSaleService.Actor actor) {
+    static UUID requireEnabledTenant(JdbcTemplate jdbc) {
         UUID tenantId = TenantContext.require();
         if (!Bazar.enabled(jdbc, tenantId)) {
             throw new BazarException(BazarException.Code.BAZAR_NOT_ENABLED, "Not found.", "غير موجود.",
                 HttpStatus.NOT_FOUND);
         }
+        return tenantId;
+    }
+
+    /**
+     * Scan-back and the leftovers list: any role in the event's seller_roles (workers included), or an owner /
+     * manager — the same rule as the sell screen's piece lookup. End, mark lost, close transfer and the report stay
+     * owner / manager.
+     */
+    private static void requireSeller(BazarSaleService.Actor actor, Map<String, Object> ev) {
+        boolean manages = actor != null && actor.role() != null && MANAGERS.contains(actor.role().toLowerCase());
+        if (manages) return;
+        if (actor == null || actor.role() == null
+                || !BazarSaleService.toList(ev.get("seller_roles")).contains(actor.roleKey())) {
+            throw new BazarException(BazarException.Code.BAZAR_NOT_A_SELLER,
+                "Your role can't do this at this bazar.", "دورك لا يسمح بذلك في هذا البازار.", HttpStatus.FORBIDDEN);
+        }
+    }
+
+    static UUID requireManagerTenant(JdbcTemplate jdbc, BazarSaleService.Actor actor) {
+        UUID tenantId = requireEnabledTenant(jdbc);
         if (actor == null || actor.role() == null || !MANAGERS.contains(actor.role().toLowerCase())) {
             throw new BazarException(BazarException.Code.BAZAR_MANAGERS_ONLY,
                 "Only an owner or manager can do this.", "يمكن للمالك أو المدير فقط القيام بذلك.", HttpStatus.FORBIDDEN);

@@ -25,7 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Bazar POS B5 over HTTP — end, leftovers, scan-back, mark-lost, close-transfer, report, customers.csv: the owner's
- * whole flow; a worker gets 403 on every one (nothing changes); flag off → 404; another tenant's event → 404; the CSV
+ * whole flow; a worker in the event's seller_roles can read the leftovers and scan back, and gets 403 on end / mark-lost
+ * / close-transfer / report / CSV (nothing changes); a worker NOT in seller_roles can't scan back; flag off → 404; another tenant's event → 404; the CSV
  * is an attachment, not cached.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -122,8 +123,13 @@ class BazarEndHttpTest {
     /** A live event (cash / card / instapay, owner + worker sell) with {@code n} pieces out: [eventId, codes…]. */
     @SuppressWarnings("rawtypes")
     private List<String> liveEvent(int n) {
+        return liveEvent(n, List.of("owner", "worker"));
+    }
+
+    @SuppressWarnings("rawtypes")
+    private List<String> liveEvent(int n, List<String> sellerRoles) {
         Map<String, Object> body = new HashMap<>(Map.of("name", "End Bazar " + (++seq), "startsOn", "2026-12-01",
-            "endsOn", "2026-12-02", "locationName", "End Hall " + seq, "sellerRoles", List.of("owner", "worker"),
+            "endsOn", "2026-12-02", "locationName", "End Hall " + seq, "sellerRoles", sellerRoles,
             "paymentMethods", List.of("cash", "card", "instapay")));
         ResponseEntity<Map> created = call(ownerOn, HttpMethod.POST, "/api/v1/bazar-events", body);
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
@@ -196,19 +202,58 @@ class BazarEndHttpTest {
     }
 
     @Test
-    void worker_getsForbiddenEverywhere_andNothingChanges() {
-        List<String> ev = liveEvent(1);
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void worker_scansBack_butCannotEndMarkLostCloseOrReadTheReport() {
+        List<String> ev = liveEvent(2);
         String id = ev.get(0), base = "/api/v1/bazar-events/" + id;
-        for (Object[] c : new Object[][] {
-                {HttpMethod.POST, "/end", null}, {HttpMethod.GET, "/leftovers", null},
-                {HttpMethod.POST, "/scan-back", Map.of("code", ev.get(1), "client_request_id", "w")},
-                {HttpMethod.POST, "/mark-lost", Map.of("piece_ids", List.of("x"))},
-                {HttpMethod.POST, "/close-transfer", null}, {HttpMethod.GET, "/report", null},
-                {HttpMethod.GET, "/report/customers.csv", null}}) {
+        Object[][] managersOnly = {
+            {HttpMethod.POST, "/end", null},
+            {HttpMethod.POST, "/mark-lost", Map.of("piece_ids", List.of("x"))},
+            {HttpMethod.POST, "/close-transfer", null}, {HttpMethod.GET, "/report", null},
+            {HttpMethod.GET, "/report/customers.csv", null}};
+        for (Object[] c : managersOnly) {
             assertThat(call(workerOn, (HttpMethod) c[0], base + c[1], c[2]).getStatusCode()).as((String) c[1])
                 .isEqualTo(HttpStatus.FORBIDDEN);
         }
         assertThat(jdbc.queryForObject("SELECT status FROM bazar_events WHERE id = ?::uuid", String.class, id)).isEqualTo("live");
+
+        assertThat(call(ownerOn, HttpMethod.POST, base + "/end", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<Map> left = call(workerOn, HttpMethod.GET, base + "/leftovers", null);
+        assertThat(left.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<Object>) left.getBody().get("outstanding")).hasSize(2);
+        ResponseEntity<Map> back = call(workerOn, HttpMethod.POST, base + "/scan-back",
+            Map.of("code", ev.get(1), "client_request_id", "wb-" + id));
+        assertThat(back.getStatusCode()).as(String.valueOf(back.getBody())).isEqualTo(HttpStatus.OK);
+        assertThat(back.getBody().get("result")).isEqualTo("back_good");
+
+        // Still refused after the end: nothing marked lost, the transfer stays open.
+        String outstanding = (String) ((List<Map<String, Object>>) call(ownerOn, HttpMethod.GET, base + "/leftovers", null)
+            .getBody().get("outstanding")).get(0).get("piece_id");
+        for (Object[] c : new Object[][] {
+                {HttpMethod.POST, "/mark-lost", Map.of("piece_ids", List.of(outstanding))},
+                {HttpMethod.POST, "/close-transfer", null}, {HttpMethod.POST, "/end", null}}) {
+            assertThat(call(workerOn, (HttpMethod) c[0], base + c[1], c[2]).getStatusCode()).as((String) c[1])
+                .isEqualTo(HttpStatus.FORBIDDEN);
+        }
+        assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, outstanding))
+            .isEqualTo("out_on_transfer");
+        assertThat(jdbc.queryForObject("SELECT t.status FROM transfers t JOIN bazar_events e ON e.transfer_id = t.id " +
+            "WHERE e.id = ?::uuid", String.class, id)).isNotEqualTo("closed");
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
+    void workerNotInSellerRoles_cannotScanBackOrReadLeftovers() {
+        List<String> ev = liveEvent(1, List.of("owner"));
+        String id = ev.get(0), base = "/api/v1/bazar-events/" + id;
+        assertThat(call(ownerOn, HttpMethod.POST, base + "/end", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<Map> back = call(workerOn, HttpMethod.POST, base + "/scan-back",
+            Map.of("code", ev.get(1), "client_request_id", "wx-" + id));
+        assertThat(back.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(back.getBody().get("code")).isEqualTo("BAZAR_NOT_A_SELLER");
+        assertThat(call(workerOn, HttpMethod.GET, base + "/leftovers", null).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(call(ownerOn, HttpMethod.GET, base + "/leftovers", null).getBody().get("counts"))
+            .extracting("back").isEqualTo(0);
     }
 
     @Test

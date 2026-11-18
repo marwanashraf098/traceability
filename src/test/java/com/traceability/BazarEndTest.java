@@ -498,4 +498,36 @@ class BazarEndTest {
             return (String) m.invoke(null, v);
         } catch (ReflectiveOperationException e) { throw new RuntimeException(e); }
     }
+
+    /**
+     * The damaged bring-home moves the piece only through InventoryLedger (the one writer of piece changes): the
+     * bazar method in TransferService has no raw UPDATE of pieces and calls ledger.bringBackDamaged, and that ledger
+     * method has exactly one caller.
+     */
+    @Test
+    void damagedBringHome_movesThePieceOnlyThroughInventoryLedger() throws java.io.IOException {
+        String ts = java.nio.file.Files.readString(
+            java.nio.file.Path.of("src/main/java/com/traceability/inventory/TransferService.java"));
+        int start = ts.indexOf("public boolean bringBackDamagedForBazar(");
+        assertThat(start).isPositive();
+        int end = ts.indexOf("\n    }\n", start);
+        String body = ts.substring(start, end);
+        assertThat(body).doesNotContainIgnoringCase("UPDATE pieces");
+        assertThat(body).contains("ledger.bringBackDamaged(");
+
+        String ledger = java.nio.file.Files.readString(
+            java.nio.file.Path.of("src/main/java/com/traceability/inventory/InventoryLedger.java"));
+        int ls = ledger.indexOf("public boolean bringBackDamaged(");
+        String lbody = ledger.substring(ls, ledger.indexOf("\n    }\n", ls));
+        assertThat(lbody).contains("UPDATE pieces SET current_location_id").contains("bazar_damaged_brought_back");
+
+        List<String> callers;
+        try (var files = java.nio.file.Files.walk(java.nio.file.Path.of("src/main/java"))) {
+            callers = files.filter(f -> f.toString().endsWith(".java")).filter(f -> {
+                try { return java.nio.file.Files.readString(f).contains(".bringBackDamaged("); }
+                catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+            }).map(f -> f.getFileName().toString()).toList();
+        }
+        assertThat(callers).containsExactly("TransferService.java");
+    }
 }

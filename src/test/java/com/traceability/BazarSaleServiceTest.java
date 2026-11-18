@@ -506,11 +506,11 @@ class BazarSaleServiceTest {
         UUID saleId = (UUID) sales.sell(f.eventId(), code(f.pieces().get(0)), crid(), null, owner).get("id");
         jdbc.update("UPDATE bazar_events SET status = 'ended', ended_at = now(), ended_by = ? WHERE id = ?",
             ownerId, f.eventId());
-        assertThat(codeOf(() -> sales.undo(f.eventId(), saleId, owner))).isEqualTo(BazarException.Code.BAZAR_EVENT_NOT_LIVE);
+        assertThat(codeOf(() -> sales.undo(f.eventId(), saleId, owner))).isEqualTo(BazarException.Code.BAZAR_EVENT_ENDED);
         assertThat(codeOf(() -> sales.changePayment(f.eventId(), saleId, "card", owner)))
-            .isEqualTo(BazarException.Code.BAZAR_EVENT_NOT_LIVE);
+            .isEqualTo(BazarException.Code.BAZAR_EVENT_ENDED);
         assertThat(codeOf(() -> sales.sell(f.eventId(), "P1", crid(), null, owner)))
-            .isEqualTo(BazarException.Code.BAZAR_EVENT_NOT_LIVE);
+            .isEqualTo(BazarException.Code.BAZAR_EVENT_ENDED);
         assertThat(pieceStatus(f.pieces().get(0))).isEqualTo("sold");
     }
 
