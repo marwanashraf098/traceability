@@ -283,6 +283,8 @@ function AwbLinkDialog({
   const [flash, setFlash] = useState<FlashState>('idle')
   const [linking, setLinking] = useState(false)
   const [conflictError, setConflictError] = useState(false)
+  // 409 EXCHANGE_NOT_MAPPED: the scan is a Bosta exchange waybill whose replacement isn't mapped yet.
+  const [exchangeNotMapped, setExchangeNotMapped] = useState(false)
   const [mismatchError, setMismatchError] = useState<{ scanned: string; existing: string } | null>(null)
   const [genericError, setGenericError] = useState(false)
 
@@ -358,7 +360,8 @@ function AwbLinkDialog({
   })
   const phoneApiRef = useRef(phoneApi)
   phoneApiRef.current = phoneApi
-  const phoneError = conflictError ? t('fulfill.linkAwb.conflict')
+  const conflictText = exchangeNotMapped ? t('fulfill.linkAwb.exchangeNotMapped') : t('fulfill.linkAwb.conflict')
+  const phoneError = conflictError ? conflictText
     : mismatchError ? t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })
     : t('fulfill.linkAwb.error')
   const phoneErrorRef = useRef(phoneError)
@@ -378,6 +381,7 @@ function AwbLinkDialog({
     if (!normalized || linking) return
     setLinking(true)
     setConflictError(false)
+    setExchangeNotMapped(false)
     setMismatchError(null)
     setGenericError(false)
     try {
@@ -396,6 +400,7 @@ function AwbLinkDialog({
         if (errBody?.code === 'AWB_MISMATCH') {
           setMismatchError({ scanned: errBody.scannedAwb ?? '', existing: errBody.existingAwb ?? '' })
         } else {
+          setExchangeNotMapped(errBody?.code === 'EXCHANGE_NOT_MAPPED')
           setConflictError(true)
         }
         if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
@@ -484,7 +489,7 @@ function AwbLinkDialog({
         <div className="flex items-start gap-2 mb-3">
           <AlertTriangle size={15} strokeWidth={2} className="text-critical flex-shrink-0 mt-0.5" />
           {conflictError && (
-            <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.conflict')}</p>
+            <p className="text-critical-text text-small font-medium">{conflictText}</p>
           )}
           {mismatchError && (
             <p className="text-warning-text text-small font-medium">

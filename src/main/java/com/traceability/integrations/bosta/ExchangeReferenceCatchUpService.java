@@ -24,7 +24,11 @@ import java.util.UUID;
  * <ol>
  *   <li>{@code exchange} — dashboard exchanges (return_request_id NULL) in needs_mapping / mapped /
  *       unmatched / needs_confirmation with no matched_order_id → ExchangeMatchService.matchByReference
- *       (the live rule, unchanged).</li>
+ *       (the live rule). 2026-11-17: when the reference matches no Traced order and the trip is a post-connect
+ *       exchange of a PRE-connect order (PreConnectDeliveryFilter.needsPreConnectParent, on the stored raw), its
+ *       parent is imported from Shopify (PreConnectParentImport — no transaction open) and set as the original
+ *       (ExchangeMatchService.matchToPreConnectParent). Dry run: WOULD_IMPORT_PARENT + the number, no Shopify
+ *       call; apply: MATCHED_PRE_CONNECT, or SKIP / NO_MATCH with the importer's reason in {@code detail}.</li>
  *   <li>{@code crp} — open unlinked customer-return pickups (type 25) whose reference resolves to exactly
  *       one order → re-run through the normal ingest pipeline: a 'bosta_backfill' webhook event with its
  *       own idempotency key, processed by BostaWebhookJob (verify-by-fetch, pre-connect filter,
@@ -46,8 +50,14 @@ public class ExchangeReferenceCatchUpService {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeReferenceCatchUpService.class);
 
+    /** {@code detail}: extra context that doesn't change the verdict / reason (e.g. why a pre-connect parent import missed). */
     public record Row(String tenant, String kind, String trackingNumber, String reference,
-                      String orderNumber, String verdict, String reason) {}
+                      String orderNumber, String verdict, String reason, String detail) {
+        public Row(String tenant, String kind, String trackingNumber, String reference,
+                   String orderNumber, String verdict, String reason) {
+            this(tenant, kind, trackingNumber, reference, orderNumber, verdict, reason, null);
+        }
+    }
 
     private final JdbcTemplate                jdbc;
     private final TransactionTemplate         tx;
@@ -55,6 +65,16 @@ public class ExchangeReferenceCatchUpService {
     private final BostaWebhookJob             webhookJob;
     private final BostaFulfillmentLinkService fulfillmentLink;
     private final ObjectMapper                mapper;
+    private PreConnectDeliveryFilter          preConnectFilter;
+    private com.traceability.portal.PreConnectParentImport parentImport;
+
+    /** Optional (hand-wired tests): without both, the pre-connect parent step is skipped. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPreConnect(PreConnectDeliveryFilter preConnectFilter,
+                              com.traceability.portal.PreConnectParentImport parentImport) {
+        this.preConnectFilter = preConnectFilter;
+        this.parentImport = parentImport;
+    }
 
     public ExchangeReferenceCatchUpService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                            ExchangeMatchService exchangeMatch, BostaWebhookJob webhookJob,
@@ -109,13 +129,20 @@ public class ExchangeReferenceCatchUpService {
             "  AND status IN ('needs_mapping', 'mapped', 'unmatched', 'needs_confirmation') " +
             "ORDER BY created_at, tracking_number", String.class, tenantId)));
         for (String tn : exchanges) {
-            isolated(sink, tenant, "exchange", tn, () -> TenantContext.runAs(tenantId, () -> tx.execute(s -> {
-                ExchangeMatchService.ReferenceMatch m = exchangeMatch.matchByReference(tenantId, tn, !apply);
-                boolean found = m.verdict() == ExchangeMatchService.ReferenceVerdict.MATCHED
-                    || m.verdict() == ExchangeMatchService.ReferenceVerdict.WOULD_MATCH;
-                return new Row(tenant, "exchange", tn, m.reference(), m.orderNumber(),
-                    found ? m.verdict().name() : "SKIP", found ? null : m.verdict().name());
-            })));
+            isolated(sink, tenant, "exchange", tn, () -> {
+                Row r = TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+                    ExchangeMatchService.ReferenceMatch m = exchangeMatch.matchByReference(tenantId, tn, !apply);
+                    boolean found = m.verdict() == ExchangeMatchService.ReferenceVerdict.MATCHED
+                        || m.verdict() == ExchangeMatchService.ReferenceVerdict.WOULD_MATCH;
+                    return new Row(tenant, "exchange", tn, m.reference(), m.orderNumber(),
+                        found ? m.verdict().name() : "SKIP", found ? null : m.verdict().name());
+                }));
+                if ("SKIP".equals(r.verdict()) && ExchangeMatchService.ReferenceVerdict.NO_MATCH.name().equals(r.reason())) {
+                    Row pre = preConnectParent(tenantId, tenant, tn, r.reference(), apply);
+                    if (pre != null) return pre;
+                }
+                return r;
+            });
         }
 
         // 2. Open unlinked customer-return pickups.
@@ -149,6 +176,37 @@ public class ExchangeReferenceCatchUpService {
                 return new Row(tenant, "fulfillment", tn, null, number, r.verdict().name(), r.reason());
             });
         }
+    }
+
+    /**
+     * The pre-connect parent step for an exchange whose reference matched no Traced order: null when it doesn't
+     * apply (no importer, not a post-connect trip of a pre-connect order). Called with NO transaction open — the
+     * import reads Shopify; every DB touch is its own transaction under the tenant.
+     */
+    private Row preConnectParent(UUID tenantId, String tenant, String tn, String ref, boolean apply) {
+        if (preConnectFilter == null || parentImport == null) return null;
+        Boolean needs = TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            String raw = jdbc.queryForObject(
+                "SELECT raw::text FROM exchanges WHERE tenant_id = ? AND tracking_number = ?", String.class, tenantId, tn);
+            try {
+                BostaDelivery d = BostaDelivery.fromRaw(tn, mapper.readTree(raw));
+                return preConnectFilter.needsPreConnectParent(tenantId, tn, d);
+            } catch (java.io.IOException e) {
+                return false;
+            }
+        }));
+        if (!Boolean.TRUE.equals(needs)) return null;
+        String number = PreConnectDeliveryFilter.orderNumberPart(ref);
+        if (!apply) return new Row(tenant, "exchange", tn, ref, number, "WOULD_IMPORT_PARENT", null);
+        com.traceability.portal.PreConnectParentImport.Outcome o = parentImport.importParent(tenantId, ref);
+        if (o.orderId() == null) {
+            return new Row(tenant, "exchange", tn, ref, number, "SKIP", ExchangeMatchService.ReferenceVerdict.NO_MATCH.name(),
+                "parent import: " + o.reason());
+        }
+        boolean set = TenantContext.runAs(tenantId, () -> Boolean.TRUE.equals(tx.execute(s ->
+            exchangeMatch.matchToPreConnectParent(tenantId, tn, o.orderId()))));
+        return new Row(tenant, "exchange", tn, ref, number, set ? "MATCHED_PRE_CONNECT" : "SKIP",
+            set ? null : "parent " + o.reason() + " but the exchange was already matched");
     }
 
     private Row crp(UUID tenantId, String tenant, String tn, String ref, String shopifyId,

@@ -15,12 +15,15 @@ import java.util.UUID;
  * customer-return pickups), the exchange step (ExchangeMatchService.matchByReference) and the
  * "linked via exchange" fulfillment verdict.
  *
- * The reference is tried through {@link PreConnectDeliveryFilter#referenceCandidates} — as sent and,
- * when it contains ':', the parts before and after it ("BRK-44868-EG:BRK-44868-EG-R1" → BRK-44868-EG;
- * "blncoeg:#515956" → #515956) — each as an order number ('#'-stripped and '#'-prefixed too) and as an
- * external_id. Only when the reference finds nothing is shopifyInfo.orderId tried, as a Shopify order
- * GID. Internal orders (external_id 'internal:…', e.g. an exchange's EXC-… replacement) never match.
- * Orders exist in Traced only from the connection on, so a pre-connect order never resolves.
+ * The reference is read by {@link BostaReferenceParser} (2026-11-17) — as sent, the part after the first ':'
+ * and the part before it ("BRK-44868-EG:BRK-44868-EG-R1" → BRK-44868-EG; "blncoeg:#515956" → #515956), each as
+ * an order number ('#'-stripped and '#'-prefixed, upper / lower case too) and as an external_id. {@link #resolve}
+ * keeps a trailing -R&lt;digits&gt; (forward-leg / return-leg linking: a SEND for a Shopify Return's replacement must
+ * never land on the original); {@link #resolveTrip} also strips it (an exchange's ORIGINAL order:
+ * "jamilatheboutique:#64968-R1" → #64968). Only when the reference finds nothing is shopifyInfo.orderId tried, as
+ * a Shopify order GID. Internal orders (external_id 'internal:…', e.g. an exchange's EXC-… replacement, a
+ * pre-connect 'internal:portal:' row) never match — a pre-connect parent is set only by
+ * ExchangeMatchService.matchToPreConnectParent. Orders exist in Traced only from the connection on.
  *
  * Returns the distinct matching order ids (at most 2): exactly one = the order; two = ambiguous,
  * never guess. Runs on the caller's connection and tenant context; every query is tenant_id-bound.
@@ -30,16 +33,18 @@ public final class OrderReference {
     private OrderReference() {}
 
     public static List<UUID> resolve(JdbcTemplate jdbc, UUID tenantId, String reference, String shopifyOrderId) {
-        Set<String> numbers = new LinkedHashSet<>();
-        Set<String> externalIds = new LinkedHashSet<>();
-        for (String c : PreConnectDeliveryFilter.referenceCandidates(reference)) {
-            String bare = c.startsWith("#") ? c.substring(1).trim() : c;
-            if (bare.isEmpty()) continue;
-            numbers.add(c);
-            numbers.add(bare);
-            numbers.add("#" + bare);
-            externalIds.add(c);
-        }
+        return resolve(jdbc, tenantId, reference, shopifyOrderId, false);
+    }
+
+    /** {@link #resolve}, with a trailing -R&lt;digits&gt; (a Shopify Return name) also stripped — an exchange's original. */
+    public static List<UUID> resolveTrip(JdbcTemplate jdbc, UUID tenantId, String reference, String shopifyOrderId) {
+        return resolve(jdbc, tenantId, reference, shopifyOrderId, true);
+    }
+
+    private static List<UUID> resolve(JdbcTemplate jdbc, UUID tenantId, String reference, String shopifyOrderId,
+                                      boolean stripReturnSuffix) {
+        Set<String> numbers = BostaReferenceParser.numberVariants(reference, stripReturnSuffix);
+        Set<String> externalIds = new LinkedHashSet<>(BostaReferenceParser.candidates(reference, stripReturnSuffix));
         if (!numbers.isEmpty()) {
             List<UUID> ids = query(jdbc, tenantId, numbers, externalIds);
             if (!ids.isEmpty()) return ids;

@@ -477,16 +477,13 @@ public class PortalOnDemandLookup {
         }
     }
 
-    /** businessReference names this order (as sent, '#'-stripped, either side of a ':'). */
+    /**
+     * businessReference names this order — {@link com.traceability.integrations.bosta.BostaReferenceParser#names}
+     * (as sent, after or before a ':', '#'-stripped, any case). No -R&lt;digits&gt; stripping: a Shopify Return's trip
+     * ("…:#1234-R1") is not the order's delivery.
+     */
     static boolean referenceMatches(String reference, String orderName) {
-        if (reference == null || orderName == null) return false;
-        String name = orderName.startsWith("#") ? orderName.substring(1) : orderName;
-        for (String part : reference.split(":")) {
-            String p = part.trim();
-            if (p.startsWith("#")) p = p.substring(1);
-            if (p.equalsIgnoreCase(name)) return true;
-        }
-        return false;
+        return com.traceability.integrations.bosta.BostaReferenceParser.names(reference, orderName, false);
     }
 
     // ── insert ───────────────────────────────────────────────────────────────────

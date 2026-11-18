@@ -218,7 +218,8 @@ public class ExchangeMatchService {
 
     /**
      * The exchange's original order from Bosta's businessReference (or shopifyInfo.orderId), through the
-     * shared {@link com.traceability.integrations.bosta.OrderReference} rule: exactly one tracked order of
+     * shared {@link com.traceability.integrations.bosta.OrderReference} rule (resolveTrip — a trailing -R&lt;digits&gt;
+     * Shopify Return suffix is stripped: "jamilatheboutique:#64968-R1" → #64968): exactly one tracked order of
      * this tenant → matched_order_id, match_method 'reference', matched_at; status 'matched' unless the
      * row still needs its replacement mapped (needs_mapping stays). Dashboard rows only — a row Traced
      * booked from a return request (return_request_id) is never touched. Idempotent: a conditional
@@ -243,7 +244,7 @@ public class ExchangeMatchService {
         if ((ref == null || ref.isBlank()) && (shopifyId == null || shopifyId.isBlank())) {
             return new ReferenceMatch(ReferenceVerdict.NO_REFERENCE, ref, null, null);
         }
-        List<UUID> ids = com.traceability.integrations.bosta.OrderReference.resolve(jdbc, tenantId, ref, shopifyId);
+        List<UUID> ids = com.traceability.integrations.bosta.OrderReference.resolveTrip(jdbc, tenantId, ref, shopifyId);
         if (ids.isEmpty()) return new ReferenceMatch(ReferenceVerdict.NO_MATCH, ref, null, null);
         if (ids.size() > 1) return new ReferenceMatch(ReferenceVerdict.AMBIGUOUS, ref, null, null);
 
