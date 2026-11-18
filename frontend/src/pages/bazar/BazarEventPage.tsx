@@ -5,8 +5,9 @@ import { useTranslation } from 'react-i18next'
 import { ScanLine, Smartphone } from 'lucide-react'
 import { getTransfer, type TransferDetail } from '../../api'
 import {
-  BazarError, clearBazarPrice, getBazarEvent, listBazarPrices, listBazarSales, markBazarSent, orderedMethods,
-  setBazarBulkRule, setBazarPrice, startBazarEvent, type BazarEventDetail, type BazarPriceRow, type BazarSale,
+  BazarError, clearBazarPrice, getBazarEvent, listBazarDays, listBazarPrices, listBazarSales, markBazarSent, orderedMethods,
+  setBazarBulkRule, setBazarPrice, startBazarEvent, type BazarDay, type BazarDays, type BazarEventDetail, type BazarPriceRow,
+  type BazarSale,
 } from '../../bazar/api'
 import {
   eventDay, formatMoney, liveLabel, pieceTitle, saleTime, shortDate, toNumber, transferCode,
@@ -15,6 +16,7 @@ import { resetCapabilitiesCache } from '../../capabilities'
 import { Badge, Button, Input, Modal, Spinner, cn } from '../../components/ui'
 import { QrCode } from '../../phone/PhonePairModal'
 import { STATUS_TONE } from './BazarEvents'
+import { CloseDayForm, DayStatusBadge, dayTitle } from './CloseDayForm'
 
 /** Bazar POS B6 — /bazar/:id. Draft → setup (mockup step 2); live / ended → the event's numbers (step 3). */
 export default function BazarEventPage() {
@@ -152,7 +154,7 @@ function pct(a: number, b: number): string {
   return p === 0 ? '0%' : `${p > 0 ? '+' : '−'}${Math.abs(p)}%`
 }
 
-function PricesCard({ ev }: { ev: BazarEventDetail }) {
+function PricesCard({ ev, live }: { ev: BazarEventDetail; live?: boolean }) {
   const { t, i18n } = useTranslation()
   const [rows, setRows] = useState<BazarPriceRow[] | null>(null)
   const [qty, setQty] = useState<Map<string, number>>(new Map())
@@ -243,6 +245,7 @@ function PricesCard({ ev }: { ev: BazarEventDetail }) {
         </div>
       )}
       <p className="text-small text-muted">{t('bazar.prices.note')}</p>
+      {live && <p className="text-small text-primary" data-testid="bazar-prices-live-note">{t('bazar.prices.liveNote')}</p>}
     </section>
   )
 }
@@ -310,20 +313,25 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
 // ── Live / ended ──────────────────────────────────────────────────────────────
 
 function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<void> }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [sales, setSales] = useState<BazarSale[] | null>(null)
   const [soon, setSoon] = useState<string | null>(null)
+  const [days, setDays] = useState<BazarDays | null>(null)
+  const [closing, setClosing] = useState<BazarDay | null>(null)
+  const [showPrices, setShowPrices] = useState(false)
   const live = ev.status === 'live'
   const { day, count } = eventDay(ev.starts_on, ev.ends_on, ev.today.business_day)
   const methods = orderedMethods(ev.payment_methods)
 
+  const loadDays = useCallback(() => listBazarDays(ev.id).then(setDays).catch(() => {}), [ev.id])
   useEffect(() => {
     const loadSales = () => listBazarSales(ev.id, 10).then(p => setSales(p.items)).catch(() => setSales([]))
     loadSales()
+    loadDays()
     if (!live) return
-    const iv = window.setInterval(() => { reload(); loadSales() }, 30_000)
+    const iv = window.setInterval(() => { reload(); loadSales(); loadDays() }, 30_000)
     return () => window.clearInterval(iv)
-  }, [ev.id, live, reload])
+  }, [ev.id, live, reload, loadDays])
 
   const sent = ev.counts.sent || 0
   const soldPct = sent ? Math.round((ev.counts.sold / sent) * 100) : 0
@@ -339,7 +347,12 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
         </div>
         {live && (
           <div className="flex flex-wrap gap-2.5">
-            <Button variant="secondary" onClick={() => setSoon(t('bazar.phone.closeDay'))}>{t('bazar.phone.closeDay')}</Button>
+            <Button variant="secondary" aria-expanded={showPrices} onClick={() => setShowPrices(v => !v)}>
+              {showPrices ? t('bazar.prices.hide') : t('bazar.prices.changePrices')}
+            </Button>
+            <Button variant="secondary" data-testid="desktop-close-day"
+                    onClick={() => setClosing(days?.days.find(d => d.is_today) ?? days?.days[days.days.length - 1] ?? null)}
+                    disabled={!days?.days.length}>{t('bazar.phone.closeDay')}</Button>
             <Button onClick={() => setSoon(t('bazar.phone.endEvent'))}>{t('bazar.phone.endEvent')}</Button>
           </div>
         )}
@@ -365,6 +378,8 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
         <Kpi label={t('bazar.live.atBazar')} value={String(ev.counts.at_bazar)} sub={t('bazar.live.ofSent', { count: sent })} />
       </section>
 
+      {live && showPrices && <div className="flex"><PricesCard ev={ev} live /></div>}
+
       <div className="flex flex-wrap gap-5 items-start">
         <div className="flex-[999_1_480px] min-w-0 flex flex-col gap-5">
           <section className="card p-5 flex flex-col gap-3.5">
@@ -384,6 +399,8 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
               <Count label={t('bazar.live.atBazar')} value={ev.counts.at_bazar} swatch="bg-trace-blue" />
             </div>
           </section>
+
+          <DaysCard days={days} onClose={setClosing} />
 
           <section className="card p-5 flex flex-col gap-2" data-testid="bazar-live-sales">
             <h2 className="text-body-lg font-semibold text-primary">{t('bazar.live.recentSales')}</h2>
@@ -426,6 +443,13 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
         )}
       </div>
 
+      {closing && days && (
+        <Modal title={`${t('bazar.close.title')} · ${dayTitle(t, closing, i18n.language)}`} onClose={() => setClosing(null)}>
+          <CloseDayForm key={closing.business_day + ':' + closing.close_count} eventId={ev.id} day={closing} compact
+                        methods={orderedMethods(days.payment_methods)}
+                        onClosed={() => { setClosing(null); loadDays(); reload() }} />
+        </Modal>
+      )}
       {soon && (
         <Modal title={soon} onClose={() => setSoon(null)}>
           <p className="text-body text-primary">{t('bazar.phone.comingSoonBody')}</p>
@@ -433,6 +457,42 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
         </Modal>
       )}
     </>
+  )
+}
+
+/** B4 — every day of the event with its money and close status; a day can be closed (again) from here. */
+function DaysCard({ days, onClose }: { days: BazarDays | null; onClose: (d: BazarDay) => void }) {
+  const { t, i18n } = useTranslation()
+  return (
+    <section className="card p-5 flex flex-col gap-2" data-testid="bazar-days">
+      <h2 className="text-body-lg font-semibold text-primary">{t('bazar.close.days')}</h2>
+      {!days ? <Spinner /> : days.days.length === 0 ? (
+        <p className="text-body text-muted">{t('bazar.close.noDays')}</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px]">
+            <tbody>
+              {[...days.days].reverse().map(d => (
+                <tr key={d.business_day} className="tbl-row" data-testid={`day-row-${d.business_day}`}>
+                  <td className="tbl-cell font-semibold text-primary whitespace-nowrap">{dayTitle(t, d, i18n.language)}</td>
+                  <td className="tbl-cell text-end font-semibold tabular-nums whitespace-nowrap">{formatMoney(d.money.total) || formatMoney(0)}</td>
+                  <td className="tbl-cell text-small text-muted">
+                    {orderedMethods(days.payment_methods).map(m => `${t(`bazar.method.${m}`)} ${formatMoney(toNumber(d.money.by_method[m])).replace(/^EGP /, '')}`).join(' · ')}
+                  </td>
+                  <td className="tbl-cell"><DayStatusBadge day={d} /></td>
+                  <td className="tbl-cell text-end">
+                    <button type="button" className="text-small font-semibold text-trace-blue min-h-[36px] px-1 whitespace-nowrap"
+                            onClick={() => onClose(d)}>
+                      {d.close ? t('bazar.close.closeAgain') : t('bazar.close.closeThisDay')}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
 

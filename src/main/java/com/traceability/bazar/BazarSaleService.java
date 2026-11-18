@@ -140,6 +140,9 @@ public class BazarSaleService {
         if (tps.isEmpty()) throw notHere();
         Map<String, Object> tp = tps.get(0);
         if ("sold".equals(tp.get("outcome"))) throw alreadySold(tenantId, pieceId, eventId);
+        // B4: taken back damaged at this bazar (B3) — its transfer piece is 'condemned', the piece damaged. It can't be
+        // sold, nor given as the new piece of an exchange (both come through here).
+        if ("condemned".equals(tp.get("outcome")) && "damaged".equals(piece.get("status"))) throw pieceDamaged();
         if (tp.get("outcome") != null || !"out_on_transfer".equals(piece.get("status"))) throw notHere();
 
         List<Map<String, Object>> prices = jdbc.queryForList(
@@ -339,6 +342,10 @@ public class BazarSaleService {
             out.put("state", "not_here");
             out.put("sale", null);
         }
+        // B4: came back damaged at this bazar → can't be sold or given in an exchange (BAZAR_PIECE_DAMAGED).
+        out.put("damaged", "damaged".equals(piece.get("status")) && !jdbc.queryForList(
+            "SELECT 1 FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ? AND tenant_id = ? AND outcome = 'condemned'",
+            ev.get("transfer_id"), pieceId, tenantId).isEmpty());
         return out;
     }
 
@@ -527,14 +534,20 @@ public class BazarSaleService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> sale = lockActiveSale(tenantId, eventId, saleId);
-        // The seller may fix the method of their own sale for as long as the event is live (approved 2026-11-16;
-        // B4 tightens it to "until that business day is closed"). Owner / manager: any time while live.
+        // The seller may fix the method of their own sale until the sale's business day is closed (B4, approved
+        // 2026-11-18; B2 allowed it while the event was live). Owner / manager: any time while live — after the day
+        // was closed their change writes money rows after the close, so the day reads "changed after close".
         boolean mine = actor.userId().equals(sale.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
         if (!actor.manages() && !mine) {
             throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
                 "Only the seller who made this sale, or an owner or manager, can change how it was paid.",
                 "يمكن فقط للبائع الذي أجرى عملية البيع، أو المالك أو المدير، تغيير طريقة الدفع.",
                 HttpStatus.FORBIDDEN);
+        }
+        if (!actor.manages() && dayClosed(tenantId, eventId, sale.get("business_day"))) {
+            throw new BazarException(BazarException.Code.BAZAR_DAY_CLOSED,
+                "This day is already closed — ask an owner or manager to change how it was paid.",
+                "تم إغلاق هذا اليوم بالفعل — اطلب من المالك أو المدير تغيير طريقة الدفع.", HttpStatus.FORBIDDEN);
         }
         if (method == null || method.isBlank()) throw methodRequired();
         String chosen = resolveMethod(ev, method);
@@ -696,32 +709,46 @@ public class BazarSaleService {
      */
     static Map<String, Object> summary(JdbcTemplate jdbc, UUID tenantId, UUID eventId, List<String> methods,
                                        boolean todayOnly) {
+        if (!todayOnly) return summary(jdbc, tenantId, eventId, methods, (java.time.LocalDate) null);
+        java.time.LocalDate today = cairoToday(jdbc);
         Map<String, Object> out = new LinkedHashMap<>();
-        if (todayOnly) {
-            out.put("business_day", jdbc.queryForObject(
-                "SELECT ((now() AT TIME ZONE 'Africa/Cairo')::date)::text", String.class));
-        }
-        String cairoToday = "(now() AT TIME ZONE 'Africa/Cairo')::date";
+        out.put("business_day", today.toString());
+        out.putAll(summary(jdbc, tenantId, eventId, methods, today));
+        return out;
+    }
+
+    /** Today's business day: the Africa/Cairo date, read from the DB clock (the same clock every row is stamped with). */
+    static java.time.LocalDate cairoToday(JdbcTemplate jdbc) {
+        return jdbc.queryForObject("SELECT (now() AT TIME ZONE 'Africa/Cairo')::date", java.time.LocalDate.class);
+    }
+
+    /**
+     * {@link #summary} for ONE business day ({@code day}), or the whole event ({@code day} null). B4's day close and
+     * the B5 report read a day's money through this, so close and /today can never disagree.
+     */
+    static Map<String, Object> summary(JdbcTemplate jdbc, UUID tenantId, UUID eventId, List<String> methods,
+                                       java.time.LocalDate day) {
+        Map<String, Object> out = new LinkedHashMap<>();
         Map<String, BigDecimal> byMethod = new LinkedHashMap<>();
         for (String m : methods) byMethod.put(m, BigDecimal.ZERO.setScale(2));
-        List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT p.method, SUM(CASE WHEN p.kind = 'payment' THEN p.amount ELSE -p.amount END) AS total " +
-            "FROM bazar_payments p JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
-            "WHERE s.event_id = ? AND s.tenant_id = ? AND p.kind IN ('payment', 'refund') " +
-            (todayOnly ? "  AND (p.created_at AT TIME ZONE 'Africa/Cairo')::date = " + cairoToday + " " : "") +
-            "  AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
-            "GROUP BY p.method ORDER BY p.method", eventId, tenantId);
         BigDecimal total = BigDecimal.ZERO.setScale(2);
-        for (Map<String, Object> r : rows) {
-            BigDecimal t = ((BigDecimal) r.get("total")).setScale(2);
-            byMethod.put((String) r.get("method"), t);
-            total = total.add(t);
+        for (Map.Entry<String, BigDecimal> e : netByMethod(jdbc, tenantId, eventId, day).entrySet()) {
+            byMethod.put(e.getKey(), e.getValue());
+            total = total.add(e.getValue());
         }
         out.put("by_method", byMethod);
         out.put("total", total);
 
-        String soldDay = todayOnly ? " AND s.business_day = " + cairoToday : "";
-        String returnedDay = todayOnly ? " AND (s.returned_at AT TIME ZONE 'Africa/Cairo')::date = " + cairoToday : "";
+        String soldDay = day != null ? " AND s.business_day = ?::date" : "";
+        String returnedDay = day != null ? " AND (s.returned_at AT TIME ZONE 'Africa/Cairo')::date = ?::date" : "";
+        List<Object> args = new ArrayList<>();
+        Object d = day == null ? null : day.toString();
+        // sales, returns, exchanges, revenue (sold − returned): each sub-select takes event, tenant (+ day).
+        for (String sub : List.of(soldDay, returnedDay, soldDay, soldDay, returnedDay)) {
+            args.add(eventId);
+            args.add(tenantId);
+            if (!sub.isEmpty()) args.add(d);
+        }
         Map<String, Object> c = jdbc.queryForMap(
             "SELECT " +
             "  (SELECT COUNT(*) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active'" +
@@ -734,11 +761,32 @@ public class BazarSaleService {
                 "AND s.status <> 'undone'" + soldDay + ") " +
             "  - (SELECT COALESCE(SUM(s.price), 0) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? " +
                 "AND s.status = 'returned'" + returnedDay + ") AS revenue",
-            eventId, tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
+            args.toArray());
         out.put("sales", ((Number) c.get("sales")).intValue());
         out.put("returns", ((Number) c.get("returns")).intValue());
         out.put("exchanges", ((Number) c.get("exchanges")).intValue());
         out.put("revenue", ((BigDecimal) c.get("revenue")).setScale(2));
+        return out;
+    }
+
+    /**
+     * THE money rule (B3 / B4): per method, every live (not voided) 'payment' row minus every live 'refund' row of the
+     * event, counted on the Africa/Cairo day the ROW was written ({@code day} null = every day). Methods with no row
+     * are absent.
+     */
+    static Map<String, BigDecimal> netByMethod(JdbcTemplate jdbc, UUID tenantId, UUID eventId, java.time.LocalDate day) {
+        List<Object> args = new ArrayList<>(List.of(eventId, tenantId));
+        if (day != null) args.add(day.toString());
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT p.method, SUM(CASE WHEN p.kind = 'payment' THEN p.amount ELSE -p.amount END) AS total " +
+                "FROM bazar_payments p JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
+                "WHERE s.event_id = ? AND s.tenant_id = ? AND p.kind IN ('payment', 'refund') " +
+                (day != null ? "  AND (p.created_at AT TIME ZONE 'Africa/Cairo')::date = ?::date " : "") +
+                "  AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
+                "GROUP BY p.method ORDER BY p.method", args.toArray())) {
+            out.put((String) r.get("method"), ((BigDecimal) r.get("total")).setScale(2));
+        }
         return out;
     }
 
@@ -884,7 +932,7 @@ public class BazarSaleService {
 
     private Map<String, Object> lockActiveSale(UUID tenantId, UUID eventId, UUID saleId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT id, status, piece_id, transfer_piece_id, sold_by, price, exchange_of_sale_id, " +
+            "SELECT id, status, piece_id, transfer_piece_id, sold_by, price, exchange_of_sale_id, business_day, " +
             "       sold_at > now() - make_interval(secs => ?) AS recent " +
             "FROM bazar_sales WHERE id = ? AND event_id = ? AND tenant_id = ? FOR UPDATE",
             UNDO_WINDOW_SECONDS, saleId, eventId, tenantId);
@@ -898,6 +946,13 @@ public class BazarSaleService {
                 "This sale was already undone.", "تم إلغاء عملية البيع هذه بالفعل.", HttpStatus.CONFLICT);
         }
         return rows.get(0);
+    }
+
+    /** Has the event's business day {@code day} been closed (B4)? Any close counts — a re-close only replaces it. */
+    private boolean dayClosed(UUID tenantId, UUID eventId, Object day) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM bazar_day_closes WHERE event_id = ? AND tenant_id = ? AND business_day = ?::date)",
+            Boolean.class, eventId, tenantId, String.valueOf(day)));
     }
 
     private void requireOwnRecentOrManager(Map<String, Object> ev, Map<String, Object> sale, Actor actor) {
@@ -1001,6 +1056,12 @@ public class BazarSaleService {
         return new BazarException(BazarException.Code.BAZAR_PIECE_NOT_HERE,
             "This piece isn't at this bazar — it wasn't sent out with its stock.",
             "هذه القطعة ليست في هذا البازار — لم تُرسل مع بضاعته.", HttpStatus.CONFLICT);
+    }
+
+    private static BazarException pieceDamaged() {
+        return new BazarException(BazarException.Code.BAZAR_PIECE_DAMAGED,
+            "This piece was returned damaged — it can't be sold.",
+            "هذه القطعة أُرجعت تالفة — لا يمكن بيعها.", HttpStatus.CONFLICT);
     }
 
     private static BazarException notASeller() {

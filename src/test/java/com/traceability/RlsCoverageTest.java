@@ -271,7 +271,13 @@ class RlsCoverageTest {
             // Bazar POS B3 — read-only piece lookup under TenantContext + RLS (findPiece / sales / transfer pieces
             // all tenant-scoped); another tenant's event → 404 and another tenant's piece → not found in
             // BazarReturnExchangeTest.lookup_*.
-            "/api/v1/bazar-events/{eventId}/piece"
+            "/api/v1/bazar-events/{eventId}/piece",
+            // Bazar POS B4 — owner / manager only; every read is tenant-scoped under TenantContext + RLS (closes,
+            // sales, payments); app_user isolation with a same-tenant positive control in
+            // BazarDayCloseTest.rls_appUser_seesOnlyItsOwnCloses, another tenant's event → 404 in
+            // BazarDayCloseTest.anotherTenantsEvent_isNotFound, worker 403 / flag off 404 in BazarDaysHttpTest.
+            "/api/v1/bazar-events/{eventId}/days",
+            "/api/v1/bazar-events/{eventId}/days/{day}/close-preview"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
