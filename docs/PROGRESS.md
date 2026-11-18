@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Bazar POS B4 — close the day + live prices + damaged pieces (2026-11-18; branch `feat/bazar-b4` from main 35b999c8;
+V235; review change made, MERGED 2026-11-18, not deployed).** Data model (V235): `bazar_day_closes` — one APPEND-ONLY row per close of
+one business day (Africa/Cairo date) of one event (app_user INSERT / SELECT only); a re-close is a new row with
+`supersedes_id` → the close it replaces (first close per event + day UNIQUE, a close superseded at most once, composite FK
+keeps it on the same tenant / event / day); entered (opening_float, cash_counted, card_settlement, instapay_received,
+cash_kept, note), the expected snapshot (net_cash / net_card / net_instapay, expected_*), the result (differences,
+not_received_total, over_total, take_home), closed_by / closed_at, client_request_id (UNIQUE per tenant). RLS NULLIF +
+FORCE. `BazarDayService` is the ONE writer (BazarDayGuardTest) — owner / manager only, no Shopify, no sale / money row.
+**The rule** (`BazarDayService.calculate`): a day's expected money = `BazarSaleService.netByMethod` for that day (live
+payments − refunds grouped by `bazar_payments.business_day` — the same source as /today; V235 adds the column: real
+money (sales, refunds, exchange differences) = the Cairo date it was written; a payment-method correction's void AND
+replacement inherit the business_day of the row they replace, so a correction never moves money onto the edit day —
+review change, approved 2026-11-18); cash expected = opening float +
+cash net, card = card net, InstaPay = InstaPay net; difference = entered − expected; InstaPay unticked = the whole
+InstaPay amount not received; "X EGP not received" = cash short + card short + InstaPay not received; money over is
+shown as over and never offsets a shortfall; take-home = counted − kept (kept ≤ counted). **Opening float:** asked at the
+event's FIRST close (not at event start — no B1 change); later days default to the previous close's cash_kept, a
+re-close to the day's own float; can be typed on any close. **Status per day:** open / closed_balanced / closed_short /
+changed_after_close — the last when a money row of the day was written (or one of its rows voided) after the close, or
+(backstop for a row stamped before but committed after the close) the day's nets ≠ the close snapshot. Closing never
+stops selling. Endpoints (`BazarDaysController`, owner / manager, worker 403): GET /bazar-events/{id}/days, GET
+…/days/{day}/close-preview?cash=&card=&instapay=&kept=&float= (pure calculation, `problems` instead of refusals), POST
+…/days/{day}/close (idempotent on client_request_id). `BazarDayService.dayReport` is the per-day money summary for B5.
+**B2 rule tightened:** a seller may change their own sale's method only until the sale's business day is closed
+(BAZAR_DAY_CLOSED, 403); owner / manager may after it, which flags the day. Fixing yesterday's sale's method today changes
+yesterday's split (cash −X / InstaPay +X) and flags yesterday changed-after-close; today's totals are unchanged.
+Screens: phone Home "Close
+day" (owner / manager) → `/bazar/:id/close` (today by default; chips for earlier open / changed days); desktop event
+page: Days card (status badges, "Close this day" / "Close again") + the same form in a modal (`CloseDayForm`, live
+preview, red not-received box with the split, over box, take-home, weak-signal retry with the same request id).
+**From the B3 live test:** prices are editable while the event is live — the B1 endpoints already allowed it (only
+ended is refused); the live page gets "Change prices" (the B1 prices table + a note that past sales keep their price).
+New `BAZAR_PIECE_DAMAGED` (EN + AR) when selling a piece returned damaged at this bazar, or scanning it as an
+exchange's new piece (was BAZAR_PIECE_NOT_HERE); GET /piece adds `damaged`. Approved test edit made:
+`BazarReturnExchangeTest.returnDamaged_…_neverSoldAgain` now expects BAZAR_PIECE_DAMAGED. Next: B5 end event + report.
+
 **Bazar POS B3 — return + exchange + whole-pound prices (2026-11-17; branch `feat/bazar-b3` from main e69c7064;
 V234; MERGED 2026-11-18, not deployed).** Data model (V234): `bazar_sales.status` gains `'returned'` + `returned_at`
 / `returned_by` / `return_condition` ('good' | 'damaged') / `return_client_request_id` (UNIQUE per tenant) and

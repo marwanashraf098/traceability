@@ -37,7 +37,13 @@ public class BazarException extends RuntimeException {
         BAZAR_INVALID_PHONE,
         // B3 — return / exchange
         BAZAR_NOT_SOLD_HERE,
-        BAZAR_ALREADY_RETURNED
+        BAZAR_ALREADY_RETURNED,
+        // B4 — close the day
+        BAZAR_DAY_CLOSED,
+        BAZAR_DAY_NOT_CLOSABLE,
+        BAZAR_OPENING_FLOAT_REQUIRED,
+        BAZAR_MANAGERS_ONLY,
+        BAZAR_PIECE_DAMAGED
     }
 
     private final Code       code;

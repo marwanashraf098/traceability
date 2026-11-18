@@ -70,7 +70,8 @@ function Home({ live }: { live: BazarLive }) {
       {manager && (
         <div className="grid grid-cols-2 gap-2.5">
           <button type="button" className={secondary.replace('52px', '46px')}
-            onClick={() => setSoon(t('bazar.phone.closeDay'))}>{t('bazar.phone.closeDay')}</button>
+            data-testid="home-close-day"
+            onClick={() => navigate(`/bazar/${encodeURIComponent(live.eventId)}/close`)}>{t('bazar.phone.closeDay')}</button>
           <button type="button" className={secondary.replace('52px', '46px')}
             onClick={() => setSoon(t('bazar.phone.endEvent'))}>{t('bazar.phone.endEvent')}</button>
         </div>

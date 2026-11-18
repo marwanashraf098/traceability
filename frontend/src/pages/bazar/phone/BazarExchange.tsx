@@ -34,6 +34,7 @@ function notForSale(p: BazarPieceLookup): BazarError | null {
     return new BazarError(409, { code: 'BAZAR_ALREADY_SOLD', details: {
       sale_number: p.sale?.sale_number, sold_at: p.sale?.sold_at, seller_name: p.sale?.seller_name } })
   }
+  if (p.damaged) return new BazarError(409, { code: 'BAZAR_PIECE_DAMAGED' })
   return new BazarError(409, { code: 'BAZAR_PIECE_NOT_HERE' })
 }
 
