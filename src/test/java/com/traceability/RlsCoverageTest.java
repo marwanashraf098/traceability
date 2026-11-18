@@ -283,6 +283,8 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        Map.entry("/api/v1/exchanges/{id}/original-lines",
+            "app_user HTTP isolation + positive control in ExchangeMultiItemHttpAppUserTest.h3"),
         Map.entry("/api/v1/exchanges/{id}/order-search",
             "app_user HTTP isolation + positive control in ExchangeOrderLinkHttpAppUserTest.x8"),
         Map.entry("/api/v1/tenant/shopify-returns-sync",
