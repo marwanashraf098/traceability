@@ -34,7 +34,10 @@ public class BazarException extends RuntimeException {
         BAZAR_SALE_NOT_FOUND,
         BAZAR_SALE_UNDONE,
         BAZAR_UNDO_NOT_ALLOWED,
-        BAZAR_INVALID_PHONE
+        BAZAR_INVALID_PHONE,
+        // B3 — return / exchange
+        BAZAR_NOT_SOLD_HERE,
+        BAZAR_ALREADY_RETURNED
     }
 
     private final Code       code;

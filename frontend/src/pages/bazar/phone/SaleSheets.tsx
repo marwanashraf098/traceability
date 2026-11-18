@@ -23,9 +23,25 @@ export function canEditSale(sale: BazarSale): boolean {
 }
 
 export function canUndoSale(sale: BazarSale, now = Date.now()): boolean {
-  if (sale.status !== 'active') return false
+  if (sale.status !== 'active' || sale.exchange_of_sale_id) return false
   if (managesBazar()) return true
   return isMine(sale) && now - new Date(sale.sold_at).getTime() < SELLER_UNDO_WINDOW_MS
+}
+
+/** Undone · Returned · Exchanged (the old half) · Exchange (the new half) · else the method. */
+export function SaleBadge({ sale }: { sale: BazarSale }) {
+  const { t } = useTranslation()
+  const neutral = 'badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]'
+  const warn = 'badge border bg-warning/[0.12] text-warning-text border-warning/[0.30]'
+  const info = 'badge border bg-trace-blue/[0.10] text-trace-blue border-trace-blue/[0.30]'
+  if (sale.status === 'undone') return <span className={neutral}>{t('bazar.sell.undoneShort')}</span>
+  if (sale.status === 'returned') {
+    return sale.exchanged_for_sale_number
+      ? <span className={info} data-testid="badge-exchanged">{t('bazar.sell.exchangedBadge')}</span>
+      : <span className={warn} data-testid="badge-returned">{t('bazar.sell.returnedBadge')}</span>
+  }
+  if (sale.exchange_of_sale_number) return <span className={info} data-testid="badge-exchange">{t('bazar.sell.exchangeBadge')}</span>
+  return sale.method ? <span className={neutral}>{t(`bazar.method.${sale.method}`)}</span> : null
 }
 
 export function MethodChips({ methods, value, onPick, busy, tone = 'plain', disabled }: {
@@ -182,12 +198,25 @@ export function SaleSheet({ eventId, sale, methods, onChanged, onClose }: {
             {current.piece_code && <> · <span className="font-mono" dir="ltr">{current.piece_code}</span></>}
           </span>
         </div>
-        <span className={cn('text-h4 font-bold tabular-nums', current.status === 'undone' && 'line-through text-muted')}>
+        <span className={cn('text-h4 font-bold tabular-nums', current.status !== 'active' && 'line-through text-muted')}>
           {formatMoney(current.price)}
         </span>
       </div>
       {current.status === 'undone' && (
         <p className="text-small font-semibold text-muted" data-testid="sale-undone">{t('bazar.sell.undoneLabel')}</p>
+      )}
+      {current.status === 'returned' && (
+        <p className="text-small font-semibold text-warning-text" data-testid="sale-returned">
+          {current.exchanged_for_sale_number
+            ? t('bazar.sell.exchangedLabel', { number: current.exchanged_for_sale_number, time: saleTime(current.returned_at) })
+            : t('bazar.sell.returnedLabel', { time: saleTime(current.returned_at), name: current.returned_by_name ?? '' })}
+          {current.return_condition === 'damaged' && ` · ${t('bazar.ret.cond.damaged')}`}
+        </p>
+      )}
+      {current.exchange_of_sale_number && (
+        <p className="text-small text-muted" data-testid="sale-exchange-of">
+          {t('bazar.sell.exchangeOfLabel', { number: current.exchange_of_sale_number })}
+        </p>
       )}
 
       {current.status === 'active' && (

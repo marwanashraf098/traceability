@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Bazar POS B3 — return + exchange + whole-pound prices (2026-11-17; branch `feat/bazar-b3` from main e69c7064;
+V234; MERGED 2026-11-18, not deployed).** Data model (V234): `bazar_sales.status` gains `'returned'` + `returned_at`
+/ `returned_by` / `return_condition` ('good' | 'damaged') / `return_client_request_id` (UNIQUE per tenant) and
+`exchange_of_sale_id` (the new half of an exchange → the old sale; UNIQUE, a sale is exchanged once). No new payment
+kind. `BazarSaleService` (still the ONE writer): `POST /bazar-events/{id}/return` {code, condition, method?,
+client_request_id} — only a piece with an ACTIVE sale at THIS event while live (else BAZAR_NOT_SOLD_HERE /
+BAZAR_ALREADY_RETURNED), approved edge sold → out_on_transfer (event `bazar_returned`); good → transfer piece
+outstanding again (qty_sold −1, sellable again); damaged → then out_on_transfer → damaged (event
+`bazar_return_damaged`), transfer piece `condemned` (qty_condemned +1; the piece stays at the bazar location, damaged).
+One `refund` row = sale price, method default = how they paid. `POST /exchange` {old_code, new_code, method?,
+condition? (default good), client_request_id}: one transaction — old sale returned (no refund: credited), new sale with
+`exchange_of_sale_id` + the customer copied, only the DIFFERENCE moves (on the new sale: `payment` if dearer, `refund`
+if cheaper, nothing if even); any refusal → nothing changes. Idempotent like /sell (shared advisory lock per request
+id). An exchange's new sale can't be undone (BAZAR_UNDO_NOT_ALLOWED — undoing one half would lose the credit); its
+method change re-writes its difference row (`changePayment` now re-writes every live row with the same kind / amount).
+`GET /bazar-events/{id}/piece?code=` (read-only): for_sale / sold / returned / not_here + price + sale — the phone's
+preview. **Totals:** `BazarSaleService.summary` — money = live payments − refunds counted on the day the ROW was
+written (a returned sale's payment stays; undone = voided); revenue = sales (not undone) − returned sales' prices; equal
+by construction. `/today` + detail `today` add returns / exchanges / revenue; detail adds `totals` (whole event).
+**Pricing fix:** a bulk-rule price is always whole pounds (round_to null / < 1 → 1); round_to must be a whole number
+≥ 1; overrides refuse piasters; the prices screen pre-fills round-to 5 (existing rows change only when the rule is
+next applied). Phone: Home's Return / Exchange and a Sell · Return · Exchange switch open `/bazar/:id/return` and
+`/exchange` (camera + HID input, preview, condition, method, big money line, same-request-id retry via
+`useRetryingCommand`); recent lists show Returned / Exchanged / Exchange badges. **Review (approved 2026-11-18):** test edits made — `BazarPricingTest.percentOff_withoutRounding_roundsToWholePounds`
+(279.00 / 85.00 / 5.00) and bazarB6 "Phone home … Return opens the Return screen"; GET /piece already masks the
+customer phone for a worker (saleView) — locked by `BazarReturnExchangeTest.lookup_workerSeesTheCustomerPhoneMasked_…`,
+revert-checked; extras approved as built (exchange condition default good, GET /piece, exchange new half not undoable).
+RestockGateMainLocationTest's earlier g1/g3 red was load: 4/4 alone after a Docker restart (a stuck 55-day Docker
+backend whose VM was unreachable — `docker desktop restart` fixed it; quitting via osascript hung). Next: B4 close day (reads
+`summary` by payment day).
+
 **Bazar POS B6 — screens: desktop setup + phone selling (2026-11-16; branch `feat/bazar-b6` from main a2854627; no
 migration; review fixes 2026-11-16, merged).** Frontend on the B1 + B2 API; backend: GET /me (below), GET
 /bazar-events/{id}/today and the customer edit's partial update (review fixes). GET /me:

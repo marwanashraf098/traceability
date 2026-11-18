@@ -32,6 +32,22 @@ public class BazarSalesController {
         return sales.sell(eventId, req.code(), req.clientRequestId(), req.method(), actor(principal));
     }
 
+    /** B3: take back a piece sold at this event. */
+    @PostMapping("/return")
+    public Map<String, Object> returnSale(@PathVariable UUID eventId, @RequestBody ReturnRequest req,
+                                          @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.returnSale(eventId, req.code(), req.method(), req.condition(), req.clientRequestId(),
+            actor(principal));
+    }
+
+    /** B3: the old piece back, the new piece sold — one transaction; only the difference moves as money. */
+    @PostMapping("/exchange")
+    public Map<String, Object> exchange(@PathVariable UUID eventId, @RequestBody ExchangeRequest req,
+                                        @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.exchange(eventId, req.oldCode(), req.newCode(), req.method(), req.condition(),
+            req.clientRequestId(), actor(principal));
+    }
+
     @PostMapping("/sales/{saleId}/undo")
     public Map<String, Object> undo(@PathVariable UUID eventId, @PathVariable UUID saleId,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
@@ -54,6 +70,13 @@ public class BazarSalesController {
         boolean phoneSent = req != null && req.has("phone");
         return sales.editCustomer(eventId, saleId, nameSent, text(req, "name"), phoneSent, text(req, "phone"),
             actor(principal));
+    }
+
+    /** B3: what a scanned piece is at this event (read-only) — the Return / Exchange screens' preview. */
+    @GetMapping("/piece")
+    public Map<String, Object> piece(@PathVariable UUID eventId, @RequestParam String code,
+                                     @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.lookupPiece(eventId, code, actor(principal));
     }
 
     @GetMapping("/today")
@@ -87,4 +110,20 @@ public class BazarSalesController {
                               String method) {}
 
     public record PaymentRequest(String method) {}
+
+    /** condition: good | damaged (required). method: optional — default the method the customer paid with. */
+    public record ReturnRequest(String code, String method, String condition,
+                                @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
+                                @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")
+                                String clientRequestId) {}
+
+    /** condition: optional, the old piece's (default good). method: for the difference, when there is one. */
+    public record ExchangeRequest(@com.fasterxml.jackson.annotation.JsonProperty("old_code")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("oldCode") String oldCode,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("new_code")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("newCode") String newCode,
+                                  String method, String condition,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")
+                                  String clientRequestId) {}
 }

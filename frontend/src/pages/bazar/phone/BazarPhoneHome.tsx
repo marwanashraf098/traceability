@@ -44,8 +44,10 @@ function Home({ live }: { live: BazarLive }) {
         <ScanLine size={26} aria-hidden />{t('bazar.phone.startSelling')}
       </button>
       <div className="grid grid-cols-2 gap-2.5">
-        <button type="button" className={secondary} onClick={() => setSoon(t('bazar.phone.return'))}>{t('bazar.phone.return')}</button>
-        <button type="button" className={secondary} onClick={() => setSoon(t('bazar.phone.exchange'))}>{t('bazar.phone.exchange')}</button>
+        <button type="button" className={secondary}
+          onClick={() => navigate(`/bazar/${encodeURIComponent(live.eventId)}/return`)}>{t('bazar.phone.return')}</button>
+        <button type="button" className={secondary}
+          onClick={() => navigate(`/bazar/${encodeURIComponent(live.eventId)}/exchange`)}>{t('bazar.phone.exchange')}</button>
       </div>
 
       <section className="card p-3.5 flex flex-col gap-2" data-testid="bazar-today">
@@ -57,7 +59,9 @@ function Home({ live }: { live: BazarLive }) {
         </div>
         {today && (
           <span className="text-small text-muted">
-            {[t('bazar.phone.pieces', { count: today.sale_count }), ...sellers].join(' · ')}
+            {[t('bazar.phone.pieces', { count: today.sale_count }), ...sellers,
+              ...(today.returns ? [t('bazar.phone.returnsCount', { count: today.returns })] : []),
+              ...(today.exchanges ? [t('bazar.phone.exchangesCount', { count: today.exchanges })] : [])].join(' · ')}
           </span>
         )}
       </section>

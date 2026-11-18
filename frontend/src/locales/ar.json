@@ -7039,7 +7039,7 @@
       "roundToAria": "تقريب أسعار البازار إلى",
       "apply": "تطبيق",
       "clearRule": "الرجوع لأسعار Shopify",
-      "ruleInvalid": "يجب أن يكون الخصم أكثر من 0% وأقل من 100%، والتقريب أكبر من 0.",
+      "ruleInvalid": "يجب أن يكون الخصم أكثر من 0% وأقل من 100%، والتقريب عددًا صحيحًا من الجنيهات، 1 أو أكثر.",
       "product": "المنتج",
       "atBazar": "في البازار",
       "shopify": "سعر Shopify",
@@ -7077,7 +7077,8 @@
       "recentSales": "آخر المبيعات",
       "phoneTitle": "بِع من أي موبايل",
       "phoneBody": "لا تحتاج لابتوب. افتح Traced على موبايلك وسجّل الدخول: البازار الجاري يفتح أولًا.",
-      "qrHint": "اختصار اختياري: امسح الكود لفتح البيع على الموبايل."
+      "qrHint": "اختصار اختياري: امسح الكود لفتح البيع على الموبايل.",
+      "eventTotal": "البازار كله"
     },
     "phone": {
       "startSelling": "ابدأ البيع",
@@ -7100,7 +7101,19 @@
       "close": "إغلاق",
       "notLiveTitle": "هذا البازار ليس جاريًا",
       "notLiveBody": "البيع يُفتح عندما يبدأ المالك أو المدير الفعالية — وفقط للأدوار المسموح لها بالبيع.",
-      "networkError": "لا يوجد اتصال — حاول مرة أخرى."
+      "networkError": "لا يوجد اتصال — حاول مرة أخرى.",
+      "returnsCount_zero": "لا مرتجعات",
+      "returnsCount_one": "مرتجع واحد",
+      "returnsCount_two": "مرتجعان",
+      "returnsCount_few": "{{count}} مرتجعات",
+      "returnsCount_many": "{{count}} مرتجعًا",
+      "returnsCount_other": "{{count}} مرتجع",
+      "exchangesCount_zero": "لا استبدالات",
+      "exchangesCount_one": "استبدال واحد",
+      "exchangesCount_two": "استبدالان",
+      "exchangesCount_few": "{{count}} استبدالات",
+      "exchangesCount_many": "{{count}} استبدالًا",
+      "exchangesCount_other": "{{count}} استبدال"
     },
     "sell": {
       "home": "الرئيسية",
@@ -7149,7 +7162,13 @@
       "salesCount_other": "{{count}} عملية",
       "defaultPay": "الدفع الافتراضي: {{method}}",
       "byYou": "أنت",
-      "notYours": "يمكن فقط للبائع الذي أجرى هذه العملية، أو المالك أو المدير، تعديلها."
+      "notYours": "يمكن فقط للبائع الذي أجرى هذه العملية، أو المالك أو المدير، تعديلها.",
+      "returnedBadge": "مرتجع",
+      "exchangedBadge": "تم استبداله",
+      "exchangeBadge": "استبدال",
+      "returnedLabel": "تم الإرجاع الساعة {{time}} بواسطة {{name}}",
+      "exchangedLabel": "تم الاستبدال الساعة {{time}} بـ {{number}}",
+      "exchangeOfLabel": "استبدال لـ {{number}}"
     },
     "customer": {
       "title": "العميل",
@@ -7181,7 +7200,61 @@
       "eventGone": "هذا البازار غير متاح.",
       "undoNotAllowed": "فات وقت تعديل هذه العملية — اطلب من المالك أو المدير.",
       "saleUndone": "تم إلغاء عملية البيع هذه بالفعل.",
-      "invalidPhone": "أدخل رقم موبايل مصري، مثل 01012345678."
+      "invalidPhone": "أدخل رقم موبايل مصري، مثل 01012345678.",
+      "notSoldHere": "لم تُبع في هذا البازار",
+      "notSoldHereDetail": "يمكن إرجاع أو استبدال القطع التي بيعت هنا فقط، أثناء تشغيل البازار.",
+      "alreadyReturned": "تم إرجاعها بالفعل",
+      "alreadyReturnedDetail": "تم إرجاع {{number}} بواسطة {{name}}.",
+      "samePiece": "هذه هي القطعة المرتجعة — امسح قطعة مختلفة."
+    },
+    "tabs": {
+      "label": "إجراءات البازار",
+      "sell": "بيع",
+      "return": "إرجاع",
+      "exchange": "استبدال"
+    },
+    "ret": {
+      "intro": "امسح القطعة التي أعادها العميل.",
+      "scanHint": "امسح القطعة المرتجعة",
+      "looking": "جارٍ البحث…",
+      "coming": "القطعة المرتجعة",
+      "refund": "استرداد",
+      "rescan": "تغيير",
+      "soldAt": "{{number}} · بيعت {{time}} · {{seller}}",
+      "condition": "حالتها",
+      "cond": {
+        "good": "سليمة",
+        "goodHint": "تعود للبيع",
+        "damaged": "تالفة",
+        "damagedHint": "لن تُباع مرة أخرى"
+      },
+      "paidBackBy": "رد المبلغ عن طريق",
+      "confirm": "تأكيد الإرجاع · {{amount}}",
+      "sending": "جارٍ حفظ الإرجاع…",
+      "checkingBody": "الإشارة ضعيفة — نتأكد أن العملية تمت. لا ترد المبلغ حتى يظهر «تم الإرجاع».",
+      "doneTitle": "تم الإرجاع · {{number}}",
+      "doneGiveBack": "رد {{amount}} · {{method}}",
+      "doneGood": "عادت للبيع في البازار.",
+      "doneDamaged": "تم تسجيلها تالفة — لن تُباع مرة أخرى.",
+      "next": "إرجاع آخر"
+    },
+    "exch": {
+      "step1": "1 · امسح القطعة المرتجعة",
+      "step2": "2 · امسح القطعة الجديدة",
+      "scanOldHint": "امسح القطعة المرتجعة",
+      "scanNewHint": "امسح القطعة الجديدة",
+      "difference": "الفرق",
+      "noMoney": "لا يوجد فرق في المبلغ",
+      "customerPays": "العميل يدفع {{amount}}",
+      "giveBack": "رد {{amount}}",
+      "even": "استبدال بدون فرق",
+      "paidBy": "العميل يدفع عن طريق",
+      "damaged": "القطعة المرتجعة تالفة (لا تبعها مرة أخرى)",
+      "returnOnly": "إرجاع فقط؟ استخدم تبويب الإرجاع: امسح القطعة واختر طريقة رد المبلغ.",
+      "confirm": "إتمام الاستبدال",
+      "doneTitle": "تم الاستبدال · {{old}} ← {{number}}",
+      "doneTook": "خذ {{amount}} · {{method}}",
+      "next": "استبدال آخر"
     }
   }
 }

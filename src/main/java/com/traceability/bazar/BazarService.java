@@ -235,8 +235,13 @@ public class BazarService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = event(tenantId, eventId, true);
         if ("ended".equals(ev.get("status"))) throw ended();
-        if (price == null || price.signum() < 0 || price.scale() > 2 || price.compareTo(new BigDecimal("99999999.99")) > 0) {
-            throw invalid("Enter a price of 0 or more (up to 2 decimals).", "أدخل سعرًا 0 أو أكثر (حتى رقمين عشريين).");
+        if (price == null || price.signum() < 0 || price.compareTo(new BigDecimal("99999999")) > 0) {
+            throw invalid("Enter a price of 0 or more.", "أدخل سعرًا 0 أو أكثر.");
+        }
+        // B3 (approved 2026-11-17): bazar prices are whole pounds — no piasters.
+        if (!isWhole(price)) {
+            throw invalid("Use whole pounds — no piasters (for example 1840, not 1840.97).",
+                "استخدم جنيهات كاملة — بدون قروش (مثلًا 1840 وليس 1840.97).");
         }
         requireVariant(tenantId, variantId);
         jdbc.update(
@@ -365,6 +370,8 @@ public class BazarService {
         @SuppressWarnings("unchecked")
         List<String> methods = (List<String>) out.get("payment_methods");
         out.put("today", BazarSaleService.today(jdbc, tenantId, eventId, methods));
+        // B3: the whole event — money that moved (payments − refunds) and revenue (sales − returns).
+        out.put("totals", BazarSaleService.summary(jdbc, tenantId, eventId, methods, false));
         return out;
     }
 
@@ -396,9 +403,15 @@ public class BazarService {
             throw invalid("The discount must be more than 0% and less than 100%.",
                 "يجب أن يكون الخصم أكثر من 0% وأقل من 100%.");
         }
-        if (roundTo != null && (roundTo.signum() <= 0 || roundTo.scale() > 2)) {
-            throw invalid("Round-to must be more than 0.", "يجب أن تكون قيمة التقريب أكبر من 0.");
+        if (roundTo != null && (roundTo.compareTo(BigDecimal.ONE) < 0 || !isWhole(roundTo))) {
+            throw invalid("Round to a whole number of pounds, 1 or more.",
+                "قرّب إلى عدد صحيح من الجنيهات، 1 أو أكثر.");
         }
+    }
+
+    /** 1840 / 1840.00 → true; 1840.97 / 0.5 → false. */
+    static boolean isWhole(BigDecimal v) {
+        return v.signum() == 0 || v.stripTrailingZeros().scale() <= 0;
     }
 
     private static String[] subset(List<String> given, List<String> dflt, Set<String> allowed, String en, String ar) {

@@ -56,6 +56,8 @@ public class BazarSaleService {
 
     static final String SOLD_EVENT   = "bazar_sold";
     static final String UNDONE_EVENT = "bazar_sale_undone";
+    static final String RETURNED_EVENT = "bazar_returned";
+    static final String RETURN_DAMAGED_EVENT = "bazar_return_damaged";
 
     private static final Set<String> MANAGERS = Set.of("owner", "manager");
 
@@ -81,12 +83,9 @@ public class BazarSaleService {
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
 
-        String crid = clientRequestId == null ? "" : clientRequestId.trim();
-        if (crid.isEmpty() || crid.length() > 100) {
-            throw invalid("Missing request id (client_request_id).", "معرّف الطلب مفقود (client_request_id).");
-        }
+        String crid = requestId(clientRequestId);
         // One sale per request id: a concurrent retry waits here for the first, then finds its sale.
-        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenantId + ":bazar-sale:" + crid);
+        lockRequest(tenantId, crid);
         List<UUID> existing = jdbc.queryForList(
             "SELECT id FROM bazar_sales WHERE tenant_id = ? AND client_request_id = ?", UUID.class, tenantId, crid);
         if (!existing.isEmpty()) {
@@ -95,7 +94,22 @@ public class BazarSaleService {
             return first;
         }
 
-        // The piece — same normalizer and triple match as every piece scan.
+        Prepared sale = prepareSale(tenantId, eventId, ev, findPiece(tenantId, code), code);
+        String chosen = resolveMethod(ev, method);
+        UUID saleId = writeSale(tenantId, eventId, ev, sale, crid, actor, null, null, null);
+        insertPayment(tenantId, saleId, chosen, sale.price(), actor.userId());
+
+        Map<String, Object> out = saleView(tenantId, saleId, actor);
+        out.put("replayed", false);
+        return out;
+    }
+
+    /** A piece ready to be sold at the event: checked, nothing written yet. */
+    private record Prepared(String pieceId, UUID variantId, UUID transferPieceId, UUID lineId, BigDecimal price,
+                            String priceSource, String code) {}
+
+    /** The piece — same normalizer and triple match as every piece scan. Untagged → refused. */
+    private Map<String, Object> findPiece(UUID tenantId, String code) {
         String lookup = ScanInputNormalizer.normalizePiece(code == null ? "" : code);
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT id, variant_id, status::text AS status, short_code FROM pieces " +
@@ -110,6 +124,12 @@ public class BazarSaleService {
                 "This piece has no barcode yet (untagged), so it can't be sold here yet.",
                 "هذه القطعة بدون باركود بعد (غير مُلصقة)، لذلك لا يمكن بيعها هنا بعد.", HttpStatus.CONFLICT);
         }
+        return piece;
+    }
+
+    /** Is the piece at this bazar, unsold and priced? Nothing is written. */
+    private Prepared prepareSale(UUID tenantId, UUID eventId, Map<String, Object> ev, Map<String, Object> piece,
+                                 String code) {
         String pieceId   = (String) piece.get("id");
         UUID   variantId = (UUID) piece.get("variant_id");
         UUID   transferId = (UUID) ev.get("transfer_id");
@@ -130,28 +150,35 @@ public class BazarSaleService {
                 "Set a price first — this product has no bazar price yet.",
                 "حدّد السعر أولًا — هذا المنتج ليس له سعر في البازار بعد.", HttpStatus.CONFLICT);
         }
-        BigDecimal price = (BigDecimal) prices.get(0).get("price");
-        String chosen = resolveMethod(ev, method);
+        return new Prepared(pieceId, variantId, (UUID) tp.get("id"), (UUID) tp.get("line_id"),
+            (BigDecimal) prices.get(0).get("price"), (String) prices.get(0).get("source"), code);
+    }
 
+    /** The sale's writes (no money row): the ledger edge, the transfer piece, the counter, the sale row. */
+    private UUID writeSale(UUID tenantId, UUID eventId, Map<String, Object> ev, Prepared p, String crid, Actor actor,
+                           UUID exchangeOf, String customerName, String customerPhone) {
+        UUID transferId = (UUID) ev.get("transfer_id");
         UUID saleId = UUID.randomUUID();
         // The referee: the ledger's race-guarded UPDATE. The loser of two concurrent scans lands here.
         try {
-            ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, PieceStatus.SOLD, SOLD_EVENT, actor.userId(),
+            ledger.transition(p.pieceId(), PieceStatus.OUT_ON_TRANSFER, PieceStatus.SOLD, SOLD_EVENT, actor.userId(),
                 new TransitionContext(null, null, (UUID) ev.get("location_id"), null,
                     "{\"event_id\":\"" + eventId + "\",\"transfer_id\":\"" + transferId
-                        + "\",\"sale_id\":\"" + saleId + "\"}", code));
+                        + "\",\"sale_id\":\"" + saleId + "\""
+                        + (exchangeOf == null ? "" : ",\"exchange_of_sale_id\":\"" + exchangeOf + "\"") + "}",
+                    p.code()));
         } catch (StateConflictException e) {
             // The whole transaction rolls back with this error — nothing of this attempt is written.
-            if (e.getActual() == PieceStatus.SOLD) throw alreadySold(tenantId, pieceId, eventId);
+            if (e.getActual() == PieceStatus.SOLD) throw alreadySold(tenantId, p.pieceId(), eventId);
             throw notHere();
         }
 
         int claimed = jdbc.update(
             "UPDATE transfer_pieces SET outcome = 'sold', outcome_verified = true, outcome_at = now(), outcome_by = ? " +
-            "WHERE id = ? AND tenant_id = ? AND outcome IS NULL", actor.userId(), tp.get("id"), tenantId);
-        if (claimed != 1) throw new IllegalStateException("bazar sale: transfer piece " + tp.get("id") + " not open");
+            "WHERE id = ? AND tenant_id = ? AND outcome IS NULL", actor.userId(), p.transferPieceId(), tenantId);
+        if (claimed != 1) throw new IllegalStateException("bazar sale: transfer piece " + p.transferPieceId() + " not open");
         jdbc.update("UPDATE transfer_lines SET qty_sold = qty_sold + 1 WHERE id = ? AND tenant_id = ?",
-            tp.get("line_id"), tenantId);
+            p.lineId(), tenantId);
 
         Integer number = jdbc.queryForObject(
             "INSERT INTO bazar_sale_counters (tenant_id, last_number) VALUES (?, 1) " +
@@ -160,14 +187,297 @@ public class BazarSaleService {
 
         jdbc.update(
             "INSERT INTO bazar_sales (id, tenant_id, event_id, transfer_piece_id, piece_id, variant_id, price, " +
-            "  price_source, sale_number, sold_by, business_day, client_request_id) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (now() AT TIME ZONE 'Africa/Cairo')::date, ?)",
-            saleId, tenantId, eventId, tp.get("id"), pieceId, variantId, price, prices.get(0).get("source"),
-            number, actor.userId(), crid);
-        insertPayment(tenantId, saleId, chosen, price, actor.userId());
+            "  price_source, sale_number, sold_by, business_day, client_request_id, exchange_of_sale_id, " +
+            "  customer_name, customer_phone) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (now() AT TIME ZONE 'Africa/Cairo')::date, ?, ?, ?, ?)",
+            saleId, tenantId, eventId, p.transferPieceId(), p.pieceId(), p.variantId(), p.price(), p.priceSource(),
+            number, actor.userId(), crid, exchangeOf, customerName, customerPhone);
+        return saleId;
+    }
 
-        Map<String, Object> out = saleView(tenantId, saleId, actor);
+    // ── Return (B3) ──────────────────────────────────────────────────────────
+
+    /**
+     * Take back a piece sold at THIS event (an active sale) while the event is live: the approved edge
+     * sold → out_on_transfer (event 'bazar_returned'). Good: the piece is back on the bazar's stock (its transfer
+     * piece outstanding again, the line's qty_sold −1). Damaged: then the existing out_on_transfer → damaged (event
+     * 'bazar_return_damaged') and the transfer piece 'condemned' (qty_condemned +1) — never sold again. One 'refund'
+     * money row on the sale for its price, by the chosen method (default: the one the customer paid with). Same
+     * {@code client_request_id} twice → the first return. Any role in the event's seller_roles. No Shopify write.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> returnSale(UUID eventId, String code, String method, String condition,
+                                          String clientRequestId, Actor actor) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        String crid = requestId(clientRequestId);
+        String cond = condition(condition, false);
+
+        lockRequest(tenantId, crid);
+        List<UUID> existing = jdbc.queryForList(
+            "SELECT id FROM bazar_sales WHERE tenant_id = ? AND return_client_request_id = ?", UUID.class, tenantId, crid);
+        if (!existing.isEmpty()) {
+            Map<String, Object> first = returnView(tenantId, existing.get(0), actor);
+            first.put("replayed", true);
+            return first;
+        }
+
+        Map<String, Object> sale = soldHere(tenantId, eventId, (String) findPiece(tenantId, code).get("id"));
+        UUID saleId = (UUID) sale.get("id");
+        String refundMethod = method == null || method.isBlank() ? paidMethod(tenantId, ev, saleId) : resolveMethod(ev, method);
+
+        takeBack(tenantId, eventId, ev, sale, cond, crid, actor);
+        insertMoney(tenantId, saleId, refundMethod, (BigDecimal) sale.get("price"), "refund", actor.userId());
+
+        Map<String, Object> out = returnView(tenantId, saleId, actor);
         out.put("replayed", false);
+        return out;
+    }
+
+    // ── Exchange (B3) ────────────────────────────────────────────────────────
+
+    /**
+     * One transaction: the old sale returned (as {@link #returnSale}, condition good by default) + a NEW sale of the
+     * new piece linked to it ({@code exchange_of_sale_id}), the customer carried over. The old price is credited, not
+     * paid back — only the DIFFERENCE moves as money, on the new sale: new &gt; old → a 'payment' row, new &lt; old →
+     * a 'refund' row, equal → no money row. Anything refused (new piece not here / no price / already sold, old piece
+     * not sold here) → nothing changes. Same {@code client_request_id} twice → the first exchange.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> exchange(UUID eventId, String oldCode, String newCode, String method, String condition,
+                                        String clientRequestId, Actor actor) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        String crid = requestId(clientRequestId);
+        String cond = condition(condition, true);
+
+        lockRequest(tenantId, crid);
+        List<Map<String, Object>> existing = jdbc.queryForList(
+            "SELECT id, exchange_of_sale_id FROM bazar_sales WHERE tenant_id = ? AND client_request_id = ?",
+            tenantId, crid);
+        if (!existing.isEmpty()) {
+            if (existing.get(0).get("exchange_of_sale_id") == null) {
+                throw invalid("This request id was already used for a sale.", "تم استخدام معرّف الطلب هذا لعملية بيع.");
+            }
+            Map<String, Object> first = exchangeView(tenantId, (UUID) existing.get(0).get("id"), actor);
+            first.put("replayed", true);
+            return first;
+        }
+
+        // Check everything before writing anything (the transaction would roll back anyway).
+        Map<String, Object> oldSale = soldHere(tenantId, eventId, (String) findPiece(tenantId, oldCode).get("id"));
+        Map<String, Object> newPiece = findPiece(tenantId, newCode);
+        if (newPiece.get("id").equals(oldSale.get("piece_id"))) {
+            throw invalid("Scan a different piece for the exchange — this is the one coming back.",
+                "امسح قطعة مختلفة للاستبدال — هذه هي القطعة المرتجعة.");
+        }
+        Prepared next = prepareSale(tenantId, eventId, ev, newPiece, newCode);
+        UUID oldSaleId = (UUID) oldSale.get("id");
+        BigDecimal diff = next.price().subtract((BigDecimal) oldSale.get("price"));
+        String moneyMethod = diff.signum() == 0 ? null
+            : method == null || method.isBlank() ? paidMethod(tenantId, ev, oldSaleId) : resolveMethod(ev, method);
+
+        takeBack(tenantId, eventId, ev, oldSale, cond, crid, actor);
+        UUID newSaleId = writeSale(tenantId, eventId, ev, next, crid, actor, oldSaleId,
+            (String) oldSale.get("customer_name"), (String) oldSale.get("customer_phone"));
+        if (diff.signum() > 0) insertMoney(tenantId, newSaleId, moneyMethod, diff, "payment", actor.userId());
+        if (diff.signum() < 0) insertMoney(tenantId, newSaleId, moneyMethod, diff.negate(), "refund", actor.userId());
+
+        Map<String, Object> out = exchangeView(tenantId, newSaleId, actor);
+        out.put("replayed", false);
+        return out;
+    }
+
+    // ── Piece lookup (B3, read-only) ─────────────────────────────────────────
+
+    /**
+     * What a scanned piece is at this event, for the phone's Return / Exchange screens before they confirm:
+     * {@code state} 'sold' (its active sale here — returnable), 'for_sale' (on the bazar's rail, with its bazar price
+     * or null), 'returned' (its last sale here was returned and it isn't for sale — e.g. damaged), 'not_here'.
+     * Nothing is written. A seller role or owner / manager.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> lookupPiece(UUID eventId, String code, Actor actor) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = event(tenantId, eventId, "");
+        if (!actor.manages() && !sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        Map<String, Object> piece = findPiece(tenantId, code);
+        String pieceId = (String) piece.get("id");
+        Map<String, Object> info = jdbc.queryForMap(
+            "SELECT pc.short_code, pr.title AS product_title, v.title AS variant_title, " +
+            "  (SELECT bp.price FROM bazar_event_prices bp WHERE bp.event_id = ? AND bp.variant_id = pc.variant_id " +
+            "     AND bp.tenant_id = pc.tenant_id) AS price " +
+            "FROM pieces pc JOIN variants v ON v.id = pc.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE pc.id = ? AND pc.tenant_id = ?", eventId, pieceId, tenantId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("piece_id", pieceId);
+        out.put("piece_code", info.get("short_code"));
+        out.put("product_title", info.get("product_title"));
+        out.put("variant_title", info.get("variant_title"));
+        out.put("price", info.get("price"));
+
+        List<UUID> active = jdbc.queryForList("SELECT id FROM bazar_sales WHERE piece_id = ? AND event_id = ? " +
+            "AND tenant_id = ? AND status = 'active'", UUID.class, pieceId, eventId, tenantId);
+        boolean onRail = !jdbc.queryForList(
+            "SELECT 1 FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ? AND tenant_id = ? AND outcome IS NULL",
+            ev.get("transfer_id"), pieceId, tenantId).isEmpty() && "out_on_transfer".equals(piece.get("status"));
+        List<UUID> returned = jdbc.queryForList("SELECT id FROM bazar_sales WHERE piece_id = ? AND event_id = ? " +
+            "AND tenant_id = ? AND status = 'returned' ORDER BY returned_at DESC, id DESC LIMIT 1",
+            UUID.class, pieceId, eventId, tenantId);
+        if (!active.isEmpty()) {
+            out.put("state", "sold");
+            out.put("sale", saleView(tenantId, active.get(0), actor));
+        } else if (onRail) {
+            out.put("state", "for_sale");
+            out.put("sale", null);
+        } else if (!returned.isEmpty()) {
+            out.put("state", "returned");
+            out.put("sale", saleView(tenantId, returned.get(0), actor));
+        } else {
+            out.put("state", "not_here");
+            out.put("sale", null);
+        }
+        return out;
+    }
+
+    /** The return's writes: ledger edge(s), the transfer piece, the line counters, the sale row → 'returned'. */
+    private void takeBack(UUID tenantId, UUID eventId, Map<String, Object> ev, Map<String, Object> sale, String cond,
+                          String crid, Actor actor) {
+        String pieceId = (String) sale.get("piece_id");
+        UUID saleId = (UUID) sale.get("id");
+        UUID locationId = (UUID) ev.get("location_id");
+        String meta = "{\"event_id\":\"" + eventId + "\",\"transfer_id\":\"" + ev.get("transfer_id")
+            + "\",\"sale_id\":\"" + saleId + "\",\"condition\":\"" + cond + "\"}";
+        try {
+            ledger.transition(pieceId, PieceStatus.SOLD, PieceStatus.OUT_ON_TRANSFER, RETURNED_EVENT, actor.userId(),
+                new TransitionContext(null, null, locationId, null, meta, null));
+        } catch (StateConflictException e) {
+            throw alreadyReturned(tenantId, saleId);
+        }
+        boolean damaged = "damaged".equals(cond);
+        if (damaged) {
+            ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, PieceStatus.DAMAGED, RETURN_DAMAGED_EVENT,
+                actor.userId(), new TransitionContext(null, null, locationId, null, meta, null));
+        }
+        int moved = damaged
+            ? jdbc.update("UPDATE transfer_pieces SET outcome = 'condemned', outcome_verified = true, " +
+                "outcome_at = now(), outcome_by = ? WHERE id = ? AND tenant_id = ? AND outcome = 'sold'",
+                actor.userId(), sale.get("transfer_piece_id"), tenantId)
+            : jdbc.update("UPDATE transfer_pieces SET outcome = NULL, outcome_verified = NULL, outcome_at = NULL, " +
+                "outcome_by = NULL WHERE id = ? AND tenant_id = ? AND outcome = 'sold'",
+                sale.get("transfer_piece_id"), tenantId);
+        if (moved != 1) {
+            throw new IllegalStateException("bazar return: transfer piece " + sale.get("transfer_piece_id") + " not sold");
+        }
+        jdbc.update(
+            "UPDATE transfer_lines SET qty_sold = qty_sold - 1" + (damaged ? ", qty_condemned = qty_condemned + 1" : "") +
+            " WHERE id = (SELECT line_id FROM transfer_pieces WHERE id = ?) AND tenant_id = ?",
+            sale.get("transfer_piece_id"), tenantId);
+        int returned = jdbc.update(
+            "UPDATE bazar_sales SET status = 'returned', returned_at = now(), returned_by = ?, return_condition = ?, " +
+            "  return_client_request_id = ?, updated_at = now() WHERE id = ? AND tenant_id = ? AND status = 'active'",
+            actor.userId(), cond, crid, saleId, tenantId);
+        if (returned != 1) throw alreadyReturned(tenantId, saleId);
+    }
+
+    /**
+     * The piece's live sale at THIS event, locked. None → BAZAR_NOT_SOLD_HERE; only a returned one →
+     * BAZAR_ALREADY_RETURNED (an undone sale never counts: it wasn't sold).
+     */
+    private Map<String, Object> soldHere(UUID tenantId, UUID eventId, String pieceId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, status, piece_id, transfer_piece_id, sold_by, price, customer_name, customer_phone " +
+            "FROM bazar_sales WHERE piece_id = ? AND event_id = ? AND tenant_id = ? AND status = 'active' FOR UPDATE",
+            pieceId, eventId, tenantId);
+        if (!rows.isEmpty() && "active".equals(rows.get(0).get("status"))) return rows.get(0);
+        List<UUID> returned = jdbc.queryForList(
+            "SELECT id FROM bazar_sales WHERE piece_id = ? AND event_id = ? AND tenant_id = ? AND status = 'returned' " +
+            "ORDER BY returned_at DESC, id DESC LIMIT 1", UUID.class, pieceId, eventId, tenantId);
+        if (!returned.isEmpty()) throw alreadyReturned(tenantId, returned.get(0));
+        throw new BazarException(BazarException.Code.BAZAR_NOT_SOLD_HERE,
+            "This piece wasn't sold at this bazar, so it can't be returned or exchanged here.",
+            "هذه القطعة لم تُبع في هذا البازار، لذلك لا يمكن إرجاعها أو استبدالها هنا.", HttpStatus.CONFLICT);
+    }
+
+    /** The method the customer paid with: the sale's own live payment row, else (an exchange) the old sale's. */
+    private String paidMethod(UUID tenantId, Map<String, Object> ev, UUID saleId) {
+        List<String> enabled = toList(ev.get("payment_methods"));
+        UUID current = saleId;
+        for (int hops = 0; current != null && hops < 20; hops++) {
+            List<String> m = jdbc.queryForList(
+                "SELECT p.method FROM bazar_payments p WHERE p.sale_id = ? AND p.tenant_id = ? AND p.kind = 'payment' " +
+                "AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
+                "ORDER BY p.created_at DESC, p.id DESC LIMIT 1", String.class, current, tenantId);
+            if (!m.isEmpty() && enabled.contains(m.get(0))) return m.get(0);
+            List<UUID> prev = jdbc.queryForList(
+                "SELECT exchange_of_sale_id FROM bazar_sales WHERE id = ? AND tenant_id = ?", UUID.class, current, tenantId);
+            current = prev.isEmpty() ? null : prev.get(0);
+        }
+        return resolveMethod(ev, null);
+    }
+
+    private static String condition(String condition, boolean optional) {
+        if ((condition == null || condition.isBlank()) && optional) return "good";
+        String c = condition == null ? "" : condition.trim().toLowerCase();
+        if (!c.equals("good") && !c.equals("damaged")) {
+            throw invalid("Say whether the piece is good or damaged.", "حدّد إن كانت القطعة سليمة أم تالفة.");
+        }
+        return c;
+    }
+
+    private BazarException alreadyReturned(UUID tenantId, UUID saleId) {
+        Map<String, Object> r = jdbc.queryForMap(
+            "SELECT s.sale_number, s.returned_at, u.name AS returned_by_name FROM bazar_sales s " +
+            "LEFT JOIN users u ON u.id = s.returned_by WHERE s.id = ? AND s.tenant_id = ?", saleId, tenantId);
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("sale_number", saleNumber((Integer) r.get("sale_number")));
+        d.put("returned_at", r.get("returned_at"));
+        d.put("returned_by_name", r.get("returned_by_name"));
+        return new BazarException(BazarException.Code.BAZAR_ALREADY_RETURNED,
+            "This sale (" + d.get("sale_number") + ") was already returned.",
+            "تم إرجاع عملية البيع هذه (" + d.get("sale_number") + ") بالفعل.", HttpStatus.CONFLICT, d);
+    }
+
+    /** {sale (the returned one), refund: {method, amount}}. */
+    private Map<String, Object> returnView(UUID tenantId, UUID saleId, Actor actor) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sale", saleView(tenantId, saleId, actor));
+        List<Map<String, Object>> refund = jdbc.queryForList(
+            "SELECT method, amount FROM bazar_payments WHERE sale_id = ? AND tenant_id = ? AND kind = 'refund' " +
+            "ORDER BY created_at, id LIMIT 1", saleId, tenantId);
+        out.put("refund", refund.isEmpty() ? null : money(refund.get(0)));
+        return out;
+    }
+
+    /** {old_sale, new_sale, difference (new − old: + the customer pays, − they get back), money: {kind, method, amount} | null}. */
+    private Map<String, Object> exchangeView(UUID tenantId, UUID newSaleId, Actor actor) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        Map<String, Object> next = saleView(tenantId, newSaleId, actor);
+        UUID oldId = jdbc.queryForObject("SELECT exchange_of_sale_id FROM bazar_sales WHERE id = ? AND tenant_id = ?",
+            UUID.class, newSaleId, tenantId);
+        Map<String, Object> old = saleView(tenantId, oldId, actor);
+        out.put("old_sale", old);
+        out.put("new_sale", next);
+        out.put("difference", ((BigDecimal) next.get("price")).subtract((BigDecimal) old.get("price")).setScale(2));
+        List<Map<String, Object>> m = jdbc.queryForList(
+            "SELECT kind, method, amount FROM bazar_payments WHERE sale_id = ? AND tenant_id = ? " +
+            "AND kind IN ('payment', 'refund') ORDER BY created_at, id LIMIT 1", newSaleId, tenantId);
+        if (m.isEmpty()) {
+            out.put("money", null);
+        } else {
+            Map<String, Object> row = money(m.get(0));
+            row.put("kind", m.get(0).get("kind"));
+            out.put("money", row);
+        }
+        return out;
+    }
+
+    private static Map<String, Object> money(Map<String, Object> r) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("method", r.get("method"));
+        out.put("amount", ((BigDecimal) r.get("amount")).setScale(2));
         return out;
     }
 
@@ -179,6 +489,13 @@ public class BazarSaleService {
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> sale = lockActiveSale(tenantId, eventId, saleId);
         requireOwnRecentOrManager(ev, sale, actor);
+        if (sale.get("exchange_of_sale_id") != null) {
+            // Undoing only the new half would lose the credit for the piece that came back (B3).
+            throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
+                "This sale is part of an exchange, so it can't be undone — return the piece instead.",
+                "عملية البيع هذه جزء من استبدال، لذلك لا يمكن إلغاؤها — قم بإرجاع القطعة بدلًا من ذلك.",
+                HttpStatus.CONFLICT);
+        }
 
         ledger.transition((String) sale.get("piece_id"), PieceStatus.SOLD, PieceStatus.OUT_ON_TRANSFER, UNDONE_EVENT,
             actor.userId(), new TransitionContext(null, null, (UUID) ev.get("location_id"), null,
@@ -222,14 +539,19 @@ public class BazarSaleService {
         if (method == null || method.isBlank()) throw methodRequired();
         String chosen = resolveMethod(ev, method);
 
-        List<String> live = jdbc.queryForList(
-            "SELECT method FROM bazar_payments p WHERE p.sale_id = ? AND p.tenant_id = ? AND p.kind = 'payment' " +
-            "AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id)",
-            String.class, saleId, tenantId);
-        if (live.size() == 1 && live.get(0).equals(chosen)) return saleView(tenantId, saleId, actor);
+        // Every live money row of the sale is re-written with the new method, same kind and amount: a plain sale has
+        // one payment row (its price); an exchange's new sale has its difference row, or none for an even swap (B3).
+        List<Map<String, Object>> live = jdbc.queryForList(
+            "SELECT method, kind, amount FROM bazar_payments p WHERE p.sale_id = ? AND p.tenant_id = ? " +
+            "AND p.kind IN ('payment', 'refund') " +
+            "AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) ORDER BY p.created_at, p.id",
+            saleId, tenantId);
+        if (live.stream().allMatch(r -> chosen.equals(r.get("method")))) return saleView(tenantId, saleId, actor);
 
         voidLivePayments(tenantId, saleId, actor.userId());
-        insertPayment(tenantId, saleId, chosen, (BigDecimal) sale.get("price"), actor.userId());
+        for (Map<String, Object> r : live) {
+            insertMoney(tenantId, saleId, chosen, (BigDecimal) r.get("amount"), (String) r.get("kind"), actor.userId());
+        }
         jdbc.update("UPDATE bazar_sales SET updated_at = now() WHERE id = ? AND tenant_id = ?", saleId, tenantId);
         return saleView(tenantId, saleId, actor);
     }
@@ -313,8 +635,9 @@ public class BazarSaleService {
     // ── Today (B6 review) ────────────────────────────────────────────────────
 
     /**
-     * The event's numbers for today (Africa/Cairo): total and by method from the live payments of ACTIVE sales (an
-     * undone sale is out), the count of active sales, and per seller their count and sum. Any role in the event's
+     * The event's numbers for today (Africa/Cairo): total and by method = the real money that moved today ({@link
+     * #summary}: payments − refunds; an undone sale is out), the count of active sales, returns, exchanges, revenue,
+     * and per seller their active sales' count and sum. Any role in the event's
      * {@code seller_roles}, or owner / manager — the phone's Home and Sell footer read this, never a sum of the paged
      * sales list.
      */
@@ -329,6 +652,9 @@ public class BazarSaleService {
         out.put("total", t.get("total"));
         out.put("sale_count", t.get("sales"));
         out.put("by_method", t.get("by_method"));
+        out.put("returns", t.get("returns"));
+        out.put("exchanges", t.get("exchanges"));
+        out.put("revenue", t.get("revenue"));
         List<Map<String, Object>> perSeller = new ArrayList<>();
         for (Map<String, Object> r : jdbc.queryForList(
                 "SELECT s.sold_by, u.name AS seller_name, COUNT(*) AS sale_count, SUM(s.price) AS total " +
@@ -349,19 +675,40 @@ public class BazarSaleService {
 
     // ── Event detail: today's money (used by BazarService.detail) ────────────
 
-    /** Today's (Africa/Cairo) live payments of the event's active sales, by method (every enabled method listed). */
+    /** Today's (Africa/Cairo) numbers — see {@link #summary}. */
     static Map<String, Object> today(JdbcTemplate jdbc, UUID tenantId, UUID eventId, List<String> methods) {
+        return summary(jdbc, tenantId, eventId, methods, true);
+    }
+
+    /**
+     * The event's numbers — today (Africa/Cairo) or, {@code todayOnly} false, the whole event (B3):
+     * <ul>
+     *   <li>{@code by_method} / {@code total}: REAL money that moved — every live (not voided) 'payment' row minus
+     *       every live 'refund' row, counted on the day the row was written. A sale's payment stays when it is
+     *       returned (the money came in) and the return's refund takes it back out; an exchange moves only its
+     *       difference; an undone sale's rows are voided. Every enabled method is listed.</li>
+     *   <li>{@code sales}: active sales sold that day (returned / undone ones are out). {@code returns}: sales returned
+     *       that day that weren't exchanged. {@code exchanges}: exchanges made that day.</li>
+     *   <li>{@code revenue}: sales sold that day (not undone) minus the price of sales returned that day — exchanges
+     *       net to their difference. It equals {@code total}: every sale is paid in full and every return refunded
+     *       in full, by construction.</li>
+     * </ul>
+     */
+    static Map<String, Object> summary(JdbcTemplate jdbc, UUID tenantId, UUID eventId, List<String> methods,
+                                       boolean todayOnly) {
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("business_day", jdbc.queryForObject(
-            "SELECT ((now() AT TIME ZONE 'Africa/Cairo')::date)::text", String.class));
+        if (todayOnly) {
+            out.put("business_day", jdbc.queryForObject(
+                "SELECT ((now() AT TIME ZONE 'Africa/Cairo')::date)::text", String.class));
+        }
+        String cairoToday = "(now() AT TIME ZONE 'Africa/Cairo')::date";
         Map<String, BigDecimal> byMethod = new LinkedHashMap<>();
         for (String m : methods) byMethod.put(m, BigDecimal.ZERO.setScale(2));
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT p.method, SUM(CASE WHEN p.kind = 'payment' THEN p.amount ELSE -p.amount END) AS total " +
             "FROM bazar_payments p JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
-            "WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' " +
-            "  AND s.business_day = (now() AT TIME ZONE 'Africa/Cairo')::date " +
-            "  AND p.kind IN ('payment', 'refund') " +
+            "WHERE s.event_id = ? AND s.tenant_id = ? AND p.kind IN ('payment', 'refund') " +
+            (todayOnly ? "  AND (p.created_at AT TIME ZONE 'Africa/Cairo')::date = " + cairoToday + " " : "") +
             "  AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
             "GROUP BY p.method ORDER BY p.method", eventId, tenantId);
         BigDecimal total = BigDecimal.ZERO.setScale(2);
@@ -372,9 +719,26 @@ public class BazarSaleService {
         }
         out.put("by_method", byMethod);
         out.put("total", total);
-        out.put("sales", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM bazar_sales WHERE event_id = ? AND tenant_id = ? AND status = 'active' " +
-            "AND business_day = (now() AT TIME ZONE 'Africa/Cairo')::date", Integer.class, eventId, tenantId));
+
+        String soldDay = todayOnly ? " AND s.business_day = " + cairoToday : "";
+        String returnedDay = todayOnly ? " AND (s.returned_at AT TIME ZONE 'Africa/Cairo')::date = " + cairoToday : "";
+        Map<String, Object> c = jdbc.queryForMap(
+            "SELECT " +
+            "  (SELECT COUNT(*) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active'" +
+                soldDay + ") AS sales, " +
+            "  (SELECT COUNT(*) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'returned'" +
+                returnedDay + " AND NOT EXISTS (SELECT 1 FROM bazar_sales x WHERE x.exchange_of_sale_id = s.id)) AS returns, " +
+            "  (SELECT COUNT(*) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? " +
+                "AND s.exchange_of_sale_id IS NOT NULL AND s.status <> 'undone'" + soldDay + ") AS exchanges, " +
+            "  (SELECT COALESCE(SUM(s.price), 0) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? " +
+                "AND s.status <> 'undone'" + soldDay + ") " +
+            "  - (SELECT COALESCE(SUM(s.price), 0) FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? " +
+                "AND s.status = 'returned'" + returnedDay + ") AS revenue",
+            eventId, tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
+        out.put("sales", ((Number) c.get("sales")).intValue());
+        out.put("returns", ((Number) c.get("returns")).intValue());
+        out.put("exchanges", ((Number) c.get("exchanges")).intValue());
+        out.put("revenue", ((BigDecimal) c.get("revenue")).setScale(2));
         return out;
     }
 
@@ -384,7 +748,9 @@ public class BazarSaleService {
         "SELECT s.id, s.sale_number, s.sold_at, s.created_at, s.status, s.price, s.price_source, s.business_day, " +
         "       s.customer_name, s.customer_phone, s.sold_by, u.name AS seller_name, s.undone_at, s.undone_by, " +
         "       s.piece_id, pc.short_code AS piece_code, s.variant_id, pr.title AS product_title, " +
-        "       v.title AS variant_title, " +
+        "       v.title AS variant_title, s.returned_at, s.return_condition, ru.name AS returned_by_name, " +
+        "       s.exchange_of_sale_id, xo.sale_number AS exchange_of_sale_number, " +
+        "       xn.id AS exchanged_for_sale_id, xn.sale_number AS exchanged_for_sale_number, " +
         // The method: the live payment row's; an undone sale shows the one it had (its newest payment row).
         "       (SELECT bp.method FROM bazar_payments bp WHERE bp.sale_id = s.id AND bp.tenant_id = s.tenant_id " +
         "          AND bp.kind = 'payment' " +
@@ -394,7 +760,10 @@ public class BazarSaleService {
         "JOIN users u ON u.id = s.sold_by " +
         "JOIN pieces pc ON pc.id = s.piece_id " +
         "JOIN variants v ON v.id = s.variant_id " +
-        "JOIN products pr ON pr.id = v.product_id ";
+        "JOIN products pr ON pr.id = v.product_id " +
+        "LEFT JOIN users ru ON ru.id = s.returned_by " +
+        "LEFT JOIN bazar_sales xo ON xo.id = s.exchange_of_sale_id AND xo.tenant_id = s.tenant_id " +
+        "LEFT JOIN bazar_sales xn ON xn.exchange_of_sale_id = s.id AND xn.tenant_id = s.tenant_id ";
 
     private Map<String, Object> saleView(UUID tenantId, UUID saleId, Actor actor) {
         return present(jdbc.queryForMap(SALE_SELECT + "WHERE s.id = ? AND s.tenant_id = ?", saleId, tenantId), actor);
@@ -421,6 +790,16 @@ public class BazarSaleService {
         String phone = (String) r.get("customer_phone");
         out.put("customer_phone", actor.manages() ? phone : maskPhone(phone));
         out.put("undone_at", r.get("undone_at"));
+        // B3: a returned sale (exchanged when a new sale points at it), and the new half of an exchange.
+        out.put("returned_at", r.get("returned_at"));
+        out.put("return_condition", r.get("return_condition"));
+        out.put("returned_by_name", r.get("returned_by_name"));
+        out.put("exchange_of_sale_id", r.get("exchange_of_sale_id"));
+        out.put("exchange_of_sale_number",
+            r.get("exchange_of_sale_number") == null ? null : saleNumber((Integer) r.get("exchange_of_sale_number")));
+        out.put("exchanged_for_sale_id", r.get("exchanged_for_sale_id"));
+        out.put("exchanged_for_sale_number",
+            r.get("exchanged_for_sale_number") == null ? null : saleNumber((Integer) r.get("exchanged_for_sale_number")));
         return out;
     }
 
@@ -454,9 +833,27 @@ public class BazarSaleService {
     }
 
     private void insertPayment(UUID tenantId, UUID saleId, String method, BigDecimal amount, UUID actorId) {
+        insertMoney(tenantId, saleId, method, amount, "payment", actorId);
+    }
+
+    /** kind 'payment' (money in) or 'refund' (money out). */
+    private void insertMoney(UUID tenantId, UUID saleId, String method, BigDecimal amount, String kind, UUID actorId) {
         // clock_timestamp(): rows written in one transaction (void + new) keep their real order.
         jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by, created_at) " +
-            "VALUES (?, ?, ?, ?, 'payment', ?, clock_timestamp())", tenantId, saleId, method, amount, actorId);
+            "VALUES (?, ?, ?, ?, ?, ?, clock_timestamp())", tenantId, saleId, method, amount, kind, actorId);
+    }
+
+    private static String requestId(String clientRequestId) {
+        String crid = clientRequestId == null ? "" : clientRequestId.trim();
+        if (crid.isEmpty() || crid.length() > 100) {
+            throw invalid("Missing request id (client_request_id).", "معرّف الطلب مفقود (client_request_id).");
+        }
+        return crid;
+    }
+
+    /** One write per request id: a concurrent retry waits here for the first (sell / return / exchange share it). */
+    private void lockRequest(UUID tenantId, String crid) {
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenantId + ":bazar-sale:" + crid);
     }
 
     /** One void row per live payment / refund row of the sale. */
@@ -487,7 +884,7 @@ public class BazarSaleService {
 
     private Map<String, Object> lockActiveSale(UUID tenantId, UUID eventId, UUID saleId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT id, status, piece_id, transfer_piece_id, sold_by, price, " +
+            "SELECT id, status, piece_id, transfer_piece_id, sold_by, price, exchange_of_sale_id, " +
             "       sold_at > now() - make_interval(secs => ?) AS recent " +
             "FROM bazar_sales WHERE id = ? AND event_id = ? AND tenant_id = ? FOR UPDATE",
             UNDO_WINDOW_SECONDS, saleId, eventId, tenantId);
@@ -495,6 +892,7 @@ public class BazarSaleService {
             throw new BazarException(BazarException.Code.BAZAR_SALE_NOT_FOUND,
                 "Sale not found.", "لم يتم العثور على عملية البيع.", HttpStatus.NOT_FOUND);
         }
+        if ("returned".equals(rows.get(0).get("status"))) throw alreadyReturned(tenantId, saleId);
         if (!"active".equals(rows.get(0).get("status"))) {
             throw new BazarException(BazarException.Code.BAZAR_SALE_UNDONE,
                 "This sale was already undone.", "تم إلغاء عملية البيع هذه بالفعل.", HttpStatus.CONFLICT);
