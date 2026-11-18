@@ -145,6 +145,129 @@ public class ExchangeService {
         return commit(exchangeId, tenantId, outboundVariantId, inboundVariantId, false);
     }
 
+    /** One row of the N-row mapping screen (S3a). {@code variantId} may be null only on an 'in' row. */
+    public record ItemRow(UUID variantId, Integer quantity, String descriptionHint) {}
+
+    /**
+     * S3a (2026-11-18) — the N-row mapping: one or more OUTBOUND rows (each with a variant — the exchange leaves
+     * needs_mapping only when every one is mapped) and zero or more INBOUND rows (a variant, or still unknown), each with
+     * a quantity (1..99) and the courier-text hint the person kept. Same claim as {@link #map} (needs_mapping → mapped,
+     * 409 otherwise). Exactly one 'out' row and at most one 'in' row → the single-item commit (one order line;
+     * outbound_variant_id / inbound_variant_id filled exactly as {@link #map} does). Otherwise one
+     * internal:exchange:&lt;AWB&gt; order with one line per 'out' row (its quantity), outbound_variant_id NULL, and the
+     * old items only in exchange_items. A multi-line exchange is never attached to a Shopify-exchange shadow (409).
+     * Every row is recorded in exchange_items (the 'out' rows with the order line they became).
+     */
+    @Transactional
+    public Map<String, Object> mapItems(UUID exchangeId, List<ItemRow> outbound, List<ItemRow> inbound, UUID actorUserId) {
+        List<ItemRow> out = outbound == null ? List.of() : outbound;
+        List<ItemRow> in = inbound == null ? List.of() : inbound;
+        if (out.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one replacement item is required");
+        }
+        if (out.size() + in.size() > 40) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Too many items");
+        }
+        for (ItemRow r : out) {
+            if (r == null || r.variantId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Every replacement item needs a variant");
+            }
+            quantityOf(r);
+        }
+        for (ItemRow r : in) {
+            if (r == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty item row");
+            quantityOf(r);
+        }
+        UUID tenantId = TenantContext.require();
+        for (ItemRow r : in) {
+            if (r.variantId() != null && !Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM variants WHERE id = ? AND tenant_id = ?)",
+                    Boolean.class, r.variantId(), tenantId))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Inbound variant not found");
+            }
+        }
+
+        boolean single = out.size() == 1 && in.size() <= 1;
+        if (!single) {
+            String ref = jdbc.query("SELECT raw->>'businessReference' FROM exchanges WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, exchangeId, tenantId);
+            if (ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, ref) != null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This is a Shopify exchange — its replacement is the Shopify exchange order; map one item");
+            }
+        }
+
+        if (claim(exchangeId, tenantId) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Exchange is not awaiting mapping");
+        }
+
+        List<OutLine> lines = new ArrayList<>();
+        for (ItemRow r : out) lines.add(new OutLine(r.variantId(), quantityOf(r)));
+        UUID singleIn = in.size() == 1 ? in.get(0).variantId() : null;
+        Committed made = commit(exchangeId, tenantId, lines,
+            single ? out.get(0).variantId() : null,
+            single ? singleIn : null,
+            false,
+            in.size() <= 1);
+
+        for (int i = 0; i < out.size(); i++) {
+            UUID orderItem = i < made.orderItemIds().size() ? made.orderItemIds().get(i) : null;
+            insertItem(tenantId, exchangeId, "out", out.get(i), orderItem, actorUserId);
+        }
+        for (ItemRow r : in) insertItem(tenantId, exchangeId, "in", r, null, actorUserId);
+
+        Map<String, Object> result = new LinkedHashMap<>(made.result());
+        result.put("items", items(exchangeId, tenantId));
+        return result;
+    }
+
+    private static int quantityOf(ItemRow r) {
+        int q = r.quantity() == null ? 1 : r.quantity();
+        if (q < 1 || q > 99) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be 1 to 99");
+        return q;
+    }
+
+    private void insertItem(UUID tenantId, UUID exchangeId, String direction, ItemRow r, UUID orderItemId, UUID actor) {
+        String hint = r.descriptionHint() == null ? null : r.descriptionHint().strip();
+        if (hint != null && hint.isEmpty()) hint = null;
+        if (hint != null && hint.length() > 500) hint = hint.substring(0, 500);
+        jdbc.update(
+            "INSERT INTO exchange_items (tenant_id, exchange_id, direction, variant_id, quantity, description_hint, " +
+            "    order_item_id, mapped_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            tenantId, exchangeId, direction, r.variantId(), quantityOf(r), hint, orderItemId, actor);
+    }
+
+    /** S3a — the exchange's mapped rows (empty for a single-item exchange mapped the old way). Caller's transaction. */
+    List<Map<String, Object>> items(UUID exchangeId, UUID tenantId) {
+        return jdbc.queryForList(
+            "SELECT ei.id, ei.direction, ei.variant_id AS \"variantId\", ei.quantity, ei.description_hint AS \"descriptionHint\", " +
+            "       ei.order_item_id AS \"orderItemId\", pr.title AS \"productTitle\", v.title AS \"variantTitle\", v.sku " +
+            "FROM exchange_items ei LEFT JOIN variants v ON v.id = ei.variant_id LEFT JOIN products pr ON pr.id = v.product_id " +
+            "WHERE ei.exchange_id = ? AND ei.tenant_id = ? ORDER BY ei.direction DESC, ei.created_at, ei.id",
+            exchangeId, tenantId);
+    }
+
+    /**
+     * S3a — the lines of the exchange's original order (matched_order_id; a pre-connect parent included), for the
+     * mapping screen's inbound picker. Empty when no order is linked. order_items only — never the orders table.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> originalLines(UUID exchangeId) {
+        UUID tenantId = TenantContext.require();
+        List<UUID> matched = jdbc.query("SELECT matched_order_id FROM exchanges WHERE id = ? AND tenant_id = ?",
+            (rs, i) -> rs.getObject(1, UUID.class), exchangeId, tenantId);
+        if (matched.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Exchange not found");
+        if (matched.get(0) == null) return List.of();
+        return jdbc.queryForList(
+            "SELECT oi.id AS \"orderItemId\", oi.variant_id AS \"variantId\", oi.quantity, pr.title AS \"productTitle\", " +
+            "       v.title AS \"variantTitle\", v.sku, pr.image_url AS \"imageUrl\" " +
+            "FROM order_items oi JOIN variants v ON v.id = oi.variant_id AND v.tenant_id = oi.tenant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE oi.order_id = ? AND oi.tenant_id = ? AND oi.quantity > 0 " +
+            "ORDER BY pr.title, v.title, oi.id",
+            matched.get(0), tenantId);
+    }
+
     /**
      * Part B — automatic outbound resolution. Same call shape as
      * {@link ExchangeMatchService#attemptMatch(String)} (tenant-scoped lookup by
@@ -246,6 +369,16 @@ public class ExchangeService {
      */
     @Transactional
     public Map<String, Object> overrideOutboundVariant(UUID exchangeId, UUID newVariantId) {
+        return overrideOutboundVariant(exchangeId, newVariantId, null);
+    }
+
+    /**
+     * S3a — {@code orderItemId} picks the replacement order's line to change; required when the order has more than one
+     * line (409 otherwise — it used to throw on the single-row read), optional on a single-line order (that line). Only
+     * that line (and its exchange_items row) changes; exchanges.outbound_variant_id follows only on a single-line order.
+     */
+    @Transactional
+    public Map<String, Object> overrideOutboundVariant(UUID exchangeId, UUID newVariantId, UUID orderItemId) {
         if (newVariantId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "variantId is required");
         }
@@ -279,8 +412,18 @@ public class ExchangeService {
                 "Variant must belong to the same store as the existing replacement order");
         }
 
-        UUID orderItemId = jdbc.queryForObject(
-            "SELECT id FROM order_items WHERE order_id = ? AND tenant_id = ?", UUID.class, orderId, tenantId);
+        List<UUID> lineIds = jdbc.queryForList(
+            "SELECT id FROM order_items WHERE order_id = ? AND tenant_id = ? ORDER BY id", UUID.class, orderId, tenantId);
+        boolean singleLine = lineIds.size() == 1;
+        if (orderItemId == null) {
+            if (!singleLine) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This replacement order has more than one item — say which one to change");
+            }
+            orderItemId = lineIds.get(0);
+        } else if (!lineIds.contains(orderItemId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That item isn't on this replacement order");
+        }
 
         Integer allocated = jdbc.queryForObject(
             "SELECT COUNT(*) FROM allocations WHERE order_item_id = ? AND status IN ('active','packed')",
@@ -292,14 +435,21 @@ public class ExchangeService {
 
         jdbc.update("UPDATE order_items SET variant_id = ? WHERE id = ? AND tenant_id = ?",
             newVariantId, orderItemId, tenantId);
-        jdbc.update(
-            "UPDATE exchanges SET outbound_variant_id = ?, auto_matched = false WHERE id = ? AND tenant_id = ?",
-            newVariantId, exchangeId, tenantId);
+        jdbc.update("UPDATE exchange_items SET variant_id = ?, mapped_at = now() " +
+            "WHERE order_item_id = ? AND tenant_id = ? AND direction = 'out'", newVariantId, orderItemId, tenantId);
+        if (singleLine) {
+            jdbc.update(
+                "UPDATE exchanges SET outbound_variant_id = ?, auto_matched = false WHERE id = ? AND tenant_id = ?",
+                newVariantId, exchangeId, tenantId);
+        } else {
+            jdbc.update("UPDATE exchanges SET auto_matched = false WHERE id = ? AND tenant_id = ?", exchangeId, tenantId);
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());
         result.put("orderId", orderId.toString());
         result.put("variantId", newVariantId.toString());
+        result.put("orderItemId", orderItemId.toString());
         return result;
     }
 
@@ -491,6 +641,25 @@ public class ExchangeService {
      */
     private Map<String, Object> commit(UUID exchangeId, UUID tenantId, UUID outboundVariantId,
                                         UUID inboundVariantId, boolean autoMatched) {
+        return commit(exchangeId, tenantId, null, outboundVariantId, inboundVariantId, autoMatched, true).result();
+    }
+
+    /** One line of the replacement order (S3a): a mapped outbound variant and its quantity. */
+    record OutLine(UUID variantId, int quantity) {}
+
+    /** What {@link #commit} made: the API result and the order lines it created, in {@code lines} order. */
+    private record Committed(Map<String, Object> result, List<UUID> orderItemIds) {}
+
+    /**
+     * The commit body. {@code lines == null} is the single-item path, unchanged: one line of
+     * {@code outboundVariantId}, its quantity read from Bosta's itemsCount. S3a's N-row mapping passes its outbound rows
+     * (every line's variant must be of the same store); {@code outboundVariantId} is then the variant written to
+     * exchanges.outbound_variant_id — the single row's, or null for a multi-line exchange. {@code fillInbound}: run
+     * ExchangeInbound.fill — false for a multi-item exchange (its old items live in exchange_items; one inbound variant
+     * would misdescribe it).
+     */
+    private Committed commit(UUID exchangeId, UUID tenantId, List<OutLine> lines, UUID outboundVariantId,
+                                  UUID inboundVariantId, boolean autoMatched, boolean fillInbound) {
         // Load the exchange's tracking_number + raw for order construction.
         Map<String, Object> exchange = jdbc.query(
             "SELECT tracking_number, raw::text AS raw FROM exchanges WHERE id = ? AND tenant_id = ?",
@@ -513,13 +682,30 @@ public class ExchangeService {
         // store_id derived from the OUTBOUND variant's product — not a separate
         // tenant-store lookup. Disambiguates correctly if a tenant ever connects
         // more than one Shopify store (variant ownership already decides it).
+        UUID firstOutbound = lines == null ? outboundVariantId : lines.get(0).variantId();
         UUID storeId = jdbc.query(
             "SELECT p.store_id FROM variants v JOIN products p ON p.id = v.product_id " +
             "WHERE v.id = ? AND v.tenant_id = ?",
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-            outboundVariantId, tenantId);
+            firstOutbound, tenantId);
         if (storeId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Outbound variant not found");
+        }
+        if (lines != null) {
+            for (OutLine l : lines) {
+                UUID lineStore = jdbc.query(
+                    "SELECT p.store_id FROM variants v JOIN products p ON p.id = v.product_id " +
+                    "WHERE v.id = ? AND v.tenant_id = ?",
+                    rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
+                    l.variantId(), tenantId);
+                if (lineStore == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Outbound variant not found");
+                }
+                if (!lineStore.equals(storeId)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Every replacement item must belong to the same store");
+                }
+            }
         }
         if (inboundVariantId != null) {
             Integer inboundVariantExists = jdbc.queryForObject(
@@ -535,9 +721,9 @@ public class ExchangeService {
         // leg links to the shadow, and the exchanges row keeps only the inbound leg. Existing internal:exchange: rows
         // are never touched (they finish on the old path).
         UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, raw.path("businessReference").asText(null));
-        if (shadow != null && Boolean.TRUE.equals(jdbc.queryForObject(
+        if (shadow != null && (lines == null || lines.size() == 1) && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM order_items WHERE order_id = ? AND tenant_id = ? AND variant_id = ? AND quantity > 0)",
-                Boolean.class, shadow, tenantId, outboundVariantId))
+                Boolean.class, shadow, tenantId, firstOutbound))
             && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT return_request_id IS NULL FROM exchanges WHERE id = ? AND tenant_id = ?", Boolean.class, exchangeId, tenantId))) {
             shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
@@ -549,8 +735,8 @@ public class ExchangeService {
                 "    auto_matched = ?, " +
                 "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
                 "WHERE id = ? AND tenant_id = ?",
-                shadow, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
-            ExchangeInbound.fill(jdbc, tenantId, exchangeId);
+                shadow, firstOutbound, inboundVariantId, autoMatched, exchangeId, tenantId);
+            if (fillInbound) ExchangeInbound.fill(jdbc, tenantId, exchangeId);
             org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
                 .info("Exchange {} (AWB {}) attached to Shopify exchange shadow order {}", exchangeId, trackingNumber, shadow);
             Map<String, Object> result = new LinkedHashMap<>();
@@ -560,7 +746,7 @@ public class ExchangeService {
                 "SELECT status FROM exchanges WHERE id = ? AND tenant_id = ?", String.class, exchangeId, tenantId));
             result.put("autoMatched", autoMatched);
             result.put("shopifyExchangeShadow", true);
-            return result;
+            return new Committed(result, List.of());
         }
 
         // Guaranteed 1 by construction (ExchangeIngestService only ever creates an
@@ -587,9 +773,13 @@ public class ExchangeService {
                 "An order already exists for this exchange");
         }
 
-        jdbc.update(
-            "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?)",
-            tenantId, orderId, outboundVariantId, quantity);
+        List<OutLine> orderLines = lines != null ? lines : List.of(new OutLine(outboundVariantId, quantity));
+        List<UUID> orderItemIds = new ArrayList<>();
+        for (OutLine l : orderLines) {
+            orderItemIds.add(jdbc.queryForObject(
+                "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?) RETURNING id",
+                UUID.class, tenantId, orderId, l.variantId(), l.quantity()));
+        }
 
         // Forward shipment, created and linked NOW (not deferred to pack). An
         // exchange has exactly one possible AWB — Traced already holds it in
@@ -621,7 +811,7 @@ public class ExchangeService {
             "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
             "WHERE id = ? AND tenant_id = ?",
             orderId, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
-        ExchangeInbound.fill(jdbc, tenantId, exchangeId);
+        if (fillInbound) ExchangeInbound.fill(jdbc, tenantId, exchangeId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());
@@ -629,7 +819,7 @@ public class ExchangeService {
         result.put("status", jdbc.queryForObject(
             "SELECT status FROM exchanges WHERE id = ? AND tenant_id = ?", String.class, exchangeId, tenantId));
         result.put("autoMatched", autoMatched);
-        return result;
+        return new Committed(result, orderItemIds);
     }
 
     private record ExchangeStub(UUID id, String status, String outboundDescription) {}

@@ -1954,7 +1954,17 @@
       "successBody": "تم إنشاء الطلب {{order}} للجزء الصادر.",
       "backToExceptions": "العودة إلى التنبيهات",
       "startPicking": "ابدأ التجهيز",
-      "backToPickPack": "الرجوع إلى التجهيز والتغليف"
+      "backToPickPack": "الرجوع إلى التجهيز والتغليف",
+      "addItem": "إضافة منتج",
+      "removeItem": "حذف المنتج",
+      "quantity": "الكمية",
+      "decrease": "أقل",
+      "increase": "أكثر",
+      "hintLabel": "نص شركة الشحن لهذا المنتج",
+      "unknownInbound": "لا أعرف المنتج بعد",
+      "unknownChosen": "غير معروف بعد — يمكن تأكيده عند وصوله.",
+      "fromOrderTitle": "منتجات الطلب المرتبط",
+      "searchCatalog": "البحث في الكتالوج بدلًا من ذلك"
     },
     "picker": {
       "title": "اختيار متغير",

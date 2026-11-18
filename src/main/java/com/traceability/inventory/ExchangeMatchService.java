@@ -565,6 +565,22 @@ public class ExchangeMatchService {
             orderId, tenantId);
         if (ex == null) return;
 
+        // S3a (2026-11-18): a multi-item exchange (its 'in' rows hold more than one unit) is received only when every
+        // unit came back and was graded — never on the first piece. Single-item exchanges continue below, unchanged.
+        Integer inboundUnits = jdbc.queryForObject(
+            "SELECT COALESCE(SUM(quantity), 0) FROM exchange_items WHERE exchange_id = ? AND tenant_id = ? " +
+            "  AND direction = 'in'", Integer.class, ex.id(), tenantId);
+        if (inboundUnits != null && inboundUnits > 1) {
+            if (Boolean.TRUE.equals(jdbc.queryForObject(ALL_INBOUND_GRADED_SQL, Boolean.class,
+                    ex.id(), tenantId, orderId))) {
+                jdbc.update(
+                    "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                    "WHERE id = ? AND tenant_id = ? AND status = 'matched'",
+                    ex.id(), tenantId);
+            }
+            return;
+        }
+
         // 2026-11-12: once the inbound variant is known (stored, else V227's resolver — the ONE rule), the exchange
         // resolves on exactly a piece of that variant; the description narrowing below is only for an unknown one.
         UUID inboundVariant = jdbc.queryForObject(
@@ -613,6 +629,41 @@ public class ExchangeMatchService {
                 ex.id(), tenantId);
         }
     }
+
+    /**
+     * S3a — every 'in' unit of a multi-item exchange is back and graded. A piece counts toward THIS exchange only through
+     * the canonical scan evidence (ShipmentLinkService.returnLegScanEvidenceSql, Rule 1's semantics): its
+     * {@code return_received} event belongs to a non-abandoned return session in which this exchange's AWB was scanned,
+     * at or after the exchange row was created — never a graded piece of the original order that came back on another
+     * leg / in another session. It must also be a piece of the ORIGINAL order (an allocation on one of its lines,
+     * released or not) and graded (return_pending_inspection → available / damaged) after the exchange was created.
+     * Known-variant rows need that many such pieces of their variant; the total (unknown rows included) needs at least
+     * the sum of every row's quantity. Params: exchange id, tenant, original order.
+     */
+    static final String ALL_INBOUND_GRADED_SQL =
+        "WITH ex AS (SELECT id, tenant_id, tracking_number, created_at FROM exchanges WHERE id = ? AND tenant_id = ?), " +
+        "graded AS ( " +
+        "  SELECT p.id, p.variant_id FROM pieces p JOIN ex ON ex.tenant_id = p.tenant_id " +
+        "  WHERE EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+        "                WHERE a.piece_id = p.id AND oi.order_id = ? AND oi.tenant_id = p.tenant_id) " +
+        "    AND EXISTS (SELECT 1 FROM piece_events pe WHERE pe.piece_id = p.id AND pe.tenant_id = p.tenant_id " +
+        "                AND pe.from_status = 'return_pending_inspection' " +
+        "                AND pe.to_status IN ('available', 'damaged') " +
+        "                AND pe.occurred_at >= ex.created_at) " +
+        "    AND EXISTS (SELECT 1 FROM piece_events pr " +
+        "                JOIN return_session_shipments rss ON rss.tenant_id = pr.tenant_id " +
+        "                                                 AND rss.session_id::text = pr.metadata->>'session_id' " +
+        "                JOIN return_sessions rs ON rs.id = rss.session_id AND rs.tenant_id = rss.tenant_id " +
+        "                WHERE pr.piece_id = p.id AND pr.tenant_id = p.tenant_id " +
+        "                  AND pr.event_type = 'return_received' AND pr.occurred_at >= ex.created_at " +
+        "                  AND rss.awb = ex.tracking_number AND rs.status <> 'abandoned') " +
+        "), need AS ( " +
+        "  SELECT ei.variant_id, SUM(ei.quantity) AS q FROM exchange_items ei JOIN ex ON ex.id = ei.exchange_id " +
+        "  WHERE ei.tenant_id = ex.tenant_id AND ei.direction = 'in' GROUP BY ei.variant_id " +
+        ") " +
+        "SELECT (SELECT COUNT(*) FROM graded) >= (SELECT COALESCE(SUM(q), 0) FROM need) " +
+        "   AND NOT EXISTS (SELECT 1 FROM need n WHERE n.variant_id IS NOT NULL " +
+        "                     AND (SELECT COUNT(*) FROM graded g WHERE g.variant_id = n.variant_id) < n.q)";
 
     // ── Part D — manual resolution actions for unmatched/needs_confirmation ────
     //

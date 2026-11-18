@@ -1,6 +1,8 @@
 package com.traceability.inventory;
 
+import com.traceability.identity.CustomUserDetails;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -56,6 +58,24 @@ public class ExchangeController {
         return svc.map(id, req.outboundVariantId(), req.inboundVariantId());
     }
 
+    /**
+     * S3a (2026-11-18) — the N-row mapping: outbound rows (each mapped) and inbound rows (a variant or unknown), each
+     * with a quantity and a description hint. One internal:exchange: order with one line per outbound row.
+     */
+    @PostMapping("/{id}/map-items")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> mapItems(@PathVariable UUID id, @RequestBody MapItemsRequest req,
+                                        @AuthenticationPrincipal CustomUserDetails principal) {
+        return svc.mapItems(id, req.outbound(), req.inbound(), principal == null ? null : principal.userId());
+    }
+
+    /** S3a — the linked original order's lines (what the old items can be), for the mapping screen's inbound rows. */
+    @GetMapping("/{id}/original-lines")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> originalLines(@PathVariable UUID id) {
+        return svc.originalLines(id);
+    }
+
     /** Part A/C — what the resolver currently says for this exchange's outbound leg
      *  (EXACT/RECS/NONE + ranked candidates), without committing anything. Feeds the
      *  mapping screen's RECS pre-population. */
@@ -70,7 +90,7 @@ public class ExchangeController {
     @PostMapping("/{id}/outbound-variant")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> overrideOutboundVariant(@PathVariable UUID id, @RequestBody OverrideOutboundRequest req) {
-        return svc.overrideOutboundVariant(id, req.variantId());
+        return svc.overrideOutboundVariant(id, req.variantId(), req.orderItemId());
     }
 
     /** Part D — merchant supplies the order the old item is actually returning from. */
@@ -118,5 +138,7 @@ public class ExchangeController {
     public record MapRequest(UUID outboundVariantId, UUID inboundVariantId) {}
     public record AttachRequest(UUID orderId) {}
     public record ImportParentRequest(String number, Boolean link) {}
-    public record OverrideOutboundRequest(UUID variantId) {}
+    /** S3a: {@code orderItemId} — which line of a multi-line replacement order (optional on a single line). */
+    public record OverrideOutboundRequest(UUID variantId, UUID orderItemId) {}
+    public record MapItemsRequest(List<ExchangeService.ItemRow> outbound, List<ExchangeService.ItemRow> inbound) {}
 }

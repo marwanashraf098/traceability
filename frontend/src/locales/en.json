@@ -1860,7 +1860,17 @@
       "successBody": "Order {{order}} was created for the outbound leg.",
       "backToExceptions": "Back to Alerts",
       "startPicking": "Start picking",
-      "backToPickPack": "Back to Pick & Pack"
+      "backToPickPack": "Back to Pick & Pack",
+      "addItem": "Add item",
+      "removeItem": "Remove item",
+      "quantity": "Quantity",
+      "decrease": "Fewer",
+      "increase": "More",
+      "hintLabel": "Courier text for this item",
+      "unknownInbound": "Don't know which item yet",
+      "unknownChosen": "Not known yet — it can be confirmed when it comes back.",
+      "fromOrderTitle": "Items on the linked order",
+      "searchCatalog": "Search the catalog instead"
     },
     "picker": {
       "title": "Select a variant",
