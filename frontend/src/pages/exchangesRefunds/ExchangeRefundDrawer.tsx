@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
-import { X } from 'lucide-react'
+import { ArrowRight, X } from 'lucide-react'
 import {
   getExchangeDetail, getExchangeCandidates, attachExchange, acceptExchangeBareReturn,
   dismissExchange, overrideOutboundVariant, ExchangeSummary, ExchangeCandidate, CatalogVariant, DerivedTone,
 } from '../../api'
-import { Badge, Button, EmptyState, Input, LegStatusBadge, Skeleton, Spinner, cn, useToast } from '../../components/ui'
+import { Badge, Button, EmptyState, LegStatusBadge, Skeleton, Spinner, cn, useToast } from '../../components/ui'
 import { exchangeStatusTone, inspectionStateTone } from './statusTone'
 import ExchangeVariantPicker from '../exchanges/ExchangeVariantPicker'
+import ExchangeOrderLink from './ExchangeOrderLink'
 
 /**
  * FR-EXCHANGE Step 4c — detail drawer. Same slide-in shell as VariantDrawer.tsx
@@ -236,8 +237,38 @@ function ExchangeDrawerBody({ exchangeId, onChanged }: { exchangeId: string; onC
         />
       )}
 
+      {/* S2 (2026-11-18): the replacement still needs a variant — the existing mapping screen. */}
+      {detail.status === 'needs_mapping' && (
+        <section className="card border-line bg-elevated p-3.5 space-y-2" data-testid="exchange-map-replacement">
+          <p className="text-small text-muted">{t('exchangesRefunds.drawer.exchange.mapReplacementHint')}</p>
+          <Link
+            to={`/exchanges/${exchangeId}`}
+            className="btn-outline inline-flex items-center gap-1.5 w-fit"
+            data-testid="map-replacement-link"
+          >
+            {t('exchangesRefunds.drawer.exchange.mapReplacement')}
+            <ArrowRight size={16} strokeWidth={2} className="rtl:rotate-180" />
+          </Link>
+          {detail.matched_order_id && (
+            <div className="text-small" data-testid="exchange-original-linked">
+              <span className="text-muted">{t('exchangesRefunds.drawer.exchange.matchedOrder')}: </span>
+              <span className="font-mono text-primary">{shortId(detail.matched_order_id)}</span>
+            </div>
+          )}
+        </section>
+      )}
+
       {detail.status === 'needs_confirmation' && (
         <CandidatePicker exchangeId={exchangeId} onConfirmed={refresh} />
+      )}
+
+      {(detail.status === 'needs_confirmation' || detail.status === 'unmatched'
+        || (detail.status === 'needs_mapping' && !detail.matched_order_id)) && (
+        <ExchangeOrderLink
+          exchangeId={exchangeId}
+          needsMapping={detail.status === 'needs_mapping'}
+          onLinked={refresh}
+        />
       )}
 
       {detail.status === 'unmatched' && (
@@ -343,18 +374,12 @@ function CandidatePicker({ exchangeId, onConfirmed }: { exchangeId: string; onCo
 function UnmatchedActions({ exchangeId, onDone }: { exchangeId: string; onDone: () => void }) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [orderId, setOrderId] = useState('')
-  const [attaching, setAttaching] = useState(false)
   const [bareReturning, setBareReturning] = useState(false)
   const [dismissing, setDismissing] = useState(false)
 
-  const run = async (action: 'attach' | 'bare' | 'dismiss') => {
+  const run = async (action: 'bare' | 'dismiss') => {
     try {
-      if (action === 'attach') {
-        if (!orderId.trim()) return
-        setAttaching(true)
-        await attachExchange(exchangeId, orderId.trim())
-      } else if (action === 'bare') {
+      if (action === 'bare') {
         setBareReturning(true)
         await acceptExchangeBareReturn(exchangeId)
       } else {
@@ -366,29 +391,12 @@ function UnmatchedActions({ exchangeId, onDone }: { exchangeId: string; onDone: 
     } catch {
       toast({ tone: 'error', message: t('exchangesRefunds.drawer.exchange.actionFailed') })
     } finally {
-      setAttaching(false); setBareReturning(false); setDismissing(false)
+      setBareReturning(false); setDismissing(false)
     }
   }
 
   return (
     <section className="space-y-4" data-testid="unmatched-actions">
-      <div>
-        <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
-          {t('exchangesRefunds.drawer.exchange.searchAttachTitle')}
-        </h3>
-        <div className="flex gap-2">
-          <Input
-            value={orderId}
-            onChange={e => setOrderId(e.target.value)}
-            placeholder={t('exchangesRefunds.drawer.exchange.orderIdPlaceholder')}
-            data-testid="attach-order-id-input"
-          />
-          <Button variant="secondary" loading={attaching} disabled={!orderId.trim()} onClick={() => run('attach')}>
-            {t('exchangesRefunds.drawer.exchange.attachButton')}
-          </Button>
-        </div>
-      </div>
-
       <div className="flex gap-2">
         {/* raw <button> — Button doesn't spread data-testid */}
         <button

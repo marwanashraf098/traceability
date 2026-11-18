@@ -626,36 +626,59 @@ public class ExchangeMatchService {
      * phone match. Same target columns (matched_order_id/match_method/matched_at/status),
      * different match_method ('manual' vs 'phone') and no candidate search: the merchant
      * is asserting the link directly, so it is trusted without a delivered/phone/window
-     * check — an operator can attach any of the tenant's own orders.
+     * check — an operator can attach any of the tenant's own orders (never an internal one:
+     * an exchange replacement, a shadow or a portal pre-connect row — those are not merchant
+     * orders; a pre-connect parent is linked by number through the drawer's Shopify import,
+     * ExchangeOrderSearch.importParent → matchToPreConnectParent, never by id here).
+     *
+     * S2 (2026-11-18): also from needs_mapping while the row has no original yet — the status
+     * stays needs_mapping (map()'s claim, status = 'needs_mapping', is never raced) and becomes
+     * 'matched' once the replacement is mapped (ExchangeService.commit), exactly like
+     * {@link #matchByReference}. Dismissed / bare_return / return_received / matched / mapped
+     * still refuse (409). Same ExchangeInbound.fill; the original's fulfillment row carrying
+     * this AWB is marked linked via the exchange, as the reference match does.
      */
     @Transactional
     public Map<String, Object> searchAttach(UUID exchangeId, UUID orderId) {
         UUID tenantId = TenantContext.require();
 
         Boolean orderExists = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ? " +
+            "  AND external_id NOT LIKE 'internal:%')",
             Boolean.class, orderId, tenantId);
         if (!Boolean.TRUE.equals(orderExists)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Order not found");
         }
 
-        int claimed = jdbc.update(
-            "UPDATE exchanges SET matched_order_id = ?, match_method = 'manual', " +
-            "    matched_at = now(), status = 'matched', updated_at = now() " +
-            "WHERE id = ? AND tenant_id = ? AND status IN ('unmatched', 'needs_confirmation')",
-            orderId, exchangeId, tenantId);
-        if (claimed == 0) {
+        Map<String, Object> claimed = jdbc.queryForList(
+            "UPDATE exchanges SET matched_order_id = ?, match_method = 'manual', matched_at = now(), " +
+            "    status = CASE WHEN status IN ('unmatched', 'needs_confirmation') THEN 'matched' ELSE status END, " +
+            "    updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND " + MANUAL_ATTACH_OPEN_SQL +
+            " RETURNING tracking_number, status",
+            orderId, exchangeId, tenantId).stream().findFirst().orElse(null);
+        if (claimed == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Exchange is not open for manual attach");
         }
         ExchangeInbound.fill(jdbc, tenantId, exchangeId);
+        markFulfillmentLinkedViaExchange(tenantId, orderId, (String) claimed.get("tracking_number"));
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());
         result.put("matchedOrderId", orderId.toString());
-        result.put("status", "matched");
+        result.put("status", claimed.get("status"));
         return result;
     }
+
+    /**
+     * S2 — the ONE rule for "the merchant may still link this exchange to its original order" (attach, the drawer's
+     * order search / Shopify import): a dashboard row (no return request) that is unmatched / needs_confirmation, or
+     * still needs_mapping with no original yet. Columns unqualified — {@code exchanges} is the only table in scope.
+     */
+    public static final String MANUAL_ATTACH_OPEN_SQL =
+        "return_request_id IS NULL AND (status IN ('unmatched', 'needs_confirmation') " +
+        "  OR (status = 'needs_mapping' AND matched_order_id IS NULL))";
 
     /**
      * The physical old item can be scanned, restocked or marked damaged with NO order
