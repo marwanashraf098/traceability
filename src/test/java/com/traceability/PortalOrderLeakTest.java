@@ -375,6 +375,8 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/exchanges/{id}/dismiss",       skip(R_EXCHANGE));
         reg("POST /api/v1/exchanges/{id}/bare-return",   skip(R_EXCHANGE));
         reg("POST /api/v1/exchanges/{id}/outbound-variant", skip(R_EXCHANGE));
+        reg("GET /api/v1/exchanges/{id}/order-search",   list());
+        reg("POST /api/v1/exchanges/{id}/import-parent", skip(R_EXCHANGE));
 
         // ── Returns (portal orders are IN scope) ───────────────────────────
         reg("GET /api/v1/return-requests",               include());
