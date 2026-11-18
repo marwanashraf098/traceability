@@ -169,10 +169,14 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
 export function ReportKpis({ r }: { r: BazarReport }) {
   const { t } = useTranslation()
   const items = [
-    { k: 'revenue', label: t('bazar.report.revenue'), value: formatMoney(r.revenue), sub: t('bazar.report.revenueSub') },
+    { k: 'revenue', label: t('bazar.report.revenue'), value: formatMoney(r.revenue),
+      sub: toNumber(r.discounts) > 0
+        ? `${t('bazar.report.revenueSub')} · ${t('bazar.report.discountsGiven', { amount: formatMoney(r.discounts ?? 0) })}`
+        : t('bazar.report.revenueSub') },
     { k: 'sold', label: t('bazar.report.piecesSold'), value: String(r.pieces_sold), sub: t('bazar.report.ofSent', { count: r.pieces_sent }) },
     { k: 'through', label: t('bazar.report.sellThrough'), value: pctText(r.sell_through), sub: t('bazar.report.ofSent', { count: r.pieces_sent }) },
-    { k: 'avg', label: t('bazar.report.averageSale'), value: r.average_sale == null ? '—' : formatMoney(r.average_sale), sub: '' },
+    { k: 'avg', label: t('bazar.report.averageSale'), value: r.average_sale == null ? '—' : formatMoney(r.average_sale),
+      sub: r.sales == null ? '' : t('bazar.report.salesCount', { count: r.sales }) },
   ]
   return (
     <section className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="report-kpis">

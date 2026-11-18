@@ -328,8 +328,7 @@ public class BazarDayService {
         }
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM bazar_payments p " +
-            "  JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
-            "  WHERE s.event_id = ? AND s.tenant_id = ? AND p.created_at > ? AND p.business_day = ?::date)",
+            "  WHERE p.event_id = ? AND p.tenant_id = ? AND p.created_at > ? AND p.business_day = ?::date)",
             Boolean.class, eventId, tenantId, close.get("closed_at"), day.toString()));
     }
 
@@ -431,8 +430,7 @@ public class BazarDayService {
             "SELECT d::date FROM generate_series(" +
             "  LEAST((SELECT (started_at AT TIME ZONE 'Africa/Cairo')::date FROM bazar_events WHERE id = ? AND tenant_id = ?), " +
             "        (SELECT MIN(p.business_day) FROM bazar_payments p " +
-            "           JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
-            "           WHERE s.event_id = ? AND s.tenant_id = ?)), " +
+            "           WHERE p.event_id = ? AND p.tenant_id = ?)), " +
             "  (SELECT COALESCE((ended_at AT TIME ZONE 'Africa/Cairo')::date, (now() AT TIME ZONE 'Africa/Cairo')::date) " +
             "     FROM bazar_events WHERE id = ? AND tenant_id = ?), interval '1 day') AS d ORDER BY d",
             LocalDate.class, ev.get("id"), tenantId, ev.get("id"), tenantId, ev.get("id"), tenantId);

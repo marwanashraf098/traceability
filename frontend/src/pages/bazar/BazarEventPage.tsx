@@ -1,13 +1,13 @@
 import { SaleBadge } from './phone/SaleSheets'
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ScanLine, Smartphone } from 'lucide-react'
+import { ChevronDown, ChevronRight, ScanLine, Smartphone } from 'lucide-react'
 import { getTransfer, type TransferDetail } from '../../api'
 import {
   BazarError, clearBazarPrice, getBazarEvent, getBazarLeftovers, listBazarDays, listBazarPrices, listBazarSales, markBazarSent, orderedMethods,
   setBazarBulkRule, setBazarPrice, startBazarEvent, type BazarDay, type BazarDays, type BazarEventDetail, type BazarLeftovers, type BazarPriceRow,
-  type BazarSale,
+  type BazarSaleRow, isReceipt,
 } from '../../bazar/api'
 import {
   eventDay, formatMoney, liveLabel, pieceTitle, saleTime, shortDate, toNumber, transferCode,
@@ -315,7 +315,8 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
 
 function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<void> }) {
   const { t, i18n } = useTranslation()
-  const [sales, setSales] = useState<BazarSale[] | null>(null)
+  const [sales, setSales] = useState<BazarSaleRow[] | null>(null)
+  const [openCarts, setOpenCarts] = useState<Set<string>>(new Set())
   const [ending, setEnding] = useState(false)
   const [left, setLeft] = useState<BazarLeftovers | null>(null)
   const [days, setDays] = useState<BazarDays | null>(null)
@@ -427,7 +428,51 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[520px]">
                   <tbody>
-                    {sales.map(s => (
+                    {sales.map(s => isReceipt(s) ? (
+                      <Fragment key={s.id}>
+                        <tr className="tbl-row" data-testid="sales-receipt-row">
+                          <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{saleTime(s.sold_at)}</td>
+                          <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{s.sale_number}</td>
+                          <td className={cn('tbl-cell text-primary', s.status !== 'active' && 'line-through text-muted')}>
+                            <button type="button" aria-expanded={openCarts.has(s.id)}
+                              onClick={() => setOpenCarts(prev => {
+                                const next = new Set(prev)
+                                if (next.has(s.id)) next.delete(s.id); else next.add(s.id)
+                                return next
+                              })}
+                              className="inline-flex items-center gap-1.5 font-medium hover:underline">
+                              {openCarts.has(s.id) ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} className="rtl:rotate-180" aria-hidden />}
+                              {t('bazar.cart.row', { count: s.line_count })}
+                              <span className="sr-only">{openCarts.has(s.id) ? t('bazar.cart.hideLines') : t('bazar.cart.showLines')}</span>
+                            </button>
+                            {toNumber(s.discount) > 0 && (
+                              <span className="text-small text-muted ms-2">{t('bazar.cart.discountLine', { amount: formatMoney(s.discount) })}</span>
+                            )}
+                          </td>
+                          <td className="tbl-cell text-small text-muted">
+                            {s.status === 'undone'
+                              ? <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t('bazar.sell.undoneShort')}</span>
+                              : s.method && <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t(`bazar.method.${s.method}`)}</span>}
+                          </td>
+                          <td className="tbl-cell text-small text-muted">{s.seller_name}</td>
+                          <td className={cn('tbl-cell text-end font-semibold tabular-nums', s.status !== 'active' && 'line-through text-muted')}>
+                            {formatMoney(s.total)}
+                          </td>
+                        </tr>
+                        {openCarts.has(s.id) && s.lines.map(l => (
+                          <tr key={l.id} className="tbl-row bg-charcoal/40" data-testid="sales-receipt-line">
+                            <td className="tbl-cell" />
+                            <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{l.piece_code}</td>
+                            <td className={cn('tbl-cell text-small text-primary ps-8', l.status !== 'active' && 'line-through text-muted')}>{pieceTitle(l)}</td>
+                            <td className="tbl-cell text-small text-muted">{l.status !== 'active' && <SaleBadge sale={l} />}</td>
+                            <td className="tbl-cell" />
+                            <td className={cn('tbl-cell text-end text-small tabular-nums', l.status !== 'active' && 'line-through text-muted')}>
+                              {formatMoney(l.net_price ?? l.price)}
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ) : (
                       <tr key={s.id} className="tbl-row">
                         <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{saleTime(s.sold_at)}</td>
                         <td className="tbl-cell font-mono text-small text-muted" dir="ltr">{s.sale_number}</td>

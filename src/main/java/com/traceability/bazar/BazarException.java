@@ -50,7 +50,10 @@ public class BazarException extends RuntimeException {
         BAZAR_ALREADY_BACK,
         BAZAR_PIECE_MARKED_LOST,
         BAZAR_NOT_OUTSTANDING,
-        BAZAR_LEFTOVERS_OUTSTANDING
+        BAZAR_LEFTOVERS_OUTSTANDING,
+        // B6c — cart
+        BAZAR_CART_DUPLICATE_PIECE,
+        BAZAR_INVALID_DISCOUNT
     }
 
     private final Code       code;

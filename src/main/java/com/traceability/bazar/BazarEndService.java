@@ -92,8 +92,8 @@ public class BazarEndService {
             String status = (String) d.get("status");
             if (!"open".equals(status) && !"changed_after_close".equals(status)) continue;
             boolean money = Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM bazar_payments p JOIN bazar_sales s ON s.id = p.sale_id " +
-                "AND s.tenant_id = p.tenant_id WHERE s.event_id = ? AND s.tenant_id = ? AND p.business_day = ?::date)",
+                "SELECT EXISTS (SELECT 1 FROM bazar_payments p " +
+                "WHERE p.event_id = ? AND p.tenant_id = ? AND p.business_day = ?::date)",
                 Boolean.class, eventId, tenantId, d.get("business_day")));
             if (!money) continue;
             Map<String, Object> row = new LinkedHashMap<>();
