@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       original's lines (GET /original-lines) list what the old items can be; the per-line override
  *       (POST /outbound-variant with orderItemId) changes that line
  *   h2  a worker gets 403 on map-items, original-lines and outbound-variant; nothing changes
+ *   h4  waybill mode: the exchange AWB opens the 2-line EXC order with both lines on the card; one piece → the session
+ *       never completes (scan 'scanned', Complete refused); the second piece completes it
  *   h3  isolation: tenant B can't map, read or override tenant A's exchange (409 / 404), and A's original lines never
  *       show to B; same-tenant positive control
  * </pre>
@@ -196,6 +198,43 @@ class ExchangeMultiItemHttpAppUserTest {
         assertThat(pg.queryForObject("SELECT COUNT(*) FROM exchange_items WHERE tenant_id = ?", Integer.class, b.tenant)).isZero();
     }
 
+    // ── h4 ───────────────────────────────────────────────────────────────────
+
+    @Test
+    void h4_waybillMode_twoLineExchange_needsBothPieces() {
+        Shop s = new Shop("h4");
+        pg.update("UPDATE tenants SET pick_pack_mode = 'waybill_scan' WHERE id = ?", s.tenant);
+        String awb = s.exchange(null);
+        UUID ex = s.exchangeId(awb);
+        JsonNode mapped = read(s.post(s.owner, "/api/v1/exchanges/" + ex + "/map-items", Map.of(
+            "outbound", List.of(Map.of("variantId", s.beige.toString(), "quantity", 1),
+                                Map.of("variantId", s.navy.toString(), "quantity", 1)), "inbound", List.of())));
+        UUID order = UUID.fromString(mapped.path("orderId").asText());
+        String beige = s.piece(s.beige), navy = s.piece(s.navy);
+
+        String session = read(s.post(s.worker, "/api/v1/pack-sessions", Map.of())).path("id").asText();
+        JsonNode opened = read(s.post(s.worker, "/api/v1/pack-sessions/" + session + "/waybill", Map.of("code", awb)));
+        assertThat(opened.path("result").asText()).as(opened.toString()).isEqualTo("opened");
+        assertThat(opened.path("order").path("id").asText()).isEqualTo(order.toString());
+        JsonNode items = opened.path("order").path("items");
+        assertThat(items).as("both lines on the card").hasSize(2);
+        assertThat(items.findValuesAsText("variant_id").isEmpty() ? items.findValuesAsText("variantId") : items.findValuesAsText("variant_id"))
+            .containsExactlyInAnyOrder(s.beige.toString(), s.navy.toString());
+
+        JsonNode first = read(s.post(s.worker, "/api/v1/pack-sessions/" + session + "/orders/" + order + "/scan",
+            Map.of("code", "PC-" + beige)));
+        assertThat(first.path("status").asText()).as(first.toString()).isEqualTo("scanned");
+        JsonNode early = read(s.post(s.worker, "/api/v1/pack-sessions/" + session + "/orders/" + order + "/complete", Map.of()));
+        assertThat(early.path("status").asText()).as("one of two pieces: never completes").isNotEqualTo("completed");
+        assertThat(pg.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, beige)).isNotEqualTo("awaiting_pickup");
+
+        JsonNode last = read(s.post(s.worker, "/api/v1/pack-sessions/" + session + "/orders/" + order + "/scan",
+            Map.of("code", "PC-" + navy)));
+        assertThat(last.path("status").asText()).as(last.toString()).isEqualTo("completed");
+        assertThat(pg.queryForList("SELECT status::text FROM pieces WHERE id IN (?, ?)", String.class, beige, navy))
+            .containsOnly("awaiting_pickup");
+    }
+
     // ── fixtures ─────────────────────────────────────────────────────────────
 
     class Shop {
@@ -256,6 +295,16 @@ class ExchangeMultiItemHttpAppUserTest {
                 "matched_order_id, match_method) VALUES (?, ?, 'needs_mapping', 'Out', 'In', ?::jsonb, ?, ?)",
                 tenant, tn, raw.toString(), original, original == null ? null : "manual");
             return tn;
+        }
+
+        /** An available piece at the tenant's main warehouse. */
+        String piece(UUID variant) {
+            String id = com.traceability.inventory.UlidGenerator.generate();
+            UUID location = pg.queryForObject("SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment", UUID.class, tenant);
+            pg.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available', ?)",
+                id, tenant, variant, "PC-" + id, id, location);
+            return id;
         }
 
         UUID exchangeId(String tn) {

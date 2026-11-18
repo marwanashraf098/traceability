@@ -572,7 +572,7 @@ public class ExchangeMatchService {
             "  AND direction = 'in'", Integer.class, ex.id(), tenantId);
         if (inboundUnits != null && inboundUnits > 1) {
             if (Boolean.TRUE.equals(jdbc.queryForObject(ALL_INBOUND_GRADED_SQL, Boolean.class,
-                    tenantId, orderId, ex.id(), ex.id(), tenantId))) {
+                    ex.id(), tenantId, orderId))) {
                 jdbc.update(
                     "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
                     "WHERE id = ? AND tenant_id = ? AND status = 'matched'",
@@ -631,25 +631,35 @@ public class ExchangeMatchService {
     }
 
     /**
-     * S3a — every 'in' unit of a multi-item exchange is back and graded. "Graded" = a piece of the ORIGINAL order (an
-     * allocation on one of its lines — released or not) that moved return_pending_inspection → available / damaged at or
-     * after the exchange row was created. Each known-variant row needs that many graded pieces of its variant; the
-     * total needs at least the sum of every row's quantity (rows still unknown are covered by any graded piece of the
-     * order). Params: tenant, original order, exchange id (for created_at), exchange id, tenant.
+     * S3a — every 'in' unit of a multi-item exchange is back and graded. A piece counts toward THIS exchange only through
+     * the canonical scan evidence (ShipmentLinkService.returnLegScanEvidenceSql, Rule 1's semantics): its
+     * {@code return_received} event belongs to a non-abandoned return session in which this exchange's AWB was scanned,
+     * at or after the exchange row was created — never a graded piece of the original order that came back on another
+     * leg / in another session. It must also be a piece of the ORIGINAL order (an allocation on one of its lines,
+     * released or not) and graded (return_pending_inspection → available / damaged) after the exchange was created.
+     * Known-variant rows need that many such pieces of their variant; the total (unknown rows included) needs at least
+     * the sum of every row's quantity. Params: exchange id, tenant, original order.
      */
     static final String ALL_INBOUND_GRADED_SQL =
-        "WITH graded AS ( " +
-        "  SELECT p.id, p.variant_id FROM pieces p " +
-        "  WHERE p.tenant_id = ? " +
-        "    AND EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+        "WITH ex AS (SELECT id, tenant_id, tracking_number, created_at FROM exchanges WHERE id = ? AND tenant_id = ?), " +
+        "graded AS ( " +
+        "  SELECT p.id, p.variant_id FROM pieces p JOIN ex ON ex.tenant_id = p.tenant_id " +
+        "  WHERE EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
         "                WHERE a.piece_id = p.id AND oi.order_id = ? AND oi.tenant_id = p.tenant_id) " +
         "    AND EXISTS (SELECT 1 FROM piece_events pe WHERE pe.piece_id = p.id AND pe.tenant_id = p.tenant_id " +
         "                AND pe.from_status = 'return_pending_inspection' " +
         "                AND pe.to_status IN ('available', 'damaged') " +
-        "                AND pe.occurred_at >= (SELECT created_at FROM exchanges WHERE id = ?)) " +
+        "                AND pe.occurred_at >= ex.created_at) " +
+        "    AND EXISTS (SELECT 1 FROM piece_events pr " +
+        "                JOIN return_session_shipments rss ON rss.tenant_id = pr.tenant_id " +
+        "                                                 AND rss.session_id::text = pr.metadata->>'session_id' " +
+        "                JOIN return_sessions rs ON rs.id = rss.session_id AND rs.tenant_id = rss.tenant_id " +
+        "                WHERE pr.piece_id = p.id AND pr.tenant_id = p.tenant_id " +
+        "                  AND pr.event_type = 'return_received' AND pr.occurred_at >= ex.created_at " +
+        "                  AND rss.awb = ex.tracking_number AND rs.status <> 'abandoned') " +
         "), need AS ( " +
-        "  SELECT variant_id, SUM(quantity) AS q FROM exchange_items " +
-        "  WHERE exchange_id = ? AND tenant_id = ? AND direction = 'in' GROUP BY variant_id " +
+        "  SELECT ei.variant_id, SUM(ei.quantity) AS q FROM exchange_items ei JOIN ex ON ex.id = ei.exchange_id " +
+        "  WHERE ei.tenant_id = ex.tenant_id AND ei.direction = 'in' GROUP BY ei.variant_id " +
         ") " +
         "SELECT (SELECT COUNT(*) FROM graded) >= (SELECT COALESCE(SUM(q), 0) FROM need) " +
         "   AND NOT EXISTS (SELECT 1 FROM need n WHERE n.variant_id IS NOT NULL " +

@@ -264,24 +264,37 @@ class ExchangeMultiItemTest {
     @Test
     void m6_closureWaitsForEveryInboundUnit_singleClosesAsBefore() {
         Shop s = new Shop("m6");
-        UUID original = s.order("#7601", s.beige, s.navy);
+        UUID original = s.order("#7601", s.beige, s.navy, s.black);
         String delivBeige = s.deliveredPiece(original, s.beige);
         String delivNavy = s.deliveredPiece(original, s.navy);
+        String unrelated = s.deliveredPiece(original, s.black);
         String awb = s.exchange(original);
+        // In: one beige (known) + one not known yet.
         s.as(() -> exchanges.mapItems(s.exchangeId(awb), List.of(row(s.black, 2, OUT_AR)),
-            List.of(row(s.beige, 1, null), row(s.navy, 1, null)), s.owner));
+            List.of(row(s.beige, 1, null), row(null, 1, "قطعة تانية")), s.owner));
         assertThat(exchange(awb).get("status")).isEqualTo("matched");
 
-        backForInspection(delivBeige);
+        // Session 1 scanned the exchange AWB: the beige comes back in it and is graded — 1 of 2.
+        UUID session1 = s.returnSession(awb);
+        received(s, delivBeige, original, session1);
         s.as(() -> { returns.restock(delivBeige, s.location, s.owner); return null; });
         assertThat(exchange(awb).get("status")).as("first old item graded — still waiting for the second")
             .isEqualTo("matched");
 
-        backForInspection(delivNavy);
+        // An unrelated piece of the SAME original order, back on another parcel in another session, graded: it never
+        // counts toward this exchange (not even for the unknown row).
+        UUID other = s.returnSession("CRP-" + awb);
+        received(s, unrelated, original, other);
+        s.as(() -> { returns.markDamaged(unrelated, "stain", s.owner); return null; });
+        assertThat(exchange(awb).get("status")).as("another leg / session never closes it").isEqualTo("matched");
+
+        // The second old item comes back in a session that scanned the exchange AWB → received.
+        UUID session2 = s.returnSession(awb);
+        received(s, delivNavy, original, session2);
         s.as(() -> { returns.markDamaged(delivNavy, "torn seam", s.owner); return null; });
         assertThat(exchange(awb).get("status")).isEqualTo("return_received");
 
-        // Single-item: closes on its one piece, as before.
+        // Single-item: closes on its one piece, as before (no session evidence needed).
         UUID original2 = s.order("#7602", s.beige);
         String piece2 = s.deliveredPiece(original2, s.beige);
         String single = s.exchange(original2);
@@ -290,6 +303,14 @@ class ExchangeMultiItemTest {
         backForInspection(piece2);
         s.as(() -> { returns.restock(piece2, s.location, s.owner); return null; });
         assertThat(exchange(single).get("status")).isEqualTo("return_received");
+    }
+
+    /** The piece arrives in {@code session}: return_pending_inspection + its return_received event (as Scan returns writes it). */
+    void received(Shop s, String piece, UUID order, UUID session) {
+        backForInspection(piece);
+        jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, order_id, from_status, to_status, metadata) " +
+            "VALUES (?, ?, 'return_received', ?, 'delivered', 'return_pending_inspection', ?::jsonb)",
+            s.tenant, piece, order, "{\"via\":\"return_scan\",\"session_id\":\"" + session + "\"}");
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────
@@ -377,6 +398,14 @@ class ExchangeMultiItemTest {
                 tenant, tn, OUT_AR, IN_AR, raw.toString(), original, original == null ? null : "manual",
                 original == null ? null : java.sql.Timestamp.from(java.time.Instant.now()));
             return tn;
+        }
+
+        /** A closed return session in which {@code awb} was scanned. */
+        UUID returnSession(String awb) {
+            UUID id = jdbc.queryForObject("INSERT INTO return_sessions (tenant_id, status, opened_by, closed_by, closed_at) " +
+                "VALUES (?, 'closed', ?, ?, now()) RETURNING id", UUID.class, tenant, owner, owner);
+            jdbc.update("INSERT INTO return_session_shipments (tenant_id, session_id, awb) VALUES (?, ?, ?)", tenant, id, awb);
+            return id;
         }
 
         UUID exchangeId(String tn) {
