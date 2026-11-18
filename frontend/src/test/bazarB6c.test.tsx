@@ -346,3 +346,105 @@ describe('Cart mode', () => {
     expect(within(sheet).queryByRole('button', { name: 'Undo cart' })).toBeNull()
   })
 })
+
+// ── Focus safety (B6c review): a HID scan (a fast burst of keys + Enter) while a cart / customer field has focus goes
+// to the cart (or, in Quick, is a sale) and leaves the field as it was; normal typing there never scans. The scanner
+// hook (useScanner, SAFETY-CRITICAL) is not touched. ──────────────────────────────────────────────────────────────
+
+/** A HID scanner: every key a few ms apart, then Enter. */
+const hid = () => userEvent.setup({ delay: 0 })
+/** A person typing: 60 ms between keys. */
+const person = () => userEvent.setup({ delay: 60 })
+const sellsSent = () => calls.filter(c => c.method === 'POST' && c.url.endsWith(`/bazar-events/${EVENT}/sell`))
+
+describe('Cart mode — focus safety', () => {
+  test('a HID scan while the discount box has focus adds the piece; the discount is unchanged', async () => {
+    install(...sellBase())
+    const user = await openCart()
+    await add(user, 'P0000002')
+    await waitFor(() => expect(screen.getByTestId('cart-total')).toHaveTextContent('800'))
+    const box = screen.getByTestId('cart-discount') as HTMLInputElement
+    await person().type(box, '50')
+    expect(box).toHaveFocus()
+    await hid().keyboard('P0000001{Enter}')
+    await waitFor(() => expect(screen.getAllByTestId('cart-line')).toHaveLength(2))
+    expect(box.value).toBe('50')
+    expect(screen.getByTestId('cart-total')).toHaveTextContent('1,250')
+    expect(sellsSent()).toHaveLength(0)
+  })
+
+  test('a HID scan while a customer box has focus adds the piece; the box is unchanged', async () => {
+    install(...sellBase())
+    const user = await openCart()
+    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    const name = screen.getByLabelText('Name') as HTMLInputElement
+    await person().type(name, 'Mona')
+    expect(name).toHaveFocus()
+    await hid().keyboard('P0000003{Enter}')
+    await waitFor(() => expect(screen.getAllByTestId('cart-line')).toHaveLength(1))
+    expect(screen.getAllByTestId('cart-line')[0]).toHaveTextContent('Scarf')
+    expect(name.value).toBe('Mona')
+    const phone = screen.getByLabelText('Mobile number') as HTMLInputElement
+    await person().type(phone, '010')
+    await hid().keyboard('P0000002{Enter}')
+    await waitFor(() => expect(screen.getAllByTestId('cart-line')).toHaveLength(2))
+    expect(phone.value).toBe('010')
+  })
+
+  test('typing normally in the discount and customer boxes (Enter included) never scans or sells', async () => {
+    install(...sellBase())
+    const user = await openCart()
+    await add(user, 'P0000001')
+    await waitFor(() => expect(screen.getByTestId('cart-total')).toHaveTextContent('500'))
+    const previewsBefore = previews().length
+    const p = person()
+    await p.type(screen.getByTestId('cart-discount'), '1234{Enter}')
+    expect(screen.getByTestId('cart-discount')).toHaveValue('1234')
+    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    await p.type(screen.getByLabelText('Name'), 'Mona Ali Hassan{Enter}')
+    await p.type(screen.getByLabelText('Mobile number'), '01012345678{Enter}')
+    expect(screen.getByLabelText('Name')).toHaveValue('Mona Ali Hassan')
+    expect(screen.getByLabelText('Mobile number')).toHaveValue('01012345678')
+    expect(screen.getAllByTestId('cart-line')).toHaveLength(1)
+    expect(previews().length).toBe(previewsBefore)
+    expect(sellsSent()).toHaveLength(0)
+    expect(completes()).toHaveLength(0)
+  })
+})
+
+describe('Quick mode "+ Customer" sheet — focus safety', () => {
+  async function openCustomerSheet() {
+    install(...sellBase(), on('POST', '/sell', () => json(200, {
+      kind: 'sale', id: 's-9', sale_number: 'B-0090', sold_at: new Date().toISOString(), business_day: TODAY,
+      status: 'active', price: '500.00', price_source: 'default', method: 'cash', piece_id: 'p', piece_code: 'P0000001',
+      variant_id: 'v', product_title: 'Linen shirt', variant_title: 'M', seller_id: 'u-worker', seller_name: 'Omar',
+      customer_name: null, customer_phone: null, undone_at: null, discount: '0.00', net_price: '500.00' })))
+    renderAt(`/bazar/${EVENT}/sell`, sellRoutes)
+    const user = userEvent.setup()
+    await user.type(await screen.findByTestId('bazar-scan-input'), 'P0000001{Enter}')
+    await screen.findByTestId('sell-card-sold')
+    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    return within(await screen.findByTestId('bazar-customer-sheet'))
+  }
+
+  test('a HID scan while the sheet\'s name box has focus is a sale (as any scan in Quick); the box is unchanged', async () => {
+    const sheet = await openCustomerSheet()
+    const name = sheet.getByLabelText('Name') as HTMLInputElement
+    await person().type(name, 'Laila')
+    expect(sellsSent()).toHaveLength(1)
+    await hid().keyboard('P0000002{Enter}')
+    await waitFor(() => expect(sellsSent()).toHaveLength(2))
+    expect((sellsSent()[1].body as Record<string, string>).code).toBe('P0000002')
+    expect(name.value).toBe('Laila')
+  })
+
+  test('typing normally in the sheet (Enter included) never sells', async () => {
+    const sheet = await openCustomerSheet()
+    const p = person()
+    await p.type(sheet.getByLabelText('Name'), 'Laila Hassan{Enter}')
+    await p.type(sheet.getByLabelText('Mobile number'), '01098765432{Enter}')
+    expect(sheet.getByLabelText('Name')).toHaveValue('Laila Hassan')
+    expect(sheet.getByLabelText('Mobile number')).toHaveValue('01098765432')
+    expect(sellsSent()).toHaveLength(1)
+  })
+})

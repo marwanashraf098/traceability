@@ -637,4 +637,33 @@ class BazarCartTest {
         Assertions.assertThrows(org.springframework.dao.DataAccessException.class,
             () -> tx.execute(s -> app.update("UPDATE bazar_payments SET amount = 0 WHERE receipt_id = ?", r.get("id"))));
     }
+
+    /**
+     * Every payment row names its event: a write without event_id is refused by the database (NOT NULL — there is no
+     * trigger to fill it), and every service writer sets it (the payment rows of a quick sale, a cart, a return, an
+     * exchange difference, a method change and the voids of an undo all carry the event).
+     */
+    @Test
+    void aPaymentWithoutEventId_isRefused_andEveryWriterSetsIt() {
+        Fixture f = live(vA, vB, vC, vA, vB);
+        UUID quick = (UUID) sales.sell(f.eventId(), code(f.p(0)), crid(), "cash", owner).get("id");
+        Assertions.assertThrows(org.springframework.dao.DataIntegrityViolationException.class, () ->
+            jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by) " +
+                "VALUES (?, ?, 'cash', 1, 'payment', ?)", tenantId, quick, ownerId));
+        assertThat(count("SELECT COUNT(*) FROM information_schema.triggers WHERE event_object_table = 'bazar_payments'"))
+            .isZero();
+
+        sales.changePayment(f.eventId(), quick, "card", owner);                          // void + new
+        Map<String, Object> r = cart(f, codes(f, 1, 2), 10, "cash", owner);              // receipt payment
+        sales.changeReceiptPayment(f.eventId(), (UUID) r.get("id"), "instapay", owner);  // void + new on the receipt
+        sales.returnSale(f.eventId(), code(f.p(1)), null, "good", crid(), owner);        // refund
+        sales.exchange(f.eventId(), code(f.p(2)), code(f.p(4)), null, null, crid(), owner); // difference
+        UUID other = (UUID) sales.sell(f.eventId(), code(f.p(3)), crid(), "cash", owner).get("id");
+        sales.undo(f.eventId(), other, owner);                                           // voids
+        assertThat(count("SELECT COUNT(DISTINCT kind) FROM bazar_payments WHERE tenant_id = ? AND event_id = ?",
+            tenantId, f.eventId())).isEqualTo(3);                                        // payment, refund, void
+        assertThat(count("SELECT COUNT(*) FROM bazar_payments p WHERE p.tenant_id = ? AND p.event_id IS DISTINCT FROM " +
+            "COALESCE((SELECT s.event_id FROM bazar_sales s WHERE s.id = p.sale_id), " +
+            "         (SELECT x.event_id FROM bazar_receipts x WHERE x.id = p.receipt_id))", tenantId)).isZero();
+    }
 }

@@ -14,8 +14,8 @@
 --     sale has discount 0, so net_price = price.
 --   - bazar_payments: a cart's money is ONE payment row for its total on the RECEIPT (receipt_id; sale_id NULL);
 --     returns / exchange differences of a line stay on the line's sale_id. Every payment row now carries event_id
---     (backfilled from its sale; a writer that omits it gets it from its sale / receipt by a BEFORE INSERT trigger)
---     so the money rule reads one table whichever the row belongs to.
+--     (backfilled from its sale, then NOT NULL — every writer sets it explicitly; no trigger) so the money rule reads
+--     one table whichever the row belongs to.
 -- RLS NULLIF + FORCE on bazar_receipts.
 
 -- 1. Receipts.
@@ -92,20 +92,6 @@ ALTER TABLE bazar_payments ALTER COLUMN sale_id DROP NOT NULL;
 
 UPDATE bazar_payments p SET event_id = s.event_id
   FROM bazar_sales s WHERE s.id = p.sale_id AND s.tenant_id = p.tenant_id;
-
--- A row written without event_id takes it from its sale / receipt (SECURITY INVOKER: the writer's own RLS applies).
-CREATE FUNCTION bazar_payments_fill_event() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.event_id IS NULL THEN
-        NEW.event_id := COALESCE(
-            (SELECT s.event_id FROM bazar_sales s WHERE s.id = NEW.sale_id AND s.tenant_id = NEW.tenant_id),
-            (SELECT r.event_id FROM bazar_receipts r WHERE r.id = NEW.receipt_id AND r.tenant_id = NEW.tenant_id));
-    END IF;
-    RETURN NEW;
-END $$;
-
-CREATE TRIGGER bazar_payments_fill_event BEFORE INSERT ON bazar_payments
-    FOR EACH ROW EXECUTE FUNCTION bazar_payments_fill_event();
 
 ALTER TABLE bazar_payments ALTER COLUMN event_id SET NOT NULL;
 

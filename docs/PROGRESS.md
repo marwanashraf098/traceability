@@ -5,15 +5,15 @@
 ## Current state
 
 **Bazar POS B6c — cart mode: several pieces, one customer, one total, one discount (2026-11-18; branch
-`feat/bazar-b6c` from main 425bc3e5; V237; pushed, NOT merged — awaiting review).** **Data model (V237):**
+`feat/bazar-b6c` from main 425bc3e5; V237; review changes made, MERGED 2026-11-19, not deployed).** **Data model (V237):**
 `bazar_receipts` — one row per completed cart (B-number from the SAME `bazar_sale_counters` as quick sales; subtotal,
 discount in whole pounds 0 ≤ d ≤ subtotal, total = subtotal − discount; status active / undone; client_request_id UNIQUE
 per tenant; RLS NULLIF + FORCE; app_user no DELETE). A cart LINE is an ordinary `bazar_sales` row (same ledger edge,
 transfer piece, returns / exchanges) with `receipt_id` + `line_no` + `discount` (its share) and generated `net_price` =
 price − discount; it has no sale_number / client_request_id of its own (CHECK `bazar_sales_line_shape`; a quick sale has
 discount 0, so net = price). `bazar_payments`: `receipt_id` (exactly one of sale_id / receipt_id) and `event_id` on every
-row (backfilled; a BEFORE INSERT trigger fills it from the sale / receipt when a writer omits it — kept two existing
-tests unedited); the money rule (`netByMethod`), day close and End read `p.event_id`. **Rules:** `spreadDiscount` is THE
+row (backfilled, NOT NULL, NO trigger — review: every writer sets it; the two writers are `insertMoney` (explicit
+eventId) and `voidLive` (copies the voided row's); a write without it fails, BazarCartTest guard); the money rule (`netByMethod`), day close and End read `p.event_id`. **Rules:** `spreadDiscount` is THE
 discount spread — proportional, whole pounds (floor), remainder on the dearest line (first of equals), never below 0,
 always exact. Complete (`BazarSaleService.completeCart`) = ONE transaction: every piece prepared (same checks as /sell +
 not scanned twice) before any write, then receipt + lines + ONE payment row on the receipt; any refusal → nothing
@@ -31,7 +31,10 @@ optional customer, "Complete sale · total", one request in flight + same id on 
 on a computer (lg) the frame widens and the summary sits beside the list; recent list + `ReceiptSheet`; the computer
 event page's sales table expands a cart to its pieces. **Gotcha:** the scanner's SAFETY-CRITICAL click-refocus steals
 focus from any other input — the cart's fields re-take it with a deferred (setTimeout 0) click listener, not by editing
-useScanner. No Shopify write; NamedDecrementSetGuardTest unchanged.
+useScanner. **HID scans into a focused field (review):** useScanner has NO burst detection; `bazar/useScanBurst` (outside
+the scanner) watches keydowns in the cart summary and the "+ Customer" sheet — ≥ 4 printable keys ≤ 30 ms apart then
+Enter ≤ 60 ms → a scan: the field is put back as it was and the code goes to the screen's scan path (Cart: the cart;
+Quick: a sale). Slower typing (Enter included) is left alone; a soft keyboard's "Unidentified" keys never form a run. No Shopify write; NamedDecrementSetGuardTest unchanged.
 
 **Bazar POS B5 — end event + leftovers on the same transfer + event report (2026-11-18; branch `feat/bazar-b5` from
 main df481f56, rebased on d8340e8b; NO migration; review changes made, MERGED 2026-11-18, not deployed).** **End** (`BazarEndService`, owner / manager):

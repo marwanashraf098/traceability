@@ -245,14 +245,15 @@ function Sell({ live }: { live: BazarLive }) {
 
       {sheet?.kind === 'sale' && (
         <SaleSheet eventId={eventId} sale={sheet.sale} methods={methods} onChanged={changed}
-                   onClose={() => setSheet(null)} />
+                   onClose={() => setSheet(null)} onScanBurst={submit} />
       )}
       {sheet?.kind === 'receipt' && (
         <ReceiptSheet eventId={eventId} receipt={sheet.receipt} methods={methods} onChanged={receiptChanged}
-                      onClose={() => setSheet(null)} />
+                      onClose={() => setSheet(null)} onScanBurst={submit} />
       )}
       {sheet?.kind === 'customer' && (
-        <CustomerSheet eventId={eventId} sale={sheet.sale} onSaved={changed} onClose={() => setSheet(null)} />
+        <CustomerSheet eventId={eventId} sale={sheet.sale} onSaved={changed} onClose={() => setSheet(null)}
+                       onScanBurst={submit} />
       )}
     </PhoneFrame>
   )

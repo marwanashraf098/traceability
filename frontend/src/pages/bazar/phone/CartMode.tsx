@@ -7,6 +7,7 @@ import {
   type BazarCartLine, type BazarCartPreview, type BazarReceipt, type BazarSale, type PaymentMethod,
 } from '../../../bazar/api'
 import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
+import { useScanBurst } from '../../../bazar/useScanBurst'
 import { sellTiming } from '../../../bazar/useQuickSell'
 import { formatMoney, pieceTitle, saleTime, sellErrorText, toNumber } from '../../../bazar/format'
 import { Button, Input, cn } from '../../../components/ui'
@@ -111,6 +112,8 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, onCo
     document.addEventListener('click', keep)
     return () => document.removeEventListener('click', keep)
   }, [])
+  // …and a HID scan typed into one of those fields still goes into the cart (the field is put back as it was).
+  useScanBurst(summaryRef, cart.add)
 
   const subtotal = cart.lines.reduce((s, l) => s + (l.error ? 0 : toNumber(l.price)), 0)
   const off = discount.trim() === '' ? 0 : Number(discount)
@@ -340,12 +343,14 @@ function ReceiptCard({ eventId, done, onChanged }: {
 }
 
 /** A cart from the recent list: its pieces, the totals, how it was paid, the customer, undo — as the API allows. */
-export function ReceiptSheet({ eventId, receipt, methods, onChanged, onClose }: {
+export function ReceiptSheet({ eventId, receipt, methods, onChanged, onClose, onScanBurst }: {
   eventId: string
   receipt: BazarReceipt
   methods: PaymentMethod[]
   onChanged: (r: BazarReceipt) => void
   onClose: () => void
+  /** A HID scan typed into the customer sheet's boxes (see useScanBurst). */
+  onScanBurst?: (code: string) => void
 }) {
   const { t } = useTranslation()
   const [current, setCurrent] = useState(receipt)
@@ -367,7 +372,7 @@ export function ReceiptSheet({ eventId, receipt, methods, onChanged, onClose }: 
       <CustomerSheet eventId={eventId} sale={{ ...current.lines[0], customer_name: current.customer_name, customer_phone: current.customer_phone }}
         onSaved={(s: BazarSale) => changed({ ...current, customer_name: s.customer_name, customer_phone: s.customer_phone,
           lines: current.lines.map(l => ({ ...l, customer_name: s.customer_name, customer_phone: s.customer_phone })) })}
-        onClose={() => setCustomerOpen(false)} />
+        onClose={() => setCustomerOpen(false)} onScanBurst={onScanBurst} />
     )
   }
 

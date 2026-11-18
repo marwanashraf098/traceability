@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2 } from 'lucide-react'
 import {
@@ -6,6 +6,7 @@ import {
   SELLER_UNDO_WINDOW_MS, type BazarSale, type PaymentMethod,
 } from '../../../bazar/api'
 import { formatMoney, pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
+import { useScanBurst } from '../../../bazar/useScanBurst'
 import { Button, Input, cn } from '../../../components/ui'
 import { Sheet } from './shared'
 
@@ -103,13 +104,20 @@ export function ErrorLine({ error }: { error: BazarError | null }) {
  * "+ Customer": name and Egyptian mobile, both optional. A worker sees a saved phone masked: the field starts empty
  * and, left empty, isn't sent — the server keeps the stored number (a field not sent stays as it is).
  */
-export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
+export function CustomerSheet({ eventId, sale, onSaved, onClose, onScanBurst }: {
   eventId: string
   sale: BazarSale
   onSaved: (s: BazarSale) => void
   onClose: () => void
+  /**
+   * B6c review: a HID scan typed into the name / phone box goes to the screen's scan path (Quick: a sale; Cart: the
+   * cart) and the box is put back as it was (useScanBurst). Normal typing is untouched.
+   */
+  onScanBurst?: (code: string) => void
 }) {
   const { t } = useTranslation()
+  const fields = useRef<HTMLDivElement>(null)
+  useScanBurst(fields, onScanBurst)
   const masked = !!sale.customer_phone && sale.customer_phone.includes('*')
   const [name, setName] = useState(sale.customer_name ?? '')
   const [phone, setPhone] = useState(masked ? '' : sale.customer_phone ?? '')
@@ -133,6 +141,7 @@ export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
 
   return (
     <Sheet title={t('bazar.customer.title')} onClose={onClose} testId="bazar-customer-sheet">
+      <div ref={fields} className="contents">
       <label className="flex flex-col gap-1">
         <span className="text-small font-medium text-muted">{t('bazar.customer.name')}</span>
         <Input value={name} maxLength={80} autoComplete="off" onChange={e => setName(e.target.value)}
@@ -148,6 +157,7 @@ export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
           </p>
         )}
       </div>
+      </div>
       <ErrorLine error={error} />
       <Button className="w-full" onClick={save} loading={saving}>{t('bazar.customer.save')}</Button>
     </Sheet>
@@ -155,12 +165,13 @@ export function CustomerSheet({ eventId, sale, onSaved, onClose }: {
 }
 
 /** A sale from the recent list: change method, add / edit the customer, undo — as the API allows. */
-export function SaleSheet({ eventId, sale, methods, onChanged, onClose }: {
+export function SaleSheet({ eventId, sale, methods, onChanged, onClose, onScanBurst }: {
   eventId: string
   sale: BazarSale
   methods: PaymentMethod[]
   onChanged: (s: BazarSale) => void
   onClose: () => void
+  onScanBurst?: (code: string) => void
 }) {
   const { t } = useTranslation()
   const [current, setCurrent] = useState(sale)
@@ -185,7 +196,8 @@ export function SaleSheet({ eventId, sale, methods, onChanged, onClose }: {
   }
 
   if (customerOpen) {
-    return <CustomerSheet eventId={eventId} sale={current} onSaved={changed} onClose={() => setCustomerOpen(false)} />
+    return <CustomerSheet eventId={eventId} sale={current} onSaved={changed} onClose={() => setCustomerOpen(false)}
+                          onScanBurst={onScanBurst} />
   }
 
   return (
