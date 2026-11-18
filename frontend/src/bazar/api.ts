@@ -301,6 +301,8 @@ export interface BazarPieceLookup {
   price: string | number | null
   state: 'sold' | 'for_sale' | 'returned' | 'not_here'
   sale: BazarSale | null
+  /** B4: the piece came back damaged at this bazar — it can't be sold (or given in an exchange). */
+  damaged?: boolean
 }
 
 export function lookupBazarPiece(eventId: string, code: string) {
@@ -337,6 +339,104 @@ export function exchangeOnce(eventId: string,
     method: 'POST', timeoutMs,
     body: JSON.stringify({ old_code: req.oldCode, new_code: req.newCode, condition: req.condition,
                            ...(req.method ? { method: req.method } : {}), client_request_id: clientRequestId }),
+  })
+}
+
+// ── B4 — close the day (owner / manager) ──────────────────────────────────────
+
+export type BazarDayStatus = 'open' | 'closed_balanced' | 'closed_short' | 'changed_after_close'
+type Money = string | number
+
+/** One method's line of a close: expected vs entered; difference = entered − expected (negative = short). */
+export interface BazarCloseMethodRow {
+  method: PaymentMethod
+  expected: Money
+  entered: Money
+  difference: Money
+  state: 'even' | 'short' | 'over' | 'not_received'
+  /** InstaPay only: ticked = received in full. */
+  received?: boolean
+}
+
+export interface BazarCloseResult {
+  opening_float: Money
+  cash_kept: Money
+  take_home: Money
+  not_received_total: Money
+  not_received: { cash: Money; card: Money; instapay: Money }
+  over_total: Money
+  methods: BazarCloseMethodRow[]
+}
+
+export interface BazarDay {
+  business_day: string
+  day_number: number
+  is_today: boolean
+  money: BazarTotals
+  status: BazarDayStatus
+  close: {
+    id: string
+    closed_at: string
+    closed_by_name: string
+    note: string | null
+    supersedes_id: string | null
+    result: BazarCloseResult
+  } | null
+  close_count: number
+  /** previous_close: yesterday's cash kept; this_day_close: a re-close keeps the day's own float; none: ask it. */
+  opening_float_default: { amount: Money | null; source: 'previous_close' | 'this_day_close' | 'none' }
+  replayed?: boolean
+}
+
+export interface BazarDays {
+  today: string
+  payment_methods: PaymentMethod[]
+  days: BazarDay[]
+}
+
+export interface BazarCloseEntry {
+  cash: number | null
+  card: number | null
+  instapay: boolean
+  kept: number | null
+  openingFloat: number | null
+}
+
+export interface BazarClosePreview {
+  business_day: string
+  status: BazarDayStatus
+  money: BazarTotals
+  opening_float_source: 'entered' | 'previous_close' | 'this_day_close' | 'none'
+  needs_opening_float: boolean
+  result: BazarCloseResult
+  problems: 'kept_more_than_counted'[]
+}
+
+const dayPath = (eventId: string, day: string) => `${base(eventId)}/days/${encodeURIComponent(day)}`
+
+export function listBazarDays(eventId: string) {
+  return bazarFetch<BazarDays>(`${base(eventId)}/days`)
+}
+
+export function previewBazarClose(eventId: string, day: string, e: BazarCloseEntry) {
+  const q = new URLSearchParams({ instapay: String(e.instapay) })
+  if (e.cash != null) q.set('cash', String(e.cash))
+  if (e.card != null) q.set('card', String(e.card))
+  if (e.kept != null) q.set('kept', String(e.kept))
+  if (e.openingFloat != null) q.set('float', String(e.openingFloat))
+  return bazarFetch<BazarClosePreview>(`${dayPath(eventId, day)}/close-preview?${q}`)
+}
+
+/** One attempt (same contract as sellOnce): retried by the caller with the SAME client_request_id. */
+export function closeBazarDayOnce(eventId: string, day: string, e: BazarCloseEntry, note: string | null,
+                                  clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarDay>(`${dayPath(eventId, day)}/close`, {
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({
+      cash_counted: e.cash, card_settlement: e.card, instapay_received: e.instapay, cash_kept: e.kept,
+      ...(e.openingFloat != null ? { opening_float: e.openingFloat } : {}),
+      ...(note ? { note } : {}), client_request_id: clientRequestId,
+    }),
   })
 }
 

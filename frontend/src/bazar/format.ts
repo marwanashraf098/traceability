@@ -95,6 +95,10 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
         detail: d.sale_number ? t('bazar.sellError.alreadyReturnedDetail', {
           number: String(d.sale_number), name: String(d.returned_by_name ?? '') }) : undefined,
       }
+    case 'BAZAR_PIECE_DAMAGED':
+      return { title: t('bazar.sellError.pieceDamaged'), detail: t('bazar.sellError.pieceDamagedDetail') }
+    case 'BAZAR_DAY_CLOSED':
+      return { title: t('bazar.sellError.dayClosed'), detail: t('bazar.sellError.dayClosedDetail') }
     case 'BAZAR_SAME_PIECE':
       return { title: t('bazar.sellError.samePiece') }
     case 'NETWORK':

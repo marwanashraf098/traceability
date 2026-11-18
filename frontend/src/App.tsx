@@ -28,6 +28,7 @@ const BazarPhoneHome  = lazy(() => import('./pages/bazar/phone/BazarPhoneHome'))
 const BazarSell       = lazy(() => import('./pages/bazar/phone/BazarSell'))
 const BazarReturn     = lazy(() => import('./pages/bazar/phone/BazarReturn'))
 const BazarExchange   = lazy(() => import('./pages/bazar/phone/BazarExchange'))
+const BazarCloseDay   = lazy(() => import('./pages/bazar/phone/BazarCloseDay'))
 // Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
 const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
 import { analyticsEnabled } from './analytics/flag'
@@ -698,6 +699,10 @@ export default function App() {
         </RequireAuth>} />
         <Route path="/bazar/:id/exchange" element={<RequireAuth>
           <Suspense fallback={<AuthLoadingSpinner />}><BazarExchange /></Suspense>
+        </RequireAuth>} />
+        {/* B4: owner / manager — the screen itself tells anyone else it isn't for them; the API answers 403. */}
+        <Route path="/bazar/:id/close" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarCloseDay /></Suspense>
         </RequireAuth>} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
