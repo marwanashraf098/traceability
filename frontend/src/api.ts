@@ -3528,6 +3528,58 @@ export function attachExchange(id: string, orderId: string) {
   })
 }
 
+// ── Exchange reference S2 (2026-11-18) — the drawer's "Link to order" ──────────────
+
+export interface ExchangeOrderItem {
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  quantity: number
+}
+
+/** One of the tenant's orders (never an internal one) — what the order drawer already shows, no phone. */
+export interface ExchangeOrderHit {
+  id: string
+  number: string
+  placedAt: string | null
+  customerName: string | null
+  items: ExchangeOrderItem[]
+}
+
+export interface ExchangeOrderSearchResult {
+  query: string
+  /** true for an empty query: orders of the courier's receiver phone. */
+  suggested: boolean
+  orders: ExchangeOrderHit[]
+  /** A clean number no order has, below the lowest Traced holds, with Shopify connected. */
+  importOption: { number: string } | null
+}
+
+/** Owner / manager. Max 20, newest first. Empty q → suggestions. */
+export function searchExchangeOrders(id: string, q: string) {
+  return request<ExchangeOrderSearchResult>(`/exchanges/${id}/order-search?q=${encodeURIComponent(q)}`)
+}
+
+export type ExchangeImportStatus = 'FOUND' | 'LINKED' | 'NOT_FOUND' | 'UNAVAILABLE' | 'NOT_PRE_CONNECT'
+
+export interface ExchangeImportResult {
+  status: ExchangeImportStatus
+  /** The importer's reason (IMPORTED / REUSED / NOT_FOUND / AMBIGUOUS / NO_CATALOG_LINES / CACHED_MISS / …). */
+  reason: string | null
+  number: string | null
+  items: ExchangeOrderItem[]
+  /** The exchange's status after a link. */
+  exchangeStatus: string | null
+}
+
+/** "Import from Shopify" (a pre-connect order, by number). link=false → FOUND + items; link=true → LINKED. */
+export function importExchangeParent(id: string, number: string, link: boolean) {
+  return request<ExchangeImportResult>(`/exchanges/${id}/import-parent`, {
+    method: 'POST',
+    body: JSON.stringify({ number, link }),
+  })
+}
+
 /** Part D — accept the physical item back with no order link. */
 export function acceptExchangeBareReturn(id: string) {
   return request<void>(`/exchanges/${id}/bare-return`, { method: 'POST' })

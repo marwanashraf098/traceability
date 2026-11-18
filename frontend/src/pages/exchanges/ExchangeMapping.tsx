@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2 } from 'lucide-react'
 import {
-  getExchanges, mapExchange, getExchangeOutboundCandidates, ExchangeSummary, CatalogProduct, CatalogVariant,
+  getExchangeDetail, mapExchange, getExchangeOutboundCandidates, ExchangeSummary, CatalogProduct, CatalogVariant,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton } from '../../components/ui'
 import ExchangeVariantPicker from './ExchangeVariantPicker'
@@ -41,13 +41,12 @@ export default function ExchangeMapping() {
 
   useEffect(() => {
     if (!id) return
-    getExchanges()
-      .then(rows => {
-        const found = rows.find(r => r.id === id)
-        if (!found) { setLoadError(t('exchange.mapping.notFound')); return }
-        setExchange(found)
-      })
-      .catch(() => setLoadError(t('common.error')))
+    // S2 (2026-11-18): the single-exchange read — the old "first 100 of the list" lookup said "not found" for
+    // any older exchange.
+    getExchangeDetail(id)
+      .then(setExchange)
+      .catch((e: unknown) => setLoadError(
+        (e as Error)?.message?.startsWith('404') ? t('exchange.mapping.notFound') : t('common.error')))
       .finally(() => setLoading(false))
   }, [id, t])
 

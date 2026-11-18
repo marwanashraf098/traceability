@@ -19,10 +19,12 @@ public class ExchangeController {
 
     private final ExchangeService svc;
     private final ExchangeMatchService matchSvc;
+    private final ExchangeOrderSearch orderSearch;
 
-    public ExchangeController(ExchangeService svc, ExchangeMatchService matchSvc) {
+    public ExchangeController(ExchangeService svc, ExchangeMatchService matchSvc, ExchangeOrderSearch orderSearch) {
         this.svc = svc;
         this.matchSvc = matchSvc;
+        this.orderSearch = orderSearch;
     }
 
     @GetMapping
@@ -78,6 +80,27 @@ public class ExchangeController {
         return matchSvc.searchAttach(id, req.orderId());
     }
 
+    /**
+     * S2 (2026-11-18) — the drawer's "Link to order" search: the tenant's orders by number / phone / name (empty q →
+     * suggestions by Bosta's receiver phone), max 20, plus an "Import from Shopify" offer for a pre-connect number.
+     */
+    @GetMapping("/{id}/order-search")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ExchangeOrderSearch.SearchResult orderSearch(@PathVariable UUID id,
+                                                        @RequestParam(required = false) String q) {
+        return orderSearch.search(id, q);
+    }
+
+    /**
+     * S2 — "Import from Shopify": the S1 pre-connect parent import (no transaction open — it calls Shopify), then, with
+     * {@code link: true}, the exchange is linked to it. A miss is a 200 with its status, not an error.
+     */
+    @PostMapping("/{id}/import-parent")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ExchangeOrderSearch.ImportResult importParent(@PathVariable UUID id, @RequestBody ImportParentRequest req) {
+        return orderSearch.importParent(id, req.number(), Boolean.TRUE.equals(req.link()));
+    }
+
     /** Part D — accept the physical item back with no order link (custody starts at intake). */
     @PostMapping("/{id}/bare-return")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -94,5 +117,6 @@ public class ExchangeController {
 
     public record MapRequest(UUID outboundVariantId, UUID inboundVariantId) {}
     public record AttachRequest(UUID orderId) {}
+    public record ImportParentRequest(String number, Boolean link) {}
     public record OverrideOutboundRequest(UUID variantId) {}
 }
