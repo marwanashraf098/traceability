@@ -555,15 +555,18 @@ public class BazarSaleService {
         // Every live money row of the sale is re-written with the new method, same kind and amount: a plain sale has
         // one payment row (its price); an exchange's new sale has its difference row, or none for an even swap (B3).
         List<Map<String, Object>> live = jdbc.queryForList(
-            "SELECT method, kind, amount FROM bazar_payments p WHERE p.sale_id = ? AND p.tenant_id = ? " +
+            "SELECT method, kind, amount, business_day FROM bazar_payments p WHERE p.sale_id = ? AND p.tenant_id = ? " +
             "AND p.kind IN ('payment', 'refund') " +
             "AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) ORDER BY p.created_at, p.id",
             saleId, tenantId);
         if (live.stream().allMatch(r -> chosen.equals(r.get("method")))) return saleView(tenantId, saleId, actor);
 
         voidLivePayments(tenantId, saleId, actor.userId());
+        // B4 review: a correction stays on the sale's day — the replacement counts on the business day of the row it
+        // replaces (its void inherits it too), so no money moves on the day of the edit.
         for (Map<String, Object> r : live) {
-            insertMoney(tenantId, saleId, chosen, (BigDecimal) r.get("amount"), (String) r.get("kind"), actor.userId());
+            insertMoney(tenantId, saleId, chosen, (BigDecimal) r.get("amount"), (String) r.get("kind"), actor.userId(),
+                String.valueOf(r.get("business_day")));
         }
         jdbc.update("UPDATE bazar_sales SET updated_at = now() WHERE id = ? AND tenant_id = ?", saleId, tenantId);
         return saleView(tenantId, saleId, actor);
@@ -771,7 +774,8 @@ public class BazarSaleService {
 
     /**
      * THE money rule (B3 / B4): per method, every live (not voided) 'payment' row minus every live 'refund' row of the
-     * event, counted on the Africa/Cairo day the ROW was written ({@code day} null = every day). Methods with no row
+     * event, counted on the row's {@code business_day} ({@code day} null = every day): the Africa/Cairo day real money
+     * was written; a payment-method correction keeps the day of the row it replaces (B4 review). Methods with no row
      * are absent.
      */
     static Map<String, BigDecimal> netByMethod(JdbcTemplate jdbc, UUID tenantId, UUID eventId, java.time.LocalDate day) {
@@ -782,7 +786,7 @@ public class BazarSaleService {
                 "SELECT p.method, SUM(CASE WHEN p.kind = 'payment' THEN p.amount ELSE -p.amount END) AS total " +
                 "FROM bazar_payments p JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
                 "WHERE s.event_id = ? AND s.tenant_id = ? AND p.kind IN ('payment', 'refund') " +
-                (day != null ? "  AND (p.created_at AT TIME ZONE 'Africa/Cairo')::date = ?::date " : "") +
+                (day != null ? "  AND p.business_day = ?::date " : "") +
                 "  AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
                 "GROUP BY p.method ORDER BY p.method", args.toArray())) {
             out.put((String) r.get("method"), ((BigDecimal) r.get("total")).setScale(2));
@@ -884,11 +888,19 @@ public class BazarSaleService {
         insertMoney(tenantId, saleId, method, amount, "payment", actorId);
     }
 
-    /** kind 'payment' (money in) or 'refund' (money out). */
+    /** kind 'payment' (money in) or 'refund' (money out) — real money: counts on today's business day (Cairo). */
     private void insertMoney(UUID tenantId, UUID saleId, String method, BigDecimal amount, String kind, UUID actorId) {
+        insertMoney(tenantId, saleId, method, amount, kind, actorId, null);
+    }
+
+    /** {@code businessDay}: the day the row counts on (yyyy-MM-dd); null = today (Africa/Cairo). */
+    private void insertMoney(UUID tenantId, UUID saleId, String method, BigDecimal amount, String kind, UUID actorId,
+                             String businessDay) {
         // clock_timestamp(): rows written in one transaction (void + new) keep their real order.
-        jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, clock_timestamp())", tenantId, saleId, method, amount, kind, actorId);
+        jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by, created_at, " +
+            "  business_day) VALUES (?, ?, ?, ?, ?, ?, clock_timestamp(), " +
+            "  COALESCE(?::date, (now() AT TIME ZONE 'Africa/Cairo')::date))",
+            tenantId, saleId, method, amount, kind, actorId, businessDay);
     }
 
     private static String requestId(String clientRequestId) {
@@ -908,8 +920,10 @@ public class BazarSaleService {
     private void voidLivePayments(UUID tenantId, UUID saleId, UUID actorId) {
         jdbc.update(
             "INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, voids_payment_id, created_by, " +
-            "  created_at) " +
-            "SELECT p.tenant_id, p.sale_id, p.method, p.amount, 'void', p.id, ?, clock_timestamp() FROM bazar_payments p " +
+            "  created_at, business_day) " +
+            // B4 review: a void counts on the day of the row it cancels.
+            "SELECT p.tenant_id, p.sale_id, p.method, p.amount, 'void', p.id, ?, clock_timestamp(), p.business_day " +
+            "FROM bazar_payments p " +
             "WHERE p.sale_id = ? AND p.tenant_id = ? AND p.kind IN ('payment', 'refund') " +
             "AND NOT EXISTS (SELECT 1 FROM bazar_payments v WHERE v.voids_payment_id = p.id) " +
             "ORDER BY p.created_at, p.id", actorId, saleId, tenantId);

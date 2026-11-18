@@ -220,7 +220,7 @@ class BazarDayCloseTest {
         jdbc.update("UPDATE bazar_events SET started_at = started_at - interval '1 day' WHERE id = ?", f.eventId());
         jdbc.update("UPDATE bazar_sales SET sold_at = sold_at - interval '1 day', created_at = created_at - interval '1 day', " +
             "business_day = business_day - 1 WHERE event_id = ?", f.eventId());
-        jdbc.update("UPDATE bazar_payments SET created_at = created_at - interval '1 day' " +
+        jdbc.update("UPDATE bazar_payments SET created_at = created_at - interval '1 day', business_day = business_day - 1 " +
             "WHERE sale_id IN (SELECT id FROM bazar_sales WHERE event_id = ?)", f.eventId());
     }
 
@@ -606,5 +606,46 @@ class BazarDayCloseTest {
         assertThat(sales.lookupPiece(f.eventId(), code(f.p(2)), owner).get("damaged")).isEqualTo(false);
         // A piece returned good is on sale again.
         assertThat(sales.sell(f.eventId(), code(f.p(2)), crid(), null, owner).get("status")).isEqualTo("active");
+    }
+
+    // ── B4 review: a payment-method correction stays on the sale's day ───────
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> moneyOf(Fixture f, LocalDate d) {
+        return (Map<String, Object>) ((Map<String, Object>) day(f, d).get("money")).get("by_method");
+    }
+
+    @Test
+    void methodChangedToday_ofYesterdaysSale_movesYesterdaysMoney_notTodays() {
+        Fixture f = live(v200);
+        UUID sale = sell(f, 0, "cash", owner);
+        shiftEventBackOneDay(f);
+        LocalDate yesterday = today().minusDays(1);
+        close(f, yesterday, entered("1200", "0", true, null, "1000"));
+        assertThat(day(f, yesterday).get("status")).isEqualTo("closed_balanced");
+
+        sales.changePayment(f.eventId(), sale, "instapay", owner);               // edited today
+
+        money(moneyOf(f, yesterday).get("cash"), "0");                          // yesterday: cash −200 …
+        money(moneyOf(f, yesterday).get("instapay"), "200");                    // … InstaPay +200
+        assertThat(day(f, yesterday).get("status")).isEqualTo("changed_after_close");
+        money(moneyOf(f, today()).get("cash"), "0");                             // today: nothing moved
+        money(moneyOf(f, today()).get("instapay"), "0");
+        money(sales.todaySummary(f.eventId(), owner).get("total"), "0");
+        // Both new rows (void + replacement) count on yesterday.
+        assertThat(jdbc.queryForList("SELECT DISTINCT business_day FROM bazar_payments WHERE sale_id = ?",
+            LocalDate.class, sale)).containsExactly(yesterday);
+    }
+
+    @Test
+    void refundToday_ofYesterdaysSale_countsToday() {
+        Fixture f = live(v200);
+        sell(f, 0, "cash", owner);
+        shiftEventBackOneDay(f);
+        LocalDate yesterday = today().minusDays(1);
+        sales.returnSale(f.eventId(), code(f.p(0)), null, "good", crid(), owner);   // real money out, today
+        money(moneyOf(f, yesterday).get("cash"), "200");
+        money(moneyOf(f, today()).get("cash"), "-200");
+        money(sales.todaySummary(f.eventId(), owner).get("total"), "-200");
     }
 }

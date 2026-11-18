@@ -282,7 +282,7 @@ class BazarReturnExchangeTest {
         assertThat(jdbc.queryForList("SELECT event_type FROM piece_events WHERE piece_id = ? ORDER BY occurred_at, id",
             String.class, p)).endsWith("bazar_sold", "bazar_returned", "bazar_return_damaged");
         assertThat(codeOf(() -> sales.sell(f.eventId(), code(p), crid(), null, worker)))
-            .isEqualTo(BazarException.Code.BAZAR_PIECE_NOT_HERE);
+            .isEqualTo(BazarException.Code.BAZAR_PIECE_DAMAGED);
         assertThat(shopifyRows()).isEqualTo(shopifyBefore);
     }
 

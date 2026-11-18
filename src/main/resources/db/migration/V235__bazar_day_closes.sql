@@ -13,6 +13,12 @@
 --     (= opening_float + net_cash), expected_card, expected_instapay; the differences (entered − expected; InstaPay
 --     unticked → −expected), not_received_total (the shortfalls), over_total (money over), take_home (counted − kept).
 --   - BazarDayService is the ONE writer. client_request_id: the phone's idempotency key (UNIQUE per tenant).
+--   - bazar_payments.business_day (B4 review, approved 2026-11-18): the business day a money row COUNTS on. Real money
+--     (a sale's payment, a return's refund, an exchange's difference) = the Africa/Cairo date it was written (the
+--     column's default). A payment-method correction stays on the sale's day: its void row AND its replacement row
+--     inherit the business_day of the row they replace (BazarSaleService) — no money moves on the day of the edit;
+--     that day reads "changed after close" when it was closed. Undo voids inherit the same way. Existing rows: the
+--     Cairo date they were written (voids: their voided row's).
 -- RLS NULLIF + FORCE.
 
 CREATE TABLE bazar_day_closes (
@@ -57,8 +63,6 @@ CREATE UNIQUE INDEX bazar_day_closes_first_per_day ON bazar_day_closes (event_id
 CREATE UNIQUE INDEX bazar_day_closes_superseded_once ON bazar_day_closes (supersedes_id)
     WHERE supersedes_id IS NOT NULL;
 CREATE INDEX bazar_day_closes_event_day_idx ON bazar_day_closes (event_id, business_day, closed_at);
--- Money counted by the day the row was written (B4 close / "changed after close").
-CREATE INDEX bazar_payments_created_idx ON bazar_payments (tenant_id, created_at);
 
 ALTER TABLE bazar_day_closes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bazar_day_closes FORCE ROW LEVEL SECURITY;
@@ -66,3 +70,12 @@ CREATE POLICY tenant_isolation ON bazar_day_closes
     USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 REVOKE UPDATE, DELETE, TRUNCATE ON bazar_day_closes FROM app_user;
+
+-- The day a money row counts on (see above).
+ALTER TABLE bazar_payments ADD COLUMN business_day date;
+UPDATE bazar_payments SET business_day = (created_at AT TIME ZONE 'Africa/Cairo')::date;
+UPDATE bazar_payments v SET business_day = o.business_day
+    FROM bazar_payments o WHERE v.voids_payment_id = o.id AND v.kind = 'void';
+ALTER TABLE bazar_payments ALTER COLUMN business_day SET DEFAULT ((now() AT TIME ZONE 'Africa/Cairo')::date);
+ALTER TABLE bazar_payments ALTER COLUMN business_day SET NOT NULL;
+CREATE INDEX bazar_payments_day_idx ON bazar_payments (tenant_id, business_day);

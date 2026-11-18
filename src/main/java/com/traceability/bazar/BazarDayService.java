@@ -23,8 +23,8 @@ import java.util.UUID;
  * money row.
  * <ul>
  *   <li><b>A business day</b> = an Africa/Cairo date. A day's EXPECTED money comes only from {@code bazar_payments}
- *       rows written that day ({@link BazarSaleService#netByMethod}: payments − refunds, voided rows out — the same
- *       source as /today): cash = opening float + cash net; card = card net; InstaPay = InstaPay net.</li>
+ *       rows counting on that day ({@link BazarSaleService#netByMethod}: payments − refunds, voided rows out — the same
+ *       source as /today; real money counts on the day written, a method correction on the replaced row's day): cash = opening float + cash net; card = card net; InstaPay = InstaPay net.</li>
  *   <li><b>The calculation</b> ({@link #calculate}): the difference per method (entered − expected; InstaPay unticked =
  *       the whole InstaPay amount not received), "X EGP not received" = the sum of the shortfalls, money over shown
  *       as over (never netted against a shortfall), take-home cash = counted − kept.</li>
@@ -313,9 +313,10 @@ public class BazarDayService {
     }
 
     /**
-     * Changed after close: a money row of the day was written after the close (a sale, return, exchange, method
-     * change), or one of the day's rows was voided after it (undo, method change) — or, as a backstop for a row
-     * stamped just before the close but committed after it, the day's nets no longer equal the close's snapshot.
+     * Changed after close: a money row counting on the day was written after the close — a sale, return or exchange
+     * that day, or a void / method-change replacement of one of its rows (they inherit its business_day) — or, as a
+     * backstop for a row stamped just before the close but committed after it, the day's nets no longer equal the
+     * close's snapshot.
      */
     private boolean changedAfterClose(UUID tenantId, UUID eventId, LocalDate day, Map<String, Object> close,
                                       Map<String, BigDecimal> byMethod) {
@@ -328,11 +329,8 @@ public class BazarDayService {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM bazar_payments p " +
             "  JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
-            "  WHERE s.event_id = ? AND s.tenant_id = ? AND p.created_at > ? " +
-            "    AND ((p.created_at AT TIME ZONE 'Africa/Cairo')::date = ?::date " +
-            "      OR (p.kind = 'void' AND EXISTS (SELECT 1 FROM bazar_payments o WHERE o.id = p.voids_payment_id " +
-            "            AND (o.created_at AT TIME ZONE 'Africa/Cairo')::date = ?::date))))",
-            Boolean.class, eventId, tenantId, close.get("closed_at"), day.toString(), day.toString()));
+            "  WHERE s.event_id = ? AND s.tenant_id = ? AND p.created_at > ? AND p.business_day = ?::date)",
+            Boolean.class, eventId, tenantId, close.get("closed_at"), day.toString()));
     }
 
     private static Nets nets(Map<String, Object> dayReport) {
@@ -432,7 +430,7 @@ public class BazarDayService {
         return jdbc.queryForList(
             "SELECT d::date FROM generate_series(" +
             "  LEAST((SELECT (started_at AT TIME ZONE 'Africa/Cairo')::date FROM bazar_events WHERE id = ? AND tenant_id = ?), " +
-            "        (SELECT MIN((p.created_at AT TIME ZONE 'Africa/Cairo')::date) FROM bazar_payments p " +
+            "        (SELECT MIN(p.business_day) FROM bazar_payments p " +
             "           JOIN bazar_sales s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id " +
             "           WHERE s.event_id = ? AND s.tenant_id = ?)), " +
             "  (SELECT COALESCE((ended_at AT TIME ZONE 'Africa/Cairo')::date, (now() AT TIME ZONE 'Africa/Cairo')::date) " +
