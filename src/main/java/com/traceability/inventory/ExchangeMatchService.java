@@ -82,6 +82,49 @@ public class ExchangeMatchService {
         this.mapper = mapper;
     }
 
+    // ── B0 (2026-11-18): an exchange that gets its original re-runs that original's shadows ──────────────────────
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ExchangeMatchService.class);
+    private ShopifyShadowOrders shadows;
+    private org.springframework.transaction.support.TransactionTemplate newTx;
+
+    /** Absent in hand-wired tests → no reconcile (as before). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShadowReconcile(ShopifyShadowOrders shadows,
+                                   org.springframework.transaction.PlatformTransactionManager txm) {
+        this.shadows = shadows;
+        this.newTx = new org.springframework.transaction.support.TransactionTemplate(txm);
+        this.newTx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
+     * B0 — prod overdue 2026-11-18: a Shopify-exchange shadow mirrored BEFORE its Bosta exchange had an original stays
+     * live after the match (the reconcile's stand-down rule, ShopifyShadowOrders: "a Shopify-native internal:exchange:
+     * replacement exists for the original + variant → stood_down", only re-runs on a Shopify signal), so the replacement
+     * is reserved twice. Every write that sets exchanges.matched_order_id calls this: AFTER COMMIT, the original's
+     * shadows are reconciled through the existing rule (own REQUIRES_NEW transaction, the captured tenant, never throws —
+     * the next Shopify signal / the ops backfill re-runs it). Nothing else is decided here.
+     */
+    void reconcileShadowsAfterCommit(UUID tenantId, UUID originalOrderId) {
+        if (shadows == null || tenantId == null || originalOrderId == null) return;
+        Runnable run = () -> {
+            try {
+                TenantContext.runAs(tenantId, () -> newTx.execute(st -> shadows.reconcileForOrder(originalOrderId)));
+            } catch (RuntimeException e) {
+                log.warn("Exchange matched: shadow reconcile for original {} failed — the next signal re-runs it: {}",
+                    originalOrderId, e.toString());
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCommit() { run.run(); }
+                });
+        } else {
+            run.run();
+        }
+    }
+
     private record ExchangeRow(UUID id, String status, String inboundDescription,
                                 UUID outboundOrderId, String rawJson) {}
 
@@ -184,6 +227,7 @@ public class ExchangeMatchService {
                 "WHERE id = ? AND tenant_id = ?",
                 resolved.get().orderId(), ex.id(), tenantId);
             ExchangeInbound.fill(jdbc, tenantId, ex.id());
+            reconcileShadowsAfterCommit(tenantId, resolved.get().orderId());
         } else {
             setStatus(ex.id(), tenantId, "needs_confirmation");
         }
@@ -263,6 +307,7 @@ public class ExchangeMatchService {
         if (updated == 0) return new ReferenceMatch(ReferenceVerdict.ALREADY_MATCHED, ref, null, null);
         ExchangeInbound.fill(jdbc, tenantId, (UUID) ex.get("id"));
         markFulfillmentLinkedViaExchange(tenantId, orderId, trackingNumber);
+        reconcileShadowsAfterCommit(tenantId, orderId);
         return new ReferenceMatch(ReferenceVerdict.MATCHED, ref, orderId, number);
     }
 
@@ -293,6 +338,7 @@ public class ExchangeMatchService {
             parentOrderId, exchangeId, tenantId);
         if (updated == 0) return false;
         ExchangeInbound.fill(jdbc, tenantId, exchangeId);
+        reconcileShadowsAfterCommit(tenantId, parentOrderId);
         return true;
     }
 
@@ -714,6 +760,7 @@ public class ExchangeMatchService {
         }
         ExchangeInbound.fill(jdbc, tenantId, exchangeId);
         markFulfillmentLinkedViaExchange(tenantId, orderId, (String) claimed.get("tracking_number"));
+        reconcileShadowsAfterCommit(tenantId, orderId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());
