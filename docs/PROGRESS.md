@@ -5,7 +5,7 @@
 ## Current state
 
 **Bazar POS B5 — end event + leftovers on the same transfer + event report (2026-11-18; branch `feat/bazar-b5` from
-main df481f56; NO migration; pushed, NOT merged — awaiting review).** **End** (`BazarEndService`, owner / manager):
+main df481f56, rebased on d8340e8b; NO migration; review changes made, MERGED 2026-11-18, not deployed).** **End** (`BazarEndService`, owner / manager):
 live → ended (`ended_at` / `ended_by`, B1 columns), refused with BAZAR_DAYS_NOT_CLOSED (details: the days) while a day
 with any money row is open or changed after its close; the event row is taken FOR UPDATE (a sale holds it FOR SHARE);
 idempotent (ended → the same answer, `replayed`). The linked transfer goes sent → reconciling. After end every sale /
@@ -19,12 +19,15 @@ lost = n, but on the EXACT pieces listed: `piece_id = ANY(?)` in the same FOR UP
 so a sold piece can never be marked lost), `closeTransferForBazar` (= closeTransfer: refused while anything is
 outstanding). One new: `bringBackDamagedForBazar` — a piece taken back damaged at the bazar (B3: transfer piece
 'condemned', piece damaged at the event location) comes home: current_location → main, still damaged, NO Shopify write;
-the arrival is a new InventoryLedger write path `recordBroughtBackDamaged` (event `bazar_damaged_brought_back`,
-damaged → damaged, like recordLabelReprinted). BazarTransferLockTest: all five have ONE caller, BazarEndService.
+the move AND its event go through InventoryLedger `bringBackDamaged` (conditional UPDATE of current_location_id
+while damaged + not at main, then event `bazar_damaged_brought_back`, damaged → damaged — review fix: no raw piece
+UPDATE outside the ledger; source-guarded in BazarEndTest). Note: the generic transfer scan-out / scan-back code still
+moves current_location_id with its own UPDATE after ledger.transition (pre-existing, not changed here). BazarTransferLockTest: all five have ONE caller, BazarEndService.
 Close the transfer when sent = sold + back + damaged + lost (BAZAR_LEFTOVERS_OUTSTANDING otherwise); a damaged piece
-still at the bazar location can be scanned home after the close. Endpoints (`BazarEndController`, owner / manager):
-POST /end, GET /leftovers, POST /scan-back {code, client_request_id}, POST /mark-lost {piece_ids}, POST
-/close-transfer, GET /report, GET /report/customers.csv. **Report** (`BazarReportService`) — only bazar tables + the
+still at the bazar location can be scanned home after the close. Endpoints (`BazarEndController`): owner / manager —
+POST /end, POST /mark-lost, POST /close-transfer, GET /report, GET /report/customers.csv; any role in the event's
+seller_roles (workers included, owner / manager always) — GET /leftovers and POST /scan-back (review change; no worker
+phone entry to the leftovers screen yet). Bodies: POST /scan-back {code, client_request_id}, POST /mark-lost {piece_ids}. **Report** (`BazarReportService`) — only bazar tables + the
 transfer (+ catalog / users names), never Analytics / Overview (BazarReportGuardTest): revenue / money in (the one money
 rule), pieces sold (active sales), sell-through (sold ÷ sent), average sale, sales by day (the B4 day summary + its
 status), busiest hours (Cairo hour, all non-undone sales), top products / sizes (sold, sent, sell-through; Shopify's
@@ -35,9 +38,9 @@ name) + customers CSV (name, phone, pieces, total, last visit; one row per phone
 4 counters, progress bar, the equation, scan back with one request in flight + same-id retry, damaged to bring home,
 not scanned back + Mark lost, Close the transfer → summary + "Open the full report"); desktop event page "End event"
 modal, the Leftovers card once ended (scan field without camera), "View report"; `/bazar/:id/report` (Step 10, plain
-bars); the events list opens an ended event's report. **Pending test edits (need approval):**
+bars); the events list opens an ended event's report. **Approved test edits (made):**
 `BazarReturnExchangeTest.return_onlySellerRoles_onlyWhileLive` and `BazarSaleServiceTest.undo_refusedWhenTheEventIsNotLive`
-set an event to 'ended' by SQL and expect BAZAR_EVENT_NOT_LIVE → now BAZAR_EVENT_ENDED (the approved B5 error).
+now expect BAZAR_EVENT_ENDED.
 
 **Bazar POS B4 — close the day + live prices + damaged pieces (2026-11-18; branch `feat/bazar-b4` from main 35b999c8;
 V235; review change made, MERGED 2026-11-18, not deployed).** Data model (V235): `bazar_day_closes` — one APPEND-ONLY row per close of
