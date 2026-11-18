@@ -401,7 +401,7 @@ public class BostaFulfillmentLinkService {
     /**
      * "linked via exchange EXC-…" when {@code shipmentOrderId} is an internal exchange order whose
      * dashboard exchange is matched to {@code orderId}, or — not matched yet — whose Bosta reference
-     * resolves to exactly {@code orderId} (OrderReference, the shared rule); otherwise null.
+     * resolves to exactly {@code orderId} (OrderReference.resolveTrip — the exchange's original, -R&lt;n&gt; stripped); otherwise null.
      */
     private String linkedViaExchange(UUID tenantId, UUID orderId, UUID shipmentOrderId, String shipmentOrderNumber) {
         Map<String, Object> ex = tx.execute(s -> jdbc.queryForList(
@@ -412,7 +412,7 @@ public class BostaFulfillmentLinkService {
         if (ex == null) return null;
         boolean ours = orderId.equals(ex.get("matched_order_id"))
             || (ex.get("matched_order_id") == null && List.of(orderId).equals(tx.execute(s ->
-                OrderReference.resolve(jdbc, tenantId, (String) ex.get("ref"), (String) ex.get("shopify_id")))));
+                OrderReference.resolveTrip(jdbc, tenantId, (String) ex.get("ref"), (String) ex.get("shopify_id")))));
         return ours ? "linked via exchange " + shipmentOrderNumber : null;
     }
 

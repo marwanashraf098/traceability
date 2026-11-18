@@ -329,6 +329,18 @@ public class ShipmentLinkService {
             throw new AwbMismatchException(trackingNumber, existingTracking);
         }
 
+        // 2b. (2026-11-17) No forward leg yet, so this scan would CREATE one: a packer's scan of a Bosta exchange
+        //     waybill whose replacement isn't mapped yet (an exchanges row with no outbound_order_id) is refused —
+        //     it belongs to no packed order; linking it would make this order the exchange's forward leg and the
+        //     exchange would never reach mapping. Packer scans only (ExchangeService.commit's own linkAtMapTime runs
+        //     before it stores outbound_order_id); a scan that verifies an existing leg (waybill mode) never gets here.
+        if (packerScan && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM exchanges WHERE tenant_id = ? AND tracking_number = ? " +
+                "  AND outbound_order_id IS NULL)",
+                Boolean.class, tenantId, trackingNumber))) {
+            throw new ExchangeNotMappedException();
+        }
+
         // 3. No existing forward shipment — fall through to original swapped-AWB check.
         //    Both the check and the INSERT receive the normalized value so a formatting
         //    difference can never again trigger ux_active_forward_shipment_per_order (V104).

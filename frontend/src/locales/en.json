@@ -1050,6 +1050,7 @@
       "success": "Linked: {{tracking}} — awaiting pickup",
       "conflict": "This waybill is already linked to another order",
       "awbMismatch": "Scanned AWB {{scanned}} does not match this order's AWB {{existing}}",
+      "exchangeNotMapped": "This exchange waybill isn't mapped to a replacement order yet. Give it to a manager.",
       "error": "Could not link — check the barcode and try again",
       "scanPrompt": "Scan Waybill to Link",
       "done": "Done — back to queue",
