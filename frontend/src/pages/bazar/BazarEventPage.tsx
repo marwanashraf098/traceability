@@ -5,8 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { ScanLine, Smartphone } from 'lucide-react'
 import { getTransfer, type TransferDetail } from '../../api'
 import {
-  BazarError, clearBazarPrice, getBazarEvent, listBazarDays, listBazarPrices, listBazarSales, markBazarSent, orderedMethods,
-  setBazarBulkRule, setBazarPrice, startBazarEvent, type BazarDay, type BazarDays, type BazarEventDetail, type BazarPriceRow,
+  BazarError, clearBazarPrice, getBazarEvent, getBazarLeftovers, listBazarDays, listBazarPrices, listBazarSales, markBazarSent, orderedMethods,
+  setBazarBulkRule, setBazarPrice, startBazarEvent, type BazarDay, type BazarDays, type BazarEventDetail, type BazarLeftovers, type BazarPriceRow,
   type BazarSale,
 } from '../../bazar/api'
 import {
@@ -17,6 +17,7 @@ import { Badge, Button, Input, Modal, Spinner, cn } from '../../components/ui'
 import { QrCode } from '../../phone/PhonePairModal'
 import { STATUS_TONE } from './BazarEvents'
 import { CloseDayForm, DayStatusBadge, dayTitle } from './CloseDayForm'
+import { EndEventPanel, LeftoversPanel } from './Leftovers'
 
 /** Bazar POS B6 — /bazar/:id. Draft → setup (mockup step 2); live / ended → the event's numbers (step 3). */
 export default function BazarEventPage() {
@@ -315,7 +316,8 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
 function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<void> }) {
   const { t, i18n } = useTranslation()
   const [sales, setSales] = useState<BazarSale[] | null>(null)
-  const [soon, setSoon] = useState<string | null>(null)
+  const [ending, setEnding] = useState(false)
+  const [left, setLeft] = useState<BazarLeftovers | null>(null)
   const [days, setDays] = useState<BazarDays | null>(null)
   const [closing, setClosing] = useState<BazarDay | null>(null)
   const [showPrices, setShowPrices] = useState(false)
@@ -324,6 +326,10 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
   const methods = orderedMethods(ev.payment_methods)
 
   const loadDays = useCallback(() => listBazarDays(ev.id).then(setDays).catch(() => {}), [ev.id])
+  // B5: once ended, the leftovers coming back on the linked transfer.
+  useEffect(() => {
+    if (ev.status === 'ended') getBazarLeftovers(ev.id).then(setLeft).catch(() => {})
+  }, [ev.id, ev.status])
   useEffect(() => {
     const loadSales = () => listBazarSales(ev.id, 10).then(p => setSales(p.items)).catch(() => setSales([]))
     loadSales()
@@ -353,8 +359,12 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
             <Button variant="secondary" data-testid="desktop-close-day"
                     onClick={() => setClosing(days?.days.find(d => d.is_today) ?? days?.days[days.days.length - 1] ?? null)}
                     disabled={!days?.days.length}>{t('bazar.phone.closeDay')}</Button>
-            <Button onClick={() => setSoon(t('bazar.phone.endEvent'))}>{t('bazar.phone.endEvent')}</Button>
+            <Button onClick={() => setEnding(true)}>{t('bazar.phone.endEvent')}</Button>
           </div>
+        )}
+        {ev.status === 'ended' && (
+          <Link to={`/bazar/${ev.id}/report`} className="btn h-10 px-4 rounded-lg bg-trace-blue text-white font-semibold flex items-center"
+                data-testid="view-report">{t('bazar.end.viewReport')}</Link>
         )}
       </div>
 
@@ -399,6 +409,13 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
               <Count label={t('bazar.live.atBazar')} value={ev.counts.at_bazar} swatch="bg-trace-blue" />
             </div>
           </section>
+
+          {left && (
+            <section className="card p-5 flex flex-col gap-3" data-testid="bazar-leftovers">
+              <h2 className="text-body-lg font-semibold text-primary">{t('bazar.end.leftoversTitle')}</h2>
+              <LeftoversPanel eventId={ev.id} initial={left} noCamera onClosed={l => { setLeft(l); reload() }} />
+            </section>
+          )}
 
           <DaysCard days={days} onClose={setClosing} />
 
@@ -450,10 +467,10 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
                         onClosed={() => { setClosing(null); loadDays(); reload() }} />
         </Modal>
       )}
-      {soon && (
-        <Modal title={soon} onClose={() => setSoon(null)}>
-          <p className="text-body text-primary">{t('bazar.phone.comingSoonBody')}</p>
-          <div className="flex justify-end mt-5"><Button variant="secondary" onClick={() => setSoon(null)}>{t('bazar.phone.ok')}</Button></div>
+      {ending && (
+        <Modal title={t('bazar.end.title')} onClose={() => setEnding(false)}>
+          <EndEventPanel eventId={ev.id} name={ev.name}
+            onEnded={l => { setEnding(false); setLeft(l); resetCapabilitiesCache(); reload() }} />
         </Modal>
       )}
     </>

@@ -615,6 +615,14 @@ class ShadowOrderLeakTest {
                 "POST /api/v1/bazar-events/{eventId}/days/{day}/close")) {
             reg(k, skip("Bazar POS B4 — close the day (bazar day closes, sales, payments); touches no orders"));
         }
+        for (String k : List.of(
+                "POST /api/v1/bazar-events/{eventId}/end", "GET /api/v1/bazar-events/{eventId}/leftovers",
+                "POST /api/v1/bazar-events/{eventId}/scan-back", "POST /api/v1/bazar-events/{eventId}/mark-lost",
+                "POST /api/v1/bazar-events/{eventId}/close-transfer", "GET /api/v1/bazar-events/{eventId}/report",
+                "GET /api/v1/bazar-events/{eventId}/report/customers.csv")) {
+            reg(k, skip("Bazar POS B5 — end event, leftovers on the bazar transfer, event report (bazar tables, the "
+                + "event's transfer); touches no orders"));
+        }
     }
 
     // ── shadow classification (on top of the shared registry) ─────────────────

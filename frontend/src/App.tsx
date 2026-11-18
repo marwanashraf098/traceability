@@ -29,6 +29,8 @@ const BazarSell       = lazy(() => import('./pages/bazar/phone/BazarSell'))
 const BazarReturn     = lazy(() => import('./pages/bazar/phone/BazarReturn'))
 const BazarExchange   = lazy(() => import('./pages/bazar/phone/BazarExchange'))
 const BazarCloseDay   = lazy(() => import('./pages/bazar/phone/BazarCloseDay'))
+const BazarEndEvent   = lazy(() => import('./pages/bazar/phone/BazarEndEvent'))
+const BazarReportPage = lazy(() => import('./pages/bazar/BazarReport'))
 // Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
 const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
 import { analyticsEnabled } from './analytics/flag'
@@ -704,6 +706,13 @@ export default function App() {
         <Route path="/bazar/:id/close" element={<RequireAuth>
           <Suspense fallback={<AuthLoadingSpinner />}><BazarCloseDay /></Suspense>
         </RequireAuth>} />
+        {/* B5: owner / manager — end the event, leftovers, summary (works after the event ended). */}
+        <Route path="/bazar/:id/end" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarEndEvent /></Suspense>
+        </RequireAuth>} />
+        <Route path="/bazar/:id/report" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarReportPage /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
       </ToastProvider>

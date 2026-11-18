@@ -39,7 +39,13 @@ export function PhoneTabs({ eventId, active }: { eventId: string; active: 'sell'
  * The one code entry of a Return / Exchange screen: the phone's camera, plus a field a HID scanner types into (or the
  * seller, after "Type a code"). Every code goes to {@code onCode}.
  */
-export function CodeEntry({ onCode, disabled, hint }: { onCode: (code: string) => void; disabled?: boolean; hint: string }) {
+export function CodeEntry({ onCode, disabled, hint, noCamera }: {
+  onCode: (code: string) => void
+  disabled?: boolean
+  hint: string
+  /** B5 desktop: the scan field only (a HID scanner) — no camera box. */
+  noCamera?: boolean
+}) {
   const { t } = useTranslation()
   const [cameraOn, setCameraOn] = useState(true)
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
@@ -66,7 +72,7 @@ export function CodeEntry({ onCode, disabled, hint }: { onCode: (code: string) =
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative h-36 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
+      {!noCamera && <div className="relative h-36 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
         {cameraOn && !cameraError && !disabled
           ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
           : (
@@ -80,7 +86,7 @@ export function CodeEntry({ onCode, disabled, hint }: { onCode: (code: string) =
           className="absolute top-2 end-2 w-11 h-11 rounded-full bg-black/55 text-white flex items-center justify-center">
           {cameraOn ? <CameraOff size={18} /> : <Camera size={18} />}
         </button>
-      </div>
+      </div>}
       <div className="flex items-center gap-2">
         <input
           ref={inputRef}

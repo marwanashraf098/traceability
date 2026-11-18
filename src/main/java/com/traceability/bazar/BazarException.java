@@ -43,7 +43,14 @@ public class BazarException extends RuntimeException {
         BAZAR_DAY_NOT_CLOSABLE,
         BAZAR_OPENING_FLOAT_REQUIRED,
         BAZAR_MANAGERS_ONLY,
-        BAZAR_PIECE_DAMAGED
+        BAZAR_PIECE_DAMAGED,
+        // B5 — end event, leftovers
+        BAZAR_DAYS_NOT_CLOSED,
+        BAZAR_EVENT_NOT_ENDED,
+        BAZAR_ALREADY_BACK,
+        BAZAR_PIECE_MARKED_LOST,
+        BAZAR_NOT_OUTSTANDING,
+        BAZAR_LEFTOVERS_OUTSTANDING
     }
 
     private final Code       code;

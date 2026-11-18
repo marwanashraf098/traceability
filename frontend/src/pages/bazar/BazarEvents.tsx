@@ -48,7 +48,8 @@ export default function BazarEvents() {
         <ul className="card p-0 divide-y divide-line overflow-hidden" data-testid="bazar-event-list">
           {rows.map(r => (
             <li key={r.id}>
-              <Link to={`/bazar/${r.id}`}
+              {/* B5: an ended event opens its report. */}
+              <Link to={r.status === 'ended' ? `/bazar/${r.id}/report` : `/bazar/${r.id}`}
                 className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-4 hover:bg-charcoal transition-colors">
                 <span className="flex flex-col min-w-0 me-auto">
                   <span className="font-semibold text-primary">{r.name}</span>

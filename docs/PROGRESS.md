@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Bazar POS B5 — end event + leftovers on the same transfer + event report (2026-11-18; branch `feat/bazar-b5` from
+main df481f56; NO migration; pushed, NOT merged — awaiting review).** **End** (`BazarEndService`, owner / manager):
+live → ended (`ended_at` / `ended_by`, B1 columns), refused with BAZAR_DAYS_NOT_CLOSED (details: the days) while a day
+with any money row is open or changed after its close; the event row is taken FOR UPDATE (a sale holds it FOR SHARE);
+idempotent (ended → the same answer, `replayed`). The linked transfer goes sent → reconciling. After end every sale /
+return / exchange / undo / method or customer edit answers **BAZAR_EVENT_ENDED** (was BAZAR_EVENT_NOT_LIVE for an ended
+event). **Leftovers on the SAME transfer** — new bazar-only TransferService entry points running the EXISTING code
+(a `bazarCaller` flag into the same core, like markSentForBazar; the generic actions stay BAZAR_TRANSFER_LOCKED):
+`beginReconcileForBazar`, `reconcileScanBackForBazar` (= reconcileScanBack "good": available at main, line
+qty_returned_good, the Shopify +1 only via the existing onTransferReturn / RETURN_COUNTED gate; the phone's
+client_request_id goes into the event metadata — a retry is answered from it), `markLostForBazar` (= classifyShortfall
+lost = n, but on the EXACT pieces listed: `piece_id = ANY(?)` in the same FOR UPDATE select — only outstanding rows,
+so a sold piece can never be marked lost), `closeTransferForBazar` (= closeTransfer: refused while anything is
+outstanding). One new: `bringBackDamagedForBazar` — a piece taken back damaged at the bazar (B3: transfer piece
+'condemned', piece damaged at the event location) comes home: current_location → main, still damaged, NO Shopify write;
+the arrival is a new InventoryLedger write path `recordBroughtBackDamaged` (event `bazar_damaged_brought_back`,
+damaged → damaged, like recordLabelReprinted). BazarTransferLockTest: all five have ONE caller, BazarEndService.
+Close the transfer when sent = sold + back + damaged + lost (BAZAR_LEFTOVERS_OUTSTANDING otherwise); a damaged piece
+still at the bazar location can be scanned home after the close. Endpoints (`BazarEndController`, owner / manager):
+POST /end, GET /leftovers, POST /scan-back {code, client_request_id}, POST /mark-lost {piece_ids}, POST
+/close-transfer, GET /report, GET /report/customers.csv. **Report** (`BazarReportService`) — only bazar tables + the
+transfer (+ catalog / users names), never Analytics / Overview (BazarReportGuardTest): revenue / money in (the one money
+rule), pieces sold (active sales), sell-through (sold ÷ sent), average sale, sales by day (the B4 day summary + its
+status), busiest hours (Cairo hour, all non-undone sales), top products / sizes (sold, sent, sell-through; Shopify's
+"Default Title" hidden), payment split, money not received (from each day's CURRENT close: cash short / over, card short
+/ over, InstaPay not received, days not closed), returns / exchanges, per seller, customers saved (distinct phone, else
+name) + customers CSV (name, phone, pieces, total, last visit; one row per phone else name; formula-safe cells; audit
+`bazar_customers_export`). Screens: phone Home "End event" → `/bazar/:id/end` (confirm + days to close → leftovers:
+4 counters, progress bar, the equation, scan back with one request in flight + same-id retry, damaged to bring home,
+not scanned back + Mark lost, Close the transfer → summary + "Open the full report"); desktop event page "End event"
+modal, the Leftovers card once ended (scan field without camera), "View report"; `/bazar/:id/report` (Step 10, plain
+bars); the events list opens an ended event's report. **Pending test edits (need approval):**
+`BazarReturnExchangeTest.return_onlySellerRoles_onlyWhileLive` and `BazarSaleServiceTest.undo_refusedWhenTheEventIsNotLive`
+set an event to 'ended' by SQL and expect BAZAR_EVENT_NOT_LIVE → now BAZAR_EVENT_ENDED (the approved B5 error).
+
 **Bazar POS B4 — close the day + live prices + damaged pieces (2026-11-18; branch `feat/bazar-b4` from main 35b999c8;
 V235; review change made, MERGED 2026-11-18, not deployed).** Data model (V235): `bazar_day_closes` — one APPEND-ONLY row per close of
 one business day (Africa/Cairo date) of one event (app_user INSERT / SELECT only); a re-close is a new row with

@@ -496,6 +496,20 @@ public class InventoryLedger {
     }
 
     /**
+     * Bazar POS B5: a piece taken back DAMAGED at a bazar arrives at the main warehouse — event
+     * 'bazar_damaged_brought_back', from = to = damaged (no status change; the caller,
+     * TransferService.bringBackDamagedForBazar, moved current_location_id in the same transaction). InventoryLedger stays
+     * the only writer of piece_events.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void recordBroughtBackDamaged(String pieceId, UUID locationId, UUID actorUserId, String metadata) {
+        jdbc.update(INSERT_EVENT,
+                pieceId, "bazar_damaged_brought_back", actorUserId,
+                null, null, locationId,
+                PieceStatus.DAMAGED.db, PieceStatus.DAMAGED.db, metadata, null);
+    }
+
+    /**
      * Records a label_reprinted event without changing piece status (4th write path).
      *
      * Writes a piece_events row with from_status = to_status = current piece status.
