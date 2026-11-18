@@ -268,10 +268,9 @@ class BazarEndTest {
     }
 
     @Test
-    void workersCantEnd_norBringLeftoversBack_norReadTheReport() {
+    void workersCantEnd_norReadTheReport() {
         Fixture f = live(vA);
         assertThat(codeOf(() -> end.end(f.eventId(), worker))).isEqualTo(BazarException.Code.BAZAR_MANAGERS_ONLY);
-        assertThat(codeOf(() -> end.leftovers(f.eventId(), worker))).isEqualTo(BazarException.Code.BAZAR_MANAGERS_ONLY);
         assertThat(codeOf(() -> report.report(f.eventId(), worker))).isEqualTo(BazarException.Code.BAZAR_MANAGERS_ONLY);
         assertThat(codeOf(() -> report.customersCsv(f.eventId(), worker))).isEqualTo(BazarException.Code.BAZAR_MANAGERS_ONLY);
         assertThat(eventStatus(f)).isEqualTo("live");

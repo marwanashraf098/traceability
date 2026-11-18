@@ -508,7 +508,7 @@ public class InventoryLedger {
     public boolean bringBackDamaged(String pieceId, UUID locationId, UUID actorUserId, String metadata) {
         int moved = jdbc.update(
                 "UPDATE pieces SET current_location_id = ?, last_event_at = now(), last_user_id = ? " +
-                "WHERE id = ? AND status = ? AND current_location_id IS DISTINCT FROM ?",
+                "WHERE id = ? AND status = ?::piece_status AND current_location_id IS DISTINCT FROM ?",
                 locationId, actorUserId, pieceId, PieceStatus.DAMAGED.db, locationId);
         if (moved == 0) return false;
         jdbc.update(INSERT_EVENT,
