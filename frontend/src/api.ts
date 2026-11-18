@@ -3603,6 +3603,38 @@ export function mapExchange(id: string, outboundVariantId: string, inboundVarian
   })
 }
 
+// ── Exchange reference S3a (2026-11-18) — multi-item mapping ─────────────────────
+
+/** One row of the N-row mapping. variantId null only on an inbound row ("don't know yet"). */
+export interface ExchangeItemRowInput {
+  variantId: string | null
+  quantity: number
+  descriptionHint: string | null
+}
+
+/** N outbound rows (each mapped) + inbound rows → one replacement order with one line per outbound row. */
+export function mapExchangeItems(id: string, outbound: ExchangeItemRowInput[], inbound: ExchangeItemRowInput[]) {
+  return request<MapExchangeResult>(`/exchanges/${id}/map-items`, {
+    method: 'POST',
+    body: JSON.stringify({ outbound, inbound }),
+  })
+}
+
+/** A line of the exchange's linked original order (what the old items can be). */
+export interface ExchangeOriginalLine {
+  orderItemId: string
+  variantId: string
+  quantity: number
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  imageUrl: string | null
+}
+
+export function getExchangeOriginalLines(id: string) {
+  return request<ExchangeOriginalLine[]>(`/exchanges/${id}/original-lines`)
+}
+
 // ── FR-EXCHANGE Step 4a-2 — CRP refund feed ──────────────────────────────────
 // Raw column-labelled response, same convention as ExchangeSummary above. order_id is
 // always present (a CRP leg is created already tied to its order) — unlike an exchange's

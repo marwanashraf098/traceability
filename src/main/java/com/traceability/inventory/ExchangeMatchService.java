@@ -565,6 +565,22 @@ public class ExchangeMatchService {
             orderId, tenantId);
         if (ex == null) return;
 
+        // S3a (2026-11-18): a multi-item exchange (its 'in' rows hold more than one unit) is received only when every
+        // unit came back and was graded — never on the first piece. Single-item exchanges continue below, unchanged.
+        Integer inboundUnits = jdbc.queryForObject(
+            "SELECT COALESCE(SUM(quantity), 0) FROM exchange_items WHERE exchange_id = ? AND tenant_id = ? " +
+            "  AND direction = 'in'", Integer.class, ex.id(), tenantId);
+        if (inboundUnits != null && inboundUnits > 1) {
+            if (Boolean.TRUE.equals(jdbc.queryForObject(ALL_INBOUND_GRADED_SQL, Boolean.class,
+                    tenantId, orderId, ex.id(), ex.id(), tenantId))) {
+                jdbc.update(
+                    "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                    "WHERE id = ? AND tenant_id = ? AND status = 'matched'",
+                    ex.id(), tenantId);
+            }
+            return;
+        }
+
         // 2026-11-12: once the inbound variant is known (stored, else V227's resolver — the ONE rule), the exchange
         // resolves on exactly a piece of that variant; the description narrowing below is only for an unknown one.
         UUID inboundVariant = jdbc.queryForObject(
@@ -613,6 +629,31 @@ public class ExchangeMatchService {
                 ex.id(), tenantId);
         }
     }
+
+    /**
+     * S3a — every 'in' unit of a multi-item exchange is back and graded. "Graded" = a piece of the ORIGINAL order (an
+     * allocation on one of its lines — released or not) that moved return_pending_inspection → available / damaged at or
+     * after the exchange row was created. Each known-variant row needs that many graded pieces of its variant; the
+     * total needs at least the sum of every row's quantity (rows still unknown are covered by any graded piece of the
+     * order). Params: tenant, original order, exchange id (for created_at), exchange id, tenant.
+     */
+    static final String ALL_INBOUND_GRADED_SQL =
+        "WITH graded AS ( " +
+        "  SELECT p.id, p.variant_id FROM pieces p " +
+        "  WHERE p.tenant_id = ? " +
+        "    AND EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+        "                WHERE a.piece_id = p.id AND oi.order_id = ? AND oi.tenant_id = p.tenant_id) " +
+        "    AND EXISTS (SELECT 1 FROM piece_events pe WHERE pe.piece_id = p.id AND pe.tenant_id = p.tenant_id " +
+        "                AND pe.from_status = 'return_pending_inspection' " +
+        "                AND pe.to_status IN ('available', 'damaged') " +
+        "                AND pe.occurred_at >= (SELECT created_at FROM exchanges WHERE id = ?)) " +
+        "), need AS ( " +
+        "  SELECT variant_id, SUM(quantity) AS q FROM exchange_items " +
+        "  WHERE exchange_id = ? AND tenant_id = ? AND direction = 'in' GROUP BY variant_id " +
+        ") " +
+        "SELECT (SELECT COUNT(*) FROM graded) >= (SELECT COALESCE(SUM(q), 0) FROM need) " +
+        "   AND NOT EXISTS (SELECT 1 FROM need n WHERE n.variant_id IS NOT NULL " +
+        "                     AND (SELECT COUNT(*) FROM graded g WHERE g.variant_id = n.variant_id) < n.q)";
 
     // ── Part D — manual resolution actions for unmatched/needs_confirmation ────
     //
