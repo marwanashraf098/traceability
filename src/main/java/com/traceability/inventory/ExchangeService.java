@@ -204,7 +204,7 @@ public class ExchangeService {
         List<OutLine> lines = new ArrayList<>();
         for (ItemRow r : out) lines.add(new OutLine(r.variantId(), quantityOf(r)));
         UUID singleIn = in.size() == 1 ? in.get(0).variantId() : null;
-        Committed made = commitLines(exchangeId, tenantId, lines,
+        Committed made = commit(exchangeId, tenantId, lines,
             single ? out.get(0).variantId() : null,
             single ? singleIn : null,
             false,
@@ -641,13 +641,13 @@ public class ExchangeService {
      */
     private Map<String, Object> commit(UUID exchangeId, UUID tenantId, UUID outboundVariantId,
                                         UUID inboundVariantId, boolean autoMatched) {
-        return commitLines(exchangeId, tenantId, null, outboundVariantId, inboundVariantId, autoMatched, true).result();
+        return commit(exchangeId, tenantId, null, outboundVariantId, inboundVariantId, autoMatched, true).result();
     }
 
     /** One line of the replacement order (S3a): a mapped outbound variant and its quantity. */
     record OutLine(UUID variantId, int quantity) {}
 
-    /** What {@link #commitLines} made: the API result and the order lines it created, in {@code lines} order. */
+    /** What {@link #commit} made: the API result and the order lines it created, in {@code lines} order. */
     private record Committed(Map<String, Object> result, List<UUID> orderItemIds) {}
 
     /**
@@ -658,7 +658,7 @@ public class ExchangeService {
      * ExchangeInbound.fill — false for a multi-item exchange (its old items live in exchange_items; one inbound variant
      * would misdescribe it).
      */
-    private Committed commitLines(UUID exchangeId, UUID tenantId, List<OutLine> lines, UUID outboundVariantId,
+    private Committed commit(UUID exchangeId, UUID tenantId, List<OutLine> lines, UUID outboundVariantId,
                                   UUID inboundVariantId, boolean autoMatched, boolean fillInbound) {
         // Load the exchange's tracking_number + raw for order construction.
         Map<String, Object> exchange = jdbc.query(
