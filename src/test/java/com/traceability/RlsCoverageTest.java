@@ -283,6 +283,8 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        Map.entry("/api/v1/exchanges/{id}/order-search",
+            "app_user HTTP isolation + positive control in ExchangeOrderLinkHttpAppUserTest.x8"),
         Map.entry("/api/v1/tenant/shopify-returns-sync",
             "S5a: the caller's own tenant row only (switch, since, own stores' scopes); rollout-gated to tenants listed at " +
             "startup, so this class's runtime tenant always reads {visible:false}; cross-tenant isolation with a same-" +

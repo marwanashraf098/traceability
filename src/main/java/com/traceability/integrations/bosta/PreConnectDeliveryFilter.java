@@ -202,6 +202,17 @@ public class PreConnectDeliveryFilter {
         return BostaReferenceParser.orderNumber(reference);
     }
 
+    /**
+     * S2 (2026-11-18) — the exchange drawer's "Import from Shopify" offer: this typed order number would be a
+     * pre-connect order — the tenant has a connection boundary (every store has a cutoff) and the number is below the
+     * lowest ingested one of the same shape. The SAME number rule as {@link #needsPreConnectParent}'s last step; the
+     * import itself (PreConnectParentImport) still decides from Shopify's order date. Caller's transaction / tenant.
+     */
+    public boolean preConnectNumber(UUID tenantId, String number) {
+        if (tenantCutoff(tenantId) == null) return false;
+        return belowLowestOrderNumber(tenantId, number);
+    }
+
     private boolean belowLowestOrderNumber(UUID tenantId, String reference) {
         String part = orderNumberPart(reference);
         if (part == null) return false;

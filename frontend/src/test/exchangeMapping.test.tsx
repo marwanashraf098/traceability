@@ -51,6 +51,7 @@ function backendFetch(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
 
   if (url.includes('/api/v1/catalog')) return fakeResponse(CATALOG)
+  if (url.endsWith('/exchanges/exc-1') && method === 'GET') return fakeResponse(EXCHANGE)
   if (url.includes('/exchanges') && method === 'GET') return fakeResponse([EXCHANGE])
   if (url.endsWith('/exchanges/exc-1/map') && method === 'POST') {
     mapCallBody = JSON.parse(opts.body as string)
