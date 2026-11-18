@@ -5,7 +5,7 @@
 ## Current state
 
 **Bazar POS B3 — return + exchange + whole-pound prices (2026-11-17; branch `feat/bazar-b3` from main e69c7064;
-V234; pushed, NOT merged — awaiting review).** Data model (V234): `bazar_sales.status` gains `'returned'` + `returned_at`
+V234; MERGED 2026-11-18, not deployed).** Data model (V234): `bazar_sales.status` gains `'returned'` + `returned_at`
 / `returned_by` / `return_condition` ('good' | 'damaged') / `return_client_request_id` (UNIQUE per tenant) and
 `exchange_of_sale_id` (the new half of an exchange → the old sale; UNIQUE, a sale is exchanged once). No new payment
 kind. `BazarSaleService` (still the ONE writer): `POST /bazar-events/{id}/return` {code, condition, method?,
@@ -27,9 +27,12 @@ by construction. `/today` + detail `today` add returns / exchanges / revenue; de
 ≥ 1; overrides refuse piasters; the prices screen pre-fills round-to 5 (existing rows change only when the rule is
 next applied). Phone: Home's Return / Exchange and a Sell · Return · Exchange switch open `/bazar/:id/return` and
 `/exchange` (camera + HID input, preview, condition, method, big money line, same-request-id retry via
-`useRetryingCommand`); recent lists show Returned / Exchanged / Exchange badges. **Pending test edits (need
-approval):** `BazarPricingTest.percentOff_withoutRounding_keepsTwoDecimalsHalfUp` (expects 2-decimal prices without a
-round-to) and bazarB6 "Phone home … Return shows Coming soon" — both contradict B3 by design. Next: B4 close day (reads
+`useRetryingCommand`); recent lists show Returned / Exchanged / Exchange badges. **Review (approved 2026-11-18):** test edits made — `BazarPricingTest.percentOff_withoutRounding_roundsToWholePounds`
+(279.00 / 85.00 / 5.00) and bazarB6 "Phone home … Return opens the Return screen"; GET /piece already masks the
+customer phone for a worker (saleView) — locked by `BazarReturnExchangeTest.lookup_workerSeesTheCustomerPhoneMasked_…`,
+revert-checked; extras approved as built (exchange condition default good, GET /piece, exchange new half not undoable).
+RestockGateMainLocationTest's earlier g1/g3 red was load: 4/4 alone after a Docker restart (a stuck 55-day Docker
+backend whose VM was unreachable — `docker desktop restart` fixed it; quitting via osascript hung). Next: B4 close day (reads
 `summary` by payment day).
 
 **Bazar POS B6 — screens: desktop setup + phone selling (2026-11-16; branch `feat/bazar-b6` from main a2854627; no
