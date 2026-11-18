@@ -192,8 +192,7 @@ public class ExchangeService {
             String ref = jdbc.query("SELECT raw->>'businessReference' FROM exchanges WHERE id = ? AND tenant_id = ?",
                 rs -> rs.next() ? rs.getString(1) : null, exchangeId, tenantId);
             if (ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, ref) != null) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "This is a Shopify exchange — its replacement is the Shopify exchange order; map one item");
+                throw new ExchangeShadowConflictException();   // B0: never a multi-line order next to a live shadow
             }
         }
 
@@ -307,6 +306,12 @@ public class ExchangeService {
             commit(ex.id(), tenantId, shadowVariant, null, true);
             return;
         }
+
+        // B0 (2026-11-18): a live shadow whose item can't be told (several variants) → never guess from the description;
+        // a person maps it (commit() would refuse anything that isn't the shadow's own item).
+        String ref = jdbc.query("SELECT raw->>'businessReference' FROM exchanges WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, ex.id(), tenantId);
+        if (ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, ref) != null) return;
 
         ExchangeMatchService.OutboundResolution resolution =
             matchService.resolveOutboundVariant(ex.outboundDescription());
@@ -721,11 +726,16 @@ public class ExchangeService {
         // leg links to the shadow, and the exchanges row keeps only the inbound leg. Existing internal:exchange: rows
         // are never touched (they finish on the old path).
         UUID shadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, raw.path("businessReference").asText(null));
-        if (shadow != null && (lines == null || lines.size() == 1) && Boolean.TRUE.equals(jdbc.queryForObject(
+        boolean dashboard = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT return_request_id IS NULL FROM exchanges WHERE id = ? AND tenant_id = ?", Boolean.class, exchangeId, tenantId));
+        // B0 (2026-11-18): a live shadow for this Return IS the replacement. Only its own item may be mapped (→ the shadow
+        // path below); anything else would put an internal:exchange: order next to it and reserve / ship it twice.
+        if (shadow != null && dashboard && !((lines == null || lines.size() == 1) && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM order_items WHERE order_id = ? AND tenant_id = ? AND variant_id = ? AND quantity > 0)",
-                Boolean.class, shadow, tenantId, firstOutbound))
-            && Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT return_request_id IS NULL FROM exchanges WHERE id = ? AND tenant_id = ?", Boolean.class, exchangeId, tenantId))) {
+                Boolean.class, shadow, tenantId, firstOutbound)))) {
+            throw new ExchangeShadowConflictException();
+        }
+        if (shadow != null && dashboard) {
             shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
             shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
             jdbc.update(

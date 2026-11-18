@@ -3596,8 +3596,9 @@ export interface MapExchangeResult {
   status: string
 }
 
+/** B0: a refusal (e.g. 409 EXCHANGE_SHADOW_CONFLICT) throws ServerMessageError with the server's EN / AR words. */
 export function mapExchange(id: string, outboundVariantId: string, inboundVariantId: string) {
-  return request<MapExchangeResult>(`/exchanges/${id}/map`, {
+  return requestReadable<MapExchangeResult>(`/exchanges/${id}/map`, {
     method: 'POST',
     body: JSON.stringify({ outboundVariantId, inboundVariantId }),
   })
@@ -3614,7 +3615,7 @@ export interface ExchangeItemRowInput {
 
 /** N outbound rows (each mapped) + inbound rows → one replacement order with one line per outbound row. */
 export function mapExchangeItems(id: string, outbound: ExchangeItemRowInput[], inbound: ExchangeItemRowInput[]) {
-  return request<MapExchangeResult>(`/exchanges/${id}/map-items`, {
+  return requestReadable<MapExchangeResult>(`/exchanges/${id}/map-items`, {
     method: 'POST',
     body: JSON.stringify({ outbound, inbound }),
   })

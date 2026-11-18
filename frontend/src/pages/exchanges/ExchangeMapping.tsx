@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { CheckCircle2, Minus, Plus, Trash2, X } from 'lucide-react'
 import {
   getExchangeDetail, mapExchange, mapExchangeItems, getExchangeOutboundCandidates, getExchangeOriginalLines,
-  ExchangeSummary, ExchangeOriginalLine, CatalogProduct, CatalogVariant,
+  ExchangeSummary, ExchangeOriginalLine, CatalogProduct, CatalogVariant, ServerMessageError,
 } from '../../api'
 import { Alert, Badge, Button, Input, ProductThumb, Skeleton } from '../../components/ui'
 import ExchangeVariantPicker from './ExchangeVariantPicker'
@@ -50,7 +50,7 @@ function trimTrailing(s: string | null): string {
 const MAX_QTY = 99
 
 export default function ExchangeMapping() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   // 2026-11-16: opened from Pick & Pack's "Exchanges to map" — success goes back there, straight to picking.
@@ -137,7 +137,7 @@ export default function ExchangeMapping() {
       setMappedOrderNumber(`EXC-${exchange?.tracking_number ?? ''}` || result.orderId)
       setMappedOrderId(result.orderId ?? null)
     } catch (e: unknown) {
-      setConfirmError((e as Error).message ?? t('common.error'))
+      setConfirmError(e instanceof ServerMessageError ? e.messageFor(i18n.language) : (e as Error).message ?? t('common.error'))
     } finally {
       setConfirming(false)
     }
