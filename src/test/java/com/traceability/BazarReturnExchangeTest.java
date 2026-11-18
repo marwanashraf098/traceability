@@ -369,7 +369,7 @@ class BazarReturnExchangeTest {
         jdbc.update("UPDATE bazar_events SET status = 'ended', ended_at = now(), ended_by = ? WHERE id = ?",
             ownerId, f.eventId());
         assertThat(codeOf(() -> sales.returnSale(f.eventId(), code(f.p(varA, 0)), null, "good", crid(), owner)))
-            .isEqualTo(BazarException.Code.BAZAR_EVENT_NOT_LIVE);
+            .isEqualTo(BazarException.Code.BAZAR_EVENT_ENDED);
         assertThat(jdbc.queryForObject("SELECT status FROM bazar_sales WHERE id = ?", String.class, saleId))
             .isEqualTo("active");
     }

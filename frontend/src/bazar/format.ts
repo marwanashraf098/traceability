@@ -56,6 +56,8 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
   const d = e.details ?? {}
   switch (e.code) {
     case 'BAZAR_ALREADY_SOLD':
+      // B5 scan-back: a piece sold at the bazar never comes back — the server's message, no sale details.
+      if (!d.sale_number) return { title: t('bazar.sellError.alreadySold'), detail: e.message_(lang) }
       return {
         title: t('bazar.sellError.alreadySold'),
         detail: t('bazar.sellError.alreadySoldDetail', {
@@ -97,6 +99,18 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
       }
     case 'BAZAR_PIECE_DAMAGED':
       return { title: t('bazar.sellError.pieceDamaged'), detail: t('bazar.sellError.pieceDamagedDetail') }
+    case 'BAZAR_ALREADY_BACK':
+      return { title: t('bazar.sellError.alreadyBack'), detail: t('bazar.sellError.alreadyBackDetail') }
+    case 'BAZAR_PIECE_MARKED_LOST':
+      return { title: t('bazar.sellError.markedLost') }
+    case 'BAZAR_EVENT_ENDED':
+      return { title: t('bazar.sellError.eventEnded'), detail: t('bazar.sellError.eventEndedDetail') }
+    case 'BAZAR_EVENT_NOT_ENDED':
+      return { title: t('bazar.sellError.notEnded') }
+    case 'BAZAR_NOT_OUTSTANDING':
+      return { title: t('bazar.sellError.notOutstanding') }
+    case 'BAZAR_LEFTOVERS_OUTSTANDING':
+      return { title: t('bazar.sellError.leftoversOut') }
     case 'BAZAR_DAY_CLOSED':
       return { title: t('bazar.sellError.dayClosed'), detail: t('bazar.sellError.dayClosedDetail') }
     case 'BAZAR_SAME_PIECE':

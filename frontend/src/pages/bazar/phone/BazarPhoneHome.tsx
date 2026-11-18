@@ -73,7 +73,8 @@ function Home({ live }: { live: BazarLive }) {
             data-testid="home-close-day"
             onClick={() => navigate(`/bazar/${encodeURIComponent(live.eventId)}/close`)}>{t('bazar.phone.closeDay')}</button>
           <button type="button" className={secondary.replace('52px', '46px')}
-            onClick={() => setSoon(t('bazar.phone.endEvent'))}>{t('bazar.phone.endEvent')}</button>
+            data-testid="home-end-event"
+            onClick={() => navigate(`/bazar/${encodeURIComponent(live.eventId)}/end`)}>{t('bazar.phone.endEvent')}</button>
         </div>
       )}
       <button type="button" onClick={() => navigate(restOfTracedPath())}

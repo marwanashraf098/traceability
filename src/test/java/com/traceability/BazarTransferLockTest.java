@@ -292,4 +292,43 @@ class BazarTransferLockTest {
         }
         assertThat(callers).containsExactly("BazarService.java");
     }
+
+    // B5 (approved 2026-11-18): the reconcile side — end, scan back, mark lost, close — has ONE caller too.
+    private static final Pattern BAZAR_RECONCILE_ENTRY = Pattern.compile(
+        "\\.(beginReconcileForBazar|reconcileScanBackForBazar|bringBackDamagedForBazar|markLostForBazar|closeTransferForBazar)\\(");
+
+    @Test
+    void bazarReconcileEntryPoints_areCalledOnlyByBazarEndService() throws IOException {
+        List<String> callers;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            callers = files.filter(f -> f.toString().endsWith(".java"))
+                .filter(f -> {
+                    try { return BAZAR_RECONCILE_ENTRY.matcher(Files.readString(f)).find(); }
+                    catch (IOException e) { throw new RuntimeException(e); }
+                })
+                .map(f -> f.getFileName().toString())
+                .toList();
+        }
+        assertThat(callers).containsExactly("BazarEndService.java");
+    }
+
+    @Test
+    void bazarReconcileEntryPoints_refuseANormalTransfer() {
+        UUID id = transferSvc.createTransfer("showroom", showroomId, null, null, actorId);
+        String p = piece();
+        assertThat(transferSvc.scanOut(id, "PC-" + p, actorId).success()).isTrue();
+        transferSvc.markSent(id, actorId);
+        assertThat(codeOf(() -> transferSvc.beginReconcileForBazar(id, actorId)))
+            .isEqualTo(TransferException.Code.TRANSFER_NOT_FOUND);
+        transferSvc.beginReconcile(id, actorId);
+        assertThat(transferSvc.reconcileScanBackForBazar(id, "PC-" + p, actorId, "x").code()).isEqualTo("TRANSFER_NOT_FOUND");
+        UUID lineId = jdbc.queryForObject("SELECT id FROM transfer_lines WHERE transfer_id = ?", UUID.class, id);
+        assertThat(codeOf(() -> transferSvc.markLostForBazar(id, lineId, List.of(p), actorId)))
+            .isEqualTo(TransferException.Code.TRANSFER_NOT_FOUND);
+        assertThat(codeOf(() -> transferSvc.closeTransferForBazar(id, actorId)))
+            .isEqualTo(TransferException.Code.TRANSFER_NOT_FOUND);
+        assertThat(status(id)).isEqualTo("reconciling");
+        assertThat(jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, p))
+            .isEqualTo("out_on_transfer");
+    }
 }

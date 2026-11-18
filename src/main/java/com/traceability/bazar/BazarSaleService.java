@@ -1013,6 +1013,12 @@ public class BazarSaleService {
     /** The event, FOR SHARE (a concurrent end / start waits for the sale), and live. */
     private Map<String, Object> liveEvent(UUID tenantId, UUID eventId) {
         Map<String, Object> ev = event(tenantId, eventId, " FOR SHARE OF e");
+        if ("ended".equals(ev.get("status"))) {
+            // B5: after End event nothing is sold, returned, exchanged or edited any more.
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_ENDED,
+                "This bazar has ended — selling, returns, exchanges and edits are closed.",
+                "انتهى هذا البازار — البيع والإرجاع والاستبدال والتعديل مغلقة.", HttpStatus.CONFLICT);
+        }
         if (!"live".equals(ev.get("status"))) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_LIVE,
                 "This bazar isn't live — selling is open only while it's running.",

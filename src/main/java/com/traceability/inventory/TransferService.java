@@ -672,10 +672,23 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void beginReconcile(UUID transferId, UUID actorUserId) {
+        beginReconcileCore(transferId, actorUserId, false);
+    }
+
+    /** Bazar POS B5: sent → reconciling for the bazar's linked transfer when its event ends — exactly
+     *  beginReconcile(). ONE caller: BazarEndService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void beginReconcileForBazar(UUID transferId, UUID actorUserId) {
+        beginReconcileCore(transferId, actorUserId, true);
+    }
+
+    private void beginReconcileCore(UUID transferId, UUID actorUserId, boolean bazarCaller) {
         UUID tenantId = TenantContext.require();
 
         Map<String, Object> transfer = lockTransfer(transferId, tenantId);
-        refuseBazar(transfer);
+        if (BAZAR_TYPE.equals(transfer.get("transfer_type")) != bazarCaller) {
+            throw bazarCaller ? transferNotFound() : bazarLocked();
+        }
         String status = (String) transfer.get("status");
         String mode   = (String) transfer.get("transfer_mode");
         if (!RETURNING_MODES.contains(mode)) {
@@ -724,6 +737,23 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanBackResult reconcileScanBack(UUID transferId, String barcode, String condition, UUID actorUserId,
                                             boolean viaPhone) {
+        return reconcileScanBackCore(transferId, barcode, condition, actorUserId, viaPhone, false, null);
+    }
+
+    /**
+     * Bazar POS B5: a leftover scanned back GOOD at the main warehouse after the event ended — exactly
+     * reconcileScanBack(…, "good", …) (available at main; the Shopify +1 through the existing onTransferReturn gate).
+     * {@code clientRequestId} is written into the event's metadata (the phone's retry finds it). ONE caller:
+     * BazarEndService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanBackResult reconcileScanBackForBazar(UUID transferId, String barcode, UUID actorUserId,
+                                                    String clientRequestId) {
+        return reconcileScanBackCore(transferId, barcode, "good", actorUserId, false, true, clientRequestId);
+    }
+
+    private ScanBackResult reconcileScanBackCore(UUID transferId, String barcode, String condition, UUID actorUserId,
+                                                 boolean viaPhone, boolean bazarCaller, String clientRequestId) {
         UUID tenantId = TenantContext.require();
 
         if (!VALID_CONDITIONS.contains(condition)) {
@@ -734,8 +764,10 @@ public class TransferService {
                 "condition must be 'good' or 'condemned'",
                 "يجب أن تكون الحالة 'good' أو 'condemned'");
         }
-        if (isBazarTransfer(transferId, tenantId)) {
-            return ScanBackResult.rejected("BAZAR_TRANSFER_LOCKED", BAZAR_LOCKED_EN, BAZAR_LOCKED_AR);
+        if (isBazarTransfer(transferId, tenantId) != bazarCaller) {
+            return bazarCaller ? ScanBackResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+                                                         "لم يتم العثور على عملية النقل")
+                               : ScanBackResult.rejected("BAZAR_TRANSFER_LOCKED", BAZAR_LOCKED_EN, BAZAR_LOCKED_AR);
         }
 
         // 1. Transfer must exist and be reconciling.
@@ -792,7 +824,8 @@ public class TransferService {
         UUID fulfillmentLocationId = fulfillmentLocationId(tenantId);
         ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, targetStatus,
             good ? "returned_from_transfer" : "condemned_at_vendor", actorUserId,
-            new TransitionContext(null, null, fulfillmentLocationId, null, reconcileScanMeta(good, transferId, viaPhone)));
+            new TransitionContext(null, null, fulfillmentLocationId, null,
+                reconcileScanMeta(good, transferId, viaPhone, clientRequestId)));
 
         // 5. Physical unit is back at the warehouse either way — move current_location_id.
         jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
@@ -824,14 +857,40 @@ public class TransferService {
             "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true", UUID.class, tenantId);
     }
 
-    private String reconcileScanMeta(boolean good, UUID transferId, boolean viaPhone) {
+    private String reconcileScanMeta(boolean good, UUID transferId, boolean viaPhone, String clientRequestId) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         m.put("verified", true);
         m.put("reconciliation", "scan");
         if (!good) m.put("attributed_to", "vendor");
         if (viaPhone) m.put("via", "phone");                 // Q1b
+        if (clientRequestId != null) m.put("client_request_id", clientRequestId);   // Bazar B5 retry key
         return writeJson(m);
+    }
+
+    /**
+     * Bazar POS B5: a piece taken back DAMAGED at the bazar (B3: its transfer piece already 'condemned', the piece
+     * damaged at the event location) is brought home — it arrives at the main warehouse still damaged. Nothing about
+     * the transfer's counts changes and there is NO Shopify write (a damaged unit isn't sellable; it left Shopify at
+     * send). The ledger records the arrival (status unchanged). Returns false when the piece isn't a damaged piece of
+     * this transfer still away from main. ONE caller: BazarEndService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean bringBackDamagedForBazar(UUID transferId, String pieceId, UUID actorUserId, String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        if (!isBazarTransfer(transferId, tenantId)) throw transferNotFound();
+        UUID main = fulfillmentLocationId(tenantId);
+        // The transfer's own guard: this piece was taken back damaged ON this bazar transfer (row locked).
+        boolean condemned = !jdbc.queryForList(
+            "SELECT 1 FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ? AND tenant_id = ? " +
+            "AND outcome = 'condemned' FOR UPDATE", Integer.class, transferId, pieceId, tenantId).isEmpty();
+        if (!condemned) return false;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        if (clientRequestId != null) m.put("client_request_id", clientRequestId);
+        // The location move + its event go through InventoryLedger — the one writer of piece changes.
+        if (!ledger.bringBackDamaged(pieceId, main, actorUserId, writeJson(m))) return false;
+        return true;
     }
 
     // ── Reconcile: classify shortfall ────────────────────────────────────────
@@ -852,9 +911,25 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void classifyShortfall(UUID transferId, UUID lineId, ShortfallCounts counts, UUID actorUserId) {
+        classifyShortfallCore(transferId, lineId, counts, actorUserId, false, null);
+    }
+
+    /**
+     * Bazar POS B5: the leftovers nobody scanned back, marked LOST — exactly classifyShortfall(…, lost = n, …)
+     * (out_on_transfer → lost, quantity-based, vendor-attributed, qty_lost), but on the EXACT pieces the owner
+     * listed (still oldest-first, still FOR UPDATE on outstanding rows only — a sold / returned piece can never be
+     * picked). ONE caller: BazarEndService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void markLostForBazar(UUID transferId, UUID lineId, List<String> pieceIds, UUID actorUserId) {
+        classifyShortfallCore(transferId, lineId, new ShortfallCounts(0, pieceIds.size(), 0), actorUserId, true, pieceIds);
+    }
+
+    private void classifyShortfallCore(UUID transferId, UUID lineId, ShortfallCounts counts, UUID actorUserId,
+                                       boolean bazarCaller, List<String> exactPieces) {
         UUID tenantId = TenantContext.require();
-        if (isBazarTransfer(transferId, tenantId)) {
-            throw bazarLocked();
+        if (isBazarTransfer(transferId, tenantId) != bazarCaller) {
+            throw bazarCaller ? transferNotFound() : bazarLocked();
         }
 
         if (counts.sold() < 0 || counts.lost() < 0 || counts.condemnedNotReturned() < 0) {
@@ -913,12 +988,19 @@ public class TransferService {
         }
 
         // FIFO claim: lock the exact pieces this call will resolve.
-        List<String> pieceIds = jdbc.query(
-            "SELECT piece_id FROM transfer_pieces " +
-            "WHERE transfer_id = ? AND line_id = ? AND tenant_id = ? AND outcome IS NULL " +
-            "ORDER BY created_at ASC LIMIT ? FOR UPDATE",
-            (rs, rowNum) -> rs.getString("piece_id"),
-            transferId, lineId, tenantId, totalRequested);
+        List<String> pieceIds = exactPieces == null
+            ? jdbc.query(
+                "SELECT piece_id FROM transfer_pieces " +
+                "WHERE transfer_id = ? AND line_id = ? AND tenant_id = ? AND outcome IS NULL " +
+                "ORDER BY created_at ASC LIMIT ? FOR UPDATE",
+                (rs, rowNum) -> rs.getString("piece_id"),
+                transferId, lineId, tenantId, totalRequested)
+            : jdbc.query(
+                "SELECT piece_id FROM transfer_pieces " +
+                "WHERE transfer_id = ? AND line_id = ? AND tenant_id = ? AND outcome IS NULL AND piece_id = ANY(?) " +
+                "ORDER BY created_at ASC LIMIT ? FOR UPDATE",
+                (rs, rowNum) -> rs.getString("piece_id"),
+                transferId, lineId, tenantId, exactPieces.toArray(new String[0]), totalRequested);
 
         if (pieceIds.size() < totalRequested) {
             // Shouldn't happen given the balance check above (same transaction — no
@@ -990,9 +1072,20 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void closeTransfer(UUID transferId, UUID actorUserId) {
+        closeTransferCore(transferId, actorUserId, false);
+    }
+
+    /** Bazar POS B5: reconciling → closed for the bazar's linked transfer — exactly closeTransfer() (refused while any
+     *  piece is outstanding). ONE caller: BazarEndService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void closeTransferForBazar(UUID transferId, UUID actorUserId) {
+        closeTransferCore(transferId, actorUserId, true);
+    }
+
+    private void closeTransferCore(UUID transferId, UUID actorUserId, boolean bazarCaller) {
         UUID tenantId = TenantContext.require();
-        if (isBazarTransfer(transferId, tenantId)) {
-            throw bazarLocked();
+        if (isBazarTransfer(transferId, tenantId) != bazarCaller) {
+            throw bazarCaller ? transferNotFound() : bazarLocked();
         }
 
         List<String> transferStatusRows = jdbc.queryForList(

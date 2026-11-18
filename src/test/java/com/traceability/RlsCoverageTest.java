@@ -277,7 +277,12 @@ class RlsCoverageTest {
             // BazarDayCloseTest.rls_appUser_seesOnlyItsOwnCloses, another tenant's event → 404 in
             // BazarDayCloseTest.anotherTenantsEvent_isNotFound, worker 403 / flag off 404 in BazarDaysHttpTest.
             "/api/v1/bazar-events/{eventId}/days",
-            "/api/v1/bazar-events/{eventId}/days/{day}/close-preview"
+            "/api/v1/bazar-events/{eventId}/days/{day}/close-preview",
+            // Bazar POS B5 — owner / manager only; every read under TenantContext + RLS (bazar tables, the event's
+            // transfer); worker 403 / flag off 404 / another tenant's event 404 in BazarEndHttpTest.
+            "/api/v1/bazar-events/{eventId}/leftovers",
+            "/api/v1/bazar-events/{eventId}/report",
+            "/api/v1/bazar-events/{eventId}/report/customers.csv"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

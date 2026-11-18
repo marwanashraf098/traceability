@@ -440,6 +440,109 @@ export function closeBazarDayOnce(eventId: string, day: string, e: BazarCloseEnt
   })
 }
 
+// ── B5 — end event, leftovers, report (owner / manager) ──────────────────────
+
+export interface BazarLeftoverPiece {
+  piece_id: string
+  piece_code: string | null
+  product_title: string
+  variant_title: string | null
+  sku: string | null
+}
+
+export interface BazarLeftovers {
+  event_id: string
+  event_status: BazarStatus
+  transfer_id: string
+  transfer_status: string
+  counts: { sent: number; sold: number; back: number; damaged: number; damaged_at_bazar: number; lost: number;
+            outstanding: number }
+  /** sent = sold + back + damaged + lost — the transfer can close. */
+  balanced: boolean
+  outstanding: BazarLeftoverPiece[]
+  damaged_to_bring_home: BazarLeftoverPiece[]
+  replayed?: boolean
+}
+
+export interface BazarScanBackResult {
+  result: 'back_good' | 'back_damaged'
+  piece: { piece_id: string; piece_code: string | null; product_title: string; variant_title: string | null }
+  leftovers: BazarLeftovers
+  replayed: boolean
+}
+
+export function endBazarEvent(eventId: string) {
+  return bazarFetch<BazarLeftovers>(`${base(eventId)}/end`, { method: 'POST', body: '{}' })
+}
+
+export function getBazarLeftovers(eventId: string) {
+  return bazarFetch<BazarLeftovers>(`${base(eventId)}/leftovers`)
+}
+
+/** One attempt (same contract as sellOnce): retried by the caller with the SAME client_request_id. */
+export function scanBackOnce(eventId: string, code: string, clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarScanBackResult>(`${base(eventId)}/scan-back`, {
+    method: 'POST', timeoutMs, body: JSON.stringify({ code, client_request_id: clientRequestId }),
+  })
+}
+
+export function markBazarLost(eventId: string, pieceIds: string[]) {
+  return bazarFetch<BazarLeftovers>(`${base(eventId)}/mark-lost`, {
+    method: 'POST', body: JSON.stringify({ piece_ids: pieceIds }),
+  })
+}
+
+export function closeBazarTransfer(eventId: string) {
+  return bazarFetch<BazarLeftovers>(`${base(eventId)}/close-transfer`, { method: 'POST', body: '{}' })
+}
+
+type Money2 = string | number
+
+export interface BazarReport {
+  event: { id: string; name: string; status: BazarStatus; starts_on: string; ends_on: string; started_at: string | null;
+           ended_at: string | null; location_name: string }
+  revenue: Money2
+  money_in: Money2
+  pieces_sold: number
+  pieces_sent: number
+  /** 0..1, null when nothing was sent. */
+  sell_through: Money2 | null
+  average_sale: Money2 | null
+  returns: number
+  exchanges: number
+  sales_by_day: { business_day: string; day_number: number; sales: number; revenue: Money2; money_in: Money2;
+                  status: BazarDayStatus }[]
+  busiest_hours: { hour: number; sales: number }[]
+  top_products: { product_title: string; sold: number; sent: number; sell_through: Money2 | null; revenue: Money2 }[]
+  top_sizes: { product_title: string; variant_title: string; sold: number; sent: number; sell_through: Money2 | null;
+               revenue: Money2 }[]
+  payment_split: { method: PaymentMethod; amount: Money2; share: Money2 | null }[]
+  money_not_received: { cash_short: Money2; cash_over: Money2; card_short: Money2; card_over: Money2;
+                        instapay_not_received: Money2; total: Money2; days_closed: number; days_not_closed: number }
+  per_seller: { seller_name: string; pieces: number; total: Money2 }[]
+  customers_saved: number
+  transfer: BazarLeftovers['counts'] & { transfer_id: string; status: string; balanced: boolean }
+}
+
+export function getBazarReport(eventId: string) {
+  return bazarFetch<BazarReport>(`${base(eventId)}/report`)
+}
+
+/** The customers CSV (owner / manager; audit-logged) — downloaded as a file. */
+export async function downloadBazarCustomers(eventId: string, fileName: string) {
+  const res = await authFetch(`${base(eventId)}/report/customers.csv`)
+  if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export function getBazarToday(eventId: string) {
   return bazarFetch<BazarTodaySummary>(`${base(eventId)}/today`)
 }
