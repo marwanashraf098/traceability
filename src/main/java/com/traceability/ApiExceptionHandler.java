@@ -167,6 +167,13 @@ public class ApiExceptionHandler {
             .body(new BazarErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
+    // Receiving move M1 — {code, message_en, message_ar, details?} (details: the move gate's readiness + deep link).
+    @ExceptionHandler(com.traceability.inventory.ReceivingMoveException.class)
+    ResponseEntity<BazarErrorBody> handleReceivingMoveException(com.traceability.inventory.ReceivingMoveException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new BazarErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
+    }
+
     record ReturnSessionErrorBody(
             String code,
             @JsonProperty("message_en") String messageEn,

@@ -225,6 +225,14 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/preview", skip("receiving import: variants and receipt lines only, no order data"));
         reg("POST /api/v1/receiving/sessions/{sessionId}/import/apply",   skip("receiving import: variants and receipt lines only, no order data"));
         reg("GET /api/v1/receiving/import/template",                     skip("receiving import: variants and receipt lines only, no order data"));
+        // Receiving move M1 (2026-11-18): Shopify locations / levels at the source, receipt lines, frozen progress; no order data.
+        for (String k : List.of("GET /api/v1/receiving/move-sources", "POST /api/v1/receiving/move-sessions",
+                "GET /api/v1/receiving/sessions/{sessionId}/move/levels", "GET /api/v1/receiving/sessions/{sessionId}/move/preview",
+                "GET /api/v1/receiving/sessions/{sessionId}/move/progress",
+                "PUT /api/v1/receiving/sessions/{sessionId}/lines/{lineId}/source-choice",
+                "POST /api/v1/receiving/sessions/{sessionId}/move/source-choice")) {
+            reg(k, skip("receiving move: Shopify locations and levels at the source, receipt lines, progress; no order data"));
+        }
         // S1b: one Return To Receive source by its own id (return leg / untracked unit / request item) — a return of a
         // portal pre-connect order must resolve too (returns MUST include them); never a list of orders.
         reg("GET /api/v1/receiving/return-source",                       skip("returns: one return source by its own id, portal orders included by design"));

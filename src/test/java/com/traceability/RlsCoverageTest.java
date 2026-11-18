@@ -299,6 +299,17 @@ class RlsCoverageTest {
         Map.entry("/api/v1/setup/address/shopify-locations",
             "O2b: no tenant rows returned — the store's own Shopify location addresses, read live from Shopify; its DB reads " +
             "(main warehouse, store) run under RLS; covered by ShopifyAddressPrefillTest (app_user, RLS on)"),
+        // Receiving move M1 (2026-11-18): read under RLS in their own transactions; the whole app runs as app_user in
+        // ReceivingMoveAppUserTest (c1: no GUC 0 rows, same tenant sees its own, other tenant none / 404).
+        Map.entry("/api/v1/receiving/move-sources",
+            "Receiving move M1: no tenant rows — the store's own Shopify locations read live; its DB reads (store, main " +
+            "warehouse) run under RLS; covered by ReceivingMoveAppUserTest (whole app on app_user)"),
+        Map.entry("/api/v1/receiving/sessions/{sessionId}/move/levels",
+            "Receiving move M1: one session's lines under RLS + live levels at its source; covered by ReceivingMoveAppUserTest c1 / p1"),
+        Map.entry("/api/v1/receiving/sessions/{sessionId}/move/preview",
+            "Receiving move M1: one session's lines under RLS + live levels at its source; covered by ReceivingMoveAppUserTest c1 / p1"),
+        Map.entry("/api/v1/receiving/sessions/{sessionId}/move/progress",
+            "Receiving move M1: one session + its frozen progress row under RLS; cross-tenant 404 in ReceivingMoveAppUserTest c1"),
         Map.entry("/api/v1/onboarding/receiving-suggestion",
             "O4: no tenant rows returned beyond one variant id of the caller's own catalog, read under RLS in its own " +
             "transaction; covered by ReceivingSuggestionTest (app_user, RLS on)"),

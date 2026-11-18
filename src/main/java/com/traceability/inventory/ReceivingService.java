@@ -125,6 +125,10 @@ public class ReceivingService {
         UUID tenantId = TenantContext.require();
         requireOpenWithLines(sessionId, tenantId);
         UUID orderId = null;
+        // Receiving move M1: a session moving stock from a Shopify location never brings a return back (409).
+        if (returnSource != null && !returnSource.isBlank() && isMoveSession(sessionId, tenantId)) {
+            throw ReceivingMoveException.returnLine();
+        }
         if (returnSource != null && !returnSource.isBlank()) {
             ReturnSource src = resolveReturnSource(tenantId, returnSource);
             if (src.variants().stream().noneMatch(v -> v.equals(variantId))) {
@@ -306,6 +310,9 @@ public class ReceivingService {
     @Transactional
     public int finalize(UUID sessionId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        // Receiving move M1: a move session is finished only by M2 (its source write replaces the ordinary +N) — until
+        // then it can't be finalized, in any mode (checked before the factory dispatch).
+        if (isMoveSession(sessionId, tenantId)) throw ReceivingMoveException.finalizeNotAvailable();
         // Factory receiving (slice 6b) has its own finalize — dispatched BEFORE any lock here, because it locks the
         // run first and then the receipt (the order every factory path uses).
         if (factoryReceiving != null && MODE_FACTORY.equals(modeOf(sessionId, tenantId))) {
@@ -436,13 +443,18 @@ public class ReceivingService {
             "SELECT r.id, r.status, r.mode, r.reference, r.supplier_name, r.note, r.label_run_id, " +
             "       r.location_id, l.name AS location_name, " +
             "       r.received_by, r.created_at, r.finalized_at, " +
-            "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
+            "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count, " +
+            "       r.move_source_location_gid, r.move_source_location_name " +
             "FROM receipts r " +
             "LEFT JOIN locations l ON l.id = r.location_id " +
             "WHERE r.id = ? AND r.tenant_id = ? AND r.kind = 'inbound'",
             sessionId, tenantId);
         if (rows.isEmpty()) throw notFound("session");
         Map<String, Object> session = new LinkedHashMap<>(rows.get(0));
+        // Receiving move M1: "moveSource" only on a session moving stock from a Shopify location (absent otherwise).
+        Object moveGid = session.remove("move_source_location_gid");
+        Object moveName = session.remove("move_source_location_name");
+        if (moveGid != null) session.put("moveSource", Map.of("id", moveGid, "name", moveName));
         session.put("lines", getLines(sessionId, tenantId));
         if (MODE_COUNT_ONLY.equals(session.get("mode")) && "finalized".equals(session.get("status"))) {
             session.put("shopify", shopifySync(sessionId, tenantId));
@@ -553,6 +565,13 @@ public class ReceivingService {
     private void requireOpenWithLines(UUID sessionId, UUID tenantId) {
         requireOpen(sessionId, tenantId, false);
         if (MODE_FACTORY.equals(modeOf(sessionId, tenantId))) throw LabelCodeException.factorySessionNoLines();
+    }
+
+    /** Receiving move M1: the session moves stock from a Shopify location (receipts.move_source_location_gid). */
+    private boolean isMoveSession(UUID sessionId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound' " +
+            "  AND move_source_location_gid IS NOT NULL)", Boolean.class, sessionId, tenantId));
     }
 
     private String modeOf(UUID sessionId, UUID tenantId) {

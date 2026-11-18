@@ -208,6 +208,41 @@ public class TracedLocationOnlineService {
         return new CheckResult(true, null, readShipping(tenantId));
     }
 
+    // ── Receiving move M1: the move gate ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * What the move gate saw. {@code verified} only on a VERIFIED Ready from THIS read; {@code readiness} is
+     * TracedShippingReadiness.SQL after it ('unknown' when the stored value says ready but this read couldn't confirm
+     * it); {@code locationNumber} / {@code shopDomain} build the owner's deep link.
+     */
+    public record MoveGate(boolean verified, String readiness, String shippingModel, String locationNumber,
+                           String shopDomain) {}
+
+    /**
+     * Receiving move M1 (approved 2026-11-18) — the move gate's FRESH read, right before a move session is created:
+     * fulfils online orders + the shipping READ (legacy: live delivery-profile membership; market-driven: the Markets
+     * read, TracedMarketCheck 'covered' in the primary market), recorded like every other read. Verified Ready only
+     * when THIS read answered on + member / covered AND TracedShippingReadiness then says 'ready' — never the stored
+     * hourly result, never the owner's "I've added it" ('owner_confirmed'), never a read that failed (a stored Ready
+     * this read couldn't confirm is not Ready). Read only, no rate limit (a session is created rarely), no transaction
+     * open during the Shopify calls.
+     */
+    public MoveGate freshShippingForMove(UUID tenantId) {
+        if (main(tenantId).isEmpty()) return new MoveGate(false, "not_linked", null, null, null);
+        String online = readOnline(tenantId);
+        String shipping = readShipping(tenantId);
+        Map<String, Object> row = tx.execute(s -> jdbc.queryForMap(
+            "SELECT " + TracedShippingReadiness.SQL + " AS readiness, l.shopify_shipping_model AS model, " +
+            "       regexp_replace(l.shopify_location_id, '^.*/', '') AS location_number " +
+            "FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment = true LIMIT 1", tenantId));
+        String readiness = (String) row.get("readiness");
+        boolean verified = ON.equals(online) && ("member".equals(shipping) || "covered".equals(shipping))
+            && TracedShippingReadiness.READY.equals(readiness);
+        String shown = verified || !TracedShippingReadiness.READY.equals(readiness) ? readiness : TracedShippingReadiness.UNKNOWN;
+        String shop = stores.findActiveStoreByTenant(tenantId).map(StoreRepository.Store::shopDomain).orElse(null);
+        return new MoveGate(verified, shown, (String) row.get("model"), (String) row.get("location_number"), shop);
+    }
+
     // ── the shipping READ ─────────────────────────────────────────────────────────────────────────────────────────
 
     /**
