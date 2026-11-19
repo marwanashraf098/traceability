@@ -11,7 +11,9 @@ import { Spinner } from '../../../components/ui'
 import { EndEventPanel, LeftoversPanel } from '../Leftovers'
 import { ReportKpis } from '../BazarReport'
 import { PhoneFrame, restOfTracedPath } from './shared'
-import { formatMoney, toNumber } from '../../../bazar/format'
+import { toNumber } from '../../../bazar/format'
+import { amount } from '../r1/parts'
+import { Money } from '../r2/parts'
 
 /**
  * Bazar POS B5 — END EVENT on the phone (mockup page 1, step 9): confirm → leftovers (scan back, mark lost, close
@@ -44,18 +46,18 @@ export default function BazarEndEvent() {
   const live = ev?.status === 'live'
   const home = live ? `/bazar/${encodeURIComponent(id ?? '')}/home` : restOfTracedPath()
   const header = (
-    <>
-      <div className="flex items-center justify-between gap-3">
-        <button type="button" onClick={() => navigate(home)}
-          className="min-h-[44px] -ms-2 px-2 flex items-center gap-1.5 text-sidebar-text hover:text-sidebar-active text-small font-semibold">
-          <Back size={18} aria-hidden />{t('bazar.sell.home')}
-        </button>
-        <span className="text-small font-semibold text-sidebar-active truncate">{ev?.name ?? ''}</span>
-      </div>
-      <h1 className="text-h4 text-sidebar-active">
-        {report ? t('bazar.end.summary') : live ? t('bazar.end.title') : t('bazar.end.leftoversTitle')}
-      </h1>
-    </>
+    <div className="flex items-center gap-3">
+      <button type="button" onClick={() => navigate(home)} aria-label={t('bazar.sell.home')}
+        className="min-h-[44px] min-w-[44px] -ms-2 flex items-center justify-center text-sidebar-text hover:text-sidebar-active">
+        <Back size={20} aria-hidden />
+      </button>
+      <span className="flex flex-col min-w-0 flex-1">
+        <span className="text-small font-semibold text-sidebar-text truncate">{ev?.name ?? ''}</span>
+        <h1 className="text-body-lg font-bold text-sidebar-active truncate">
+          {report ? t('bazar.end.summary') : live ? t('bazar.end.title') : t('bazar.end.leftoversTitle')}
+        </h1>
+      </span>
+    </div>
   )
 
   if (!managesBazar()) {
@@ -82,9 +84,8 @@ export default function BazarEndEvent() {
           <ReportKpis r={report} />
           <div className="card p-4 flex flex-col gap-1">
             <span className="text-small text-muted">{t('bazar.report.notReceived')}</span>
-            <span className={toNumber(report.money_not_received.total) > 0 ? 'text-h4 font-bold text-critical-text' : 'text-h4 font-bold text-primary'}>
-              {formatMoney(report.money_not_received.total)}
-            </span>
+            <Money value={report.money_not_received.total} unitClass="text-body"
+              className={toNumber(report.money_not_received.total) > 0 ? 'text-h4 font-bold text-critical-text' : 'text-h4 font-bold text-primary'} />
             <span className="text-small text-muted">
               {t('bazar.report.returns', { count: report.returns })} · {t('bazar.report.exchanges', { count: report.exchanges })}
               {' · '}{t('bazar.report.customersSaved', { count: report.customers_saved })}
@@ -98,9 +99,37 @@ export default function BazarEndEvent() {
             className="h-[52px] rounded-xl border border-line bg-surface font-semibold text-primary">{t('bazar.end.backHome')}</button>
         </section>
       ) : (
-        <LeftoversPanel eventId={ev.id} initial={left}
-          onClosed={async () => { if (id) setReport(await getBazarReport(id)) }} />
+        <>
+          <EndTotals ev={ev} left={left} />
+          <LeftoversPanel eventId={ev.id} initial={left}
+            onClosed={async () => { if (id) setReport(await getBazarReport(id)) }} />
+        </>
       )}
     </PhoneFrame>
+  )
+}
+
+/** Ended, leftovers coming back: what the event made, how many sold, how many are still to come back. */
+function EndTotals({ ev, left }: { ev: BazarEventDetail; left: BazarLeftovers }) {
+  const { t, i18n } = useTranslation()
+  const stopped = ev.ended_at ? new Date(ev.ended_at).toLocaleString(i18n.language === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB',
+    { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Africa/Cairo' }) : null
+  const tiles = [
+    { k: 'revenue', value: ev.totals?.revenue != null ? amount(ev.totals.revenue) : null, label: t('bazar.r2.end.egpTotal') },
+    { k: 'sold', value: String(left.counts.sold), label: t('bazar.r2.end.piecesSold') },
+    { k: 'left', value: String(Math.max(left.counts.sent - left.counts.sold, 0)), label: t('bazar.r2.end.leftOver') },
+  ].filter(x => x.value != null)
+  return (
+    <section className="flex flex-col gap-2" data-testid="end-totals">
+      {stopped && <span className="text-small text-muted">{t('bazar.r2.end.sellingStopped', { time: stopped })}</span>}
+      <div className="grid grid-cols-3 gap-2">
+        {tiles.map(x => (
+          <div key={x.k} className="card px-3 py-2.5 flex flex-col">
+            <span dir="ltr" className="text-h4 font-bold text-primary tabular-nums text-start">{x.value}</span>
+            <span className="text-small text-muted">{x.label}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
