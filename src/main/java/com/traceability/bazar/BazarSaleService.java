@@ -81,7 +81,7 @@ public class BazarSaleService {
     public Map<String, Object> sell(UUID eventId, String code, String clientRequestId, String method, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
-        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!sells(ev, actor)) throw notASeller();
 
         String crid = requestId(clientRequestId);
         // One sale per request id: a concurrent retry waits here for the first, then finds its sale.
@@ -232,7 +232,7 @@ public class BazarSaleService {
                                           String clientRequestId, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
-        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!sells(ev, actor)) throw notASeller();
         String crid = requestId(clientRequestId);
         String cond = condition(condition, false);
 
@@ -272,7 +272,7 @@ public class BazarSaleService {
                                         String clientRequestId, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
-        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!sells(ev, actor)) throw notASeller();
         String crid = requestId(clientRequestId);
         String cond = condition(condition, true);
 
@@ -326,7 +326,7 @@ public class BazarSaleService {
     public Map<String, Object> lookupPiece(UUID eventId, String code, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = event(tenantId, eventId, "");
-        if (!actor.manages() && !sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!actor.manages() && !sells(ev, actor)) throw notASeller();
         Map<String, Object> piece = findPiece(tenantId, code);
         String pieceId = (String) piece.get("id");
         Map<String, Object> info = jdbc.queryForMap(
@@ -564,7 +564,7 @@ public class BazarSaleService {
         // The seller may fix the method of their own sale until the sale's business day is closed (B4, approved
         // 2026-11-18; B2 allowed it while the event was live). Owner / manager: any time while live — after the day
         // was closed their change writes money rows after the close, so the day reads "changed after close".
-        boolean mine = actor.userId().equals(sale.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
+        boolean mine = actor.userId().equals(sale.get("sold_by")) && sells(ev, actor);
         if (!actor.manages() && !mine) {
             throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
                 "Only the seller who made this sale, or an owner or manager, can change how it was paid.",
@@ -615,7 +615,7 @@ public class BazarSaleService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> sale = lockActiveSale(tenantId, eventId, saleId);
-        boolean mine = actor.userId().equals(sale.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
+        boolean mine = actor.userId().equals(sale.get("sold_by")) && sells(ev, actor);
         if (!actor.manages() && !mine) {
             throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
                 "Only the seller who made this sale, or an owner or manager, can change its customer.",
@@ -660,7 +660,7 @@ public class BazarSaleService {
     public Map<String, Object> previewCart(UUID eventId, List<String> codes, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = requireLive(event(tenantId, eventId, ""));
-        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!sells(ev, actor)) throw notASeller();
         List<String> list = cartCodes(codes, true);
         List<Map<String, Object>> lines = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
@@ -705,7 +705,7 @@ public class BazarSaleService {
                                             Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
-        if (!sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!sells(ev, actor)) throw notASeller();
         String crid = requestId(clientRequestId);
 
         lockRequest(tenantId, crid);
@@ -871,7 +871,7 @@ public class BazarSaleService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         Map<String, Object> receipt = lockActiveReceipt(tenantId, eventId, receiptId);
-        boolean mine = actor.userId().equals(receipt.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
+        boolean mine = actor.userId().equals(receipt.get("sold_by")) && sells(ev, actor);
         if (!actor.manages() && !mine) {
             throw new BazarException(BazarException.Code.BAZAR_UNDO_NOT_ALLOWED,
                 "Only the seller who made this sale, or an owner or manager, can change how it was paid.",
@@ -1040,7 +1040,7 @@ public class BazarSaleService {
     public Map<String, Object> list(UUID eventId, Integer limit, String cursor, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = event(tenantId, eventId, "");
-        if (!actor.manages() && !sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!actor.manages() && !sells(ev, actor)) throw notASeller();
         int n = limit == null ? 50 : limit;
         if (n < 1 || n > 200) throw invalid("limit must be 1–200.", "يجب أن يكون الحد بين 1 و200.");
 
@@ -1089,7 +1089,7 @@ public class BazarSaleService {
     public Map<String, Object> todaySummary(UUID eventId, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = event(tenantId, eventId, "");
-        if (!actor.manages() && !sellerRoles(ev).contains(actor.roleKey())) throw notASeller();
+        if (!actor.manages() && !sells(ev, actor)) throw notASeller();
         Map<String, Object> t = today(jdbc, tenantId, eventId, toList(ev.get("payment_methods")));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("business_day", t.get("business_day"));
@@ -1437,7 +1437,7 @@ public class BazarSaleService {
 
     private void requireOwnRecentOrManager(Map<String, Object> ev, Map<String, Object> sale, Actor actor) {
         if (actor.manages()) return;
-        boolean mine = actor.userId().equals(sale.get("sold_by")) && sellerRoles(ev).contains(actor.roleKey());
+        boolean mine = actor.userId().equals(sale.get("sold_by")) && sells(ev, actor);
         if (!mine || !Boolean.TRUE.equals(sale.get("recent"))) throw undoNotAllowed();
     }
 
@@ -1508,6 +1508,15 @@ public class BazarSaleService {
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
         }
         return rows.get(0);
+    }
+
+    /**
+     * B6b — may this caller sell at this event: their role is in its seller_roles AND they weren't removed from it
+     * ("Remove seller", {@link BazarSellers#removed}). Every sell-side check goes through here.
+     */
+    private boolean sells(Map<String, Object> ev, Actor actor) {
+        return sellerRoles(ev).contains(actor.roleKey())
+            && !BazarSellers.removed(jdbc, (UUID) ev.get("id"), actor.userId());
     }
 
     private static List<String> sellerRoles(Map<String, Object> ev) {

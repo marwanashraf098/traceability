@@ -656,6 +656,89 @@ export async function listRecentBazarSales(eventId: string, businessDay: string,
   return page.items.filter(s => s.business_day === businessDay)
 }
 
+// ── B6b — sellers (owner / manager), the invited seller's first open, Switch seller ─────────────────
+
+export interface BazarSeller {
+  user_id: string
+  name: string
+  phone: string | null
+  has_pin: boolean
+  added_at: string
+  last_invited_at?: string | null
+  invite_expires_at?: string | null
+  /** Remove turns the account off: "Add seller" created them and this is their last bazar that hasn't ended. */
+  remove_turns_off_account?: boolean
+}
+
+export interface BazarSellers {
+  event_name: string
+  event_status: BazarStatus
+  workers_allowed: boolean
+  sellers: BazarSeller[]
+}
+
+export interface BazarSellerLink {
+  link: string
+  expires_at: string
+  event_name: string
+}
+
+export function listBazarSellers(eventId: string) {
+  return bazarFetch<BazarSellers>(`${base(eventId)}/sellers`)
+}
+
+export function listBazarSellerCandidates(eventId: string) {
+  return bazarFetch<{ user_id: string; name: string; phone: string | null; has_pin: boolean }[]>(`${base(eventId)}/sellers/candidates`)
+}
+
+/** A new worker ({name, phone?}) or an existing one ({user_id}) — never a role. */
+export function addBazarSeller(eventId: string, req: { name: string; phone?: string | null } | { user_id: string }) {
+  return bazarFetch<BazarSellerLink & { seller: BazarSeller; workers_allowed: boolean }>(`${base(eventId)}/sellers`, {
+    method: 'POST', body: JSON.stringify(req),
+  })
+}
+
+export function newBazarSellerLink(eventId: string, userId: string) {
+  return bazarFetch<BazarSellerLink>(`${base(eventId)}/sellers/${encodeURIComponent(userId)}/link`, { method: 'POST', body: '{}' })
+}
+
+export function removeBazarSeller(eventId: string, userId: string) {
+  return bazarFetch<{ sessions_revoked: number }>(`${base(eventId)}/sellers/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+}
+
+export function allowBazarWorkers(eventId: string) {
+  return bazarFetch<{ workers_allowed: boolean }>(`${base(eventId)}/sellers/allow-workers`, { method: 'POST', body: '{}' })
+}
+
+export interface BazarSellerMe {
+  event_id: string
+  event_name: string
+  event_status: BazarStatus
+  name: string
+  needs_pin: boolean
+  removed: boolean
+  can_sell: boolean
+}
+
+export function getBazarSellerMe(eventId: string) {
+  return bazarFetch<BazarSellerMe>(`${base(eventId)}/sellers/me`)
+}
+
+export function setBazarSellerPin(pin: string) {
+  return bazarFetch<{ pin_set: boolean }>('/bazar-sellers/me/pin', { method: 'POST', body: JSON.stringify({ pin }) })
+}
+
+export function getBazarSellerRoster(eventId: string) {
+  return bazarFetch<{ id: string; name: string; locked: boolean; lockedUntil: string | null }[]>(`${base(eventId)}/sellers/roster`)
+}
+
+/** wa.me with the invite text prefilled; an Egyptian mobile (01…) goes straight to that chat. */
+export function whatsAppUrl(text: string, phone?: string | null): string {
+  const digits = (phone ?? '').replace(/\D/g, '')
+  const to = /^01\d{9}$/.test(digits) ? '2' + digits : /^201\d{9}$/.test(digits) ? digits : ''
+  return `https://wa.me/${to}?text=${encodeURIComponent(text)}`
+}
+
 // ── Who am I (from the access token) ──────────────────────────────────────────
 
 export function currentUserId(): string | null {

@@ -100,6 +100,28 @@ public class MagicLinkService {
         return appUrl + "/auth/magic?token=" + rawToken;
     }
 
+    /** Bazar B6b: a seller invite link lives at most this long (24 h). */
+    public static final int SELLER_INVITE_TTL_MINUTES = 24 * 60;
+
+    /** The seller invite link, the SHA-256 its token is stored under, and when it expires. Never log {@code url}. */
+    public record SellerInviteLink(String url, String tokenHash, Instant expiresAt) {}
+
+    /**
+     * Bazar B6b — the ONE other issuer that RETURNS a sign-in link (approved 2026-11-19; the other is
+     * {@link #issueSignInLink}): the "Add seller" invite of a bazar WORKER, sent by the owner / manager over WhatsApp.
+     * Called only from {@code BazarSellerService} (EmbeddedOnboardingTest.s6 guards both callers). Never emailed.
+     * Same table, hash-at-rest and single-use consume through hatch #6 as every link; 24 h; bound to that user +
+     * tenant. Opened at {@code /auth/seller-invite} (SellerInviteController), which consumes it with
+     * {@link #consumeMagicLinkFor}. Never log the returned URL.
+     */
+    public SellerInviteLink issueSellerInviteLink(UUID userId, UUID tenantId) {
+        Instant expiresAt = Instant.now().plus(SELLER_INVITE_TTL_MINUTES, ChronoUnit.MINUTES);
+        String rawToken = storeToken(userId, tenantId, SELLER_INVITE_TTL_MINUTES);
+        log.info("Seller invite link issued userId={} tenantId={}", userId, tenantId);
+        return new SellerInviteLink(appUrl + "/auth/seller-invite?token=" + rawToken,
+            AuthRepository.sha256(rawToken), expiresAt);
+    }
+
     /** CSPRNG 128-bit token; only its SHA-256 is stored. magic_link_tokens is not under RLS. */
     private String storeToken(UUID userId, UUID tenantId, int ttl) {
         byte[] bytes = new byte[16]; // 128 bits
@@ -127,6 +149,14 @@ public class MagicLinkService {
      * to the caller — MAGIC_LINK_INVALID in every case.
      */
     public TokenResponse consumeMagicLink(String rawToken) {
+        return consumeMagicLinkFor(rawToken).tokens();
+    }
+
+    /** What a consumed link signed in: the tokens, whose they are, and the token's SHA-256. */
+    public record Consumed(TokenResponse tokens, UUID userId, UUID tenantId, String tokenHash) {}
+
+    /** {@link #consumeMagicLink}, also saying who signed in (B6b: the seller invite lands on its event). */
+    public Consumed consumeMagicLinkFor(String rawToken) {
         String hash = AuthRepository.sha256(rawToken.trim());
 
         record Row(UUID userId, UUID tenantId) {}
@@ -165,7 +195,7 @@ public class MagicLinkService {
             String access  = jwtService.issueAccessToken(row.userId(), row.tenantId(), role, issued.id());
             String refresh = issued.raw();
             log.info("Magic link consumed userId={} tenantId={}", row.userId(), row.tenantId());
-            return new TokenResponse(access, refresh);
+            return new Consumed(new TokenResponse(access, refresh), row.userId(), row.tenantId(), hash);
         });
     }
 

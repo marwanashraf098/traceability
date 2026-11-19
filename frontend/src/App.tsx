@@ -31,6 +31,8 @@ const BazarExchange   = lazy(() => import('./pages/bazar/phone/BazarExchange'))
 const BazarCloseDay   = lazy(() => import('./pages/bazar/phone/BazarCloseDay'))
 const BazarEndEvent   = lazy(() => import('./pages/bazar/phone/BazarEndEvent'))
 const BazarReportPage = lazy(() => import('./pages/bazar/BazarReport'))
+const BazarJoin       = lazy(() => import('./pages/bazar/phone/BazarJoin'))
+const BazarInviteExpired = lazy(() => import('./pages/bazar/phone/BazarJoin').then(m => ({ default: m.BazarInviteExpired })))
 // Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
 const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
 import { analyticsEnabled } from './analytics/flag'
@@ -690,6 +692,12 @@ export default function App() {
         <Route path="/bazar/:id/scan-out" element={<RequireAuth><OwnerOnlyRoute>
           <Suspense fallback={null}><BazarScanOut /></Suspense>
         </OwnerOnlyRoute></RequireAuth>} />
+        {/* B6b: an opened seller invite (/auth/seller-invite) lands here — pick a PIN, then Sell. The expired page
+            needs no sign-in. */}
+        <Route path="/bazar/join/:id" element={<RequireAuth>
+          <Suspense fallback={<AuthLoadingSpinner />}><BazarJoin /></Suspense>
+        </RequireAuth>} />
+        <Route path="/bazar/invite-expired" element={<Suspense fallback={null}><BazarInviteExpired /></Suspense>} />
         <Route path="/bazar/:id/home" element={<RequireAuth>
           <Suspense fallback={<AuthLoadingSpinner />}><BazarPhoneHome /></Suspense>
         </RequireAuth>} />

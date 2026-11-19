@@ -29,7 +29,7 @@ public class AuthController {
 
     static final String COOKIE_NAME    = "traced_refresh";
     static final String COOKIE_PATH    = "/api/v1/auth/refresh";
-    static final int    COOKIE_MAX_AGE = 2_592_000; // 30 days
+    public static final int COOKIE_MAX_AGE = 2_592_000; // 30 days
 
     // Same generic body regardless of whether the email matched a user — enumeration-safe.
     private static final ForgotPasswordResponse FORGOT_PASSWORD_RESPONSE =
@@ -198,7 +198,7 @@ public class AuthController {
     }
 
     /** Sets or clears the httpOnly refresh-token cookie. Package-visible for MagicLinkController. */
-    static void setRefreshCookie(HttpServletResponse response, String value, int maxAge) {
+    public static void setRefreshCookie(HttpServletResponse response, String value, int maxAge) {
         ResponseCookie cookie = ResponseCookie.from(COOKIE_NAME, value)
                 .httpOnly(true)
                 .secure(true)

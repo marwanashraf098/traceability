@@ -282,7 +282,15 @@ class RlsCoverageTest {
             // transfer); worker 403 / flag off 404 / another tenant's event 404 in BazarEndHttpTest.
             "/api/v1/bazar-events/{eventId}/leftovers",
             "/api/v1/bazar-events/{eventId}/report",
-            "/api/v1/bazar-events/{eventId}/report/customers.csv"
+            "/api/v1/bazar-events/{eventId}/report/customers.csv",
+            // Bazar POS B6b — every read under TenantContext + RLS (bazar_event_sellers / bazar_seller_invites / users);
+            // another tenant's event → 404 and another tenant's worker → not found in BazarSellersTest.wrongTenant_isRefused,
+            // app_user isolation with a same-tenant positive control in
+            // BazarSellersTest.rls_appUser_seesOnlyItsOwnSellersAndInvites, worker 403 on the owner reads.
+            "/api/v1/bazar-events/{eventId}/sellers",
+            "/api/v1/bazar-events/{eventId}/sellers/candidates",
+            "/api/v1/bazar-events/{eventId}/sellers/me",
+            "/api/v1/bazar-events/{eventId}/sellers/roster"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

@@ -111,7 +111,7 @@ public class BazarEndService {
     public Map<String, Object> leftovers(UUID eventId, BazarSaleService.Actor actor) {
         UUID tenantId = requireEnabledTenant(jdbc);
         Map<String, Object> ev = event(tenantId, eventId, "");
-        requireSeller(actor, ev);
+        requireSeller(jdbc, actor, ev);
         return leftovers(tenantId, ev);
     }
 
@@ -178,7 +178,7 @@ public class BazarEndService {
     public Map<String, Object> scanBack(UUID eventId, String code, String clientRequestId, BazarSaleService.Actor actor) {
         UUID tenantId = requireEnabledTenant(jdbc);
         Map<String, Object> ev = endedEvent(tenantId, eventId);
-        requireSeller(actor, ev);
+        requireSeller(jdbc, actor, ev);
         UUID transferId = (UUID) ev.get("transfer_id");
         String crid = clientRequestId == null ? "" : clientRequestId.trim();
         if (crid.isEmpty() || crid.length() > 100) {
@@ -349,11 +349,12 @@ public class BazarEndService {
      * manager — the same rule as the sell screen's piece lookup. End, mark lost, close transfer and the report stay
      * owner / manager.
      */
-    private static void requireSeller(BazarSaleService.Actor actor, Map<String, Object> ev) {
+    private static void requireSeller(JdbcTemplate jdbc, BazarSaleService.Actor actor, Map<String, Object> ev) {
         boolean manages = actor != null && actor.role() != null && MANAGERS.contains(actor.role().toLowerCase());
         if (manages) return;
         if (actor == null || actor.role() == null
-                || !BazarSaleService.toList(ev.get("seller_roles")).contains(actor.roleKey())) {
+                || !BazarSaleService.toList(ev.get("seller_roles")).contains(actor.roleKey())
+                || BazarSellers.removed(jdbc, (UUID) ev.get("id"), actor.userId())) {
             throw new BazarException(BazarException.Code.BAZAR_NOT_A_SELLER,
                 "Your role can't do this at this bazar.", "دورك لا يسمح بذلك في هذا البازار.", HttpStatus.FORBIDDEN);
         }

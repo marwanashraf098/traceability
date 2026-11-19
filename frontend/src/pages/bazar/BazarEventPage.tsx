@@ -18,6 +18,7 @@ import { QrCode } from '../../phone/PhonePairModal'
 import { STATUS_TONE } from './BazarEvents'
 import { CloseDayForm, DayStatusBadge, dayTitle } from './CloseDayForm'
 import { EndEventPanel, LeftoversPanel } from './Leftovers'
+import { SellersPanel } from './SellersPanel'
 
 /** Bazar POS B6 — /bazar/:id. Draft → setup (mockup step 2); live / ended → the event's numbers (step 3). */
 export default function BazarEventPage() {
@@ -131,6 +132,8 @@ function SetupView({ ev, reload, onChanged }: {
               {t('bazar.start.button')}
             </Button>
           </section>
+
+          <SellersCard eventId={ev.id} />
         </aside>
 
         <PricesCard ev={ev} />
@@ -491,8 +494,9 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
           </section>
         </div>
 
+        {ev.status === 'live' && <div className="flex-[1_1_260px] min-w-0 flex flex-col gap-5">
         {live && (
-          <aside className="card p-5 flex-[1_1_260px] min-w-0 flex flex-col gap-3" data-testid="bazar-open-on-phone">
+          <aside className="card p-5 min-w-0 flex flex-col gap-3" data-testid="bazar-open-on-phone">
             <h2 className="text-body-lg font-semibold text-primary flex items-center gap-2">
               <Smartphone size={18} aria-hidden />{t('bazar.live.phoneTitle')}
             </h2>
@@ -503,6 +507,8 @@ function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => Promise<
             <p className="text-small text-muted text-center">{t('bazar.live.qrHint')}</p>
           </aside>
         )}
+        <SellersCard eventId={ev.id} />
+        </div>}
       </div>
 
       {closing && days && (
@@ -576,5 +582,17 @@ function Count({ label, value, swatch }: { label: string; value: number; swatch?
       </span>
       <span className="text-h4 font-semibold text-primary tabular-nums">{value}</span>
     </div>
+  )
+}
+
+/** B6b — who sells at this event, and their one-time sign-in links. */
+function SellersCard({ eventId }: { eventId: string }) {
+  const { t } = useTranslation()
+  return (
+    <section className="card p-5 flex flex-col gap-3" data-testid="bazar-sellers-card">
+      <h2 className="text-body-lg font-semibold text-primary">{t('bazar.sellers.title')}</h2>
+      <p className="text-small text-muted">{t('bazar.sellers.subtitle')}</p>
+      <SellersPanel eventId={eventId} />
+    </section>
   )
 }
