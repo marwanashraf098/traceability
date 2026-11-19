@@ -112,7 +112,16 @@ public class ExchangeService {
         if (rows.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Exchange not found");
         }
-        return rows.get(0);
+        Map<String, Object> row = rows.get(0);
+        // S3b (2026-11-19): the N-row mapping screen's prefill — only for a multi-item exchange still to be mapped
+        // (absent otherwise: single-item detail is unchanged). Built from Bosta's raw on every read, never stored.
+        if ("needs_mapping".equals(row.get("status"))) {
+            JsonNode raw = rawOf(exchangeId, tenantId);
+            if (ExchangeMultiItem.isMulti(raw)) {
+                row.put("prefill", ExchangeMultiItem.toMap(ExchangeMultiItem.prefill(jdbc, tenantId, raw)));
+            }
+        }
+        return row;
     }
 
     /**
@@ -298,6 +307,14 @@ public class ExchangeService {
             tenantId, trackingNumber);
         if (ex == null || !"needs_mapping".equals(ex.status())) return;
 
+        // S3b (2026-11-19): counts decide, never the description's separators — a multi-item exchange (either leg > 1)
+        // never takes the single-item auto-map below.
+        JsonNode raw = rawOf(ex.id(), tenantId);
+        if (ExchangeMultiItem.isMulti(raw)) {
+            autoMapMulti(ex.id(), tenantId, trackingNumber, raw);
+            return;
+        }
+
         // S3d: a Shopify-native exchange whose Return has a live shadow — the replacement is the shadow's own line;
         // no guessing from the description.
         UUID shadowVariant = shadowVariantFor(ex.id(), tenantId);
@@ -321,6 +338,89 @@ public class ExchangeService {
         if (claimed == 0) return; // lost the race — a human map() (or a concurrent webhook) won first
 
         commit(ex.id(), tenantId, resolution.committedVariantId(), null, true);
+    }
+
+    private JsonNode rawOf(UUID exchangeId, UUID tenantId) {
+        String json = jdbc.query("SELECT raw::text FROM exchanges WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, exchangeId, tenantId);
+        try {
+            return json == null ? null : mapper.readTree(json);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * S3b — a multi-item exchange's automatic mapping, in this order:
+     * <ol>
+     *   <li>B2: an -R reference with a live Shopify-exchange shadow whose units match Bosta's counts both ways
+     *       ({@link ExchangeMultiItem#shadowFor}) → the shadow IS the replacement ({@link #linkShadowMulti}). A live
+     *       shadow whose counts differ → nothing (needs_mapping; B0's conflict rule refuses any other mapping).</li>
+     *   <li>No shadow: the SKU-label auto-commit ({@link ExchangeMultiItem#autoLines}) → one internal:exchange: order,
+     *       one line per label line, auto_matched; the inbound leg is recorded as one row of Bosta's count with NO
+     *       variant (never committed beyond what single-item does today).</li>
+     *   <li>Anything else → stays needs_mapping; the mapping screen prefills the rows.</li>
+     * </ol>
+     */
+    private void autoMapMulti(UUID exchangeId, UUID tenantId, String trackingNumber, JsonNode raw) {
+        String ref = raw == null ? null : raw.path("businessReference").asText(null);
+        UUID liveShadow = ShopifyShadowOrders.shadowForReturnReference(jdbc, tenantId, ref);
+        if (liveShadow != null) {
+            UUID matching = ExchangeMultiItem.shadowFor(jdbc, tenantId, raw);
+            if (matching == null) return;
+            if (claim(exchangeId, tenantId) == 0) return;
+            linkShadowMulti(exchangeId, tenantId, trackingNumber, matching, raw);
+            return;
+        }
+        List<ExchangeMultiItem.Line> lines = ExchangeMultiItem.autoLines(jdbc, tenantId, raw);
+        if (lines == null) return;
+        if (claim(exchangeId, tenantId) == 0) return;
+        List<OutLine> orderLines = lines.stream().map(l -> new OutLine(l.variantId(), l.quantity())).toList();
+        Committed made = commit(exchangeId, tenantId, orderLines,
+            lines.size() == 1 ? lines.get(0).variantId() : null, null, true, false);
+        for (int i = 0; i < lines.size(); i++) {
+            ExchangeMultiItem.Line l = lines.get(i);
+            insertItem(tenantId, exchangeId, "out", new ItemRow(l.variantId(), l.quantity(), l.name()),
+                i < made.orderItemIds().size() ? made.orderItemIds().get(i) : null, null);
+        }
+        ExchangeMultiItem.Counts c = ExchangeMultiItem.counts(raw);
+        insertItem(tenantId, exchangeId, "in",
+            new ItemRow(null, Math.max(1, Math.min(99, c.in())), ExchangeMultiItem.inboundDescription(raw)), null, null);
+    }
+
+    /**
+     * S3b B2 — the multi-item exchange's replacement is its live Shopify-exchange shadow (same shape as commit()'s
+     * single-item shadow path): the Bosta leg links to the shadow, no internal:exchange: order is ever created (so the
+     * 4th named decrement can't apply — shadows never take it), outbound_order_id = the shadow, outbound_variant_id only
+     * for a one-line shadow, auto_matched. Rows: 'out' = the shadow's live lines (order_item_id set), 'in' = the
+     * Shopify Return's lines (their variant when the mirror knows it). Already claimed (mapped).
+     */
+    private void linkShadowMulti(UUID exchangeId, UUID tenantId, String trackingNumber, UUID shadow, JsonNode raw) {
+        shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
+        shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
+        List<Map<String, Object>> outLines = jdbc.queryForList(
+            "SELECT id, variant_id, quantity FROM order_items WHERE order_id = ? AND tenant_id = ? AND quantity > 0 " +
+            "ORDER BY id", shadow, tenantId);
+        UUID single = outLines.size() == 1 ? (UUID) outLines.get(0).get("variant_id") : null;
+        jdbc.update(
+            "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, auto_matched = true, " +
+            "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
+            "WHERE id = ? AND tenant_id = ?",
+            shadow, single, exchangeId, tenantId);
+        for (Map<String, Object> l : outLines) {
+            insertItem(tenantId, exchangeId, "out",
+                new ItemRow((UUID) l.get("variant_id"), ((Number) l.get("quantity")).intValue(), null), (UUID) l.get("id"), null);
+        }
+        for (Map<String, Object> rl : jdbc.queryForList(
+                "SELECT rl.variant_id, rl.quantity, rl.raw->'fulfillmentLineItem'->'lineItem'->>'name' AS name " +
+                "FROM shopify_return_lines rl JOIN shopify_exchange_shadows s ON s.return_id = rl.return_id AND s.tenant_id = rl.tenant_id " +
+                "WHERE s.order_id = ? AND s.tenant_id = ? AND rl.quantity > 0 ORDER BY rl.created_at, rl.id", shadow, tenantId)) {
+            insertItem(tenantId, exchangeId, "in",
+                new ItemRow((UUID) rl.get("variant_id"), Math.min(99, ((Number) rl.get("quantity")).intValue()), (String) rl.get("name")),
+                null, null);
+        }
+        org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
+            .info("Exchange {} (AWB {}) multi-item, attached to Shopify exchange shadow order {}", exchangeId, trackingNumber, shadow);
     }
 
     /**

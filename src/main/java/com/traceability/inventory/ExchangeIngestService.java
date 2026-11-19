@@ -80,16 +80,20 @@ public class ExchangeIngestService {
             "SELECT EXISTS(SELECT 1 FROM exchanges WHERE tenant_id = ? AND tracking_number = ?)",
             Boolean.class, tenantId, trackingNumber);
 
+        // S3b (2026-11-19): a multi-item exchange (itemsCount > 1 on a leg) is created like a single-item one — its
+        // items are mapped as rows (exchange_items, S3a). Only an unreadable count (missing / < 1) still falls back to
+        // the unlinked lane. The inbound leg still has to be known first (HELD), now also when the outbound is > 1.
+        // A single-item delivery goes through exactly the same checks as before.
         if (!Boolean.TRUE.equals(exists)) {
             int outboundCount = outboundDetails.path("itemsCount").asInt(-1);
-            if (outboundCount != 1) {
+            if (outboundCount < 1) {
                 return IngestOutcome.MULTI_ITEM;
             }
             if (returnSpecsNode.isMissingNode() || inboundDetails.isMissingNode()) {
                 return IngestOutcome.HELD;
             }
             int inboundCount = inboundDetails.path("itemsCount").asInt(-1);
-            if (inboundCount != 1) {
+            if (inboundCount < 1) {
                 return IngestOutcome.MULTI_ITEM;
             }
         }
@@ -111,7 +115,19 @@ public class ExchangeIngestService {
             tenantId, trackingNumber, outboundDesc, inboundDesc, inboundDescAr,
             cod, goodsValue, raw.toString());
         // 2026-11-12: the inbound (old) item, when its description / original order names it (never overwrites).
-        ExchangeInbound.fill(jdbc, tenantId, trackingNumber);
+        // S3b: never for a multi-item exchange — its old items are rows (exchange_items); one variant would misdescribe it.
+        if (!ExchangeMultiItem.isMulti(raw)) {
+            ExchangeInbound.fill(jdbc, tenantId, trackingNumber);
+        }
+        // S3b: the delivery recorded unlinked as EXCHANGE_MULTI_ITEM before (or by the old gate) is now an exchange —
+        // resolved in this transaction (never deleted: its webhook idempotency must stay intact). Clears the
+        // condition-only unmatched_delivery alert.
+        if (!Boolean.TRUE.equals(exists)) {
+            jdbc.update(
+                "UPDATE unlinked_bosta_deliveries SET resolved = true, last_seen_at = now() " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND resolved = false AND match_reason = 'EXCHANGE_MULTI_ITEM'",
+                tenantId, trackingNumber);
+        }
 
         // FR-EXCHANGE Phase 3/4 §3.5 structural hook: derive exchanges.status from
         // return-leg timeline progress. interpretReturnLeg() always returns empty this
