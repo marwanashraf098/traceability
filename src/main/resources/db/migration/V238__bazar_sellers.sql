@@ -19,6 +19,10 @@ CREATE TABLE bazar_event_sellers (
     added_at    timestamptz NOT NULL DEFAULT now(),
     removed_at  timestamptz,
     removed_by  uuid        REFERENCES users(id),
+    -- true on the row whose "Add seller" CREATED this user (a new worker from a name); false when an existing worker
+    -- was picked. A user created this way is turned off (UserService.deactivate) when removed from their last event
+    -- that hasn't ended; a picked team member only leaves the event.
+    created_user boolean    NOT NULL DEFAULT false,
     CHECK ((removed_at IS NULL) = (removed_by IS NULL)),
     UNIQUE (event_id, user_id),
     FOREIGN KEY (event_id, tenant_id) REFERENCES bazar_events (id, tenant_id)

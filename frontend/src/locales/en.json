@@ -7147,7 +7147,8 @@
       "newLink": "New sign-in link",
       "remove": "Remove",
       "keep": "Keep",
-      "removeConfirm": "Remove {{name}}? They're signed out on every phone and can't sell at this bazar any more.",
+      "removeConfirmOff": "Remove {{name}}? Their account will be turned off.",
+      "removeConfirmStay": "Remove {{name}} from this bazar? They stay on your team.",
       "workersNotAllowed": "This bazar doesn't let workers sell yet — invited sellers can sign in but can't sell.",
       "allowWorkers": "Allow workers to sell at this bazar",
       "failed": "That didn't work. Try again."

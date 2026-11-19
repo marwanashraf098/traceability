@@ -25,7 +25,7 @@ BazarScanOut / App.tsx untouched.
 - Next: R2 (close day / end event / report) and R3 (Get ready, live event page, return / exchange) after B6b.
 
 **Bazar POS B6b — seller invites: WhatsApp link + PIN (2026-11-19; branch `feat/bazar-b6b` from main 9ddee4e2; V238;
-BUILT, pushed, NOT merged — awaiting review; not deployed).** **Data (V238):** `bazar_event_sellers` (one row per event +
+APPROVED with one fix (done); merge waits for R1 on main; not deployed).** **Data (V238):** `bazar_event_sellers` (one row per event +
 worker; Remove stamps removed_at / removed_by, never deleted; re-adding clears it) and `bazar_seller_invites` (append-only:
 one row per link — who invited whom, when, until when; token_hash = the magic_link_tokens hash; also the rate limit).
 **Rules:** owner / manager only (`BazarSellerService`, `BazarSellersController`): Add seller = a NEW worker (name + optional
@@ -47,8 +47,12 @@ seller = `GET …/sellers/roster` (this event's non-removed sellers with a PIN; 
 an Egyptian 01… phone opens that chat; Remove with a confirm); phone Home header menu (⋮) → Switch seller (all) / Sellers
 (owner / manager, the same panel in a sheet); `BazarJoin` (/bazar/join/:id: pick PIN twice → Sell; can't-sell states);
 `BazarInviteExpired`. EN + AR. **Known limits:** "Copy link" always issues a NEW link (only the hash is stored); older
-unused links stay valid until their 24 h (app_user can't update magic_link_tokens). A removed seller can still PIN-switch
-in on a shared phone (the existing /auth/pin is untouched) but can't sell there. PIN uniqueness per tenant is not checked
+unused links stay valid until their 24 h (app_user can't update magic_link_tokens). **Review fix (2026-11-19):**
+a worker "Add seller" CREATED (`bazar_event_sellers.created_user`, in V238) who is removed from their last event that
+hasn't ended is turned off through the existing Team settings path (`UserService.deactivate` — active = false +
+user_deactivate audit; Remove already revoked every token; /auth/pin, refresh and login refuse an inactive user); a
+picked team member only leaves the event (stays active, can still PIN-switch, can't sell there). The audit row's
+`outcome` is `account_turned_off` / `removed_from_event`; the list's `remove_turns_off_account` drives the confirm text. PIN uniqueness per tenant is not checked
 (the switch identifies the user first). The Sellers card is hidden once the event has ended.
 
 **Bazar POS B6c — cart mode: several pieces, one customer, one total, one discount (2026-11-18; branch

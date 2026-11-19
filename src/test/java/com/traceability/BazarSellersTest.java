@@ -493,6 +493,82 @@ class BazarSellersTest {
             Integer.class, seller)).isZero();
     }
 
+    // ── Remove: an "Add seller" account is turned off; a picked team member stays (B6b review) ──────────
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Map<String, Object> listRow(String ev, UUID user) {
+        List<Map> rows = (List<Map>) call(ownerA, HttpMethod.GET, "/api/v1/bazar-events/" + ev + "/sellers", null)
+            .getBody().get("sellers");
+        return rows.stream().filter(r -> user.toString().equals(r.get("user_id"))).findFirst().orElseThrow();
+    }
+
+    private String removeOutcome(String ev, UUID user) {
+        @SuppressWarnings("rawtypes")
+        ResponseEntity<Map> r = call(ownerA, HttpMethod.DELETE, "/api/v1/bazar-events/" + ev + "/sellers/" + user, null);
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return (String) r.getBody().get("outcome");
+    }
+
+    private String auditOutcome(String ev, UUID user) {
+        return jdbc.queryForObject("SELECT metadata->>'outcome' FROM audit_log WHERE action = 'bazar_seller_remove' " +
+            "AND target_id = ? AND metadata->>'event_id' = ? ORDER BY created_at DESC LIMIT 1",
+            String.class, user.toString(), ev);
+    }
+
+    @Test
+    void removedBazarCreatedSeller_isTurnedOff_andThePinSwitchRefusesThem() throws Exception {
+        String ev = liveEvent(1, List.of("owner", "worker")).get(0);
+        Map<String, Object> added = addSeller(ownerA, ev, Map.of("name", "Omar"));
+        UUID seller = sellerId(added);
+        assertThat(setPin(signIn((String) added.get("link")), "2468").getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pinSwitch(ownerA, seller, "2468").getStatusCode()).as("works before").isEqualTo(HttpStatus.OK);
+        assertThat(listRow(ev, seller).get("remove_turns_off_account")).isEqualTo(true);
+
+        assertThat(removeOutcome(ev, seller)).isEqualTo("account_turned_off");
+        assertThat(jdbc.queryForObject("SELECT active FROM users WHERE id = ?", Boolean.class, seller)).isFalse();
+        assertThat(auditOutcome(ev, seller)).isEqualTo("account_turned_off");
+        // The existing Team settings path ran (its own audit row).
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM audit_log WHERE action = 'user_deactivate' AND target_id = ?",
+            Integer.class, seller.toString())).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL",
+            Integer.class, seller)).isZero();
+        assertThat(pinSwitch(ownerA, seller, "2468").getStatusCode()).as("PIN switch refused").isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
+    void removedExistingWorker_staysActive_pinSwitchStillWorks_butCantSellThere() {
+        List<String> ev = liveEvent(1, List.of("owner", "worker"));
+        UUID hana = UUID.randomUUID();
+        user(hana, tenantA, "worker");
+        jdbc.update("UPDATE users SET pin_code = ? WHERE id = ?", passwordEncoder.encode("1357"), hana);
+        addSeller(ownerA, ev.get(0), Map.of("user_id", hana.toString()));
+        assertThat(listRow(ev.get(0), hana).get("remove_turns_off_account")).isEqualTo(false);
+
+        assertThat(removeOutcome(ev.get(0), hana)).isEqualTo("removed_from_event");
+        assertThat(jdbc.queryForObject("SELECT active FROM users WHERE id = ?", Boolean.class, hana)).isTrue();
+        assertThat(auditOutcome(ev.get(0), hana)).isEqualTo("removed_from_event");
+        ResponseEntity<AccessTokenResponse> sw = pinSwitch(ownerA, hana, "1357");
+        assertThat(sw.getStatusCode()).as("still on the team").isEqualTo(HttpStatus.OK);
+        ResponseEntity<Map> refused = sell(sw.getBody().accessToken(), ev.get(0), ev.get(1));
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refused.getBody().get("code")).isEqualTo("BAZAR_NOT_A_SELLER");
+    }
+
+    @Test
+    void bazarCreatedSeller_onAnotherLiveEvent_staysActive_untilTheirLastOne() {
+        String ev1 = liveEvent(1, List.of("owner", "worker")).get(0);
+        String ev2 = liveEvent(1, List.of("owner", "worker")).get(0);
+        UUID seller = sellerId(addSeller(ownerA, ev1, Map.of("name", "Two Bazars")));
+        addSeller(ownerA, ev2, Map.of("user_id", seller.toString()));
+        assertThat(listRow(ev1, seller).get("remove_turns_off_account")).isEqualTo(false);
+        assertThat(removeOutcome(ev1, seller)).isEqualTo("removed_from_event");
+        assertThat(jdbc.queryForObject("SELECT active FROM users WHERE id = ?", Boolean.class, seller)).isTrue();
+        assertThat(listRow(ev2, seller).get("remove_turns_off_account")).isEqualTo(true);
+        assertThat(removeOutcome(ev2, seller)).isEqualTo("account_turned_off");
+        assertThat(jdbc.queryForObject("SELECT active FROM users WHERE id = ?", Boolean.class, seller)).isFalse();
+    }
+
     // ── RLS (app_user) ──────────────────────────────────────────────────────
 
     @Test

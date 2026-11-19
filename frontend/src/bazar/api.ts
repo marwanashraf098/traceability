@@ -666,6 +666,8 @@ export interface BazarSeller {
   added_at: string
   last_invited_at?: string | null
   invite_expires_at?: string | null
+  /** Remove turns the account off: "Add seller" created them and this is their last bazar that hasn't ended. */
+  remove_turns_off_account?: boolean
 }
 
 export interface BazarSellers {

@@ -143,21 +143,28 @@ describe('Sellers panel (owner / manager)', () => {
     expect(wa.searchParams.get('text')).toContain(LINK)
   })
 
-  test('Remove asks first, then removes', async () => {
+  test('Remove asks first — the text says whether the account is turned off — then removes', async () => {
     setAccessToken(fakeJwt('owner'))
     let removed = false
+    const rows = [
+      { user_id: 'u-omar', name: 'Omar', phone: null, has_pin: true, added_at: 'x', remove_turns_off_account: true },
+      { user_id: 'u-hana', name: 'Hana', phone: null, has_pin: true, added_at: 'x', remove_turns_off_account: false },
+    ]
     install(
-      on('DELETE', `/sellers/u-mona`, () => { removed = true; return json(200, { sessions_revoked: 1 }) }),
-      on('GET', `/bazar-events/${EVENT}/sellers`, () => json(200, removed ? SELLERS({ sellers: [] }) : SELLERS())),
+      on('DELETE', `/sellers/u-hana`, () => { removed = true; return json(200, { sessions_revoked: 1, outcome: 'removed_from_event' }) }),
+      on('GET', `/bazar-events/${EVENT}/sellers`, () => json(200, SELLERS({ sellers: removed ? rows.slice(0, 1) : rows }))),
     )
     renderAt('/x', <Route path="/x" element={<SellersPanel eventId={EVENT} />} />)
-    const row = await screen.findByTestId('seller-row')
-    await userEvent.click(within(row).getByRole('button', { name: 'Remove' }))
+    const [omar, hana] = await screen.findAllByTestId('seller-row')
+    await userEvent.click(within(omar).getByRole('button', { name: 'Remove' }))
+    expect(within(omar).getByTestId('seller-remove-confirm')).toHaveTextContent('Remove Omar? Their account will be turned off.')
+    await userEvent.click(within(omar).getByRole('button', { name: 'Keep' }))
+    await userEvent.click(within(hana).getByRole('button', { name: 'Remove' }))
     expect(removed).toBe(false)
-    expect(screen.getByText(/signed out on every phone/)).toBeInTheDocument()
-    await userEvent.click(within(row).getByRole('button', { name: 'Remove' }))
+    expect(within(hana).getByTestId('seller-remove-confirm')).toHaveTextContent('Remove Hana from this bazar? They stay on your team.')
+    await userEvent.click(within(hana).getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(removed).toBe(true))
-    expect(await screen.findByText(/No invited sellers yet/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByTestId('seller-row')).toHaveLength(1))
   })
 })
 

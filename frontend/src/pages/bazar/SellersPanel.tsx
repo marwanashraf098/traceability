@@ -93,7 +93,9 @@ export function SellersPanel({ eventId }: { eventId: string }) {
               </div>
               {confirmRemove?.user_id === s.user_id ? (
                 <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-charcoal">
-                  <p className="text-small text-primary">{t('bazar.sellers.removeConfirm', { name: s.name })}</p>
+                  <p className="text-small text-primary" data-testid="seller-remove-confirm">
+                    {t(s.remove_turns_off_account ? 'bazar.sellers.removeConfirmOff' : 'bazar.sellers.removeConfirmStay', { name: s.name })}
+                  </p>
                   <div className="flex gap-2">
                     <Button size="sm" variant="secondary" onClick={() => setConfirmRemove(null)}>{t('bazar.sellers.keep')}</Button>
                     <Button size="sm" variant="danger" loading={busy === 'remove:' + s.user_id} onClick={() => remove(s)}>

@@ -1,6 +1,7 @@
 package com.traceability.bazar;
 
 import com.traceability.account.AuditService;
+import com.traceability.account.UserService;
 import com.traceability.identity.AuthRepository;
 import com.traceability.identity.MagicLinkService;
 import com.traceability.tenancy.TenantContext;
@@ -29,7 +30,10 @@ import java.util.UUID;
  *       one bazar_seller_invites row, one audit_log row {@code bazar_seller_invite} (who invited whom, when);
  *       at most {@link #INVITES_PER_HOUR} links per tenant per hour (BAZAR_INVITE_RATE_LIMITED).</li>
  *   <li>Remove: removed_at stamped, every refresh token of the user revoked (the "log out of all devices" write),
- *       audit_log {@code bazar_seller_remove}; the sell side refuses them ({@link BazarSellers}).</li>
+ *       audit_log {@code bazar_seller_remove} with its outcome; the sell side refuses them ({@link BazarSellers}).
+ *       A worker "Add seller" CREATED, leaving their last event that hasn't ended, is turned off through
+ *       UserService.deactivate ({@code account_turned_off}); a picked team member stays active
+ *       ({@code removed_from_event}).</li>
  *   <li>The seller's own: {@link #me} (the first-open screen), {@link #setPin} (once — then the PIN switch needs it),
  *       {@link #roster} (Switch seller: this event's sellers who have a PIN).</li>
  * </ul>
@@ -45,16 +49,28 @@ public class BazarSellerService {
     private final AuditService        audit;
     private final PasswordEncoder     encoder;
     private final TransactionTemplate tx;
+    private final UserService         users;
 
     public BazarSellerService(JdbcTemplate jdbc, MagicLinkService magicLinks, AuthRepository authRepository,
-                              AuditService audit, PasswordEncoder encoder, PlatformTransactionManager txm) {
+                              AuditService audit, PasswordEncoder encoder, PlatformTransactionManager txm,
+                              UserService users) {
         this.jdbc           = jdbc;
         this.magicLinks     = magicLinks;
         this.authRepository = authRepository;
         this.audit          = audit;
         this.encoder        = encoder;
         this.tx             = new TransactionTemplate(txm);
+        this.users          = users;
     }
+
+    /**
+     * B6b review — would removing this seller from this event turn their account off: "Add seller" created them
+     * (a created_user row) AND they aren't a seller of any OTHER event that hasn't ended. Params: tenant, event, user.
+     */
+    static final String TURNS_OFF_SQL =
+        "EXISTS (SELECT 1 FROM bazar_event_sellers c WHERE c.tenant_id = ? AND c.user_id = u.id AND c.created_user) " +
+        "AND NOT EXISTS (SELECT 1 FROM bazar_event_sellers o JOIN bazar_events oe ON oe.id = o.event_id " +
+        "  WHERE o.user_id = u.id AND o.event_id <> ? AND o.removed_at IS NULL AND oe.status <> 'ended')";
 
     public record AddSeller(UUID userId, String name, String phone) {}
 
@@ -71,12 +87,13 @@ public class BazarSellerService {
         out.put("workers_allowed", workersAllowed(ev));
         out.put("sellers", jdbc.queryForList(
             "SELECT u.id AS user_id, u.name, u.phone, (u.pin_code IS NOT NULL) AS has_pin, s.added_at, " +
-            "       i.created_at AS last_invited_at, i.expires_at AS invite_expires_at " +
+            "       i.created_at AS last_invited_at, i.expires_at AS invite_expires_at, " +
+            "       (" + TURNS_OFF_SQL + ") AS remove_turns_off_account " +
             "FROM bazar_event_sellers s JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id " +
             "LEFT JOIN LATERAL (SELECT created_at, expires_at FROM bazar_seller_invites bi " +
             "  WHERE bi.event_id = s.event_id AND bi.user_id = s.user_id ORDER BY created_at DESC, id DESC LIMIT 1) i ON true " +
             "WHERE s.tenant_id = ? AND s.event_id = ? AND s.removed_at IS NULL AND u.active " +
-            "ORDER BY s.added_at, u.name", tenantId, eventId));
+            "ORDER BY s.added_at, u.name", tenantId, eventId, tenantId, eventId));
         return out;
     }
 
@@ -132,11 +149,12 @@ public class BazarSellerService {
                 Map.of("name", name, "role", "worker", "source", "bazar_seller_invite", "event_id", eventId.toString()));
         }
 
+        boolean created = req == null || req.userId() == null;
         jdbc.update(
-            "INSERT INTO bazar_event_sellers (tenant_id, event_id, user_id, added_by) VALUES (?, ?, ?, ?) " +
+            "INSERT INTO bazar_event_sellers (tenant_id, event_id, user_id, added_by, created_user) VALUES (?, ?, ?, ?, ?) " +
             "ON CONFLICT (event_id, user_id) DO UPDATE SET removed_at = NULL, removed_by = NULL, " +
             "  added_by = EXCLUDED.added_by, added_at = now()",
-            tenantId, eventId, userId, actor.userId());
+            tenantId, eventId, userId, actor.userId(), created);
 
         MagicLinkService.SellerInviteLink link = invite(tenantId, eventId, userId, actor);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -168,15 +186,26 @@ public class BazarSellerService {
     public Map<String, Object> remove(UUID eventId, UUID userId, BazarSaleService.Actor actor) {
         UUID tenantId = BazarEndService.requireManagerTenant(jdbc, actor);
         event(tenantId, eventId);
+        // Decided BEFORE this event's row is marked removed (TURNS_OFF_SQL looks at the OTHER events only anyway).
+        Boolean turnsOff = jdbc.queryForObject(
+            "SELECT " + TURNS_OFF_SQL + " FROM users u WHERE u.id = ? AND u.tenant_id = ? AND u.active",
+            Boolean.class, tenantId, eventId, userId, tenantId);
         int n = jdbc.update(
             "UPDATE bazar_event_sellers SET removed_at = now(), removed_by = ? " +
             "WHERE tenant_id = ? AND event_id = ? AND user_id = ? AND removed_at IS NULL",
             actor.userId(), tenantId, eventId, userId);
         if (n == 0) throw sellerNotFound();
         int revoked = authRepository.revokeAllRefreshTokens(userId);
+        // A worker "Add seller" created, leaving their last bazar that hasn't ended → their account is turned off
+        // through the EXISTING Team settings path (active = false + its user_deactivate audit row); the refresh
+        // tokens were just revoked and /auth/pin, /auth/refresh and login refuse an inactive user. A team member
+        // picked from the list only leaves this event.
+        boolean off = Boolean.TRUE.equals(turnsOff);
+        if (off) users.deactivate(actor.userId(), actor.role(), userId);
+        String outcome = off ? "account_turned_off" : "removed_from_event";
         audit.record(actor.userId(), "bazar_seller_remove", "user", userId.toString(),
-            Map.of("event_id", eventId.toString(), "sessions_revoked", revoked));
-        return Map.of("sessions_revoked", revoked);
+            Map.of("event_id", eventId.toString(), "sessions_revoked", revoked, "outcome", outcome));
+        return Map.of("sessions_revoked", revoked, "outcome", outcome);
     }
 
     /** Adds 'worker' to the event's seller_roles ("Allow workers to sell"); idempotent. */
