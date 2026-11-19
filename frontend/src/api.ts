@@ -3443,6 +3443,23 @@ export interface ExchangeSummary {
   inbound_items_count: number | null
   customer_name: string | null
   customer_phone: string | null
+  /** S3b — only on a multi-item exchange still to be mapped: rows prefilled from Bosta's label / counts. */
+  prefill?: ExchangePrefill
+}
+
+export interface ExchangePrefillRow {
+  variantId: string | null
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  quantity: number
+  descriptionHint: string | null
+}
+
+export interface ExchangePrefill {
+  labelParsed: boolean
+  outbound: ExchangePrefillRow[]
+  inbound: ExchangePrefillRow[]
 }
 
 /** Omit status to fetch every exchange for the tenant (e.g. re-visiting a since-mapped one). */
