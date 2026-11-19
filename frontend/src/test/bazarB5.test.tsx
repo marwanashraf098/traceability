@@ -285,7 +285,7 @@ describe('Leftovers', () => {
     await userEvent.click(btn)
     const summary = await screen.findByTestId('end-summary')
     expect(posts('close-transfer')).toHaveLength(1)
-    expect(within(summary).getByTestId('kpi-revenue')).toHaveTextContent('EGP 2,400')
+    expect(within(summary).getByTestId('kpi-revenue')).toHaveTextContent('2,400 EGP')
     expect(within(summary).getByTestId('kpi-through')).toHaveTextContent('44%')
     await userEvent.click(screen.getByTestId('end-full-report'))
     expect(screen.getByTestId('where').textContent).toBe(`/bazar/${EVENT}/report`)
@@ -303,7 +303,7 @@ describe('Report page', () => {
     URL.revokeObjectURL = vi.fn()
     try {
       renderAt(`/bazar/${EVENT}/report`, <Route path="/bazar/:id/report" element={<BazarReportPage />} />)
-      expect(await screen.findByTestId('kpi-revenue')).toHaveTextContent('EGP 2,400')
+      expect(await screen.findByTestId('kpi-revenue')).toHaveTextContent('2,400 EGP')
       expect(screen.getByTestId('kpi-sold')).toHaveTextContent('4')
       expect(screen.getByTestId('kpi-avg')).toHaveTextContent('EGP 600')
       expect(screen.getByTestId('report-not-received')).toHaveTextContent('EGP 70')

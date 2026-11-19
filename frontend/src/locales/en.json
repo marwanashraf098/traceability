@@ -6585,6 +6585,84 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "r2": {
+      "close": {
+        "shouldBe": "Should be",
+        "includesFloat": "includes opening float {{amount}}",
+        "countedCash": "Counted in the drawer",
+        "cardTitle": "Card machine",
+        "instapayTitle": "InstaPay",
+        "drawer": "Drawer",
+        "sellingGoesOn": "Selling isn't affected. If anything changes, close the day again.",
+        "salesCount_one": "{{count}} sale",
+        "salesCount_other": "{{count}} sales",
+        "refundsCount_one": "{{count}} refund",
+        "refundsCount_other": "{{count}} refunds",
+        "shouldHave": "Should have",
+        "youCounted": "You counted",
+        "difference": "Difference",
+        "headerToday": "Today",
+        "headerSales_one": "{{count}} sale",
+        "headerSales_other": "{{count}} sales",
+        "closeDay": "Close {{day}}",
+        "chip": {
+          "open": "Open",
+          "closed_balanced": "Balanced",
+          "closed_short": "Short",
+          "changed_after_close": "Changed",
+          "today": "today"
+        }
+      },
+      "end": {
+        "ofBack_one": "of {{count}} back",
+        "ofBack_other": "of {{count}} back",
+        "good": "Good",
+        "notScanned": "Not scanned",
+        "scanTitle": "Scan leftovers back",
+        "comingBack": "Coming back",
+        "lastScanned": "Last scanned",
+        "backChip": "Back",
+        "whoScans": "This bazar's sellers can scan pieces back. Closing the transfer is for owners and managers.",
+        "notBackYet": "Not back yet · {{count}}",
+        "markLostRow": "Mark lost",
+        "rowLostConfirm": "Mark {{code}} as lost? It will be removed from stock.",
+        "whenClose": "Where the leftovers end up",
+        "what": {
+          "good_one": "{{count}} good piece",
+          "good_other": "{{count}} good pieces",
+          "damaged_one": "{{count}} damaged",
+          "damaged_other": "{{count}} damaged",
+          "lost_one": "{{count}} lost",
+          "lost_other": "{{count}} lost"
+        },
+        "then": {
+          "good": "back in stock",
+          "damaged": "home, set aside as damaged",
+          "lost": "leave your stock, listed in the report"
+        },
+        "egpTotal": "EGP, the whole event",
+        "piecesSold": "pieces sold",
+        "leftOver": "left over",
+        "sellingStopped": "Selling stopped · {{time}}"
+      },
+      "report": {
+        "transferClosed": "transfer closed",
+        "byDay": "Money by day",
+        "splitNote": "How customers paid, the whole event.",
+        "whatSold": "What sold",
+        "whatSoldSub": "sold / taken · EGP",
+        "busiest_one": "Busiest: {{from}}–{{to}} · {{count}} sale",
+        "busiest_other": "Busiest: {{from}}–{{to}} · {{count}} sales",
+        "ended": "Where the {{count}} pieces ended up",
+        "backInStock": "Back in stock",
+        "sellers": "Sellers",
+        "ofPieces": "{{sold}} of {{sent}} pieces",
+        "perDay": "Per day",
+        "avgOfDays_one": "avg of {{count}} day",
+        "avgOfDays_other": "avg of {{count}} days",
+        "discounts": "discounts"
+      }
+    },
     "r1": {
       "overview": {
         "subtitle": "Your pop-up sales, live and past.",

@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Bazar R2 restyle — report, phone Close day, phone End event (2026-11-19; branch `bazar-r2-restyle` off origin/main
+2505aac2; frontend only, no migration, no endpoint; committed, NOT merged).** Appearance only, design/bazar-v2
+(V2_CloseDay*, V2_EndEvent*, V2_Report*). Files: BazarReport.tsx (+ ReportKpis = the dark hero, also the phone end
+summary), CloseDayForm.tsx, Leftovers.tsx, phone/BazarCloseDay.tsx, phone/BazarEndEvent.tsx, new r2/parts.tsx (reuses
+r1/parts.tsx). BazarEventPage / App.tsx / ReturnParts / phone/shared untouched — the desktop full-page Close day and End
+event are R3 (they live in the event page's modal today).
+- Close day: Cash first with the cursor in it (desktop compact too — the only focus change), Card, InstaPay (still one
+  yes/no), the dark difference card, then the Drawer block (opening float / kept for tomorrow / take-home). "Should be"
+  for cash says "includes opening float N". Same state, request and test ids. Phone header: "Today X · N sales" from the
+  days list already loaded. Wrong-day default (today, not the oldest open day) is NOT fixed — U1.
+- End event: "N of M back" + bar + legend, last scanned (this screen's scans only), Not back yet with a per-row "Mark
+  lost" (existing POST mark-lost with that one piece, behind a confirm) + the tick-many path; the dark box lists good /
+  damaged / lost only (no "still looking" — the transfer can't close while anything is out). Scan-back stays the inline
+  CodeEntry (not the safety-critical scanner).
+- Report: hero "62,780 EGP", money by day (revenue, day status), event-wide payment split, what sold, busiest hours
+  (existing chart), where the pieces ended up, sellers (pieces), customers + the existing CSV export, top sizes, money
+  not received. Approved test edit: bazarB5 288 / 306 → "2,400 EGP".
+- Money format exceptions kept because tests pin them (ask before changing): kpi-avg "EGP 600" (bazarB5:308),
+  report-not-received "EGP 70" (bazarB5:309), and the close-day texts ("EGP 118 not received", "Take home EGP …",
+  "EGP 100 over", "Drawer started with EGP …").
+- Strings: `bazar.r2` block first in `bazar` (B6b appends at the end).
+
 **Bazar R1 restyle — overview + New bazar form (2026-11-19; branch `bazar-r1-restyle` off origin/main 18b5946b;
 frontend only, no migration, no endpoint; committed, NOT merged).** Appearance only, design/bazar-v2 (V2_Overview*,
 V2_NewEvent*). Get ready (SetupView / PricesCard) moved to R3 after B6b merges — BazarEventPage / TransferScanOut /
