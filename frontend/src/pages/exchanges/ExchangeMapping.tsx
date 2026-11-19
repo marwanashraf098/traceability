@@ -74,9 +74,6 @@ export default function ExchangeMapping() {
   const [confirmError, setConfirmError] = useState('')
   const [mappedOrderNumber, setMappedOrderNumber] = useState<string | null>(null)
 
-  const defaultOutQty = Math.min(MAX_QTY, Math.max(1, exchange?.outbound_items_count ?? 1))
-  const defaultInQty = Math.min(MAX_QTY, Math.max(1, exchange?.inbound_items_count ?? 1))
-
   useEffect(() => {
     if (!id) return
     // S2 (2026-11-18): the single-exchange read — the old "first 100 of the list" lookup said "not found" for
@@ -132,9 +129,11 @@ export default function ExchangeMapping() {
     if (!id || !ready) return
     setConfirming(true); setConfirmError('')
     try {
-      // One plain item each way, as Bosta counted it → the single-item mapping (unchanged); anything else → map-items.
-      const single = outRows.length === 1 && inRows.length === 1 && !!inRows[0].selected && !inRows[0].unknown
-        && outRows[0].quantity === defaultOutQty && inRows[0].quantity === defaultInQty
+      // The single-item /map only when Bosta counted ONE item each way (S3b) and the screen holds one plain item each
+      // way; anything else — including one row of 2 on a 2-item exchange — goes to map-items (exchange_items rows).
+      const bostaSingle = (exchange?.outbound_items_count ?? 1) === 1 && (exchange?.inbound_items_count ?? 1) === 1
+      const single = bostaSingle && outRows.length === 1 && inRows.length === 1 && !!inRows[0].selected && !inRows[0].unknown
+        && outRows[0].quantity === 1 && inRows[0].quantity === 1
       const result = single
         ? await mapExchange(id, outRows[0].selected!.variant.id, inRows[0].selected!.variant.id)
         : await mapExchangeItems(id,

@@ -64,6 +64,31 @@ public class ExchangeService {
         this.matchService = matchService;
     }
 
+    // S3b: brings a freshly committed exchange leg to Bosta's current state after commit (see ExchangeLegAdvancer).
+    // Setter-injected and lazy: BostaWebhookJob (its implementation) depends on this service.
+    private org.springframework.beans.factory.ObjectProvider<ExchangeLegAdvancer> legAdvancer;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setLegAdvancer(org.springframework.beans.factory.ObjectProvider<ExchangeLegAdvancer> legAdvancer) {
+        this.legAdvancer = legAdvancer;
+    }
+
+    /** After the caller's transaction commits: the new leg follows Bosta's current state (no-op at "Pickup requested"). */
+    private void advanceLegAfterCommit(UUID tenantId, String trackingNumber) {
+        ExchangeLegAdvancer a = legAdvancer == null ? null : legAdvancer.getIfAvailable();
+        if (a == null) return;
+        ShopifyInventoryService.afterCommit(() -> TenantContext.runAs(tenantId, () -> {
+            try {
+                a.advanceAtCommit(tenantId, trackingNumber);
+            } catch (RuntimeException e) {
+                // Never fails the mapping; the next Bosta update for this AWB moves the leg anyway.
+                org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
+                    .warn("Exchange {}: leg not advanced at commit ({})", trackingNumber, e.getClass().getSimpleName());
+            }
+            return null;
+        }));
+    }
+
     // Shared projection for list() and detail() — kept identical so a row looks the same
     // shape whichever endpoint returned it. matched_order_id is the ONLY "mapped order"
     // field here — see class javadoc's labelling guard; outbound_order_id is never
@@ -397,6 +422,7 @@ public class ExchangeService {
      */
     private void linkShadowMulti(UUID exchangeId, UUID tenantId, String trackingNumber, UUID shadow, JsonNode raw) {
         shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
+        advanceLegAfterCommit(tenantId, trackingNumber);
         shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
         List<Map<String, Object>> outLines = jdbc.queryForList(
             "SELECT id, variant_id, quantity FROM order_items WHERE order_id = ? AND tenant_id = ? AND quantity > 0 " +
@@ -837,6 +863,7 @@ public class ExchangeService {
         }
         if (shadow != null && dashboard) {
             shipmentLinkService.linkShadowLeg(shadow, trackingNumber, null);
+            advanceLegAfterCommit(tenantId, trackingNumber);
             shipmentLinkService.populateConsigneePiiFromRaw(shadow, tenantId, raw);
             jdbc.update(
                 "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, " +
@@ -903,6 +930,7 @@ public class ExchangeService {
         // actorUserId=null: no operator is present at map/auto-commit time, same as the
         // webhook auto-matcher's system-initiated links (ShipmentLinkService.tryMatchDelivery()).
         shipmentLinkService.linkAtMapTime(orderId, trackingNumber, null);
+        advanceLegAfterCommit(tenantId, trackingNumber);
 
         // PII — reuse, don't reimplement. Same receiver/dropOffAddress shape
         // ShipmentLinkService already parses for every other Bosta delivery

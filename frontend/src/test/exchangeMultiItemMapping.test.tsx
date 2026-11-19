@@ -172,7 +172,9 @@ describe('Exchange mapping — N rows (S3a)', () => {
     expect((mapItemsBody as { outbound: { quantity: number }[] }).outbound[0].quantity).toBe(3)
   })
 
-  test('n5 one plain item each way, as Bosta counted it → the single-item /map, unchanged', async () => {
+  test('n5 one row each way on a 2-item exchange → map-items with Bosta\'s counts, never the single-item /map (S3b)', async () => {
+    // Bosta counted 2 out / 2 in: one row each way at quantity 2 must still write exchange_items rows. The single-item
+    // /map (one item each way as Bosta counted it) is covered, unchanged, by exchangeMapping.test.tsx.
     const user = userEvent.setup()
     renderScreen()
     const out0 = await screen.findByTestId('exchange-row-outbound-0')
@@ -180,8 +182,11 @@ describe('Exchange mapping — N rows (S3a)', () => {
     await pickCatalog(user, screen.getByTestId('exchange-row-inbound-0'), 'v-black')
     await user.click(screen.getByRole('button', { name: /Confirm mapping/i }))
     await waitFor(() => screen.getByTestId('exchange-mapped-success'))
-    expect(mapBody).toEqual({ outboundVariantId: 'v-beige', inboundVariantId: 'v-black' })
-    expect(mapItemsBody).toBeNull()
+    expect(mapBody).toBeNull()
+    expect(mapItemsBody).toEqual({
+      outbound: [{ variantId: 'v-beige', quantity: 2, descriptionHint: expect.anything() }],
+      inbound: [{ variantId: 'v-black', quantity: 2, descriptionHint: expect.anything() }],
+    })
   })
 })
 

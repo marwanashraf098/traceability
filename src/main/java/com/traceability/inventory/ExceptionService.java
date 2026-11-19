@@ -2217,7 +2217,9 @@ public class ExceptionService {
             "JOIN shipments s ON s.order_id = e.outbound_order_id AND s.shipment_leg = 'forward' " +
             "WHERE e.tenant_id = ? AND s.tenant_id = ? " +
             "  AND s.raw #>> '{state,value}' IS NOT NULL " +
-            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN (" + KNOWN_EXCHANGE_STATES_SQL + ")",
+            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN (" + KNOWN_EXCHANGE_STATES_SQL + ") " +
+            // S3b: a leg only advanced at commit (no Bosta update since) — its state came from the interpreter.
+            "  AND NOT " + ExchangeLegAdvancer.advancedAtCommitOnlySql("s"),
             tid, tid);
     }
 
