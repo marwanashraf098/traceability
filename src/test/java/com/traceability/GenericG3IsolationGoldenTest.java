@@ -181,8 +181,9 @@ class GenericG3IsolationGoldenTest {
         java.time.LocalDate today = java.time.LocalDate.now(com.traceability.analytics.AnalyticsPeriod.CAIRO);
         TenantContext.set(tenant);
 
-        // 1. Pickup session
-        UUID pickup = pickups.openSession(tenant, worker, LocalDate.of(2026, 10, 20), "10:00-13:00", "g3");
+        // 1. Pickup session — its date comes from the scenario's pinned "today" (see pickupDate), never a fixed date.
+        LocalDate pickupDate = pickupDate(today);
+        UUID pickup = pickups.openSession(tenant, worker, pickupDate, "10:00-13:00", "g3");
         Map<String, Object> pk = new LinkedHashMap<>();
         pk.put("01_packedHubPrefix", attempt(() -> pickups.scan(tenant, pickup, worker, "D-07-" + (b + 1))));
         pk.put("02_duplicate",       attempt(() -> pickups.scan(tenant, pickup, worker, String.valueOf(b + 1))));
@@ -268,7 +269,42 @@ class GenericG3IsolationGoldenTest {
 
         String json = mapper.copy().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
             .enable(SerializationFeature.INDENT_OUTPUT).writeValueAsString(out);
+        // Guard: the pickup date is a bare date of its own — no other bare date in the output equals it, so the
+        // stabiliser can never fold it into another value's token.
+        String withoutPickupDate = json.replaceAll("\"scheduledDate\" : \"" + pickupDate + "\"", "\"scheduledDate\" : \"\"");
+        assertThat(java.util.regex.Pattern.compile("(?<![\\d-])" + pickupDate + "(?![T \\d])").matcher(withoutPickupDate).find())
+            .as("another bare date in the output equals the pickup date %s", pickupDate).isFalse();
         return stabilise(json, name, slug);
+    }
+
+    /**
+     * The pickup fixture's date, from the scenario's pinned "today" (2026-11-19 fix). It was LocalDate.of(2026, 10, 20):
+     * the stabiliser gives equal dates one token, so whenever a moving date equalled it every later token shifted —
+     * the analytics range start (today − 29) on 2026-11-18, the previous range's end (today − 30) on 2026-11-19 and its
+     * start (today − 59) on 2026-12-18. Tomorrow is after every analytics date (all ≤ today), so it never collides; the
+     * token it gets is the same as the old date's whenever that one didn't collide, so the golden files are unchanged.
+     */
+    static LocalDate pickupDate(LocalDate today) {
+        return today.plusDays(1);
+    }
+
+    /** The bare dates the analytics part prints for {@code today}: the 30-day range and the previous range
+     *  (AnalyticsSql.previous: same length, ending the day before the range starts). */
+    static Set<LocalDate> analyticsDates(LocalDate today) {
+        LocalDate from = today.minusDays(29), to = today;
+        return Set.of(from, to, from.minusDays(30), from.minusDays(1));
+    }
+
+    @Test
+    void g0_pickupDate_neverCollidesWithAnAnalyticsDate_simulatedDays() {
+        LocalDate oldFixed = LocalDate.of(2026, 10, 20);
+        for (LocalDate day : List.of(LocalDate.of(2026, 11, 18), LocalDate.of(2026, 11, 19), LocalDate.of(2026, 12, 18))) {
+            assertThat(analyticsDates(day)).as("the old fixed date collided on %s", day).contains(oldFixed);
+            assertThat(analyticsDates(day)).as("pickup date on %s", day).doesNotContain(pickupDate(day));
+        }
+        for (LocalDate day = LocalDate.of(2026, 1, 1); day.isBefore(LocalDate.of(2028, 1, 1)); day = day.plusDays(1)) {
+            assertThat(analyticsDates(day)).as("pickup date on %s", day).doesNotContain(pickupDate(day));
+        }
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────────
