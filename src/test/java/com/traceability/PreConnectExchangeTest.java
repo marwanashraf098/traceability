@@ -182,13 +182,15 @@ class PreConnectExchangeTest {
     }
 
     @Test
-    void x4_multiItem_staysOnTheUnlinkedLane_noShopifyCall() {
+    void x4_multiItem_createsExchange_andRunsTheParentImport() {
+        // S3b (approved 2026-11-19): a multi-item exchange gets its exchanges row like a single-item one, so the
+        // pre-connect parent import runs for it too; it never lands on the unlinked lane.
         Shop s = new Shop("x4");
         long ev = process(s.tenant, exchange("3092641690", "#2950:#2950-R1", AFTER, 2, 1));
-        assertThat(note(ev)).isEqualTo("unlinked: 3092641690");
-        assertThat(jdbc.queryForObject("SELECT match_reason FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ?",
-            String.class, s.tenant, "3092641690")).isEqualTo("EXCHANGE_MULTI_ITEM");
-        verify(shopify, never()).findOrdersByName(anyString(), anyString(), anyString());
+        assertThat(note(ev)).isEqualTo("exchange: 3092641690");
+        assertThat(count("SELECT COUNT(*) FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ? " +
+            "AND match_reason = 'EXCHANGE_MULTI_ITEM'", s.tenant, "3092641690")).isZero();
+        verify(shopify, times(1)).findOrdersByName(anyString(), anyString(), eq("2950"));
     }
 
     @Test
