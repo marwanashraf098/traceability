@@ -75,6 +75,8 @@ export interface BazarPriceRow {
 }
 
 export interface BazarSale {
+  /** B6c: 'sale' (a quick sale or a cart line) — a cart in the list is a BazarReceipt. */
+  kind?: 'sale'
   id: string
   sale_number: string
   sold_at: string
@@ -102,11 +104,46 @@ export interface BazarSale {
   exchange_of_sale_number?: string | null
   exchanged_for_sale_id?: string | null
   exchanged_for_sale_number?: string | null
+  /** B6c: a cart line — its receipt, place in it, discount share and what it was paid (price − discount). */
+  receipt_id?: string | null
+  line_no?: number | null
+  discount?: string | number
+  net_price?: string | number
   replayed?: boolean
 }
 
+/** B6c — a completed cart: one B-number, N piece sales, one total, one discount, one payment. */
+export interface BazarReceipt {
+  kind: 'receipt'
+  id: string
+  sale_number: string
+  sold_at: string
+  business_day: string
+  status: 'active' | 'undone'
+  subtotal: string | number
+  discount: string | number
+  total: string | number
+  /** = total, so a list row can show one amount for either kind. */
+  price: string | number
+  method: PaymentMethod | null
+  seller_id: string
+  seller_name: string
+  customer_name: string | null
+  customer_phone: string | null
+  undone_at: string | null
+  line_count: number
+  lines: BazarSale[]
+  replayed?: boolean
+}
+
+export type BazarSaleRow = BazarSale | BazarReceipt
+
+export function isReceipt(r: BazarSaleRow): r is BazarReceipt {
+  return r.kind === 'receipt'
+}
+
 export interface BazarSalesPage {
-  items: BazarSale[]
+  items: BazarSaleRow[]
   next_cursor: string | null
 }
 
@@ -279,12 +316,68 @@ export function setBazarCustomer(eventId: string, saleId: string,
 export interface BazarTodaySummary {
   business_day: string
   total: string | number
+  /** Sales = receipts (a quick sale is its own); pieces = lines (B6c). */
   sale_count: number
+  pieces?: number
+  discounts?: string | number
   returns?: number
   exchanges?: number
   revenue?: string | number
   by_method: Record<string, string | number>
   per_seller: { seller_id: string; seller_name: string; sale_count: number; total: string | number }[]
+}
+
+// ── B6c — cart (any seller role) ──────────────────────────────────────────────
+
+/** A scanned code as a cart line: the piece and its bazar price, or why it can't be sold (nothing is reserved). */
+export interface BazarCartLine {
+  index: number
+  code: string
+  piece_id?: string
+  piece_code?: string | null
+  variant_id?: string
+  product_title?: string
+  variant_title?: string | null
+  price?: string | number
+  error: { code: string; message_en: string; message_ar: string; details?: Record<string, unknown> } | null
+}
+
+export interface BazarCartPreview {
+  lines: BazarCartLine[]
+  subtotal: string | number
+  ok: boolean
+}
+
+export function previewBazarCart(eventId: string, codes: string[]) {
+  return bazarFetch<BazarCartPreview>(`${base(eventId)}/cart/preview`, {
+    method: 'POST', body: JSON.stringify({ codes }),
+  })
+}
+
+export interface BazarCartRequest {
+  codes: string[]
+  discount: number
+  method: PaymentMethod
+  customer: { name: string | null; phone: string | null } | null
+}
+
+/** One attempt (useRetryingCommand re-sends the SAME client_request_id until the server answers). */
+export function completeCartOnce(eventId: string, req: BazarCartRequest, clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarReceipt>(`${base(eventId)}/cart/complete`, {
+    method: 'POST', timeoutMs, body: JSON.stringify({ ...req, client_request_id: clientRequestId }),
+  })
+}
+
+export function undoBazarReceipt(eventId: string, receiptId: string) {
+  return bazarFetch<BazarReceipt>(`${base(eventId)}/receipts/${encodeURIComponent(receiptId)}/undo`, {
+    method: 'POST', body: '{}',
+  })
+}
+
+export function changeBazarReceiptPayment(eventId: string, receiptId: string, method: PaymentMethod) {
+  return bazarFetch<BazarReceipt>(`${base(eventId)}/receipts/${encodeURIComponent(receiptId)}/payment`, {
+    method: 'PUT', body: JSON.stringify({ method }),
+  })
 }
 
 // ── B3 — return / exchange (any seller role) ──────────────────────────────────
@@ -508,6 +601,10 @@ export interface BazarReport {
   /** 0..1, null when nothing was sent. */
   sell_through: Money2 | null
   average_sale: Money2 | null
+  /** B6c: sales = receipts (a quick sale is its own); average_sale = revenue ÷ sales. */
+  sales?: number
+  /** B6c: cart discounts on the pieces still sold. */
+  discounts?: Money2
   returns: number
   exchanges: number
   sales_by_day: { business_day: string; day_number: number; sales: number; revenue: Money2; money_in: Money2;
@@ -554,7 +651,7 @@ export function listBazarSales(eventId: string, limit = 50, cursor?: string | nu
 }
 
 /** The newest sales of {@code businessDay} (one page) — the Sell screen's recent list, not its totals. */
-export async function listRecentBazarSales(eventId: string, businessDay: string, limit = 20): Promise<BazarSale[]> {
+export async function listRecentBazarSales(eventId: string, businessDay: string, limit = 20): Promise<BazarSaleRow[]> {
   const page = await listBazarSales(eventId, limit)
   return page.items.filter(s => s.business_day === businessDay)
 }

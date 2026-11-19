@@ -84,7 +84,18 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
     case 'BAZAR_NOT_ENABLED':
       return { title: t('bazar.sellError.eventGone') }
     case 'BAZAR_UNDO_NOT_ALLOWED':
+      // B6c: a cart line is undone / re-paid through its cart.
+      if (d.receipt_id) {
+        return { title: t('bazar.sellError.cartLine'),
+                 detail: t('bazar.sellError.cartLineDetail', { number: String(d.sale_number ?? '') }) }
+      }
+      // A cart with a returned piece: the server says so.
+      if (e.messageEn.includes('cart')) return { title: t('bazar.sellError.undoNotAllowed'), detail: e.message_(lang) }
       return { title: t('bazar.sellError.undoNotAllowed') }
+    case 'BAZAR_CART_DUPLICATE_PIECE':
+      return { title: t('bazar.sellError.cartDuplicate') }
+    case 'BAZAR_INVALID_DISCOUNT':
+      return { title: t('bazar.sellError.invalidDiscount'), detail: t('bazar.sellError.invalidDiscountDetail') }
     case 'BAZAR_SALE_UNDONE':
       return { title: t('bazar.sellError.saleUndone') }
     case 'BAZAR_INVALID_PHONE':

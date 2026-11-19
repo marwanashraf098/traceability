@@ -3603,8 +3603,8 @@ class RlsCoverageTest {
             "variant_id, price, price_source, sale_number, sold_by, business_day, client_request_id) " +
             "VALUES (?, ?, ?, ?, ?, 100, 'override', 900001, ?, current_date, 'cvg-sale-1') RETURNING id",
             UUID.class, tenantId, eventId, tpId, pieceId, variantId, ownerUserId);
-        jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by) " +
-            "VALUES (?, ?, 'cash', 100, 'payment', ?)", tenantId, saleId, ownerUserId);
+        jdbc.update("INSERT INTO bazar_payments (tenant_id, event_id, sale_id, method, amount, kind, created_by) " +
+            "VALUES (?, ?, ?, 'cash', 100, 'payment', ?)", tenantId, eventId, saleId, ownerUserId);
         try {
             ResponseEntity<Map> sales = get("/api/v1/bazar-events/" + eventId + "/sales", Map.class);
             assertThat(sales.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -3652,8 +3652,8 @@ class RlsCoverageTest {
             "variant_id, price, price_source, sale_number, sold_by, business_day, client_request_id) " +
             "VALUES (?, ?, ?, ?, ?, 100, 'override', 900002, ?, (now() AT TIME ZONE 'Africa/Cairo')::date, 'cvg-today-1') RETURNING id",
             UUID.class, tenantId, eventId, tpId, pieceId, variantId, ownerUserId);
-        jdbc.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by) " +
-            "VALUES (?, ?, 'cash', 100, 'payment', ?)", tenantId, saleId, ownerUserId);
+        jdbc.update("INSERT INTO bazar_payments (tenant_id, event_id, sale_id, method, amount, kind, created_by) " +
+            "VALUES (?, ?, ?, 'cash', 100, 'payment', ?)", tenantId, eventId, saleId, ownerUserId);
         try {
             ResponseEntity<Map> today = get("/api/v1/bazar-events/" + eventId + "/today", Map.class);
             assertThat(today.getStatusCode()).isEqualTo(HttpStatus.OK);

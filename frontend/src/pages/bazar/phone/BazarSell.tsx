@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ArrowRight, Camera, CameraOff, Keyboard, Loader2, WifiOff } from 'lucide-react'
 import { useScanner, MAX_QUEUED_SCANS } from '../../../hooks/useScanner'
 import CameraReader, { type CameraError } from '../../scanpair/CameraReader'
-import { BazarError, defaultMethod, orderedMethods, undoBazarSale, type BazarSale } from '../../../bazar/api'
+import {
+  BazarError, defaultMethod, isReceipt, orderedMethods, undoBazarSale,
+  type BazarReceipt, type BazarSale, type BazarSaleRow,
+} from '../../../bazar/api'
 import { sellTiming, useQuickSell, type SellCard } from '../../../bazar/useQuickSell'
 import { formatMoney, pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
 import { cn } from '../../../components/ui'
@@ -14,11 +17,26 @@ import { PhoneTabs } from './ReturnParts'
 import {
   CustomerSheet, ErrorLine, MethodChips, SaleBadge, SaleSheet, canEditSale, canUndoSale, usePaymentChange,
 } from './SaleSheets'
+import { CartPanel, ReceiptSheet, useCart } from './CartMode'
+
+type Mode = 'quick' | 'cart'
+
+/** The seller's last mode on this phone, per event (a convenience: storage may be unavailable). */
+function savedMode(eventId: string): Mode {
+  try { return sessionStorage.getItem(`bazar-sell-mode:${eventId}`) === 'cart' ? 'cart' : 'quick' } catch { return 'quick' }
+}
+function saveMode(eventId: string, m: Mode) {
+  try { sessionStorage.setItem(`bazar-sell-mode:${eventId}`, m) } catch { /* private mode */ }
+}
 
 /** The camera reports the same code many times a second: one read per code per 2 s (ScanPairPage's rule). */
 const DUPLICATE_MS = 2_000
 
-/** Bazar POS B6 — QUICK MODE (mockup step 6): every scan is a sale. Full-screen, phone-first. */
+/**
+ * Bazar POS B6 — QUICK MODE (mockup step 6): every scan is a sale. B6c — CART MODE (step 6c): scan several pieces,
+ * one discount, one method, one customer, Complete. Quick is the default; the switch sits under the tabs.
+ * Full-screen, phone-first; on a computer the cart's summary sits beside its list.
+ */
 export default function BazarSell() {
   const { id } = useParams<{ id: string }>()
   const { loading, live } = useBazarLive(id)
@@ -35,15 +53,19 @@ function Sell({ live }: { live: BazarLive }) {
   const { sales, setSales, reload } = useTodaySales(eventId, live.businessDay)
   const { today, reload: reloadToday } = useBazarToday(eventId)
 
-  const upsert = useCallback((s: BazarSale) => {
+  const upsert = useCallback((s: BazarSaleRow) => {
     setSales(prev => {
       const list = prev ?? []
       return list.some(x => x.id === s.id) ? list.map(x => (x.id === s.id ? s : x)) : [s, ...list]
     })
   }, [setSales])
+  const [mode, setModeState] = useState<Mode>(() => savedMode(eventId))
+  const setMode = (m: Mode) => { setModeState(m); saveMode(eventId, m) }
+  const cart = useCart(eventId)
 
   const quick = useQuickSell({ eventId, method, onSold: s => { upsert(s); reload(); reloadToday() } })
-  const [sheet, setSheet] = useState<{ kind: 'sale' | 'customer'; sale: BazarSale } | null>(null)
+  const [sheet, setSheet] = useState<
+    { kind: 'sale' | 'customer'; sale: BazarSale } | { kind: 'receipt'; receipt: BazarReceipt } | null>(null)
   const [typing, setTyping] = useState(false)
   const [cameraOn, setCameraOn] = useState(true)
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
@@ -51,6 +73,7 @@ function Sell({ live }: { live: BazarLive }) {
 
   const changed = useCallback((s: BazarSale) => { upsert(s); quick.updateSale(s); reloadToday() },
     [upsert, quick, reloadToday])
+  const receiptChanged = useCallback((r: BazarReceipt) => { upsert(r); reloadToday() }, [upsert, reloadToday])
 
   const scanner = useScanner({
     onScan: quick.sell,
@@ -61,6 +84,12 @@ function Sell({ live }: { live: BazarLive }) {
   const submit = useCallback((raw: string) => {
     const code = raw.trim()
     if (!code) return
+    if (mode === 'cart') {
+      // Cart: the code joins the list — nothing is sold until Complete.
+      cart.add(code)
+      if (scanner.inputRef.current) scanner.inputRef.current.value = ''
+      return
+    }
     if (scanner.pending >= MAX_QUEUED_SCANS) { scanner.handleScan(code); return }   // refused loudly by the scanner
     if (!quick.enqueue(code)) {
       if (scanner.inputRef.current) scanner.inputRef.current.value = ''
@@ -69,7 +98,7 @@ function Sell({ live }: { live: BazarLive }) {
     }
     setDropped(null)
     scanner.handleScan(code)
-  }, [scanner, quick])
+  }, [scanner, quick, mode, cart])
 
   const lastRead = useRef<{ code: string; at: number } | null>(null)
   const onCameraRead = useCallback((raw: string) => {
@@ -83,10 +112,62 @@ function Sell({ live }: { live: BazarLive }) {
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
 
   const recent = (sales ?? []).slice(0, 20)
+  const scanBlock = (
+    <>
+        {/* The phone's camera is its scanner (no pairing). */}
+        <div className="relative h-44 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
+          {cameraOn && !cameraError
+            ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
+            : (
+              <p className="w-full px-6 text-center text-small text-[#D1D5DB]">
+                {cameraError ? t(`bazar.sell.camera.${cameraError}`) : t('bazar.sell.camera.off')}
+              </p>
+            )}
+          <span className="absolute bottom-2 inset-x-0 text-center text-small text-[#D1D5DB] pointer-events-none">
+            {mode === 'cart' ? t('bazar.cart.scanHint') : t('bazar.sell.scanHint')}
+          </span>
+          <button type="button" onClick={() => { setCameraError(null); setCameraOn(v => !v) }}
+            aria-label={cameraOn ? t('bazar.sell.cameraOff') : t('bazar.sell.cameraOn')}
+            className="absolute top-2 end-2 w-11 h-11 rounded-full bg-black/55 text-white flex items-center justify-center">
+            {cameraOn ? <CameraOff size={18} /> : <Camera size={18} />}
+          </button>
+        </div>
+
+        {/* HID scanner / typed code: the one scan input. It opens no keyboard until "Type a code". */}
+        <div className="flex items-center gap-2">
+          <input
+            ref={scanner.inputRef}
+            type="text"
+            inputMode={typing ? 'text' : 'none'}
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            dir="auto"
+            aria-label={t('bazar.sell.codeLabel')}
+            placeholder={typing ? t('bazar.sell.typePlaceholder') : t('bazar.sell.hidPlaceholder')}
+            className={cn('input w-full font-mono placeholder:font-sans', typing ? 'h-11 text-body-lg' : 'h-10 text-small')}
+            onKeyDown={e => { if (e.key === 'Enter') submit((e.target as HTMLInputElement).value) }}
+            data-testid="bazar-scan-input"
+          />
+          <button type="button" onClick={() => {
+            const next = !typing
+            setTyping(next)
+            if (next) setTimeout(() => scanner.inputRef.current?.focus(), 0)
+          }} aria-pressed={typing}
+            className={cn('h-11 px-3 rounded-lg border border-line flex items-center gap-1.5 text-small font-semibold shrink-0',
+              typing ? 'bg-trace-blue text-white border-trace-blue' : 'bg-surface text-primary')}>
+            <Keyboard size={16} aria-hidden />{t('bazar.sell.typeCode')}
+          </button>
+        </div>
+        {dropped && <p className="text-small text-muted" role="status">{t('bazar.sell.alreadySending', { code: dropped })}</p>}
+        {scanner.queueFull && <p className="text-small text-critical" role="alert">{t('bazar.sell.queueFull')}</p>}
+        {scanner.pending > 0 && <p className="text-small text-muted">{t('bazar.sell.waiting', { count: scanner.pending })}</p>}
+    </>
+  )
   const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
 
   return (
-    <PhoneFrame testId="bazar-sell" header={
+    <PhoneFrame testId="bazar-sell" wide={mode === 'cart'} header={
       <>
       <div className="flex items-center justify-between gap-3">
         <button type="button" onClick={() => navigate(`/bazar/${encodeURIComponent(eventId)}/home`)}
@@ -98,6 +179,7 @@ function Sell({ live }: { live: BazarLive }) {
         </span>
       </div>
       <PhoneTabs eventId={eventId} active="sell" />
+      <ModeSwitch mode={mode} onChange={setMode} />
       </>
     } footer={
       <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3"
@@ -112,63 +194,38 @@ function Sell({ live }: { live: BazarLive }) {
         </span>
       </footer>
     }>
-      {/* The phone's camera is its scanner (no pairing). */}
-      <div className="relative h-44 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
-        {cameraOn && !cameraError
-          ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
-          : (
-            <p className="w-full px-6 text-center text-small text-[#D1D5DB]">
-              {cameraError ? t(`bazar.sell.camera.${cameraError}`) : t('bazar.sell.camera.off')}
-            </p>
-          )}
-        <span className="absolute bottom-2 inset-x-0 text-center text-small text-[#D1D5DB] pointer-events-none">
-          {t('bazar.sell.scanHint')}
-        </span>
-        <button type="button" onClick={() => { setCameraError(null); setCameraOn(v => !v) }}
-          aria-label={cameraOn ? t('bazar.sell.cameraOff') : t('bazar.sell.cameraOn')}
-          className="absolute top-2 end-2 w-11 h-11 rounded-full bg-black/55 text-white flex items-center justify-center">
-          {cameraOn ? <CameraOff size={18} /> : <Camera size={18} />}
-        </button>
-      </div>
-
-      {/* HID scanner / typed code: the one scan input. It opens no keyboard until "Type a code". */}
-      <div className="flex items-center gap-2">
-        <input
-          ref={scanner.inputRef}
-          type="text"
-          inputMode={typing ? 'text' : 'none'}
-          autoComplete="off"
-          autoCapitalize="characters"
-          spellCheck={false}
-          dir="auto"
-          aria-label={t('bazar.sell.codeLabel')}
-          placeholder={typing ? t('bazar.sell.typePlaceholder') : t('bazar.sell.hidPlaceholder')}
-          className={cn('input w-full font-mono placeholder:font-sans', typing ? 'h-11 text-body-lg' : 'h-10 text-small')}
-          onKeyDown={e => { if (e.key === 'Enter') submit((e.target as HTMLInputElement).value) }}
-          data-testid="bazar-scan-input"
-        />
-        <button type="button" onClick={() => {
-          const next = !typing
-          setTyping(next)
-          if (next) setTimeout(() => scanner.inputRef.current?.focus(), 0)
-        }} aria-pressed={typing}
-          className={cn('h-11 px-3 rounded-lg border border-line flex items-center gap-1.5 text-small font-semibold shrink-0',
-            typing ? 'bg-trace-blue text-white border-trace-blue' : 'bg-surface text-primary')}>
-          <Keyboard size={16} aria-hidden />{t('bazar.sell.typeCode')}
-        </button>
-      </div>
-      {dropped && <p className="text-small text-muted" role="status">{t('bazar.sell.alreadySending', { code: dropped })}</p>}
-      {scanner.queueFull && <p className="text-small text-critical" role="alert">{t('bazar.sell.queueFull')}</p>}
-      {scanner.pending > 0 && <p className="text-small text-muted">{t('bazar.sell.waiting', { count: scanner.pending })}</p>}
-
-      <StatusCard card={quick.card} eventId={eventId} methods={methods}
-        onChanged={changed} onCustomer={s => setSheet({ kind: 'customer', sale: s })} />
+      {mode === 'cart' ? (
+        <CartPanel eventId={eventId} cart={cart} methods={methods} defaultMethod={method} scanner={scanBlock}
+          onCompleted={r => { upsert(r); reload(); reloadToday() }} onChanged={receiptChanged} />
+      ) : (
+        <>
+          {scanBlock}
+          <StatusCard card={quick.card} eventId={eventId} methods={methods}
+            onChanged={changed} onCustomer={s => setSheet({ kind: 'customer', sale: s })} />
+        </>
+      )}
 
       <section className="flex flex-col gap-1.5 min-h-0" aria-label={t('bazar.sell.recent')}>
         <span className="text-small font-medium text-muted">{t('bazar.sell.recent')}</span>
         {sales && recent.length === 0 && <p className="text-small text-muted">{t('bazar.sell.noSales')}</p>}
         <ul className="flex flex-col gap-1.5" data-testid="bazar-recent">
-          {recent.map(s => (
+          {recent.map(s => isReceipt(s) ? (
+            <li key={s.id}>
+              <button type="button" onClick={() => setSheet({ kind: 'receipt', receipt: s })} data-testid="recent-receipt"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-line bg-surface text-start min-h-[44px]">
+                <span className="font-mono text-small text-muted w-11 shrink-0" dir="ltr">{saleTime(s.sold_at)}</span>
+                <span className={cn('flex-1 min-w-0 truncate font-medium', s.status !== 'active' && 'line-through text-muted')}>
+                  {t('bazar.cart.row', { count: s.line_count })}
+                </span>
+                {s.status === 'undone'
+                  ? <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t('bazar.sell.undoneShort')}</span>
+                  : s.method && <span className="badge border bg-muted/[0.14] text-neutral-text border-muted/[0.30]">{t(`bazar.method.${s.method}`)}</span>}
+                <span className={cn('font-semibold tabular-nums shrink-0', s.status !== 'active' && 'line-through text-muted')}>
+                  {formatMoney(s.total).replace(/^EGP /, '')}
+                </span>
+              </button>
+            </li>
+          ) : (
             <li key={s.id}>
               <button type="button" onClick={() => setSheet({ kind: 'sale', sale: s })}
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-line bg-surface text-start min-h-[44px]">
@@ -188,10 +245,15 @@ function Sell({ live }: { live: BazarLive }) {
 
       {sheet?.kind === 'sale' && (
         <SaleSheet eventId={eventId} sale={sheet.sale} methods={methods} onChanged={changed}
-                   onClose={() => setSheet(null)} />
+                   onClose={() => setSheet(null)} onScanBurst={submit} />
+      )}
+      {sheet?.kind === 'receipt' && (
+        <ReceiptSheet eventId={eventId} receipt={sheet.receipt} methods={methods} onChanged={receiptChanged}
+                      onClose={() => setSheet(null)} onScanBurst={submit} />
       )}
       {sheet?.kind === 'customer' && (
-        <CustomerSheet eventId={eventId} sale={sheet.sale} onSaved={changed} onClose={() => setSheet(null)} />
+        <CustomerSheet eventId={eventId} sale={sheet.sale} onSaved={changed} onClose={() => setSheet(null)}
+                       onScanBurst={submit} />
       )}
     </PhoneFrame>
   )
@@ -314,5 +376,22 @@ function StatusCard({ card, eventId, methods, onChanged, onCustomer }: {
       </div>
       {undoError && <div className="rounded-md bg-white px-2 py-1"><ErrorLine error={undoError} /></div>}
     </section>
+  )
+}
+
+/** Quick (every scan is a sale) / Cart (several pieces, one total). */
+function ModeSwitch({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+  const { t } = useTranslation()
+  return (
+    <div role="radiogroup" aria-label={t('bazar.cart.mode')} data-testid="bazar-mode-switch"
+         className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-white/10">
+      {(['quick', 'cart'] as const).map(m => (
+        <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => onChange(m)}
+          className={cn('h-9 rounded-lg text-small font-semibold transition-colors',
+            mode === m ? 'bg-white text-primary' : 'text-sidebar-text hover:text-sidebar-active')}>
+          {t(`bazar.cart.${m}`)}
+        </button>
+      ))}
+    </div>
   )
 }

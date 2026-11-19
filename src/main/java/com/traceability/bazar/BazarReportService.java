@@ -56,7 +56,9 @@ public class BazarReportService {
         Map<String, Object> left = end.leftovers(tenantId, ev);
         Map<String, Object> counts = (Map<String, Object>) left.get("counts");
         int sent = (Integer) counts.get("sent");
-        int sold = (Integer) totals.get("sales");
+        // B6c: pieces = lines (a cart's pieces each count); a sale = a receipt (a quick sale is its own).
+        int sold = (Integer) totals.get("pieces");
+        int salesCount = (Integer) totals.get("sales");
         BigDecimal revenue = (BigDecimal) totals.get("revenue");
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -76,7 +78,10 @@ public class BazarReportService {
         out.put("pieces_sold", sold);
         out.put("pieces_sent", sent);
         out.put("sell_through", ratio(sold, sent));
-        out.put("average_sale", sold == 0 ? null : revenue.divide(BigDecimal.valueOf(sold), 2, RoundingMode.HALF_UP));
+        out.put("sales", salesCount);
+        out.put("average_sale", salesCount == 0 ? null
+            : revenue.divide(BigDecimal.valueOf(salesCount), 2, RoundingMode.HALF_UP));
+        out.put("discounts", totals.get("discounts"));
         out.put("returns", totals.get("returns"));
         out.put("exchanges", totals.get("exchanges"));
 
@@ -95,10 +100,11 @@ public class BazarReportService {
         }
         out.put("sales_by_day", byDay);
 
-        // Busiest hours: every sale made (undone ones never happened), by its Cairo hour, all days together.
+        // Busiest hours: every sale made (undone ones never happened; a cart is one sale), by its Cairo hour, all days.
         int[] hours = new int[24];
         for (Map<String, Object> r : jdbc.queryForList(
-                "SELECT EXTRACT(HOUR FROM s.sold_at AT TIME ZONE 'Africa/Cairo')::int AS h, COUNT(*) AS n " +
+                "SELECT EXTRACT(HOUR FROM s.sold_at AT TIME ZONE 'Africa/Cairo')::int AS h, " +
+                "       COUNT(DISTINCT COALESCE(s.receipt_id, s.id)) AS n " +
                 "FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status <> 'undone' GROUP BY 1",
                 eventId, tenantId)) {
             hours[((Number) r.get("h")).intValue()] = ((Number) r.get("n")).intValue();
@@ -134,9 +140,9 @@ public class BazarReportService {
 
         List<Map<String, Object>> sellers = new ArrayList<>();
         for (Map<String, Object> r : jdbc.queryForList(
-                "SELECT u.name, COUNT(*) AS pieces, SUM(s.price) AS total FROM bazar_sales s JOIN users u ON u.id = s.sold_by " +
-                "WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' " +
-                "GROUP BY s.sold_by, u.name ORDER BY SUM(s.price) DESC, u.name", eventId, tenantId)) {
+                "SELECT u.name, COUNT(*) AS pieces, SUM(s.net_price) AS total FROM bazar_sales s " +
+                "JOIN users u ON u.id = s.sold_by WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' " +
+                "GROUP BY s.sold_by, u.name ORDER BY SUM(s.net_price) DESC, u.name", eventId, tenantId)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("seller_name", r.get("name"));
             row.put("pieces", ((Number) r.get("pieces")).intValue());
@@ -169,7 +175,7 @@ public class BazarReportService {
                 "WITH sent AS (SELECT " + key + " AS k, COUNT(*) AS n FROM transfer_pieces tp " +
                 "  JOIN pieces p ON p.id = tp.piece_id JOIN variants v ON v.id = p.variant_id " +
                 "  JOIN products pr ON pr.id = v.product_id WHERE tp.transfer_id = ? AND tp.tenant_id = ? GROUP BY 1), " +
-                "sold AS (SELECT " + key + " AS k, COUNT(*) AS n, SUM(s.price) AS total FROM bazar_sales s " +
+                "sold AS (SELECT " + key + " AS k, COUNT(*) AS n, SUM(s.net_price) AS total FROM bazar_sales s " +
                 "  JOIN variants v ON v.id = s.variant_id JOIN products pr ON pr.id = v.product_id " +
                 "  WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' GROUP BY 1) " +
                 "SELECT sold.k, sold.n AS sold, sold.total, COALESCE(sent.n, 0) AS sent, pr.title AS product_title, " +
@@ -231,7 +237,7 @@ public class BazarReportService {
             "SELECT (array_agg(s.customer_name ORDER BY s.sold_at DESC) FILTER (WHERE s.customer_name IS NOT NULL))[1] AS name, " +
             "       max(s.customer_phone) AS phone, " +
             "       COUNT(*) FILTER (WHERE s.status = 'active') AS pieces, " +
-            "       COALESCE(SUM(s.price) FILTER (WHERE s.status = 'active'), 0) AS total, max(s.sold_at) AS last_visit " +
+            "       COALESCE(SUM(s.net_price) FILTER (WHERE s.status = 'active'), 0) AS total, max(s.sold_at) AS last_visit " +
             "FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status <> 'undone' " +
             "  AND (s.customer_phone IS NOT NULL OR s.customer_name IS NOT NULL) " +
             "GROUP BY " + CUSTOMER_KEY + " ORDER BY 4 DESC, 5 DESC", eventId, tenantId);

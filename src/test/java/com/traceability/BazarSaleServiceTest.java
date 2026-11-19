@@ -706,8 +706,8 @@ class BazarSaleServiceTest {
                 () -> tx.execute(s -> app.update(sql, saleId)), sql);
         }
         // Positive control: app_user CAN insert a payment row for its own tenant (append works).
-        tx.execute(s -> app.update("INSERT INTO bazar_payments (tenant_id, sale_id, method, amount, kind, created_by) " +
-            "VALUES (?, ?, 'cash', 1, 'refund', ?)", tenantId, saleId, ownerId));
+        tx.execute(s -> app.update("INSERT INTO bazar_payments (tenant_id, event_id, sale_id, method, amount, kind, " +
+            "created_by) VALUES (?, ?, ?, 'cash', 1, 'refund', ?)", tenantId, f.eventId(), saleId, ownerId));
         assertThat(payments(saleId)).hasSize(2);
         assertThat(jdbc.queryForObject("SELECT amount FROM bazar_payments WHERE sale_id = ? AND kind = 'payment'",
             BigDecimal.class, saleId)).isEqualByComparingTo("349.00");

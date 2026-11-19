@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { loadCapabilities, type BazarLive } from '../../../capabilities'
 import { getRoleFromToken } from '../../../api'
-import { getBazarToday, listRecentBazarSales, type BazarSale, type BazarTodaySummary } from '../../../bazar/api'
+import { getBazarToday, listRecentBazarSales, type BazarSaleRow, type BazarTodaySummary } from '../../../bazar/api'
 import { Button, Spinner, cn } from '../../../components/ui'
 import { Logo } from '../../../components/Logo'
 import { liveLabel } from '../../../bazar/format'
@@ -25,7 +25,7 @@ export function useBazarLive(eventId: string | undefined): { loading: boolean; l
 
 /** The newest sales of today (one page), reloaded on demand and every 30 s (other sellers' sales). */
 export function useTodaySales(eventId: string, businessDay: string) {
-  const [sales, setSales] = useState<BazarSale[] | null>(null)
+  const [sales, setSales] = useState<BazarSaleRow[] | null>(null)
   const [failed, setFailed] = useState(false)
   const reload = useCallback(() => {
     return listRecentBazarSales(eventId, businessDay)
@@ -60,15 +60,17 @@ export function restOfTracedPath(): string {
 }
 
 /** The phone screens' full-screen frame: 480 px column, dark header (the sidebar palette, as in the mockup). */
-export function PhoneFrame({ header, children, footer, testId }: {
+export function PhoneFrame({ header, children, footer, testId, wide }: {
   header: ReactNode
   children: ReactNode
   footer?: ReactNode
   testId?: string
+  /** B6c cart: on a computer the frame widens so the cart's summary sits beside its list. */
+  wide?: boolean
 }) {
   return (
     <div className="min-h-[100dvh] bg-base flex justify-center" data-testid={testId}>
-      <div className="w-full max-w-[480px] min-h-[100dvh] flex flex-col bg-base">
+      <div className={cn('w-full max-w-[480px] min-h-[100dvh] flex flex-col bg-base', wide && 'lg:max-w-[1100px]')}>
         <header className="bg-sidebar px-4 py-3 flex flex-col gap-2">{header}</header>
         <main className="flex-1 flex flex-col gap-3 px-4 py-4 min-h-0">{children}</main>
         {footer}

@@ -6,6 +6,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -61,6 +62,37 @@ public class BazarSalesController {
         return sales.changePayment(eventId, saleId, req.method(), actor(principal));
     }
 
+    /** B6c: what each scanned code would be as a cart line (read-only — nothing is sold or reserved). */
+    @PostMapping("/cart/preview")
+    public Map<String, Object> cartPreview(@PathVariable UUID eventId, @RequestBody CartPreviewRequest req,
+                                           @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.previewCart(eventId, req == null ? null : req.codes(), actor(principal));
+    }
+
+    /** B6c: sell every piece of the cart in one transaction, or none. */
+    @PostMapping("/cart/complete")
+    public Map<String, Object> cartComplete(@PathVariable UUID eventId, @RequestBody CartCompleteRequest req,
+                                            @AuthenticationPrincipal CustomUserDetails principal) {
+        CartCustomer c = req.customer();
+        return sales.completeCart(eventId, req.codes(), req.discount(), req.method(),
+            c == null ? null : c.name(), c == null ? null : c.phone(), req.clientRequestId(), actor(principal));
+    }
+
+    /** B6c: undo a whole cart. */
+    @PostMapping("/receipts/{receiptId}/undo")
+    public Map<String, Object> undoReceipt(@PathVariable UUID eventId, @PathVariable UUID receiptId,
+                                           @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.undoReceipt(eventId, receiptId, actor(principal));
+    }
+
+    /** B6c: change how a whole cart was paid. */
+    @PutMapping("/receipts/{receiptId}/payment")
+    public Map<String, Object> receiptPayment(@PathVariable UUID eventId, @PathVariable UUID receiptId,
+                                              @RequestBody PaymentRequest req,
+                                              @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.changeReceiptPayment(eventId, receiptId, req.method(), actor(principal));
+    }
+
     @PutMapping("/sales/{saleId}/customer")
     public Map<String, Object> customer(@PathVariable UUID eventId, @PathVariable UUID saleId,
                                         @RequestBody com.fasterxml.jackson.databind.JsonNode req,
@@ -110,6 +142,17 @@ public class BazarSalesController {
                               String method) {}
 
     public record PaymentRequest(String method) {}
+
+    public record CartPreviewRequest(List<String> codes) {}
+
+    public record CartCustomer(String name, String phone) {}
+
+    /** discount: whole pounds (≥ 0, ≤ the cart's total). method: default cash. customer: optional. */
+    public record CartCompleteRequest(List<String> codes, java.math.BigDecimal discount, String method,
+                                      CartCustomer customer,
+                                      @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
+                                      @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")
+                                      String clientRequestId) {}
 
     /** condition: good | damaged (required). method: optional — default the method the customer paid with. */
     public record ReturnRequest(String code, String method, String condition,
