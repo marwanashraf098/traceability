@@ -9,6 +9,7 @@ import {
   ComingSoonSheet, LivePill, NotLiveScreen, PhoneBrandRow, PhoneFrame, restOfTracedPath, useBazarLive, useBazarToday,
 } from './shared'
 import type { BazarLive } from '../../../capabilities'
+import { BazarMenu } from './BazarMenu'
 
 /** Bazar POS B6 — the phone's landing on a live bazar (mockup step 5). Full-screen, every seller role. */
 export default function BazarPhoneHome() {
@@ -34,7 +35,7 @@ function Home({ live }: { live: BazarLive }) {
   return (
     <PhoneFrame testId="bazar-phone-home" header={
       <>
-        <PhoneBrandRow />
+        <PhoneBrandRow end={<BazarMenu eventId={live.eventId} />} />
         <LivePill live={live} />
         <h1 className="text-h4 text-sidebar-active">{live.name}</h1>
       </>

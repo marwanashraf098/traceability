@@ -28,19 +28,20 @@ public final class Bazar {
 
     /**
      * B6 — GET /me's {@code bazarLive}: the tenant's live bazar event the caller may sell at (their role is in the
-     * event's {@code seller_roles}), else null. Several live events (one per location) → the most recently started.
+     * event's {@code seller_roles}) and wasn't removed from (B6b), else null. Several live events (one per location) → the most recently started.
      * {@code day} / {@code dayCount}: which day of the event today (Africa/Cairo) is; {@code businessDay}: today's
      * Cairo date (the phone filters "today's" sales by it); {@code paymentMethods}: the event's enabled methods
      * (a worker can't read the event itself — the sell screen's method chips come from here).
      */
-    public static Map<String, Object> liveFor(JdbcTemplate jdbc, UUID tenantId, String role) {
+    public static Map<String, Object> liveFor(JdbcTemplate jdbc, UUID tenantId, UUID userId, String role) {
         if (role == null) return null;
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT e.id, e.name, e.starts_on, e.ends_on, e.payment_methods, " +
             "       ((now() AT TIME ZONE 'Africa/Cairo')::date)::text AS business_day " +
             "FROM bazar_events e WHERE e.tenant_id = ? AND e.status = 'live' AND ? = ANY (e.seller_roles) " +
+            "  AND NOT " + BazarSellers.REMOVED_FROM_E_SQL + " " +
             "ORDER BY e.started_at DESC NULLS LAST, e.created_at DESC, e.id DESC LIMIT 1",
-            tenantId, role.toLowerCase());
+            tenantId, role.toLowerCase(), userId);
         if (rows.isEmpty()) return null;
         Map<String, Object> r = rows.get(0);
         LocalDate start = ((java.sql.Date) r.get("starts_on")).toLocalDate();

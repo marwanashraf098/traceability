@@ -24,6 +24,33 @@ BazarScanOut / App.tsx untouched.
   components; ui.tsx untouched. Money LTR + Latin digits; Arabic date ranges NOT forced LTR (reading order).
 - Next: R2 (close day / end event / report) and R3 (Get ready, live event page, return / exchange) after B6b.
 
+**Bazar POS B6b — seller invites: WhatsApp link + PIN (2026-11-19; branch `feat/bazar-b6b` from main 9ddee4e2; V238;
+BUILT, pushed, NOT merged — awaiting review; not deployed).** **Data (V238):** `bazar_event_sellers` (one row per event +
+worker; Remove stamps removed_at / removed_by, never deleted; re-adding clears it) and `bazar_seller_invites` (append-only:
+one row per link — who invited whom, when, until when; token_hash = the magic_link_tokens hash; also the rate limit).
+**Rules:** owner / manager only (`BazarSellerService`, `BazarSellersController`): Add seller = a NEW worker (name + optional
+phone, `pin_code` NULL) or an existing ACTIVE WORKER (an owner / manager → 409 BAZAR_NOT_A_WORKER; the request has no role).
+Link = `MagicLinkService.issueSellerInviteLink` — the one approved extra link-returning issuer (CLAUDE.md, s6): 24 h,
+single use, bound to user + tenant, audit `bazar_seller_invite`, ≤ 30 per tenant per rolling hour (429
+BAZAR_INVITE_RATE_LIMITED, per-tenant advisory lock). Opened at `GET /auth/seller-invite` (permitAll) → hatch #6
+`consume_magic_link` (no new hatch) → 30-day refresh cookie → `/bazar/join/{eventId}`; expired / used / unknown, or the
+seller was removed (their tokens revoked again) → `/bazar/invite-expired`. PIN: `POST /bazar-sellers/me/pin` — 4 digits,
+only while NULL (409 BAZAR_PIN_ALREADY_SET after), only a non-removed seller of some event; a plain app_user UPDATE under
+RLS (app_user has UPDATE on users.pin_code — checked). Who sells is unchanged: the event's seller_roles (the card warns when
+'worker' isn't in it and offers `POST …/sellers/allow-workers`, audit `bazar_allow_workers`) AND not removed
+(`BazarSellers.removed` — every `sells(ev, actor)` check in BazarSaleService, BazarEndService.requireSeller, and
+`Bazar.liveFor` now takes the user). Remove = removed_at + `AuthRepository.revokeAllRefreshTokens` (the "log out of all
+devices" write) + audit `bazar_seller_remove`; their still-valid 15-min access token is refused by the sell checks. Switch
+seller = `GET …/sellers/roster` (this event's non-removed sellers with a PIN; any seller of the event) + the existing
+`/auth/pin`. **Screens:** computer event page "Sellers" card (draft: under Start; live: beside "Open on a phone") =
+`SellersPanel` (list, Add seller, a fresh link → Copy / Send on WhatsApp = wa.me with the name, event and link prefilled,
+an Egyptian 01… phone opens that chat; Remove with a confirm); phone Home header menu (⋮) → Switch seller (all) / Sellers
+(owner / manager, the same panel in a sheet); `BazarJoin` (/bazar/join/:id: pick PIN twice → Sell; can't-sell states);
+`BazarInviteExpired`. EN + AR. **Known limits:** "Copy link" always issues a NEW link (only the hash is stored); older
+unused links stay valid until their 24 h (app_user can't update magic_link_tokens). A removed seller can still PIN-switch
+in on a shared phone (the existing /auth/pin is untouched) but can't sell there. PIN uniqueness per tenant is not checked
+(the switch identifies the user first). The Sellers card is hidden once the event has ended.
+
 **Bazar POS B6c — cart mode: several pieces, one customer, one total, one discount (2026-11-18; branch
 `feat/bazar-b6c` from main 425bc3e5; V237; review changes made, MERGED 2026-11-19, not deployed).** **Data model (V237):**
 `bazar_receipts` — one row per completed cart (B-number from the SAME `bazar_sale_counters` as quick sales; subtotal,

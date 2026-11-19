@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.AuthRepository;
+import com.traceability.identity.MagicLinkService;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaV2Client;
 import com.traceability.integrations.shopify.ShopifyGateway;
@@ -360,6 +361,19 @@ class EmbeddedOnboardingTest {
                 .map(p -> p.getFileName().toString()).sorted().toList();
             assertThat(callers).containsExactly("EmbeddedOnboardingService.java", "MagicLinkService.java");
         }
+        // Bazar B6b (approved 2026-11-19): exactly ONE other issuer returns a sign-in link — the seller invite
+        // (MagicLinkService.issueSellerInviteLink), called only from BazarSellerService.
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            List<String> callers = files.filter(p -> p.toString().endsWith(".java"))
+                .filter(p -> { try { return Files.readString(p).contains("issueSellerInviteLink("); } catch (Exception e) { return false; } })
+                .map(p -> p.getFileName().toString()).sorted().toList();
+            assertThat(callers).containsExactly("BazarSellerService.java", "MagicLinkService.java");
+        }
+        List<String> linkReturningIssuers = java.util.Arrays.stream(MagicLinkService.class.getDeclaredMethods())
+            .filter(m -> java.lang.reflect.Modifier.isPublic(m.getModifiers()) && m.getName().startsWith("issue")
+                && m.getReturnType() != void.class)
+            .map(java.lang.reflect.Method::getName).sorted().toList();
+        assertThat(linkReturningIssuers).containsExactly("issueSellerInviteLink", "issueSignInLink");
     }
 
     // ── s7 ────────────────────────────────────────────────────────────────────

@@ -90,7 +90,7 @@ public class UserService {
         // role may sell at). Only sent with bazar on, so an off tenant's /me is unchanged.
         if (com.traceability.bazar.Bazar.enabled(jdbc, tenantId)) {
             self.put("bazar", true);
-            Map<String, Object> live = com.traceability.bazar.Bazar.liveFor(jdbc, tenantId, (String) self.get("role"));
+            Map<String, Object> live = com.traceability.bazar.Bazar.liveFor(jdbc, tenantId, userId, (String) self.get("role"));
             if (live != null) self.put("bazarLive", live);
         }
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a

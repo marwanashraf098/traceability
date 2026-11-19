@@ -608,6 +608,15 @@ class ShadowOrderLeakTest {
                 "PUT /api/v1/bazar-events/{eventId}/receipts/{receiptId}/payment")) {
             reg(k, skip("Bazar POS B6c — bazar cart receipts, sales and payments; touches no orders"));
         }
+        for (String k : List.of(
+                "GET /api/v1/bazar-events/{eventId}/sellers", "GET /api/v1/bazar-events/{eventId}/sellers/candidates",
+                "POST /api/v1/bazar-events/{eventId}/sellers", "POST /api/v1/bazar-events/{eventId}/sellers/{userId}/link",
+                "DELETE /api/v1/bazar-events/{eventId}/sellers/{userId}",
+                "POST /api/v1/bazar-events/{eventId}/sellers/allow-workers",
+                "GET /api/v1/bazar-events/{eventId}/sellers/me", "GET /api/v1/bazar-events/{eventId}/sellers/roster",
+                "POST /api/v1/bazar-sellers/me/pin")) {
+            reg(k, skip("Bazar POS B6b — bazar sellers, invites, users' PIN; touches no orders"));
+        }
         reg("GET /api/v1/bazar-events/{eventId}/today",
             skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
         for (String k : List.of(
