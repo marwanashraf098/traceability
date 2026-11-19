@@ -4,6 +4,26 @@
 
 ## Current state
 
+**Bazar R1 restyle — overview + New bazar form (2026-11-19; branch `bazar-r1-restyle` off origin/main 18b5946b;
+frontend only, no migration, no endpoint; committed, NOT merged).** Appearance only, design/bazar-v2 (V2_Overview*,
+V2_NewEvent*). Get ready (SetupView / PricesCard) moved to R3 after B6b merges — BazarEventPage / TransferScanOut /
+BazarScanOut / App.tsx untouched.
+- Overview state from the loaded list only (`pages/bazar/r1/overviewState.ts` `pickOverview`): live (earliest
+  starts_on; others "Also live") → upcoming draft (overdue = "date passed · N days ago", never negative) → past only →
+  first time. Hero reads (approved): live → detail + days + today; upcoming → detail + prices (checklist: created /
+  prices set / pieces sent / started); last bazar → one report. Every read is optional and shape-checked: a failure or
+  wrong shape = list-row fields only, never a page error.
+- Left out (no data): sparkline / busiest hour, last sale time, sellers on now, all-time KPIs, past-bazar revenue /
+  sell-through / compare, "~150", sellers invited, bring more of, plan-from-this, see how it works, "used 2×".
+  Labels follow the data: "Sold today" (per_seller), "sales today", "not received (whole event)".
+- New bazar: same fields / validation / request; bazar-only RangeCalendar (Saturday-first EN + AR, past days
+  selectable, arrows / Home / End / PageUp / PageDown, Enter picks start then end, aria-selected + full-date labels);
+  steps + preview display only; phone "Where · Change" opens a Modal with the same chooser. Submit label
+  "Create · scan pieces out" (approved test edit in bazarB6.test.tsx).
+- Strings: `bazar.r1` block placed FIRST in `bazar` (B6b appends at the end). 6px tags via `rounded` in bazar-only
+  components; ui.tsx untouched. Money LTR + Latin digits; Arabic date ranges NOT forced LTR (reading order).
+- Next: R2 (close day / end event / report) and R3 (Get ready, live event page, return / exchange) after B6b.
+
 **Bazar POS B6c — cart mode: several pieces, one customer, one total, one discount (2026-11-18; branch
 `feat/bazar-b6c` from main 425bc3e5; V237; review changes made, MERGED 2026-11-19, not deployed).** **Data model (V237):**
 `bazar_receipts` — one row per completed cart (B-number from the SAME `bazar_sale_counters` as quick sales; subtotal,

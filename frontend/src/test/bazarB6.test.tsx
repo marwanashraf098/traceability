@@ -576,7 +576,7 @@ describe('New event', () => {
     await user.type(screen.getByLabelText('Location name'), 'Zamalek Hall')
     await user.click(screen.getByText('Card'))        // untick Card
     await user.click(screen.getByText('Workers'))     // untick Workers
-    await user.click(screen.getByRole('button', { name: 'Create event' }))
+    await user.click(screen.getByRole('button', { name: 'Create · scan pieces out' }))
     expect(await screen.findByTestId('where')).toHaveTextContent('/bazar/new-ev')
     const post = calls.find(c => c.method === 'POST' && c.url.endsWith('/bazar-events'))
     expect(post?.body).toMatchObject({
