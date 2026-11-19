@@ -113,6 +113,8 @@ class ExchangeMultiIngestTest {
     @Autowired ExchangeMultiCatchUpService catchUp;
     @Autowired ExchangeStateInterpreter    interpreter;
     @Autowired PlatformTransactionManager  txm;
+    @Autowired FulfillService              fulfill;
+    @Autowired WaybillResolver             waybills;
 
     JdbcTemplate appJdbc;
     DataSourceTransactionManager appTxm;
@@ -406,6 +408,131 @@ class ExchangeMultiIngestTest {
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────
+
+    // ── i11 ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Backfill shape (S3b condition 3): an exchange Bosta already took past pickup (the merchant packed it outside
+     * Traced) that is auto-committed now — a multi-line internal:exchange: order — must never be pickable: not in the
+     * queue, its waybill does not open it, it is not on the gather (pick) list. Positive control: the same shape still
+     * at "Pickup requested" (10) is pickable in all three.
+     */
+    @Test
+    void i11_alreadyPastPickup_autoCommittedExcOrder_neverPickable_queueWaybillGather() {
+        Shop s = new Shop("I11", false, "BRK-47011-EG");
+        s.variant("Baggy Sweatpants", "Black / L", "BRK-I11-BLK-L");
+        s.variant("Never Quit Crewneck", "Beige / M", "BRK-I11-BEG-M");
+        String outDesc = "x1 Baggy Sweatpants – Black - L - SKU: BRK-I11-BLK-L // x1 Never Quit Crewneck - Beige - M - SKU: BRK-I11-BEG-M";
+        String inDesc = "x2 Baggy Sweatpants – Black - M";
+        // 21 picked up from business, 22 picking up from consignee, 24 received at warehouse, 30 between hubs,
+        // 45 delivered, 46 returned to business — every past-pickup state the prod backfill rows carry.
+        // Each with the timeline milestone prod carries for that state (unlinked rows, 2026-11-19).
+        int[][] past = {{21}, {22}, {24}, {30}, {46}, {46}};
+        String[] names = {"Picked up from business", "Picking up from consignee", "Received at warehouse",
+            "In transit between Hubs", "Returned to business", "Returned to business"};
+        String[] milestones = {"picked_up", "out_for_exchange", "in_transit", "in_transit", "out_for_return", "exchanged_returned"};
+        String[] expectedLeg = {"with_courier", "with_courier", "with_courier", "with_courier", "delivered", "delivered"};
+        Set<String> alertsBefore = alertKeys(s);
+        Map<String, UUID> gone = new LinkedHashMap<>();
+        for (int i = 0; i < past.length; i++) {
+            String awb = tn();
+            ingest(s, atState(delivery(awb, "BRK-47011-EG:BRK-47011-EG-R" + (i + 1), 2, outDesc, 2, inDesc),
+                past[i][0], names[i], milestones[i]));
+            UUID exc = s.internalOrder(awb);
+            assertThat(exc).as("auto-committed at state %s", past[i][0]).isNotNull();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM order_items WHERE order_id = ?", Integer.class, exc))
+                .as("multi-line").isEqualTo(2);
+            assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, awb))
+                .as("leg advanced at commit, %s", milestones[i]).isEqualTo(expectedLeg[i]);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shipment_status_history h JOIN shipments sh ON sh.id = h.shipment_id " +
+                "WHERE sh.tracking_number = ?", Integer.class, awb)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ?", String.class, exc))
+                .as("the order's own status is never written").isEqualTo("new");
+            gone.put(awb, exc);
+        }
+        String live = tn();
+        ingest(s, atState(delivery(live, "BRK-47011-EG:BRK-47011-EG-R9", 2, outDesc, 2, inDesc), 10, "Pickup requested", "new"));
+        UUID liveExc = s.internalOrder(live);
+        assertThat(liveExc).isNotNull();
+        assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, live))
+            .as("no-op at Pickup requested").isEqualTo("created");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shipment_status_history h JOIN shipments sh ON sh.id = h.shipment_id " +
+            "WHERE sh.tracking_number = ?", Integer.class, live)).isZero();
+
+        // Nothing but the leg moved: no alert, no piece / ledger event, no Shopify write of any kind.
+        assertThat(alertKeys(s)).as("no alert raised by advancing at commit").isEqualTo(alertsBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM piece_events WHERE tenant_id = ?", Integer.class, s.tenant)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ?", Integer.class, s.tenant)).isZero();
+        verifyNoInteractions(shopifyGateway);
+
+        Set<UUID> queue = new HashSet<>();
+        s.as(() -> fulfill.getQueue()).forEach(r -> queue.add((UUID) r.get("id")));
+        assertThat(queue).as("positive control: still at the merchant → pickable").contains(liveExc);
+        assertThat(queue).as("already past pickup → never in the queue").doesNotContainAnyElementsOf(gone.values());
+
+        for (Map.Entry<String, UUID> e : gone.entrySet()) {
+            WaybillResolver.Resolution r = s.as(() -> waybills.resolve(e.getKey(), null));
+            assertThat(r.code()).as("waybill %s past pickup", e.getKey()).isNotEqualTo(WaybillResolver.Code.OPEN);
+        }
+        assertThat(s.as(() -> waybills.resolve(live, null)).code()).isEqualTo(WaybillResolver.Code.OPEN);
+
+        List<String> gathered = s.as(() -> fulfill.getGatherList(null)).rows().stream()
+            .flatMap(r -> r.orderNumbers().stream()).toList();
+        assertThat(gathered).as("positive control").contains("EXC-" + live);
+        for (String awb : gone.keySet()) assertThat(gathered).doesNotContain("EXC-" + awb);
+    }
+
+    // ── i12 ──────────────────────────────────────────────────────────────────
+
+    /**
+     * The alert suppression is for the advanced-at-commit leg ONLY: advanced at commit → no exchange_unmapped_state;
+     * the next real Bosta update for the AWB moves the leg through the normal webhook path (with_courier → delivered)
+     * and from then on the leg is treated like every other exchange leg (that detector's own behaviour is unchanged).
+     */
+    @Test
+    void i12_advancedAtCommit_laterBostaUpdate_movesLeg_suppressionEnds() {
+        Shop s = new Shop("I12", false, "BRK-47012-EG");
+        s.variant("Baggy Sweatpants", "Black / L", "BRK-I12-BLK-L");
+        s.variant("Never Quit Crewneck", "Beige / M", "BRK-I12-BEG-M");
+        String outDesc = "x1 Baggy Sweatpants – Black - L - SKU: BRK-I12-BLK-L // x1 Never Quit Crewneck - Beige - M - SKU: BRK-I12-BEG-M";
+        String awb = tn();
+        BostaDelivery first = atState(delivery(awb, "BRK-47012-EG:BRK-47012-EG-R1", 2, outDesc, 2, "x2 back"),
+            22, "Picking up from consignee", "out_for_exchange");
+        ingest(s, first);
+        assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, awb))
+            .isEqualTo("with_courier");
+        assertThat(alertKeys(s)).noneMatch(k -> k.startsWith("exchange_unmapped_state|"));
+
+        ObjectNode later = (ObjectNode) atState(first, 46, "Returned to business", "out_for_return").raw().deepCopy();
+        later.put("updatedAt", "2026-11-14T10:00:00Z");
+        ingest(s, BostaDelivery.fromRaw(awb, later));
+        assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, awb))
+            .as("the normal type-30 webhook path still moves it").isEqualTo("delivered");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shipment_status_history h JOIN shipments sh ON sh.id = h.shipment_id " +
+            "WHERE sh.tracking_number = ? AND h.webhook_event_id IS NOT NULL", Integer.class, awb)).isEqualTo(1);
+        assertThat(alertKeys(s)).as("suppression ended with the first Bosta update — detector unchanged from here")
+            .anyMatch(k -> k.startsWith("exchange_unmapped_state|") && k.endsWith("|" + awb));
+    }
+
+    /** {@code d} at Bosta state {@code code}, its timeline's latest completed milestone {@code milestone}. */
+    BostaDelivery atState(BostaDelivery d, int code, String value, String milestone) {
+        ObjectNode raw = (ObjectNode) d.raw().deepCopy();
+        raw.putObject("state").put("code", code).put("value", value);
+        ArrayNode tl = raw.putArray("timeline");
+        tl.addObject().put("value", "new").put("done", true).put("date", "2026-11-12T10:00:00.000Z");
+        if (!"new".equals(milestone)) tl.addObject().put("value", milestone).put("done", true).put("date", "2026-11-13T10:00:00.000Z");
+        tl.addObject().put("value", "exchanged_returned_placeholder").put("done", false);
+        return BostaDelivery.fromRaw(d.trackingNumber(), raw);
+    }
+
+    /** Every open alert of the tenant as type|order|tracking — compared before and after. */
+    Set<String> alertKeys(Shop s) {
+        Set<String> out = new TreeSet<>();
+        for (Map<String, Object> a : s.as(() -> exceptionService.detectAllOpen())) {
+            out.add(a.get("type") + "|" + a.get("order_id") + "|" + a.get("tracking_number"));
+        }
+        return out;
+    }
 
     static String gid(String kind) { return "gid://shopify/" + kind + "/" + IDS.incrementAndGet(); }
     static String tn() { return String.valueOf(5_000_000_000L + IDS.incrementAndGet() % 4_000_000_000L); }
