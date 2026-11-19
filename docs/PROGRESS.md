@@ -5,17 +5,17 @@
 ## Current state
 
 **Receiving move M1 — moving stock from the merchant's Shopify location, READ ONLY (2026-11-18; branch
-`feat/m1-receiving-move` from main 2d882e06, worktree `~/Documents/traceability-m1`; V236; NOT committed / merged /
-deployed).** Amendment (approved 2026-11-12, supersedes the 2026-11-07 wording on `feat/receiving-move`) recorded
+`feat/receiving-move-m1`, rebased on main 9ddee4e2 2026-11-19, worktree `~/Documents/traceability-m1`; V238; pushed, NOT
+merged / deployed).** Amendment (approved 2026-11-12, supersedes the 2026-11-07 wording on `feat/receiving-move`) recorded
 verbatim in CLAUDE.md next to the Location-target invariant; count check: 9 named writes on main → pushLocationMove is
-the tenth; 13 write sites → 14 in M2. V235 is reserved by Bazar B4 (uncommitted in `traceability-bazar-b4`), so M1 took
-V236 (Flyway out-of-order is on). Built: `ShopifyMoveSourceGateway` (read only: locations all pages with
+the tenth; 13 write sites → 14 in M2. Migration renumbered V236 → V238 on the rebase (main took V235 bazar
+day closes, V236 exchange items, V237 bazar receipts; prod at V236). Built: `ShopifyMoveSourceGateway` (read only: locations all pages with
 includeInactive/includeLegacy false + fulfillmentService; `fetchLocationLevels` at the location the caller names;
 products with stock at a location — queries validated against 2026-04), `ReceivingMoveService` / `ReceivingMoveController`
 (GET /receiving/move-sources, POST /receiving/move-sessions, GET /sessions/{id}/move/levels | preview | progress,
 PUT /sessions/{id}/lines/{lineId}/source-choice, POST /sessions/{id}/move/source-choice), `ReceivingMovePlan` (THE §6
 math), `ReceivingMoveException` (EN/AR, details), the move gate `TracedLocationOnlineService.freshShippingForMove`
-(fresh read, verified Ready only). V236: receipts.move_source_location_gid/_name, receipt_lines.source_choice (keep
+(fresh read, verified Ready only). V238: receipts.move_source_location_gid/_name, receipt_lines.source_choice (keep
 default), receiving_move_progress (Y frozen), receiving_move_syncs (claim, C1 resolution columns) +
 receiving_move_attempts — RLS + NULLIF + no DELETE for app_user. Refused: store not ready (setupProblem), non-main
 warehouse, ineligible source, return-linked line, and (until M2) finalize of a move session (MOVE_FINALIZE_NOT_AVAILABLE).

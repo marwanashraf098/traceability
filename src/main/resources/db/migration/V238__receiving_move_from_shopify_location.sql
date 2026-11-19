@@ -1,4 +1,4 @@
--- V236 — Receiving moves from the merchant's Shopify location, M1 (approved by Marawan 2026-11-12, M1 go 2026-11-18).
+-- V238 — Receiving moves from the merchant's Shopify location, M1 (approved by Marawan 2026-11-12, M1 go 2026-11-18).
 -- Schema only for the write: M1 has NO Shopify mutation. The tenth named write (pushLocationMove) and its sweep land in
 -- M2 and are the only writers of receiving_move_syncs / receiving_move_attempts.
 --
