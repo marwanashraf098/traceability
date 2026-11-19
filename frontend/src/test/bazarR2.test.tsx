@@ -158,19 +158,19 @@ describe('Close day', () => {
     expect(screen.getByTestId('close-summary').textContent).toContain('1 refund')
     // Take-home sits in the Drawer block.
     expect(within(screen.getByTestId('close-drawer')).getByTestId('close-take-home').textContent)
-      .toContain('Take home EGP 9,840 in cash')
+      .toContain('Take home 9,840 EGP in cash')
   })
 
   test('short day: chip and the dark difference card show it, the split keeps label → value', async () => {
     renderClose({ opening_float_default: { amount: '1000.00', source: 'previous_close' } })
-    expect(screen.getByTestId('close-float-line').textContent).toContain('Drawer started with EGP 1,000')
+    expect(screen.getByTestId('close-float-line').textContent).toContain('Drawer started with 1,000 EGP')
     expect(screen.queryByTestId('close-float')).toBeNull()
     await typeIn('close-cash', '10800')
     await typeIn('close-card', '3480')
     await waitFor(() => expect(screen.getByTestId('close-chip-cash').textContent).toBe('Short 40'))
     expect(screen.getByTestId('close-difference').textContent).toContain('− 40')
     const box = screen.getByTestId('close-not-received')
-    expect(box.textContent).toContain('EGP 40 not received')
+    expect(box.textContent).toContain('40 EGP not received')
     expect(within(box).getByText('Cash short').nextSibling?.textContent).toBe('40')
   })
 
@@ -181,7 +181,7 @@ describe('Close day', () => {
     await typeIn('close-card', '3480')
     await userEvent.click(screen.getByTestId('close-instapay'))
     await waitFor(() => expect(screen.getByTestId('close-chip-instapay').textContent).toBe('Not received 5,600'))
-    expect(screen.getByTestId('close-over').textContent).toContain('EGP 100 over')
+    expect(screen.getByTestId('close-over').textContent).toContain('100 EGP over')
     expect(within(screen.getByTestId('close-not-received')).getByText('InstaPay not received').nextSibling?.textContent).toBe('5,600')
   })
 

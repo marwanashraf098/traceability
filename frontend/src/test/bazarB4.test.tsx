@@ -211,10 +211,10 @@ describe('Phone — Close the day', () => {
       expect([q.get('cash'), q.get('card'), q.get('instapay'), q.get('float')]).toEqual(['19150', '3332', 'true', '1000'])
     })
     const box = await screen.findByTestId('close-not-received')
-    await waitFor(() => expect(box.textContent).toContain('EGP 118 not received'))
+    await waitFor(() => expect(box.textContent).toContain('118 EGP not received'))
     expect(within(box).getByText('Cash short').nextSibling?.textContent).toBe('50')
     expect(within(box).getByText(/Card short/).nextSibling?.textContent).toBe('68')
-    expect(screen.getByTestId('close-take-home').textContent).toContain('Take home EGP 18,150 in cash')
+    expect(screen.getByTestId('close-take-home').textContent).toContain('Take home 18,150 EGP in cash')
     expect(screen.getByTestId('close-take-home').textContent).toContain('EGP 1,000 stays in the drawer')
     expect(screen.getByTestId('close-row-cash').textContent).toContain('Short 50')
     expect(screen.getByTestId('close-row-card').textContent).toContain('Short 68')
@@ -238,7 +238,7 @@ describe('Phone — Close the day', () => {
     await userEvent.click(screen.getByTestId('close-instapay'))
     await waitFor(() => expect(lastPreview().get('instapay')).toBe('false'))
     const box = await screen.findByTestId('close-not-received')
-    await waitFor(() => expect(box.textContent).toContain('EGP 9,968 not received'))
+    await waitFor(() => expect(box.textContent).toContain('9,968 EGP not received'))
     expect(within(box).getByText('InstaPay not received').nextSibling?.textContent).toBe('9,850')
   })
 
@@ -248,7 +248,7 @@ describe('Phone — Close the day', () => {
     await type('close-float', '1000')
     await type('close-cash', '19300')
     await type('close-card', '3400')
-    await waitFor(() => expect(screen.getByTestId('close-over').textContent).toContain('EGP 100 over'))
+    await waitFor(() => expect(screen.getByTestId('close-over').textContent).toContain('100 EGP over'))
     expect(screen.getByTestId('close-all-received')).toBeTruthy()
   })
 
@@ -290,7 +290,7 @@ describe('Phone — Close the day', () => {
         close: { id: 'c', closed_at: TODAY, closed_by_name: 'O', note: null, supersedes_id: null,
                  result: calc(new URLSearchParams('cash=19000&card=3400&instapay=true'), 800).result } }))))
     renderAt(`/bazar/${EVENT}/close`, closeRoutes)
-    expect((await screen.findByTestId('close-float-line')).textContent).toContain('Drawer started with EGP 800')
+    expect((await screen.findByTestId('close-float-line')).textContent).toContain('Drawer started with 800 EGP')
     expect(screen.queryByTestId('close-float')).toBeNull()
     expect((screen.getByTestId('close-kept') as HTMLInputElement).value).toBe('800')
     await type('close-cash', '19000')
@@ -353,7 +353,7 @@ describe('Desktop event page — days', () => {
     expect(within(days).getByTestId(`day-status-${TODAY}`).textContent).toBe('Open')
     await userEvent.click(within(within(days).getByTestId(`day-row-${TODAY}`)).getByText('Close this day'))
     expect(await screen.findByTestId('close-day-form')).toBeTruthy()
-    expect(screen.getByTestId('close-float-line').textContent).toContain('EGP 1,000')
+    expect(screen.getByTestId('close-float-line').textContent).toContain('1,000 EGP')
   })
 
   test("a live event's prices can be changed from its page — new sales use them, past ones keep theirs", async () => {

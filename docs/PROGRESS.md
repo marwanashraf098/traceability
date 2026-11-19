@@ -21,9 +21,9 @@ event are R3 (they live in the event page's modal today).
 - Report: hero "62,780 EGP", money by day (revenue, day status), event-wide payment split, what sold, busiest hours
   (existing chart), where the pieces ended up, sellers (pieces), customers + the existing CSV export, top sizes, money
   not received. Approved test edit: bazarB5 288 / 306 → "2,400 EGP".
-- Money format exceptions kept because tests pin them (ask before changing): kpi-avg "EGP 600" (bazarB5:308),
-  report-not-received "EGP 70" (bazarB5:309), and the close-day texts ("EGP 118 not received", "Take home EGP …",
-  "EGP 100 over", "Drawer started with EGP …").
+- Money format: "N EGP" everywhere in R2 (approved test text edits: bazarB5 288 / 306 / 308 / 309, bazarB4 "… not
+  received", "Take home … in cash", "… over", "Drawer started with …"). One exception left, pinned by bazarB4:218 (not
+  in the approved list): the take-home sub-line "EGP 1,000 stays in the drawer for tomorrow".
 - Strings: `bazar.r2` block first in `bazar` (B6b appends at the end).
 
 **Bazar R1 restyle — overview + New bazar form (2026-11-19; branch `bazar-r1-restyle` off origin/main 18b5946b;

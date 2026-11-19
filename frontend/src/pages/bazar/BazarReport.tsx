@@ -3,12 +3,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, Download } from 'lucide-react'
 import { BazarError, downloadBazarCustomers, getBazarReport, type BazarReport } from '../../bazar/api'
-import { formatMoney, toNumber, transferCode } from '../../bazar/format'
+import { toNumber, transferCode } from '../../bazar/format'
 import { Button, Spinner, cn, type BadgeTone } from '../../components/ui'
 import { STATUS_TONE } from './BazarEvents'
 import { dayCount } from './r1/overviewState'
 import { amount, rangeLabel, weekdayShort } from './r1/parts'
-import { Chip, Legend, Money, StackBar, type ChipTone } from './r2/parts'
+import { Chip, Legend, Money, StackBar, money, type ChipTone } from './r2/parts'
 
 // Bazar POS B5 — the event report (mockup page 1, step 10): /bazar/:id/report, in-shell (computer and phone). Read-
 // only, owner / manager. Built from GET /report only (bazar tables + the linked transfer).
@@ -207,14 +207,14 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
           ))}
         </Card>
         <Card title={t('bazar.report.notReceived')} sub={t('bazar.report.notReceivedSub')} testId="report-not-received">
-          <Line label={t('bazar.report.cashShort')} value={formatMoney(nr.cash_short)} />
-          <Line label={t('bazar.report.cardShort')} value={formatMoney(nr.card_short)} />
-          <Line label={t('bazar.report.instapay')} value={formatMoney(nr.instapay_not_received)} />
-          {toNumber(nr.cash_over) > 0 && <Line label={t('bazar.report.cashOver')} value={formatMoney(nr.cash_over)} />}
-          {toNumber(nr.card_over) > 0 && <Line label={t('bazar.report.cardOver')} value={formatMoney(nr.card_over)} />}
+          <Line label={t('bazar.report.cashShort')} value={money(nr.cash_short)} />
+          <Line label={t('bazar.report.cardShort')} value={money(nr.card_short)} />
+          <Line label={t('bazar.report.instapay')} value={money(nr.instapay_not_received)} />
+          {toNumber(nr.cash_over) > 0 && <Line label={t('bazar.report.cashOver')} value={money(nr.cash_over)} />}
+          {toNumber(nr.card_over) > 0 && <Line label={t('bazar.report.cardOver')} value={money(nr.card_over)} />}
           <div className={cn('flex justify-between gap-2 pt-2 border-t border-line font-bold',
             toNumber(nr.total) > 0 ? 'text-critical-text' : 'text-primary')}>
-            <span>{t('bazar.report.total')}</span><span className="tabular-nums" dir="ltr">{formatMoney(nr.total)}</span>
+            <span>{t('bazar.report.total')}</span><span className="tabular-nums" dir="ltr">{money(nr.total)}</span>
           </div>
           {nr.days_not_closed > 0 && (
             <p className="text-small text-warning-text">{t('bazar.report.daysNotClosed', { count: nr.days_not_closed })}</p>
@@ -239,8 +239,7 @@ export function ReportKpis({ r }: { r: BazarReport }) {
     { k: 'through', label: t('bazar.report.sellThrough'), value: pctText(r.sell_through),
       sub: t('bazar.r2.report.ofPieces', { sold: r.pieces_sold, sent: r.pieces_sent }) },
     { k: 'sold', label: t('bazar.report.piecesSold'), value: String(r.pieces_sold), sub: t('bazar.report.ofSent', { count: r.pieces_sent }) },
-    // Average sale keeps the "EGP 600" shape — bazarB5.test.tsx:308 pins it (see the R2 report).
-    { k: 'avg', label: t('bazar.report.averageSale'), value: r.average_sale == null ? '—' : formatMoney(r.average_sale),
+    { k: 'avg', label: t('bazar.report.averageSale'), value: r.average_sale == null ? '—' : money(r.average_sale),
       sub: r.sales == null ? '' : t('bazar.report.salesCount', { count: r.sales }) },
     { k: 'day', label: t('bazar.r2.report.perDay'), value: amount(Math.round(toNumber(r.revenue) / days)),
       sub: t('bazar.r2.report.avgOfDays', { count: days }) },

@@ -10,7 +10,7 @@ import { useRetryingCommand } from '../../bazar/useRetryingCommand'
 import { CommandStatus } from './phone/ReturnParts'
 import { cn } from '../../components/ui'
 import { amount } from './r1/parts'
-import { Chip, StepCard, type ChipTone } from './r2/parts'
+import { Chip, StepCard, money, type ChipTone } from './r2/parts'
 
 // Bazar POS B4 — the close-the-day form, shared by the phone screen and the desktop event page: cash in the drawer,
 // card machine settlement, InstaPay tick, then the drawer (opening float on the bazar's first close, kept for
@@ -204,7 +204,7 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
         ) : (
           <div className="flex items-center justify-between gap-2 rounded-[10px] bg-charcoal px-3 py-2 text-small" data-testid="close-float-line">
             <span className="text-primary">
-              {t('bazar.close.floatFrom', { amount: formatMoney(toNumber(floatDefault.amount)) })}
+              {t('bazar.close.floatFrom', { amount: money(toNumber(floatDefault.amount)) })}
               <span className="text-muted"> · {t(floatDefault.source === 'this_day_close' ? 'bazar.close.floatFromDay' : 'bazar.close.floatFromPrevious')}</span>
             </span>
             <button type="button" className="min-h-[44px] px-2 font-semibold text-trace-blue" disabled={cmd.busy}
@@ -247,7 +247,7 @@ function TakeHome({ result }: { result: BazarCloseResult }) {
   return (
     <section className="rounded-[10px] bg-charcoal px-3.5 py-2.5 flex flex-col gap-0.5" data-testid="close-take-home">
       <span className="text-body-lg font-bold text-primary tabular-nums">
-        {t('bazar.close.takeHome', { amount: formatMoney(result.take_home) })}
+        {t('bazar.close.takeHome', { amount: money(result.take_home) })}
       </span>
       <span className="text-small text-muted">{t('bazar.close.takeHomeKept', { amount: formatMoney(result.cash_kept) })}</span>
     </section>
@@ -321,7 +321,7 @@ export function CloseResultView({ result, loading, day, hideTakeHome }: {
       {notReceived > 0 ? (
         <section role="alert" className="rounded-xl bg-critical/10 border border-critical/40 px-4 py-3 flex flex-col gap-1" data-testid="close-not-received">
           <span className="text-h4 font-bold text-critical-text tabular-nums">
-            {t('bazar.close.notReceivedTitle', { amount: formatMoney(notReceived) })}
+            {t('bazar.close.notReceivedTitle', { amount: money(notReceived) })}
           </span>
           {split.map(k => (
             <span key={k} className="flex items-center justify-between gap-3 text-small text-primary">
@@ -341,7 +341,7 @@ export function CloseResultView({ result, loading, day, hideTakeHome }: {
       )}
       {over > 0 && (
         <section className="rounded-xl bg-warning/10 border border-warning/30 px-4 py-3 flex flex-col gap-0.5" data-testid="close-over">
-          <span className="font-bold text-warning-text tabular-nums">{t('bazar.close.overTitle', { amount: formatMoney(over) })}</span>
+          <span className="font-bold text-warning-text tabular-nums">{t('bazar.close.overTitle', { amount: money(over) })}</span>
           <span className="text-small text-primary">{t('bazar.close.overBody')}</span>
         </section>
       )}
@@ -361,7 +361,7 @@ export function DayStatusBadge({ day }: { day: BazarDay }) {
     <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-small font-semibold', tone)}
           data-testid={`day-status-${day.business_day}`}>
       {t(`bazar.close.status.${day.status}`, {
-        amount: formatMoney(toNumber(day.close?.result.not_received_total ?? 0)) })}
+        amount: money(toNumber(day.close?.result.not_received_total ?? 0)) })}
     </span>
   )
 }
