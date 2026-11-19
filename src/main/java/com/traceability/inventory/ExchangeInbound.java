@@ -51,10 +51,25 @@ public final class ExchangeInbound {
      * Ingest / match: stores the resolved inbound variant on the exchange of {@code trackingNumber} — only while it is
      * NULL (never overwrites, a person's pick stays). Joins the caller's transaction; RLS applies.
      */
+    /**
+     * S3b (2026-11-19) — the exchanges row (alias e) is a MULTI-ITEM exchange: Bosta's itemsCount &gt; 1 on either leg
+     * (ExchangeMultiItem.counts), or its mapped 'in' rows hold more than one unit. Such an exchange never gets ONE
+     * inbound variant — its old items are rows (exchange_items); every fill caller (ingest, the matchers, commit) is
+     * covered here, not one by one.
+     */
+    static final String MULTI_ITEM_SQL =
+        "(COALESCE(CASE WHEN e.raw #>> '{specs,packageDetails,itemsCount}' ~ '^[0-9]+$' " +
+        "               THEN (e.raw #>> '{specs,packageDetails,itemsCount}')::int END, 1) > 1 " +
+        " OR COALESCE(CASE WHEN e.raw #>> '{returnSpecs,packageDetails,itemsCount}' ~ '^[0-9]+$' " +
+        "               THEN (e.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int END, 1) > 1 " +
+        " OR COALESCE((SELECT SUM(ei.quantity) FROM exchange_items ei WHERE ei.exchange_id = e.id " +
+        "              AND ei.tenant_id = e.tenant_id AND ei.direction = 'in'), 0) > 1)";
+
     public static int fill(JdbcTemplate jdbc, UUID tenantId, String trackingNumber) {
         return jdbc.update(
             "UPDATE exchanges e SET inbound_variant_id = " + variantSql("e") + " " +
             "WHERE e.tenant_id = ? AND e.tracking_number = ? AND e.inbound_variant_id IS NULL " +
+            "  AND NOT " + MULTI_ITEM_SQL + " " +
             "  AND " + variantSql("e") + " IS NOT NULL",
             tenantId, trackingNumber);
     }
@@ -64,6 +79,7 @@ public final class ExchangeInbound {
         return jdbc.update(
             "UPDATE exchanges e SET inbound_variant_id = " + variantSql("e") + " " +
             "WHERE e.tenant_id = ? AND e.id = ? AND e.inbound_variant_id IS NULL " +
+            "  AND NOT " + MULTI_ITEM_SQL + " " +
             "  AND " + variantSql("e") + " IS NOT NULL",
             tenantId, exchangeId);
     }

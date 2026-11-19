@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { CheckCircle2, Minus, Plus, Trash2, X } from 'lucide-react'
 import {
   getExchangeDetail, mapExchange, mapExchangeItems, getExchangeOutboundCandidates, getExchangeOriginalLines,
-  ExchangeSummary, ExchangeOriginalLine, CatalogProduct, CatalogVariant, ServerMessageError,
+  ExchangeSummary, ExchangeOriginalLine, ExchangePrefillRow, CatalogProduct, CatalogVariant, ServerMessageError,
 } from '../../api'
 import { Alert, Badge, Button, Input, ProductThumb, Skeleton } from '../../components/ui'
 import ExchangeVariantPicker from './ExchangeVariantPicker'
@@ -86,8 +86,17 @@ export default function ExchangeMapping() {
         setExchange(ex)
         const outQty = Math.min(MAX_QTY, Math.max(1, ex.outbound_items_count ?? 1))
         const inQty = Math.min(MAX_QTY, Math.max(1, ex.inbound_items_count ?? 1))
-        setOutRows(rows => rows.length ? rows : [newRow(outQty, trimTrailing(ex.outbound_description))])
-        setInRows(rows => rows.length ? rows : [newRow(inQty, trimTrailing(ex.inbound_description))])
+        // S3b: a multi-item exchange arrives with rows prefilled from Bosta's label (variant suggested by exact SKU) or
+        // its counts; a person still confirms every row.
+        const fromPrefill = (rows: ExchangePrefillRow[] | undefined): Row[] | null =>
+          rows && rows.length ? rows.map(r => ({
+            ...newRow(Math.min(MAX_QTY, Math.max(1, r.quantity)), r.descriptionHint ?? ''),
+            selected: r.variantId ? stub(r.variantId, r.variantTitle, r.productTitle) : null,
+          })) : null
+        setOutRows(rows => rows.length ? rows
+          : fromPrefill(ex.prefill?.outbound) ?? [newRow(outQty, trimTrailing(ex.outbound_description))])
+        setInRows(rows => rows.length ? rows
+          : fromPrefill(ex.prefill?.inbound) ?? [newRow(inQty, trimTrailing(ex.inbound_description))])
         if (ex.matched_order_id) {
           getExchangeOriginalLines(id).then(setOriginalLines).catch(() => { /* catalog search still works */ })
         }
