@@ -92,6 +92,11 @@ export function sellErrorText(t: TFunction, lang: string, e: BazarError): { titl
       // A cart with a returned piece: the server says so.
       if (e.messageEn.includes('cart')) return { title: t('bazar.sellError.undoNotAllowed'), detail: e.message_(lang) }
       return { title: t('bazar.sellError.undoNotAllowed') }
+    case 'BAZAR_SOLD_OUT':
+      // B7a: no piece of the tapped size left at this bazar (another seller may have just sold the last one).
+      return { title: t('bazar.sellError.soldOut'), detail: e.message_(lang) }
+    case 'BAZAR_PRODUCT_NUMBER':
+      return { title: t('bazar.sellError.productNumber'), detail: t('bazar.sellError.productNumberDetail') }
     case 'BAZAR_CART_DUPLICATE_PIECE':
       return { title: t('bazar.sellError.cartDuplicate') }
     case 'BAZAR_INVALID_DISCOUNT':

@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared scan-normalization vectors (S1 backend, S2 frontend). 'piece' = ScanInputNormalizer.normalizePiece(input). 'tracking' = TrackingNumberNormalizer.normalize(input) (null = rejected); a vector without 'tracking' does not assert it.",
+  "_comment": "Shared scan-normalization vectors (S1 backend, S2 frontend). 'piece' = ScanInputNormalizer.normalizePiece(input). 'tracking' = TrackingNumberNormalizer.normalize(input) (null = rejected); a vector without 'tracking' does not assert it. 'productNumber' (B7, bazar price-sheet numbers) = ScanInputNormalizer.productNumber(input) / the phone's productNumber(input) (null = not a product number); a vector without it does not assert it.",
   "vectors": [
     {
       "name": "short code, Caps Lock on",
@@ -155,6 +155,96 @@
       "name": "non-Bosta tracking number is never uppercased",
       "input": "wj-12345",
       "piece": "wj-12345"
+    },
+    {
+      "name": "product number, bare",
+      "input": "12",
+      "piece": "12",
+      "productNumber": 12
+    },
+    {
+      "name": "product number, with #",
+      "input": "#12",
+      "piece": "#12",
+      "productNumber": 12
+    },
+    {
+      "name": "product number, Arabic-Indic digits",
+      "input": "١٢",
+      "piece": "12",
+      "productNumber": 12
+    },
+    {
+      "name": "product number, # + Persian digit",
+      "input": "#۳",
+      "piece": "#3",
+      "productNumber": 3
+    },
+    {
+      "name": "product number, surrounding spaces",
+      "input": " 12 ",
+      "piece": "12",
+      "productNumber": 12
+    },
+    {
+      "name": "product number, zero-width space injected",
+      "input": "​#7",
+      "piece": "#7",
+      "productNumber": 7
+    },
+    {
+      "name": "product number, three digits",
+      "input": "#999",
+      "piece": "#999",
+      "productNumber": 999
+    },
+    {
+      "name": "product number, leading zeros",
+      "input": "007",
+      "piece": "007",
+      "productNumber": 7
+    },
+    {
+      "name": "not a product number: four digits",
+      "input": "1001",
+      "piece": "1001",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: Shopify-style order number",
+      "input": "#1001",
+      "piece": "#1001",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: six digits",
+      "input": "123456",
+      "piece": "123456",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: piece short code",
+      "input": "P0001041",
+      "piece": "P0001041",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: tracking number",
+      "input": "9730639058",
+      "piece": "9730639058",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: # alone",
+      "input": "#",
+      "piece": "#",
+      "productNumber": null
+    },
+    {
+      "name": "not a product number: digits and a letter",
+      "input": "12a",
+      "piece": "12a",
+      "productNumber": null
     }
   ]
 }

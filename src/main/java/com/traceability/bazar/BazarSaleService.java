@@ -77,8 +77,20 @@ public class BazarSaleService {
 
     // ── Sell ─────────────────────────────────────────────────────────────────
 
+    // The B2 shape. Its own @Transactional: the call below is a self-call, which never goes through the proxy.
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> sell(UUID eventId, String code, String clientRequestId, String method, Actor actor) {
+        return sell(eventId, code, null, clientRequestId, method, actor);
+    }
+
+    /**
+     * B7a: {@code variantId} instead of a code ("tap to sell") — the server picks the piece ({@link #pickPiece}: the
+     * oldest open piece of that variant at this bazar) inside this transaction; everything after that is the scan
+     * sale's own path (prepareSale → writeSale → insertPayment). Exactly one of code / variantId.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> sell(UUID eventId, String code, UUID variantId, String clientRequestId, String method,
+                                    Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         if (!sells(ev, actor)) throw notASeller();
@@ -94,7 +106,12 @@ public class BazarSaleService {
             return first;
         }
 
-        Prepared sale = prepareSale(tenantId, eventId, ev, findPiece(tenantId, code), code);
+        boolean tapped = (code == null || code.isBlank()) && variantId != null;
+        if (!tapped && (code == null || code.isBlank())) {
+            throw invalid("Scan a piece or pick a product.", "امسح قطعة أو اختر منتجًا.");
+        }
+        Map<String, Object> piece = tapped ? pickPiece(tenantId, ev, variantId, Set.of()) : findPiece(tenantId, code);
+        Prepared sale = prepareSale(tenantId, eventId, ev, piece, tapped ? pieceCode(piece) : code);
         String chosen = resolveMethod(ev, method);
         UUID saleId = writeSale(tenantId, eventId, ev, sale, crid, actor, null, null, null);
         insertPayment(tenantId, eventId, saleId, chosen, sale.price(), actor.userId());
@@ -110,6 +127,13 @@ public class BazarSaleService {
 
     /** The piece — same normalizer and triple match as every piece scan. Untagged → refused. */
     private Map<String, Object> findPiece(UUID tenantId, String code) {
+        if (ScanInputNormalizer.productNumber(code) != null) {
+            // B7a: "12" / "#12" is a product number from the price sheet — it opens the product's sizes on the
+            // phone, it never sells as a code.
+            throw new BazarException(BazarException.Code.BAZAR_PRODUCT_NUMBER,
+                "That's a product number from the price sheet — pick the size to sell it.",
+                "هذا رقم منتج من قائمة الأسعار — اختر المقاس لبيعه.", HttpStatus.BAD_REQUEST);
+        }
         String lookup = ScanInputNormalizer.normalizePiece(code == null ? "" : code);
         List<Map<String, Object>> pieces = jdbc.queryForList(
             "SELECT id, variant_id, status::text AS status, short_code FROM pieces " +
@@ -125,6 +149,66 @@ public class BazarSaleService {
                 "هذه القطعة بدون باركود بعد (غير مُلصقة)، لذلك لا يمكن بيعها هنا بعد.", HttpStatus.CONFLICT);
         }
         return piece;
+    }
+
+    /**
+     * B7a — THE piece choice for a tapped variant: the OLDEST piece scanned out to this bazar that is still open on its
+     * transfer (no outcome) and {@code out_on_transfer}. {@code FOR UPDATE OF tp SKIP LOCKED}: a piece another
+     * seller's sale is writing right now is skipped (never waited on — a plain FOR UPDATE could come back empty after
+     * the wait even with another piece free); the ledger's race-guarded UPDATE in writePiece stays the referee.
+     * {@code exclude}: pieces this transaction already holds (a cart's other lines — SKIP LOCKED doesn't skip
+     * one's own locks). None → BAZAR_SOLD_OUT with the variant and how many are left.
+     */
+    private Map<String, Object> pickPiece(UUID tenantId, Map<String, Object> ev, UUID variantId, Set<String> exclude) {
+        List<Object> args = new ArrayList<>(List.of(ev.get("transfer_id"), tenantId, variantId));
+        String notIn = "";
+        if (!exclude.isEmpty()) {
+            notIn = " AND p.id NOT IN (" + String.join(", ", java.util.Collections.nCopies(exclude.size(), "?")) + ")";
+            args.addAll(exclude);
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT p.id, p.variant_id, p.status::text AS status, p.short_code " +
+            "FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.status = 'out_on_transfer' " +
+            "  AND p.variant_id = ?" + notIn + " " +
+            "ORDER BY tp.created_at, tp.id LIMIT 1 FOR UPDATE OF tp SKIP LOCKED", args.toArray());
+        if (rows.isEmpty()) throw soldOut(tenantId, ev, variantId);
+        return rows.get(0);
+    }
+
+    /** How many pieces of the variant are still open at this bazar (what a tap could still sell). */
+    private int openLeft(UUID tenantId, Map<String, Object> ev, UUID variantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT count(*)::int FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.status = 'out_on_transfer' " +
+            "  AND p.variant_id = ?", Integer.class, ev.get("transfer_id"), tenantId, variantId);
+        return n == null ? 0 : n;
+    }
+
+    /** BAZAR_SOLD_OUT (409): details {variant_id, left, product_title, variant_title}. */
+    private BazarException soldOut(UUID tenantId, Map<String, Object> ev, UUID variantId) {
+        List<Map<String, Object>> v = jdbc.queryForList(
+            "SELECT pr.title AS product_title, v.title AS variant_title FROM variants v " +
+            "JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id WHERE v.id = ? AND v.tenant_id = ?",
+            variantId, tenantId);
+        String name = v.isEmpty() ? "" : v.get(0).get("product_title")
+            + (v.get(0).get("variant_title") == null ? "" : " · " + v.get(0).get("variant_title"));
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("variant_id", variantId);
+        d.put("left", openLeft(tenantId, ev, variantId));
+        if (!v.isEmpty()) {
+            d.put("product_title", v.get(0).get("product_title"));
+            d.put("variant_title", v.get(0).get("variant_title"));
+        }
+        return new BazarException(BazarException.Code.BAZAR_SOLD_OUT,
+            (name.isEmpty() ? "This size" : name) + " is sold out at this bazar.",
+            (name.isEmpty() ? "هذا المقاس" : name) + " نفد في هذا البازار.", HttpStatus.CONFLICT, d);
+    }
+
+    /** What a tapped sale records as its scan code: the piece's short code, else its internal id. */
+    private static String pieceCode(Map<String, Object> piece) {
+        Object sc = piece.get("short_code");
+        return sc != null ? (String) sc : (String) piece.get("id");
     }
 
     /** Is the piece at this bazar, unsold and priced? Nothing is written. */
@@ -656,29 +740,73 @@ public class BazarSaleService {
      * (the same checks as Complete: here, priced, not sold, not damaged, not scanned twice). Nothing is written or
      * reserved. A seller role, while the event is live.
      */
+    /** B6c shape: every line a scanned code. (Own @Transactional — a self-call never goes through the proxy.) */
     @Transactional(readOnly = true)
     public Map<String, Object> previewCart(UUID eventId, List<String> codes, Actor actor) {
+        return previewCartLines(eventId, codeLines(codes), actor);
+    }
+
+    /** B7a: a cart line — a scanned {@code code}, or a tapped {@code variantId} (the piece is picked at Complete). */
+    public record CartLine(String code, UUID variantId) {
+        boolean tapped() { return (code == null || code.isBlank()) && variantId != null; }
+    }
+
+    static List<CartLine> codeLines(List<String> codes) {
+        if (codes == null) return null;
+        List<CartLine> out = new ArrayList<>();
+        for (String c : codes) out.add(new CartLine(c, null));
+        return out;
+    }
+
+    /**
+     * Read-only: each line as it would be sold — a scanned piece (the same checks as Complete: here, priced, not
+     * sold, not damaged, not scanned twice), or a tapped variant (priced, and not more of it in the cart than are
+     * left at the bazar — no piece is chosen or reserved here). Nothing is written. A seller role, while live.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> previewCartLines(UUID eventId, List<CartLine> input, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = requireLive(event(tenantId, eventId, ""));
         if (!sells(ev, actor)) throw notASeller();
-        List<String> list = cartCodes(codes, true);
+        List<CartLine> list = cartLines(input, true);
         List<Map<String, Object>> lines = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
+        Map<UUID, Integer> scannedPerVariant = new java.util.HashMap<>();
+        Map<UUID, Integer> tappedPerVariant = new java.util.HashMap<>();
+        // Scanned pieces are specific open pieces: they use up what a tapped line of the same variant can have.
+        for (CartLine l : list) {
+            if (l.tapped()) continue;
+            try {
+                Map<String, Object> piece = findPiece(tenantId, l.code());
+                scannedPerVariant.merge((UUID) piece.get("variant_id"), 1, Integer::sum);
+            } catch (BazarException ignored) { /* reported on its own line below */ }
+        }
         BigDecimal subtotal = BigDecimal.ZERO.setScale(2);
         boolean ok = true;
         for (int i = 0; i < list.size(); i++) {
-            String code = list.get(i);
+            CartLine l = list.get(i);
             Map<String, Object> line = new LinkedHashMap<>();
             line.put("index", i);
-            line.put("code", code);
+            line.put("code", l.tapped() ? null : l.code());
             try {
-                Map<String, Object> piece = findPiece(tenantId, code);
-                if (!seen.add((String) piece.get("id"))) throw duplicateInCart();
-                Prepared prep = prepareSale(tenantId, eventId, ev, piece, code);
-                line.putAll(pieceInfo(tenantId, prep.pieceId()));
-                line.put("price", prep.price().setScale(2));
-                line.put("error", null);
-                subtotal = subtotal.add(prep.price());
+                if (l.tapped()) {
+                    line.putAll(variantInfo(tenantId, l.variantId()));
+                    BigDecimal price = eventPrice(tenantId, eventId, l.variantId());
+                    int taken = tappedPerVariant.merge(l.variantId(), 1, Integer::sum)
+                        + scannedPerVariant.getOrDefault(l.variantId(), 0);
+                    if (taken > openLeft(tenantId, ev, l.variantId())) throw soldOut(tenantId, ev, l.variantId());
+                    line.put("price", price.setScale(2));
+                    line.put("error", null);
+                    subtotal = subtotal.add(price);
+                } else {
+                    Map<String, Object> piece = findPiece(tenantId, l.code());
+                    if (!seen.add((String) piece.get("id"))) throw duplicateInCart();
+                    Prepared prep = prepareSale(tenantId, eventId, ev, piece, l.code());
+                    line.putAll(pieceInfo(tenantId, prep.pieceId()));
+                    line.put("price", prep.price().setScale(2));
+                    line.put("error", null);
+                    subtotal = subtotal.add(prep.price());
+                }
             } catch (BazarException e) {
                 ok = false;
                 line.put("error", errorBody(e));
@@ -692,6 +820,35 @@ public class BazarSaleService {
         return out;
     }
 
+    /** A tapped line's product / size (no piece yet). */
+    private Map<String, Object> variantInfo(UUID tenantId, UUID variantId) {
+        List<Map<String, Object>> r = jdbc.queryForList(
+            "SELECT v.id, pr.title AS product_title, v.title AS variant_title FROM variants v " +
+            "JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id WHERE v.id = ? AND v.tenant_id = ?",
+            variantId, tenantId);
+        if (r.isEmpty()) throw notHere();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("piece_id", null);
+        out.put("piece_code", null);
+        out.put("variant_id", variantId);
+        out.put("product_title", r.get(0).get("product_title"));
+        out.put("variant_title", r.get(0).get("variant_title"));
+        return out;
+    }
+
+    /** The variant's bazar price at this event, else BAZAR_NO_PRICE (never 0 by default). */
+    private BigDecimal eventPrice(UUID tenantId, UUID eventId, UUID variantId) {
+        List<BigDecimal> p = jdbc.queryForList(
+            "SELECT price FROM bazar_event_prices WHERE event_id = ? AND variant_id = ? AND tenant_id = ?",
+            BigDecimal.class, eventId, variantId, tenantId);
+        if (p.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_NO_PRICE,
+                "Set a price first — this product has no bazar price yet.",
+                "حدّد السعر أولًا — هذا المنتج ليس له سعر في البازار بعد.", HttpStatus.CONFLICT);
+        }
+        return p.get(0);
+    }
+
     /**
      * Complete a cart: ONE transaction — every piece sold through the same writes as a quick sale (ledger edge
      * out_on_transfer → sold, transfer piece 'sold', the line's qty_sold), one receipt with a new B-number, the
@@ -699,10 +856,24 @@ public class BazarSaleService {
      * the total on the receipt. Any piece refused → nothing is written, and the error names the piece (details
      * {@code line_index} / {@code line_code}). Same {@code client_request_id} twice → the first receipt.
      */
+    // The B6c shape. Its own @Transactional: the call below is a self-call, which never goes through the proxy.
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> completeCart(UUID eventId, List<String> codes, BigDecimal discount, String method,
                                             String customerName, String customerPhone, String clientRequestId,
                                             Actor actor) {
+        return completeCartLines(eventId, codeLines(codes), discount, method, customerName, customerPhone,
+            clientRequestId, actor);
+    }
+
+    /**
+     * B7a: lines may be tapped variants — their pieces are picked here, in this one transaction, after every scanned
+     * line is resolved ({@link #pickPiece}, never one already in the cart). A size with none left → BAZAR_SOLD_OUT on
+     * that line ({@code line_index}); nothing is written.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> completeCartLines(UUID eventId, List<CartLine> input, BigDecimal discount, String method,
+                                                 String customerName, String customerPhone, String clientRequestId,
+                                                 Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         if (!sells(ev, actor)) throw notASeller();
@@ -721,7 +892,7 @@ public class BazarSaleService {
             throw invalid("This request id was already used for a sale.", "تم استخدام معرّف الطلب هذا لعملية بيع.");
         }
 
-        List<String> list = cartCodes(codes, false);
+        List<CartLine> list = cartLines(input, false);
         String chosen = resolveMethod(ev, method);
         BigDecimal off = discount == null ? BigDecimal.ZERO : discount;
         if (off.signum() < 0 || off.stripTrailingZeros().scale() > 0) throw invalidDiscount();
@@ -739,19 +910,33 @@ public class BazarSaleService {
             }
         }
 
-        // Check every piece before writing anything.
-        List<Prepared> lines = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();
+        // Check every piece before writing anything: the scanned ones first, then a piece for each tapped line —
+        // never one the cart already holds.
+        Prepared[] prepared = new Prepared[list.size()];
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
         for (int i = 0; i < list.size(); i++) {
-            String code = list.get(i);
+            CartLine l = list.get(i);
+            if (l.tapped()) continue;
             try {
-                Map<String, Object> piece = findPiece(tenantId, code);
+                Map<String, Object> piece = findPiece(tenantId, l.code());
                 if (!seen.add((String) piece.get("id"))) throw duplicateInCart();
-                lines.add(prepareSale(tenantId, eventId, ev, piece, code));
+                prepared[i] = prepareSale(tenantId, eventId, ev, piece, l.code());
             } catch (BazarException e) {
-                throw onLine(e, i, code);
+                throw onLine(e, i, l.code());
             }
         }
+        for (int i = 0; i < list.size(); i++) {
+            CartLine l = list.get(i);
+            if (!l.tapped()) continue;
+            try {
+                Map<String, Object> piece = pickPiece(tenantId, ev, l.variantId(), seen);
+                seen.add((String) piece.get("id"));
+                prepared[i] = prepareSale(tenantId, eventId, ev, piece, pieceCode(piece));
+            } catch (BazarException e) {
+                throw onLine(e, i, lineLabel(tenantId, l));
+            }
+        }
+        List<Prepared> lines = java.util.Arrays.asList(prepared);
         BigDecimal subtotal = lines.stream().map(Prepared::price).reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2);
         if (off.compareTo(subtotal) > 0) throw invalidDiscount();
         List<BigDecimal> shares = spreadDiscount(lines.stream().map(Prepared::price).toList(), off);
@@ -770,7 +955,7 @@ public class BazarSaleService {
                     shares.get(i));
             } catch (BazarException e) {
                 // A concurrent sale took the piece between the check and the write: the whole cart rolls back.
-                throw onLine(e, i, list.get(i));
+                throw onLine(e, i, lines.get(i).code());
             }
         }
         insertMoney(tenantId, eventId, null, receiptId, chosen, total, "payment", actor.userId(), null);
@@ -958,9 +1143,14 @@ public class BazarSaleService {
         return out;
     }
 
-    private static List<String> cartCodes(List<String> codes, boolean emptyOk) {
-        List<String> list = new ArrayList<>();
-        if (codes != null) for (String c : codes) list.add(c == null ? "" : c.trim());
+    private static List<CartLine> cartLines(List<CartLine> input, boolean emptyOk) {
+        List<CartLine> list = new ArrayList<>();
+        if (input != null) {
+            for (CartLine l : input) {
+                if (l == null) { list.add(new CartLine("", null)); continue; }
+                list.add(new CartLine(l.code() == null ? null : l.code().trim(), l.variantId()));
+            }
+        }
         if (list.isEmpty() && !emptyOk) {
             throw invalid("Scan at least one piece into the cart.", "امسح قطعة واحدة على الأقل في السلة.");
         }
@@ -968,7 +1158,17 @@ public class BazarSaleService {
             throw invalid("A cart can hold up to " + MAX_CART_LINES + " pieces.",
                 "يمكن أن تحتوي السلة على " + MAX_CART_LINES + " قطعة كحد أقصى.");
         }
-        return list;
+        return list.stream().map(l -> l.tapped() || l.code() != null ? l : new CartLine("", null)).toList();
+    }
+
+    /** How a tapped line is named in an error (no code was scanned): its product · size. */
+    private String lineLabel(UUID tenantId, CartLine l) {
+        try {
+            Map<String, Object> v = variantInfo(tenantId, l.variantId());
+            return v.get("product_title") + (v.get("variant_title") == null ? "" : " · " + v.get("variant_title"));
+        } catch (BazarException e) {
+            return String.valueOf(l.variantId());
+        }
     }
 
     /** product / size of a piece, for a cart line. */

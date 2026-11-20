@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, ArrowRight, Camera, CameraOff, Keyboard, Loader2, WifiOff } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Camera, CameraOff, FileText, Keyboard, LayoutGrid, Loader2, WifiOff } from 'lucide-react'
 import { useScanner, MAX_QUEUED_SCANS } from '../../../hooks/useScanner'
 import CameraReader, { type CameraError } from '../../scanpair/CameraReader'
 import {
@@ -18,6 +18,12 @@ import {
   CustomerSheet, ErrorLine, MethodChips, SaleBadge, SaleSheet, canEditSale, canUndoSale, usePaymentChange,
 } from './SaleSheets'
 import { CartPanel, ReceiptSheet, useCart } from './CartMode'
+import {
+  findVariant, getPriceSheet, productNumber, sizeName, tapRef, tappedVariant, useBazarCatalog,
+  type BazarCatalogProduct, type BazarCatalogSize,
+} from '../../../bazar/catalog'
+import { PickSheet } from './PickSheet'
+import { ProductGrid } from './ProductGrid'
 
 type Mode = 'quick' | 'cart'
 
@@ -63,16 +69,19 @@ function Sell({ live }: { live: BazarLive }) {
   const setMode = (m: Mode) => { setModeState(m); saveMode(eventId, m) }
   const cart = useCart(eventId)
 
-  const quick = useQuickSell({ eventId, method, onSold: s => { upsert(s); reload(); reloadToday() } })
+  // B7a: what's for sale without a barcode (numbers, sizes, what's left) — reloaded after every sale.
+  const { catalog, reload: reloadCatalog } = useBazarCatalog(eventId)
+  const quick = useQuickSell({ eventId, method, onSold: s => { upsert(s); reload(); reloadToday(); reloadCatalog() } })
   const [sheet, setSheet] = useState<
-    { kind: 'sale' | 'customer'; sale: BazarSale } | { kind: 'receipt'; receipt: BazarReceipt } | null>(null)
+    { kind: 'sale' | 'customer'; sale: BazarSale } | { kind: 'receipt'; receipt: BazarReceipt }
+    | { kind: 'pick'; number: number | null } | null>(null)
   const [typing, setTyping] = useState(false)
   const [cameraOn, setCameraOn] = useState(true)
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
   const [dropped, setDropped] = useState<string | null>(null)
 
-  const changed = useCallback((s: BazarSale) => { upsert(s); quick.updateSale(s); reloadToday() },
-    [upsert, quick, reloadToday])
+  const changed = useCallback((s: BazarSale) => { upsert(s); quick.updateSale(s); reloadToday(); reloadCatalog() },
+    [upsert, quick, reloadToday, reloadCatalog])
   const receiptChanged = useCallback((r: BazarReceipt) => { upsert(r); reloadToday() }, [upsert, reloadToday])
 
   const scanner = useScanner({
@@ -80,16 +89,8 @@ function Sell({ live }: { live: BazarLive }) {
     focusPaused: sheet !== null || typing,
   })
 
-  /** Every way a code arrives (camera, HID scanner, typed) goes through here. */
-  const submit = useCallback((raw: string) => {
-    const code = raw.trim()
-    if (!code) return
-    if (mode === 'cart') {
-      // Cart: the code joins the list — nothing is sold until Complete.
-      cart.add(code)
-      if (scanner.inputRef.current) scanner.inputRef.current.value = ''
-      return
-    }
+  /** Quick mode: one code (or a B7a tapped-size ref) → one sale, through the scanner's single-flight queue. */
+  const sendQuick = useCallback((code: string) => {
     if (scanner.pending >= MAX_QUEUED_SCANS) { scanner.handleScan(code); return }   // refused loudly by the scanner
     if (!quick.enqueue(code)) {
       if (scanner.inputRef.current) scanner.inputRef.current.value = ''
@@ -98,7 +99,51 @@ function Sell({ live }: { live: BazarLive }) {
     }
     setDropped(null)
     scanner.handleScan(code)
-  }, [scanner, quick, mode, cart])
+  }, [scanner, quick])
+
+  /** Every way a code arrives (camera, HID scanner, typed) goes through here. */
+  const submit = useCallback((raw: string) => {
+    const code = raw.trim()
+    if (!code) return
+    // B7a: "12" / "#12" — the price sheet's product number (never a piece code: those have 6+ digits). It opens
+    // that product's sizes; it never sells.
+    const n = productNumber(code)
+    if (n !== null) {
+      if (scanner.inputRef.current) scanner.inputRef.current.value = ''
+      setSheet({ kind: 'pick', number: n })
+      return
+    }
+    if (mode === 'cart') {
+      // Cart: the code joins the list — nothing is sold until Complete.
+      cart.add(code)
+      if (scanner.inputRef.current) scanner.inputRef.current.value = ''
+      return
+    }
+    sendQuick(code)
+  }, [scanner, mode, cart, sendQuick])
+
+  /** B7a: a tapped size — the same path as a scan (quick: a sale; cart: a line); the server picks the piece. */
+  const pick = useCallback((_p: BazarCatalogProduct, size: BazarCatalogSize) => {
+    setSheet(null)
+    const ref = tapRef(size.variant_id)
+    if (mode === 'cart') cart.add(ref)
+    else sendQuick(ref)
+  }, [mode, cart, sendQuick])
+
+  /** What the sending / error card names: the scanned code, or a tapped size's product + size. */
+  const labelFor = useCallback((code: string) => {
+    const v = tappedVariant(code)
+    if (!v) return code
+    const f = findVariant(catalog, v)
+    return f ? `${f.product.title} · ${sizeName(f.product, f.size)}` : ''
+  }, [catalog])
+
+  const [sheetBusy, setSheetBusy] = useState(false)
+  const priceSheet = useCallback(async () => {
+    setSheetBusy(true)
+    try { await getPriceSheet(eventId, i18n.language, false) } catch { /* the button stays; try again */ }
+    finally { setSheetBusy(false) }
+  }, [eventId, i18n.language])
 
   const lastRead = useRef<{ code: string; at: number } | null>(null)
   const onCameraRead = useCallback((raw: string) => {
@@ -159,52 +204,18 @@ function Sell({ live }: { live: BazarLive }) {
             <Keyboard size={16} aria-hidden />{t('bazar.sell.typeCode')}
           </button>
         </div>
-        {dropped && <p className="text-small text-muted" role="status">{t('bazar.sell.alreadySending', { code: dropped })}</p>}
+        {/* B7a: no barcode — pick a product (phone: a sheet; computer: the grid below). */}
+        <button type="button" onClick={() => setSheet({ kind: 'pick', number: null })} data-testid="open-pick"
+          className="lg:hidden h-11 rounded-lg border border-line bg-surface flex items-center justify-center gap-2 text-small font-semibold text-primary">
+          <LayoutGrid size={16} aria-hidden />{t('bazar.pick.open')}
+        </button>
+        <div className="hidden lg:block"><ProductGrid catalog={catalog} onPick={pick} /></div>
+        {dropped && <p className="text-small text-muted" role="status">{t('bazar.sell.alreadySending', { code: labelFor(dropped) })}</p>}
         {scanner.queueFull && <p className="text-small text-critical" role="alert">{t('bazar.sell.queueFull')}</p>}
         {scanner.pending > 0 && <p className="text-small text-muted">{t('bazar.sell.waiting', { count: scanner.pending })}</p>}
     </>
   )
-  const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
-
-  return (
-    <PhoneFrame testId="bazar-sell" wide={mode === 'cart'} header={
-      <>
-      <div className="flex items-center justify-between gap-3">
-        <button type="button" onClick={() => navigate(`/bazar/${encodeURIComponent(eventId)}/home`)}
-          className="min-h-[44px] -ms-2 px-2 flex items-center gap-1.5 text-sidebar-text hover:text-sidebar-active text-small font-semibold">
-          <Back size={18} aria-hidden />{t('bazar.sell.home')}
-        </button>
-        <span className="text-small font-semibold text-sidebar-active truncate">
-          {live.day >= 1 && live.day <= live.dayCount ? t('bazar.sell.titleDay', { name: live.name, day: live.day }) : live.name}
-        </span>
-      </div>
-      <PhoneTabs eventId={eventId} active="sell" />
-      <ModeSwitch mode={mode} onChange={setMode} />
-      </>
-    } footer={
-      <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3"
-              data-testid="bazar-sell-footer">
-        <span className="flex flex-col">
-          <span className="text-small text-muted">{t('bazar.phone.today')}</span>
-          <span className="text-body-lg font-bold text-primary tabular-nums">{today ? formatMoney(today.total) : '…'}</span>
-        </span>
-        <span className="text-small text-muted text-end">
-          {today ? t('bazar.sell.salesCount', { count: today.sale_count }) : ''}
-          <br />{t('bazar.sell.defaultPay', { method: t(`bazar.method.${method}`) })}
-        </span>
-      </footer>
-    }>
-      {mode === 'cart' ? (
-        <CartPanel eventId={eventId} cart={cart} methods={methods} defaultMethod={method} scanner={scanBlock}
-          onCompleted={r => { upsert(r); reload(); reloadToday() }} onChanged={receiptChanged} />
-      ) : (
-        <>
-          {scanBlock}
-          <StatusCard card={quick.card} eventId={eventId} methods={methods}
-            onChanged={changed} onCustomer={s => setSheet({ kind: 'customer', sale: s })} />
-        </>
-      )}
-
+  const recentList = (
       <section className="flex flex-col gap-1.5 min-h-0" aria-label={t('bazar.sell.recent')}>
         <span className="text-small font-medium text-muted">{t('bazar.sell.recent')}</span>
         {sales && recent.length === 0 && <p className="text-small text-muted">{t('bazar.sell.noSales')}</p>}
@@ -242,6 +253,65 @@ function Sell({ live }: { live: BazarLive }) {
           ))}
         </ul>
       </section>
+  )
+  const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
+
+  return (
+    <PhoneFrame testId="bazar-sell" wide header={
+      <>
+      <div className="flex items-center justify-between gap-3">
+        <button type="button" onClick={() => navigate(`/bazar/${encodeURIComponent(eventId)}/home`)}
+          className="min-h-[44px] -ms-2 px-2 flex items-center gap-1.5 text-sidebar-text hover:text-sidebar-active text-small font-semibold">
+          <Back size={18} aria-hidden />{t('bazar.sell.home')}
+        </button>
+        <span className="flex items-center gap-3 min-w-0">
+          <span className="text-small font-semibold text-sidebar-active truncate">
+            {live.day >= 1 && live.day <= live.dayCount ? t('bazar.sell.titleDay', { name: live.name, day: live.day }) : live.name}
+          </span>
+          {/* B7b: the A4 price sheet (computer: print it; the phone has it in the bazar menu). */}
+          <button type="button" onClick={priceSheet} disabled={sheetBusy} data-testid="sell-price-sheet"
+            className="hidden lg:flex h-9 px-3 rounded-lg border border-white/20 text-small font-semibold text-sidebar-active items-center gap-1.5 shrink-0 disabled:opacity-60">
+            {sheetBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <FileText size={14} aria-hidden />}
+            {t('bazar.pick.priceSheet')}
+          </button>
+        </span>
+      </div>
+      <PhoneTabs eventId={eventId} active="sell" />
+      <ModeSwitch mode={mode} onChange={setMode} />
+      </>
+    } footer={
+      <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center justify-between gap-3"
+              data-testid="bazar-sell-footer">
+        <span className="flex flex-col">
+          <span className="text-small text-muted">{t('bazar.phone.today')}</span>
+          <span className="text-body-lg font-bold text-primary tabular-nums">{today ? formatMoney(today.total) : '…'}</span>
+        </span>
+        <span className="text-small text-muted text-end">
+          {today ? t('bazar.sell.salesCount', { count: today.sale_count }) : ''}
+          <br />{t('bazar.sell.defaultPay', { method: t(`bazar.method.${method}`) })}
+        </span>
+      </footer>
+    }>
+      {mode === 'cart' ? (
+        <CartPanel eventId={eventId} cart={cart} methods={methods} defaultMethod={method} scanner={scanBlock}
+          onCompleted={r => { upsert(r); reload(); reloadToday(); reloadCatalog() }} onChanged={receiptChanged} />
+      ) : (
+        <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-5">
+          <div className="flex flex-col gap-3 min-w-0">{scanBlock}</div>
+          <div className="flex flex-col gap-3 min-w-0">
+            <StatusCard card={quick.card} eventId={eventId} methods={methods} labelFor={labelFor}
+              onChanged={changed} onCustomer={s => setSheet({ kind: 'customer', sale: s })} />
+            {recentList}
+          </div>
+        </div>
+      )}
+
+      {mode === 'cart' && recentList}
+
+      {sheet?.kind === 'pick' && (
+        <PickSheet catalog={catalog} startNumber={sheet.number} mode={mode} onPick={pick}
+                   onClose={() => setSheet(null)} onScanBurst={submit} />
+      )}
 
       {sheet?.kind === 'sale' && (
         <SaleSheet eventId={eventId} sale={sheet.sale} methods={methods} onChanged={changed}
@@ -259,10 +329,12 @@ function Sell({ live }: { live: BazarLive }) {
   )
 }
 
-function StatusCard({ card, eventId, methods, onChanged, onCustomer }: {
+function StatusCard({ card, eventId, methods, labelFor, onChanged, onCustomer }: {
   card: SellCard
   eventId: string
   methods: ReturnType<typeof orderedMethods>
+  /** B7a: a tapped size's product + size instead of its internal ref. */
+  labelFor: (code: string) => string
   onChanged: (s: BazarSale) => void
   onCustomer: (s: BazarSale) => void
 }) {
@@ -293,7 +365,7 @@ function StatusCard({ card, eventId, methods, onChanged, onCustomer }: {
       <section role="status" className="rounded-2xl bg-trace-blue/10 border border-trace-blue/30 px-4 py-4 flex items-center gap-3" data-testid="sell-card-sending">
         <Loader2 size={20} className="animate-spin text-trace-blue" aria-hidden />
         <span className="font-semibold text-primary">{t('bazar.sell.sending')}</span>
-        <span className="font-mono text-small text-muted ms-auto" dir="ltr">{card.code}</span>
+        <span className="font-mono text-small text-muted ms-auto" dir="ltr">{labelFor(card.code)}</span>
       </section>
     )
   }
@@ -305,7 +377,7 @@ function StatusCard({ card, eventId, methods, onChanged, onCustomer }: {
           <Loader2 size={16} className="animate-spin ms-auto" aria-hidden />
         </span>
         <span className="text-small text-primary">{t('bazar.sell.checkingBody')}</span>
-        <span className="font-mono text-small text-muted" dir="ltr">{card.code}</span>
+        <span className="font-mono text-small text-muted" dir="ltr">{labelFor(card.code)}</span>
       </section>
     )
   }
@@ -315,7 +387,7 @@ function StatusCard({ card, eventId, methods, onChanged, onCustomer }: {
       <section role="alert" className="rounded-2xl bg-critical/10 border border-critical/30 px-4 py-4 flex flex-col gap-1" data-testid="sell-card-error">
         <span className="font-semibold text-critical-text">{title}</span>
         {detail && <span className="text-small text-primary">{detail}</span>}
-        <span className="font-mono text-small text-muted" dir="ltr">{card.code}</span>
+        <span className="font-mono text-small text-muted" dir="ltr">{labelFor(card.code)}</span>
       </section>
     )
   }

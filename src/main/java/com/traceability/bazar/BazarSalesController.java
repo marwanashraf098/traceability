@@ -30,7 +30,7 @@ public class BazarSalesController {
     @ResponseStatus(HttpStatus.OK)
     public Map<String, Object> sell(@PathVariable UUID eventId, @RequestBody SellRequest req,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.sell(eventId, req.code(), req.clientRequestId(), req.method(), actor(principal));
+        return sales.sell(eventId, req.code(), req.variantId(), req.clientRequestId(), req.method(), actor(principal));
     }
 
     /** B3: take back a piece sold at this event. */
@@ -66,7 +66,7 @@ public class BazarSalesController {
     @PostMapping("/cart/preview")
     public Map<String, Object> cartPreview(@PathVariable UUID eventId, @RequestBody CartPreviewRequest req,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.previewCart(eventId, req == null ? null : req.codes(), actor(principal));
+        return sales.previewCartLines(eventId, req == null ? null : lines(req.lines(), req.codes()), actor(principal));
     }
 
     /** B6c: sell every piece of the cart in one transaction, or none. */
@@ -74,7 +74,7 @@ public class BazarSalesController {
     public Map<String, Object> cartComplete(@PathVariable UUID eventId, @RequestBody CartCompleteRequest req,
                                             @AuthenticationPrincipal CustomUserDetails principal) {
         CartCustomer c = req.customer();
-        return sales.completeCart(eventId, req.codes(), req.discount(), req.method(),
+        return sales.completeCartLines(eventId, lines(req.lines(), req.codes()), req.discount(), req.method(),
             c == null ? null : c.name(), c == null ? null : c.phone(), req.clientRequestId(), actor(principal));
     }
 
@@ -135,7 +135,21 @@ public class BazarSalesController {
     }
 
     /** {@code client_request_id} also accepted in camelCase. */
+    /** B7a: {@code lines} ([{code} | {variant_id}]) when sent, else B6c's {@code codes}. */
+    private static List<BazarSaleService.CartLine> lines(List<CartLineRequest> lines, List<String> codes) {
+        if (lines == null) return BazarSaleService.codeLines(codes);
+        return lines.stream().map(l -> l == null ? new BazarSaleService.CartLine("", null)
+            : new BazarSaleService.CartLine(l.code(), l.variantId())).toList();
+    }
+
+    public record CartLineRequest(String code,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("variant_id")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("variantId") UUID variantId) {}
+
+    /** {@code code} (a scan) or B7a {@code variant_id} (a tap — the server picks the piece). */
     public record SellRequest(String code,
+                              @com.fasterxml.jackson.annotation.JsonProperty("variant_id")
+                              @com.fasterxml.jackson.annotation.JsonAlias("variantId") UUID variantId,
                               @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
                               @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")
                               String clientRequestId,
@@ -143,12 +157,13 @@ public class BazarSalesController {
 
     public record PaymentRequest(String method) {}
 
-    public record CartPreviewRequest(List<String> codes) {}
+    public record CartPreviewRequest(List<String> codes, List<CartLineRequest> lines) {}
 
     public record CartCustomer(String name, String phone) {}
 
     /** discount: whole pounds (≥ 0, ≤ the cart's total). method: default cash. customer: optional. */
-    public record CartCompleteRequest(List<String> codes, java.math.BigDecimal discount, String method,
+    public record CartCompleteRequest(List<String> codes, List<CartLineRequest> lines, java.math.BigDecimal discount,
+                                      String method,
                                       CartCustomer customer,
                                       @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
                                       @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")

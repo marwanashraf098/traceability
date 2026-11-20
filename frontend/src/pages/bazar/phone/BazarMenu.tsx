@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MoreVertical, Users, UserRoundCog } from 'lucide-react'
+import { FileText, Loader2, MoreVertical, Users, UserRoundCog } from 'lucide-react'
 import { switchPin } from '../../../api'
 import { setAccessToken } from '../../../auth'
 import { BazarError, getBazarSellerRoster, managesBazar } from '../../../bazar/api'
 import { resetCapabilitiesCache } from '../../../capabilities'
+import { getPriceSheet } from '../../../bazar/catalog'
 import { Button, Input, Spinner } from '../../../components/ui'
 import { SellersPanel } from '../SellersPanel'
 import { Sheet } from './shared'
@@ -17,8 +18,15 @@ type View = 'menu' | 'switch' | 'sellers' | null
  * computer's Sellers card).
  */
 export function BazarMenu({ eventId }: { eventId: string }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [view, setView] = useState<View>(null)
+  const [sharing, setSharing] = useState<'busy' | 'failed' | null>(null)
+  // B7b: the A4 price sheet — shared as a PDF (Web Share API), else downloaded. Any seller of the event.
+  async function priceSheet() {
+    setSharing('busy')
+    try { await getPriceSheet(eventId, i18n.language, true); setSharing(null); setView(null) }
+    catch { setSharing('failed') }
+  }
   const manager = managesBazar()
   const item = 'h-12 rounded-xl border border-line bg-surface px-4 font-semibold text-primary flex items-center gap-3 text-start'
   return (
@@ -33,6 +41,11 @@ export function BazarMenu({ eventId }: { eventId: string }) {
           <button type="button" className={item} onClick={() => setView('switch')} data-testid="menu-switch-seller">
             <UserRoundCog size={18} aria-hidden />{t('bazar.menu.switchSeller')}
           </button>
+          <button type="button" className={item} onClick={priceSheet} disabled={sharing === 'busy'} data-testid="menu-price-sheet">
+            {sharing === 'busy' ? <Loader2 size={18} className="animate-spin" aria-hidden /> : <FileText size={18} aria-hidden />}
+            {t('bazar.pick.priceSheet')}
+          </button>
+          {sharing === 'failed' && <p role="alert" className="text-small text-critical">{t('bazar.pick.priceSheetFailed')}</p>}
           {manager && (
             <button type="button" className={item} onClick={() => setView('sellers')} data-testid="menu-sellers">
               <Users size={18} aria-hidden />{t('bazar.menu.sellers')}
