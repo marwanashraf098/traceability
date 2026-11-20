@@ -5,7 +5,8 @@ import {
   BazarError, addBazarSeller, allowBazarWorkers, listBazarSellerCandidates, listBazarSellers, newBazarSellerLink,
   removeBazarSeller, whatsAppUrl, type BazarSeller, type BazarSellerLink, type BazarSellers,
 } from '../../bazar/api'
-import { Badge, Button, Input, Spinner } from '../../components/ui'
+import { Button, Input, Spinner } from '../../components/ui'
+import { Chip } from './r2/parts'
 
 /**
  * Bazar POS B6b — the event's sellers (owner / manager): who can sell, "Add seller" (a new worker from a name and an
@@ -88,8 +89,9 @@ export function SellersPanel({ eventId }: { eventId: string }) {
                   <span className="font-semibold text-primary truncate">{s.name}</span>
                   {s.phone && <span className="text-small text-muted font-mono" dir="ltr">{s.phone}</span>}
                 </div>
-                <Badge tone={s.has_pin ? 'success' : 'neutral'} className="shrink-0 whitespace-nowrap"
-                       label={s.has_pin ? t('bazar.sellers.ready') : t('bazar.sellers.waiting')} />
+                <Chip tone={s.has_pin ? 'good' : 'neutral'} className="shrink-0">
+                  {s.has_pin ? t('bazar.sellers.ready') : t('bazar.sellers.waiting')}
+                </Chip>
               </div>
               {confirmRemove?.user_id === s.user_id ? (
                 <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-charcoal">

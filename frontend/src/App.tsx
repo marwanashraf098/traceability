@@ -24,6 +24,9 @@ const BazarEvents     = lazy(() => import('./pages/bazar/BazarEvents'))
 const BazarNewEvent   = lazy(() => import('./pages/bazar/BazarNewEvent'))
 const BazarEventPage  = lazy(() => import('./pages/bazar/BazarEventPage'))
 const BazarScanOut    = lazy(() => import('./pages/bazar/BazarScanOut'))
+// Bazar R3: Close the day and End event as pages on the computer (in-shell). The phone keeps /close and /end.
+const BazarCloseDayPage = lazy(() => import('./pages/bazar/r3/CloseDayPage'))
+const BazarEndEventPage = lazy(() => import('./pages/bazar/r3/EndEventPage'))
 const BazarPhoneHome  = lazy(() => import('./pages/bazar/phone/BazarPhoneHome'))
 const BazarSell       = lazy(() => import('./pages/bazar/phone/BazarSell'))
 const BazarReturn     = lazy(() => import('./pages/bazar/phone/BazarReturn'))
@@ -688,6 +691,12 @@ export default function App() {
         </OwnerOnlyRoute></RequireAuth>} />
         <Route path="/bazar/:id" element={<RequireAuth><OwnerOnlyRoute>
           <Layout><Suspense fallback={null}><BazarEventPage /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/:id/close-day" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarCloseDayPage /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
+        <Route path="/bazar/:id/end-event" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarEndEventPage /></Suspense></Layout>
         </OwnerOnlyRoute></RequireAuth>} />
         <Route path="/bazar/:id/scan-out" element={<RequireAuth><OwnerOnlyRoute>
           <Suspense fallback={null}><BazarScanOut /></Suspense>

@@ -67,13 +67,15 @@ function ShouldBe({ value, extra }: { value: string | number | null | undefined;
   )
 }
 
-export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
+export function CloseDayForm({ eventId, day, methods, onClosed, compact, wide }: {
   eventId: string
   day: BazarDay
   methods: PaymentMethod[]
   onClosed: (day: BazarDay) => void
-  /** Desktop (the event page's modal): a slightly smaller field. */
+  /** Desktop: a slightly smaller field. */
   compact?: boolean
+  /** R3 — the computer's Close day page: two columns (the money left, the difference + confirm right). Same form. */
+  wide?: boolean
 }) {
   const { t } = useTranslation()
   const ids = useId()
@@ -140,8 +142,8 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
   const field = cn('input w-full font-bold tabular-nums border-[1.5px] focus:border-trace-blue', compact ? 'h-12 text-h4' : 'h-14 text-h3')
   const inputLabel = 'text-small font-semibold text-primary'
 
-  return (
-    <div className="flex flex-col gap-3" data-testid="close-day-form">
+  const sections = (
+    <>
       {/* 1 · Cash — first, and the cursor starts here (R2 decision 2). */}
       <StepCard n={1} title={t('bazar.close.cash')} sub={t('bazar.close.cashHint')}
         end={cash != null && !Number.isNaN(cash) ? <StateChip result={result} method="cash" testId="close-chip-cash" /> : undefined}
@@ -187,9 +189,13 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
           </label>
         </StepCard>
       )}
+    </>
+  )
 
-      <CloseResultView result={result} loading={previewing && !preview} day={day} hideTakeHome />
+  const summary = <CloseResultView result={result} loading={previewing && !preview} day={day} hideTakeHome />
 
+  const drawer = (
+    <>
       {/* The drawer — the opening float (first close only) and what stays for tomorrow. */}
       <section className="card p-4 flex flex-col gap-3" data-testid="close-drawer">
         <span className="text-body-lg font-semibold text-primary">{t('bazar.r2.close.drawer')}</span>
@@ -223,7 +229,11 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
         </label>
         {result && <TakeHome result={result} />}
       </section>
+    </>
+  )
 
+  const finish = (
+    <>
       <label className="flex flex-col gap-1">
         <span className={inputLabel}>{t('bazar.close.note')}</span>
         <textarea className="input min-h-[72px] py-2" value={note} maxLength={500} onChange={e => setNote(e.target.value)}
@@ -238,6 +248,20 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact }: {
         {cmd.busy ? t('bazar.close.closing') : again ? t('bazar.close.confirmAgain') : t('bazar.close.confirm')}
       </button>
       <p className="text-small text-muted -mt-1">{t('bazar.r2.close.sellingGoesOn')}</p>
+    </>
+  )
+
+  if (wide) {
+    return (
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] items-start" data-testid="close-day-form">
+        <div className="flex flex-col gap-3 min-w-0">{sections}{drawer}</div>
+        <div className="flex flex-col gap-3 min-w-0 lg:sticky lg:top-4">{summary}<div className="card p-4 flex flex-col gap-3">{finish}</div></div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-3" data-testid="close-day-form">
+      {sections}{summary}{drawer}{finish}
     </div>
   )
 }
@@ -249,7 +273,7 @@ function TakeHome({ result }: { result: BazarCloseResult }) {
       <span className="text-body-lg font-bold text-primary tabular-nums">
         {t('bazar.close.takeHome', { amount: money(result.take_home) })}
       </span>
-      <span className="text-small text-muted">{t('bazar.close.takeHomeKept', { amount: formatMoney(result.cash_kept) })}</span>
+      <span className="text-small text-muted">{t('bazar.close.takeHomeKept', { amount: money(result.cash_kept) })}</span>
     </section>
   )
 }

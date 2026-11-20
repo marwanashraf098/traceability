@@ -4,6 +4,23 @@
 
 ## Current state
 
+**Bazar R3 restyle — event page (Get ready / live / ended) + computer Close day and End event pages (2026-11-20;
+branch `bazar-r3-restyle` off origin/main 5d3cfbf6 (R1 + R2 + B6b); frontend only, no migration, no endpoint; pushed,
+NOT merged).** Appearance only, design/bazar-v2 (V2_Event*, V2_Setup*, V2_CloseDay, V2_EndEvent).
+- BazarEventPage.tsx is now only the loader; the views are in r3/: SetupView (Get ready), LiveView (tabs Today / Sales /
+  Days & cash / Pieces / Prices / Sellers; ended: Summary / Sales / Days / Pieces + View report), PricesCard (moved out,
+  shared by Get ready and the Prices tab; All / Custom / No price filters and the Shopify → bazar value are display only),
+  SellersCard (B6b, moved), CloseDayPage, EndEventPage, parts.
+- New routes (in-shell, OwnerOnlyRoute): /bazar/:id/close-day (?day=, else today — as the modal did; day picker) and
+  /bazar/:id/end-event. The two modals are gone. Phone /close and /end unchanged. CloseDayForm / LeftoversPanel got a
+  `wide` two-column option only (same behaviour, request bodies, test ids).
+- Extra reads (approved): GET …/today (Sold today per seller) on the 30 s loop; GET …/report (Selling best + "Sales by
+  hour · whole bazar") on open and when Today is re-opened, never on the loop. A failure / bad shape hides that card only.
+- Get ready: no scanner on the page (the button opens /bazar/:id/scan-out); mark-sent keeps its confirm; start only once
+  sent. SaleBadge is imported as-is from phone/SaleSheets (B7 may touch it — resolve at merge).
+- Approved test edits: bazarB4 218 (text), 348–356 (Days & cash tab → /close-day?day=), 358–369 (More ▾ → Change prices).
+- Strings: `bazar.r3` block first in `bazar`.
+
 **Bazar R2 restyle — report, phone Close day, phone End event (2026-11-19; branch `bazar-r2-restyle` off origin/main
 2505aac2; frontend only, no migration, no endpoint; committed, NOT merged).** Appearance only, design/bazar-v2
 (V2_CloseDay*, V2_EndEvent*, V2_Report*). Files: BazarReport.tsx (+ ReportKpis = the dark hero, also the phone end
