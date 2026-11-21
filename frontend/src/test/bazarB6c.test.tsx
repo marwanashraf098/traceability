@@ -230,7 +230,7 @@ describe('Cart mode', () => {
     await waitFor(() => expect(screen.getByTestId('cart-total')).toHaveTextContent('800'))
     await user.type(screen.getByTestId('cart-discount'), '50')
     expect(screen.getByTestId('cart-total')).toHaveTextContent('750')
-    expect(screen.getByTestId('cart-complete')).toHaveTextContent('Complete sale · EGP 750')
+    expect(screen.getByTestId('cart-complete')).toHaveTextContent('Charge 750 EGP · Cash')
     expect(screen.getByTestId('cart-complete')).toBeEnabled()
     await user.clear(screen.getByTestId('cart-discount'))
     await user.type(screen.getByTestId('cart-discount'), '900')
@@ -258,7 +258,7 @@ describe('Cart mode', () => {
     await waitFor(() => expect(screen.getByTestId('cart-complete')).toBeEnabled())
     await user.type(screen.getByTestId('cart-discount'), '100')
     await user.click(within(screen.getByTestId('cart-summary')).getByRole('button', { name: 'Card' }))
-    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    await user.click(screen.getByLabelText('Name'))
     await user.type(screen.getByLabelText('Name'), 'Mona')
     await user.type(screen.getByLabelText('Mobile number'), '01012345678')
     await user.click(screen.getByTestId('cart-complete'))
@@ -376,7 +376,7 @@ describe('Cart mode — focus safety', () => {
   test('a HID scan while a customer box has focus adds the piece; the box is unchanged', async () => {
     install(...sellBase())
     const user = await openCart()
-    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    await user.click(screen.getByLabelText('Name'))
     const name = screen.getByLabelText('Name') as HTMLInputElement
     await person().type(name, 'Mona')
     expect(name).toHaveFocus()
@@ -400,7 +400,7 @@ describe('Cart mode — focus safety', () => {
     const p = person()
     await p.type(screen.getByTestId('cart-discount'), '1234{Enter}')
     expect(screen.getByTestId('cart-discount')).toHaveValue('1234')
-    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    await user.click(screen.getByLabelText('Name'))
     await p.type(screen.getByLabelText('Name'), 'Mona Ali Hassan{Enter}')
     await p.type(screen.getByLabelText('Mobile number'), '01012345678{Enter}')
     expect(screen.getByLabelText('Name')).toHaveValue('Mona Ali Hassan')
@@ -423,7 +423,7 @@ describe('Quick mode "+ Customer" sheet — focus safety', () => {
     const user = userEvent.setup()
     await user.type(await screen.findByTestId('bazar-scan-input'), 'P0000001{Enter}')
     await screen.findByTestId('sell-card-sold')
-    await user.click(screen.getByRole('button', { name: '+ Customer' }))
+    await user.click(screen.getByRole('button', { name: 'Customer name' }))
     return within(await screen.findByTestId('bazar-customer-sheet'))
   }
 

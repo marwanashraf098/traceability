@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import {
   BazarError, defaultMethod, exchangeOnce, orderedMethods,
   type BazarExchangeResult, type BazarPieceLookup, type BazarSale, type PaymentMethod,
 } from '../../../bazar/api'
-import { formatMoney, pieceTitle, toNumber } from '../../../bazar/format'
+import { pieceTitle, toNumber } from '../../../bazar/format'
 import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
 import type { BazarLive } from '../../../capabilities'
 import { cn } from '../../../components/ui'
-import { NotLiveScreen, PhoneFrame, useBazarLive } from './shared'
+import { NotLiveScreen, useBazarLive, useBazarToday } from './shared'
 import { MethodChips } from './SaleSheets'
-import { BigButton, CodeEntry, CommandStatus, ErrorCard, MoneyBanner, PhoneTabs, PieceRow, soldLine } from './ReturnParts'
+import { BigButton, CommandStatus, ErrorCard, soldLine } from './ReturnParts'
+import { amount } from '../r1/parts'
+import { money } from '../r2/parts'
+import {
+  Columns, ConditionCards, ConfirmButton, KindSwitch, Label, MoneyBox, PieceCard, R4CodeEntry, R4Header, R4Screen,
+  StepTick, StickyAction, TodayLine, TodayPill,
+  useSentenceMoney,
+} from '../r4/parts'
 import { notReturnable, useLookup } from './BazarReturn'
 import { sizeName, useBazarCatalog, type BazarCatalogProduct, type BazarCatalogSize } from '../../../bazar/catalog'
 import { FindSaleSheet } from './FindSale'
@@ -42,9 +49,10 @@ function notForSale(p: BazarPieceLookup): BazarError | null {
 }
 
 function ExchangeScreen({ live }: { live: BazarLive }) {
-  const { t, i18n } = useTranslation()
-  const navigate = useNavigate()
+  const { t } = useTranslation()
   const eventId = live.eventId
+  const { today } = useBazarToday(eventId)
+  const sm = useSentenceMoney()
   const methods = useMemo(() => orderedMethods(live.paymentMethods), [live.paymentMethods])
   const oldLook = useLookup(eventId)
   const newLook = useLookup(eventId)
@@ -100,103 +108,135 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
 
   function startOver() { cmd.reset(); oldLook.clear(); newLook.clear(); setOldFound(null); setNewTapped(null) }
 
-  const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
   const done = cmd.state.kind === 'done' ? cmd.state.result : null
+  const exchanges = today ? t('bazar.phone.exchangesCount', { count: today.exchanges ?? 0 }) : ''
+  const methodName = t(`bazar.method.${method}`)
+  const linkBtn = 'min-h-[36px] px-1 text-small font-semibold text-trace-blue hover:underline shrink-0 disabled:opacity-60'
 
   return (
-    <PhoneFrame testId="bazar-exchange" header={
-      <>
-        <div className="flex items-center justify-between gap-3">
-          <button type="button" onClick={() => navigate(`/bazar/${encodeURIComponent(eventId)}/home`)}
-            className="min-h-[44px] -ms-2 px-2 flex items-center gap-1.5 text-sidebar-text hover:text-sidebar-active text-small font-semibold">
-            <Back size={18} aria-hidden />{t('bazar.sell.home')}
-          </button>
-          <span className="text-small font-semibold text-sidebar-active truncate">{live.name}</span>
-        </div>
-        <PhoneTabs eventId={eventId} active="exchange" />
-      </>
-    } footer={ready && !done && (
-      <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))]">
-        <BigButton onClick={confirm} busy={cmd.busy} testId="exchange-confirm">
-          {t('bazar.exch.confirm')}
-        </BigButton>
-      </footer>
-    )}>
+    <R4Screen testId="bazar-exchange" header={
+      <R4Header live={live} back={{ to: `/bazar/${encodeURIComponent(eventId)}/sell`, label: t('bazar.tabs.sell') }}
+        title={live.name} wideTitle={t('bazar.r4.returnTitle')}
+        sub={today ? <TodayLine total={today.total} count={exchanges} /> : null}
+        wideSub={t('bazar.r4.returnSub')}
+        today={today ? <TodayPill total={today.total} count={exchanges} /> : null} />
+    }>
       {done ? (
         <ExchangeDone result={done} onNext={startOver} />
       ) : (
-        <>
-          {!ready && (
-            <CodeEntry onCode={onCode} disabled={cmd.busy}
-                       hint={target === 'old' ? t('bazar.exch.scanOldHint') : t('bazar.exch.scanNewHint')} />
-          )}
-          {!ready && (
-            <button type="button" onClick={() => setSheet(target === 'old' ? 'find' : 'pick')} disabled={cmd.busy}
-              data-testid={target === 'old' ? 'exchange-find' : 'exchange-pick'}
-              className="h-11 rounded-lg border border-line bg-surface text-small font-semibold text-primary">
-              {target === 'old' ? t('bazar.find.open') : t('bazar.pick.open')}
-            </button>
-          )}
-          {sheet === 'find' && (
-            <FindSaleSheet eventId={eventId} catalog={catalog} onClose={() => setSheet(null)}
-              onPick={s => { setSheet(null); cmd.reset(); oldLook.clear(); setOldFound(s) }} />
-          )}
-          {sheet === 'pick' && (
-            <PickSheet catalog={catalog} mode="exchange" onClose={() => setSheet(null)}
-              onPick={(product, size) => { setSheet(null); cmd.reset(); newLook.clear(); setNewTapped({ product, size }) }} />
-          )}
+        <Columns left={
+          <>
+            {!ready && (
+              <R4CodeEntry onCode={onCode} disabled={cmd.busy}
+                           hint={target === 'old' ? t('bazar.exch.scanOldHint') : t('bazar.exch.scanNewHint')} />
+            )}
+            <h2 className="lg:hidden text-h4 font-bold text-primary">{t('bazar.r4.returnTitle')}</h2>
+            <KindSwitch eventId={eventId} active="exchange" />
+            {sheet === 'find' && (
+              <FindSaleSheet eventId={eventId} catalog={catalog} onClose={() => setSheet(null)}
+                onPick={s => { setSheet(null); cmd.reset(); oldLook.clear(); setOldFound(s) }} />
+            )}
+            {sheet === 'pick' && (
+              <PickSheet catalog={catalog} mode="exchange" onClose={() => setSheet(null)}
+                onPick={(product, size) => { setSheet(null); cmd.reset(); newLook.clear(); setNewTapped({ product, size }) }} />
+            )}
 
-          <section className="flex flex-col gap-2">
-            <span className={cn('text-small font-medium', target === 'old' ? 'text-primary' : 'text-muted')}>
-              {t('bazar.exch.step1')}
-            </span>
-            {oldSale ? (
-              <PieceRow testId="exchange-old" title={pieceTitle(oldSale)} line={soldLine(t, oldSale)} price={oldSale.net_price ?? oldSale.price}
-                        onClear={cmd.busy ? undefined : startOver} />
-            ) : oldLook.looked?.loading ? <Looking /> : oldRefusal ? <ErrorCard error={oldRefusal} /> : null}
-          </section>
-
-          {oldSale && (
-            <section className="flex flex-col gap-2">
-              <span className={cn('text-small font-medium', target === 'new' ? 'text-primary' : 'text-muted')}>
-                {t('bazar.exch.step2')}
-              </span>
-              {newTapped ? (
-                <PieceRow testId="exchange-new" title={`${newTapped.product.title} · ${sizeName(newTapped.product, newTapped.size)}`}
-                          line={t('bazar.pick.tappedLine')} price={newTapped.size.price ?? 0}
-                          onClear={cmd.busy ? undefined : () => setNewTapped(null)} />
-              ) : newPiece ? (
-                <PieceRow testId="exchange-new" title={pieceTitle(newPiece)}
-                          line={<span className="font-mono" dir="ltr">{newPiece.piece_code}</span>}
-                          price={newPiece.price} onClear={cmd.busy ? undefined : newLook.clear} />
-              ) : newLook.looked?.loading ? <Looking /> : newRefusal ? <ErrorCard error={newRefusal} /> : null}
-            </section>
-          )}
-
-          {ready && (
-            <>
-              <MoneyBanner kind={diff > 0 ? 'pay' : diff < 0 ? 'giveBack' : 'even'} amount={Math.abs(diff)}
-                           testId="exchange-difference" />
-              {diff !== 0 && (
+            <section className="flex flex-col gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <StepTick done={!!oldSale} />
+                <span className={cn('flex-1 text-body font-semibold', target === 'old' ? 'text-primary' : 'text-muted')}>
+                  {t('bazar.r4.pieceBack')}
+                </span>
+                {target === 'old' && (
+                  <button type="button" onClick={() => setSheet('find')} disabled={cmd.busy} data-testid="exchange-find" className={linkBtn}>
+                    {t('bazar.find.open')}
+                  </button>
+                )}
+              </div>
+              {oldSale ? (
+                <PieceCard testId="exchange-old" catalog={catalog} variantId={oldSale.variant_id} title={pieceTitle(oldSale)}
+                           code={oldSale.piece_code} line={soldLine(t, oldSale)} price={oldSale.net_price ?? oldSale.price}
+                           onClear={cmd.busy ? undefined : startOver} />
+              ) : oldLook.looked?.loading ? <Looking /> : oldRefusal ? <ErrorCard error={oldRefusal} /> : null}
+              {oldSale && (
                 <>
-                  <span className="text-small font-medium text-muted">
-                    {diff > 0 ? t('bazar.exch.paidBy') : t('bazar.ret.paidBackBy')}
-                  </span>
-                  <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
+                  <span className="text-body font-semibold text-primary">{t('bazar.r4.shape')}</span>
+                  <ConditionCards damaged={damaged} disabled={cmd.busy} onChange={setDamaged} />
                 </>
               )}
-              <label className="flex items-center gap-2 min-h-[44px] text-body text-primary">
-                <input type="checkbox" checked={damaged} disabled={cmd.busy} onChange={e => setDamaged(e.target.checked)}
-                       className="w-5 h-5" data-testid="exchange-damaged" />
-                {t('bazar.exch.damaged')}
-              </label>
-              <CommandStatus state={cmd.state} />
-            </>
-          )}
-          <p className="text-small text-muted">{t('bazar.exch.returnOnly')}</p>
-        </>
+            </section>
+
+            {oldSale && (
+              <section className="flex flex-col gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <StepTick done={ready} />
+                  <span className={cn('flex-1 text-body font-semibold', target === 'new' ? 'text-primary' : 'text-muted')}>
+                    {t('bazar.r4.pieceInstead')}
+                  </span>
+                  {!ready && (
+                    <button type="button" onClick={() => setSheet('pick')} disabled={cmd.busy} data-testid="exchange-pick" className={linkBtn}>
+                      {t('bazar.r4.pickWithout')}
+                    </button>
+                  )}
+                </div>
+                {newTapped ? (
+                  <PieceCard testId="exchange-new" tone="new" catalog={catalog} variantId={newTapped.size.variant_id}
+                             title={`${newTapped.product.title} · ${sizeName(newTapped.product, newTapped.size)}`}
+                             line={t('bazar.pick.tappedLine')} price={newTapped.size.price ?? 0}
+                             onClear={cmd.busy ? undefined : () => setNewTapped(null)} />
+                ) : newPiece ? (
+                  <PieceCard testId="exchange-new" tone="new" catalog={catalog} variantId={null} title={pieceTitle(newPiece)}
+                             code={newPiece.piece_code} line={t('bazar.r4.atBazar')}
+                             price={newPiece.price} onClear={cmd.busy ? undefined : newLook.clear} />
+                ) : newLook.looked?.loading ? <Looking /> : newRefusal ? <ErrorCard error={newRefusal} /> : (
+                  <p className="rounded-xl border-[1.5px] border-dashed border-trace-blue/50 px-4 py-3.5 text-center text-body font-semibold text-trace-blue">
+                    {t('bazar.exch.scanNewHint')}
+                  </p>
+                )}
+              </section>
+            )}
+            <p className="text-small text-muted">{t('bazar.exch.returnOnly')}</p>
+          </>
+        } right={oldSale && (
+          <>
+            <h2 className="hidden lg:block text-body-lg font-bold text-primary">{t('bazar.r4.summary')}</h2>
+            <div className="flex flex-col gap-1.5 text-body" data-testid="exchange-summary">
+              <div className="flex justify-between gap-3">
+                <span className="text-muted">{t('bazar.r4.comingBack')}</span>
+                <span className="tabular-nums text-primary" dir="ltr">− {amount(credit)}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted">{t('bazar.r4.goingOut')}</span>
+                <span className="tabular-nums text-primary" dir="ltr">{ready ? `+ ${amount(newPrice ?? 0)}` : '—'}</span>
+              </div>
+            </div>
+            {ready && (
+              <MoneyBox testId="exchange-difference" big
+                label={diff > 0 ? t('bazar.r4.customerPays') : diff < 0 ? t('bazar.r4.giveBack') : t('bazar.exch.noMoney')}
+                amount={diff === 0 ? t('bazar.exch.even') : money(Math.abs(diff))}
+                note={t('bazar.r4.diffNote')} />
+            )}
+            {ready && diff !== 0 && (
+              <>
+                <Label>{diff > 0 ? t('bazar.exch.paidBy') : t('bazar.ret.paidBackBy')}</Label>
+                <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
+              </>
+            )}
+            <CommandStatus state={cmd.state} />
+            {ready && (
+              <StickyAction>
+                <ConfirmButton onClick={confirm} busy={cmd.busy} testId="exchange-confirm">
+                  {diff > 0 ? t('bazar.r4.confirmTake', { amount: sm(diff), method: methodName })
+                    : diff < 0 ? t('bazar.r4.confirmGive', { amount: sm(-diff), method: methodName })
+                    : t('bazar.r4.confirmEven')}
+                </ConfirmButton>
+              </StickyAction>
+            )}
+            <p className="hidden lg:block text-small text-muted border-t border-line pt-3">{t('bazar.r4.explain')}</p>
+          </>
+        )} />
       )}
-    </PhoneFrame>
+    </R4Screen>
   )
 }
 
@@ -211,24 +251,25 @@ function Looking() {
 
 function ExchangeDone({ result, onNext }: { result: BazarExchangeResult; onNext: () => void }) {
   const { t } = useTranslation()
+  const sm = useSentenceMoney()
   const m = result.money
   return (
-    <>
-      <section role="status" className="rounded-2xl bg-[#16A34A] text-white px-4 py-3.5 flex flex-col gap-1.5" data-testid="exchange-done">
-        <span className="text-small font-bold tracking-wider">
+    <div className="flex flex-col gap-4 lg:max-w-[560px]">
+      <section role="status" className="rounded-2xl bg-[#16A34A] text-white p-4 lg:p-5 flex flex-col gap-1.5" data-testid="exchange-done">
+        <span className="text-[12px] font-bold tracking-[0.08em]">
           {t('bazar.exch.doneTitle', { old: result.old_sale.sale_number, number: result.new_sale.sale_number })}
         </span>
-        <span className="text-body-lg font-semibold">
+        <span className="text-[18px] leading-6 font-bold">
           <span className="line-through opacity-80">{pieceTitle(result.old_sale)}</span> → {pieceTitle(result.new_sale)}
         </span>
         <span className="text-h4 font-bold" data-testid="exchange-done-money">
           {!m ? t('bazar.exch.even')
             : m.kind === 'payment'
-              ? t('bazar.exch.doneTook', { amount: formatMoney(m.amount), method: t(`bazar.method.${m.method}`) })
-              : t('bazar.ret.doneGiveBack', { amount: formatMoney(m.amount), method: t(`bazar.method.${m.method}`) })}
+              ? t('bazar.exch.doneTook', { amount: sm(m.amount), method: t(`bazar.method.${m.method}`) })
+              : t('bazar.ret.doneGiveBack', { amount: sm(m.amount), method: t(`bazar.method.${m.method}`) })}
         </span>
       </section>
       <BigButton variant="secondary" onClick={onNext} testId="exchange-next">{t('bazar.exch.next')}</BigButton>
-    </>
+    </div>
   )
 }

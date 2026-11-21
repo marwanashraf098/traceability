@@ -5,10 +5,11 @@ import {
   BazarError, changeBazarPayment, currentUserId, managesBazar, setBazarCustomer, undoBazarSale,
   SELLER_UNDO_WINDOW_MS, type BazarSale, type PaymentMethod,
 } from '../../../bazar/api'
-import { formatMoney, pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
+import { pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
 import { useScanBurst } from '../../../bazar/useScanBurst'
 import { Button, Input, cn } from '../../../components/ui'
 import { Sheet } from './shared'
+import { money } from '../r2/parts'
 
 // What the phone offers on a sale follows B2's rules (the server is still the referee — a refusal is shown as is):
 //   change method / customer: owner or manager, or the seller who made the sale — while the event is live;
@@ -62,10 +63,10 @@ export function MethodChips({ methods, value, onPick, busy, tone = 'plain', disa
         return (
           <button key={m} type="button" aria-pressed={on} disabled={disabled || busy !== null}
             onClick={() => { if (!on) onPick(m) }}
-            className={cn('h-11 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-70',
+            className={cn('h-12 rounded-[10px] text-body font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-70',
               tone === 'onGreen'
-                ? on ? 'bg-white text-success-text' : 'border border-white/60 text-white'
-                : on ? 'bg-trace-blue text-white' : 'border border-line bg-surface text-primary')}>
+                ? on ? 'bg-white text-success-text' : 'bg-white/[0.16] text-white hover:bg-white/[0.22]'
+                : on ? 'bg-[#0D1117] text-white' : 'border border-line bg-surface text-primary hover:bg-charcoal')}>
             {busy === m && <Loader2 size={14} className="animate-spin" aria-hidden />}
             {t(`bazar.method.${m}`)}
           </button>
@@ -211,7 +212,7 @@ export function SaleSheet({ eventId, sale, methods, onChanged, onClose, onScanBu
           </span>
         </div>
         <span className={cn('text-h4 font-bold tabular-nums', current.status !== 'active' && 'line-through text-muted')}>
-          {formatMoney(current.price)}
+          {money(current.price)}
         </span>
       </div>
       {current.status === 'undone' && (
