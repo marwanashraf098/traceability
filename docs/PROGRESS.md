@@ -21,6 +21,37 @@ NOT merged).** Appearance only, design/bazar-v2 (V2_Event*, V2_Setup*, V2_CloseD
 - Approved test edits: bazarB4 218 (text), 348–356 (Days & cash tab → /close-day?day=), 358–369 (More ▾ → Change prices).
 - Strings: `bazar.r3` block first in `bazar`.
 
+**Bazar POS B7a + B7b — sell without barcodes + the A4 price sheet (2026-11-20; branch `feat/bazar-b7` from main
+5d3cfbf6; V239; APPROVED, MERGED 2026-11-21, not deployed).** **Tap to sell:** `POST /sell` takes
+`variant_id` instead of `code`; `BazarSaleService.pickPiece` is THE piece choice — the oldest piece scanned out to this
+bazar still open on its transfer and `out_on_transfer`, `FOR UPDATE OF tp SKIP LOCKED` (a piece another sale is writing
+is skipped, never waited on; the ledger UPDATE stays the referee); none → 409 `BAZAR_SOLD_OUT` {variant_id, left,
+product / variant title} (EN + AR). Everything after the pick is the scan sale's own path (prepareSale → writeSale →
+insertPayment); same client_request_id idempotency. Cart: `lines` [{code} | {variant_id}] (B6c's `codes` still
+accepted, and the phone still sends `codes` for a scan-only cart); Complete resolves scanned lines first, then picks a
+DISTINCT piece per tapped line in its one transaction (never one the cart holds — SKIP LOCKED doesn't skip one's own
+locks); a size with none left → BAZAR_SOLD_OUT with `line_index`, nothing written; preview flags more taps than left.
+**No Shopify write** (the −N happened at send; a test asserts no claim rows). The B2 / B6c method signatures keep their
+own @Transactional (they self-call the new ones; a self-call skips the proxy — the existing concurrency tests caught it).
+**#numbers (V239 `bazar_event_product_numbers`, RLS NULLIF + FORCE, app_user INSERT / SELECT only):** per product +
+colour (`ExchangeOptions.colourAndSize` — a size-axis value is the size, the other option values the colour; no colour
+→ one per product); assigned at Start (and by any first read) by product title then colour; never renumbered; a product
+appearing mid-event gets the next free number (1–999). `BazarCatalogService` is the one writer and serves `GET
+/bazar-events/{id}/catalog` (groups with sizes, bazar price, left = open transfer pieces, image_url, category =
+product_type_norm). **Short number:** `ScanInputNormalizer.productNumber` — invisibles / spaces stripped, Arabic digits
+folded, `^#?[0-9]{1,3}$`; the backend refuses it as a code (400 BAZAR_PRODUCT_NUMBER); the phone checks it at the top of
+BazarSell `submit()` (above useScanner, SAFETY-CRITICAL blocks untouched) and opens that product's sizes — never a
+sale. Shared vectors: `productNumber` key in shared/scan-normalization-vectors.json (both sides assert it).
+**Price sheet:** `GET /bazar-events/{id}/price-sheet.pdf?lang=en|ar` (`BazarPriceSheet`, PDFBox + the labels' Noto
+fonts, Arabic shaped by LabelTextFitter, Arabic sheets mirrored): #, product, colour, sizes still at the bazar (none →
+Sold out), price ("800–960 EGP" when sizes differ); owner / manager and the event's sellers (seller_roles, not removed).
+**Screens:** phone `PickSheet` (search name / colour / #, category chips, rows → sizes with N left, sold out faded,
+green "Sell White / M · 960" / "Add … to the cart"; opened by "No barcode? Pick a product" or "#12"); computer
+`ProductGrid` (tiles per size) beside the scan field, quick mode two columns on a computer; tapped cart lines say
+"Picked from the products"; "Price sheet" in the Sell header (computer, download) and the phone bazar menu (Web Share
+→ download). EN + AR. **Not touched:** BazarEventPage.tsx, App.tsx (the event-page button comes after R3). **Next:** B7c
+returns / exchanges by product + sale picker; B7d send by count (approved; own Step 0 of TransferService first).
+
 **Bazar R2 restyle — report, phone Close day, phone End event (2026-11-19; branch `bazar-r2-restyle` off origin/main
 2505aac2; frontend only, no migration, no endpoint; committed, NOT merged).** Appearance only, design/bazar-v2
 (V2_CloseDay*, V2_EndEvent*, V2_Report*). Files: BazarReport.tsx (+ ReportKpis = the dark hero, also the phone end

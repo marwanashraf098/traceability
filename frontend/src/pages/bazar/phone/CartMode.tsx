@@ -10,6 +10,7 @@ import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
 import { useScanBurst } from '../../../bazar/useScanBurst'
 import { sellTiming } from '../../../bazar/useQuickSell'
 import { formatMoney, pieceTitle, saleTime, sellErrorText, toNumber } from '../../../bazar/format'
+import { tappedVariant } from '../../../bazar/catalog'
 import { Button, Input, cn } from '../../../components/ui'
 import { CustomerSheet, ErrorLine, MethodChips, SaleBadge } from './SaleSheets'
 import { Sheet } from './shared'
@@ -63,7 +64,10 @@ export function useCart(eventId: string) {
 
   // The preview of the CURRENT codes only (a stale answer is never shown against a changed list).
   const lines: BazarCartLine[] = preview && preview.lines.length === codes.length
-    && preview.lines.every((l, i) => l.code === codes[i]) ? preview.lines : []
+    && preview.lines.every((l, i) => {
+      const tapped = tappedVariant(codes[i])
+      return tapped ? l.code === null && l.variant_id === tapped : l.code === codes[i]
+    }) ? preview.lines : []
   return { codes, lines, preview, checking, previewFailed, notice, refused, setRefused, add, remove, clear }
 }
 
@@ -189,14 +193,18 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, onCo
                 const l = cart.lines[i]
                 const refused = cart.refused?.index === i ? cart.refused.error : undefined
                 const err = l ? lineErrorText(t, i18n.language, l, refused) : null
-                const title = l?.product_title ? pieceTitle({ product_title: l.product_title, variant_title: l.variant_title ?? null }) : code
+                const tapped = tappedVariant(code) !== null
+                const title = l?.product_title ? pieceTitle({ product_title: l.product_title, variant_title: l.variant_title ?? null })
+                  : tapped ? '…' : code
                 return (
                   <li key={`${code}-${i}`} data-testid="cart-line"
                       className={cn('flex items-start gap-2.5 px-3 py-2.5 rounded-xl border bg-surface min-h-[52px]',
                         err ? 'border-critical/40 bg-critical/5' : 'border-line')}>
                     <span className="flex-1 min-w-0 flex flex-col">
                       <span className={cn('font-medium truncate', err ? 'text-critical-text' : 'text-primary')}>{title}</span>
-                      <span className="text-small text-muted font-mono" dir="ltr">{l?.piece_code ?? code}</span>
+                      {tapped
+                        ? <span className="text-small text-muted" data-testid="cart-line-tapped">{t('bazar.pick.tappedLine')}</span>
+                        : <span className="text-small text-muted font-mono" dir="ltr">{l?.piece_code ?? code}</span>}
                       {err && <span role="alert" className="text-small text-critical-text" data-testid="cart-line-error">{err}</span>}
                     </span>
                     <span className="font-semibold tabular-nums shrink-0 pt-0.5">

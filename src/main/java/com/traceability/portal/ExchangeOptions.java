@@ -75,6 +75,38 @@ public class ExchangeOptions {
         return out;
     }
 
+    /** B7 (bazar product numbers): one variant's colour (its non-size option values, " / "; null when none) and size. */
+    public record ColourSize(String colour, String size) {}
+
+    /** One variant of a product family, for {@link #colourAndSize}: id, title, variants.raw json. */
+    public record FamilyMember(UUID id, String title, String rawJson) {}
+
+    /**
+     * B7 — per variant of ONE product: {@link ColourSize}, from the same option parsing and axis guess as
+     * {@link #forVariant}. A value on a "size" axis is the size; every other value is part of the colour (a product
+     * whose only option isn't a size — a scarf in Grey / Black — gets one colour per value and no size).
+     */
+    public static Map<UUID, ColourSize> colourAndSize(List<FamilyMember> members, String productRawJson) {
+        JsonNode productRaw = parse(productRawJson);
+        List<Variant> family = new ArrayList<>();
+        for (FamilyMember m : members) {
+            family.add(new Variant(m.id(), m.title(), values(parse(m.rawJson()), m.title()), productRaw));
+        }
+        List<Map<String, Object>> axes = axes(family);
+        Map<UUID, ColourSize> out = new LinkedHashMap<>();
+        for (Variant v : family) {
+            String size = null;
+            List<String> colour = new ArrayList<>();
+            for (int i = 0; i < v.values().size(); i++) {
+                String kind = i < axes.size() ? (String) axes.get(i).get("kind") : "option";
+                if ("size".equals(kind) && size == null) size = v.values().get(i);
+                else colour.add(v.values().get(i));
+            }
+            out.put(v.id(), new ColourSize(colour.isEmpty() ? null : String.join(" / ", colour), size));
+        }
+        return out;
+    }
+
     /** Option values of one variant: REST option1..3 when stored, else the title split on " / ". */
     static List<String> values(JsonNode raw, String title) {
         List<String> out = new ArrayList<>();

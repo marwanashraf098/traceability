@@ -59,7 +59,10 @@ public class BazarException extends RuntimeException {
         BAZAR_NOT_A_WORKER,
         BAZAR_INVITE_RATE_LIMITED,
         BAZAR_PIN_ALREADY_SET,
-        BAZAR_PIN_INVALID
+        BAZAR_PIN_INVALID,
+        // B7a — sell without barcodes
+        BAZAR_SOLD_OUT,
+        BAZAR_PRODUCT_NUMBER
     }
 
     private final Code       code;

@@ -94,6 +94,20 @@ public final class ScanInputNormalizer {
         return s;
     }
 
+    private static final Pattern PRODUCT_NUMBER = Pattern.compile("#?([0-9]{1,3})");
+
+    /**
+     * Bazar B7 — a product number from the printed price sheet ({@code 12} or {@code #12}, Arabic / Persian digits
+     * folded, invisibles and whitespace stripped), or null. 1–3 digits only, so it never matches a piece code
+     * ({@code P} + 6 or more digits, PC-ULID, ULID) or a tracking number (8+ digits). Shared vectors: the
+     * {@code productNumber} key of {@code shared/scan-normalization-vectors.json}.
+     */
+    public static Integer productNumber(String raw) {
+        if (raw == null) return null;
+        java.util.regex.Matcher m = PRODUCT_NUMBER.matcher(foldDigits(stripInvisible(raw)));
+        return m.matches() ? Integer.valueOf(m.group(1)) : null;
+    }
+
     /**
      * Drops zero-width / non-printing characters a scanner may inject, then every whitespace
      * character anywhere — Character.isWhitespace plus no-break and other Unicode space separators.

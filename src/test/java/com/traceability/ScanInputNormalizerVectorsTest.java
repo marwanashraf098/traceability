@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * S1 — the shared scan-normalization vectors ({@code shared/scan-normalization-vectors.json}; S2's
  * TypeScript tests load the same file). Every vector asserts {@link ScanInputNormalizer#normalizePiece};
+ * a vector with a {@code productNumber} key (B7) also asserts {@link ScanInputNormalizer#productNumber};
  * a vector with a {@code tracking} key also asserts {@link TrackingNumberNormalizer#normalize}.
  */
 class ScanInputNormalizerVectorsTest {
@@ -33,6 +34,11 @@ class ScanInputNormalizerVectorsTest {
             tests.add(DynamicTest.dynamicTest(v.get("name").asText(), () -> {
                 assertThat(ScanInputNormalizer.normalizePiece(input))
                     .as("normalizePiece(%s)", input).isEqualTo(v.get("piece").asText());
+                if (v.has("productNumber")) {
+                    Integer expected = v.get("productNumber").isNull() ? null : v.get("productNumber").asInt();
+                    assertThat(ScanInputNormalizer.productNumber(input))
+                        .as("productNumber(%s)", input).isEqualTo(expected);
+                }
                 if (v.has("tracking")) {
                     String expected = v.get("tracking").isNull() ? null : v.get("tracking").asText();
                     assertThat(TrackingNumberNormalizer.normalize(input))

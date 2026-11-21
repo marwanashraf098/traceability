@@ -42,9 +42,12 @@ public class BazarService {
     private final JdbcTemplate    jdbc;
     private final TransferService transfers;
 
-    public BazarService(JdbcTemplate jdbc, TransferService transfers) {
+    private final BazarCatalogService catalogs;
+
+    public BazarService(JdbcTemplate jdbc, TransferService transfers, BazarCatalogService catalogs) {
         this.jdbc      = jdbc;
         this.transfers = transfers;
+        this.catalogs  = catalogs;
     }
 
     // ── Create ───────────────────────────────────────────────────────────────
@@ -196,6 +199,8 @@ public class BazarService {
         jdbc.update(
             "UPDATE bazar_events SET status = 'live', started_at = now(), started_by = ?, updated_at = now() " +
             "WHERE id = ? AND tenant_id = ? AND status = 'draft'", actorUserId, eventId, tenantId);
+        // B7a: the price sheet's product numbers, first by product title then colour (stable for the event).
+        catalogs.assignAtStart(tenantId, eventId);
         return detail(tenantId, eventId);
     }
 
@@ -296,7 +301,7 @@ public class BazarService {
     }
 
     /** Variants on the event: on its transfer, or with a price row. Params: event id, tenant, event id, tenant. */
-    private static String eventVariantsSql() {
+    static String eventVariantsSql() {
         return "SELECT tl.variant_id FROM transfer_lines tl JOIN bazar_events e ON e.transfer_id = tl.transfer_id " +
                "WHERE e.id = ? AND tl.tenant_id = ? " +
                "UNION SELECT bp.variant_id FROM bazar_event_prices bp WHERE bp.event_id = ? AND bp.tenant_id = ?";

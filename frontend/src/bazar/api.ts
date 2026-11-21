@@ -209,6 +209,25 @@ async function bazarFetch<T>(path: string, init: RequestInit & { timeoutMs?: num
 
 const base = (eventId: string) => `/bazar-events/${encodeURIComponent(eventId)}`
 
+/** A plain GET with the bazar error contract (B7 catalog). */
+export function bazarGet<T>(path: string) {
+  return bazarFetch<T>(path)
+}
+
+// B7a: a tapped size travels the scan path as "variant:<id>:<nonce>" (bazar/catalog.ts tapRef).
+function tappedId(ref: string): string | null {
+  if (!ref.startsWith('variant:')) return null
+  const rest = ref.slice('variant:'.length)
+  const i = rest.indexOf(':')
+  return i < 0 ? rest : rest.slice(0, i)
+}
+
+/** Cart lines for the API: B6c's {codes} while every line is a scan, B7a's {lines} once one is a tapped size. */
+function cartBody(codes: string[]): { codes: string[] } | { lines: ({ code: string } | { variant_id: string })[] } {
+  if (!codes.some(c => tappedId(c) !== null)) return { codes }
+  return { lines: codes.map(c => { const v = tappedId(c); return v ? { variant_id: v } : { code: c } }) }
+}
+
 // ── B1 — events, send-out, prices, start (owner / manager) ───────────────────
 
 export function listBazarEvents() {
@@ -277,12 +296,16 @@ export function clearBazarPrice(eventId: string, variantId: string) {
 
 // ── B2 — selling (any seller role) ────────────────────────────────────────────
 
-/** One attempt. A definite server answer resolves / throws BazarError; anything else throws BazarNetworkError. */
+/**
+ * One attempt. A definite server answer resolves / throws BazarError; anything else throws BazarNetworkError.
+ * {@code code}: a scanned code, or a B7a tapped-size ref (the server picks the piece).
+ */
 export function sellOnce(eventId: string, code: string, clientRequestId: string, method: PaymentMethod,
                          timeoutMs: number) {
   return bazarFetch<BazarSale>(`${base(eventId)}/sell`, {
     method: 'POST', timeoutMs,
-    body: JSON.stringify({ code, client_request_id: clientRequestId, method }),
+    body: JSON.stringify({ ...(tappedId(code) ? { variant_id: tappedId(code) } : { code }),
+                           client_request_id: clientRequestId, method }),
   })
 }
 
@@ -332,7 +355,8 @@ export interface BazarTodaySummary {
 /** A scanned code as a cart line: the piece and its bazar price, or why it can't be sold (nothing is reserved). */
 export interface BazarCartLine {
   index: number
-  code: string
+  /** The scanned code; null on a B7a tapped-size line (its piece is picked at Complete). */
+  code: string | null
   piece_id?: string
   piece_code?: string | null
   variant_id?: string
@@ -350,7 +374,7 @@ export interface BazarCartPreview {
 
 export function previewBazarCart(eventId: string, codes: string[]) {
   return bazarFetch<BazarCartPreview>(`${base(eventId)}/cart/preview`, {
-    method: 'POST', body: JSON.stringify({ codes }),
+    method: 'POST', body: JSON.stringify(cartBody(codes)),
   })
 }
 
@@ -364,7 +388,8 @@ export interface BazarCartRequest {
 /** One attempt (useRetryingCommand re-sends the SAME client_request_id until the server answers). */
 export function completeCartOnce(eventId: string, req: BazarCartRequest, clientRequestId: string, timeoutMs: number) {
   return bazarFetch<BazarReceipt>(`${base(eventId)}/cart/complete`, {
-    method: 'POST', timeoutMs, body: JSON.stringify({ ...req, client_request_id: clientRequestId }),
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ ...req, codes: undefined, ...cartBody(req.codes), client_request_id: clientRequestId }),
   })
 }
 
