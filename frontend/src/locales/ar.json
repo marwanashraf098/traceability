@@ -6981,6 +6981,144 @@
     "alertLink": "ماذا يعني هذا؟"
   },
   "bazar": {
+    "r3": {
+      "tabs": {
+        "label": "أقسام الفعالية",
+        "today": "اليوم",
+        "summary": "الملخص",
+        "sales": "المبيعات",
+        "days": "الأيام والنقدية",
+        "pieces": "القطع",
+        "prices": "الأسعار",
+        "sellers": "البائعون"
+      },
+      "header": {
+        "closeToday": "إغلاق اليوم",
+        "more": "المزيد",
+        "startSelling": "ابدأ البيع",
+        "inviteSellers": "دعوة بائعين"
+      },
+      "today": {
+        "today": "اليوم",
+        "avg": "المتوسط",
+        "hours": "المبيعات حسب الساعة · البازار كله",
+        "lastSale_zero": "آخر بيع الآن",
+        "lastSale_one": "آخر بيع منذ دقيقة",
+        "lastSale_two": "آخر بيع منذ دقيقتين",
+        "lastSale_few": "آخر بيع منذ {{count}} دقائق",
+        "lastSale_many": "آخر بيع منذ {{count}} دقيقة",
+        "lastSale_other": "آخر بيع منذ {{count}} دقيقة",
+        "wholeBazar": "البازار كله",
+        "wholeBazarLower": "البازار كله",
+        "yesterday": "أمس",
+        "latest": "آخر المبيعات",
+        "returnExchange": "مرتجع / استبدال",
+        "all_zero": "الكل {{count}}",
+        "all_one": "الكل {{count}}",
+        "all_two": "الكل {{count}}",
+        "all_few": "الكل {{count}}",
+        "all_many": "الكل {{count}}",
+        "all_other": "الكل {{count}}",
+        "sellingBest": "الأكثر مبيعًا",
+        "soldOf": "بيع {{sold}} من {{sent}}",
+        "invite": "دعوة",
+        "return": "مرتجع"
+      },
+      "pieces": {
+        "title": "القطع",
+        "soldThrough": "نسبة البيع · {{sold}} من {{sent}}",
+        "returned": "أرجعها العملاء",
+        "bringBack": "إرجاع القطع المتبقية",
+        "openEnd": "القطع المتبقية والتحويل"
+      },
+      "sales": {
+        "time": "الوقت",
+        "piece": "القطعة",
+        "seller": "البائع",
+        "paid": "الدفع",
+        "cart": "سلة",
+        "more": "عرض مبيعات أكثر"
+      },
+      "prices": {
+        "sub": "لهذا البازار فقط. أسعار شوبيفاي لا تتغير.",
+        "everything": "الكل −",
+        "roundTo": "تقريب إلى",
+        "filter": "عرض",
+        "filters": {
+          "all": "الكل",
+          "custom": "مخصص",
+          "none": "بلا سعر"
+        },
+        "noneInFilter": "لا شيء هنا.",
+        "pieces": "القطع",
+        "custom": "مخصص",
+        "shopifyValue": "قيمة شوبيفاي",
+        "bazarValue": "قيمة البازار"
+      },
+      "setup": {
+        "tag": "التجهيز · {{when}}",
+        "scanTitle": "امسح القطع الخارجة",
+        "piecesOut_zero": "قطعة خرجت",
+        "piecesOut_one": "قطعة خرجت",
+        "piecesOut_two": "قطعتان خرجتا",
+        "piecesOut_few": "قطع خرجت",
+        "piecesOut_many": "قطعة خرجت",
+        "piecesOut_other": "قطعة خرجت",
+        "products_zero": "منتج",
+        "products_one": "منتج",
+        "products_two": "منتجان",
+        "products_few": "منتجات",
+        "products_many": "منتجًا",
+        "products_other": "منتج",
+        "egpAtBazar": "ج.م في البازار",
+        "ready_zero": "لا قطع جاهزة",
+        "ready_one": "قطعة واحدة جاهزة",
+        "ready_two": "قطعتان جاهزتان",
+        "ready_few": "{{count}} قطع جاهزة",
+        "ready_many": "{{count}} قطعة جاهزة",
+        "ready_other": "{{count}} قطعة جاهزة",
+        "allPriced": "كلها مُسعّرة",
+        "sendHint": "سجّلها كمُرسلة عندما تخرج من المخزن — عندها تُخصم من المخزون الأونلاين.",
+        "markSent_zero": "تسجيل القطع كمُرسلة",
+        "markSent_one": "تسجيل قطعة واحدة كمُرسلة",
+        "markSent_two": "تسجيل قطعتين كمُرسلتين",
+        "markSent_few": "تسجيل {{count}} قطع كمُرسلة",
+        "markSent_many": "تسجيل {{count}} قطعة كمُرسلة",
+        "markSent_other": "تسجيل {{count}} قطعة كمُرسلة",
+        "startAfter": "بدء الفعالية · بعد الإرسال",
+        "steps": {
+          "details": "التفاصيل",
+          "piecesSoFar_zero": "لا قطع حتى الآن",
+          "piecesSoFar_one": "قطعة واحدة حتى الآن",
+          "piecesSoFar_two": "قطعتان حتى الآن",
+          "piecesSoFar_few": "{{count}} قطع حتى الآن",
+          "piecesSoFar_many": "{{count}} قطعة حتى الآن",
+          "piecesSoFar_other": "{{count}} قطعة حتى الآن"
+        }
+      },
+      "close": {
+        "backToEvent": "العودة إلى الفعالية"
+      },
+      "end": {
+        "egp": "ج.م، البازار كله",
+        "steps": {
+          "days": "كل الأيام مُغلقة",
+          "daysDone": "كل يوم مُغلق",
+          "daysTodo": "أنهِ الفعالية للبدء",
+          "back": "رجوع القطع المتبقية",
+          "backSub_zero": "{{scanned}} من {{count}} مُسحت",
+          "backSub_one": "{{scanned}} من {{count}} مُسحت",
+          "backSub_two": "{{scanned}} من {{count}} مُسحت",
+          "backSub_few": "{{scanned}} من {{count}} مُسحت",
+          "backSub_many": "{{scanned}} من {{count}} مُسحت",
+          "backSub_other": "{{scanned}} من {{count}} مُسحت",
+          "close": "إغلاق التحويل",
+          "closeSub": "بعد حصر كل القطع",
+          "report": "التقرير",
+          "reportSub": "المبيعات والأكثر مبيعًا والأموال"
+        }
+      }
+    },
     "r2": {
       "close": {
         "shouldBe": "المفروض",

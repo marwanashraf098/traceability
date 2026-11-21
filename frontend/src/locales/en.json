@@ -6585,6 +6585,112 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "r3": {
+      "tabs": {
+        "label": "Event sections",
+        "today": "Today",
+        "summary": "Summary",
+        "sales": "Sales",
+        "days": "Days & cash",
+        "pieces": "Pieces",
+        "prices": "Prices",
+        "sellers": "Sellers"
+      },
+      "header": {
+        "closeToday": "Close today",
+        "more": "More",
+        "startSelling": "Start selling",
+        "inviteSellers": "Invite sellers"
+      },
+      "today": {
+        "today": "Today",
+        "avg": "avg",
+        "hours": "Sales by hour · whole bazar",
+        "lastSale_one": "last sale {{count}} min ago",
+        "lastSale_other": "last sale {{count}} min ago",
+        "wholeBazar": "Whole bazar",
+        "wholeBazarLower": "whole bazar",
+        "yesterday": "Yesterday",
+        "latest": "Latest sales",
+        "returnExchange": "Return / exchange",
+        "all_one": "All {{count}}",
+        "all_other": "All {{count}}",
+        "sellingBest": "Selling best",
+        "soldOf": "{{sold}} sold of {{sent}}",
+        "invite": "Invite",
+        "return": "Return"
+      },
+      "pieces": {
+        "title": "Pieces",
+        "soldThrough": "sold through · {{sold}} of {{sent}}",
+        "returned": "Returned by customers",
+        "bringBack": "Bring leftovers back",
+        "openEnd": "Leftovers & transfer"
+      },
+      "sales": {
+        "time": "Time",
+        "piece": "Piece",
+        "seller": "Seller",
+        "paid": "Paid",
+        "cart": "Cart",
+        "more": "Show more sales"
+      },
+      "prices": {
+        "sub": "Only for this bazar. Shopify prices don't change.",
+        "everything": "Everything −",
+        "roundTo": "round to",
+        "filter": "Show",
+        "filters": {
+          "all": "All",
+          "custom": "Custom",
+          "none": "No price"
+        },
+        "noneInFilter": "Nothing here.",
+        "pieces": "Pieces",
+        "custom": "Custom",
+        "shopifyValue": "Shopify value",
+        "bazarValue": "bazar value"
+      },
+      "setup": {
+        "tag": "Getting ready · {{when}}",
+        "scanTitle": "Scan pieces out",
+        "piecesOut_one": "piece out",
+        "piecesOut_other": "pieces out",
+        "products_one": "product",
+        "products_other": "products",
+        "egpAtBazar": "EGP at bazar",
+        "ready_one": "{{count}} piece ready",
+        "ready_other": "{{count}} pieces ready",
+        "allPriced": "all priced",
+        "sendHint": "Mark them as sent when they leave the warehouse — they leave online stock then.",
+        "markSent_one": "Mark {{count}} piece as sent",
+        "markSent_other": "Mark {{count}} pieces as sent",
+        "startAfter": "Start event · after sending",
+        "steps": {
+          "details": "Details",
+          "piecesSoFar_one": "{{count}} piece so far",
+          "piecesSoFar_other": "{{count}} pieces so far"
+        }
+      },
+      "close": {
+        "backToEvent": "Back to the event"
+      },
+      "end": {
+        "egp": "EGP, whole bazar",
+        "steps": {
+          "days": "All days closed",
+          "daysDone": "Every day closed",
+          "daysTodo": "End the event to start",
+          "back": "Leftovers back",
+          "backSub_one": "{{scanned}} of {{count}} scanned",
+          "backSub_other": "{{scanned}} of {{count}} scanned",
+          "close": "Close the transfer",
+          "closeSub": "Once every piece is accounted for",
+          "report": "Report",
+          "reportSub": "Sales, best sellers, money"
+        }
+      }
+    },
     "r2": {
       "close": {
         "shouldBe": "Should be",

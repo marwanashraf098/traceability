@@ -8,6 +8,7 @@ import en from '../locales/en.json'
 import BazarPhoneHome from '../pages/bazar/phone/BazarPhoneHome'
 import BazarCloseDay from '../pages/bazar/phone/BazarCloseDay'
 import BazarEventPage from '../pages/bazar/BazarEventPage'
+import CloseDayPage from '../pages/bazar/r3/CloseDayPage'
 import BazarSell from '../pages/bazar/phone/BazarSell'
 import BazarExchange from '../pages/bazar/phone/BazarExchange'
 import { parseAmount } from '../pages/bazar/CloseDayForm'
@@ -215,7 +216,7 @@ describe('Phone — Close the day', () => {
     expect(within(box).getByText('Cash short').nextSibling?.textContent).toBe('50')
     expect(within(box).getByText(/Card short/).nextSibling?.textContent).toBe('68')
     expect(screen.getByTestId('close-take-home').textContent).toContain('Take home 18,150 EGP in cash')
-    expect(screen.getByTestId('close-take-home').textContent).toContain('EGP 1,000 stays in the drawer')
+    expect(screen.getByTestId('close-take-home').textContent).toContain('1,000 EGP stays in the drawer')
     expect(screen.getByTestId('close-row-cash').textContent).toContain('Short 50')
     expect(screen.getByTestId('close-row-card').textContent).toContain('Short 68')
     expect(screen.getByTestId('close-row-instapay').textContent).toContain('Matches')
@@ -345,13 +346,20 @@ describe('Desktop event page — days', () => {
   test('lists each day with its status badge and opens the close form', async () => {
     setAccessToken(fakeJwt('owner'))
     install(...desktopHandlers())
-    renderAt(`/bazar/${EVENT}`, <Route path="/bazar/:id" element={<BazarEventPage />} />)
+    // R3: the days are on the "Days & cash" tab; closing a day opens the Close day page (no modal).
+    const Probe = () => { const l = useLocation(); return <div data-testid="where-full">{l.pathname + l.search}</div> }
+    renderAt(`/bazar/${EVENT}`, <>
+      <Route path="/bazar/:id" element={<BazarEventPage />} />
+      <Route path="/bazar/:id/close-day" element={<><CloseDayPage /><Probe /></>} />
+    </>)
 
+    await userEvent.click(await screen.findByRole('tab', { name: 'Days & cash' }))
     const days = await screen.findByTestId('bazar-days')
     await waitFor(() => expect(within(days).getByTestId('day-status-2026-11-19').textContent)
       .toBe('Changed after close — close again'))
     expect(within(days).getByTestId(`day-status-${TODAY}`).textContent).toBe('Open')
     await userEvent.click(within(within(days).getByTestId(`day-row-${TODAY}`)).getByText('Close this day'))
+    expect((await screen.findByTestId('where-full')).textContent).toBe(`/bazar/${EVENT}/close-day?day=${TODAY}`)
     expect(await screen.findByTestId('close-day-form')).toBeTruthy()
     expect(screen.getByTestId('close-float-line').textContent).toContain('1,000 EGP')
   })
@@ -360,9 +368,11 @@ describe('Desktop event page — days', () => {
     setAccessToken(fakeJwt('owner'))
     install(...desktopHandlers())
     renderAt(`/bazar/${EVENT}`, <Route path="/bazar/:id" element={<BazarEventPage />} />)
-    await screen.findByTestId('bazar-days')
+    await screen.findByTestId('bazar-live-sales')
     expect(screen.queryByTestId('bazar-prices')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Change prices' }))
+    // R3: Change prices sits in the More ▾ menu and opens the Prices tab.
+    await userEvent.click(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Change prices' }))
     const prices = await screen.findByTestId('bazar-prices')
     expect(await within(prices).findByText(/Linen shirt/)).toBeTruthy()
     expect(within(prices).getByTestId('bazar-prices-live-note').textContent)

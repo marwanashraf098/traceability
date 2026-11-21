@@ -142,12 +142,14 @@ function PieceLine({ p }: { p: BazarLeftoverPiece }) {
  * damaged still to bring home, the pieces not scanned back (Mark lost — one row, or ticked together), and Close the
  * transfer (only once every piece is accounted for).
  */
-export function LeftoversPanel({ eventId, initial, onClosed, noCamera }: {
+export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide }: {
   eventId: string
   initial: BazarLeftovers
   onClosed: (l: BazarLeftovers) => void
   /** Desktop: the scan field only (a HID scanner), no camera. */
   noCamera?: boolean
+  /** R3 — the computer's End event page: scan + counts left, not back yet + close right. Same panel. */
+  wide?: boolean
 }) {
   const { t } = useTranslation()
   const [l, setL] = useState<BazarLeftovers>(initial)
@@ -217,7 +219,9 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera }: {
   const scanning = !closed || l.counts.damaged_at_bazar > 0
 
   return (
-    <div className="flex flex-col gap-4" data-testid="leftovers-panel">
+    <div className={wide ? 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] items-start' : 'flex flex-col gap-4'}
+         data-testid="leftovers-panel">
+      <div className="flex flex-col gap-4 min-w-0">
       <section className="card p-4 flex flex-col gap-3.5">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <h3 className="text-body-lg font-semibold text-primary">{t('bazar.r2.end.scanTitle')}</h3>
@@ -274,6 +278,8 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera }: {
         </section>
       )}
 
+      </div>
+      <div className="flex flex-col gap-4 min-w-0">
       {l.outstanding.length > 0 && !closed && (
         <section className="card p-4 flex flex-col gap-2.5" data-testid="leftovers-out">
           <div className="flex items-start justify-between gap-2">
@@ -380,6 +386,7 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera }: {
       {l.counts.damaged_at_bazar > 0 && closed && (
         <p className="text-small text-warning-text">{t('bazar.end.damagedStillAway', { count: l.counts.damaged_at_bazar })}</p>
       )}
+      </div>
     </div>
   )
 }
