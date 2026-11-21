@@ -890,11 +890,13 @@ export function getJwtExpiry(token: string): number | null {
 
 export function signup(
   tenantName: string, name: string, email: string, phone: string, password: string, consent: boolean,
-  attribution?: SignupAttribution
+  attribution?: SignupAttribution,
+  /** Bazar B9a — 'bazar' for /signup?for=bazar; omitted otherwise (the body is then exactly as before). */
+  intent?: 'bazar'
 ) {
   return request<{ accessToken: string }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ tenantName, name, email, phone, password, consent, attribution }),
+    body: JSON.stringify({ tenantName, name, email, phone, password, consent, attribution, intent }),
   })
 }
 

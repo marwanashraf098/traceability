@@ -57,6 +57,11 @@ import java.util.*;
  * {@code setupIntroSeen} pref). Read by GET /me; never for a manager / worker, a gated tenant, the demo or
  * review tenants, a tenant whose card is hidden (backfilled for every active tenant at V220) or one that
  * has seen it.
+ *
+ * Bazar B9a — signup intent: {@code intent: 'bazar'} is written once, at signup, in the signup's own transaction
+ * ({@link #recordSignupIntent}, through the same writer as {@link #updatePrefs}); it is NOT a PATCH key
+ * ({@link #SIGNUP_KEYS}). It is an onboarding hint only — never a stock or Shopify mode. For such a tenant the gate
+ * asks for Shopify only (SetupStatus) and the intro is {@link #INTRO_BAZAR} (/setup/bazar) until setupIntroSeen.
  */
 @Service
 public class OnboardingProgressService {
@@ -65,6 +70,9 @@ public class OnboardingProgressService {
     public static final Set<String> SKIPPABLE     = Set.of("courier", "test_label");
     public static final Set<String> PREF_KEYS     =
         Set.of("card", "skipped", "pickPackChosen", "testLabelPrinted", "labelingPace", "setupIntroSeen");
+    /** Written only at signup (recordSignupIntent) — PATCH refuses them like any unknown key. */
+    public static final Set<String> SIGNUP_KEYS   = Set.of("intent");
+    public static final String INTENT_BAZAR = "bazar";
     static final int PACE_MIN = 1, PACE_MAX = 10_000;
 
     /**
@@ -159,7 +167,24 @@ public class OnboardingProgressService {
             || CourierSimulation.isSimulated(jdbc, tenantId);
     }
 
-    public static final String INTRO_COURIER = "courier", INTRO_READY = "ready";
+    public static final String INTRO_COURIER = "courier", INTRO_READY = "ready", INTRO_BAZAR = "bazar";
+
+    /** The tenant signed up to sell at a bazar (onboarding_prefs.intent = 'bazar', Bazar B9a). Caller's transaction. */
+    public static boolean bazarIntent(JdbcTemplate jdbc, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT COALESCE(onboarding_prefs->>'intent', '') = '" + INTENT_BAZAR + "' FROM tenants WHERE id = ?",
+            Boolean.class, tenantId));
+    }
+
+    /** A signup's intent as sent: "bazar" (any case, trimmed) → "bazar"; anything else → null (ignored, never a 400). */
+    public static String signupIntent(String raw) {
+        return raw != null && INTENT_BAZAR.equalsIgnoreCase(raw.trim()) ? INTENT_BAZAR : null;
+    }
+
+    /** The same for the signup body's untyped field: only a JSON string can be an intent. */
+    public static String signupIntent(com.fasterxml.jackson.databind.JsonNode raw) {
+        return raw != null && raw.isTextual() ? signupIntent(raw.asText()) : null;
+    }
 
     /**
      * The setup intro screen an owner is sent to next — {@link #INTRO_COURIER}, {@link #INTRO_READY} or null.
@@ -173,6 +198,7 @@ public class OnboardingProgressService {
             "       COALESCE(onboarding_prefs->'skipped', '[]'::jsonb) @> '[\"courier\"]'::jsonb AS courier_skipped " +
             "FROM tenants WHERE id = ?", tenantId);
         if (Boolean.TRUE.equals(p.get("seen")) || Boolean.TRUE.equals(p.get("hidden"))) return null;
+        if (bazarIntent(jdbc, tenantId)) return INTRO_BAZAR;
         if (!Boolean.TRUE.equals(p.get("courier_skipped")) && !courierDone(jdbc, tenantId)) return INTRO_COURIER;
         return INTRO_READY;
     }
@@ -186,8 +212,23 @@ public class OnboardingProgressService {
      */
     @Transactional
     public Map<String, Object> updatePrefs(UUID actorUserId, Map<String, Object> patch) {
+        writePrefs(actorUserId, validate(patch));
+        return progress();
+    }
+
+    /**
+     * Bazar B9a — records the signup's intent. Runs INSIDE the signup's transaction (AuthService: tenant + owner
+     * + this commit or roll back together), with TenantContext = the new tenant. {@code intent} must already be
+     * {@link #signupIntent normalised}; null → nothing written.
+     */
+    @Transactional
+    public void recordSignupIntent(UUID ownerUserId, String intent) {
+        if (intent == null) return;
+        writePrefs(ownerUserId, validate(Map.of("intent", intent), true));
+    }
+
+    private void writePrefs(UUID actorUserId, Map<String, Object> clean) {
         UUID tenantId = TenantContext.require();
-        Map<String, Object> clean = validate(patch);
         String json;
         try {
             json = mapper.writeValueAsString(clean);
@@ -199,7 +240,6 @@ public class OnboardingProgressService {
                     "|| CASE WHEN ? THEN jsonb_build_object('cardChosenAt', now()) ELSE '{}'::jsonb END WHERE id = ?",
             json, clean.containsKey("card"), tenantId);
         audit.record(actorUserId, "onboarding_prefs_set", "tenant", tenantId.toString(), clean);
-        return progress();
     }
 
     /**
@@ -210,13 +250,22 @@ public class OnboardingProgressService {
         "UPDATE tenants SET onboarding_prefs = onboarding_prefs || '{\"card\":\"hidden\"}'::jsonb WHERE id = ?";
 
     static Map<String, Object> validate(Map<String, Object> patch) {
+        return validate(patch, false);
+    }
+
+    /** {@code signup}: also allow {@link #SIGNUP_KEYS} (recordSignupIntent only). */
+    static Map<String, Object> validate(Map<String, Object> patch, boolean signup) {
         if (patch == null || patch.isEmpty()) throw bad("no prefs given");
         Map<String, Object> clean = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : patch.entrySet()) {
             String key = e.getKey();
             Object v = e.getValue();
-            if (!PREF_KEYS.contains(key)) throw bad("unknown pref: " + key);
+            if (!PREF_KEYS.contains(key) && !(signup && SIGNUP_KEYS.contains(key))) throw bad("unknown pref: " + key);
             switch (key) {
+                case "intent" -> {
+                    if (!INTENT_BAZAR.equals(v)) throw bad("intent must be " + INTENT_BAZAR);
+                    clean.put(key, v);
+                }
                 case "card" -> {
                     if (!(v instanceof String s) || !CARD_STATES.contains(s))
                         throw bad("card must be one of " + new TreeSet<>(CARD_STATES));

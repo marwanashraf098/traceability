@@ -4,6 +4,8 @@ import com.traceability.identity.model.LoginRequest;
 import com.traceability.identity.model.SignupAttribution;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import com.traceability.account.OnboardingProgressService;
+import com.traceability.bazar.BazarSignup;
 import com.traceability.notifications.WelcomeEmailJob;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -45,10 +47,13 @@ public class AuthService {
     private final Clock clock;
     private final JobScheduler jobScheduler;
     private final WelcomeEmailJob welcomeEmailJob;
+    private final OnboardingProgressService onboarding;
+    private final BazarSignup bazarSignup;
 
     public AuthService(JdbcTemplate jdbc, AuthRepository repo,
                        JwtService jwt, PasswordEncoder encoder, Clock clock,
-                       JobScheduler jobScheduler, WelcomeEmailJob welcomeEmailJob) {
+                       JobScheduler jobScheduler, WelcomeEmailJob welcomeEmailJob,
+                       OnboardingProgressService onboarding, BazarSignup bazarSignup) {
         this.jdbc    = jdbc;
         this.repo    = repo;
         this.jwt     = jwt;
@@ -56,6 +61,8 @@ public class AuthService {
         this.clock   = clock;
         this.jobScheduler     = jobScheduler;
         this.welcomeEmailJob  = welcomeEmailJob;
+        this.onboarding       = onboarding;
+        this.bazarSignup      = bazarSignup;
     }
 
     // ---- signup ----
@@ -76,15 +83,31 @@ public class AuthService {
         // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
         // A rollback (e.g. duplicate email) throws out of runAs, so the enqueue below is
         // only reached once createTenantWithOwner has actually committed.
+        // Bazar B9a: a signup with an intent ("bazar") records it in the SAME transaction as tenant + owner;
+        // without one, exactly the pre-B9a call.
+        String intent = OnboardingProgressService.signupIntent(req.intent());
         TokenResponse tokens = TenantContext.runAs(tenantId, () -> {
-            repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
-                    req.name(), req.email(), phone, hash,
-                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
+            if (intent == null) {
+                repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
+                        req.name(), req.email(), phone, hash,
+                        PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
+            } else {
+                repo.createTenantWithOwnerAnd(tenantId, req.tenantName(), userId,
+                        req.name(), req.email(), phone, hash,
+                        PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution,
+                        () -> { recordBazarIntent(userId, intent); return null; });
+            }
             AuthRepository.IssuedRefresh refresh = repo.issueRefreshToken(userId, tenantId, "signup", userAgent);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner", refresh.id()), refresh.raw());
         });
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
         return tokens;
+    }
+
+    /** Bazar B9a — inside the signup transaction: the intent pref, then bazar on (only with BAZAR_SIGNUP_ENABLED). */
+    private void recordBazarIntent(UUID userId, String intent) {
+        onboarding.recordSignupIntent(userId, intent);
+        if (OnboardingProgressService.INTENT_BAZAR.equals(intent)) bazarSignup.enableAtSignup(userId);
     }
 
     /** A created account: the new tenant, its owner, and the id {@code createAccount}'s extra step returned. */
@@ -104,11 +127,15 @@ public class AuthService {
         String hash    = encoder.encode(req.password());
         Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
         SignupAttribution attribution = attributionFor(req, clientIp, userAgent);
+        String intent = OnboardingProgressService.signupIntent(req.intent());
         UUID extraId = TenantContext.runAs(tenantId, () ->
                 repo.createTenantWithOwnerAnd(tenantId, req.tenantName(), userId,
                         req.name(), req.email(), phone, hash,
                         PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution,
-                        () -> inSameTransaction.apply(tenantId)));
+                        () -> {
+                            if (intent != null) recordBazarIntent(userId, intent);   // Bazar B9a
+                            return inSameTransaction.apply(tenantId);
+                        }));
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
         return new CreatedAccount(tenantId, userId, extraId);
     }

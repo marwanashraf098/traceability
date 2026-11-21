@@ -25,6 +25,10 @@ export interface OnboardingCopy {
   emailHint: string
   password: string
   passwordHint: string
+  // Bazar B9a — what the store signs up for
+  purposeTitle: string
+  purposeOrders: string
+  purposeBazar: string
   consentBefore: string
   terms: string
   consentAnd: string
@@ -91,6 +95,9 @@ export const onboardingCopy: Record<'en' | 'ar', OnboardingCopy> = {
     emailHint: 'From your Shopify store. Change it if you sign in with another email.',
     password: 'Password',
     passwordHint: 'At least 8 characters.',
+    purposeTitle: 'What brings you to Traced?',
+    purposeOrders: 'Run my orders and stock',
+    purposeBazar: 'Sell at a bazar',
     consentBefore: 'I agree to the',
     terms: 'Terms of Service',
     consentAnd: 'and',
@@ -152,6 +159,9 @@ export const onboardingCopy: Record<'en' | 'ar', OnboardingCopy> = {
     emailHint: 'من متجرك على Shopify. غيّره إذا كنت تسجّل الدخول ببريد آخر.',
     password: 'كلمة المرور',
     passwordHint: '8 أحرف على الأقل.',
+    purposeTitle: 'إيه اللي جابك لـ Traced؟',
+    purposeOrders: 'إدارة الطلبات والمخزون',
+    purposeBazar: 'البيع في بازار',
     consentBefore: 'أوافق على',
     terms: 'شروط الخدمة',
     consentAnd: 'و',

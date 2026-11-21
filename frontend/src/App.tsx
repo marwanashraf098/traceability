@@ -82,7 +82,7 @@ import Refund from './pages/Refund'
 import Contact from './pages/Contact'
 import ConnectShopify from './pages/connect/ConnectShopify'
 import { SetupGate, OnboardingRoute } from './components/SetupGate'
-import { SetupCourierPage, SetupReadyPage } from './pages/onboarding/SetupIntro'
+import { SetupBazarPage, SetupCourierPage, SetupReadyPage } from './pages/onboarding/SetupIntro'
 
 type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -675,6 +675,7 @@ export default function App() {
             OUTSIDE SetupGate so it can never lock anyone in; owner only, decided by GET /me setupIntro. */}
         <Route path="/setup/courier" element={<RequireAuth><SetupCourierPage /></RequireAuth>} />
         <Route path="/setup/ready"   element={<RequireAuth><SetupReadyPage /></RequireAuth>} />
+        <Route path="/setup/bazar"   element={<RequireAuth><SetupBazarPage /></RequireAuth>} />
         {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}
         <Route path="/shopify-inventory" element={<Navigate to="/inventory" replace />} />
         {import.meta.env.DEV && StyleGuide && (
