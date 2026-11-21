@@ -283,3 +283,33 @@ describe('exchange without a label', () => {
     expect(await screen.findByTestId('exchange-done')).toBeInTheDocument()
   })
 })
+
+describe('exchange of a discounted cart line', () => {
+  test('the difference before confirm is what the server credits (the line\'s net price), = the amount after', async () => {
+    // A cart line sold at 960 with 60 of the cart's discount on it: the server credits 900 (B6c), so a 960
+    // replacement costs the customer 60 — not 0.
+    const cartLine = soldOf('s-21', 'B-0121', { price: '960.00', net_price: '900.00', discount: '60.00', receipt_id: 'r-9',
+      line_no: 2, piece_code: 'P0000021' })
+    install(
+      on('GET', '/piece?code=P0000021', () => json(200, { piece_id: 'pc-21', piece_code: 'P0000021',
+        product_title: 'Linen shirt', variant_title: 'White / S', price: '960.00', state: 'sold', sale: cartLine, damaged: false })),
+      on('GET', '/piece?code=P0000031', () => json(200, { piece_id: 'pc-31', piece_code: 'P0000031',
+        product_title: 'Linen shirt', variant_title: 'White / M', price: '960.00', state: 'for_sale', sale: null, damaged: false })),
+      on('POST', '/exchange', () => json(200, { old_sale: { ...cartLine, status: 'returned' },
+        new_sale: soldOf('s-22', 'B-0122', { variant_title: 'White / M' }), difference: '60.00',
+        money: { kind: 'payment', method: 'cash', amount: '60.00' } })),
+      ...base())
+    renderAt(`/bazar/${EVENT}/exchange`, <Route path="/bazar/:id/exchange" element={<BazarExchange />} />)
+    const user = userEvent.setup()
+    await user.type(await screen.findByTestId('bazar-code-input'), 'P0000021{Enter}')
+    expect(await screen.findByTestId('exchange-old')).toHaveTextContent('900')
+    await user.type(screen.getByTestId('bazar-code-input'), 'P0000031{Enter}')
+    const banner = await screen.findByTestId('exchange-difference')
+    expect(banner).toHaveTextContent('Customer pays')
+    expect(banner).toHaveTextContent('60')
+    const before = banner.textContent!.match(/[\d,]+(?:\.\d+)?/)![0]
+    await user.click(screen.getByTestId('exchange-confirm'))
+    const after = await screen.findByTestId('exchange-done-money')
+    expect(after.textContent!.match(/[\d,]+(?:\.\d+)?/)![0]).toBe(before)
+  })
+})

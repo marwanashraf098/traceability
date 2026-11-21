@@ -82,7 +82,10 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
 
   const newPrice = newTapped ? newTapped.size.price : newPiece?.price
   const ready = !!oldSale && (!!newPiece || !!newTapped)
-  const diff = ready ? toNumber(newPrice ?? 0) - toNumber(oldSale.price) : 0
+  // What the server credits for the piece coming back: what it was paid — a cart line's net price (B6c), a quick
+  // sale's price (its net price is its price).
+  const credit = oldSale ? toNumber(oldSale.net_price ?? oldSale.price) : 0
+  const diff = ready ? toNumber(newPrice ?? 0) - credit : 0
 
   function confirm() {
     if (!ready) return
@@ -148,7 +151,7 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
               {t('bazar.exch.step1')}
             </span>
             {oldSale ? (
-              <PieceRow testId="exchange-old" title={pieceTitle(oldSale)} line={soldLine(t, oldSale)} price={oldSale.price}
+              <PieceRow testId="exchange-old" title={pieceTitle(oldSale)} line={soldLine(t, oldSale)} price={oldSale.net_price ?? oldSale.price}
                         onClear={cmd.busy ? undefined : startOver} />
             ) : oldLook.looked?.loading ? <Looking /> : oldRefusal ? <ErrorCard error={oldRefusal} /> : null}
           </section>

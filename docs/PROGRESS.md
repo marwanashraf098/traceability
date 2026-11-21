@@ -16,9 +16,11 @@ not removed). No Shopify change. Screens: Return / Exchange get "No label? Find 
 picker in find mode — every size, sold out included — then optional phone / receipt → one match to confirm, several
 listed (time, seller, price, masked customer) for the seller to pick, none says so) and, on Exchange, "No barcode? Pick
 a product" for the new piece (PickSheet mode exchange, "Use … · price"). Current look kept (R4 restyles).
-**Noticed, not changed:** the Exchange screen's difference banner uses the old sale's `price`, while the server credits
-its `net_price` (B6c) — for a cart line with a discount the banner overstates what the customer pays; the server's
-amount (shown after confirm) is right. A one-line fix when you want it.
+**Review fix (2026-11-21):** the Exchange screen's difference (and the old item's row) uses what the server credits —
+the old sale's `net_price` (a discounted cart line's net, B6c) — so the banner before confirm equals the server's
+amount after (vitest, revert-checked). **Still open, same class:** the Return screen's "Give back X" button / banner
+show the sale's full `price`, while the server refunds its `net_price`; for a discounted cart line it overstates the
+refund before confirm (the server's amount after confirm is right).
 
 **Bazar R3 restyle — event page (Get ready / live / ended) + computer Close day and End event pages (2026-11-20;
 branch `bazar-r3-restyle` off origin/main 5d3cfbf6 (R1 + R2 + B6b); frontend only, no migration, no endpoint; pushed,
