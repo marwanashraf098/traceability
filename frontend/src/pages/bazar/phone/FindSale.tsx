@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { Loader2 } from 'lucide-react'
 import { BazarError, findBazarSales, type BazarFoundSales, type BazarSale } from '../../../bazar/api'
 import { sizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize } from '../../../bazar/catalog'
-import { formatMoney, saleTime, sellErrorText } from '../../../bazar/format'
+import { saleTime, sellErrorText } from '../../../bazar/format'
+import { amount } from '../r1/parts'
 import { Input } from '../../../components/ui'
-import { PickSheet } from './PickSheet'
+import { PickSheet, ProductThumb } from './PickSheet'
 import { Sheet } from './shared'
 
 /**
@@ -90,9 +91,9 @@ function Matches({ eventId, product, size, onPick, onBack, onClose }: {
       {result && sales.length === 1 && (
         <section className="flex flex-col gap-2" data-testid="find-one">
           <span className="text-small font-medium text-muted">{t('bazar.find.oneTitle')}</span>
-          <SaleRow sale={sales[0]} />
+          <SaleRow sale={sales[0]} product={product} />
           <button type="button" onClick={() => onPick(sales[0])} data-testid="find-use"
-            className="h-12 rounded-xl bg-[#16A34A] text-white font-bold">{t('bazar.find.useThis')}</button>
+            className="h-12 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white font-bold">{t('bazar.find.useThis')}</button>
         </section>
       )}
       {result && sales.length > 1 && (
@@ -102,7 +103,7 @@ function Matches({ eventId, product, size, onPick, onBack, onClose }: {
             {sales.map(s => (
               <li key={s.id}>
                 <button type="button" onClick={() => onPick(s)} data-testid="find-row" className="w-full text-start">
-                  <SaleRow sale={s} />
+                  <SaleRow sale={s} product={product} />
                 </button>
               </li>
             ))}
@@ -117,17 +118,19 @@ function Matches({ eventId, product, size, onPick, onBack, onClose }: {
 }
 
 /** Time · seller · price · customer (masked for a worker, as the server sends it). */
-function SaleRow({ sale }: { sale: BazarSale }) {
+function SaleRow({ sale, product }: { sale: BazarSale; product: BazarCatalogProduct }) {
   const { t } = useTranslation()
   const customer = [sale.customer_name, sale.customer_phone].filter(Boolean).join(' · ')
   return (
-    <span className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-surface min-h-[52px]">
-      <span className="font-mono text-small text-muted w-11 shrink-0" dir="ltr">{saleTime(sale.sold_at)}</span>
+    <span className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-surface min-h-[60px] hover:border-trace-blue">
+      <ProductThumb product={product} size={40} />
       <span className="flex-1 min-w-0 flex flex-col">
-        <span className="font-medium text-primary truncate">{sale.sale_number} · {sale.seller_name}</span>
+        <span className="font-semibold text-primary truncate">
+          {sale.sale_number} · <span dir="ltr">{saleTime(sale.sold_at)}</span> · {sale.seller_name}
+        </span>
         <span className="text-small text-muted truncate" dir="auto">{customer || t('bazar.find.noCustomer')}</span>
       </span>
-      <span className="font-semibold tabular-nums shrink-0">{formatMoney(sale.net_price ?? sale.price).replace(/^EGP /, '')}</span>
+      <span className="font-bold tabular-nums shrink-0" dir="ltr">{amount(sale.net_price ?? sale.price)}</span>
     </span>
   )
 }

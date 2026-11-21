@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Bazar R4 restyle — Sell (quick + cart), Return, Exchange (2026-11-21; branch `bazar-r4-restyle` off origin/main
+00b7b6eb (B7c); frontend only, no migration, no endpoint; pushed, NOT merged).** Appearance only, design/bazar-v2
+(V2_SellQuick, V2_Sell, V2_SellPhone, V2_SellPhoneCart, V2_SellPickPhone, V2_Return, V2_ReturnPhone).
+- New `r4/parts.tsx`: R4Screen (full-screen; phone 480 px column + dark top bar, computer 1240 px + light header —
+  ONE header markup for both sizes, so no duplicated controls), R4Header, TodayPill / TodayLine, useSellerName (one
+  GET /me; failure hides "Selling as"), Columns (computer two columns; on a phone the panel is `display: contents` so
+  StickyAction's button sticks to the screen bottom), ModeTabs (visible "Quick · scan = sold", accessible names stay
+  Quick / Cart), KindSwitch (Refund | Exchange = links to the two existing routes), Thumb (catalog image by
+  variant_id, else letter tile), ReadyPill, CameraChips, R4CodeEntry (CodeEntry's behaviour copied, same test ids),
+  PieceCard, ConditionCards, MoneyBox, ConfirmButton, useSentenceMoney.
+- Sell: footer gone — today total + sales count in the header; "Return" (phone) / "Return / exchange" (computer)
+  replaces the Sell / Return / Exchange tabs; SOLD card with number · time, code, two customer boxes (open the existing
+  CustomerSheet — nothing saved inline), Undo · Ns kept; Earlier today list. Cart: customer fields always shown,
+  "Charge N EGP · method", compact last-sale card. "Scanner ready" = no sheet open and not typing (display only).
+- Return / Exchange: back link named "Sell"; Good / Damaged cards (exchange too, same `damaged` value); dark money box;
+  exchange summary (coming back / going out). Return "Give back" still uses `sale.price` (B7d-1 fixes it).
+- Untouched: PhoneFrame, ReturnParts, SaleBadge, Sheet, App.tsx, ui.tsx; useScanner / useScanBurst / CameraReader
+  byte-identical (bazarR4 guard test hashes them, the Sell scan input, its scan routing block and the cart's refocus
+  listener).
+- **RTL money gotcha:** "880 EGP" interpolated into an Arabic sentence renders "EGP 880" (the digits resolve to the
+  RTL run). Sentence money goes through `useSentenceMoney` (LTR isolate U+2066…U+2069 in RTL only); standalone amounts
+  use `dir="ltr"`.
+- Left out (not available): Ctrl Z hint, "All 23 →", "+ added" toast, 2+ new pieces in an exchange, discount %.
+- Approved test edits: bazarB3 198, 202, 276, 280, 293 (N EGP); bazarB6 432–455 (header, no default-pay line);
+  bazarB6c 233 (Charge), 261 / 379 / 403 (click the Name box), 426 (click "Customer name"). Screenshot harness
+  `frontend/dev/bazar-r4-shots/` (`node dev/bazar-r4-shots/shoot.mjs <dir>`).
+- **Next:** review + merge R4 (expect a one-line BazarReturn.tsx conflict with B7d-1's net_price fix — keep B7d-1's);
+  U1 (computer selling in the shell, camera pause between scans).
+
 **Bazar POS B7c — returns / exchanges without a label (2026-11-21; branch `feat/bazar-b7`, rebased on main 32faea57;
 no migration; BUILT, pushed, NOT merged — awaiting review; not deployed).** `GET /bazar-events/{id}/sales/find?variant=…
 [&phone=…][&receipt=…]` (`BazarSaleService.findSales`): the ACTIVE sales of that variant at this event, newest first, at

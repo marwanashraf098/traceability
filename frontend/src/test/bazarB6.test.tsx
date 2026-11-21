@@ -429,15 +429,14 @@ describe('Recent sales — what each role may do', () => {
     expect(await within(sheet).findByTestId('sale-undone')).toBeInTheDocument()
   })
 
-  test('footer: today total and count come from GET /today, not from the (paged) sales list', async () => {
+  test('header: today total and count come from GET /today, not from the (paged) sales list', async () => {
     // The list holds one page; the server's totals cover the whole day.
     install(...sellBase('worker', [sale({ price: '100.00' }), sale({ price: '250.50' })],
                         todaySummary({ total: '12000.00', sale_count: 60 })))
     renderAt(`/bazar/${EVENT}/sell`, sellRoutes)
-    const footer = await screen.findByTestId('bazar-sell-footer')
-    await waitFor(() => expect(footer).toHaveTextContent('EGP 12,000'))
+    const footer = await screen.findByTestId('bazar-sell-header')
+    await waitFor(() => expect(footer).toHaveTextContent('12,000 EGP'))
     expect(footer).toHaveTextContent('60 sales')
-    expect(footer).toHaveTextContent('default pay: Cash')
   })
 
   test('a sale reloads the server totals', async () => {
@@ -447,11 +446,11 @@ describe('Recent sales — what each role may do', () => {
       on('GET', `/bazar-events/${EVENT}/today`, () => json(200, today)),
       on('POST', '/sell', () => { today = todaySummary({ total: '960.00', sale_count: 1 }); return json(200, s) }))
     renderAt(`/bazar/${EVENT}/sell`, sellRoutes)
-    const footer = await screen.findByTestId('bazar-sell-footer')
+    const footer = await screen.findByTestId('bazar-sell-header')
     await waitFor(() => expect(footer).toHaveTextContent('0 sales'))
     await scan('P0000001')
     await screen.findByTestId('sell-card-sold')
-    await waitFor(() => expect(footer).toHaveTextContent('EGP 960'))
+    await waitFor(() => expect(footer).toHaveTextContent('960 EGP'))
     expect(footer).toHaveTextContent('1 sale')
   })
 })

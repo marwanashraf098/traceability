@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, WifiOff, X } from 'lucide-react'
+import { Loader2, Undo2, WifiOff, X } from 'lucide-react'
 import {
   BazarError, changeBazarReceiptPayment, completeCartOnce, currentUserId, managesBazar, previewBazarCart,
   undoBazarReceipt, SELLER_UNDO_WINDOW_MS,
@@ -9,11 +9,14 @@ import {
 import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
 import { useScanBurst } from '../../../bazar/useScanBurst'
 import { sellTiming } from '../../../bazar/useQuickSell'
-import { formatMoney, pieceTitle, saleTime, sellErrorText, toNumber } from '../../../bazar/format'
-import { tappedVariant } from '../../../bazar/catalog'
+import { pieceTitle, saleTime, sellErrorText, toNumber } from '../../../bazar/format'
+import { tappedVariant, type BazarCatalog } from '../../../bazar/catalog'
 import { Button, Input, cn } from '../../../components/ui'
 import { CustomerSheet, ErrorLine, MethodChips, SaleBadge } from './SaleSheets'
 import { Sheet } from './shared'
+import { amount } from '../r1/parts'
+import { money } from '../r2/parts'
+import { Columns, Label, StickyAction, Thumb, useSentenceMoney } from '../r4/parts'
 
 // Bazar POS B6c — CART MODE (mockup step 6c): scan pieces into a list — nothing is sold or reserved until Complete.
 // The list is checked by POST /cart/preview (read-only) after every change; Complete sells every piece in ONE
@@ -85,22 +88,26 @@ function lineErrorText(t: ReturnType<typeof useTranslation>['t'], lang: string, 
  * is the screen's own scan block (camera + the one scan input), placed above the lines; on a computer the summary
  * sits beside the list.
  */
-export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, onCompleted, onChanged }: {
+export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, catalog, modeSwitch, extra, onCompleted, onChanged }: {
   eventId: string
   cart: Cart
   methods: PaymentMethod[]
   defaultMethod: PaymentMethod
   scanner: ReactNode
+  /** R4: the catalog (line pictures), the Quick / Cart switch and the recent sales, placed in the panel. */
+  catalog: BazarCatalog | null
+  modeSwitch: ReactNode
+  extra?: ReactNode
   onCompleted: (r: BazarReceipt) => void
   onChanged: (r: BazarReceipt) => void
 }) {
   const { t, i18n } = useTranslation()
   const cmd = useRetryingCommand<BazarReceipt>()
   const [discount, setDiscount] = useState('')
+  const sm = useSentenceMoney()
   const [method, setMethod] = useState<PaymentMethod>(defaultMethod)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [customerOpen, setCustomerOpen] = useState(false)
   const [done, setDone] = useState<{ receipt: BazarReceipt; shownAt: number } | null>(null)
   const summaryRef = useRef<HTMLElement>(null)
 
@@ -137,7 +144,6 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, onCo
       setDiscount('')
       setName('')
       setPhone('')
-      setCustomerOpen(false)
       setMethod(defaultMethod)
       cmd.reset()
     } else if (cmd.state.kind === 'error') {
@@ -162,117 +168,126 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, onCo
     ? cmd.state.error : null
 
   return (
-    <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-5" data-testid="bazar-cart">
-      <div className="flex flex-col gap-3 min-w-0">
-        {scanner}
-        {cart.notice && (
-          <p role="status" className="text-small text-muted" data-testid="cart-notice">
-            {t(`bazar.cart.${cart.notice.key}`, { code: cart.notice.code ?? '' })}
-          </p>
-        )}
-        {done && <ReceiptCard eventId={eventId} done={done} onChanged={r => { setDone({ ...done, receipt: r }); onChanged(r) }} />}
-
-        <section className="flex flex-col gap-1.5" aria-label={t('bazar.cart.cart')}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-small font-medium text-muted">
-              {t('bazar.cart.pieces', { count: cart.codes.length })}
-              {cart.checking && <Loader2 size={12} className="inline animate-spin ms-1.5" aria-label={t('bazar.cart.checkingPieces')} />}
-            </span>
-            {cart.codes.length > 0 && (
-              <button type="button" onClick={cart.clear} disabled={cmd.busy}
-                className="min-h-[36px] px-2 text-small font-semibold text-muted hover:text-primary">{t('bazar.cart.clear')}</button>
-            )}
-          </div>
-          {cart.codes.length === 0 ? (
-            <p className="rounded-2xl border border-dashed border-line px-4 py-5 text-center text-small text-muted" data-testid="cart-empty">
-              {t('bazar.cart.empty')}
+    <div className="contents" data-testid="bazar-cart">
+      <Columns left={
+        <>
+          {scanner}
+          {cart.notice && (
+            <p role="status" className="text-small text-muted" data-testid="cart-notice">
+              {t(`bazar.cart.${cart.notice.key}`, { code: cart.notice.code ?? '' })}
             </p>
-          ) : (
-            <ul className="flex flex-col gap-1.5" data-testid="cart-lines">
-              {cart.codes.map((code, i) => {
-                const l = cart.lines[i]
-                const refused = cart.refused?.index === i ? cart.refused.error : undefined
-                const err = l ? lineErrorText(t, i18n.language, l, refused) : null
-                const tapped = tappedVariant(code) !== null
-                const title = l?.product_title ? pieceTitle({ product_title: l.product_title, variant_title: l.variant_title ?? null })
-                  : tapped ? '…' : code
-                return (
-                  <li key={`${code}-${i}`} data-testid="cart-line"
-                      className={cn('flex items-start gap-2.5 px-3 py-2.5 rounded-xl border bg-surface min-h-[52px]',
-                        err ? 'border-critical/40 bg-critical/5' : 'border-line')}>
-                    <span className="flex-1 min-w-0 flex flex-col">
-                      <span className={cn('font-medium truncate', err ? 'text-critical-text' : 'text-primary')}>{title}</span>
-                      {tapped
-                        ? <span className="text-small text-muted" data-testid="cart-line-tapped">{t('bazar.pick.tappedLine')}</span>
-                        : <span className="text-small text-muted font-mono" dir="ltr">{l?.piece_code ?? code}</span>}
-                      {err && <span role="alert" className="text-small text-critical-text" data-testid="cart-line-error">{err}</span>}
-                    </span>
-                    <span className="font-semibold tabular-nums shrink-0 pt-0.5">
-                      {l && !l.error ? formatMoney(l.price ?? 0).replace(/^EGP /, '') : ''}
-                    </span>
-                    <button type="button" onClick={() => cart.remove(i)} disabled={cmd.busy}
-                      aria-label={t('bazar.cart.remove', { title })}
-                      className="w-10 h-10 -me-1.5 -mt-1.5 rounded-full flex items-center justify-center text-muted hover:text-primary hover:bg-charcoal shrink-0">
-                      <X size={18} aria-hidden />
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
           )}
-          {cart.previewFailed && <p role="alert" className="text-small text-critical">{t('bazar.cart.previewFailed')}</p>}
-        </section>
-      </div>
+        </>
+      } right={
+        <>
+          {modeSwitch}
+          <section className="flex flex-col rounded-2xl border border-line bg-surface p-3.5 lg:border-0 lg:p-0" aria-label={t('bazar.cart.cart')}>
+            <div className="flex items-center justify-between gap-2 pb-2">
+              <span className="text-body-lg font-bold text-primary">
+                {t('bazar.r4.cartTitle', { count: cart.codes.length })}
+                {cart.checking && <Loader2 size={13} className="inline animate-spin ms-1.5 text-muted" aria-label={t('bazar.cart.checkingPieces')} />}
+              </span>
+              {cart.codes.length > 0 && (
+                <button type="button" onClick={cart.clear} disabled={cmd.busy} aria-label={t('bazar.cart.clear')}
+                  className="min-h-[36px] px-1 text-small font-semibold text-muted hover:text-primary">{t('bazar.r4.clear')}</button>
+              )}
+            </div>
+            {cart.codes.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-line px-4 py-5 text-center text-small text-muted" data-testid="cart-empty">
+                {t('bazar.cart.empty')}
+              </p>
+            ) : (
+              <ul className="flex flex-col divide-y divide-line border-t border-line" data-testid="cart-lines">
+                {cart.codes.map((code, i) => {
+                  const l = cart.lines[i]
+                  const refused = cart.refused?.index === i ? cart.refused.error : undefined
+                  const err = l ? lineErrorText(t, i18n.language, l, refused) : null
+                  const tapped = tappedVariant(code) !== null
+                  const title = l?.product_title ? pieceTitle({ product_title: l.product_title, variant_title: l.variant_title ?? null })
+                    : tapped ? '…' : code
+                  return (
+                    <li key={`${code}-${i}`} data-testid="cart-line"
+                        className={cn('flex items-center gap-3 py-2.5 min-h-[60px]', err && 'bg-critical/5 -mx-2 px-2 rounded-lg')}>
+                      <Thumb catalog={catalog} variantId={l?.variant_id ?? tappedVariant(code)} title={l?.product_title ?? code} size={40} />
+                      <span className="flex-1 min-w-0 flex flex-col">
+                        <span className={cn('font-semibold truncate', err ? 'text-critical-text' : 'text-primary')}>{title}</span>
+                        {tapped
+                          ? <span className="text-small text-muted truncate" data-testid="cart-line-tapped">{t('bazar.pick.tappedLine')}</span>
+                          : <span className="text-small text-muted font-mono" dir="ltr">{l?.piece_code ?? code}</span>}
+                        {err && <span role="alert" className="text-small text-critical-text" data-testid="cart-line-error">{err}</span>}
+                      </span>
+                      <span className="font-bold tabular-nums shrink-0" dir="ltr">
+                        {l && !l.error ? amount(l.price ?? 0) : ''}
+                      </span>
+                      <button type="button" onClick={() => cart.remove(i)} disabled={cmd.busy}
+                        aria-label={t('bazar.cart.remove', { title })}
+                        className="w-9 h-9 rounded-lg border border-line flex items-center justify-center text-muted hover:text-primary hover:bg-charcoal shrink-0">
+                        <X size={16} aria-hidden />
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {cart.previewFailed && <p role="alert" className="text-small text-critical pt-2">{t('bazar.cart.previewFailed')}</p>}
+          </section>
 
-      <section ref={summaryRef} className="card p-4 flex flex-col gap-3 lg:sticky lg:top-4" data-testid="cart-summary">
-        <div className="flex items-center justify-between text-body">
-          <span className="text-muted">{t('bazar.cart.subtotal')}</span>
-          <span className="tabular-nums font-semibold" dir="ltr" data-testid="cart-subtotal">{formatMoney(subtotal)}</span>
-        </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-small font-medium text-muted">{t('bazar.cart.discount')}</span>
-          <Input value={discount} inputMode="numeric" dir="ltr" placeholder="0" disabled={cmd.busy}
-                 onChange={e => setDiscount(e.target.value.replace(/[^\d٠-٩]/g, '').replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))))}
-                 data-testid="cart-discount" aria-invalid={!discountOk} />
-          <span className={cn('text-small', discountOk ? 'text-muted' : 'text-critical')}>
-            {discountOk ? t('bazar.cart.discountHint') : t('bazar.cart.discountInvalid', { max: Math.floor(subtotal) })}
-          </span>
-        </label>
-        <div className="flex items-center justify-between">
-          <span className="text-body font-semibold text-primary">{t('bazar.cart.total')}</span>
-          <span className="text-h3 font-bold tabular-nums text-primary" dir="ltr" data-testid="cart-total">{formatMoney(total)}</span>
-        </div>
-        <span className="text-small font-medium text-muted">{t('bazar.sell.paidBy')}</span>
-        <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
+          <section ref={summaryRef} className="contents lg:flex lg:flex-col lg:gap-4" data-testid="cart-summary">
+            <div className="rounded-xl border border-line bg-base px-3.5 py-3 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between text-body">
+                <span className="text-muted">{t('bazar.cart.subtotal')}</span>
+                <span className="tabular-nums text-primary" dir="ltr" data-testid="cart-subtotal">{amount(subtotal)}</span>
+              </div>
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-body text-muted">{t('bazar.r4.discount')}</span>
+                <span className="flex items-center gap-1.5">
+                  <Input value={discount} inputMode="numeric" dir="ltr" placeholder="0" disabled={cmd.busy}
+                         className="w-24 h-10 text-end tabular-nums"
+                         onChange={e => setDiscount(e.target.value.replace(/[^\d٠-٩]/g, '').replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))))}
+                         data-testid="cart-discount" aria-invalid={!discountOk} />
+                  <span className="h-8 px-2.5 rounded-md bg-surface border border-line text-small font-semibold text-primary flex items-center">EGP</span>
+                </span>
+              </label>
+              {!discountOk && (
+                <span className="text-small text-critical">{t('bazar.cart.discountInvalid', { max: Math.floor(subtotal) })}</span>
+              )}
+              <div className="flex items-center justify-between border-t border-line pt-2.5">
+                <span className="text-body-lg font-bold text-primary">{t('bazar.cart.total')}</span>
+                <span className="text-[22px] leading-7 font-bold tabular-nums text-primary" dir="ltr" data-testid="cart-total">{money(total)}</span>
+              </div>
+            </div>
+            <Label>{t('bazar.r4.paidWith')}</Label>
+            <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
 
-        {customerOpen || name || phone ? (
-          <fieldset className="flex flex-col gap-2" disabled={cmd.busy}>
-            <legend className="text-small font-medium text-muted mb-1">{t('bazar.cart.customer')}</legend>
-            <Input value={name} maxLength={80} autoComplete="off" placeholder={t('bazar.customer.namePlaceholder')}
-                   aria-label={t('bazar.customer.name')} onChange={e => setName(e.target.value)} />
-            <Input value={phone} inputMode="tel" autoComplete="off" dir="ltr" placeholder="01012345678"
-                   aria-label={t('bazar.customer.phone')} onChange={e => setPhone(e.target.value)} />
-          </fieldset>
-        ) : (
-          <button type="button" onClick={() => setCustomerOpen(true)}
-            className="min-h-[44px] self-start font-semibold text-trace-blue underline underline-offset-2">
-            {t('bazar.customer.addShort')}
-          </button>
-        )}
+            {/* R4: the customer's two boxes, always shown (still optional, still sent with Complete). */}
+            <fieldset className="grid grid-cols-2 gap-2" disabled={cmd.busy}>
+              <legend className="sr-only">{t('bazar.cart.customer')}</legend>
+              <Input value={name} maxLength={80} autoComplete="off" placeholder={t('bazar.r4.customerNameOpt')}
+                     aria-label={t('bazar.customer.name')} onChange={e => setName(e.target.value)} />
+              <Input value={phone} inputMode="tel" autoComplete="off" dir="ltr" placeholder={t('bazar.r4.customerPhoneOpt')}
+                     aria-label={t('bazar.customer.phone')} onChange={e => setPhone(e.target.value)} />
+            </fieldset>
 
-        {cmd.state.kind === 'checking' && (
-          <p role="status" className="rounded-lg bg-warning/10 border border-warning/30 px-3 py-2 text-small text-primary flex items-start gap-2" data-testid="cart-checking">
-            <WifiOff size={16} className="text-warning-text shrink-0 mt-0.5" aria-hidden />{t('bazar.cart.checking')}
-          </p>
-        )}
-        {anyError && cart.codes.length > 0 && <p className="text-small text-critical-text">{t('bazar.cart.fixLines')}</p>}
-        <ErrorLine error={commandError} />
-        <button type="button" onClick={complete} disabled={!ready || cmd.busy} data-testid="cart-complete"
-          className="h-[52px] rounded-xl bg-[#16A34A] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50">
-          {cmd.busy && <Loader2 size={18} className="animate-spin" aria-hidden />}
-          {cmd.busy ? t('bazar.cart.completing') : t('bazar.cart.complete', { total: formatMoney(total) })}
-        </button>
-      </section>
+            {cmd.state.kind === 'checking' && (
+              <p role="status" className="rounded-lg bg-warning/10 border border-warning/30 px-3 py-2 text-small text-primary flex items-start gap-2" data-testid="cart-checking">
+                <WifiOff size={16} className="text-warning-text shrink-0 mt-0.5" aria-hidden />{t('bazar.cart.checking')}
+              </p>
+            )}
+            {anyError && cart.codes.length > 0 && <p className="text-small text-critical-text">{t('bazar.cart.fixLines')}</p>}
+            <ErrorLine error={commandError} />
+            <StickyAction>
+              <button type="button" onClick={complete} disabled={!ready || cmd.busy} data-testid="cart-complete"
+                className="w-full min-h-[56px] rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-body-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50">
+                {cmd.busy && <Loader2 size={18} className="animate-spin" aria-hidden />}
+                {cmd.busy ? t('bazar.cart.completing')
+                  : t('bazar.r4.charge', { total: sm(total), method: t(`bazar.method.${method}`) })}
+              </button>
+            </StickyAction>
+          </section>
+          {done && <ReceiptCard eventId={eventId} done={done} onChanged={r => { setDone({ ...done, receipt: r }); onChanged(r) }} />}
+          {extra}
+        </>
+      } />
     </div>
   )
 }
@@ -301,6 +316,7 @@ function ReceiptCard({ eventId, done, onChanged }: {
 }) {
   const { t } = useTranslation()
   const r = done.receipt
+  const sm = useSentenceMoney()
   const [now, setNow] = useState(Date.now())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<BazarError | null>(null)
@@ -327,25 +343,26 @@ function ReceiptCard({ eventId, done, onChanged }: {
     finally { setBusy(false) }
   }
   return (
-    <section role="status" className="rounded-2xl bg-[#16A34A] text-white px-4 py-3.5 flex flex-col gap-2" data-testid="cart-card-sold">
-      <div className="flex items-start justify-between gap-3">
-        <span className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-small font-bold tracking-wider">{t('bazar.cart.doneTitle', { number: r.sale_number })}</span>
-          <span className="text-body font-semibold">
-            {t('bazar.cart.pieces', { count: r.line_count })}
-            {toNumber(r.discount) > 0 && <> · {t('bazar.cart.discountLine', { amount: formatMoney(r.discount) })}</>}
+    <section role="status" data-testid="cart-card-sold"
+      className="rounded-xl border border-success/30 bg-success/[0.06] px-3.5 py-2.5 flex flex-col gap-1.5">
+      <div className="flex items-center gap-3">
+        <span className="flex-1 min-w-0 flex flex-col">
+          <span className="text-[12px] font-bold tracking-[0.08em] text-success-text">{t('bazar.cart.doneTitle', { number: r.sale_number })}</span>
+          <span className="text-small text-muted truncate">
+            {t('bazar.r4.lastSale')} · {t('bazar.cart.pieces', { count: r.line_count })}
+            {toNumber(r.discount) > 0 && <> · {t('bazar.cart.discountLine', { amount: sm(r.discount) })}</>}
           </span>
         </span>
-        <span className="text-h3 font-bold tabular-nums shrink-0" dir="ltr">{formatMoney(r.total).replace(/^EGP /, '')}</span>
+        <span className="font-bold tabular-nums text-primary shrink-0" dir="ltr">{money(r.total)}</span>
+        {left > 0 && canUndoReceipt(r) && (
+          <button type="button" onClick={undo} disabled={busy} data-testid="cart-undo"
+            className="min-h-[40px] px-2 rounded-lg font-semibold text-trace-blue flex items-center gap-1.5 shrink-0">
+            {busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Undo2 size={15} aria-hidden />}
+            {t('bazar.cart.undoCountdown', { seconds: left })}
+          </button>
+        )}
       </div>
-      {left > 0 && canUndoReceipt(r) && (
-        <button type="button" onClick={undo} disabled={busy} data-testid="cart-undo"
-          className="self-end min-h-[44px] px-3 rounded-lg border border-white/60 font-semibold flex items-center gap-1.5">
-          {busy && <Loader2 size={14} className="animate-spin" aria-hidden />}
-          {t('bazar.cart.undoCountdown', { seconds: left })}
-        </button>
-      )}
-      {error && <div className="rounded-md bg-white px-2 py-1"><ErrorLine error={error} /></div>}
+      {error && <ErrorLine error={error} />}
     </section>
   )
 }
@@ -397,18 +414,18 @@ export function ReceiptSheet({ eventId, receipt, methods, onChanged, onClose, on
             <span className={cn('flex-1 min-w-0 truncate', l.status !== 'active' && 'line-through text-muted')}>{pieceTitle(l)}</span>
             {l.status !== 'active' && <SaleBadge sale={l} />}
             <span className="tabular-nums text-small text-muted shrink-0" dir="ltr">
-              {toNumber(l.discount) > 0 ? <><s>{formatMoney(l.price).replace(/^EGP /, '')}</s>{' '}</> : null}
-              <span className="text-primary font-semibold">{formatMoney(l.net_price ?? l.price).replace(/^EGP /, '')}</span>
+              {toNumber(l.discount) > 0 ? <><s>{amount(l.price)}</s>{' '}</> : null}
+              <span className="text-primary font-semibold">{amount(l.net_price ?? l.price)}</span>
             </span>
           </li>
         ))}
       </ul>
       <div className="flex flex-col gap-1 text-body">
-        <div className="flex justify-between"><span className="text-muted">{t('bazar.cart.subtotal')}</span><span className="tabular-nums" dir="ltr">{formatMoney(current.subtotal)}</span></div>
+        <div className="flex justify-between"><span className="text-muted">{t('bazar.cart.subtotal')}</span><span className="tabular-nums" dir="ltr">{money(current.subtotal)}</span></div>
         {toNumber(current.discount) > 0 && (
-          <div className="flex justify-between"><span className="text-muted">{t('bazar.cart.discount')}</span><span className="tabular-nums" dir="ltr">−{formatMoney(current.discount)}</span></div>
+          <div className="flex justify-between"><span className="text-muted">{t('bazar.cart.discount')}</span><span className="tabular-nums" dir="ltr">−{money(current.discount)}</span></div>
         )}
-        <div className="flex justify-between font-bold"><span>{t('bazar.cart.total')}</span><span className={cn('tabular-nums', current.status !== 'active' && 'line-through text-muted')} dir="ltr">{formatMoney(current.total)}</span></div>
+        <div className="flex justify-between font-bold"><span>{t('bazar.cart.total')}</span><span className={cn('tabular-nums', current.status !== 'active' && 'line-through text-muted')} dir="ltr">{money(current.total)}</span></div>
       </div>
       {current.status === 'active' && (
         <>
