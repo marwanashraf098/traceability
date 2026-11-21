@@ -28,6 +28,18 @@ import java.util.List;
  * A failed probe (the watchdog's own DB check threw) counts only from its 2nd consecutive time, so one DB blip
  * never restarts the job server. No check runs in the first {@code startupGrace} after start.
  *
+ * <p>Incident 2026-11-21 (prod wiring — with a {@link Requeuer} and a {@link RegistrationCheck}):
+ * <ul>
+ *   <li>stuck webhook events while the heartbeat and the liveness job are fine are NOT a stall: the watchdog
+ *       re-enqueues them ({@link Requeuer}, at most every {@code requeueEvery}) instead of restarting. Only when
+ *       they are still stuck {@code requeueGrace} after the first re-enqueue AND no other webhook was processed
+ *       meanwhile ({@link Health#othersProcessing}) is it treated as a stall (step 1 below);</li>
+ *   <li>after the stop + start, the server must be back in jobrunr_backgroundjobservers (heartbeat after the
+ *       restart began) within {@code reregisterTimeout}; if not, the escalation happens at once (alert, and the
+ *       exit when exit-on-escalation is on) instead of {@code escalateAfter} later.</li>
+ * </ul>
+ * Without them (the older constructors) the behaviour is exactly the pre-incident one.
+ *
  * <p>Plain class (no Spring), so the decisions are unit-tested with fakes and a fixed clock.
  */
 public final class JobServerWatchdog {
@@ -35,8 +47,19 @@ public final class JobServerWatchdog {
     private static final Logger log = LoggerFactory.getLogger(JobServerWatchdog.class);
 
     /** The probe's answer. {@code checkError} = the watchdog could not check (its own DB call failed). */
-    public record Health(boolean healthy, List<String> problems, boolean checkError) {
+    /**
+     * {@code webhooksOnly}: the ONLY failing check is "Shopify webhook events unprocessed" (heartbeat and liveness
+     * job fine). {@code othersProcessing}: some other webhook event was processed in the last few minutes.
+     */
+    public record Health(boolean healthy, List<String> problems, boolean checkError,
+                         boolean webhooksOnly, boolean othersProcessing) {
+        public Health(boolean healthy, List<String> problems, boolean checkError) {
+            this(healthy, problems, checkError, false, false);
+        }
         public static Health ok() { return new Health(true, List.of(), false); }
+        public static Health stuckWebhooks(List<String> problems, boolean othersProcessing) {
+            return new Health(false, List.copyOf(problems), false, true, othersProcessing);
+        }
         public static Health failing(List<String> problems) { return new Health(false, List.copyOf(problems), false); }
         public static Health checkFailed(String why) { return new Health(false, List.of(why), true); }
     }
@@ -47,6 +70,14 @@ public final class JobServerWatchdog {
     public interface ServerControl { String restart(); }
 
     public interface Alerter { void alert(String subject, String body); }
+
+    /** Re-enqueues stuck Shopify webhook events (prod: ShopifyWebhookRetrySweeper.sweepNow); returns how many. */
+    public interface Requeuer { int requeue(); }
+
+    /** This server is in jobrunr_backgroundjobservers with a heartbeat at/after {@code since}. */
+    public interface RegistrationCheck { boolean registeredSince(Instant since); }
+
+    public interface Sleeper { void sleep(Duration d) throws InterruptedException; }
 
     public interface ThreadDumper { String dump(); }
 
@@ -81,6 +112,16 @@ public final class JobServerWatchdog {
     private final boolean exitOnEscalation;
     private final Exiter exiter;
 
+    private Requeuer requeuer;
+    private RegistrationCheck registration;
+    private Sleeper sleeper = d -> Thread.sleep(d.toMillis());
+    private Duration requeueGrace = Duration.ofMinutes(5);
+    private Duration requeueEvery = Duration.ofMinutes(2);
+    private Duration reregisterTimeout = Duration.ofSeconds(30);
+    private Duration reregisterPoll = Duration.ofSeconds(1);
+    private Instant firstRequeueAt;
+    private Instant lastRequeueAt;
+
     private Instant incidentStart;
     private Instant restartedAt;
     private boolean escalated;
@@ -109,6 +150,20 @@ public final class JobServerWatchdog {
         this.startedAt = clock.instant();
         this.startupGrace = startupGrace;
         this.escalateAfter = escalateAfter;
+    }
+
+    /** Prod wiring (incident 2026-11-21): requeue stuck webhooks instead of restarting; verify re-registration. */
+    public JobServerWatchdog withRecovery(Requeuer requeuer, RegistrationCheck registration, Sleeper sleeper,
+                                          Duration requeueGrace, Duration requeueEvery,
+                                          Duration reregisterTimeout, Duration reregisterPoll) {
+        this.requeuer = requeuer;
+        this.registration = registration;
+        if (sleeper != null) this.sleeper = sleeper;
+        this.requeueGrace = requeueGrace;
+        this.requeueEvery = requeueEvery;
+        this.reregisterTimeout = reregisterTimeout;
+        this.reregisterPoll = reregisterPoll;
+        return this;
     }
 
     /** One check. Never throws: an exception would cancel the scheduler's periodic task. */
@@ -140,6 +195,8 @@ public final class JobServerWatchdog {
             restartedAt = null;
             escalated = false;
             consecutiveCheckErrors = 0;
+            firstRequeueAt = null;
+            lastRequeueAt = null;
             return;
         }
 
@@ -152,6 +209,23 @@ public final class JobServerWatchdog {
             }
         } else {
             consecutiveCheckErrors = 0;
+        }
+
+        if (incidentStart == null && requeuer != null && h.webhooksOnly() && !h.checkError()) {
+            if (h.othersProcessing()) {
+                // Jobs are running (heartbeat, liveness job, other webhooks): a few lost events, not a stall.
+                firstRequeueAt = null;
+                requeue(now, h, "other webhooks and the liveness job are being processed — not a stall");
+                return;
+            }
+            if (firstRequeueAt == null) firstRequeueAt = now;
+            if (now.isBefore(firstRequeueAt.plus(requeueGrace))) {
+                requeue(now, h, "nothing else is being processed — restarting if still stuck "
+                    + requeueGrace.toMinutes() + " min after the first re-enqueue");
+                return;
+            }
+            log.warn("JobRunr watchdog: webhook events still stuck {} min after the first re-enqueue and no other "
+                + "webhook was processed — treating it as a stall", Duration.between(firstRequeueAt, now).toMinutes());
         }
 
         if (incidentStart == null) {
@@ -183,6 +257,43 @@ public final class JobServerWatchdog {
         log.warn("JobRunr watchdog: incident open since {} — still failing: {}", incidentStart, h.problems());
     }
 
+    private void requeue(Instant now, Health h, String why) {
+        if (lastRequeueAt != null && now.isBefore(lastRequeueAt.plus(requeueEvery))) {
+            log.warn("JobRunr watchdog: {} ({}); re-enqueued {} s ago — waiting", h.problems(), why,
+                Duration.between(lastRequeueAt, now).toSeconds());
+            return;
+        }
+        lastRequeueAt = now;
+        int n;
+        try {
+            n = requeuer.requeue();
+        } catch (RuntimeException e) {
+            log.warn("JobRunr watchdog: {} ({}); re-enqueue failed: {}", h.problems(), why, e.toString());
+            return;
+        }
+        log.warn("JobRunr watchdog: {} ({}); re-enqueued {} event(s), no restart", h.problems(), why, n);
+    }
+
+    /** Polls {@link RegistrationCheck} until {@code reregisterTimeout}; true once registered. */
+    private boolean awaitRegistration(Instant since) {
+        long polls = Math.max(1, reregisterTimeout.toMillis() / Math.max(1, reregisterPoll.toMillis()));
+        for (long i = 0; i <= polls; i++) {
+            try {
+                if (registration.registeredSince(since)) return true;
+            } catch (RuntimeException e) {
+                log.warn("JobRunr watchdog: registration check failed: {}", e.toString());
+            }
+            if (i == polls) break;
+            try {
+                sleeper.sleep(reregisterPoll);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
     private void openIncident(Instant now, Health h) {
         incidentStart = now;
         escalated = false;
@@ -201,6 +312,29 @@ public final class JobServerWatchdog {
         }
         restartedAt = clock.instant();
         log.error("JobRunr watchdog: BackgroundJobServer restart done — {}", outcome);
+        if (registration == null) return;
+        if (awaitRegistration(now)) {
+            log.warn("JobRunr watchdog: the server re-registered in jobrunr_backgroundjobservers after the restart");
+            return;
+        }
+        // The 2026-11-21 shape: stop + start returned, but the server never came back. Nothing runs until the app
+        // restarts — escalate now instead of escalateAfter later.
+        escalated = true;
+        log.error("JobRunr watchdog: the server did NOT re-register in jobrunr_backgroundjobservers within {} s of "
+            + "the restart ({})", reregisterTimeout.toSeconds(), outcome);
+        alerter.alert("HIGH · Traced job server did not come back after restart",
+            body("The watchdog restarted the job server, but it did not re-register within "
+                    + reregisterTimeout.toSeconds() + " seconds — no background job runs.", incidentStart, h.problems(),
+                exitOnEscalation
+                    ? "The app now exits so Docker restarts the container."
+                    : "No further automatic action. Restart the app container: "
+                        + "cd ~/traceability && docker compose -f deploy/docker-compose.yml restart app"));
+        if (exitOnEscalation) {
+            log.error("JobRunr watchdog: EXITING THE JVM (code 1) — the server did not re-register after the restart "
+                + "(incident since {}); Docker's restart policy restarts the container. Final thread dump:\n{}",
+                incidentStart, dumper.dump());
+            exiter.exit(1);
+        }
     }
 
     private static String body(String headline, Instant since, List<String> problems, String action) {

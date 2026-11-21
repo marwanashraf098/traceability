@@ -33,6 +33,9 @@ import java.util.function.Supplier;
  *       registered.</li>
  *   <li>This server's row in {@code jobrunr_backgroundjobservers} exists and its lastHeartbeat is fresh.</li>
  * </ol>
+ * When the webhook check is the ONLY failing one, the answer is {@link JobServerWatchdog.Health#stuckWebhooks} with
+ * whether another webhook event was processed in the last {@code staleAfter} (+ 2 min) — the watchdog then
+ * re-enqueues instead of restarting (incident 2026-11-21). {@link #registeredSince} is the after-restart check.
  * JobRunr stores its timestamps as UTC wall time in {@code timestamp} columns, so they are read with a UTC
  * calendar and compared with this JVM's clock (the same clock that wrote them).
  */
@@ -79,6 +82,7 @@ public final class WatchdogDbProbe implements JobServerWatchdog.Probe {
     @Override
     public JobServerWatchdog.Health check(Instant now) {
         List<String> problems = new ArrayList<>();
+        boolean webhooksStale = false;
 
         Long stale = jdbc.queryForObject("""
             SELECT count(*) FROM shopify_webhook_events
@@ -89,6 +93,7 @@ public final class WatchdogDbProbe implements JobServerWatchdog.Probe {
             """, Long.class, (double) staleAfter.toSeconds(), maxAttempts);
         if (stale != null && stale > 0) {
             problems.add(stale + " Shopify webhook event(s) unprocessed for more than " + staleAfter.toMinutes() + " min");
+            webhooksStale = true;
         }
 
         Boolean registered = jdbc.queryForObject(
@@ -130,7 +135,25 @@ public final class WatchdogDbProbe implements JobServerWatchdog.Probe {
             }
         }
 
-        return problems.isEmpty() ? JobServerWatchdog.Health.ok() : JobServerWatchdog.Health.failing(problems);
+        if (problems.isEmpty()) return JobServerWatchdog.Health.ok();
+        if (webhooksStale && problems.size() == 1) {
+            Boolean others = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM shopify_webhook_events WHERE processed_at > now() - make_interval(secs => ?))",
+                Boolean.class, (double) staleAfter.plusMinutes(2).toSeconds());
+            return JobServerWatchdog.Health.stuckWebhooks(problems, Boolean.TRUE.equals(others));
+        }
+        return JobServerWatchdog.Health.failing(problems);
+    }
+
+    /** This server's row exists with a heartbeat at / after {@code since} (JobRunr's UTC wall time, this JVM's clock). */
+    public boolean registeredSince(Instant since) {
+        UUID id = serverId.get();
+        if (id == null) return false;
+        List<Timestamp> hb = jdbc.query(
+            "SELECT lastHeartbeat FROM jobrunr_backgroundjobservers WHERE id = ?",
+            (rs, i) -> rs.getTimestamp(1, UTC), id.toString());
+        if (hb.isEmpty() || hb.get(0) == null) return false;
+        return !hb.get(0).toInstant().isBefore(since);
     }
 
     private static Instant instant(Timestamp t) { return t == null ? null : t.toInstant(); }
