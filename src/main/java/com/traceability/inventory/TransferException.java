@@ -36,7 +36,9 @@ public class TransferException extends RuntimeException {
         TRANSFER_SOURCE_EQUALS_DESTINATION,
         TRANSFER_RETURN_DESTINATION_NOT_FULFILLMENT,
         /** Bazar POS B1: a generic Transfers action on a bazar event's linked transfer. */
-        BAZAR_TRANSFER_LOCKED
+        BAZAR_TRANSFER_LOCKED,
+        /** Bazar POS B7d: a scan claimed one of a count send's pieces in between — nothing sent, try again. */
+        TRANSFER_SEND_CONFLICT
     }
 
     private final Code       code;

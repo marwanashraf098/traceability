@@ -12,6 +12,8 @@ export interface BazarCatalogSize {
   size: string | null
   price: string | number | null
   left: number
+  /** B7d send stock only: online orders' committed demand for this size (as Inventory shows it). */
+  committed?: number
 }
 
 export interface BazarCatalogProduct {
@@ -33,6 +35,11 @@ export interface BazarCatalog {
   event_status: 'draft' | 'live' | 'ended'
   categories: { name: string; count: number }[]
   products: BazarCatalogProduct[]
+}
+
+/** B7d — what the main warehouse can send (labelled and untagged), the catalog's shape; `left` = at Main. */
+export function getBazarSendStock(eventId: string) {
+  return bazarGet<BazarCatalog>(`/bazar-events/${encodeURIComponent(eventId)}/send-stock`)
 }
 
 export function getBazarCatalog(eventId: string) {

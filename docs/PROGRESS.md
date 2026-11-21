@@ -33,8 +33,38 @@
 - **Next:** review + merge R4 (expect a one-line BazarReturn.tsx conflict with B7d-1's net_price fix — keep B7d-1's);
   U1 (computer selling in the shell, camera pause between scans).
 
-**Bazar POS B7c — returns / exchanges without a label (2026-11-21; branch `feat/bazar-b7`, rebased on main 32faea57;
-no migration; BUILT, pushed, NOT merged — awaiting review; not deployed).** `GET /bazar-events/{id}/sales/find?variant=…
+**Bazar POS B7d-1 — send by count + remove from this send (2026-11-21; MERGED onto main
+61d5e571 (after R4) — not deployed; no migration).**
+- `TransferService.claimAndSend` is the ONE claim-and-send (line get-or-create, transfer_pieces claim — `created_at =
+  clock_timestamp()` so many claims in one transaction still order —, ledger available → out_on_transfer, location,
+  qty_out), used by the scan (`scanOutCore`, which keeps PIECE_UNTAGGED in front: every non-bazar transfer, and the
+  bazar's own scan, still refuse an untagged piece; send-back unchanged) and by `scanOutByCountForBazar`.
+- Send by count (`POST /bazar-events/{id}/scan-out-by-count {variant_id, quantity, client_request_id}`, owner /
+  manager): bazar transfer in preparing only; available pieces AT MAIN, labelled or untagged, oldest received first,
+  `FOR UPDATE OF p SKIP LOCKED`; all or nothing (BAZAR_NOT_ENOUGH_AT_MAIN, details.available); 1–500; a scan claiming
+  one of the pieces in between → TRANSFER_SEND_CONFLICT (409, nothing sent). Retry: per-request advisory lock, the
+  request id in each `transferred_out` event's metadata (`by: count`) → the same id returns the first result.
+- Remove from this send (`POST /bazar-events/{id}/remove-from-send`, `{code}` or `{variant_id, quantity}`, +
+  client_request_id, owner / manager): preparing only (BAZAR_SEND_CLOSED once sent); by code = that piece; by count = the
+  newest added first, all or nothing (BAZAR_NOT_ON_SEND, details.on_send). `TransferService.unsend` reverses the claim:
+  DELETE the transfer_pieces row (nothing was sent — Mark sent's claimSend reads these rows), ledger out_on_transfer →
+  available (existing edge; event `removed_from_transfer`, request id in metadata) at the place it left from, location,
+  qty_out − 1, an emptied line deleted. No Shopify write (asserted: no claim row, no gateway call). transfer_pieces rows
+  were "never deleted" before — now except this, documented on `piecesEverScanned`.
+- `GET /bazar-events/{id}/send-stock` (owner / manager): the catalog's shape over what Main has (available at the
+  fulfillment location, labelled + untagged), bazar price (the event's row, else its rule on the Shopify price), each
+  size's `committed` from `VariantStockService.computeAll` (Inventory's rule); existing #numbers shown, none assigned.
+- Screens, scan-out route only (TransferScanOut `bazar` mode via BazarScanOut): "Send by count" panel (PickSheet `send`
+  mode → size → − / + stepper — no text field, so the scan field's SAFETY-CRITICAL focus rules are untouched; "N at Main
+  · M needed by online orders"; going below committed shows the warning and needs a second tap, never blocks), "Remove"
+  → stepper → "Remove N" on each line, ✕ on scanned rows. Generic transfers render as before (vitest). Return screen:
+  "Give back X" button, banner and row use `net_price ?? price` (vitest, revert-checked). EN + AR.
+- Registries: both leak registries (SKIP), RlsCoverage (send-stock).
+- **Not done / known:** a removed variant keeps its auto price row (`bazar_event_prices`), so it can still show on the
+  price list / price sheet as sold out. **Next:** B7d-2 bring back by count (untagged only) + tap a damaged untagged
+  leftover.
+
+**Bazar POS B7c — returns / exchanges without a label (2026-11-21; MERGED 00b7b6eb, not deployed; no migration).** `GET /bazar-events/{id}/sales/find?variant=…
 [&phone=…][&receipt=…]` (`BazarSaleService.findSales`): the ACTIVE sales of that variant at this event, newest first, at
 most 10, plus `count` of all matches; phone normalized like every customer phone (bad → BAZAR_INVALID_PHONE); receipt
 "B-0057" / "57" = a quick sale's number or a cart's receipt number; a worker sees the phone masked (the existing
@@ -47,9 +77,7 @@ listed (time, seller, price, masked customer) for the seller to pick, none says 
 a product" for the new piece (PickSheet mode exchange, "Use … · price"). Current look kept (R4 restyles).
 **Review fix (2026-11-21):** the Exchange screen's difference (and the old item's row) uses what the server credits —
 the old sale's `net_price` (a discounted cart line's net, B6c) — so the banner before confirm equals the server's
-amount after (vitest, revert-checked). **Still open, same class:** the Return screen's "Give back X" button / banner
-show the sale's full `price`, while the server refunds its `net_price`; for a discounted cart line it overstates the
-refund before confirm (the server's amount after confirm is right).
+amount after (vitest, revert-checked). The Return screen's "Give back X" got the same fix in B7d-1.
 
 **Bazar R3 restyle — event page (Get ready / live / ended) + computer Close day and End event pages (2026-11-20;
 branch `bazar-r3-restyle` off origin/main 5d3cfbf6 (R1 + R2 + B6b); frontend only, no migration, no endpoint; pushed,

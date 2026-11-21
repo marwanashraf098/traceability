@@ -33,8 +33,10 @@ public class BazarCatalogService {
     private static final Set<String> MANAGERS = Set.of("owner", "manager");
 
     private final JdbcTemplate jdbc;
+    private final com.traceability.inventory.VariantStockService stock;
 
-    public BazarCatalogService(JdbcTemplate jdbc) {
+    public BazarCatalogService(JdbcTemplate jdbc, com.traceability.inventory.VariantStockService stock) {
+        this.stock = stock;
         this.jdbc = jdbc;
     }
 
@@ -54,7 +56,11 @@ public class BazarCatalogService {
     /** GET /bazar-events/{id}/catalog. */
     @Transactional
     public Map<String, Object> catalogView(UUID eventId, BazarSaleService.Actor actor) {
-        Catalog c = catalog(eventId, actor);
+        return view(catalog(eventId, actor), null);
+    }
+
+    /** The catalog's response shape; {@code committed} (B7d send stock) adds each size's online committed demand. */
+    private static Map<String, Object> view(Catalog c, Map<UUID, Long> committed) {
         Map<String, Integer> categories = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         List<Map<String, Object>> products = new ArrayList<>();
         for (Group g : c.groups()) {
@@ -78,6 +84,7 @@ public class BazarCatalogService {
                 m.put("size", s.size());
                 m.put("price", s.price() == null ? null : s.price().setScale(2));
                 m.put("left", s.left());
+                if (committed != null) m.put("committed", committed.getOrDefault(s.variantId(), 0L));
                 sizes.add(m);
             }
             p.put("sizes", sizes);
@@ -139,12 +146,31 @@ public class BazarCatalogService {
             "ORDER BY pr.title, pr.id, v.title, v.id",
             ev.get("transfer_id"), tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
 
+        Map<String, Group> byKey = groupRows(rows);
+        List<Group> groups = new ArrayList<>();
+        Map<String, Integer> numbers = ensureNumbers(tenantId, eventId, new ArrayList<>(byKey.values()));
+        for (Map.Entry<String, Group> e : byKey.entrySet()) {
+            Group g = e.getValue();
+            groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
+                g.category(), g.sizes()));
+        }
+        groups.sort(Comparator.comparing((Group g) -> g.number() == null ? Integer.MAX_VALUE : g.number())
+            .thenComparing(Group::title, String.CASE_INSENSITIVE_ORDER));
+        return new Catalog(eventId, (String) ev.get("name"), (String) ev.get("status"),
+            (String) ev.get("location_name"), (String) ev.get("starts_on"), (String) ev.get("ends_on"), groups);
+    }
+
+    /**
+     * Rows (variant_id, variant_title, variant_raw, product_id, product_title, product_raw, image_url, category, price,
+     * left_count) → groups per product, then per colour (ExchangeOptions' colour / size split), sizes in size order;
+     * keyed product|colour, no numbers yet.
+     */
+    private static Map<String, Group> groupRows(List<Map<String, Object>> rows) {
         // Group per product, then per colour.
         Map<UUID, List<Map<String, Object>>> byProduct = new LinkedHashMap<>();
         for (Map<String, Object> r : rows) {
             byProduct.computeIfAbsent((UUID) r.get("product_id"), k -> new ArrayList<>()).add(r);
         }
-        List<Group> groups = new ArrayList<>();
         Map<String, Group> byKey = new LinkedHashMap<>();
         for (List<Map<String, Object>> family : byProduct.values()) {
             List<ExchangeOptions.FamilyMember> members = family.stream()
@@ -170,16 +196,71 @@ public class BazarCatalogService {
                 byKey.put(key(g.productId(), e.getKey()), g);
             }
         }
-        Map<String, Integer> numbers = ensureNumbers(tenantId, eventId, new ArrayList<>(byKey.values()));
+        return byKey;
+    }
+
+    /**
+     * B7d — "Send by count": what the main warehouse can send to this bazar, as the catalog's shape — every size
+     * with available pieces at Main (labelled and untagged — status available, located at the main warehouse; the
+     * same count Inventory's on hand uses), its bazar price (the event's row, else the event's rule on the Shopify
+     * price) and {@code committed}: online orders' demand for it, derived at read time by
+     * {@link com.traceability.inventory.VariantStockService} exactly as Inventory shows it. The event's existing
+     * #numbers are shown; none is assigned here. Owners / managers (the controller).
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> sendStockView(UUID eventId) {
+        UUID tenantId = BazarEndService.requireEnabledTenant(jdbc);
+        List<Map<String, Object>> evs = jdbc.queryForList(
+            "SELECT e.id, e.name, e.status, e.discount_pct, e.round_to, e.starts_on::text AS starts_on, " +
+            "       e.ends_on::text AS ends_on, l.name AS location_name " +
+            "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
+            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+        if (evs.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        }
+        Map<String, Object> ev = evs.get(0);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT v.id AS variant_id, v.title AS variant_title, v.raw::text AS variant_raw, v.price AS shopify_price, " +
+                "       pr.id AS product_id, pr.title AS product_title, pr.raw::text AS product_raw, pr.image_url, " +
+                "       pr.product_type_norm AS category, bp.price, a.n AS left_count " +
+                "FROM (SELECT p.variant_id, count(*)::int AS n FROM pieces p " +
+                "      WHERE p.tenant_id = ? AND p.status = 'available' " +
+                "        AND p.current_location_id IN (SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment) " +
+                "      GROUP BY p.variant_id) a " +
+                "JOIN variants v ON v.id = a.variant_id AND v.tenant_id = ? " +
+                "JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id " +
+                "LEFT JOIN bazar_event_prices bp ON bp.event_id = ? AND bp.variant_id = v.id AND bp.tenant_id = v.tenant_id " +
+                "ORDER BY pr.title, pr.id, v.title, v.id",
+                tenantId, tenantId, tenantId, eventId)) {
+            Map<String, Object> m = new LinkedHashMap<>(r);
+            if (m.get("price") == null && m.get("shopify_price") != null) {
+                BazarPricing.Priced p = BazarPricing.forVariant((BigDecimal) m.get("shopify_price"),
+                    (BigDecimal) ev.get("discount_pct"), (BigDecimal) ev.get("round_to"));
+                if (p != null) m.put("price", p.price());
+            }
+            rows.add(m);
+        }
+        Map<String, Group> byKey = groupRows(rows);
+        Map<String, Integer> numbers = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT product_id, colour_key, number FROM bazar_event_product_numbers WHERE event_id = ? AND tenant_id = ?",
+                eventId, tenantId)) {
+            numbers.put(key((UUID) r.get("product_id"), (String) r.get("colour_key")), ((Number) r.get("number")).intValue());
+        }
+        List<Group> groups = new ArrayList<>();
         for (Map.Entry<String, Group> e : byKey.entrySet()) {
             Group g = e.getValue();
             groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
                 g.category(), g.sizes()));
         }
-        groups.sort(Comparator.comparing((Group g) -> g.number() == null ? Integer.MAX_VALUE : g.number())
-            .thenComparing(Group::title, String.CASE_INSENSITIVE_ORDER));
-        return new Catalog(eventId, (String) ev.get("name"), (String) ev.get("status"),
-            (String) ev.get("location_name"), (String) ev.get("starts_on"), (String) ev.get("ends_on"), groups);
+        groups.sort(Comparator.comparing(Group::title, String.CASE_INSENSITIVE_ORDER)
+            .thenComparing(g -> g.colour() == null ? "" : g.colour(), String.CASE_INSENSITIVE_ORDER));
+        Map<UUID, Long> committed = new HashMap<>();
+        stock.computeAll().forEach((v, st) -> committed.put(v, st.committed()));
+        return view(new Catalog(eventId, (String) ev.get("name"), (String) ev.get("status"),
+            (String) ev.get("location_name"), (String) ev.get("starts_on"), (String) ev.get("ends_on"), groups), committed);
     }
 
     /**

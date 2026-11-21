@@ -147,7 +147,7 @@ function ReturnScreen({ live }: { live: BazarLive }) {
                 <section className="flex flex-col gap-2">
                   <Label>{t('bazar.ret.coming')}</Label>
                   <PieceCard testId="return-sale" catalog={catalog} variantId={sale.variant_id} title={pieceTitle(sale)}
-                             code={sale.piece_code} line={soldLine(t, sale)} price={sale.price}
+                             code={sale.piece_code} line={soldLine(t, sale)} price={sale.net_price ?? sale.price}
                              onClear={cmd.busy ? undefined : next} />
                 </section>
                 <section className="flex flex-col gap-2">
@@ -162,14 +162,14 @@ function ReturnScreen({ live }: { live: BazarLive }) {
         } right={sale && (
           <>
             <h2 className="hidden lg:block text-body-lg font-bold text-primary">{t('bazar.r4.refundSummary')}</h2>
-            <MoneyBox testId="return-amount" label={t('bazar.r4.giveBack')} amount={money(sale.price)}
+            <MoneyBox testId="return-amount" label={t('bazar.r4.giveBack')} amount={money(sale.net_price ?? sale.price)}
                       note={t('bazar.r4.giveBackNote')} />
             <Label>{t('bazar.r4.refundWith')} · <span className="normal-case tracking-normal font-semibold">{t('bazar.r4.sameAsSale')}</span></Label>
             <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
             <CommandStatus state={cmd.state} />
             <StickyAction>
               <ConfirmButton onClick={confirm} busy={cmd.busy} testId="return-confirm">
-                {t('bazar.r4.confirmRefund', { amount: sm(sale.price), method: t(`bazar.method.${method}`) })}
+                {t('bazar.r4.confirmRefund', { amount: sm(sale.net_price ?? sale.price), method: t(`bazar.method.${method}`) })}
               </ConfirmButton>
             </StickyAction>
           </>

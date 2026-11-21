@@ -14,7 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -344,6 +346,31 @@ public class TransferService {
                 "القطعة غير متاحة (الحالة الحالية: " + status + ")");
         }
 
+        // 4–8. Claim and send (shared with the bazar's send-by-count — claimAndSend).
+        Claimed claimed = claimAndSend(tenantId, transferId, destinationLocationId, pieceId, variantId, fromLocationId,
+            actorUserId, transferMeta(transferId, transferType, viaPhone, null));
+        if (claimed == null) {
+            // No further DB access on this path: Postgres aborts the transaction on the
+            // violation, and COMMIT on an aborted transaction is a silent, no-error
+            // implicit ROLLBACK — any statement issued here first would fail instead.
+            return ScanOutResult.rejected("ALREADY_ON_TRANSFER",
+                "Piece was claimed by a concurrent scan",
+                "تم حجز القطعة بواسطة عملية مسح متزامنة");
+        }
+        return ScanOutResult.success(pieceId, barcode, variantId, claimed.lineId(), claimed.qtyOut());
+    }
+
+    /** The line and the line's running total after one piece was claimed and sent. */
+    private record Claimed(UUID lineId, int qtyOut) {}
+
+    /**
+     * Steps 4–8 of every send-out: line get-or-create, the CLAIM (the race referee), the ledger move
+     * available → out_on_transfer, the location, the line's qty_out. ONE copy, used by the scan ({@link #scanOutCore}
+     * — which refuses an untagged piece BEFORE it gets here) and the bazar's send-by-count. Returns null when a
+     * concurrent scan claimed the piece first: the transaction is then aborted — the caller must not touch the DB.
+     */
+    private Claimed claimAndSend(UUID tenantId, UUID transferId, UUID destinationLocationId, String pieceId,
+                                 UUID variantId, UUID fromLocationId, UUID actorUserId, String meta) {
         // 4. Ensure the line row exists (create-if-absent, qty_out untouched — only bumped
         //    once the claim + transition below both succeed). ON CONFLICT DO UPDATE with a
         //    harmless self-assignment is the standard get-or-create-and-RETURNING idiom.
@@ -360,17 +387,14 @@ public class TransferService {
         //    distinction matters). transfer_pieces_one_active rejects a concurrent loser
         //    with a unique-constraint violation; nothing else has been mutated yet.
         try {
+            // created_at = clock_timestamp(), not now(): a count send claims many pieces in ONE transaction, and
+            // "newest added first" (remove by count) / "oldest open first" (B7a's pickPiece) must still order them.
             jdbc.update(
-                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id) " +
-                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?)",
+                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id, created_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, clock_timestamp())",
                 tenantId, transferId, lineId, pieceId, fromLocationId);
         } catch (DuplicateKeyException e) {
-            // No further DB access on this path: Postgres aborts the transaction on the
-            // violation above, and COMMIT on an aborted transaction is a silent, no-error
-            // implicit ROLLBACK — any statement issued here first would fail instead.
-            return ScanOutResult.rejected("ALREADY_ON_TRANSFER",
-                "Piece was claimed by a concurrent scan",
-                "تم حجز القطعة بواسطة عملية مسح متزامنة");
+            return null;   // the transaction is aborted — see the caller
         }
 
         // 6. Transition available → out_on_transfer. The claim above already uniquely
@@ -380,7 +404,7 @@ public class TransferService {
         //    orphaned.
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.OUT_ON_TRANSFER,
             "transferred_out", actorUserId,
-            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType, viaPhone)));
+            new TransitionContext(null, null, destinationLocationId, null, meta));
 
         // 7. Explicit location update — transition() does not touch current_location_id
         //    (same pattern as ReturnService).
@@ -391,11 +415,11 @@ public class TransferService {
         int qtyOut = jdbc.queryForObject(
             "UPDATE transfer_lines SET qty_out = qty_out + 1 WHERE id = ? RETURNING qty_out",
             Integer.class, lineId);
-
-        return ScanOutResult.success(pieceId, barcode, variantId, lineId, qtyOut);
+        return new Claimed(lineId, qtyOut);
     }
 
-    private String transferMeta(UUID transferId, String transferType, boolean viaPhone) {
+
+    private String transferMeta(UUID transferId, String transferType, boolean viaPhone, String clientRequestId) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         // "reason" the transition happened — the transfer's category (showroom/dryclean/
@@ -403,7 +427,226 @@ public class TransferService {
         // the transfer's freeform note is not duplicated here (it's on the transfer row).
         m.put("reason", transferType);
         if (viaPhone) m.put("via", "phone");                 // Q1b
+        if (clientRequestId != null) {                       // Bazar B7d: sent by count (the retry key)
+            m.put("by", "count");
+            m.put("client_request_id", clientRequestId);
+        }
         return writeJson(m);
+    }
+
+    // ── Bazar B7d: send by count, remove from this send ─────────────────────
+
+    /** Most pieces one count send or one count removal may move. */
+    public static final int MAX_COUNT_MOVE = 500;
+
+    /**
+     * Bazar POS B7d: send {@code quantity} pieces of a variant to the bazar without scanning them — for stock that
+     * has no barcode (count-only receiving) as much as for labelled stock. ONLY a bazar transfer, ONLY while it is
+     * preparing; ONE caller: BazarService. Traced picks the pieces: available AT THE MAIN WAREHOUSE (untagged pieces
+     * only exist there, and Shopify's −N at Mark sent is counted at Main), labelled or untagged, oldest received
+     * first, {@code FOR UPDATE SKIP LOCKED} so two counts at once never take the same piece. All or nothing: fewer
+     * than {@code quantity} free pieces → nothing is sent and the answer says how many are. Each piece goes through
+     * the SAME claim-and-send as a scan ({@link #claimAndSend}) — the scan path alone refuses an untagged piece.
+     * Retry-safe: the {@code clientRequestId} is written into every send event's metadata under a per-request lock;
+     * the same id again returns the first result and sends nothing.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CountResult scanOutByCountForBazar(UUID transferId, UUID variantId, int quantity, UUID actorUserId,
+                                              String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-count-out", clientRequestId);
+        List<Map<String, Object>> done = jdbc.queryForList(
+            "SELECT pe.piece_id, p.variant_id FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id " +
+            "WHERE pe.tenant_id = ? AND pe.event_type = 'transferred_out' " +
+            "AND pe.metadata->>'client_request_id' = ? AND pe.metadata->>'transfer_id' = ? ORDER BY pe.id",
+            tenantId, clientRequestId, transferId.toString());
+        if (!done.isEmpty()) {
+            UUID v = (UUID) done.get(0).get("variant_id");
+            return CountResult.success(v, done.stream().map(r -> (String) r.get("piece_id")).toList(),
+                lineQtyOut(transferId, v), true);
+        }
+
+        Map<String, Object> transfer = shareBazarPreparing(transferId, tenantId);
+        if (transfer == null) return CountResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+            "لم يتم العثور على عملية النقل", 0);
+        if (!"preparing".equals(transfer.get("status"))) return sendClosed();
+        if (quantity < 1 || quantity > MAX_COUNT_MOVE) {
+            return CountResult.rejected("INVALID_QUANTITY", "Send between 1 and " + MAX_COUNT_MOVE + " pieces at a time.",
+                "أرسل من 1 إلى " + MAX_COUNT_MOVE + " قطعة في المرة.", 0);
+        }
+        UUID main = fulfillmentLocationId(tenantId);
+        UUID destination = (UUID) transfer.get("destination_location_id");
+
+        List<String> picked = jdbc.queryForList(
+            "SELECT p.id FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
+            "AND p.status = 'available' AND p.current_location_id = ? " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
+            "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF p SKIP LOCKED",
+            String.class, tenantId, variantId, main, quantity);
+        if (picked.size() < quantity) {
+            int n = picked.size();
+            return CountResult.rejected("NOT_ENOUGH_AT_MAIN",
+                n == 0 ? "None of this size is available at the main warehouse."
+                       : "Only " + n + " of this size " + (n == 1 ? "is" : "are") + " available at the main warehouse.",
+                n == 0 ? "لا توجد قطع متاحة من هذا المقاس في المستودع الرئيسي."
+                       : "المتاح من هذا المقاس في المستودع الرئيسي " + n + " فقط.", n);
+        }
+        String meta = transferMeta(transferId, BAZAR_TYPE, false, clientRequestId);
+        int qtyOut = 0;
+        for (String pieceId : picked) {
+            Claimed c = claimAndSend(tenantId, transferId, destination, pieceId, variantId, main, actorUserId, meta);
+            if (c == null) {
+                // A scan claimed one of these pieces in between (it doesn't lock the piece row). The transaction is
+                // aborted — throwing rolls every piece of this count back; the person just tries again.
+                throw new TransferException(TransferException.Code.TRANSFER_SEND_CONFLICT,
+                    "The stock changed while sending — nothing was sent. Try again.",
+                    "تغيّر المخزون أثناء الإرسال — لم يُرسل شيء. حاول مرة أخرى.", HttpStatus.CONFLICT);
+            }
+            qtyOut = c.qtyOut();
+        }
+        return CountResult.success(variantId, picked, qtyOut, false);
+    }
+
+    /**
+     * Bazar POS B7d: take one scanned piece back off the bazar's send (the ✕ on a scanned row) while the transfer is
+     * preparing. Reverses exactly what the claim did ({@link #unsend}). ONE caller: BazarService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CountResult removeScannedFromSendForBazar(UUID transferId, String code, UUID actorUserId,
+                                                     String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-unsend", clientRequestId);
+        CountResult replay = unsendReplay(tenantId, transferId, clientRequestId);
+        if (replay != null) return replay;
+        Map<String, Object> transfer = shareBazarPreparing(transferId, tenantId);
+        if (transfer == null) return CountResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+            "لم يتم العثور على عملية النقل", 0);
+        if (!"preparing".equals(transfer.get("status"))) return sendClosed();
+        String lookup = ScanInputNormalizer.normalizePiece(code == null ? "" : code.trim());
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT tp.id, tp.piece_id, tp.line_id, tp.from_location_id, p.variant_id FROM transfer_pieces tp " +
+            "JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL " +
+            "AND (p.barcode = ? OR p.id = ? OR p.short_code = ?) FOR UPDATE OF tp",
+            transferId, tenantId, lookup, lookup, lookup);
+        if (rows.isEmpty()) {
+            return CountResult.rejected("NOT_ON_THIS_SEND", "This piece isn't on this send.",
+                "هذه القطعة ليست ضمن هذا الإرسال.", 0);
+        }
+        return unsend(tenantId, transferId, rows, (UUID) rows.get(0).get("variant_id"), actorUserId, clientRequestId, "scan");
+    }
+
+    /**
+     * Bazar POS B7d: take {@code quantity} pieces of a variant back off the bazar's send, the newest added first,
+     * while the transfer is preparing. All or nothing. ONE caller: BazarService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CountResult removeCountFromSendForBazar(UUID transferId, UUID variantId, int quantity, UUID actorUserId,
+                                                   String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-unsend", clientRequestId);
+        CountResult replay = unsendReplay(tenantId, transferId, clientRequestId);
+        if (replay != null) return replay;
+        Map<String, Object> transfer = shareBazarPreparing(transferId, tenantId);
+        if (transfer == null) return CountResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+            "لم يتم العثور على عملية النقل", 0);
+        if (!"preparing".equals(transfer.get("status"))) return sendClosed();
+        if (quantity < 1 || quantity > MAX_COUNT_MOVE) {
+            return CountResult.rejected("INVALID_QUANTITY", "Remove between 1 and " + MAX_COUNT_MOVE + " pieces at a time.",
+                "احذف من 1 إلى " + MAX_COUNT_MOVE + " قطعة في المرة.", 0);
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT tp.id, tp.piece_id, tp.line_id, tp.from_location_id FROM transfer_pieces tp " +
+            "JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.variant_id = ? " +
+            "ORDER BY tp.created_at DESC, tp.id DESC LIMIT ? FOR UPDATE OF tp SKIP LOCKED",
+            transferId, tenantId, variantId, quantity);
+        if (rows.size() < quantity) {
+            int n = rows.size();
+            return CountResult.rejected("NOT_ON_THIS_SEND",
+                "Only " + n + " of this size " + (n == 1 ? "is" : "are") + " on this send.",
+                "الموجود من هذا المقاس في هذا الإرسال " + n + " فقط.", n);
+        }
+        return unsend(tenantId, transferId, rows, variantId, actorUserId, clientRequestId, "count");
+    }
+
+    /**
+     * Reverses a claim, piece by piece: the transfer_pieces row is deleted (nothing has been sent — Mark sent reads
+     * these rows for Shopify's −N, so a removed piece is simply not part of it), the piece goes back
+     * out_on_transfer → available through the ledger (event removed_from_transfer, the request id in its metadata)
+     * at the place it left from, the line's qty_out goes down — and a line left with no piece is deleted, as if it
+     * was never scanned. No Shopify write: nothing reaches Shopify before Mark sent.
+     */
+    private CountResult unsend(UUID tenantId, UUID transferId, List<Map<String, Object>> rows, UUID variantId,
+                               UUID actorUserId, String clientRequestId, String by) {
+        UUID main = fulfillmentLocationId(tenantId);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("by", by);
+        m.put("client_request_id", clientRequestId);
+        String meta = writeJson(m);
+        List<String> pieceIds = new ArrayList<>();
+        Set<UUID> lines = new LinkedHashSet<>();
+        for (Map<String, Object> r : rows) {
+            String pieceId = (String) r.get("piece_id");
+            UUID back = r.get("from_location_id") != null ? (UUID) r.get("from_location_id") : main;
+            jdbc.update("DELETE FROM transfer_pieces WHERE id = ? AND tenant_id = ?", r.get("id"), tenantId);
+            ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, PieceStatus.AVAILABLE,
+                "removed_from_transfer", actorUserId, new TransitionContext(null, null, back, null, meta));
+            jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?", back, pieceId);
+            jdbc.update("UPDATE transfer_lines SET qty_out = qty_out - 1 WHERE id = ? AND tenant_id = ?",
+                r.get("line_id"), tenantId);
+            lines.add((UUID) r.get("line_id"));
+            pieceIds.add(pieceId);
+        }
+        for (UUID line : lines) {
+            jdbc.update("DELETE FROM transfer_lines tl WHERE tl.id = ? AND tl.tenant_id = ? AND tl.qty_out = 0 " +
+                "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.line_id = tl.id)", line, tenantId);
+        }
+        return CountResult.success(variantId, pieceIds, lineQtyOut(transferId, variantId), false);
+    }
+
+    private CountResult unsendReplay(UUID tenantId, UUID transferId, String clientRequestId) {
+        List<Map<String, Object>> done = jdbc.queryForList(
+            "SELECT pe.piece_id, p.variant_id FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id " +
+            "WHERE pe.tenant_id = ? AND pe.event_type = 'removed_from_transfer' " +
+            "AND pe.metadata->>'client_request_id' = ? AND pe.metadata->>'transfer_id' = ? ORDER BY pe.id",
+            tenantId, clientRequestId, transferId.toString());
+        if (done.isEmpty()) return null;
+        UUID v = (UUID) done.get(0).get("variant_id");
+        return CountResult.success(v, done.stream().map(r -> (String) r.get("piece_id")).toList(),
+            lineQtyOut(transferId, v), true);
+    }
+
+    /** One request id at a time: a retry waits for the first try, then finds what it did. */
+    private void requestLock(UUID tenantId, String kind, String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank() || clientRequestId.length() > 100) {
+            throw new IllegalArgumentException("client_request_id is required");
+        }
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            tenantId + ":" + kind + ":" + clientRequestId);
+    }
+
+    /** The bazar transfer's row FOR SHARE (Mark sent's FOR UPDATE waits for us — the class javadoc); null when
+     *  it doesn't exist or isn't a bazar transfer. */
+    private Map<String, Object> shareBazarPreparing(UUID transferId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ? FOR SHARE",
+            transferId, tenantId);
+        if (rows.isEmpty() || !BAZAR_TYPE.equals(rows.get(0).get("transfer_type"))) return null;
+        return rows.get(0);
+    }
+
+    private static CountResult sendClosed() {
+        return CountResult.rejected("TRANSFER_NOT_OPEN",
+            "This stock is already on its way — nothing can be added or removed now.",
+            "هذه البضاعة في طريقها بالفعل — لا يمكن الإضافة أو الحذف الآن.", 0);
+    }
+
+    private int lineQtyOut(UUID transferId, UUID variantId) {
+        List<Integer> q = jdbc.queryForList("SELECT qty_out FROM transfer_lines WHERE transfer_id = ? AND variant_id = ?",
+            Integer.class, transferId, variantId);
+        return q.isEmpty() ? 0 : q.get(0);
     }
 
     // ── Return send-out scan (FR-22.11 / B2) ────────────────────────────────
@@ -538,7 +781,7 @@ public class TransferService {
         //    terminal. Left uncaught by design, same reasoning as scanOut()'s step 6.
         ledger.transition(pieceId, PieceStatus.TRANSFERRED_OUT, PieceStatus.OUT_ON_TRANSFER,
             "return_transfer_out", actorUserId,
-            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType, viaPhone)));
+            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType, viaPhone, null)));
 
         // 8. Explicit location update — transition() does not touch current_location_id
         //    (same pattern as scanOut()). The piece is physically still at B until it's
@@ -1396,8 +1639,8 @@ public class TransferService {
         return rows.get(0);
     }
 
-    /** transfer_pieces rows are never deleted (only given an outcome), so this is every piece
-     *  ever scanned onto the transfer. */
+    /** transfer_pieces rows are never deleted (only given an outcome) — except a bazar piece taken back off the send
+     *  before Mark sent (Bazar B7d, {@link #unsend}) — so this is every piece on the transfer. */
     private int piecesEverScanned(UUID transferId, UUID tenantId) {
         Integer n = jdbc.queryForObject(
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ?",
@@ -1483,6 +1726,28 @@ public class TransferService {
 
         static ScanBackResult rejected(String code, String messageEn, String messageAr) {
             return new ScanBackResult(false, code, messageEn, messageAr, null, null, null, null);
+        }
+    }
+
+    /** Bazar B7d — a count send / a removal: the pieces moved (or, refused, how many could be: {@code available}). */
+    public record CountResult(
+            boolean success,
+            String  code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            UUID    variantId,
+            int     count,
+            int     available,
+            List<String> pieceIds,
+            int     qtyOut,
+            boolean replayed) {
+
+        static CountResult success(UUID variantId, List<String> pieceIds, int qtyOut, boolean replayed) {
+            return new CountResult(true, "SENT", null, null, variantId, pieceIds.size(), 0, pieceIds, qtyOut, replayed);
+        }
+
+        static CountResult rejected(String code, String messageEn, String messageAr, int available) {
+            return new CountResult(false, code, messageEn, messageAr, null, 0, available, List.of(), 0, false);
         }
     }
 
