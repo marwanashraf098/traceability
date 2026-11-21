@@ -4,6 +4,32 @@
 
 ## Current state
 
+**Incident 2026-11-21 — shipped_without_scan held every connection (outages 18:07 + 19:45 Cairo).**
+- **Part 1 (MERGED 68e3ceb3, deploy pending):** `ExceptionService.detectShippedWithoutScanCapped` — the one call site
+  (detectAllOpen → page, bell / Overview counts, immediate sweep, digest). SET LOCAL statement_timeout inside a
+  savepoint of the caller's transaction (no second connection); 57014 → WARN + no rows of that type, every other type
+  still returned; one run per tenant at a time (in-JVM set); `exceptions.shipped-without-scan.enabled` /
+  `.timeout-ms` (env EXCEPTIONS_SHIPPED_WITHOUT_SCAN_ENABLED / _TIMEOUT_MS). ShippedWithoutScanCapTest.
+- **Part 2 (branch `fix/shipped-without-scan-query`, pushed, NOT merged):** root cause = a GENERIC prepared plan
+  (pgjdbc server-prepares after 5 runs; estimates = rows / n_distinct(tenant): 396 shipments, 707 history rows —
+  prod's stats were fresh). It drove from every Bosta leg and nested-looped all piece-event groups (~3.5M probes, each
+  a history subplan with the RLS BitmapAnd). Rewrite: `SHIPPED_WITHOUT_SCAN_SQL` = MATERIALIZED CTE over the tenant's
+  superseded legs (pk joins), the unchanged rule (`SHIPPED_WITHOUT_SCAN_RULE`) as ONE select-list boolean (never
+  pulled up). V240 `piece_events_shipment_idx` (partial, CONCURRENTLY, .conf). Prod-sized local copy (PG 17,
+  app_user): old in prod's join order 10.1 s / 2.8 s → new ≤ 5 ms in default / generic / forced plans; identical rows
+  on all 34 tenants. ShippedWithoutScanQueryTest = old vs new on every clause incl. BROEK deleted waybills. Cap 3 →
+  10 s. Count gates MigrationSmokeTest 239, NotTracedBackfillTest 184. Suite 4,830 / only ExchangeBackfillTest red.
+- **Part 3 (branch `fix/webhook-recovery-watchdog`):** (a) transient DB failure → recorded (process_error
+  "transient DB failure: …", next_retry_at) for the sweeper; rethrown only if that record fails. (b) sweeper no-error
+  path 3 min (was 30) + `NO_LIVE_JOB` (jobrunr_jobs AWAITING/SCHEDULED/ENQUEUED/PROCESSING containing the event id),
+  lease 10 min, `sweepNow()`. (c) watchdog: `Health.stuckWebhooks` (only the webhook check fails) → requeue (≤ 2 min),
+  never a restart while other webhooks are processed; restart only if still stuck 5 min after the first requeue with
+  nothing else processed. (d) after stop + start, `registeredSince` within 30 s else escalate at once (exit when
+  TRACED_WATCHDOG_EXIT_ON_ESCALATION). Prod wiring via `withRecovery`; old constructors unchanged.
+  **Waiting:** approval to edit ShopifyWebhookRetryTest wr1 + wr5 (they assert the old behaviour).
+- **Gotcha:** synthetic data does not pick prod's plan by itself — read the plan from postgres_logs (auto_explain) and
+  force the join order to reproduce.
+
 **Bazar R4 restyle — Sell (quick + cart), Return, Exchange (2026-11-21; branch `bazar-r4-restyle` off origin/main
 00b7b6eb (B7c); frontend only, no migration, no endpoint; pushed, NOT merged).** Appearance only, design/bazar-v2
 (V2_SellQuick, V2_Sell, V2_SellPhone, V2_SellPhoneCart, V2_SellPickPhone, V2_Return, V2_ReturnPhone).

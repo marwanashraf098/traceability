@@ -66,15 +66,16 @@ public class ExceptionService {
 
     /**
      * Incident 2026-11-21 (two outages): the shipped_without_scan query hit the 120 s server statement_timeout in
-     * bursts and held every Hikari connection. It now runs under its own cap (SET LOCAL statement_timeout inside a
-     * savepoint of the caller's transaction — no second connection), at most once at a time per tenant, and can be
-     * switched off. On a timeout / a concurrent run it contributes no rows; every other detector still answers.
+     * bursts and held every Hikari connection. It runs under its own cap — SET LOCAL statement_timeout inside a
+     * savepoint of the caller's transaction (no second connection); 3 s in the hotfix, 10 s since the rewrite (it takes
+     * milliseconds now) — at most once at a time per tenant, and can be switched off. On a timeout / a concurrent run
+     * it contributes no rows; every other detector still answers.
      */
     public static final String SHIPPED_WITHOUT_SCAN_ENABLED = "exceptions.shipped-without-scan.enabled";
     public static final String SHIPPED_WITHOUT_SCAN_TIMEOUT_MS = "exceptions.shipped-without-scan.timeout-ms";
 
     private boolean shippedWithoutScanEnabled = true;
-    private long    shippedWithoutScanTimeoutMs = 3000;
+    private long    shippedWithoutScanTimeoutMs = 10000;
     private final Set<UUID> shippedWithoutScanRunning = ConcurrentHashMap.newKeySet();
     /** The query itself — a field only so a test can make it slow (ShippedWithoutScanCapTest); never reassigned in main. */
     java.util.function.Function<UUID, List<Map<String, Object>>> shippedWithoutScanQuery = this::detectShippedWithoutScan;
@@ -87,7 +88,7 @@ public class ExceptionService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setShippedWithoutScanTimeoutMs(
-            @org.springframework.beans.factory.annotation.Value("${" + SHIPPED_WITHOUT_SCAN_TIMEOUT_MS + ":3000}") long ms) {
+            @org.springframework.beans.factory.annotation.Value("${" + SHIPPED_WITHOUT_SCAN_TIMEOUT_MS + ":10000}") long ms) {
         if (ms <= 0) throw new IllegalArgumentException(SHIPPED_WITHOUT_SCAN_TIMEOUT_MS + " must be > 0");
         this.shippedWithoutScanTimeoutMs = ms;
     }
@@ -1528,27 +1529,48 @@ public class ExceptionService {
     }
 
     private List<Map<String, Object>> detectShippedWithoutScan(UUID tid) {
-        return jdbc.queryForList(
-            "SELECT DISTINCT ON (n.id) 'shipped_without_scan' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
-            "       n.order_id, o.number AS order_number, n.id AS shipment_id, n.tracking_number, " +
-            "       s.tracking_number AS old_tracking_number, n.provider_state, s.superseded_at AS occurred_at, " +
-            "       'shipped_without_scan:' || n.id AS subject_key " +
-            "FROM shipments s " +
-            "JOIN shipments n ON n.id = s.superseded_by_shipment_id AND n.tenant_id = s.tenant_id " +
-            "JOIN merchant_orders o ON o.id = n.order_id AND o.tenant_id = n.tenant_id " +
-            "WHERE s.tenant_id = ? AND n.provider = 'bosta' AND n.shipment_leg = 'forward' " +
-            "  AND o.status::text <> 'cancelled' " +
-            "  AND " + OrderLineFreeze.newestForwardLegSql("n") + " " +
-            "  AND " + OrderReopen.legDeadSql("s") + " " +
-            "  AND EXISTS (SELECT 1 FROM piece_events pe_o WHERE pe_o.shipment_id = s.id AND pe_o.order_id = s.order_id) " +
-            "  AND (coalesce(n.provider_state, 0) > 10 OR " + OrderLineFreeze.legMovedSql("n") + ") " +
-            "  AND NOT EXISTS (SELECT 1 FROM piece_events pe_n WHERE pe_n.shipment_id = n.id) " +
-            "  AND " + OrderReopen.noPieceHeldSql("o") + " " +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = n.tenant_id " +
-            "        AND er.exception_type = 'shipped_without_scan' AND er.subject_key = 'shipped_without_scan:' || n.id) " +
-            "ORDER BY n.id, s.superseded_at DESC",
-            tid);
+        return jdbc.queryForList(SHIPPED_WITHOUT_SCAN_SQL, tid);
     }
+
+    /**
+     * The D2 rule, per (old leg {@code s}, replacing leg {@code n}, n's order {@code o}) — unchanged since 2026-11-16
+     * (BROEK deleted-waybill behaviour included: OrderReopen.legDeadSql). One boolean SQL expression.
+     */
+    static final String SHIPPED_WITHOUT_SCAN_RULE =
+        "o.status::text <> 'cancelled' " +
+        "AND " + OrderLineFreeze.newestForwardLegSql("n") + " " +
+        "AND " + OrderReopen.legDeadSql("s") + " " +
+        "AND EXISTS (SELECT 1 FROM piece_events pe_o WHERE pe_o.shipment_id = s.id AND pe_o.order_id = s.order_id) " +
+        "AND (coalesce(n.provider_state, 0) > 10 OR " + OrderLineFreeze.legMovedSql("n") + ") " +
+        "AND NOT EXISTS (SELECT 1 FROM piece_events pe_n WHERE pe_n.shipment_id = n.id) " +
+        "AND " + OrderReopen.noPieceHeldSql("o") + " " +
+        "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = n.tenant_id " +
+        "      AND er.exception_type = 'shipped_without_scan' AND er.subject_key = 'shipped_without_scan:' || n.id)";
+
+    /**
+     * Incident 2026-11-21 rewrite (same rows as the 2026-11-16 query — ShippedWithoutScanQueryTest). The old shape let
+     * the planner pull every EXISTS up into a join and start from all of the tenant's Bosta legs (n): with a generic
+     * prepared plan (average-tenant estimates) prod paired ~1,900 legs with ~1,800 piece-event groups and ran a
+     * status-history subplan per pair — 39 s to the 120 s timeout. Now: the driving set is the tenant's superseded
+     * legs (a handful) joined by primary key, and the rule is evaluated in the SELECT list of a MATERIALIZED CTE —
+     * select-list subqueries stay per-row subplans (never pulled up), so they run only for those few pairs, and
+     * short-circuit left to right. Measured on a prod-sized copy: 8.6–10 s (prod's plan) → ≤ 5 ms.
+     */
+    public static final String SHIPPED_WITHOUT_SCAN_SQL =
+        "WITH c AS MATERIALIZED ( " +
+        "  SELECT s.tracking_number AS old_tracking_number, s.superseded_at, n.id AS n_id, n.order_id, " +
+        "         n.tracking_number, n.provider_state, o.number AS order_number, " +
+        "         (" + SHIPPED_WITHOUT_SCAN_RULE + ") AS hit " +
+        "  FROM shipments s " +
+        "  JOIN shipments n ON n.id = s.superseded_by_shipment_id AND n.tenant_id = s.tenant_id " +
+        "  JOIN merchant_orders o ON o.id = n.order_id AND o.tenant_id = n.tenant_id " +
+        "  WHERE s.tenant_id = ? AND s.superseded_by_shipment_id IS NOT NULL " +
+        "    AND n.provider = 'bosta' AND n.shipment_leg = 'forward') " +
+        "SELECT DISTINCT ON (c.n_id) 'shipped_without_scan' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
+        "       c.order_id, c.order_number, c.n_id AS shipment_id, c.tracking_number, c.old_tracking_number, " +
+        "       c.provider_state, c.superseded_at AS occurred_at, 'shipped_without_scan:' || c.n_id AS subject_key " +
+        "FROM c WHERE c.hit " +
+        "ORDER BY c.n_id, c.superseded_at DESC";
 
     /**
      * HIGH — V202: a Bosta leg replaced by a Shopify tracking edit, whose OLD delivery is moving in Bosta anyway
