@@ -18,7 +18,9 @@ import java.util.UUID;
  *                that has connected and whose main warehouse already has an address.
  *   'shopify'  — never connected Shopify (the sticky tenants.shopify_connected_at is NULL). Live
  *                store status is never read: an expired token or needs_reauth never re-locks.
- *   'address'  — connected, the main warehouse (is_fulfillment) has no address yet.
+ *   'address'  — connected, the main warehouse (is_fulfillment) has no address yet. NOT for a tenant that signed
+ *                up to sell at a bazar (onboarding_prefs.intent = 'bazar', Bazar B9a): connected is enough there —
+ *                the address is asked later (the soft banner, the Get started card), never as a gate.
  *
  * {@link #addressNeeded}: the soft banner — not gated (step null), not demo / review, and the main
  * warehouse still has no address (the grandfathered tenants).
@@ -40,11 +42,13 @@ public final class SetupStatus {
             "SELECT t.setup_completed_at IS NOT NULL AS done, t.shopify_connected_at IS NOT NULL AS connected, " +
             "       EXISTS (SELECT 1 FROM locations l WHERE l.tenant_id = t.id AND l.is_fulfillment " +
             "                 AND l.address_province_code IS NOT NULL AND l.address_city IS NOT NULL " +
-            "                 AND l.address_street IS NOT NULL) AS has_address " +
+            "                 AND l.address_street IS NOT NULL) AS has_address, " +
+            "       COALESCE(t.onboarding_prefs->>'intent', '') = 'bazar' AS bazar_intent " +
             "FROM tenants t WHERE t.id = ?", tenantId);
         if (Boolean.TRUE.equals(t.get("done"))) return null;
         if (!Boolean.TRUE.equals(t.get("connected"))) return SHOPIFY;
         if (Boolean.TRUE.equals(t.get("has_address"))) return null;
+        if (Boolean.TRUE.equals(t.get("bazar_intent"))) return null;   // Bazar B9a: no address gate
         return ADDRESS;
     }
 

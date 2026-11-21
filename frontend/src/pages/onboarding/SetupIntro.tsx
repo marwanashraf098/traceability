@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import { ErrorAlert } from '../settings/connections/StoreFinder'
 import { WebhookSecretReveal } from '../settings/ConnectionsTab'
 import { useStation } from '../../components/StationProvider'
+import { useCapabilities } from '../../capabilities'
 import {
   bostaConnect, getConnections, getCourierSettings, getOnboardingProgress, getRoleFromToken,
   patchOnboardingPrefs, updateCourierSettings, type OnboardingProgress,
@@ -29,13 +30,16 @@ function Loading() {
 }
 
 /** 'show', a redirect target, or undefined while loading. */
-function useIntroGuard(screen: 'courier' | 'ready'): 'show' | string | undefined {
+function useIntroGuard(screen: 'courier' | 'ready' | 'bazar'): 'show' | string | undefined {
   const { stationMode } = useStation()
   const state = useSetupState()
   if (stationMode || getRoleFromToken() !== 'owner') return '/overview'
   if (state === undefined) return undefined
   if (state.step !== null) return '/overview'
   const intro: SetupIntro = state.intro
+  // Bazar B9a: a bazar signup's intro is /setup/bazar alone (never Flow-3 / Flow-4); any other intro never shows it.
+  if (screen === 'bazar') return intro === 'bazar' ? 'show' : '/overview'
+  if (intro === 'bazar') return '/setup/bazar'
   if (screen === 'courier') return intro === 'courier' ? 'show' : intro === 'ready' ? '/setup/ready' : '/overview'
   // Flow-4 shows for any intro still open: Skip / Continue on Flow-3 lands here even if its write failed.
   return intro !== null ? 'show' : '/overview'
@@ -297,6 +301,61 @@ function SetupReady() {
           <a href={SETUP_CALL_URL} target="_blank" rel="noopener noreferrer" data-testid="setup-call"
             className="text-trace-blue hover:text-trace-blue-hover hover:underline">{t('setupIntro.ready.call')}</a>
         </p>
+      </div>
+    </GateFrame>
+  )
+}
+
+// ── Bazar B9a — a store that signed up to sell at a bazar ────────────────────
+// Placeholder until B9b's guided bazar setup: shown once (setupIntroSeen), then the owner goes on to /bazar/new.
+// The warehouse address and courier stay reachable from the Overview Get started card and the address banner.
+
+export function SetupBazarPage() {
+  const guard = useIntroGuard('bazar')
+  if (guard === undefined) return <Loading />
+  if (guard !== 'show') return <Navigate to={guard} replace />
+  return <SetupBazar />
+}
+
+function SetupBazar() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const caps = useCapabilities()
+  const marked = useRef(false)
+
+  useEffect(() => {
+    takeIntroRedirect('bazar')
+    if (!marked.current) {
+      marked.current = true
+      patchOnboardingPrefs({ setupIntroSeen: true }).catch(() => {}).finally(() => refreshSetupStep())
+    }
+  }, [])
+
+  return (
+    <GateFrame width="medium">
+      <div className="flex flex-col gap-6" data-testid="setup-bazar">
+        <SetupCard className="gap-5 p-7">
+          <div className="flex flex-col gap-2">
+            <h1 className="text-[28px] leading-[1.2] font-bold tracking-tight text-primary">{t('setupIntro.bazar.title')}</h1>
+            <p className="text-[15px] leading-relaxed text-primary/80">{t('setupIntro.bazar.body')}</p>
+          </div>
+          {!caps.bazar && (
+            <p className="text-[14px] text-muted" data-testid="setup-bazar-not-on">{t('setupIntro.bazar.notOnYet')}</p>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3 max-[520px]:flex-col-reverse max-[520px]:items-stretch">
+            <button type="button" onClick={() => navigate('/overview')} data-testid="setup-bazar-explore"
+              className="text-[14.5px] font-medium text-primary/80 hover:text-primary px-1 py-3">
+              {t('setupIntro.bazar.explore')}
+            </button>
+            {caps.bazar && (
+              <Link to="/bazar/new" data-testid="setup-bazar-new"
+                className="inline-flex items-center justify-center rounded-lg bg-trace-blue text-white font-semibold px-7 py-3 hover:bg-trace-blue-hover">
+                {t('setupIntro.bazar.newBazar')}
+              </Link>
+            )}
+          </div>
+        </SetupCard>
+        <p className="text-center text-body text-muted">{t('setupIntro.bazar.later')}</p>
       </div>
     </GateFrame>
   )

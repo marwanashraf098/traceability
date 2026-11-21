@@ -2488,6 +2488,7 @@
   "signup": {
     "title": "Create your account",
     "subtitle": "Set up your warehouse in a few minutes.",
+    "subtitleBazar": "Set up Traced for your bazar in a few minutes.",
     "businessName": "Business name",
     "ownerName": "Your name",
     "email": "Email",
@@ -6200,6 +6201,14 @@
     "readOnlyNote": "Shopify returns are read-only here. Traced books no courier for them; scan the item in Scan returns when it arrives."
   },
   "setupIntro": {
+    "bazar": {
+      "title": "Your bazar setup is coming next",
+      "body": "Your Shopify store is connected. Next you'll pick the pieces you're taking to your bazar, label them and send them.",
+      "newBazar": "Create your bazar",
+      "notOnYet": "Bazar isn't switched on for your store yet. We'll let you know as soon as it is.",
+      "explore": "Explore Traced first",
+      "later": "You can add your warehouse address and courier later, from Get started on the Overview."
+    },
     "courier": {
       "eyebrow": "Step 3 of 3 · about 2 minutes",
       "title": "How do you ship your orders?",

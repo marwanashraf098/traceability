@@ -17,9 +17,15 @@ function toE164(localInput: string): string {
   return `+20${digits}`
 }
 
+/** Bazar B9a — /signup?for=bazar: the account is set up bazar-first (onboarding_prefs.intent). Read with the attribution. */
+export function readSignupIntent(): 'bazar' | undefined {
+  return new URLSearchParams(window.location.search).get('for') === 'bazar' ? 'bazar' : undefined
+}
+
 export default function Signup() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [intent] = useState(readSignupIntent)
 
   const [businessName, setBusinessName] = useState('')
   const [ownerName,    setOwnerName]    = useState('')
@@ -54,7 +60,7 @@ export default function Signup() {
     try {
       const res = await signup(
         businessName.trim(), ownerName.trim(), email.trim(), toE164(phone), password, consent,
-        readSignupAttribution()
+        readSignupAttribution(), intent
       )
       setAccessToken(res.accessToken)
       // Fires only here, after a successful signup — never on refresh or re-login.
@@ -78,7 +84,7 @@ export default function Signup() {
       <div className="card p-6">
         <div className="mb-5">
           <h2 className="text-h3 text-primary">{t('signup.title')}</h2>
-          <p className="text-small text-muted mt-1">{t('signup.subtitle')}</p>
+          <p className="text-small text-muted mt-1">{intent === 'bazar' ? t('signup.subtitleBazar') : t('signup.subtitle')}</p>
         </div>
 
         {error && (
