@@ -53,6 +53,8 @@ import static org.mockito.Mockito.when;
  *   e1 App Store onboarding with intent 'bazar': prefs written, the embedded gate (/embedded/setup) and /me are
  *      done right after signup (no address step), setupIntro 'bazar'.
  *   e2 App Store onboarding without intent: unchanged — gate 'address', no intent stored.
+ *   BAZAR_SIGNUP_ENABLED is off here (the default): tenants.bazar_enabled stays false for every signup, bazar or not,
+ *   and no bazar_enabled_at_signup audit row (BazarSignupEnabledTest has the setting on).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -141,6 +143,7 @@ class BazarSignupIntentTest {
         UUID tenant = tenantOf(mail);
 
         assertThat(mapper.readValue(prefs(tenant), Map.class)).isEqualTo(Map.of("intent", "bazar"));
+        assertBazarOff(tenant);
         assertThat(owner.queryForObject(
             "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'onboarding_prefs_set' " +
             "AND metadata->>'intent' = 'bazar' AND actor_user_id = (SELECT id FROM users WHERE email = ?)",
@@ -195,6 +198,7 @@ class BazarSignupIntentTest {
             String token = (String) r.getBody().get("accessToken");
             UUID tenant = tenantOf(mail);
             assertThat(prefs(tenant)).as("%s", sent.get(i)).isEqualTo("{}");
+            assertBazarOff(tenant);
             assertThat(owner.queryForObject("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'onboarding_prefs_set'",
                 Integer.class, tenant)).isZero();
 
@@ -269,6 +273,7 @@ class BazarSignupIntentTest {
         UUID tenant = tenantOf(mail);
         assertThat(mapper.readValue(prefs(tenant), Map.class)).isEqualTo(Map.of("intent", "bazar"));
         assertThat(owner.queryForObject("SELECT tenant_id FROM stores WHERE shop_domain = ?", UUID.class, shop)).isEqualTo(tenant);
+        assertBazarOff(tenant);
 
         ResponseEntity<Map> gate = embeddedGet(shop, "/api/v1/embedded/setup");
         assertThat(gate.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -279,6 +284,7 @@ class BazarSignupIntentTest {
         assertThat(me.get("setupStep")).isNull();
         assertThat(me.get("setupIntro")).isEqualTo("bazar");
         assertThat(me.get("warehouseAddressNeeded")).isEqualTo(true);
+        assertThat(me).doesNotContainKey("bazar");
     }
 
     @Test
@@ -296,6 +302,13 @@ class BazarSignupIntentTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    private void assertBazarOff(UUID tenant) {
+        assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant))
+            .as("BAZAR_SIGNUP_ENABLED off").isFalse();
+        assertThat(owner.queryForObject(
+            "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup'", Integer.class, tenant)).isZero();
+    }
 
     private String base() { return "http://localhost:" + port; }
 

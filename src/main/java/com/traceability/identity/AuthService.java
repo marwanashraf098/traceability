@@ -5,6 +5,7 @@ import com.traceability.identity.model.SignupAttribution;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.account.OnboardingProgressService;
+import com.traceability.bazar.BazarSignup;
 import com.traceability.notifications.WelcomeEmailJob;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -47,11 +48,12 @@ public class AuthService {
     private final JobScheduler jobScheduler;
     private final WelcomeEmailJob welcomeEmailJob;
     private final OnboardingProgressService onboarding;
+    private final BazarSignup bazarSignup;
 
     public AuthService(JdbcTemplate jdbc, AuthRepository repo,
                        JwtService jwt, PasswordEncoder encoder, Clock clock,
                        JobScheduler jobScheduler, WelcomeEmailJob welcomeEmailJob,
-                       OnboardingProgressService onboarding) {
+                       OnboardingProgressService onboarding, BazarSignup bazarSignup) {
         this.jdbc    = jdbc;
         this.repo    = repo;
         this.jwt     = jwt;
@@ -60,6 +62,7 @@ public class AuthService {
         this.jobScheduler     = jobScheduler;
         this.welcomeEmailJob  = welcomeEmailJob;
         this.onboarding       = onboarding;
+        this.bazarSignup      = bazarSignup;
     }
 
     // ---- signup ----
@@ -92,13 +95,19 @@ public class AuthService {
                 repo.createTenantWithOwnerAnd(tenantId, req.tenantName(), userId,
                         req.name(), req.email(), phone, hash,
                         PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution,
-                        () -> { onboarding.recordSignupIntent(userId, intent); return null; });
+                        () -> { recordBazarIntent(userId, intent); return null; });
             }
             AuthRepository.IssuedRefresh refresh = repo.issueRefreshToken(userId, tenantId, "signup", userAgent);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner", refresh.id()), refresh.raw());
         });
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
         return tokens;
+    }
+
+    /** Bazar B9a — inside the signup transaction: the intent pref, then bazar on (only with BAZAR_SIGNUP_ENABLED). */
+    private void recordBazarIntent(UUID userId, String intent) {
+        onboarding.recordSignupIntent(userId, intent);
+        if (OnboardingProgressService.INTENT_BAZAR.equals(intent)) bazarSignup.enableAtSignup(userId);
     }
 
     /** A created account: the new tenant, its owner, and the id {@code createAccount}'s extra step returned. */
@@ -124,7 +133,7 @@ public class AuthService {
                         req.name(), req.email(), phone, hash,
                         PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution,
                         () -> {
-                            if (intent != null) onboarding.recordSignupIntent(userId, intent);   // Bazar B9a
+                            if (intent != null) recordBazarIntent(userId, intent);   // Bazar B9a
                             return inSameTransaction.apply(tenantId);
                         }));
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
