@@ -12,6 +12,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Exceptions center (FR-15.3, +1 detector FR-24, +2 detectors FR-EXCHANGE, +1 detector
@@ -59,6 +60,36 @@ public class ExceptionService {
         this.jdbc                = jdbc;
         this.clock               = clock;
         this.shipmentLinkService = shipmentLinkService;
+    }
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ExceptionService.class);
+
+    /**
+     * Incident 2026-11-21 (two outages): the shipped_without_scan query hit the 120 s server statement_timeout in
+     * bursts and held every Hikari connection. It now runs under its own cap (SET LOCAL statement_timeout inside a
+     * savepoint of the caller's transaction — no second connection), at most once at a time per tenant, and can be
+     * switched off. On a timeout / a concurrent run it contributes no rows; every other detector still answers.
+     */
+    public static final String SHIPPED_WITHOUT_SCAN_ENABLED = "exceptions.shipped-without-scan.enabled";
+    public static final String SHIPPED_WITHOUT_SCAN_TIMEOUT_MS = "exceptions.shipped-without-scan.timeout-ms";
+
+    private boolean shippedWithoutScanEnabled = true;
+    private long    shippedWithoutScanTimeoutMs = 3000;
+    private final Set<UUID> shippedWithoutScanRunning = ConcurrentHashMap.newKeySet();
+    /** The query itself — a field only so a test can make it slow (ShippedWithoutScanCapTest); never reassigned in main. */
+    java.util.function.Function<UUID, List<Map<String, Object>>> shippedWithoutScanQuery = this::detectShippedWithoutScan;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShippedWithoutScanEnabled(
+            @org.springframework.beans.factory.annotation.Value("${" + SHIPPED_WITHOUT_SCAN_ENABLED + ":true}") boolean on) {
+        this.shippedWithoutScanEnabled = on;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShippedWithoutScanTimeoutMs(
+            @org.springframework.beans.factory.annotation.Value("${" + SHIPPED_WITHOUT_SCAN_TIMEOUT_MS + ":3000}") long ms) {
+        if (ms <= 0) throw new IllegalArgumentException(SHIPPED_WITHOUT_SCAN_TIMEOUT_MS + " must be > 0");
+        this.shippedWithoutScanTimeoutMs = ms;
     }
 
     private int deliveredUnfulfilledDays = 7;
@@ -240,7 +271,7 @@ public class ExceptionService {
         all.addAll(detectTrackingChanges(tenantId));
         all.addAll(detectSupersededWaybillMoving(tenantId));
         // D2 (2026-11-16): a replacing waybill left with a parcel Traced never scanned (the old one's pieces were taken apart).
-        all.addAll(detectShippedWithoutScan(tenantId));
+        all.addAll(detectShippedWithoutScanCapped(tenantId));
         // Main reconcile R2 fix 2 (V203): Traced delivered it, Shopify still shows it unfulfilled.
         if (!simulated) all.addAll(detectDeliveredNotFulfilledInShopify(tenantId));
         // 2026-11-07: pieces still held in Traced on an order shipped outside its pack / pickup flow.
@@ -1455,6 +1486,47 @@ public class ExceptionService {
      * Condition-only; clears when a piece is scanned onto the new waybill, the order is cancelled, or it is resolved.
      * Never adjusts stock.
      */
+    List<Map<String, Object>> detectShippedWithoutScanCapped(UUID tid) {
+        if (!shippedWithoutScanEnabled) return List.of();
+        if (!shippedWithoutScanRunning.add(tid)) {
+            log.info("shipped_without_scan skipped for tenant {}: another run is in progress", tid);
+            return List.of();
+        }
+        try {
+            // Every real caller is detectAllOpen() through the @Transactional proxy; without a transaction there is
+            // no savepoint (and no tenant under RLS) — keep the old plain query for that case.
+            if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                return shippedWithoutScanQuery.apply(tid);
+            }
+            // Runs inside the caller's (read-only) transaction: the savepoint scopes the SET LOCAL to this one query
+            // and lets the transaction carry on after a cancelled statement. Rolled back on success too (it only read).
+            jdbc.execute("SAVEPOINT shipped_without_scan");
+            try {
+                jdbc.execute("SET LOCAL statement_timeout = " + shippedWithoutScanTimeoutMs);
+                return shippedWithoutScanQuery.apply(tid);
+            } catch (org.springframework.dao.DataAccessException e) {
+                if (!isQueryCanceled(e)) throw e;
+                log.warn("shipped_without_scan timed out after {} ms for tenant {} — no rows this run",
+                        shippedWithoutScanTimeoutMs, tid);
+                return List.of();
+            } finally {
+                jdbc.execute("ROLLBACK TO SAVEPOINT shipped_without_scan");
+                jdbc.execute("RELEASE SAVEPOINT shipped_without_scan");
+            }
+        } finally {
+            shippedWithoutScanRunning.remove(tid);
+        }
+    }
+
+    /** Postgres 57014 query_canceled — what statement_timeout raises, whatever Spring translated it to. */
+    static boolean isQueryCanceled(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql && "57014".equals(sql.getSQLState())) return true;
+            if (t.getCause() == t) break;
+        }
+        return false;
+    }
+
     private List<Map<String, Object>> detectShippedWithoutScan(UUID tid) {
         return jdbc.queryForList(
             "SELECT DISTINCT ON (n.id) 'shipped_without_scan' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +

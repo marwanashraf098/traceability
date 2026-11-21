@@ -319,6 +319,13 @@ shopify:
     reprocess:
       on-startup: ""
       apply: false
+# Incident 2026-11-21: the shipped_without_scan detector (ExceptionService.detectShippedWithoutScanCapped) runs under
+# its own statement cap, once at a time per tenant; a timeout drops only its rows. enabled=false switches it off.
+exceptions:
+  shipped-without-scan:
+    enabled: ${EXCEPTIONS_SHIPPED_WITHOUT_SCAN_ENABLED:true}
+    timeout-ms: ${EXCEPTIONS_SHIPPED_WITHOUT_SCAN_TIMEOUT_MS:3000}
+
 orders:
   # Order shipping badge (OrderShippingBadge, V139): a Bosta-eligible order with no shipment reads
   # "Not booked in Bosta for {n} days" from overdue-days on; a Bosta tracking number on a Shopify
