@@ -304,7 +304,11 @@ class RlsCoverageTest {
             // Bazar POS B7d — stock at Main to send by count: TenantContext + RLS (pieces, variants, products,
             // bazar prices; committed through VariantStockService); another tenant's event → 404, worker → 403, and
             // app_user isolation of the pieces it counts with a same-tenant positive control in BazarSendByCountTest.
-            "/api/v1/bazar-events/{eventId}/send-stock"
+            "/api/v1/bazar-events/{eventId}/send-stock",
+            // Bazar POS B7d-2 — untagged leftovers still out: TenantContext + RLS (transfer_pieces, pieces, variants,
+            // products); another tenant's event → 404, a role outside seller_roles / a removed seller → 403 in
+            // BazarBringBackByCountTest.p1_*, app_user isolation with a same-tenant positive control in its s1_.
+            "/api/v1/bazar-events/{eventId}/bring-back-stock"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

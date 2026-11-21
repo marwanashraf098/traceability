@@ -30,6 +30,12 @@ public class BazarCatalogController {
         return catalogs.catalogView(eventId, actor(p));
     }
 
+    /** B7d-2 — leftovers without a barcode still out, for "Bring back by count" (the event's sellers). */
+    @GetMapping("/bring-back-stock")
+    public Map<String, Object> bringBackStock(@PathVariable UUID eventId, @AuthenticationPrincipal CustomUserDetails p) {
+        return catalogs.bringBackStockView(eventId, actor(p));
+    }
+
     /** The A4 price sheet, {@code lang} en (default) | ar. */
     @GetMapping("/price-sheet.pdf")
     public ResponseEntity<byte[]> priceSheet(@PathVariable UUID eventId, @RequestParam(required = false) String lang,

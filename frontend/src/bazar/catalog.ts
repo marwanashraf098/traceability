@@ -42,6 +42,11 @@ export function getBazarSendStock(eventId: string) {
   return bazarGet<BazarCatalog>(`/bazar-events/${encodeURIComponent(eventId)}/send-stock`)
 }
 
+/** B7d-2 — the event's leftovers without a barcode still out, the catalog's shape; `left` = still out. */
+export function getBazarBringBackStock(eventId: string) {
+  return bazarGet<BazarCatalog>(`/bazar-events/${encodeURIComponent(eventId)}/bring-back-stock`)
+}
+
 export function getBazarCatalog(eventId: string) {
   return bazarGet<BazarCatalog>(`/bazar-events/${encodeURIComponent(eventId)}/catalog`)
 }

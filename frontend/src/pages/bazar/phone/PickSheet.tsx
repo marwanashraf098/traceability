@@ -21,8 +21,9 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
   /** "12" from the scan field: that product, open. */
   startNumber?: number | null
   /** quick: sell; cart: add; exchange (B7c): the new piece; find (B7c): whose sale is coming back — every size;
-   *  send (B7d): what to send by count — `left` is what's at Main, a size without a bazar price can still go. */
-  mode: 'quick' | 'cart' | 'exchange' | 'find' | 'send'
+   *  send (B7d): what to send by count — `left` is what's at Main, a size without a bazar price can still go;
+   *  back (B7d-2): what to bring back by count — `left` is the untagged pieces still out. */
+  mode: 'quick' | 'cart' | 'exchange' | 'find' | 'send' | 'back'
   onPick: (product: BazarCatalogProduct, size: BazarCatalogSize) => void
   onClose: () => void
   onScanBurst?: (code: string) => void
@@ -33,7 +34,9 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
   const startProduct = startNumber != null ? catalog?.products.find(p => p.number === startNumber) : undefined
   const [open, setOpen] = useState<string | null>(startProduct ? key(startProduct) : null)
   const find = mode === 'find'
-  const send = mode === 'send'
+  const back = mode === 'back'
+  const send = mode === 'send' || back
+  const leftKey = back ? 'bazar.bringBack.out' : 'bazar.count.atMain'
   const [picked, setPicked] = useState<string | null>(() =>
     startProduct ? firstAvailable(startProduct, find, send)?.variant_id ?? null : null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -43,7 +46,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
     .filter(p => matchesQuery(p, query) && (category === null || p.category === category)), [catalog, query, category])
 
   return (
-    <Sheet title={find ? t('bazar.find.title') : send ? t('bazar.count.pickTitle') : t('bazar.pick.title')} onClose={onClose}
+    <Sheet title={find ? t('bazar.find.title') : back ? t('bazar.bringBack.pickTitle') : send ? t('bazar.count.pickTitle') : t('bazar.pick.title')} onClose={onClose}
            testId="bazar-pick-sheet">
       <div ref={bodyRef} className="flex flex-col gap-3">
         <label className="relative block">
@@ -90,7 +93,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                         <span className="font-semibold text-primary truncate">{p.title}</span>
                       </span>
                       <span className="text-small text-muted truncate">
-                        {[p.colour, find ? null : send ? t('bazar.count.atMain', { count: p.left })
+                        {[p.colour, find ? null : send ? t(leftKey, { count: p.left })
                           : p.left > 0 ? t('bazar.pick.left', { count: p.left }) : t('bazar.pick.soldOut')]
                           .filter(Boolean).join(' · ')}
                       </span>
@@ -114,7 +117,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                               <span className="font-bold leading-tight">{s.size ?? s.title ?? t('bazar.pick.oneSize')}</span>
                               {!find && (
                                 <span className="text-[11px] leading-tight">
-                                  {send ? t('bazar.count.atMain', { count: s.left })
+                                  {send ? t(leftKey, { count: s.left })
                                     : s.price == null ? t('bazar.pick.noPrice') : out ? t('bazar.pick.soldOut') : t('bazar.pick.left', { count: s.left })}
                                 </span>
                               )}
@@ -139,7 +142,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
           </ul>
         )}
         <p className="text-small text-muted">
-          {find ? t('bazar.find.footnote') : send ? t('bazar.count.footnote') : t('bazar.pick.footnote')}
+          {find ? t('bazar.find.footnote') : back ? t('bazar.bringBack.footnote') : send ? t('bazar.count.footnote') : t('bazar.pick.footnote')}
         </p>
       </div>
     </Sheet>

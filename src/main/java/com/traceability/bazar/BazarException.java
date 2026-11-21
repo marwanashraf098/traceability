@@ -66,7 +66,10 @@ public class BazarException extends RuntimeException {
         // B7d — send by count, remove from this send
         BAZAR_NOT_ENOUGH_AT_MAIN,
         BAZAR_NOT_ON_SEND,
-        BAZAR_SEND_CLOSED
+        BAZAR_SEND_CLOSED,
+        // B7d-2 — bring back by count
+        BAZAR_NOT_ENOUGH_UNTAGGED,
+        BAZAR_PIECE_HAS_BARCODE
     }
 
     private final Code       code;

@@ -33,6 +33,29 @@
 - **Next:** review + merge R4 (expect a one-line BazarReturn.tsx conflict with B7d-1's net_price fix — keep B7d-1's);
   U1 (computer selling in the shell, camera pause between scans).
 
+**Bazar POS B7d-2 — bring leftovers without a barcode home by count (2026-11-22; branch `feat/bazar-b7` at main
+9ed891fd; no migration; BUILT, pushed, NOT merged — awaiting review; not deployed).**
+- `POST /bazar-events/{id}/bring-back-by-count {variant_id, quantity, client_request_id}` (`BazarEndService
+  .bringBackByCount`): ended event; the scan-back rule (seller_roles, not removed); UNTAGGED pieces still outstanding on
+  the event's transfer only, oldest received first, `FOR UPDATE OF tp SKIP LOCKED`; all or nothing — labelled leftovers
+  are never taken (BAZAR_NOT_ENOUGH_UNTAGGED, details {untagged, labelled}, "scan them back"). Each piece goes through
+  the scan-back's own good path (`TransferService.reconcileScanBackByCountForBazar` = reconcileScanBackForBazar with
+  `by: count` in the event metadata): returned_good, available at main, line counter, and the UNCHANGED onTransferReturn
+  +1 (only when the piece's departure was in the pushed −N). Retry: per-request lock + request id in the events.
+- `POST /bazar-events/{id}/bring-home-damaged {piece_id, client_request_id}`: a damaged leftover WITHOUT a barcode
+  (condemned at the bazar, still away) brought home by its row — the existing bringBackDamagedForBazar (no count change,
+  no Shopify write); a labelled one → BAZAR_PIECE_HAS_BARCODE (scan it). Same lock / replay as scan-back.
+- `GET /bazar-events/{id}/bring-back-stock`: the catalog's shape over the untagged leftovers still out (scan-back rule).
+- Hidden sizes (B7d-1 follow-up, approved rule "hide only auto price rows"): `BazarService.shownVariantsSql` — a size is
+  shown on the price list, catalog / pick sheets and price sheet when ≥ 1 piece was sent on the event's transfer, or its
+  price was set by hand (override — keeps B7a's "a product priced mid-event gets the next number"). Rows aren't deleted.
+  The bulk rule still prices `eventVariantsSql` (unchanged).
+- Leftovers panel (phone /end and computer /end-event — both render LeftoversPanel): "Bring back by count"
+  (`BringBackByCount.tsx`; PickSheet `back` mode → − / + stepper, never more than still out; shown only while an
+  untagged piece is out and the transfer isn't closed) and "Bring home" on damaged rows without a barcode. R2 / R3
+  layout and test ids kept. EN + AR (`bazar.bringBack`).
+- Registries: both leak registries (SKIP), RlsCoverage (bring-back-stock).
+
 **Bazar POS B7d-1 — send by count + remove from this send (2026-11-21; MERGED onto main
 61d5e571 (after R4) — not deployed; no migration).**
 - `TransferService.claimAndSend` is the ONE claim-and-send (line get-or-create, transfer_pieces claim — `created_at =
@@ -60,9 +83,7 @@
   → stepper → "Remove N" on each line, ✕ on scanned rows. Generic transfers render as before (vitest). Return screen:
   "Give back X" button, banner and row use `net_price ?? price` (vitest, revert-checked). EN + AR.
 - Registries: both leak registries (SKIP), RlsCoverage (send-stock).
-- **Not done / known:** a removed variant keeps its auto price row (`bazar_event_prices`), so it can still show on the
-  price list / price sheet as sold out. **Next:** B7d-2 bring back by count (untagged only) + tap a damaged untagged
-  leftover.
+- A removed variant's auto price row is kept but hidden since B7d-2 (below).
 
 **Bazar POS B7c — returns / exchanges without a label (2026-11-21; MERGED 00b7b6eb, not deployed; no migration).** `GET /bazar-events/{id}/sales/find?variant=…
 [&phone=…][&receipt=…]` (`BazarSaleService.findSales`): the ACTIVE sales of that variant at this event, newest first, at

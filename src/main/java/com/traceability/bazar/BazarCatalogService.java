@@ -142,7 +142,7 @@ public class BazarCatalogService {
             "           AND pc.status = 'out_on_transfer' AND pc.variant_id = v.id)::int AS left_count " +
             "FROM variants v JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id " +
             "LEFT JOIN bazar_event_prices bp ON bp.event_id = ? AND bp.variant_id = v.id AND bp.tenant_id = v.tenant_id " +
-            "WHERE v.tenant_id = ? AND v.id IN (" + BazarService.eventVariantsSql() + ") " +
+            "WHERE v.tenant_id = ? AND v.id IN (" + BazarService.shownVariantsSql() + ") " +
             "ORDER BY pr.title, pr.id, v.title, v.id",
             ev.get("transfer_id"), tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
 
@@ -261,6 +261,57 @@ public class BazarCatalogService {
         stock.computeAll().forEach((v, st) -> committed.put(v, st.committed()));
         return view(new Catalog(eventId, (String) ev.get("name"), (String) ev.get("status"),
             (String) ev.get("location_name"), (String) ev.get("starts_on"), (String) ev.get("ends_on"), groups), committed);
+    }
+
+    /**
+     * B7d-2 — "Bring back by count": the event's leftovers WITHOUT a barcode, still outstanding on its transfer, as
+     * the catalog's shape ({@code left} = untagged pieces still out). Its #numbers as assigned; none assigned here.
+     * The scan-back rule (the event's sellers, owners / managers).
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> bringBackStockView(UUID eventId, BazarSaleService.Actor actor) {
+        UUID tenantId = BazarEndService.requireEnabledTenant(jdbc);
+        List<Map<String, Object>> evs = jdbc.queryForList(
+            "SELECT e.id, e.name, e.status, e.seller_roles, e.transfer_id, e.starts_on::text AS starts_on, " +
+            "       e.ends_on::text AS ends_on, l.name AS location_name " +
+            "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
+            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+        if (evs.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        }
+        Map<String, Object> ev = evs.get(0);
+        requireSellerOrManager(ev, actor);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT v.id AS variant_id, v.title AS variant_title, v.raw::text AS variant_raw, " +
+            "       pr.id AS product_id, pr.title AS product_title, pr.raw::text AS product_raw, pr.image_url, " +
+            "       pr.product_type_norm AS category, bp.price, a.n AS left_count " +
+            "FROM (SELECT p.variant_id, count(*)::int AS n FROM transfer_pieces tp " +
+            "      JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "      WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.short_code IS NULL " +
+            "        AND p.status = 'out_on_transfer' GROUP BY p.variant_id) a " +
+            "JOIN variants v ON v.id = a.variant_id AND v.tenant_id = ? " +
+            "JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id " +
+            "LEFT JOIN bazar_event_prices bp ON bp.event_id = ? AND bp.variant_id = v.id AND bp.tenant_id = v.tenant_id " +
+            "ORDER BY pr.title, pr.id, v.title, v.id",
+            ev.get("transfer_id"), tenantId, tenantId, eventId);
+        Map<String, Group> byKey = groupRows(rows);
+        Map<String, Integer> numbers = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT product_id, colour_key, number FROM bazar_event_product_numbers WHERE event_id = ? AND tenant_id = ?",
+                eventId, tenantId)) {
+            numbers.put(key((UUID) r.get("product_id"), (String) r.get("colour_key")), ((Number) r.get("number")).intValue());
+        }
+        List<Group> groups = new ArrayList<>();
+        for (Map.Entry<String, Group> e : byKey.entrySet()) {
+            Group g = e.getValue();
+            groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
+                g.category(), g.sizes()));
+        }
+        groups.sort(Comparator.comparing((Group g) -> g.number() == null ? Integer.MAX_VALUE : g.number())
+            .thenComparing(Group::title, String.CASE_INSENSITIVE_ORDER));
+        return view(new Catalog(eventId, (String) ev.get("name"), (String) ev.get("status"),
+            (String) ev.get("location_name"), (String) ev.get("starts_on"), (String) ev.get("ends_on"), groups), null);
     }
 
     /**
