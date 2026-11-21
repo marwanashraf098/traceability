@@ -314,6 +314,16 @@ public class BazarSaleService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> returnSale(UUID eventId, String code, String method, String condition,
                                           String clientRequestId, Actor actor) {
+        return returnSale(eventId, code, null, method, condition, clientRequestId, actor);
+    }
+
+    /**
+     * B7c: {@code saleId} instead of a code (no label — the seller found the sale by product + size,
+     * {@link #findSales}): the sale's piece, then the very same path as a scanned return. Exactly one of code / saleId.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> returnSale(UUID eventId, String code, UUID saleId, String method, String condition,
+                                          String clientRequestId, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         if (!sells(ev, actor)) throw notASeller();
@@ -329,8 +339,8 @@ public class BazarSaleService {
             return first;
         }
 
-        Map<String, Object> sale = soldHere(tenantId, eventId, (String) findPiece(tenantId, code).get("id"));
-        UUID saleId = (UUID) sale.get("id");
+        Map<String, Object> sale = soldHere(tenantId, eventId, returningPiece(tenantId, eventId, code, saleId));
+        saleId = (UUID) sale.get("id");
         String refundMethod = method == null || method.isBlank() ? paidMethod(tenantId, ev, saleId) : resolveMethod(ev, method);
 
         takeBack(tenantId, eventId, ev, sale, cond, crid, actor);
@@ -354,6 +364,16 @@ public class BazarSaleService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> exchange(UUID eventId, String oldCode, String newCode, String method, String condition,
                                         String clientRequestId, Actor actor) {
+        return exchange(eventId, oldCode, null, newCode, null, method, condition, clientRequestId, actor);
+    }
+
+    /**
+     * B7c: the piece coming back by {@code oldSaleId} (found by product + size) and / or the new piece as a tapped
+     * {@code newVariantId} (B7a {@link #pickPiece} — never the piece coming back). Everything else is the B3 exchange.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> exchange(UUID eventId, String oldCode, UUID oldSaleId, String newCode, UUID newVariantId,
+                                        String method, String condition, String clientRequestId, Actor actor) {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = liveEvent(tenantId, eventId);
         if (!sells(ev, actor)) throw notASeller();
@@ -374,14 +394,18 @@ public class BazarSaleService {
         }
 
         // Check everything before writing anything (the transaction would roll back anyway).
-        Map<String, Object> oldSale = soldHere(tenantId, eventId, (String) findPiece(tenantId, oldCode).get("id"));
-        Map<String, Object> newPiece = findPiece(tenantId, newCode);
+        Map<String, Object> oldSale = soldHere(tenantId, eventId, returningPiece(tenantId, eventId, oldCode, oldSaleId));
+        boolean tappedNew = (newCode == null || newCode.isBlank()) && newVariantId != null;
+        Map<String, Object> newPiece = tappedNew
+            ? pickPiece(tenantId, ev, newVariantId, Set.of((String) oldSale.get("piece_id")))
+            : findPiece(tenantId, newCode);
+        if (tappedNew) newCode = pieceCode(newPiece);
         if (newPiece.get("id").equals(oldSale.get("piece_id"))) {
             throw invalid("Scan a different piece for the exchange — this is the one coming back.",
                 "امسح قطعة مختلفة للاستبدال — هذه هي القطعة المرتجعة.");
         }
         Prepared next = prepareSale(tenantId, eventId, ev, newPiece, newCode);
-        UUID oldSaleId = (UUID) oldSale.get("id");
+        oldSaleId = (UUID) oldSale.get("id");
         // B6c: the old piece is credited at what it was paid (a cart line's net price).
         BigDecimal diff = next.price().subtract((BigDecimal) oldSale.get("net_price"));
         String moneyMethod = diff.signum() == 0 ? null
@@ -396,6 +420,86 @@ public class BazarSaleService {
         Map<String, Object> out = exchangeView(tenantId, newSaleId, actor);
         out.put("replayed", false);
         return out;
+    }
+
+    /**
+     * B7c: the piece of a return / exchange — a scanned code, or the piece of {@code saleId} when it is a sale of THIS
+     * event (else BAZAR_NOT_SOLD_HERE). soldHere then decides exactly as for a scan.
+     */
+    private String returningPiece(UUID tenantId, UUID eventId, String code, UUID saleId) {
+        if ((code == null || code.isBlank()) && saleId != null) {
+            List<String> piece = jdbc.queryForList(
+                "SELECT piece_id FROM bazar_sales WHERE id = ? AND event_id = ? AND tenant_id = ?",
+                String.class, saleId, eventId, tenantId);
+            if (piece.isEmpty()) throw notSoldHere();
+            return piece.get(0);
+        }
+        if (code == null || code.isBlank()) {
+            throw invalid("Scan the piece coming back or find its sale.", "امسح القطعة المرتجعة أو ابحث عن عملية بيعها.");
+        }
+        return (String) findPiece(tenantId, code).get("id");
+    }
+
+    static final int FIND_LIMIT = 10;
+
+    /**
+     * B7c — a return / exchange without a label: the ACTIVE sales of {@code variantId} at this event, newest first, at
+     * most {@value #FIND_LIMIT}; {@code phone} (normalized like every customer phone) and {@code receipt} ("B-0057" or
+     * 57 — a quick sale's number or a cart's receipt number) narrow it. {@code count} = all matches (more than shown →
+     * the screen asks for a phone or receipt). Never picks one: one match is shown to confirm, several are listed.
+     * Who: the same as a return (role in seller_roles, not removed). A worker sees the customer's phone masked.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> findSales(UUID eventId, UUID variantId, String phone, String receipt, Actor actor) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = event(tenantId, eventId, "");
+        if (!sells(ev, actor)) throw notASeller();
+        if (variantId == null) throw invalid("Pick the product and size.", "اختر المنتج والمقاس.");
+        StringBuilder where = new StringBuilder(
+            "WHERE s.tenant_id = ? AND s.event_id = ? AND s.variant_id = ? AND s.status = 'active'");
+        List<Object> args = new ArrayList<>(List.of(tenantId, eventId, variantId));
+        if (phone != null && !phone.isBlank()) {
+            String p = normalizePhone(phone);
+            if (p == null) {
+                throw new BazarException(BazarException.Code.BAZAR_INVALID_PHONE,
+                    "Enter an Egyptian mobile number, like 01012345678.",
+                    "أدخل رقم موبايل مصري، مثل 01012345678.", HttpStatus.BAD_REQUEST);
+            }
+            where.append(" AND s.customer_phone = ?");
+            args.add(p);
+        }
+        if (receipt != null && !receipt.isBlank()) {
+            Integer n = receiptNumber(receipt);
+            if (n == null) throw invalid("Enter the receipt number, like B-0057.", "أدخل رقم الإيصال، مثل B-0057.");
+            where.append(" AND COALESCE(s.sale_number, rc.receipt_number) = ?");
+            args.add(n);
+        }
+        Integer count = jdbc.queryForObject(
+            "SELECT count(*)::int FROM bazar_sales s " +
+            "LEFT JOIN bazar_receipts rc ON rc.id = s.receipt_id AND rc.tenant_id = s.tenant_id " + where,
+            Integer.class, args.toArray());
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            SALE_SELECT + where + " ORDER BY s.sold_at DESC, s.id DESC LIMIT " + FIND_LIMIT, args.toArray());
+        List<Map<String, Object>> sales = new ArrayList<>();
+        for (Map<String, Object> r : rows) sales.add(present(r, actor));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("variant_id", variantId);
+        out.put("count", count == null ? 0 : count);
+        out.put("sales", sales);
+        return out;
+    }
+
+    /** "B-0057", "b57", "57", "٥٧" → 57; anything else null. */
+    static Integer receiptNumber(String raw) {
+        String s = ScanInputNormalizer.foldDigits(raw.trim()).replaceAll("\\s+", "");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)^(?:B-?)?0*([0-9]{1,9})$").matcher(s);
+        return m.matches() ? Integer.valueOf(m.group(1)) : null;
+    }
+
+    private static BazarException notSoldHere() {
+        return new BazarException(BazarException.Code.BAZAR_NOT_SOLD_HERE,
+            "This piece wasn't sold at this bazar, so it can't be returned or exchanged here.",
+            "هذه القطعة لم تُبع في هذا البازار، لذلك لا يمكن إرجاعها أو استبدالها هنا.", HttpStatus.CONFLICT);
     }
 
     // ── Piece lookup (B3, read-only) ─────────────────────────────────────────

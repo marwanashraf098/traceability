@@ -37,7 +37,7 @@ public class BazarSalesController {
     @PostMapping("/return")
     public Map<String, Object> returnSale(@PathVariable UUID eventId, @RequestBody ReturnRequest req,
                                           @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.returnSale(eventId, req.code(), req.method(), req.condition(), req.clientRequestId(),
+        return sales.returnSale(eventId, req.code(), req.saleId(), req.method(), req.condition(), req.clientRequestId(),
             actor(principal));
     }
 
@@ -45,8 +45,20 @@ public class BazarSalesController {
     @PostMapping("/exchange")
     public Map<String, Object> exchange(@PathVariable UUID eventId, @RequestBody ExchangeRequest req,
                                         @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.exchange(eventId, req.oldCode(), req.newCode(), req.method(), req.condition(),
-            req.clientRequestId(), actor(principal));
+        return sales.exchange(eventId, req.oldCode(), req.oldSaleId(), req.newCode(), req.newVariantId(), req.method(),
+            req.condition(), req.clientRequestId(), actor(principal));
+    }
+
+    /**
+     * B7c: no label — the active sales of a variant at this event (newest first, at most 10), optionally by the
+     * customer's phone or the receipt number. Never chooses: the screen confirms one or lists several.
+     */
+    @GetMapping("/sales/find")
+    public Map<String, Object> findSales(@PathVariable UUID eventId, @RequestParam UUID variant,
+                                         @RequestParam(required = false) String phone,
+                                         @RequestParam(required = false) String receipt,
+                                         @AuthenticationPrincipal CustomUserDetails principal) {
+        return sales.findSales(eventId, variant, phone, receipt, actor(principal));
     }
 
     @PostMapping("/sales/{saleId}/undo")
@@ -170,7 +182,11 @@ public class BazarSalesController {
                                       String clientRequestId) {}
 
     /** condition: good | damaged (required). method: optional — default the method the customer paid with. */
-    public record ReturnRequest(String code, String method, String condition,
+    /** {@code code} (scanned) or B7c {@code sale_id} (found by product + size). */
+    public record ReturnRequest(String code,
+                                @com.fasterxml.jackson.annotation.JsonProperty("sale_id")
+                                @com.fasterxml.jackson.annotation.JsonAlias("saleId") UUID saleId,
+                                String method, String condition,
                                 @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
                                 @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")
                                 String clientRequestId) {}
@@ -178,8 +194,12 @@ public class BazarSalesController {
     /** condition: optional, the old piece's (default good). method: for the difference, when there is one. */
     public record ExchangeRequest(@com.fasterxml.jackson.annotation.JsonProperty("old_code")
                                   @com.fasterxml.jackson.annotation.JsonAlias("oldCode") String oldCode,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("old_sale_id")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("oldSaleId") UUID oldSaleId,
                                   @com.fasterxml.jackson.annotation.JsonProperty("new_code")
                                   @com.fasterxml.jackson.annotation.JsonAlias("newCode") String newCode,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("new_variant_id")
+                                  @com.fasterxml.jackson.annotation.JsonAlias("newVariantId") UUID newVariantId,
                                   String method, String condition,
                                   @com.fasterxml.jackson.annotation.JsonProperty("client_request_id")
                                   @com.fasterxml.jackson.annotation.JsonAlias("clientRequestId")

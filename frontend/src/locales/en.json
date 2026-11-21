@@ -7375,6 +7375,7 @@
       "switch": "Switch"
     },
     "pick": {
+      "use": "Use {{name}} · {{price}}",
       "open": "No barcode? Pick a product",
       "title": "Pick a product",
       "search": "Name, colour or # from the price sheet",
@@ -7401,6 +7402,25 @@
       "tappedLine": "Picked from the products — Traced chooses the piece",
       "priceSheet": "Price sheet",
       "priceSheetFailed": "The price sheet didn't download. Try again."
+    },
+    "find": {
+      "open": "No label? Find the sale",
+      "title": "Find the sale",
+      "findSize": "Find sales of {{name}}",
+      "footnote": "Pick the product and size that's coming back — then narrow it by the customer's phone or the receipt if you need to.",
+      "change": "Change",
+      "phone": "Customer phone",
+      "receipt": "Receipt (B-0057)",
+      "go": "Find",
+      "filtersHint": "Both are optional. Traced never picks for you — you choose the sale.",
+      "none": "No sale of {{name}} at this bazar that can still be returned.",
+      "oneTitle": "One sale matches — check it's the right one",
+      "useThis": "Use this sale",
+      "severalTitle_one": "{{count}} sale matches — pick the right one",
+      "severalTitle_other": "{{count}} sales match — pick the right one",
+      "more": "Showing the newest {{shown}} of {{count}} — add the phone or the receipt to narrow it.",
+      "noCustomer": "No customer saved",
+      "failed": "The search didn't work. Try again."
     },
     "cart": {
       "mode": "Sell mode",

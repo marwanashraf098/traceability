@@ -434,11 +434,30 @@ export interface BazarReturnResult {
 }
 
 /** One attempt (same contract as sellOnce): retried by the caller with the SAME client_request_id. */
-export function returnOnce(eventId: string, req: { code: string; condition: ReturnCondition; method: PaymentMethod },
+export function returnOnce(eventId: string,
+                           req: { code?: string; saleId?: string; condition: ReturnCondition; method: PaymentMethod },
                            clientRequestId: string, timeoutMs: number) {
+  const { saleId, ...rest } = req
+  // B7c: no label — the sale found by product + size goes as sale_id (a scan still sends its code).
   return bazarFetch<BazarReturnResult>(`${base(eventId)}/return`, {
-    method: 'POST', timeoutMs, body: JSON.stringify({ ...req, client_request_id: clientRequestId }),
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ ...rest, ...(saleId ? { sale_id: saleId } : {}), client_request_id: clientRequestId }),
   })
+}
+
+export interface BazarFoundSales {
+  variant_id: string
+  /** Every match; {@code sales} shows the newest 10. */
+  count: number
+  sales: BazarSale[]
+}
+
+/** B7c: the active sales of a size at this event (newest first), optionally by the customer's phone or receipt. */
+export function findBazarSales(eventId: string, variantId: string, filters: { phone?: string; receipt?: string } = {}) {
+  const q = new URLSearchParams({ variant: variantId })
+  if (filters.phone?.trim()) q.set('phone', filters.phone.trim())
+  if (filters.receipt?.trim()) q.set('receipt', filters.receipt.trim())
+  return bazarFetch<BazarFoundSales>(`${base(eventId)}/sales/find?${q}`)
 }
 
 export interface BazarExchangeResult {
@@ -451,12 +470,16 @@ export interface BazarExchangeResult {
 }
 
 export function exchangeOnce(eventId: string,
-                             req: { oldCode: string; newCode: string; method: PaymentMethod | null; condition: ReturnCondition },
+                             req: { oldCode?: string; oldSaleId?: string; newCode?: string; newVariantId?: string;
+                                    method: PaymentMethod | null; condition: ReturnCondition },
                              clientRequestId: string, timeoutMs: number) {
+  // B7c: the piece coming back by its sale (no label) and / or the new piece as a tapped size.
   return bazarFetch<BazarExchangeResult>(`${base(eventId)}/exchange`, {
     method: 'POST', timeoutMs,
-    body: JSON.stringify({ old_code: req.oldCode, new_code: req.newCode, condition: req.condition,
-                           ...(req.method ? { method: req.method } : {}), client_request_id: clientRequestId }),
+    body: JSON.stringify({
+      ...(req.oldSaleId ? { old_sale_id: req.oldSaleId } : { old_code: req.oldCode }),
+      ...(req.newVariantId ? { new_variant_id: req.newVariantId } : { new_code: req.newCode }),
+      condition: req.condition, ...(req.method ? { method: req.method } : {}), client_request_id: clientRequestId }),
   })
 }
 

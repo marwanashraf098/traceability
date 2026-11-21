@@ -619,6 +619,8 @@ class PortalOrderLeakTest {
                 "GET /api/v1/bazar-events/{eventId}/catalog", "GET /api/v1/bazar-events/{eventId}/price-sheet.pdf")) {
             reg(k, skip("Bazar POS B7 — the event's products / numbers / bazar prices / pieces left; touches no orders"));
         }
+        reg("GET /api/v1/bazar-events/{eventId}/sales/find",
+            skip("Bazar POS B7c — an event's bazar sales of one variant (by phone / receipt); touches no orders"));
         reg("GET /api/v1/bazar-events/{eventId}/today",
             skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
         for (String k : List.of(

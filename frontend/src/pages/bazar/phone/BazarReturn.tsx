@@ -4,12 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react'
 import {
   BazarError, defaultMethod, lookupBazarPiece, orderedMethods, returnOnce,
-  type BazarPieceLookup, type BazarReturnResult, type PaymentMethod, type ReturnCondition,
+  type BazarPieceLookup, type BazarReturnResult, type BazarSale, type PaymentMethod, type ReturnCondition,
 } from '../../../bazar/api'
 import { formatMoney, pieceTitle, toNumber } from '../../../bazar/format'
 import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
 import type { BazarLive } from '../../../capabilities'
 import { NotLiveScreen, PhoneFrame, useBazarLive } from './shared'
+import { useBazarCatalog } from '../../../bazar/catalog'
+import { FindSaleSheet } from './FindSale'
 import { MethodChips } from './SaleSheets'
 import {
   BigButton, CodeEntry, CommandStatus, ConditionToggle, ErrorCard, MoneyBanner, PhoneTabs, PieceRow, soldLine,
@@ -65,8 +67,12 @@ function ReturnScreen({ live }: { live: BazarLive }) {
   const [condition, setCondition] = useState<ReturnCondition>('good')
   const [method, setMethod] = useState<PaymentMethod>(defaultMethod(live.paymentMethods))
 
-  const sale = looked?.piece?.state === 'sold' ? looked.piece.sale : null
-  const refusal = looked?.piece ? notReturnable(looked.piece) : looked?.error ?? null
+  // B7c: no label — the sale found by product + size (sent as sale_id); a scan still sends its code.
+  const { catalog } = useBazarCatalog(eventId)
+  const [finding, setFinding] = useState(false)
+  const [found, setFound] = useState<BazarSale | null>(null)
+  const sale = found ?? (looked?.piece?.state === 'sold' ? looked.piece.sale : null)
+  const refusal = found ? null : looked?.piece ? notReturnable(looked.piece) : looked?.error ?? null
 
   // A new sale on screen: good, and the money goes back the way it came in.
   useEffect(() => {
@@ -78,16 +84,23 @@ function ReturnScreen({ live }: { live: BazarLive }) {
   const onCode = useCallback((code: string) => {
     if (cmd.busy) return
     cmd.reset()
+    setFound(null)
     look(code)
   }, [cmd, look])
 
   function confirm() {
-    if (!sale || !looked) return
+    if (!sale) return
+    if (found) {
+      const saleId = found.id
+      cmd.run((requestId, timeoutMs) => returnOnce(eventId, { saleId, condition, method }, requestId, timeoutMs))
+      return
+    }
+    if (!looked) return
     const code = looked.code
     cmd.run((requestId, timeoutMs) => returnOnce(eventId, { code, condition, method }, requestId, timeoutMs))
   }
 
-  function next() { cmd.reset(); clear() }
+  function next() { cmd.reset(); clear(); setFound(null) }
 
   const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
   const done = cmd.state.kind === 'done' ? cmd.state.result : null
@@ -116,6 +129,16 @@ function ReturnScreen({ live }: { live: BazarLive }) {
       ) : (
         <>
           {!sale && <CodeEntry onCode={onCode} disabled={cmd.busy} hint={t('bazar.ret.scanHint')} />}
+          {!sale && (
+            <button type="button" onClick={() => setFinding(true)} disabled={cmd.busy} data-testid="return-find"
+              className="h-11 rounded-lg border border-line bg-surface text-small font-semibold text-primary">
+              {t('bazar.find.open')}
+            </button>
+          )}
+          {finding && (
+            <FindSaleSheet eventId={eventId} catalog={catalog} onClose={() => setFinding(false)}
+              onPick={s => { setFinding(false); cmd.reset(); clear(); setFound(s) }} />
+          )}
           {looked?.loading && (
             <p className="flex items-center gap-2 text-small text-muted" role="status">
               <Loader2 size={14} className="animate-spin" aria-hidden />{t('bazar.ret.looking')}
@@ -137,7 +160,7 @@ function ReturnScreen({ live }: { live: BazarLive }) {
               <CommandStatus state={cmd.state} />
             </>
           )}
-          {!looked && <p className="text-small text-muted">{t('bazar.ret.intro')}</p>}
+          {!looked && !found && <p className="text-small text-muted">{t('bazar.ret.intro')}</p>}
         </>
       )}
     </PhoneFrame>

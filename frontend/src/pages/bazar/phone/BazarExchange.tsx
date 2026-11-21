@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react'
 import {
   BazarError, defaultMethod, exchangeOnce, orderedMethods,
-  type BazarExchangeResult, type BazarPieceLookup, type PaymentMethod,
+  type BazarExchangeResult, type BazarPieceLookup, type BazarSale, type PaymentMethod,
 } from '../../../bazar/api'
 import { formatMoney, pieceTitle, toNumber } from '../../../bazar/format'
 import { useRetryingCommand } from '../../../bazar/useRetryingCommand'
@@ -14,6 +14,9 @@ import { NotLiveScreen, PhoneFrame, useBazarLive } from './shared'
 import { MethodChips } from './SaleSheets'
 import { BigButton, CodeEntry, CommandStatus, ErrorCard, MoneyBanner, PhoneTabs, PieceRow, soldLine } from './ReturnParts'
 import { notReturnable, useLookup } from './BazarReturn'
+import { sizeName, useBazarCatalog, type BazarCatalogProduct, type BazarCatalogSize } from '../../../bazar/catalog'
+import { FindSaleSheet } from './FindSale'
+import { PickSheet } from './PickSheet'
 
 /**
  * Bazar POS B3 — EXCHANGE (mockup page 1, step 7): scan the piece coming back → scan the new piece → "Customer pays
@@ -49,13 +52,18 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
   const [method, setMethod] = useState<PaymentMethod>(defaultMethod(live.paymentMethods))
   const [damaged, setDamaged] = useState(false)
 
-  const oldSale = oldLook.looked?.piece?.state === 'sold' ? oldLook.looked.piece.sale : null
-  const oldRefusal = oldLook.looked?.piece ? notReturnable(oldLook.looked.piece) : oldLook.looked?.error ?? null
-  const scanned = newLook.looked?.piece ?? null
+  // B7c: no label — the piece coming back by its sale (found by product + size), the new one as a tapped size.
+  const { catalog } = useBazarCatalog(eventId)
+  const [sheet, setSheet] = useState<'find' | 'pick' | null>(null)
+  const [oldFound, setOldFound] = useState<BazarSale | null>(null)
+  const [newTapped, setNewTapped] = useState<{ product: BazarCatalogProduct; size: BazarCatalogSize } | null>(null)
+  const oldSale = oldFound ?? (oldLook.looked?.piece?.state === 'sold' ? oldLook.looked.piece.sale : null)
+  const oldRefusal = oldFound ? null : oldLook.looked?.piece ? notReturnable(oldLook.looked.piece) : oldLook.looked?.error ?? null
+  const scanned = newTapped ? null : newLook.looked?.piece ?? null
   // Checked first: the piece coming back is "sold", but the right answer is "scan a different one".
   const samePiece = !!scanned && !!oldSale && scanned.piece_id === oldSale.piece_id
   const newPiece = scanned && !samePiece && !notForSale(scanned) ? scanned : null
-  const newRefusal = samePiece ? new BazarError(400, { code: 'BAZAR_SAME_PIECE' })
+  const newRefusal = newTapped ? null : samePiece ? new BazarError(400, { code: 'BAZAR_SAME_PIECE' })
     : newLook.looked?.piece ? notForSale(newLook.looked.piece) : newLook.looked?.error ?? null
   const target: 'old' | 'new' = oldSale ? 'new' : 'old'
 
@@ -68,22 +76,29 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
   const onCode = useCallback((code: string) => {
     if (cmd.busy) return
     cmd.reset()
-    if (target === 'old') oldLook.look(code)
-    else newLook.look(code)
+    if (target === 'old') { setOldFound(null); oldLook.look(code) }
+    else { setNewTapped(null); newLook.look(code) }
   }, [cmd, target, oldLook, newLook])
 
-  const ready = !!oldSale && !!newPiece
-  const diff = ready ? toNumber(newPiece.price) - toNumber(oldSale.price) : 0
+  const newPrice = newTapped ? newTapped.size.price : newPiece?.price
+  const ready = !!oldSale && (!!newPiece || !!newTapped)
+  // What the server credits for the piece coming back: what it was paid — a cart line's net price (B6c), a quick
+  // sale's price (its net price is its price).
+  const credit = oldSale ? toNumber(oldSale.net_price ?? oldSale.price) : 0
+  const diff = ready ? toNumber(newPrice ?? 0) - credit : 0
 
   function confirm() {
-    if (!ready || !oldLook.looked || !newLook.looked) return
-    const oldCode = oldLook.looked.code, newCode = newLook.looked.code
+    if (!ready) return
+    const old = oldFound ? { oldSaleId: oldFound.id } : oldLook.looked ? { oldCode: oldLook.looked.code } : null
+    const next = newTapped ? { newVariantId: newTapped.size.variant_id }
+      : newLook.looked ? { newCode: newLook.looked.code } : null
+    if (!old || !next) return
     const m = diff === 0 ? null : method
     cmd.run((requestId, timeoutMs) => exchangeOnce(eventId,
-      { oldCode, newCode, method: m, condition: damaged ? 'damaged' : 'good' }, requestId, timeoutMs))
+      { ...old, ...next, method: m, condition: damaged ? 'damaged' : 'good' }, requestId, timeoutMs))
   }
 
-  function startOver() { cmd.reset(); oldLook.clear(); newLook.clear() }
+  function startOver() { cmd.reset(); oldLook.clear(); newLook.clear(); setOldFound(null); setNewTapped(null) }
 
   const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
   const done = cmd.state.kind === 'done' ? cmd.state.result : null
@@ -115,13 +130,28 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
             <CodeEntry onCode={onCode} disabled={cmd.busy}
                        hint={target === 'old' ? t('bazar.exch.scanOldHint') : t('bazar.exch.scanNewHint')} />
           )}
+          {!ready && (
+            <button type="button" onClick={() => setSheet(target === 'old' ? 'find' : 'pick')} disabled={cmd.busy}
+              data-testid={target === 'old' ? 'exchange-find' : 'exchange-pick'}
+              className="h-11 rounded-lg border border-line bg-surface text-small font-semibold text-primary">
+              {target === 'old' ? t('bazar.find.open') : t('bazar.pick.open')}
+            </button>
+          )}
+          {sheet === 'find' && (
+            <FindSaleSheet eventId={eventId} catalog={catalog} onClose={() => setSheet(null)}
+              onPick={s => { setSheet(null); cmd.reset(); oldLook.clear(); setOldFound(s) }} />
+          )}
+          {sheet === 'pick' && (
+            <PickSheet catalog={catalog} mode="exchange" onClose={() => setSheet(null)}
+              onPick={(product, size) => { setSheet(null); cmd.reset(); newLook.clear(); setNewTapped({ product, size }) }} />
+          )}
 
           <section className="flex flex-col gap-2">
             <span className={cn('text-small font-medium', target === 'old' ? 'text-primary' : 'text-muted')}>
               {t('bazar.exch.step1')}
             </span>
             {oldSale ? (
-              <PieceRow testId="exchange-old" title={pieceTitle(oldSale)} line={soldLine(t, oldSale)} price={oldSale.price}
+              <PieceRow testId="exchange-old" title={pieceTitle(oldSale)} line={soldLine(t, oldSale)} price={oldSale.net_price ?? oldSale.price}
                         onClear={cmd.busy ? undefined : startOver} />
             ) : oldLook.looked?.loading ? <Looking /> : oldRefusal ? <ErrorCard error={oldRefusal} /> : null}
           </section>
@@ -131,7 +161,11 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
               <span className={cn('text-small font-medium', target === 'new' ? 'text-primary' : 'text-muted')}>
                 {t('bazar.exch.step2')}
               </span>
-              {newPiece ? (
+              {newTapped ? (
+                <PieceRow testId="exchange-new" title={`${newTapped.product.title} · ${sizeName(newTapped.product, newTapped.size)}`}
+                          line={t('bazar.pick.tappedLine')} price={newTapped.size.price ?? 0}
+                          onClear={cmd.busy ? undefined : () => setNewTapped(null)} />
+              ) : newPiece ? (
                 <PieceRow testId="exchange-new" title={pieceTitle(newPiece)}
                           line={<span className="font-mono" dir="ltr">{newPiece.piece_code}</span>}
                           price={newPiece.price} onClear={cmd.busy ? undefined : newLook.clear} />
