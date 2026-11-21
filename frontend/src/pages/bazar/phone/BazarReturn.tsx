@@ -120,7 +120,7 @@ function ReturnScreen({ live }: { live: BazarLive }) {
     } footer={sale && !done && (
       <footer className="sticky bottom-0 z-10 bg-surface border-t border-line px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))]">
         <BigButton onClick={confirm} busy={cmd.busy} testId="return-confirm">
-          {t('bazar.ret.confirm', { amount: formatMoney(sale.price) })}
+          {t('bazar.ret.confirm', { amount: formatMoney(sale.net_price ?? sale.price) })}
         </BigButton>
       </footer>
     )}>
@@ -149,12 +149,12 @@ function ReturnScreen({ live }: { live: BazarLive }) {
             <>
               <section className="flex flex-col gap-2">
                 <span className="text-small font-medium text-muted">{t('bazar.ret.coming')}</span>
-                <PieceRow testId="return-sale" title={pieceTitle(sale)} line={soldLine(t, sale)} price={sale.price}
+                <PieceRow testId="return-sale" title={pieceTitle(sale)} line={soldLine(t, sale)} price={sale.net_price ?? sale.price}
                           onClear={cmd.busy ? undefined : next} />
               </section>
               <span className="text-small font-medium text-muted">{t('bazar.ret.condition')}</span>
               <ConditionToggle value={condition} onChange={setCondition} disabled={cmd.busy} />
-              <MoneyBanner kind="giveBack" amount={toNumber(sale.price)} testId="return-amount" label={t('bazar.ret.refund')} />
+              <MoneyBanner kind="giveBack" amount={toNumber(sale.net_price ?? sale.price)} testId="return-amount" label={t('bazar.ret.refund')} />
               <span className="text-small font-medium text-muted">{t('bazar.ret.paidBackBy')}</span>
               <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
               <CommandStatus state={cmd.state} />

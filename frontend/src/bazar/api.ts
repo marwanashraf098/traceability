@@ -263,6 +263,37 @@ export function bazarScanOut(eventId: string, barcode: string, relayEventId?: st
   })
 }
 
+/** B7d — a count send / a removal from the send (TransferService.CountResult). */
+export interface BazarCountResult {
+  success: boolean
+  code: string
+  variantId: string | null
+  count: number
+  pieceIds: string[]
+  qtyOut: number
+  replayed: boolean
+}
+
+/** B7d — send `quantity` of a size; Traced picks the pieces at Main. One attempt; retried with the SAME request id. */
+export function sendByCountOnce(eventId: string, variantId: string, quantity: number, clientRequestId: string,
+                                timeoutMs: number) {
+  return bazarFetch<BazarCountResult>(`${base(eventId)}/scan-out-by-count`, {
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ variant_id: variantId, quantity, client_request_id: clientRequestId }),
+  })
+}
+
+/** B7d — take a scanned piece (`code`) or `quantity` of a size off the send, before Mark sent. Same retry contract. */
+export function removeFromSendOnce(eventId: string, what: { code: string } | { variantId: string; quantity: number },
+                                   clientRequestId: string, timeoutMs: number) {
+  const body = 'code' in what
+    ? { code: what.code, client_request_id: clientRequestId }
+    : { variant_id: what.variantId, quantity: what.quantity, client_request_id: clientRequestId }
+  return bazarFetch<BazarCountResult>(`${base(eventId)}/remove-from-send`, {
+    method: 'POST', timeoutMs, body: JSON.stringify(body),
+  })
+}
+
 export function markBazarSent(eventId: string) {
   return bazarFetch<BazarEventDetail>(`${base(eventId)}/mark-sent`, { method: 'POST', body: '{}' })
 }

@@ -26,10 +26,12 @@ public class BazarController {
 
     private final BazarService    bazar;
     private final PhoneScanSource phoneScanSource;
+    private final BazarCatalogService catalogs;
 
-    public BazarController(BazarService bazar, PhoneScanSource phoneScanSource) {
+    public BazarController(BazarService bazar, PhoneScanSource phoneScanSource, BazarCatalogService catalogs) {
         this.bazar           = bazar;
         this.phoneScanSource = phoneScanSource;
+        this.catalogs        = catalogs;
     }
 
     @PostMapping
@@ -56,6 +58,27 @@ public class BazarController {
                                                  @AuthenticationPrincipal CustomUserDetails principal) {
         boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.barcode(), principal.userId());
         return bazar.scanOut(eventId, req.barcode(), principal.userId(), viaPhone);
+    }
+
+    /** B7d — send N of a size without scanning (Traced picks the pieces at the main warehouse). */
+    @PostMapping("/{eventId}/scan-out-by-count")
+    public TransferService.CountResult sendByCount(@PathVariable UUID eventId, @RequestBody CountRequest req,
+                                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.sendByCount(eventId, req.variantId(), req.quantity(), req.clientRequestId(), principal.userId());
+    }
+
+    /** B7d — take a scanned piece ({@code code}) or N of a size ({@code variant_id} + {@code quantity}) off the send. */
+    @PostMapping("/{eventId}/remove-from-send")
+    public TransferService.CountResult removeFromSend(@PathVariable UUID eventId, @RequestBody RemoveRequest req,
+                                                      @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.removeFromSend(eventId, req.code(), req.variantId(), req.quantity(), req.clientRequestId(),
+            principal.userId());
+    }
+
+    /** B7d — what the main warehouse has to send (labelled and untagged), with online orders' committed demand. */
+    @GetMapping("/{eventId}/send-stock")
+    public Map<String, Object> sendStock(@PathVariable UUID eventId) {
+        return catalogs.sendStockView(eventId);
     }
 
     @PostMapping("/{eventId}/mark-sent")
@@ -100,6 +123,15 @@ public class BazarController {
                                 String shopifySyncMode, BigDecimal discountPct, BigDecimal roundTo) {}
 
     public record ScanRequest(String barcode, UUID relayEventId) {}
+
+    public record CountRequest(@com.fasterxml.jackson.annotation.JsonProperty("variant_id") UUID variantId,
+                               Integer quantity,
+                               @com.fasterxml.jackson.annotation.JsonProperty("client_request_id") String clientRequestId) {}
+
+    public record RemoveRequest(String code,
+                                @com.fasterxml.jackson.annotation.JsonProperty("variant_id") UUID variantId,
+                                Integer quantity,
+                                @com.fasterxml.jackson.annotation.JsonProperty("client_request_id") String clientRequestId) {}
 
     public record BulkRuleRequest(BigDecimal discountPct, BigDecimal roundTo) {}
 

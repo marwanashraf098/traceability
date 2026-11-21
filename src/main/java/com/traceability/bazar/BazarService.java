@@ -156,6 +156,73 @@ public class BazarService {
         return r;
     }
 
+    /**
+     * B7d — send {@code quantity} pieces of a size without scanning them (stock with or without a barcode). Traced
+     * picks them at the main warehouse, oldest first, all or nothing (TransferService.scanOutByCountForBazar). The
+     * same {@code clientRequestId} again returns the first answer and sends nothing more.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.CountResult sendByCount(UUID eventId, UUID variantId, Integer quantity,
+                                                   String clientRequestId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = event(tenantId, eventId, false);
+        if ("ended".equals(ev.get("status"))) throw ended();
+        if (variantId == null) throw invalid("Choose a product and size.", "اختر منتجًا ومقاسًا.");
+        requireVariant(tenantId, variantId);
+        TransferService.CountResult r = transfers.scanOutByCountForBazar((UUID) ev.get("transfer_id"), variantId,
+            quantity == null ? 0 : quantity, actorUserId, crid);
+        if (!r.success()) throw countRefused(r);
+        ensurePrice(tenantId, ev, r.variantId());
+        return r;
+    }
+
+    /**
+     * B7d — take pieces back off the send before Mark sent: one scanned piece by its code (exactly one of
+     * {@code code}), or {@code quantity} pieces of a size, the newest added first. Each piece is back available at
+     * the main warehouse, nothing reaches Shopify. The same {@code clientRequestId} again changes nothing more.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.CountResult removeFromSend(UUID eventId, String code, UUID variantId, Integer quantity,
+                                                      String clientRequestId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = event(tenantId, eventId, false);
+        if ("ended".equals(ev.get("status"))) throw ended();
+        boolean byCode = code != null && !code.isBlank();
+        if (byCode == (variantId != null)) {
+            throw invalid("Remove one scanned piece, or a number of one size.", "احذف قطعة ممسوحة واحدة، أو عددًا من مقاس واحد.");
+        }
+        UUID transferId = (UUID) ev.get("transfer_id");
+        TransferService.CountResult r = byCode
+            ? transfers.removeScannedFromSendForBazar(transferId, code, actorUserId, crid)
+            : transfers.removeCountFromSendForBazar(transferId, variantId, quantity == null ? 0 : quantity, actorUserId, crid);
+        if (!r.success()) throw countRefused(r);
+        return r;
+    }
+
+    private static String requestId(String clientRequestId) {
+        String crid = clientRequestId == null ? "" : clientRequestId.trim();
+        if (crid.isEmpty() || crid.length() > 100) {
+            throw invalid("Missing request id (client_request_id).", "معرّف الطلب مفقود (client_request_id).");
+        }
+        return crid;
+    }
+
+    private static BazarException countRefused(TransferService.CountResult r) {
+        return switch (r.code()) {
+            case "NOT_ENOUGH_AT_MAIN" -> new BazarException(BazarException.Code.BAZAR_NOT_ENOUGH_AT_MAIN,
+                r.messageEn(), r.messageAr(), HttpStatus.CONFLICT, Map.of("available", r.available()));
+            case "NOT_ON_THIS_SEND" -> new BazarException(BazarException.Code.BAZAR_NOT_ON_SEND,
+                r.messageEn(), r.messageAr(), HttpStatus.CONFLICT, Map.of("on_send", r.available()));
+            case "TRANSFER_NOT_OPEN" -> new BazarException(BazarException.Code.BAZAR_SEND_CLOSED,
+                r.messageEn(), r.messageAr(), HttpStatus.CONFLICT);
+            case "INVALID_QUANTITY" -> invalid(r.messageEn(), r.messageAr());
+            default -> new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        };
+    }
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> markSent(UUID eventId, UUID actorUserId) {
         UUID tenantId = requireEnabled();

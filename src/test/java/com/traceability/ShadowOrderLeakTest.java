@@ -623,6 +623,13 @@ class ShadowOrderLeakTest {
         }
         reg("GET /api/v1/bazar-events/{eventId}/sales/find",
             skip("Bazar POS B7c — an event's bazar sales of one variant (by phone / receipt); touches no orders"));
+        reg("GET /api/v1/bazar-events/{eventId}/send-stock",
+            skip("Bazar POS B7d — pieces available at Main per variant + committed demand read ONLY through "
+                + "VariantStockService.computeAll (the GET /inventory/stock rule, checked there); lists no order"));
+        for (String k : List.of("POST /api/v1/bazar-events/{eventId}/scan-out-by-count",
+                                "POST /api/v1/bazar-events/{eventId}/remove-from-send")) {
+            reg(k, skip("Bazar POS B7d — send N of a size to / take pieces off the bazar's transfer; touches no orders"));
+        }
         reg("GET /api/v1/bazar-events/{eventId}/today",
             skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
         for (String k : List.of(

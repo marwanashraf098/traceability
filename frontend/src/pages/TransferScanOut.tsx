@@ -12,7 +12,9 @@ import {
 } from '../api'
 import { useCapabilities } from '../capabilities'
 import TransferCollectList from './putaway/TransferCollectList'
-import { bazarScanOut } from '../bazar/api'
+import { bazarScanOut, type BazarError } from '../bazar/api'
+import { sellErrorText } from '../bazar/format'
+import { RemoveCount, RemoveScanButton, SendByCountPanel } from './bazar/SendByCount'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -34,6 +36,8 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
   const [transfer, setTransfer] = useState<TransferDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Bazar B7d: a refused ✕ (piece no longer on the send).
+  const [removeError, setRemoveError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     if (!id) return Promise.resolve()
@@ -177,6 +181,8 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
 
       {/* Per-variant running send-out count */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Bazar B7d: send N of a size without scanning — bazar mode only. */}
+        {bazar && <SendByCountPanel eventId={bazar.eventId} onSent={() => { load() }} />}
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('transfers.scanOut.progress')}</h2>
           {transfer.lines.length === 0 ? (
@@ -192,6 +198,14 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
                         {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
                       </td>
                       <td className="tbl-cell text-end font-mono text-h3 text-primary">{line.qty_out}</td>
+                      {bazar && (
+                        <td className="tbl-cell text-end w-0 whitespace-nowrap">
+                          {line.qty_out > 0 && (
+                            <RemoveCount eventId={bazar.eventId} variantId={line.variant_id} max={line.qty_out}
+                                         onRemoved={() => { load() }} />
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -206,6 +220,7 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
 
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('transfers.scanOut.recent')}</h2>
+          {bazar && removeError && <p role="alert" className="text-small text-danger" data-testid="remove-scan-error">{removeError}</p>}
           {scanner.recentScans.length === 0 ? (
             <p className="text-small text-muted">{t('transfers.scanOut.noScansYet')}</p>
           ) : (
@@ -216,8 +231,18 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
                   className="flex items-center justify-between bg-panel rounded border border-line px-3 py-2"
                 >
                   <span className="font-mono text-small text-primary">{entry.barcode.slice(-10)}</span>
-                  <span className={`text-caption ${entry.success ? 'text-success' : 'text-danger'}`}>
-                    {entry.label}
+                  <span className="flex items-center gap-2">
+                    <span className={`text-caption ${entry.success ? 'text-success' : 'text-danger'}`}>
+                      {entry.label}
+                    </span>
+                    {bazar && entry.success && (
+                      <RemoveScanButton eventId={bazar.eventId} code={entry.barcode}
+                        onRemoved={() => { setRemoveError(null); scanner.removeRecentScan(entry.key); load() }}
+                        onError={(e: BazarError) => {
+                          const { title, detail } = sellErrorText(t, i18n.language, e)
+                          setRemoveError(detail && detail !== title ? `${title} — ${detail}` : title)
+                        }} />
+                    )}
                   </span>
                 </div>
               ))}
