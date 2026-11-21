@@ -99,7 +99,7 @@ class ShippedWithoutScanCapTest {
     @BeforeEach void ctx() {
         TenantContext.set(tenantId);
         svc.setShippedWithoutScanEnabled(true);
-        svc.setShippedWithoutScanTimeoutMs(3000);
+        svc.setShippedWithoutScanTimeoutMs(10000);
         setHook(realQuery);
     }
     @AfterEach void clear() { TenantContext.clear(); }
@@ -149,7 +149,7 @@ class ShippedWithoutScanCapTest {
     void t2_normalAnswer_rowsReturned_capLifted() {
         setHook(tid -> {
             String inside = appJdbc.queryForObject("SHOW statement_timeout", String.class);
-            assertThat(inside).isEqualTo("3s");
+            assertThat(inside).isEqualTo("10s");
             return new ArrayList<>(List.of(fakeRow()));
         });
         Object[] out = appTx.execute(s -> {

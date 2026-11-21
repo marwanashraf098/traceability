@@ -324,7 +324,7 @@ shopify:
 exceptions:
   shipped-without-scan:
     enabled: ${EXCEPTIONS_SHIPPED_WITHOUT_SCAN_ENABLED:true}
-    timeout-ms: ${EXCEPTIONS_SHIPPED_WITHOUT_SCAN_TIMEOUT_MS:3000}
+    timeout-ms: ${EXCEPTIONS_SHIPPED_WITHOUT_SCAN_TIMEOUT_MS:10000}
 
 orders:
   # Order shipping badge (OrderShippingBadge, V139): a Bosta-eligible order with no shipment reads
