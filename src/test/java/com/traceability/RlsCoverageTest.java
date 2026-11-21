@@ -296,7 +296,11 @@ class RlsCoverageTest {
             // seller → 403 in BazarSellByProductTest.whoMayUseIt_*, app_user isolation of the numbers table with a
             // same-tenant positive control in BazarSellByProductTest.rls_appUser_seesOnlyItsOwnNumbers.
             "/api/v1/bazar-events/{eventId}/catalog",
-            "/api/v1/bazar-events/{eventId}/price-sheet.pdf"
+            "/api/v1/bazar-events/{eventId}/price-sheet.pdf",
+            // Bazar POS B7c — sales of a variant at the event: read under TenantContext + RLS (bazar_sales, receipts,
+            // users); another tenant's event → 404, a role outside seller_roles / a removed seller → 403, and app_user
+            // isolation of bazar_sales with a same-tenant positive control in BazarReturnByProductTest.
+            "/api/v1/bazar-events/{eventId}/sales/find"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

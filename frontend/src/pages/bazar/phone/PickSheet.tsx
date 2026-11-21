@@ -20,7 +20,8 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
   catalog: BazarCatalog | null
   /** "12" from the scan field: that product, open. */
   startNumber?: number | null
-  mode: 'quick' | 'cart'
+  /** quick: sell; cart: add; exchange (B7c): the new piece; find (B7c): whose sale is coming back — every size. */
+  mode: 'quick' | 'cart' | 'exchange' | 'find'
   onPick: (product: BazarCatalogProduct, size: BazarCatalogSize) => void
   onClose: () => void
   onScanBurst?: (code: string) => void
@@ -30,8 +31,9 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
   const [category, setCategory] = useState<string | null>(null)
   const startProduct = startNumber != null ? catalog?.products.find(p => p.number === startNumber) : undefined
   const [open, setOpen] = useState<string | null>(startProduct ? key(startProduct) : null)
+  const find = mode === 'find'
   const [picked, setPicked] = useState<string | null>(() =>
-    startProduct ? firstAvailable(startProduct)?.variant_id ?? null : null)
+    startProduct ? firstAvailable(startProduct, find)?.variant_id ?? null : null)
   const bodyRef = useRef<HTMLDivElement>(null)
   useScanBurst(bodyRef, onScanBurst)
 
@@ -39,7 +41,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
     .filter(p => matchesQuery(p, query) && (category === null || p.category === category)), [catalog, query, category])
 
   return (
-    <Sheet title={t('bazar.pick.title')} onClose={onClose} testId="bazar-pick-sheet">
+    <Sheet title={find ? t('bazar.find.title') : t('bazar.pick.title')} onClose={onClose} testId="bazar-pick-sheet">
       <div ref={bodyRef} className="flex flex-col gap-3">
         <label className="relative block">
           <Search size={18} className="absolute start-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" aria-hidden />
@@ -76,8 +78,8 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                 <li key={k} className={cn('rounded-xl border bg-surface', isOpen ? 'border-trace-blue' : 'border-line')}
                     data-testid="pick-product">
                   <button type="button" aria-expanded={isOpen}
-                    onClick={() => { setOpen(isOpen ? null : k); setPicked(isOpen ? null : firstAvailable(p)?.variant_id ?? null) }}
-                    className={cn('w-full flex items-center gap-3 p-3 text-start min-h-[64px]', p.left === 0 && 'opacity-60')}>
+                    onClick={() => { setOpen(isOpen ? null : k); setPicked(isOpen ? null : firstAvailable(p, find)?.variant_id ?? null) }}
+                    className={cn('w-full flex items-center gap-3 p-3 text-start min-h-[64px]', p.left === 0 && !find && 'opacity-60')}>
                     <ProductThumb product={p} size={48} />
                     <span className="flex-1 min-w-0 flex flex-col">
                       <span className="flex items-center gap-1.5 min-w-0">
@@ -85,7 +87,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                         <span className="font-semibold text-primary truncate">{p.title}</span>
                       </span>
                       <span className="text-small text-muted truncate">
-                        {[p.colour, p.left > 0 ? t('bazar.pick.left', { count: p.left }) : t('bazar.pick.soldOut')]
+                        {[p.colour, find ? null : p.left > 0 ? t('bazar.pick.left', { count: p.left }) : t('bazar.pick.soldOut')]
                           .filter(Boolean).join(' · ')}
                       </span>
                     </span>
@@ -97,7 +99,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                     <div className="px-3 pb-3 flex flex-col gap-3">
                       <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label={t('bazar.pick.sizes')}>
                         {p.sizes.map(s => {
-                          const out = s.left === 0 || s.price == null
+                          const out = !find && (s.left === 0 || s.price == null)
                           return (
                             <button key={s.variant_id} type="button" role="radio" aria-checked={picked === s.variant_id}
                               disabled={out} onClick={() => setPicked(s.variant_id)} data-testid="pick-size"
@@ -106,9 +108,11 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                                   : picked === s.variant_id ? 'bg-trace-blue border-trace-blue text-white'
                                     : 'border-line bg-surface text-primary')}>
                               <span className="font-bold leading-tight">{s.size ?? s.title ?? t('bazar.pick.oneSize')}</span>
-                              <span className="text-[11px] leading-tight">
-                                {s.price == null ? t('bazar.pick.noPrice') : out ? t('bazar.pick.soldOut') : t('bazar.pick.left', { count: s.left })}
-                              </span>
+                              {!find && (
+                                <span className="text-[11px] leading-tight">
+                                  {s.price == null ? t('bazar.pick.noPrice') : out ? t('bazar.pick.soldOut') : t('bazar.pick.left', { count: s.left })}
+                                </span>
+                              )}
                             </button>
                           )
                         })}
@@ -117,7 +121,8 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                         onClick={() => { if (size) onPick(p, size) }}
                         className="h-12 rounded-xl bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-50 text-white font-bold">
                         {size
-                          ? t(mode === 'cart' ? 'bazar.pick.add' : 'bazar.pick.sell',
+                          ? t(find ? 'bazar.find.findSize' : mode === 'cart' ? 'bazar.pick.add'
+                              : mode === 'exchange' ? 'bazar.pick.use' : 'bazar.pick.sell',
                               { name: sizeName(p, size), price: formatMoney(size.price ?? 0).replace(/^EGP /, '') })
                           : t('bazar.pick.pickSize')}
                       </button>
@@ -128,7 +133,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
             })}
           </ul>
         )}
-        <p className="text-small text-muted">{t('bazar.pick.footnote')}</p>
+        <p className="text-small text-muted">{find ? t('bazar.find.footnote') : t('bazar.pick.footnote')}</p>
       </div>
     </Sheet>
   )
@@ -138,8 +143,8 @@ function key(p: BazarCatalogProduct) {
   return `${p.product_id}|${p.colour ?? ''}`
 }
 
-function firstAvailable(p: BazarCatalogProduct) {
-  const ok = p.sizes.filter(s => s.left > 0 && s.price != null)
+function firstAvailable(p: BazarCatalogProduct, any = false) {
+  const ok = any ? p.sizes : p.sizes.filter(s => s.left > 0 && s.price != null)
   return ok.length === 1 ? ok[0] : undefined
 }
 

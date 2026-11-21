@@ -4,6 +4,22 @@
 
 ## Current state
 
+**Bazar POS B7c — returns / exchanges without a label (2026-11-21; branch `feat/bazar-b7`, rebased on main 32faea57;
+no migration; BUILT, pushed, NOT merged — awaiting review; not deployed).** `GET /bazar-events/{id}/sales/find?variant=…
+[&phone=…][&receipt=…]` (`BazarSaleService.findSales`): the ACTIVE sales of that variant at this event, newest first, at
+most 10, plus `count` of all matches; phone normalized like every customer phone (bad → BAZAR_INVALID_PHONE); receipt
+"B-0057" / "57" = a quick sale's number or a cart's receipt number; a worker sees the phone masked (the existing
+`present`). It never chooses. `POST /return` takes `sale_id`, `POST /exchange` takes `old_sale_id` and / or
+`new_variant_id` (B7a `pickPiece`, never the piece coming back): the sale → its piece_id (a sale of another event →
+BAZAR_NOT_SOLD_HERE) → the unchanged soldHere / takeBack / B3 money path. Same permissions as returns (seller_roles +
+not removed). No Shopify change. Screens: Return / Exchange get "No label? Find the sale" (`FindSale.tsx`: the B7a
+picker in find mode — every size, sold out included — then optional phone / receipt → one match to confirm, several
+listed (time, seller, price, masked customer) for the seller to pick, none says so) and, on Exchange, "No barcode? Pick
+a product" for the new piece (PickSheet mode exchange, "Use … · price"). Current look kept (R4 restyles).
+**Noticed, not changed:** the Exchange screen's difference banner uses the old sale's `price`, while the server credits
+its `net_price` (B6c) — for a cart line with a discount the banner overstates what the customer pays; the server's
+amount (shown after confirm) is right. A one-line fix when you want it.
+
 **Bazar R3 restyle — event page (Get ready / live / ended) + computer Close day and End event pages (2026-11-20;
 branch `bazar-r3-restyle` off origin/main 5d3cfbf6 (R1 + R2 + B6b); frontend only, no migration, no endpoint; pushed,
 NOT merged).** Appearance only, design/bazar-v2 (V2_Event*, V2_Setup*, V2_CloseDay, V2_EndEvent).
