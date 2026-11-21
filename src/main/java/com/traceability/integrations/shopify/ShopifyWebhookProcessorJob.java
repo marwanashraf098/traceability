@@ -38,7 +38,11 @@ import org.springframework.web.server.ResponseStatusException;
  *     if a LATER event for the same order / product has been processed, or Traced's stored copy is
  *     strictly newer (raw.updated_at), the event is marked superseded (processed_at + superseded_at) and
  *     NOT applied — an old payload never overwrites newer data;
- *   - a transient DB failure (no connection) is rethrown: JobRunr retries the job (3 times, seconds apart);
+ *   - a transient DB failure (no connection — anywhere, the event's first read included) is recorded like any
+ *     other failure (process_error "transient DB failure: …", retry_count + 1, next_retry_at on the backoff), so
+ *     ShopifyWebhookRetrySweeper re-enqueues it (incident 2026-11-21: a job that died on a full pool left its
+ *     event with no error and no next_retry_at, and nothing picked it up). Only when even that record can't be
+ *     written is it rethrown, for JobRunr's own retries — and the sweeper's no-error path (3 min) is the backstop;
  *   - any other failure is stored (process_error) with retry_count + 1 and next_retry_at on a backoff
  *     (1, 5, 15, 60, 240 min) for ShopifyWebhookRetrySweeper — after shopify.webhook.retry.max-attempts the
  *     error stays and next_retry_at is cleared.
@@ -150,6 +154,46 @@ public class ShopifyWebhookProcessorJob {
 
     @Job(name = "Shopify webhook processor — event %0", retries = 3)
     public void process(UUID eventId, UUID tenantId) {
+        try {
+            processOnce(eventId, tenantId);
+        } catch (RuntimeException e) {
+            if (!isTransientDbFailure(e)) throw e;
+            if (recordTransientFailure(eventId, tenantId, e)) {
+                log.warn("Webhook processor: no DB connection for event {} — recorded for the retry sweeper: {}",
+                    eventId, e.toString());
+                return;
+            }
+            log.warn("Webhook processor: no DB connection for event {} and the failure could not be recorded — "
+                + "JobRunr will retry: {}", eventId, e.toString());
+            throw e;
+        }
+    }
+
+    /**
+     * Records a transient failure exactly like any other (MARK_ERROR: one more attempt, next_retry_at on the backoff)
+     * so the retry sweeper owns the retry. Only while the event is still unprocessed. False when the record itself
+     * could not be written (still no connection).
+     */
+    boolean recordTransientFailure(UUID eventId, UUID tenantId, Throwable cause) {
+        String msg = "transient DB failure: " + cause.getClass().getSimpleName()
+            + (cause.getMessage() != null ? " — " + cause.getMessage() : "");
+        String stored = msg.length() > 2000 ? msg.substring(0, 2000) : msg;
+        try {
+            TenantContext.runAs(tenantId, (Runnable) () -> tx.execute(s -> {
+                Integer done = jdbc.query("SELECT retry_count FROM shopify_webhook_events WHERE id = ? AND processed_at IS NULL",
+                    rs -> rs.next() ? rs.getInt(1) : null, eventId);
+                if (done == null) return null;   // gone, or processed meanwhile — nothing to retry
+                int backoff = RETRY_BACKOFF_MINUTES[Math.min(done, RETRY_BACKOFF_MINUTES.length - 1)];
+                jdbc.update(MARK_ERROR, stored, maxAttempts, backoff, eventId);
+                return null;
+            }));
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void processOnce(UUID eventId, UUID tenantId) {
         // tenantId is passed from the controller (which resolved it) so the GUC is set
         // before the first SELECT. Without it, shopify_webhook_events RLS returns no rows.
         TenantContext.runAs(tenantId, (Runnable) () -> {
@@ -198,10 +242,7 @@ public class ShopifyWebhookProcessorJob {
                 tx.execute(s -> { jdbc.update(MARK_PROCESSED, eventId); return null; });
             } catch (Exception e) {
                 if (isTransientDbFailure(e)) {
-                    // No connection: let JobRunr retry the whole job in a few seconds. If that runs out,
-                    // the row stays unprocessed and ShopifyWebhookRetrySweeper picks it up.
-                    log.warn("Webhook processor: no DB connection for event {} ({}) — JobRunr will retry: {}",
-                        eventId, topic, e.toString());
+                    // No connection: process() records it for the retry sweeper (or, if it can't, rethrows for JobRunr).
                     throw e instanceof RuntimeException re ? re : new IllegalStateException(e);
                 }
                 log.error("Webhook processor failed: eventId={} topic={} shop={}", eventId, topic, shopDomain, e);

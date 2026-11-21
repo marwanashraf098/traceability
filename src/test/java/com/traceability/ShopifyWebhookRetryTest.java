@@ -31,13 +31,14 @@ import static org.mockito.Mockito.*;
  * Shopify webhook events: automatic retry with ordering safety, the sweeper and the re-process
  * (2026-10-04, V136).
  *
- *   wr1 no DB connection (the 10-03 error): rethrown for JobRunr, the row is NOT marked failed
+ *   wr1 no DB connection (the 10-03 error): since 2026-11-21 recorded like any failure (process_error
+ *       "transient DB failure: …", retry_count 1, next_retry_at set) for the sweeper; the job ends normally
  *   wr2 any other failure: process_error + retry_count 1 + next_retry_at (1 min); once due the sweeper
  *       claims and re-enqueues it; the retry applies it → processed
  *   wr3 ordering — stored copy newer: an older orders/updated delivered AFTER a newer one was applied
  *       (no later event exists, only the stored updated_at tells) is superseded, never applied
  *   wr4 ordering — a later event applied (no updated_at to compare): the earlier one is superseded
- *   wr5 never-enqueued events are swept after 30 min (claimed once — leased), not beyond the window;
+ *   wr5 never-enqueued events are swept after 3 min (claimed once — leased), not beyond the window;
  *       legacy failures (no next_retry_at) are not swept
  *   wr6 bounded: after max attempts the error stays, next_retry_at is cleared, the sweeper stops
  *   wr7 an already-processed event is a no-op when run again
@@ -96,16 +97,17 @@ class ShopifyWebhookRetryTest {
     }
 
     @Test
-    void wr1_noConnection_rethrownForJobRunr_notMarkedFailed() {
+    void wr1_noConnection_recordedForTheSweeper() {
         UUID e = event(tenant, shop, "orders/create", order("#9001", 1001, "2026-10-04T09:00:00+03:00"), 0);
         doThrow(new CannotCreateTransactionException("Could not open JDBC Connection for transaction",
                 new SQLTransientConnectionException("app-pool - Connection is not available")))
             .when(syncService).ingestOrderWebhook(any(), any(), any());
 
-        assertThatThrownBy(() -> processor.process(e, tenant)).isInstanceOf(CannotCreateTransactionException.class);
+        processor.process(e, tenant);   // no throw: recorded for the sweeper, no JobRunr retry
 
-        assertThat(row(e)).containsEntry("process_error", null).containsEntry("processed_at", null)
-            .containsEntry("retry_count", 0);
+        assertThat(row(e)).containsEntry("processed_at", null).containsEntry("retry_count", 1);
+        assertThat((String) row(e).get("process_error")).startsWith("transient DB failure: ");
+        assertThat(row(e).get("next_retry_at")).isNotNull();
     }
 
     @Test
@@ -166,7 +168,7 @@ class ShopifyWebhookRetryTest {
     @Test
     void wr5_neverEnqueued_sweptOnce_windowAndLegacyRespected() {
         UUID stale = event(tenant, shop, "orders/create", order("#9005", 1005, "2026-10-04T09:00:00+03:00"), -40 * 60);
-        UUID fresh = event(tenant, shop, "orders/create", order("#9006", 1006, "2026-10-04T09:00:00+03:00"), -5 * 60);
+        UUID fresh = event(tenant, shop, "orders/create", order("#9006", 1006, "2026-10-04T09:00:00+03:00"), -2 * 60);
         UUID ancient = event(tenant, shop, "orders/create", order("#9007", 1007, "2026-10-04T09:00:00+03:00"), -3 * 24 * 3600);
         UUID legacy = event(tenant, shop, "orders/create", order("#9008", 1008, "2026-10-04T09:00:00+03:00"), -40 * 60);
         jdbc.update("UPDATE shopify_webhook_events SET process_error = 'Could not open JDBC Connection for transaction' WHERE id = ?", legacy);

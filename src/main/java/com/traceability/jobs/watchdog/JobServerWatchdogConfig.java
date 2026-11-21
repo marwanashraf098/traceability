@@ -78,7 +78,11 @@ public class JobServerWatchdogConfig {
             @Value("${traced.watchdog.startup-grace-minutes:5}") long graceMinutes,
             @Value("${traced.watchdog.escalate-after-minutes:5}") long escalateMinutes,
             @Value("${traced.watchdog.restart-timeout-seconds:120}") long restartTimeoutSeconds,
-            @Value("${traced.watchdog.exit-on-escalation:false}") boolean exitOnEscalation) {
+            @Value("${traced.watchdog.exit-on-escalation:false}") boolean exitOnEscalation,
+            ObjectProvider<com.traceability.integrations.shopify.ShopifyWebhookRetrySweeper> sweeper,
+            @Value("${traced.watchdog.requeue-grace-minutes:5}") long requeueGraceMinutes,
+            @Value("${traced.watchdog.requeue-every-seconds:120}") long requeueEverySeconds,
+            @Value("${traced.watchdog.reregister-timeout-seconds:30}") long reregisterSeconds) {
         List<String> recipients = Arrays.stream(alertEmails.split(","))
             .map(String::trim).filter(s -> !s.isEmpty()).toList();
         if (recipients.isEmpty()) {
@@ -95,7 +99,15 @@ public class JobServerWatchdogConfig {
             new EmailWatchdogAlerter(email, recipients, Duration.ofSeconds(30)),
             new ThreadDumps(), Clock.systemUTC(),
             Duration.ofMinutes(graceMinutes), Duration.ofMinutes(escalateMinutes),
-            exitOnEscalation, JobServerWatchdog.halting(Duration.ofSeconds(30)));
+            exitOnEscalation, JobServerWatchdog.halting(Duration.ofSeconds(30)))
+            .withRecovery(
+                () -> {
+                    var sw = sweeper.getIfAvailable();
+                    return sw == null ? 0 : sw.sweepNow();
+                },
+                probe::registeredSince, null,
+                Duration.ofMinutes(requeueGraceMinutes), Duration.ofSeconds(requeueEverySeconds),
+                Duration.ofSeconds(reregisterSeconds), Duration.ofSeconds(1));
     }
 
     /** The watchdog's own scheduler thread — never shared with @Scheduled or JobRunr. */
