@@ -169,6 +169,7 @@ public class ExchangeService {
         }
 
         UUID tenantId = TenantContext.require();
+        refuseUnknownBostaStep(exchangeId, tenantId);
 
         int claimed = claim(exchangeId, tenantId);
         if (claimed == 0) {
@@ -230,6 +231,7 @@ public class ExchangeService {
             }
         }
 
+        refuseUnknownBostaStep(exchangeId, tenantId);
         if (claim(exchangeId, tenantId) == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Exchange is not awaiting mapping");
         }
@@ -332,9 +334,17 @@ public class ExchangeService {
             tenantId, trackingNumber);
         if (ex == null || !"needs_mapping".equals(ex.status())) return;
 
+        JsonNode raw = rawOf(ex.id(), tenantId);
+        // S3b follow-up (2026-11-22): Bosta moved it past "Pickup requested" with no step Traced recognises → never
+        // committed automatically (the replacement would be left 'created' and pickable); stays needs_mapping.
+        if (ExchangeBostaStep.unknownPastPickup(raw)) {
+            org.slf4j.LoggerFactory.getLogger(ExchangeService.class)
+                .info("Exchange {} (AWB {}): Bosta step unknown past pickup — not auto-mapped", ex.id(), trackingNumber);
+            return;
+        }
+
         // S3b (2026-11-19): counts decide, never the description's separators — a multi-item exchange (either leg > 1)
         // never takes the single-item auto-map below.
-        JsonNode raw = rawOf(ex.id(), tenantId);
         if (ExchangeMultiItem.isMulti(raw)) {
             autoMapMulti(ex.id(), tenantId, trackingNumber, raw);
             return;
@@ -363,6 +373,11 @@ public class ExchangeService {
         if (claimed == 0) return; // lost the race — a human map() (or a concurrent webhook) won first
 
         commit(ex.id(), tenantId, resolution.committedVariantId(), null, true);
+    }
+
+    /** 409 EXCHANGE_BOSTA_STEP_UNKNOWN for a person's map / map-items (ExchangeBostaStep#unknownPastPickup). */
+    private void refuseUnknownBostaStep(UUID exchangeId, UUID tenantId) {
+        if (ExchangeBostaStep.unknownPastPickup(rawOf(exchangeId, tenantId))) throw new ExchangeBostaStepUnknownException();
     }
 
     private JsonNode rawOf(UUID exchangeId, UUID tenantId) {

@@ -916,9 +916,11 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
      * S3b (2026-11-19) — see {@link com.traceability.inventory.ExchangeLegAdvancer}. Called after the committing
      * transaction (ExchangeService.commit / the shadow links), under the tenant. Only a FRESH leg: forward, still
      * 'created' and with no status history at all (nothing has ever been applied to it). Its exchange's stored raw goes
-     * through the SAME type-30 interpreter and the SAME {@link #applyMappedState} writer a Bosta update uses
-     * (webhookEventId null, like {@link #reinterpretExchangeForwardLeg}); fail-safe exactly like them — a milestone the
-     * interpreter doesn't know, or 'new' ("Pickup requested"), applies nothing. A just-committed order has no
+     * through the type-30 interpreter's FURTHEST-recognised-step reading (2026-11-22,
+     * ExchangeStateInterpreter#interpretFurthestForwardLeg — the live path keeps the latest step) and the SAME
+     * {@link #applyMappedState} writer a Bosta update uses (webhookEventId null, like
+     * {@link #reinterpretExchangeForwardLeg}); no recognised step past 'new' ("Pickup requested") applies nothing (an
+     * exchange with only unknown steps past pickup is never committed in the first place — ExchangeBostaStep). A just-committed order has no
      * allocations, so no piece moves, no ledger write and no Shopify write (the exchange-dispatch decrement is a piece
      * hook) happen; the order's own status is never written here.
      */
@@ -942,7 +944,9 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
             log.warn("advanceAtCommit: malformed exchange raw for {} — leg left as it is", trackingNumber);
             return;
         }
-        java.util.Optional<BostaStateMapper.MappedState> interpreted = exchangeStateInterpreter.interpretForwardLeg(raw);
+        // S3b follow-up (2026-11-22): the FURTHEST recognised step, not the latest — a latest "exchanged" / "rescheduled"
+        // after picked_up / out_for_exchange still places the leg (else it would stay 'created' and pickable).
+        java.util.Optional<BostaStateMapper.MappedState> interpreted = exchangeStateInterpreter.interpretFurthestForwardLeg(raw);
         if (interpreted.isEmpty() || "created".equals(interpreted.get().shipmentInternalState())) return;
         applyMappedState(null, tenantId, BostaDelivery.fromRaw(trackingNumber, raw), interpreted.get(),
             new ShipmentRow(leg.id(), leg.orderId()));
