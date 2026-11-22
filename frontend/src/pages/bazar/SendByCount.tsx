@@ -18,7 +18,7 @@ import { PickSheet } from './phone/PickSheet'
 
 const MAX = 500
 
-function Stepper({ value, max, onChange, testId }: {
+export function Stepper({ value, max, onChange, testId }: {
   value: number
   max: number
   onChange: (n: number) => void
@@ -43,7 +43,7 @@ function Stepper({ value, max, onChange, testId }: {
   )
 }
 
-function Status({ state, testId }: { state: CommandState<unknown>; testId: string }) {
+export function Status({ state, testId }: { state: CommandState<unknown>; testId: string }) {
   const { t, i18n } = useTranslation()
   if (state.kind === 'sending') {
     return <p role="status" className="text-small text-muted flex items-center gap-2" data-testid={`${testId}-sending`}>

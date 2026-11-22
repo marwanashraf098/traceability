@@ -7433,6 +7433,20 @@
       "back": "Back",
       "switch": "Switch"
     },
+    "bringBack": {
+      "title": "Bring back by count",
+      "intro": "For leftovers without a barcode: choose the size and how many came back in good shape. Pieces with a barcode are scanned.",
+      "choose": "Choose product and size",
+      "pickTitle": "Bring back from the bazar",
+      "footnote": "Pieces without a barcode still at the bazar.",
+      "bringHome": "Bring home",
+      "out_one": "{{count}} without a barcode still out",
+      "out_other": "{{count}} without a barcode still out",
+      "bring_one": "Bring back {{count}} piece",
+      "bring_other": "Bring back {{count}} pieces",
+      "done_one": "{{count}} piece back in stock.",
+      "done_other": "{{count}} pieces back in stock."
+    },
     "count": {
       "title": "Send by count",
       "intro": "For stock without barcodes, or many of one size: choose the size and how many. Traced takes them from the main warehouse, oldest first.",

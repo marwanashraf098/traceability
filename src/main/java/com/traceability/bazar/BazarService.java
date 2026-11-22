@@ -374,13 +374,27 @@ public class BazarService {
                "UNION SELECT bp.variant_id FROM bazar_event_prices bp WHERE bp.event_id = ? AND bp.tenant_id = ?";
     }
 
+    /**
+     * B7d-2 — the variants SHOWN for the event (price list, catalog / pick sheet, price sheet): at least one piece sent
+     * on its transfer, or a price an owner / manager set by hand (an override — B7a's "a product priced mid-event gets
+     * the next number"). A size with no piece sent and only an automatic price row — e.g. one taken back off the send
+     * before Mark sent (its line deleted, B7d-1) — is not shown; nothing is deleted. Params: event id, tenant, event id,
+     * tenant.
+     */
+    static String shownVariantsSql() {
+        return "SELECT tl.variant_id FROM transfer_lines tl JOIN bazar_events e ON e.transfer_id = tl.transfer_id " +
+               "WHERE e.id = ? AND tl.tenant_id = ? AND tl.qty_out > 0 " +
+               "UNION SELECT bp.variant_id FROM bazar_event_prices bp WHERE bp.event_id = ? AND bp.tenant_id = ? " +
+               "AND bp.source = 'override'";
+    }
+
     private List<Map<String, Object>> prices(UUID tenantId, UUID eventId) {
         return jdbc.queryForList(
             "SELECT v.id AS variant_id, v.sku, v.title AS variant_title, pr.title AS product_title, " +
             "       v.price AS shopify_price, bp.price, bp.source " +
             "FROM variants v JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN bazar_event_prices bp ON bp.variant_id = v.id AND bp.event_id = ? AND bp.tenant_id = v.tenant_id " +
-            "WHERE v.tenant_id = ? AND v.id IN (" + eventVariantsSql() + ") " +
+            "WHERE v.tenant_id = ? AND v.id IN (" + shownVariantsSql() + ") " +
             "ORDER BY pr.title ASC, v.title ASC, v.id ASC",
             eventId, tenantId, eventId, tenantId, eventId, tenantId);
     }

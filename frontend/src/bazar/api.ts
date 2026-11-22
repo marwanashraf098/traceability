@@ -658,6 +658,32 @@ export function scanBackOnce(eventId: string, code: string, clientRequestId: str
   })
 }
 
+/** B7d-2 — N leftovers of a size without a barcode back good. */
+export interface BazarBringBackResult {
+  result: 'back_good'
+  count: number
+  piece_ids: string[]
+  variant_id: string
+  leftovers: BazarLeftovers
+  replayed: boolean
+}
+
+/** One attempt; retried by the caller with the SAME client_request_id. */
+export function bringBackByCountOnce(eventId: string, variantId: string, quantity: number, clientRequestId: string,
+                                     timeoutMs: number) {
+  return bazarFetch<BazarBringBackResult>(`${base(eventId)}/bring-back-by-count`, {
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ variant_id: variantId, quantity, client_request_id: clientRequestId }),
+  })
+}
+
+/** B7d-2 — a damaged leftover without a barcode brought home (scan-back's result shape). Same retry contract. */
+export function bringHomeDamagedOnce(eventId: string, pieceId: string, clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarScanBackResult>(`${base(eventId)}/bring-home-damaged`, {
+    method: 'POST', timeoutMs, body: JSON.stringify({ piece_id: pieceId, client_request_id: clientRequestId }),
+  })
+}
+
 export function markBazarLost(eventId: string, pieceIds: string[]) {
   return bazarFetch<BazarLeftovers>(`${base(eventId)}/mark-lost`, {
     method: 'POST', body: JSON.stringify({ piece_ids: pieceIds }),

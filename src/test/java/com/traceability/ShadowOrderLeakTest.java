@@ -630,6 +630,12 @@ class ShadowOrderLeakTest {
                                 "POST /api/v1/bazar-events/{eventId}/remove-from-send")) {
             reg(k, skip("Bazar POS B7d — send N of a size to / take pieces off the bazar's transfer; touches no orders"));
         }
+        reg("GET /api/v1/bazar-events/{eventId}/bring-back-stock",
+            skip("Bazar POS B7d-2 — the event's untagged leftovers still out, per variant; touches no orders"));
+        for (String k : List.of("POST /api/v1/bazar-events/{eventId}/bring-back-by-count",
+                                "POST /api/v1/bazar-events/{eventId}/bring-home-damaged")) {
+            reg(k, skip("Bazar POS B7d-2 — leftovers back on the bazar's transfer (scan-back's path); touches no orders"));
+        }
         reg("GET /api/v1/bazar-events/{eventId}/today",
             skip("Bazar POS B6 — the event's totals for today from bazar sales / payments; touches no orders"));
         for (String k : List.of(

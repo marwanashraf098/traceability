@@ -980,7 +980,7 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanBackResult reconcileScanBack(UUID transferId, String barcode, String condition, UUID actorUserId,
                                             boolean viaPhone) {
-        return reconcileScanBackCore(transferId, barcode, condition, actorUserId, viaPhone, false, null);
+        return reconcileScanBackCore(transferId, barcode, condition, actorUserId, viaPhone, false, null, false);
     }
 
     /**
@@ -992,11 +992,24 @@ public class TransferService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanBackResult reconcileScanBackForBazar(UUID transferId, String barcode, UUID actorUserId,
                                                     String clientRequestId) {
-        return reconcileScanBackCore(transferId, barcode, "good", actorUserId, false, true, clientRequestId);
+        return reconcileScanBackCore(transferId, barcode, "good", actorUserId, false, true, clientRequestId, false);
+    }
+
+    /**
+     * Bazar POS B7d-2: one untagged leftover brought back GOOD by count — exactly reconcileScanBackForBazar (the same
+     * claim, ledger move, location, line counter and the unchanged onTransferReturn +1 gate), the event marked
+     * {@code by: count}. {@code pieceId} is the piece's internal id (the core's lookup matches it). ONE caller:
+     * BazarEndService.bringBackByCount, which picks only untagged pieces outstanding on this transfer.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanBackResult reconcileScanBackByCountForBazar(UUID transferId, String pieceId, UUID actorUserId,
+                                                           String clientRequestId) {
+        return reconcileScanBackCore(transferId, pieceId, "good", actorUserId, false, true, clientRequestId, true);
     }
 
     private ScanBackResult reconcileScanBackCore(UUID transferId, String barcode, String condition, UUID actorUserId,
-                                                 boolean viaPhone, boolean bazarCaller, String clientRequestId) {
+                                                 boolean viaPhone, boolean bazarCaller, String clientRequestId,
+                                                 boolean byCount) {
         UUID tenantId = TenantContext.require();
 
         if (!VALID_CONDITIONS.contains(condition)) {
@@ -1068,7 +1081,7 @@ public class TransferService {
         ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, targetStatus,
             good ? "returned_from_transfer" : "condemned_at_vendor", actorUserId,
             new TransitionContext(null, null, fulfillmentLocationId, null,
-                reconcileScanMeta(good, transferId, viaPhone, clientRequestId)));
+                reconcileScanMeta(good, transferId, viaPhone, clientRequestId, byCount)));
 
         // 5. Physical unit is back at the warehouse either way — move current_location_id.
         jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
@@ -1100,7 +1113,8 @@ public class TransferService {
             "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true", UUID.class, tenantId);
     }
 
-    private String reconcileScanMeta(boolean good, UUID transferId, boolean viaPhone, String clientRequestId) {
+    private String reconcileScanMeta(boolean good, UUID transferId, boolean viaPhone, String clientRequestId,
+                                     boolean byCount) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         m.put("verified", true);
@@ -1108,6 +1122,7 @@ public class TransferService {
         if (!good) m.put("attributed_to", "vendor");
         if (viaPhone) m.put("via", "phone");                 // Q1b
         if (clientRequestId != null) m.put("client_request_id", clientRequestId);   // Bazar B5 retry key
+        if (byCount) m.put("by", "count");                                           // Bazar B7d-2
         return writeJson(m);
     }
 

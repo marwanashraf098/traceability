@@ -83,12 +83,32 @@ public class BazarEndController {
             .body(body);
     }
 
+    /** B7d-2 — N leftovers of a size without a barcode back good (scan-back's rule: the event's sellers). */
+    @PostMapping("/bring-back-by-count")
+    public Map<String, Object> bringBackByCount(@PathVariable UUID eventId, @RequestBody BringBackRequest req,
+                                                @AuthenticationPrincipal CustomUserDetails p) {
+        return end.bringBackByCount(eventId, req.variantId(), req.quantity(), req.clientRequestId(), actor(p));
+    }
+
+    /** B7d-2 — a damaged leftover without a barcode brought home by its piece id (its row in the list). */
+    @PostMapping("/bring-home-damaged")
+    public Map<String, Object> bringHomeDamaged(@PathVariable UUID eventId, @RequestBody BringHomeRequest req,
+                                                @AuthenticationPrincipal CustomUserDetails p) {
+        return end.bringHomeDamaged(eventId, req.pieceId(), req.clientRequestId(), actor(p));
+    }
+
     private static BazarSaleService.Actor actor(CustomUserDetails p) {
         return new BazarSaleService.Actor(p.userId(), p.role());
     }
 
     public record ScanBackRequest(String code,
                                   @JsonProperty("client_request_id") @JsonAlias("clientRequestId") String clientRequestId) {}
+
+    public record BringBackRequest(@JsonProperty("variant_id") UUID variantId, Integer quantity,
+                                   @JsonProperty("client_request_id") String clientRequestId) {}
+
+    public record BringHomeRequest(@JsonProperty("piece_id") String pieceId,
+                                   @JsonProperty("client_request_id") String clientRequestId) {}
 
     public record MarkLostRequest(@JsonProperty("piece_ids") @JsonAlias("pieceIds") List<String> pieceIds) {}
 }

@@ -234,6 +234,134 @@ public class BazarEndService {
         }
     }
 
+    // ── Bring back by count (B7d-2) ──────────────────────────────────────────
+
+    /**
+     * B7d-2 — {@code quantity} leftovers of a size WITHOUT a barcode back good at main, without scanning: untagged
+     * pieces still outstanding on the event's transfer, oldest received first, {@code FOR UPDATE OF tp SKIP LOCKED};
+     * each goes through the scan-back's own good path (TransferService.reconcileScanBackByCountForBazar — the Shopify +1
+     * per piece is the unchanged onTransferReturn gate). Labelled leftovers are never taken: they are scanned. All or
+     * nothing (BAZAR_NOT_ENOUGH_UNTAGGED says how many untagged / labelled are still out). Who: the scan-back rule
+     * (seller_roles, not removed). Same {@code client_request_id} again → the first answer (replayed).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> bringBackByCount(UUID eventId, UUID variantId, Integer quantity, String clientRequestId,
+                                                BazarSaleService.Actor actor) {
+        UUID tenantId = requireEnabledTenant(jdbc);
+        Map<String, Object> ev = endedEvent(tenantId, eventId);
+        requireSeller(jdbc, actor, ev);
+        UUID transferId = (UUID) ev.get("transfer_id");
+        String crid = requestId(clientRequestId);
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenantId + ":bazar-back-count:" + crid);
+        List<String> done = jdbc.queryForList(
+            "SELECT piece_id FROM piece_events WHERE tenant_id = ? AND event_type = '" + BACK_GOOD_EVENT + "' " +
+            "AND metadata->>'client_request_id' = ? AND metadata->>'transfer_id' = ? ORDER BY id",
+            String.class, tenantId, crid, transferId.toString());
+        if (!done.isEmpty()) return countResult(tenantId, ev, done, true);
+
+        if (variantId == null) throw invalid("Choose a product and size.", "اختر منتجًا ومقاسًا.");
+        int qty = quantity == null ? 0 : quantity;
+        if (qty < 1 || qty > TransferService.MAX_COUNT_MOVE) {
+            throw invalid("Bring back between 1 and " + TransferService.MAX_COUNT_MOVE + " pieces at a time.",
+                "أرجِع من 1 إلى " + TransferService.MAX_COUNT_MOVE + " قطعة في المرة.");
+        }
+        List<String> picked = jdbc.queryForList(
+            "SELECT tp.piece_id FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+            "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.variant_id = ? " +
+            "AND p.short_code IS NULL AND p.status = 'out_on_transfer' " +
+            "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF tp SKIP LOCKED",
+            String.class, transferId, tenantId, variantId, qty);
+        if (picked.size() < qty) {
+            int untagged = picked.size();
+            int labelled = jdbc.queryForObject(
+                "SELECT count(*) FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
+                "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.variant_id = ? " +
+                "AND p.short_code IS NOT NULL", Integer.class, transferId, tenantId, variantId);
+            String en = untagged == 0 && labelled > 0
+                ? "These pieces have a barcode — scan them back one by one."
+                : "Only " + untagged + " without a barcode " + (untagged == 1 ? "is" : "are") + " still out"
+                  + (labelled > 0 ? " — scan the " + labelled + " with a barcode." : ".");
+            String ar = untagged == 0 && labelled > 0
+                ? "هذه القطع لها باركود — امسحها للعودة واحدة واحدة."
+                : "المتبقي بدون باركود " + untagged + " فقط" + (labelled > 0 ? " — امسح الـ " + labelled + " ذات الباركود." : ".");
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("untagged", untagged);
+            d.put("labelled", labelled);
+            throw new BazarException(BazarException.Code.BAZAR_NOT_ENOUGH_UNTAGGED, en, ar, HttpStatus.CONFLICT, d);
+        }
+        for (String pieceId : picked) {
+            TransferService.ScanBackResult r = transfers.reconcileScanBackByCountForBazar(transferId, pieceId,
+                actor.userId(), crid);
+            if (!r.success()) {
+                // Not expected (the rows are locked by this transaction); throwing rolls every piece back.
+                throw new BazarException(BazarException.Code.BAZAR_INVALID_INPUT, r.messageEn(), r.messageAr(),
+                    HttpStatus.CONFLICT);
+            }
+        }
+        return countResult(tenantId, ev, picked, false);
+    }
+
+    private Map<String, Object> countResult(UUID tenantId, Map<String, Object> ev, List<String> pieceIds,
+                                            boolean replayed) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("result", "back_good");
+        out.put("count", pieceIds.size());
+        out.put("piece_ids", pieceIds);
+        out.put("variant_id", jdbc.queryForObject("SELECT variant_id FROM pieces WHERE id = ? AND tenant_id = ?",
+            UUID.class, pieceIds.get(0), tenantId));
+        out.put("leftovers", leftovers(tenantId, ev));
+        out.put("replayed", replayed);
+        return out;
+    }
+
+    /**
+     * B7d-2 — a damaged leftover WITHOUT a barcode (taken back damaged at the bazar, still away) brought home by
+     * tapping its row: the scan-back's own damaged path (TransferService.bringBackDamagedForBazar — no count change,
+     * no Shopify write). A piece with a barcode is scanned instead (BAZAR_PIECE_HAS_BARCODE). Same rule, lock and
+     * replay as a scan-back.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> bringHomeDamaged(UUID eventId, String pieceId, String clientRequestId,
+                                                BazarSaleService.Actor actor) {
+        UUID tenantId = requireEnabledTenant(jdbc);
+        Map<String, Object> ev = endedEvent(tenantId, eventId);
+        requireSeller(jdbc, actor, ev);
+        UUID transferId = (UUID) ev.get("transfer_id");
+        String crid = requestId(clientRequestId);
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenantId + ":bazar-back:" + crid);
+        List<String> first = jdbc.queryForList(
+            "SELECT piece_id FROM piece_events WHERE tenant_id = ? AND event_type = '" + BACK_DAMAGED_EVENT + "' " +
+            "AND metadata->>'client_request_id' = ? AND metadata->>'transfer_id' = ? LIMIT 1",
+            String.class, tenantId, crid, transferId.toString());
+        if (!first.isEmpty()) return scanResult(tenantId, ev, first.get(0), "back_damaged", true);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT p.short_code, tp.outcome FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id " +
+            "AND p.tenant_id = tp.tenant_id WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.piece_id = ? " +
+            "ORDER BY tp.created_at DESC, tp.id DESC LIMIT 1", transferId, tenantId, pieceId);
+        if (rows.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_PIECE_NOT_HERE,
+                "This piece didn't go to this bazar.", "هذه القطعة لم تذهب إلى هذا البازار.", HttpStatus.CONFLICT);
+        }
+        if (rows.get(0).get("short_code") != null) {
+            throw new BazarException(BazarException.Code.BAZAR_PIECE_HAS_BARCODE,
+                "This piece has a barcode — scan it to bring it home.", "هذه القطعة لها باركود — امسحها لإرجاعها.",
+                HttpStatus.CONFLICT);
+        }
+        if (!"condemned".equals(rows.get(0).get("outcome"))
+                || !transfers.bringBackDamagedForBazar(transferId, pieceId, actor.userId(), crid)) {
+            throw alreadyBack();
+        }
+        return scanResult(tenantId, ev, pieceId, "back_damaged", false);
+    }
+
+    private static String requestId(String clientRequestId) {
+        String crid = clientRequestId == null ? "" : clientRequestId.trim();
+        if (crid.isEmpty() || crid.length() > 100) {
+            throw invalid("Missing request id (client_request_id).", "معرّف الطلب مفقود (client_request_id).");
+        }
+        return crid;
+    }
+
     private Map<String, Object> scanResult(UUID tenantId, Map<String, Object> ev, String pieceId, String result,
                                            boolean replayed) {
         Map<String, Object> out = new LinkedHashMap<>();

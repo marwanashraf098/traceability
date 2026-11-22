@@ -11,6 +11,7 @@ import { useRetryingCommand } from '../../bazar/useRetryingCommand'
 import { CodeEntry, CommandStatus, ErrorCard } from './phone/ReturnParts'
 import { cn } from '../../components/ui'
 import { Eyebrow } from './r1/parts'
+import { BringBackByCountPanel, BringHomeButton } from './BringBackByCount'
 import { Chip, Legend, StackBar } from './r2/parts'
 
 // Bazar POS B5 — End event (mockup page 1, step 9) and the leftovers coming back on the event's linked transfer,
@@ -268,12 +269,29 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide }: {
         <p className="text-small text-muted">{t('bazar.r2.end.whoScans')}</p>
       </section>
 
+      {/* B7d-2: leftovers without a barcode come back by count. */}
+      {!closed && l.outstanding.some(p => p.piece_code == null) && (
+        <BringBackByCountPanel eventId={eventId} leftovers={l} onDone={setL} />
+      )}
+
       {l.damaged_to_bring_home.length > 0 && (
         <section className="card p-4 flex flex-col gap-2" data-testid="leftovers-damaged">
           <h3 className="font-semibold text-primary">{t('bazar.end.damagedTitle')}</h3>
           <p className="text-small text-muted">{t('bazar.end.damagedBody')}</p>
           <ul className="rounded-[10px] border border-line bg-surface divide-y divide-line">
-            {l.damaged_to_bring_home.map(p => <li key={p.piece_id} className="px-3 py-2.5"><PieceLine p={p} /></li>)}
+            {l.damaged_to_bring_home.map(p => (
+              <li key={p.piece_id} className="px-3 py-2.5 flex items-center justify-between gap-3">
+                <PieceLine p={p} />
+                {/* B7d-2: no barcode to scan — tap to bring it home. */}
+                {p.piece_code == null && (
+                  <BringHomeButton eventId={eventId} piece={p} onDone={r => {
+                    setLast(r)
+                    setL(r.leftovers)
+                    setRecent(cur => [r, ...cur.filter(x => x.piece.piece_id !== r.piece.piece_id)].slice(0, 5))
+                  }} />
+                )}
+              </li>
+            ))}
           </ul>
         </section>
       )}
