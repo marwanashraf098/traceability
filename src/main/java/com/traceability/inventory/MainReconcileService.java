@@ -92,6 +92,8 @@ public class MainReconcileService {
     private final StoreRepository storeRepository;
     private final InventoryItemIdService itemIds;
     private final ObjectMapper mapper = new ObjectMapper();
+    /** Part 1's candidate lines, cached per order by row version (MainReconcilePart1Lines). */
+    private final MainReconcilePart1Lines part1Lines;
 
     private boolean enabled = false;
     private Set<String> shops = Set.of();
@@ -118,6 +120,7 @@ public class MainReconcileService {
                                 ShopifyTokenProvider tokenProvider, StoreRepository storeRepository) {
         this.jdbc            = jdbc;
         this.named           = new NamedParameterJdbcTemplate(jdbc);
+        this.part1Lines      = new MainReconcilePart1Lines(this.named);
         this.tx              = new TransactionTemplate(txm);
         this.shopify         = shopify;
         this.tokenProvider   = tokenProvider;
@@ -886,13 +889,13 @@ public class MainReconcileService {
     private ObjectNode part1(UUID tenantId, UUID runId, Main main, List<UUID> variantIds, boolean write) {
         Map<String, Integer> outcomes = new TreeMap<>();
         int units = 0;
-        MapSqlParameterSource p = new MapSqlParameterSource("t", tenantId).addValue("mainNum", main.numeric())
-            .addValue("days", part1WindowDays).addValue("all", variantIds == null)
-            .addValue("ids", uuidArray(variantIds == null ? List.of() : variantIds));
-        List<P1Line> lines = named.query(MainReconcileRules.PART1_LINES_SQL, p, (rs, i) -> new P1Line(
-            rs.getObject("order_id", UUID.class), rs.getBoolean("order_cancelled"), rs.getObject("variant_id", UUID.class),
-            rs.getString("fulfillment_id"), rs.getString("line_item_id"), rs.getString("fulfillment_status"),
-            rs.getString("fulfilled_location_id"), rs.getInt("qty"), rs.getTimestamp("fulfillment_created_at")));
+        // Disk IO fix (2026-11-22): an order's raw is read only when the order changed since the last run (part1Lines).
+        MainReconcilePart1Lines.Result extracted = part1Lines.lines(tenantId, main.numeric(), part1WindowDays, variantIds);
+        List<P1Line> lines = new ArrayList<>(extracted.lines().size());
+        for (MainReconcilePart1Lines.Row r : extracted.lines()) {
+            lines.add(new P1Line(r.orderId(), r.orderCancelled(), r.variantId(), r.fulfillmentId(), r.lineItemId(),
+                r.status(), r.location(), r.qty(), r.createdAt()));
+        }
 
         Map<List<UUID>, List<P1Line>> groups = new LinkedHashMap<>();
         for (P1Line l : lines) {
@@ -949,12 +952,11 @@ public class MainReconcileService {
                 }
             }
         }
-        Integer unreadable = named.queryForObject(MainReconcileRules.PART1_UNREADABLE_SQL,
-            new MapSqlParameterSource("t", tenantId).addValue("days", part1WindowDays), Integer.class);
+        int unreadable = extracted.unreadableOrders();
         ObjectNode out = mapper.createObjectNode();
         outcomes.forEach(out::put);
         out.put("new_claim_units", units);
-        out.put("unreadable_orders", unreadable == null ? 0 : unreadable);
+        out.put("unreadable_orders", unreadable);
         return out;
     }
 

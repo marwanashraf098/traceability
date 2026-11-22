@@ -99,17 +99,25 @@ public final class WatchdogDbProbe implements JobServerWatchdog.Probe {
         Boolean registered = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM jobrunr_recurring_jobs WHERE id = ?)", Boolean.class, livenessJobId);
         if (Boolean.TRUE.equals(registered)) {
+            // Disk IO fix (2026-11-22): the same three values as max(createdAt) / max(updatedAt) FILTER (state …) over
+            // every job of the recurring job, but each one is a single index descent (V241 indexes) instead of an
+            // aggregate over the whole history. Both columns are NOT NULL; GREATEST ignores NULLs like max().
             Instant[] last = jdbc.query("""
-                SELECT max(createdAt) AS created,
-                       max(updatedAt) FILTER (WHERE state = 'PROCESSING') AS processing,
-                       max(updatedAt) FILTER (WHERE state IN ('SUCCEEDED', 'FAILED')) AS finished
-                  FROM jobrunr_jobs WHERE recurringJobId = ?
+                SELECT (SELECT createdAt FROM jobrunr_jobs WHERE recurringJobId = ?
+                         ORDER BY createdAt DESC LIMIT 1) AS created,
+                       (SELECT updatedAt FROM jobrunr_jobs WHERE recurringJobId = ? AND state = 'PROCESSING'
+                         ORDER BY updatedAt DESC LIMIT 1) AS processing,
+                       GREATEST(
+                         (SELECT updatedAt FROM jobrunr_jobs WHERE recurringJobId = ? AND state = 'SUCCEEDED'
+                           ORDER BY updatedAt DESC LIMIT 1),
+                         (SELECT updatedAt FROM jobrunr_jobs WHERE recurringJobId = ? AND state = 'FAILED'
+                           ORDER BY updatedAt DESC LIMIT 1)) AS finished
                 """, rs -> {
                     rs.next();
                     return new Instant[] { instant(rs.getTimestamp("created", UTC)),
                                            instant(rs.getTimestamp("processing", UTC)),
                                            instant(rs.getTimestamp("finished", UTC)) };
-                }, livenessJobId);
+                }, livenessJobId, livenessJobId, livenessJobId, livenessJobId);
             Instant cutoff = now.minus(livenessWindow);
             boolean created  = last[0] != null && last[0].isAfter(cutoff);
             boolean running  = last[1] != null && last[1].isAfter(now.minus(Duration.ofMinutes(2)));
