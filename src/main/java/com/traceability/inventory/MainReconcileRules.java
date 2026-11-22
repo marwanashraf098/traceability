@@ -536,27 +536,53 @@ public final class MainReconcileRules {
         "WHERE c.tenant_id = :t AND c.status IN " + P1_OWED_STATUSES_SQL;
 
     /**
-     * Part 1 candidates: every successful-or-not REST fulfillment line at a location that is not Main, on a non-internal
-     * order created in the window. vv is NULL for a line whose variant Traced doesn't know. :t, :mainNum, :days, :all
-     * (boolean — every variant) or :ids.
+     * Part 1 candidates, step 1 of 2 — THE extraction (disk IO fix 2026-11-22: the old one-statement query detoasted
+     * every window order's raw twice on every queue run, ~20k blocks a call on prod). One row per non-internal order of
+     * the tenant created in the window, with its row version ({@code xmin}); for an order NOT in the caller's cache
+     * (:cIds / :cVers, parallel uuid[] / text[] — same id AND same xmin = same row content) also its lines and whether it
+     * has a fulfillment Traced can't read. A cached order's raw is never detoasted (the fenced subquery runs only when
+     * c.id IS NULL); an uncached one's exactly once. Lines are every REST fulfillment line with ids and a positive
+     * quantity, ANY location (the Main filter is step 2's, so the cache doesn't depend on it). Reads the orders table
+     * (system columns aren't visible through merchant_orders): {@code external_id NOT LIKE 'internal:%'} leaves out
+     * everything merchant_orders does. :t, :days, :cIds, :cVers.
      */
-    public static final String PART1_LINES_SQL =
-        "SELECT o.id AS order_id, (COALESCE(o.is_cancelled, false) OR o.status = 'cancelled') AS order_cancelled, " +
-        "       vv.id AS variant_id, f->>'id' AS fulfillment_id, li->>'id' AS line_item_id, " +
-        "       lower(f->>'status') AS fulfillment_status, f->>'location_id' AS fulfilled_location_id, " +
-        "       (li->>'quantity')::int AS qty, " + fulfillmentCreatedAtSql("f") + " AS fulfillment_created_at " +
-        "FROM merchant_orders o " +
-        "CROSS JOIN LATERAL jsonb_array_elements(" + fulfillmentsSql("o") + ") f " +
-        "CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(f->'line_items') = 'array' " +
-        "                                             THEN f->'line_items' ELSE '[]'::jsonb END) li " +
-        "LEFT JOIN variants vv ON vv.tenant_id = o.tenant_id AND " + lineMatchesVariantSql("li", "vv") + " " +
+    public static final String PART1_EXTRACT_SQL =
+        "SELECT o.id AS order_id, o.xmin::text AS ver, c.id IS NOT NULL AS cached, x.lines::text AS lines, x.unreadable " +
+        "FROM orders o " +
+        "LEFT JOIN unnest(CAST(:cIds AS uuid[]), CAST(:cVers AS text[])) AS c(id, ver) " +
+        "       ON c.id = o.id AND c.ver = o.xmin::text " +
+        "LEFT JOIN LATERAL (" +
+        "  SELECT (SELECT COALESCE(jsonb_agg(jsonb_build_object(" +
+        "              'order_id', o.id, 'order_cancelled', (COALESCE(o.is_cancelled, false) OR o.status = 'cancelled'), " +
+        "              'variant_gid', li->>'variant_id', 'fulfillment_id', f->>'id', 'line_item_id', li->>'id', " +
+        "              'fulfillment_status', lower(f->>'status'), 'fulfilled_location_id', f->>'location_id', " +
+        "              'qty', (li->>'quantity')::int, 'fulfillment_created_at', " + fulfillmentCreatedAtSql("f") + ", " +
+        "              'f_created', f->>'created_at')), '[]'::jsonb) " +
+        "          FROM jsonb_array_elements(q.fa) f, jsonb_array_elements(" + lineItemsSql("f") + ") li " +
+        "          WHERE " + restShapeSql("f") + " AND f->>'id' IS NOT NULL AND li->>'id' IS NOT NULL " +
+        "            AND li->>'quantity' ~ '^[0-9]+$' AND (li->>'quantity')::int > 0) AS lines, " +
+        "         EXISTS (SELECT 1 FROM jsonb_array_elements(q.fa) f WHERE NOT " + restShapeSql("f") + ") AS unreadable " +
+        "  FROM (SELECT CASE WHEN jsonb_typeof(r.fs) = 'array' THEN r.fs ELSE '[]'::jsonb END AS fa " +
+        "          FROM (SELECT o.raw->'fulfillments' AS fs WHERE c.id IS NULL OFFSET 0) r) q) x ON true " +
         "WHERE o.tenant_id = :t AND o.created_at > now() - make_interval(days => :days) " +
-        "  AND o.external_id NOT LIKE 'internal:%' " +
-        "  AND " + restShapeSql("f") + " AND f->>'location_id' <> :mainNum " +
-        "  AND f->>'id' IS NOT NULL AND li->>'id' IS NOT NULL " +
-        "  AND li->>'quantity' ~ '^[0-9]+$' AND (li->>'quantity')::int > 0 " +
+        "  AND o.external_id NOT LIKE 'internal:%'";
+
+    /**
+     * Part 1 candidates, step 2 of 2: the extracted lines (:lines, a JSON array of step 1's objects) at a location that
+     * is not Main, joined to Traced's variants exactly as before (vv is NULL for a line whose variant Traced doesn't
+     * know), filtered to :all (boolean — every variant) or :ids, in the original order. No table but variants is read.
+     * :t, :mainNum, :lines, :all, :ids.
+     */
+    public static final String PART1_RESOLVE_SQL =
+        "SELECT l.order_id, l.order_cancelled, vv.id AS variant_id, l.fulfillment_id, l.line_item_id, " +
+        "       l.fulfillment_status, l.fulfilled_location_id, l.qty, l.fulfillment_created_at " +
+        "FROM jsonb_to_recordset(CAST(:lines AS jsonb)) AS l(order_id uuid, order_cancelled boolean, variant_gid text, " +
+        "       fulfillment_id text, line_item_id text, fulfillment_status text, fulfilled_location_id text, qty int, " +
+        "       fulfillment_created_at timestamptz, f_created text) " +
+        "LEFT JOIN variants vv ON vv.tenant_id = :t AND ('gid://shopify/ProductVariant/' || l.variant_gid = vv.external_id) " +
+        "WHERE l.fulfilled_location_id <> :mainNum " +
         "  AND (:all OR vv.id = ANY(CAST(:ids AS uuid[]))) " +
-        "ORDER BY o.id, vv.id, f->>'created_at', f->>'id', li->>'id'";
+        "ORDER BY l.order_id, vv.id, l.f_created, l.fulfillment_id, l.line_item_id";
 
     /**
      * R2 fix 2 alert (delivered_not_fulfilled_in_shopify, MEDIUM): non-cancelled Shopify orders whose pieces Traced
@@ -574,13 +600,6 @@ public final class MainReconcileRules {
         "  AND x.left_at > now() - make_interval(days => :lookbackDays) " +
         "  AND " + unfulfilledUnitsSql("o", "vv") + " > 0 " +
         "GROUP BY o.id, o.number";
-
-    /** Orders in the window with a fulfillment Traced can't read (GraphQL import shape) — counted for Part 1. */
-    public static final String PART1_UNREADABLE_SQL =
-        "SELECT COUNT(*) FROM merchant_orders o " +
-        "WHERE o.tenant_id = :t AND o.created_at > now() - make_interval(days => :days) " +
-        "  AND o.external_id NOT LIKE 'internal:%' " +
-        "  AND EXISTS (SELECT 1 FROM jsonb_array_elements(" + fulfillmentsSql("o") + ") f WHERE NOT " + restShapeSql("f") + ")";
 
     /**
      * Part 1, per (order, variant): F_main (successful REST lines from Main), left (pieces of the order + variant that

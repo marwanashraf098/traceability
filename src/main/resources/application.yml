@@ -518,6 +518,12 @@ org:
       # 5 s (the open-source minimum) instead of 15 s: webhook pickup lag was p50 5.9 s / p95 13.6 s.
       worker-count: 8
       poll-interval-in-seconds: 5
+      # 2026-11-22 (Supabase Disk IO budget): JobRunr's defaults (36 h / 72 h) kept ~44k SUCCEEDED + ~118k DELETED
+      # rows (446 MB). Nothing reads old finished jobs: the watchdog looks back at most 2 × the liveness cron + 1 min,
+      # the webhook sweeper only at unfinished jobs, and the per-day deterministic job ids (catalog / location-address
+      # backfill) need the row for under 24 h — kept 30 h here.
+      delete-succeeded-jobs-after: ${TRACED_JOBRUNR_DELETE_SUCCEEDED_AFTER:6h}
+      permanently-delete-deleted-jobs-after: ${TRACED_JOBRUNR_PERMANENTLY_DELETE_AFTER:24h}
     # skip-create=true prevents the Spring Boot auto-config StorageProvider from running DDL.
     # Our custom JobRunrConfig @Bean creates PostgresStorageProvider(ownerDs) directly, which
     # ignores this property. V18 Flyway migration creates all JobRunr tables and pre-populates

@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Disk IO budget — three biggest prod readers fixed (2026-11-22; branch `perf/disk-io` off origin/main 370593cf; V241;
+count gates MigrationSmokeTest 240 files, NotTracedBackfillTest 185).** Supabase warned the Disk IO budget is being
+depleted (Micro, 1 GB RAM). Measured on a local PG 17 bench shaped from Marawan's pg_stat_statements numbers (no query
+was run on prod — the session has no prod SQL permission). Buffers = shared hit + read per call.
+- **Watchdog liveness** (`WatchdogDbProbe`, every 60 s): `max(createdAt)` / `max(updatedAt) FILTER (state …)` over
+  every job of the recurring job → four `ORDER BY … DESC LIMIT 1` index-only lookups (GREATEST for SUCCEEDED/FAILED;
+  both columns NOT NULL, so the same answers). V241 partial indexes `jobrunr_jobs (recurringjobid, createdat DESC)` and
+  `(recurringjobid, state, updatedat DESC)` WHERE recurringjobid IS NOT NULL. Bench 2,457 → 16 blocks, 31 → 0.25 ms.
+  Thresholds / re-enqueue / restart / escalation untouched. Part 3's other probes: the stale-webhook count (2 blocks)
+  and the sweeper's live-job check are fine; the "another webhook processed in the last N min" check seq-scanned
+  shopify_webhook_events and read ALL of it exactly in a stall (bench 24,940 blocks) → V241
+  `shopify_webhook_events_processed_recent_idx (processed_at) WHERE processed_at IS NOT NULL` → 3 blocks.
+- **JobRunr retention**: `org.jobrunr.background-job-server.delete-succeeded-jobs-after` 6h
+  (`TRACED_JOBRUNR_DELETE_SUCCEEDED_AFTER`) and `permanently-delete-deleted-jobs-after` 24h
+  (`TRACED_JOBRUNR_PERMANENTLY_DELETE_AFTER`) — were JobRunr's 36h / 72h. Nothing reads old finished jobs (watchdog
+  window ≤ 2 × cron + 1 min; sweeper reads unfinished jobs only; per-day deterministic job ids of catalog /
+  location-address backfill need < 24 h, kept 30 h; the Bosta fulfillment-link job id only collapses near-simultaneous
+  enqueues — its attempt re-reads state). FAILED jobs are never auto-deleted by JobRunr (unchanged). Bench: 157k → 43k
+  rows. The file only shrinks with VACUUM FULL / pg_repack; plain autovacuum makes the space reusable.
+- **Main reconcile Part 1** (`PART1_LINES_SQL` + `PART1_UNREADABLE_SQL`, every queue run = every minute per tenant with
+  queued variants, plus the 4-hourly sweep; 30-day window, unchanged): it detoasted raw of every window order TWICE per
+  run (`CASE jsonb_typeof(o.raw->…) THEN o.raw->…`), with no (tenant_id, created_at) index. Now
+  `MainReconcilePart1Lines`: per-tenant in-memory cache of each window order's extracted lines keyed by (id, xmin) —
+  only new / changed orders are detoasted (once); the variant join, Main filter, variant filter and ORDER BY stay in SQL
+  (`PART1_RESOLVE_SQL`); the sweep re-reads everything (bounds the cache's age to one sweep). `PART1_EXTRACT_SQL` reads
+  the orders TABLE (xmin isn't visible through a view) with `external_id NOT LIKE 'internal:%'` — same rows as the old
+  `merchant_orders` + `NOT LIKE 'internal:%'` (the view only hides internal:portal: / internal:shopify-exchange:);
+  OrdersTableAccessGuardTest entry ALREADY_EXCLUDED_BY_KEY (approved 2026-11-22). V241 `orders_tenant_created_at_idx`.
+  Bench (11.4k window orders): queue run 83,165 → 366 blocks, 590 → 14 ms; sweep 121k → 42k. Proof:
+  MainReconcilePart1LinesEquivalenceTest (old SQL frozen in the test; cold, warm after raw / status / new / deleted /
+  out-of-window / new-variant changes, two Main ids; hides what merchant_orders hides; app_user RLS) — revert-checked
+  (ignoring xmin fails e2).
+- Deploy note: the first JobRunr housekeeping after deploy moves ~35k SUCCEEDED → DELETED and deletes ~80k DELETED rows
+  (one-time burst) — deploy in a quiet hour, then check jobrunr_backgroundjobservers.lastheartbeat.
+
 **Incident 2026-11-21 — shipped_without_scan held every connection (outages 18:07 + 19:45 Cairo).**
 - **Part 1 (MERGED 68e3ceb3, deploy pending):** `ExceptionService.detectShippedWithoutScanCapped` — the one call site
   (detectAllOpen → page, bell / Overview counts, immediate sweep, digest). SET LOCAL statement_timeout inside a

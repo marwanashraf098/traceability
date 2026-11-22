@@ -63,6 +63,9 @@ class OrdersTableAccessGuardTest {
           "orders/updated looks the order up by Shopify external_id"),
         e("integrations/shopify/ShopifyWebhookProcessorJob.java#handleOrderCancelled", ALREADY_EXCLUDED_BY_KEY,
           "orders/cancelled looks the order up by Shopify external_id, then updates that id"),
+        e("inventory/MainReconcileRules.java#field:PART1_EXTRACT_SQL", ALREADY_EXCLUDED_BY_KEY,
+          "filters external_id NOT LIKE 'internal:%' (portal + shadow rows included); reads the table for xmin, " +
+          "which a view doesn't expose (MainReconcilePart1LinesEquivalenceTest.e4/e5)"),
         e("inventory/ExchangeService.java#commit", ALREADY_EXCLUDED_BY_KEY,
           "INSERTs a new internal:exchange: replacement order; never reads or writes another row"),
         e("courier/GenericExchanges.java#attachGenericForRequest", ALREADY_EXCLUDED_BY_KEY,
