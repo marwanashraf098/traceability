@@ -40,7 +40,8 @@ import static org.mockito.Mockito.*;
  *   k1 KEEP SHOWING ONLINE end to end — send (scan + by count), remove from send (scan + count), tap sell, scan sell,
  *      cart, return (good + damaged), exchange, damaged home (scanned + tapped), lost, leftovers back (scanned + by
  *      count), close: NO transfer_shopify_syncs row, the transfer's snapshot is 'leave', no inventory claim row of any
- *      kind, and Shopify saw NO mutation (only reads). Then Main reconcile (report-only) on that variant: the pieces
+ *      kind, and Shopify saw NO mutation naming this test's inventory items (every Shopify write names its items; other
+ *      tests' background pushes name theirs, so the order of the tests doesn't matter). Then Main reconcile (report-only) on that variant: the pieces
  *      sold / lost / damaged at the bazar come off — delta = −(sold + lost + damaged) (approved 2026-11-22).
  *   r1 REMOVE (the default) positive control — the same kinds of action: exactly one pushTransferOut with −N for the
  *      pieces sent, and exactly one +1 per good leftover (scanned and by count) — as today.
@@ -54,7 +55,6 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)   // k1 and r1 first: a remove-mode send's push is asynchronous
 class BazarOnlineStockTest {
 
     @Container
@@ -145,7 +145,7 @@ class BazarOnlineStockTest {
 
     // ── k1 ───────────────────────────────────────────────────────────────────
 
-    @Test @Order(1)
+    @Test
     void k1_keepShowingOnline_endToEnd_noShopifyWrite_thenReconcileLowersSoldLostDamaged() throws Exception {
         UUID labelled = variant(), untagged = variant();
         // Labelled: l1 scan-sold, l2 cart, l3 sold → returned good → back, l4 exchanged away → back, l5 exchange's new
@@ -204,7 +204,7 @@ class BazarOnlineStockTest {
             .isEqualTo("leave");
         assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND variant_id IN (?, ?) " +
             "AND trigger_type <> 'receiving_session'", tenant, labelled, untagged)).isZero();
-        assertNoMutation();
+        assertNoMutation(labelled, untagged);
 
         // Decision 4 — Main reconcile still lowers the pieces that are gone. Shopify still has every piece (no −N).
         int received = l.size() + u.size();
@@ -221,12 +221,12 @@ class BazarOnlineStockTest {
         assertThat(d.get("delta")).as("%s", d).isEqualTo(-labelledGone);
         assertThat(diff(run, untagged).get("delta")).isEqualTo(-(soldLostDamaged - labelledGone));
         assertThat(received).isEqualTo(15);
-        assertNoMutation();
+        assertNoMutation(labelled, untagged);
     }
 
     // ── r1 ───────────────────────────────────────────────────────────────────
 
-    @Test @Order(2)
+    @Test
     void r1_removeFromOnlineStock_positiveControl_minusNThenPlusOnePerGoodLeftover() throws Exception {
         UUID labelled = variant(), untagged = variant();
         List<String> l = List.of(piece(labelled, true), piece(labelled, true), piece(labelled, true), piece(labelled, true));
@@ -259,13 +259,22 @@ class BazarOnlineStockTest {
             .isEqualTo("remove");
         Map<String, Object> sync = jdbc.queryForMap("SELECT deltas::text AS deltas FROM transfer_shopify_syncs WHERE transfer_id = ?", transferId);
         assertThat((String) sync.get("deltas")).contains(labelled + "\": 3").contains(untagged + "\": 3");
-        verify(shopify, times(1)).pushTransferOut(any(), any(), anyList(), any(), any(), any());
-        verify(shopify, times(3)).adjustInventoryQuantities(any(), any(), any(), eq(traced), eq(1), anyString(), any());
+        // This test's own writes only (another test's background push names its own items).
+        assertThat(callsAbout("pushTransferOut", labelled, untagged)).as("one −N send").isEqualTo(1);
+        Invocation push = Mockito.mockingDetails(shopify).getInvocations().stream()
+            .filter(inv -> inv.getMethod().getName().equals("pushTransferOut"))
+            .filter(inv -> Arrays.deepToString(inv.getArguments()).contains("gid://shopify/InventoryItem/" + labelled))
+            .findFirst().orElseThrow();
+        assertThat((String) push.getArgument(3)).isEqualTo(traced);
+        @SuppressWarnings("unchecked")
+        List<ShopifyGateway.InventoryDelta> deltas = (List<ShopifyGateway.InventoryDelta>) push.getArgument(2);
+        assertThat(deltas).extracting(d -> Math.abs(d.negativeDelta())).containsExactlyInAnyOrder(3, 3);
+        assertThat(callsAbout("adjustInventoryQuantities", labelled, untagged)).as("+1 per good leftover").isEqualTo(3);
     }
 
     // ── m1 ───────────────────────────────────────────────────────────────────
 
-    @Test @Order(3)
+    @Test
     void m1_choice_changeWhileDraft_lockedAfterSend() {
         UUID v = variant();
         Map<String, Object> ev = create("Choice Bazar", null, "Choice Hall " + seq.incrementAndGet(), "remove");
@@ -297,7 +306,7 @@ class BazarOnlineStockTest {
 
     // ── m2 ───────────────────────────────────────────────────────────────────
 
-    @Test @Order(4)
+    @Test
     void m2_reuse_writesTheChoice_conflictWhileAnotherUnsentBazarDisagrees() {
         UUID v = variant();
         Map<String, Object> a = create("Reuse A", null, "Reuse Hall " + seq.incrementAndGet(), "leave");
@@ -328,7 +337,7 @@ class BazarOnlineStockTest {
 
     // ── m3 ───────────────────────────────────────────────────────────────────
 
-    @Test @Order(5)
+    @Test
     void m3_settingsLocations_refusedWhileTheLocationHasAnUnsentBazar() {
         UUID v = variant();
         Map<String, Object> ev = create("Settings Bazar", null, "Settings Hall " + seq.incrementAndGet(), "remove");
@@ -405,11 +414,26 @@ class BazarOnlineStockTest {
         return d.get(0);
     }
 
-    /** Every Shopify call the mock saw was a read. */
-    private void assertNoMutation() {
+    /**
+     * Shopify saw no mutation for these variants: every call naming one of their inventory items (directly, or inside
+     * a delta list) is a read. Calls about other tests' items (a background push of another test's send) don't count.
+     */
+    private void assertNoMutation(UUID... variants) {
+        List<String> items = Arrays.stream(variants).map(v -> "gid://shopify/InventoryItem/" + v).toList();
         for (Invocation inv : Mockito.mockingDetails(shopify).getInvocations()) {
-            assertThat(READS).as("Shopify call %s", inv.getMethod().getName()).contains(inv.getMethod().getName());
+            String args = Arrays.deepToString(inv.getArguments());
+            if (items.stream().noneMatch(args::contains)) continue;
+            assertThat(READS).as("Shopify call %s %s", inv.getMethod().getName(), args).contains(inv.getMethod().getName());
         }
+    }
+
+    /** Calls of {@code method} that name one of these variants' inventory items (this test's own writes only). */
+    private long callsAbout(String method, UUID... variants) {
+        List<String> items = Arrays.stream(variants).map(v -> "gid://shopify/InventoryItem/" + v).toList();
+        return Mockito.mockingDetails(shopify).getInvocations().stream()
+            .filter(inv -> inv.getMethod().getName().equals(method))
+            .filter(inv -> { String a = Arrays.deepToString(inv.getArguments()); return items.stream().anyMatch(a::contains); })
+            .count();
     }
 
     private String code(Runnable r) {
