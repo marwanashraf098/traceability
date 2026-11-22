@@ -427,10 +427,10 @@ class ExchangeMultiIngestTest {
         // 21 picked up from business, 22 picking up from consignee, 24 received at warehouse, 30 between hubs,
         // 45 delivered, 46 returned to business — every past-pickup state the prod backfill rows carry.
         // Each with the timeline milestone prod carries for that state (unlinked rows, 2026-11-19).
-        int[][] past = {{21}, {22}, {24}, {30}, {46}, {46}};
+        int[][] past = {{21}, {22}, {24}, {30}, {45}, {46}};
         String[] names = {"Picked up from business", "Picking up from consignee", "Received at warehouse",
-            "In transit between Hubs", "Returned to business", "Returned to business"};
-        String[] milestones = {"picked_up", "out_for_exchange", "in_transit", "in_transit", "out_for_return", "exchanged_returned"};
+            "In transit between Hubs", "Delivered", "Returned to business"};
+        String[] milestones = {"picked_up", "out_for_exchange", "in_transit", "in_transit", "exchanged_returned", "out_for_return"};
         String[] expectedLeg = {"with_courier", "with_courier", "with_courier", "with_courier", "delivered", "delivered"};
         Set<String> alertsBefore = alertKeys(s);
         Map<String, UUID> gone = new LinkedHashMap<>();
