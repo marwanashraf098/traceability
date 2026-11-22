@@ -55,6 +55,24 @@ public class BostaVisibilityCheckTrigger {
     private String referenceCatchUpOnStartup = "";
     private boolean referenceCatchUpApply;
 
+    private ExchangeMultiCatchUpService multiCatchUp;
+    private String multiCatchUpOnStartup = "";
+    private boolean multiCatchUpApply;
+
+    /**
+     * S3b (2026-11-19) — the multi-item exchange backfill (ExchangeMultiCatchUpService).
+     * BOSTA_EXCHANGE_MULTI_CATCH_UP_ON_STARTUP=<tenant ids> ('all' is refused — tenant by tenant), dry run unless
+     * BOSTA_EXCHANGE_MULTI_CATCH_UP_APPLY=true. One job per tenant, one-shot per startup; remove the lines after the run.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMultiCatchUp(ExchangeMultiCatchUpService multiCatchUp,
+                                @Value("${bosta.exchange-multi.catch-up.on-startup:}") String onStartup,
+                                @Value("${bosta.exchange-multi.catch-up.apply:false}") boolean apply) {
+        this.multiCatchUp = multiCatchUp;
+        this.multiCatchUpOnStartup = onStartup;
+        this.multiCatchUpApply = apply;
+    }
+
     private PreConnectReprocessService preConnectReprocess;
     private String preConnectOnStartup = "";
     private String preConnectTrackings = "";
@@ -146,6 +164,19 @@ public class BostaVisibilityCheckTrigger {
         }
         // Exchange / CRP reference catch-up (2026-10-05): BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<ids>|all,
         // dry run unless BOSTA_EXCHANGE_REFERENCE_CATCH_UP_APPLY=true. One-shot per startup.
+        if (multiCatchUp != null && multiCatchUpOnStartup != null && !multiCatchUpOnStartup.isBlank()) {
+            if (multiCatchUpOnStartup.trim().equalsIgnoreCase("all")) {
+                log.warn("bosta.exchange-multi.catch-up.on-startup: 'all' is refused — list tenant ids");
+            } else {
+                final boolean mApply = multiCatchUpApply;
+                final ExchangeMultiCatchUpService svc = multiCatchUp;
+                for (UUID tenantId : tenants(multiCatchUpOnStartup)) {
+                    final UUID t = tenantId;
+                    jobScheduler.enqueue(() -> svc.runAndLog(t, mApply));
+                    log.info("Multi-item exchange catch-up enqueued for tenant {} (apply={})", t, mApply);
+                }
+            }
+        }
         final boolean refApply = referenceCatchUpApply;
         if (referenceCatchUp != null) {
             for (UUID tenantId : tenants(referenceCatchUpOnStartup)) {
