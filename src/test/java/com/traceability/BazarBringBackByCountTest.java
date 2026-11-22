@@ -248,7 +248,9 @@ class BazarBringBackByCountTest {
         assertThat(jdbc.queryForList("SELECT split_part(trigger_id, ':', 1) FROM shopify_inventory_adjustments " +
             "WHERE tenant_id = ? AND trigger_type = 'transfer_return' AND status = 'applied' AND variant_id = ?",
             String.class, tenant, variant)).containsExactlyInAnyOrder(counted1, counted2);
-        verify(shopify, times(2)).adjustInventoryQuantities(any(), any(), any(), eq(traced), eq(1), anyString(), any());
+        // Only this test's item: another test's background +1 (b2 …) names its own item, so the order doesn't matter.
+        verify(shopify, times(2)).adjustInventoryQuantities(any(), any(), eq("gid://shopify/InventoryItem/" + variant),
+            eq(traced), eq(1), anyString(), any());
         assertThat(count("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
             "AND trigger_type = 'transfer_return' AND split_part(trigger_id, ':', 1) = ? AND status = 'applied'", tenant, never))
             .isZero();
