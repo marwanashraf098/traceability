@@ -194,10 +194,10 @@ class ExchangeIngestTest {
         assertThat(countAfterSecond).as("no duplicate row on a second webhook").isEqualTo(1);
     }
 
-    // ── e3: itemsCount != 1 on a leg falls back to the generic unmatched lane ────────
+    // ── e3: a multi-item exchange (2 out / 1 in) gets its exchanges row (S3b, approved 2026-11-19) ──
 
     @Test
-    void e3_multiItemExchange_fallsBackToUnmatchedLane_notExchangesTable() {
+    void e3_multiItemExchange_createsExchangeRow_needsMapping() {
         String tracking = "184907356";
         Long wid = insertWebhookEvent(tracking, 10, "2026-08-18T10:10:00.000Z");
         when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
@@ -208,17 +208,12 @@ class ExchangeIngestTest {
 
         assertThat(webhookStatus(wid)).isEqualTo("processed");
 
-        int exchangeCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
-            Integer.class, tenantId, tracking);
-        assertThat(exchangeCount).as("multi-item exchange must not be represented in exchanges").isZero();
-
-        Map<String, Object> unlinked = jdbc.queryForMap(
-            "SELECT * FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ?",
+        Map<String, Object> ex = jdbc.queryForMap(
+            "SELECT status, inbound_variant_id FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
             tenantId, tracking);
-        assertThat(unlinked.get("resolved")).isEqualTo(false);
-        assertThat(unlinked.get("bosta_order_type")).isEqualTo("EXCHANGE");
-        assertThat(unlinked.get("match_reason")).isEqualTo("EXCHANGE_MULTI_ITEM");
+        assertThat(ex.get("status")).as("a multi-item exchange waits for a person").isEqualTo("needs_mapping");
+        assertThat(ex.get("inbound_variant_id")).as("never one inbound variant for a multi-item exchange").isNull();
+        assertThat(countUnlinked(tracking)).as("no longer on the generic unmatched lane").isZero();
     }
 
     // ── e5: returnSpecs entirely absent (real early-sighting shape) → HELD ───────────
@@ -279,7 +274,7 @@ class ExchangeIngestTest {
     // ── e7: later webhook, returnSpecs now populated itemsCount=2 → still rejects ────
 
     @Test
-    void e7_heldThenReturnSpecsPopulatedMultiItem_laterWebhook_stillRejectsMultiItem() {
+    void e7_heldThenReturnSpecsPopulatedMultiItem_laterWebhook_createsExchangeRow() {
         String tracking = "9999999999";
         Long wid1 = insertWebhookEvent(tracking, 10, "2026-09-10T10:00:00.000Z");
         when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
@@ -295,14 +290,11 @@ class ExchangeIngestTest {
 
         assertThat(webhookStatus(wid2)).isEqualTo("processed");
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
-                Integer.class, tenantId, tracking))
-            .as("confirmed multi-item inbound must still never be represented in exchanges")
-            .isZero();
-        Map<String, Object> unlinked = jdbc.queryForMap(
-            "SELECT * FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ?",
-            tenantId, tracking);
-        assertThat(unlinked.get("match_reason")).isEqualTo("EXCHANGE_MULTI_ITEM");
+                "SELECT status FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+                String.class, tenantId, tracking))
+            .as("multi-item inbound now gets its exchanges row on the later webhook (S3b)")
+            .isEqualTo("needs_mapping");
+        assertThat(countUnlinked(tracking)).isZero();
     }
 
     // ── e4: cross-tenant RLS isolation on exchanges ──────────────────────────────────

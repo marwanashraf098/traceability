@@ -420,6 +420,12 @@ bosta:
     catch-up:
       on-startup: ""
       apply: false
+  # S3b multi-item exchange backfill (ExchangeMultiCatchUpService, 2026-11-19): one-off, never scheduled —
+  # BOSTA_EXCHANGE_MULTI_CATCH_UP_ON_STARTUP=<tenant ids> (never 'all') (+ _APPLY=true to write).
+  exchange-multi:
+    catch-up:
+      on-startup: ""
+      apply: false
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
   api-version: v0

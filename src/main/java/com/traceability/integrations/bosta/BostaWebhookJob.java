@@ -55,7 +55,7 @@ import java.util.UUID;
  *   Mapped to exception shipment state    → webhook_events.status='failed' + alert
  */
 @Component
-public class BostaWebhookJob {
+public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAdvancer {
 
     private static final Logger log = LoggerFactory.getLogger(BostaWebhookJob.class);
 
@@ -908,6 +908,46 @@ public class BostaWebhookJob {
         if (resolvedShipment.orderId() != null) {
             notTracedTagger.maybeTagNotTraced(resolvedShipment.orderId(), tenantId);
         }
+    }
+
+    // ---- S3b: a freshly committed exchange leg follows Bosta's current state ----
+
+    /**
+     * S3b (2026-11-19) — see {@link com.traceability.inventory.ExchangeLegAdvancer}. Called after the committing
+     * transaction (ExchangeService.commit / the shadow links), under the tenant. Only a FRESH leg: forward, still
+     * 'created' and with no status history at all (nothing has ever been applied to it). Its exchange's stored raw goes
+     * through the SAME type-30 interpreter and the SAME {@link #applyMappedState} writer a Bosta update uses
+     * (webhookEventId null, like {@link #reinterpretExchangeForwardLeg}); fail-safe exactly like them — a milestone the
+     * interpreter doesn't know, or 'new' ("Pickup requested"), applies nothing. A just-committed order has no
+     * allocations, so no piece moves, no ledger write and no Shopify write (the exchange-dispatch decrement is a piece
+     * hook) happen; the order's own status is never written here.
+     */
+    @Override
+    public void advanceAtCommit(UUID tenantId, String trackingNumber) {
+        record FreshLeg(UUID id, UUID orderId, String raw) {}
+        FreshLeg leg = tx.execute(s -> jdbc.query(
+            "SELECT s.id, s.order_id, e.raw::text AS raw FROM shipments s " +
+            "JOIN exchanges e ON e.tenant_id = s.tenant_id AND e.tracking_number = s.tracking_number " +
+            "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward' " +
+            "  AND s.internal_state = 'created' " +
+            "  AND NOT EXISTS (SELECT 1 FROM shipment_status_history h WHERE h.shipment_id = s.id)",
+            rs -> rs.next() ? new FreshLeg(rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                rs.getString("raw")) : null,
+            trackingNumber, tenantId));
+        if (leg == null || leg.raw() == null) return;
+        JsonNode raw;
+        try {
+            raw = mapper.readTree(leg.raw());
+        } catch (Exception e) {
+            log.warn("advanceAtCommit: malformed exchange raw for {} — leg left as it is", trackingNumber);
+            return;
+        }
+        java.util.Optional<BostaStateMapper.MappedState> interpreted = exchangeStateInterpreter.interpretForwardLeg(raw);
+        if (interpreted.isEmpty() || "created".equals(interpreted.get().shipmentInternalState())) return;
+        applyMappedState(null, tenantId, BostaDelivery.fromRaw(trackingNumber, raw), interpreted.get(),
+            new ShipmentRow(leg.id(), leg.orderId()));
+        log.info("Exchange {}: leg advanced at commit → {} (provider_state={})", trackingNumber,
+            interpreted.get().shipmentInternalState(), raw.path("state").path("code").asInt(-1));
     }
 
     // ---- admin: re-interpret a stuck exchange forward leg (Step 3C-fix Part 2) ----
