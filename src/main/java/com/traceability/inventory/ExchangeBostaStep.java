@@ -28,6 +28,9 @@ public final class ExchangeBostaStep {
     /** Bosta's "Pickup requested" step. */
     public static final String PICKUP_REQUESTED = "new";
 
+    /** Bosta's state / timeline code for "Pickup requested". */
+    public static final int PICKUP_REQUESTED_CODE = 10;
+
     /**
      * The recognised forward-leg steps in the order an exchange moves through them — the same vocabulary as
      * ExchangeStateInterpreter's map (its static check fails startup if the two ever differ).
@@ -46,16 +49,20 @@ public final class ExchangeBostaStep {
     }
 
     /**
-     * True when Bosta's latest completed step is past "Pickup requested" and NO recognised step past it was completed —
+     * True when Bosta's state isn't "Pickup requested" (code 10), its latest completed step is past "Pickup requested"
+     * (a step with code 10 counts as "Pickup requested") and NO recognised step past it was completed —
      * Traced can't tell where the exchange is, so it must not create a replacement (it would be pickable).
      */
     public static boolean unknownPastPickup(JsonNode raw) {
+        // Bosta's own state still "Pickup requested" (code 10) → not past pickup, whatever the timeline's text says.
+        if (raw == null || raw.path("state").path("code").asInt(-1) == PICKUP_REQUESTED_CODE) return false;
         String latest = null;
         Instant latestAt = null;
         boolean recognisedPastPickup = false;
         for (JsonNode e : completed(raw)) {
             String v = value(e);
             Instant at = Instant.parse(e.path("date").asText());
+            if (e.path("code").asInt(-1) == PICKUP_REQUESTED_CODE) v = PICKUP_REQUESTED;
             if (latestAt == null || at.isAfter(latestAt)) { latestAt = at; latest = v; }
             if (PROGRESS.contains(v) && !PICKUP_REQUESTED.equals(v)) recognisedPastPickup = true;
         }

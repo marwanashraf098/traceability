@@ -60,6 +60,14 @@ class ExchangeBostaStepTest {
         assertThat(interpreter.interpretFurthestForwardLeg(pickupRequested)).get()
             .satisfies(m -> assertThat(m.shipmentInternalState()).isEqualTo("created"));
 
+        // Bosta's state still "Pickup requested" (code 10): never unknown, whatever the timeline's text; a step coded 10 is
+        // "Pickup requested" too.
+        JsonNode stateTen = M.readTree("{\"state\":{\"code\":10},\"timeline\":[{\"date\":\"2026-10-22T09:00:00Z\","
+            + "\"done\":true,\"value\":\"pickup_requested\"}]}");
+        assertThat(ExchangeBostaStep.unknownPastPickup(stateTen)).isFalse();
+        JsonNode codedTen = raw("[{\"code\":10,\"date\":\"2026-10-22T09:00:00Z\",\"done\":true,\"value\":\"pickup_requested\"}]");
+        assertThat(ExchangeBostaStep.unknownPastPickup(codedTen)).isFalse();
+
         assertThat(ExchangeBostaStep.unknownPastPickup(raw("[]"))).isFalse();
         assertThat(ExchangeBostaStep.unknownPastPickup(null)).isFalse();
         assertThat(ExchangeBostaStep.furthestRecognised(null)).isNull();
