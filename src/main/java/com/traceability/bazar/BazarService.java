@@ -26,8 +26,10 @@ import java.util.UUID;
  *       ({@code scanOutForBazar} / {@code markSentForBazar} — no copy of the logic); Mark sent claims the existing
  *       {@code pushTransferOut} −N at the Traced Main Warehouse. Every generic Transfers action refuses the transfer
  *       (BAZAR_TRANSFER_LOCKED).</li>
- *   <li>Shopify mode is always 'remove' in v1: an event location in 'leave' mode is refused at create and again,
- *       under a share lock on the location row, at Mark sent (so the send-time snapshot is 'remove').</li>
+ *   <li>B8 — online stock per bazar ({@link BazarOnlineStock}): 'remove' (default) or 'leave', written on the event
+ *       location under FOR UPDATE at create / reuse and by {@link #setOnlineStock} while the event is a draft and its
+ *       transfer is preparing; Mark sent holds the location under a share lock so the transfer's snapshot is the mode
+ *       the owner saw. 'leave' = TransferShopifySync writes no claim row (the snapshot is the record).</li>
  *   <li>Prices ({@link BazarPricing}) are Traced-only — no Shopify write of any kind here.</li>
  *   <li>Start: draft → live, only once the transfer is sent; at most one live event per location.</li>
  * </ul>
@@ -62,9 +64,8 @@ public class BazarService {
     public Map<String, Object> create(CreateEvent req, UUID actorUserId) {
         UUID tenantId = requireEnabled();
 
-        if (req.shopifySyncMode() != null && !"remove".equals(req.shopifySyncMode())) {
-            throw leaveMode();
-        }
+        String mode = req.shopifySyncMode() == null ? BazarOnlineStock.REMOVE : req.shopifySyncMode();
+        if (!BazarOnlineStock.MODES.contains(mode)) throw BazarOnlineStock.invalidMode();
         String name = req.name() == null ? "" : req.name().trim();
         if (name.isEmpty() || name.length() > 80) {
             throw invalid("Give the bazar a name (up to 80 characters).", "اكتب اسمًا للبازار (حتى 80 حرفًا).");
@@ -81,7 +82,7 @@ public class BazarService {
             "Seller roles must be owner, manager or worker.", "أدوار البائعين يجب أن تكون مالك أو مدير أو عامل.");
         validateRule(req.discountPct(), req.roundTo());
 
-        UUID locationId = resolveLocation(tenantId, req.locationId(), req.locationName());
+        UUID locationId = resolveLocation(tenantId, req.locationId(), req.locationName(), mode);
         UUID transferId = transfers.createBazarTransfer(locationId, actorUserId);
 
         UUID id = UUID.randomUUID();
@@ -94,17 +95,17 @@ public class BazarService {
         return detail(tenantId, id);
     }
 
-    private UUID resolveLocation(UUID tenantId, UUID locationId, String locationName) {
+    private UUID resolveLocation(UUID tenantId, UUID locationId, String locationName, String mode) {
         boolean hasName = locationName != null && !locationName.isBlank();
         if ((locationId == null) == !hasName) {
             throw invalid("Choose an existing bazar location or name a new one.",
                 "اختر موقع بازار موجودًا أو اكتب اسم موقع جديد.");
         }
         if (locationId != null) {
-            // FOR SHARE: the Settings mode switch can't flip it to 'leave' under this create.
+            // FOR UPDATE: the chosen mode is written onto the location; the Settings switch waits for this create.
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT type::text AS type, is_fulfillment, shopify_location_id, shopify_sync_mode " +
-                "FROM locations WHERE id = ? AND tenant_id = ? FOR SHARE", locationId, tenantId);
+                "FROM locations WHERE id = ? AND tenant_id = ? FOR UPDATE", locationId, tenantId);
             if (rows.isEmpty()) {
                 throw new BazarException(BazarException.Code.BAZAR_LOCATION_NOT_FOUND,
                     "Location not found.", "لم يتم العثور على الموقع.", HttpStatus.UNPROCESSABLE_ENTITY);
@@ -116,8 +117,9 @@ public class BazarService {
                     "Pick a bazar (event) location, not a warehouse or shop.",
                     "اختر موقع بازار (فعالية)، وليس مستودعًا أو متجرًا.", HttpStatus.UNPROCESSABLE_ENTITY);
             }
-            if (!"remove".equals(l.get("shopify_sync_mode"))) {
-                throw leaveMode();
+            if (!mode.equals(l.get("shopify_sync_mode"))) {
+                if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, null) > 0) throw BazarOnlineStock.conflict();
+                jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, locationId, tenantId);
             }
             return locationId;
         }
@@ -137,7 +139,7 @@ public class BazarService {
         UUID id = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, shopify_sync_mode) " +
-            "VALUES (?, ?, ?, 'event'::location_type, false, false, 'remove')", id, tenantId, name);
+            "VALUES (?, ?, ?, 'event'::location_type, false, false, ?)", id, tenantId, name, mode);
         return id;
     }
 
@@ -228,12 +230,40 @@ public class BazarService {
         UUID tenantId = requireEnabled();
         Map<String, Object> ev = event(tenantId, eventId, true);
         if (!"draft".equals(ev.get("status"))) throw notDraft();
-        // v1 is remove-only: hold the location's mode under a share lock until the send (and its snapshot) commits.
-        String mode = jdbc.queryForObject(
-            "SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR SHARE",
-            String.class, ev.get("location_id"), tenantId);
-        if (!"remove".equals(mode)) throw leaveMode();
+        // B8: hold the location's mode under a share lock until the send (and its snapshot, claimSend) commits —
+        // the Settings switch can't change it under this send. 'leave' → claimSend writes no row (Shopify untouched).
+        jdbc.queryForList("SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR SHARE",
+            ev.get("location_id"), tenantId);
         transfers.markSentForBazar((UUID) ev.get("transfer_id"), actorUserId);
+        return detail(tenantId, eventId);
+    }
+
+    // ── Online stock (B8) ────────────────────────────────────────────────────
+
+    /**
+     * Changes the bazar's online stock choice — only while the event is a draft and its transfer is still being
+     * prepared (409 BAZAR_ONLINE_STOCK_LOCKED after Mark sent: the snapshot is final). Written onto the event location
+     * under FOR UPDATE; 409 BAZAR_ONLINE_STOCK_CONFLICT while another unsent bazar shares the location.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> setOnlineStock(UUID eventId, String mode, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        if (mode == null || !BazarOnlineStock.MODES.contains(mode)) throw BazarOnlineStock.invalidMode();
+        Map<String, Object> ev = event(tenantId, eventId, true);
+        if ("ended".equals(ev.get("status"))) throw ended();
+        if (!"draft".equals(ev.get("status"))) throw BazarOnlineStock.locked();
+        String transferStatus = jdbc.queryForObject(
+            "SELECT status FROM transfers WHERE id = ? AND tenant_id = ? FOR SHARE",
+            String.class, ev.get("transfer_id"), tenantId);
+        if (!"preparing".equals(transferStatus)) throw BazarOnlineStock.locked();
+        UUID locationId = (UUID) ev.get("location_id");
+        String current = jdbc.queryForObject(
+            "SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            String.class, locationId, tenantId);
+        if (!mode.equals(current)) {
+            if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, eventId) > 0) throw BazarOnlineStock.conflict();
+            jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, locationId, tenantId);
+        }
         return detail(tenantId, eventId);
     }
 
@@ -432,7 +462,9 @@ public class BazarService {
         Map<String, Object> out = new LinkedHashMap<>(jdbc.queryForMap(
             "SELECT e.id, e.name, e.starts_on, e.ends_on, e.status, e.location_id, l.name AS location_name, " +
             "       e.transfer_id, t.status AS transfer_status, t.sent_at AS transfer_sent_at, " +
-            "       t.shopify_sync_mode AS transfer_shopify_sync_mode, " +
+            "       t.shopify_sync_mode AS transfer_shopify_sync_mode, l.shopify_sync_mode AS location_shopify_sync_mode, " +
+            "       COALESCE(t.shopify_sync_mode, l.shopify_sync_mode) AS online_stock, " +
+            "       (e.status <> 'draft' OR t.status <> 'preparing') AS online_stock_locked, " +
             "       e.payment_methods, e.seller_roles, e.discount_pct, e.round_to, " +
             "       e.created_by, e.created_at, e.started_at, e.started_by, e.ended_at " +
             "FROM bazar_events e JOIN locations l ON l.id = e.location_id JOIN transfers t ON t.id = e.transfer_id " +
@@ -521,14 +553,6 @@ public class BazarService {
 
     private static BazarException invalid(String en, String ar) {
         return new BazarException(BazarException.Code.BAZAR_INVALID_INPUT, en, ar, HttpStatus.BAD_REQUEST);
-    }
-
-    private static BazarException leaveMode() {
-        return new BazarException(BazarException.Code.BAZAR_LEAVE_MODE_UNSUPPORTED,
-            "A bazar always takes its stock out of your Shopify count while it's away. " +
-            "\"Leave Shopify unchanged\" isn't available for bazars yet.",
-            "البازار يخصم بضاعته دائمًا من عدد Shopify أثناء غيابها. خيار \"عدم تغيير Shopify\" غير متاح للبازارات بعد.",
-            HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     private static BazarException notDraft() {

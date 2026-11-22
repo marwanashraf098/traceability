@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { OnlineStockTag } from '../OnlineStock'
 import { ArrowRight, ChevronDown, ChevronRight, ScanLine, Smartphone } from 'lucide-react'
 import {
   currentUserId, getBazarLeftovers, getBazarReport, getBazarToday, isReceipt, listBazarDays, listBazarSales, orderedMethods,
@@ -87,9 +88,12 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
     <div className="flex flex-col gap-5" data-testid="bazar-live">
       <EventHeader startsOn={ev.starts_on} lang={lang} name={ev.name}
         back={{ to: '/bazar', label: t('bazar.title') }}
-        tag={live
-          ? <Tag tone="live" dot testId="bazar-event-tag">{inRange ? t('bazar.r1.overview.liveNow', { day, count }) : t('bazar.r1.overview.liveNowPlain')}</Tag>
-          : <Tag tone="neutral" testId="bazar-event-tag">{t('bazar.status.ended')}</Tag>}
+        tag={<>
+          {live
+            ? <Tag tone="live" dot testId="bazar-event-tag">{inRange ? t('bazar.r1.overview.liveNow', { day, count }) : t('bazar.r1.overview.liveNowPlain')}</Tag>
+            : <Tag tone="neutral" testId="bazar-event-tag">{t('bazar.status.ended')}</Tag>}
+          <OnlineStockTag mode={ev.online_stock} />
+        </>}
         meta={<>{ev.location_name} · <span>{rangeLabel(ev.starts_on, ev.ends_on, lang)}</span> · <span dir="ltr" className="font-mono">{transferCode(ev.transfer_id)}</span></>}
         actions={live ? (
           <>

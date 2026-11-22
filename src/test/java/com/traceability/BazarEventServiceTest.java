@@ -157,17 +157,27 @@ class BazarEventServiceTest {
     }
 
     @Test
-    void create_rejectsLeaveMode_inTheRequest() {
-        assertThat(codeOf(() -> bazar.create(req(null, "Leave Hall", "leave"), actorId)))
-            .isEqualTo(BazarException.Code.BAZAR_LEAVE_MODE_UNSUPPORTED);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM locations WHERE name = 'Leave Hall'", Integer.class)).isZero();
+    void create_leaveMode_inTheRequest_makesTheLocationInLeaveMode() {
+        Map<String, Object> ev = bazar.create(req(null, "Leave Hall", "leave"), actorId);
+        assertThat(jdbc.queryForObject("SELECT shopify_sync_mode FROM locations WHERE id = ?", String.class,
+            ev.get("location_id"))).isEqualTo("leave");
+        assertThat(ev.get("online_stock")).isEqualTo("leave");
     }
 
     @Test
-    void create_rejectsAReusedLocationInLeaveMode() {
+    void create_reusesALocationInLeaveMode_keepsLeave_orSwitchesItToRemoveWhenRemoveIsChosen() {
         UUID loc = eventLocation("leave");
-        assertThat(codeOf(() -> bazar.create(req(loc, null, null), actorId)))
-            .isEqualTo(BazarException.Code.BAZAR_LEAVE_MODE_UNSUPPORTED);
+        assertThat(bazar.create(req(loc, null, "leave"), actorId).get("location_id")).isEqualTo(loc);
+        assertThat(jdbc.queryForObject("SELECT shopify_sync_mode FROM locations WHERE id = ?", String.class, loc))
+            .isEqualTo("leave");
+
+        // Another leave location, no unsent bazar there: the new bazar chose remove → the location switches to remove.
+        UUID other = eventLocation("leave");
+        Map<String, Object> ev = bazar.create(req(other, null, "remove"), actorId);
+        assertThat(ev.get("location_id")).isEqualTo(other);
+        assertThat(jdbc.queryForObject("SELECT shopify_sync_mode FROM locations WHERE id = ?", String.class, other))
+            .isEqualTo("remove");
+        assertThat(ev.get("online_stock")).isEqualTo("remove");
     }
 
     @Test
@@ -212,15 +222,18 @@ class BazarEventServiceTest {
     }
 
     @Test
-    void markSent_refusedWhenTheLocationWasSwitchedToLeaveAfterCreate() {
+    void markSent_afterTheLocationWasSwitchedToLeave_sendsWithSnapshotLeave_andNoClaimRow() {
         Map<String, Object> ev = newEvent();
         UUID eventId = (UUID) ev.get("id");
         assertThat(bazar.scanOut(eventId, "PC-" + piece(variantA), actorId, false).success()).isTrue();
         jdbc.update("UPDATE locations SET shopify_sync_mode = 'leave' WHERE id = ?", ev.get("location_id"));
-        assertThat(codeOf(() -> bazar.markSent(eventId, actorId)))
-            .isEqualTo(BazarException.Code.BAZAR_LEAVE_MODE_UNSUPPORTED);
-        assertThat(jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, ev.get("transfer_id")))
-            .isEqualTo("preparing");
+        bazar.markSent(eventId, actorId);
+        Map<String, Object> t = jdbc.queryForMap("SELECT status, shopify_sync_mode FROM transfers WHERE id = ?",
+            ev.get("transfer_id"));
+        assertThat(t.get("status")).isEqualTo("sent");
+        assertThat(t.get("shopify_sync_mode")).isEqualTo("leave");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM transfer_shopify_syncs WHERE transfer_id = ?",
+            Integer.class, ev.get("transfer_id"))).isZero();
     }
 
     // ── start ────────────────────────────────────────────────────────────────

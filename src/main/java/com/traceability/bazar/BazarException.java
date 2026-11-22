@@ -11,7 +11,6 @@ public class BazarException extends RuntimeException {
         BAZAR_NOT_ENABLED,
         BAZAR_EVENT_NOT_FOUND,
         BAZAR_INVALID_INPUT,
-        BAZAR_LEAVE_MODE_UNSUPPORTED,
         BAZAR_LOCATION_NOT_FOUND,
         BAZAR_LOCATION_NOT_EVENT,
         BAZAR_LOCATION_NAME_TAKEN,
@@ -69,7 +68,10 @@ public class BazarException extends RuntimeException {
         BAZAR_SEND_CLOSED,
         // B7d-2 — bring back by count
         BAZAR_NOT_ENOUGH_UNTAGGED,
-        BAZAR_PIECE_HAS_BARCODE
+        BAZAR_PIECE_HAS_BARCODE,
+        // B8 — online stock per bazar
+        BAZAR_ONLINE_STOCK_CONFLICT,
+        BAZAR_ONLINE_STOCK_LOCKED
     }
 
     private final Code       code;

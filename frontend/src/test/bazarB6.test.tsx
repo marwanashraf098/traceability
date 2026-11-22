@@ -557,7 +557,7 @@ describe('Sidebar — Bazar only for bazar tenants', () => {
 })
 
 describe('New event', () => {
-  test('creates with the chosen methods and roles, never a Shopify mode; says pieces leave online stock', async () => {
+  test('creates with the chosen methods and roles, default Remove from online stock (no mode sent); says pieces leave online stock', async () => {
     setAccessToken(fakeJwt('owner'))
     install(
       on('GET', '/locations', () => json(200, [])),
@@ -570,7 +570,7 @@ describe('New event', () => {
     const user = userEvent.setup()
     expect(await screen.findByTestId('bazar-remove-note')).toHaveTextContent("Bazar pieces leave online stock while they're at the bazar")
     expect(screen.queryByText(/Leave online stock as it is/i)).not.toBeInTheDocument()
-    expect(screen.queryAllByRole('radio')).toHaveLength(2)   // only the location choice — no Shopify-mode radios
+    expect(screen.queryAllByRole('radio')).toHaveLength(4)   // the location choice + B8 online stock (Remove checked by default)
     await user.type(screen.getByLabelText('Event name'), 'Zamalek Winter Bazar')
     await user.type(screen.getByLabelText('Location name'), 'Zamalek Hall')
     await user.click(screen.getByText('Card'))        // untick Card

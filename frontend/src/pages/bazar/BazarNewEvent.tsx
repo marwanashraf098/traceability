@@ -6,8 +6,9 @@ import {
 } from 'lucide-react'
 import { listLocations, type LocationRow } from '../../api'
 import {
-  BazarError, createBazarEvent, METHOD_ORDER, type PaymentMethod, type SellerRole,
+  BazarError, createBazarEvent, METHOD_ORDER, type OnlineStock, type PaymentMethod, type SellerRole,
 } from '../../bazar/api'
+import { OnlineStockCards, OnlineStockPhonePair } from './OnlineStock'
 import { Button, Input, Modal, cn } from '../../components/ui'
 import RangeCalendar from './r1/RangeCalendar'
 import { cairoToday, dayCount, daysFrom } from './r1/overviewState'
@@ -19,9 +20,9 @@ type Icon = LucideIcon
 const METHOD_ICON: Record<PaymentMethod, Icon> = { cash: Banknote, instapay: Smartphone, card: CreditCard }
 const ROLE_ICON: Record<SellerRole, Icon> = { owner: Crown, manager: UserCog, worker: Users }
 
-/** A location B1 accepts for a bazar: type 'event', never the warehouse, never a Shopify location, remove mode. */
-function isEventLocation(l: LocationRow & { shopify_sync_mode?: string }) {
-  return l.type === 'event' && !l.is_fulfillment && !l.shopify_location_id && l.shopify_sync_mode !== 'leave'
+/** A location a bazar accepts: type 'event', never the warehouse, never a Shopify location (either online stock mode — B8). */
+function isEventLocation(l: LocationRow) {
+  return l.type === 'event' && !l.is_fulfillment && !l.shopify_location_id
 }
 
 /** Square 6px tick box (bazar-only). */
@@ -97,7 +98,7 @@ function StepsBar({ phone }: { phone: boolean }) {
   )
 }
 
-/** Bazar POS — /bazar/new (R1 restyle). Same fields, validation and request as before; remove mode only. */
+/** Bazar POS — /bazar/new (R1 restyle). B8: section 5 "Online stock" — Remove from online stock (default) / Keep showing online. */
 export default function BazarNewEvent() {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
@@ -113,6 +114,7 @@ export default function BazarNewEvent() {
   const [endsOn, setEndsOn] = useState(today)
   const [methods, setMethods] = useState<PaymentMethod[]>(['cash', 'instapay', 'card'])
   const [roles, setRoles] = useState<SellerRole[]>(['owner', 'manager', 'worker'])
+  const [online, setOnline] = useState<OnlineStock>('remove')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [whereOpen, setWhereOpen] = useState(false)
@@ -143,6 +145,8 @@ export default function BazarNewEvent() {
         locationName: where === 'new' ? locationName.trim() : null,
         paymentMethods: METHOD_ORDER.filter(m => methods.includes(m)),
         sellerRoles: ROLES.filter(r => roles.includes(r)),
+        // B8: the default (Remove from online stock) sends no mode — the server's default; Keep sends 'leave'.
+        ...(online === 'leave' ? { shopifySyncMode: 'leave' as const } : {}),
       })
       navigate(`/bazar/${ev.id}`)
     } catch (err) {
@@ -229,9 +233,9 @@ export default function BazarNewEvent() {
     </div>
   )
 
-  const removeNote = (
-    <p className="text-small text-muted" data-testid="bazar-remove-note">{t('bazar.form.removeNote')}</p>
-  )
+  const removeNote = online === 'remove'
+    ? <p className="text-small text-muted" data-testid="bazar-remove-note">{t('bazar.form.removeNote')}</p>
+    : <p className="text-small text-muted" data-testid="bazar-keep-note">{t('bazar.online.keepNote')}</p>
 
   const errorLine = error && <p role="alert" className="text-body text-critical">{error}</p>
   const createLabel = t('bazar.r1.form.create')
@@ -269,6 +273,11 @@ export default function BazarNewEvent() {
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2"><Eyebrow>{t('bazar.form.sellers')}</Eyebrow></legend>
           {roleTiles}
+        </fieldset>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2"><Eyebrow>{t('bazar.online.title')}</Eyebrow></legend>
+          <OnlineStockPhonePair value={online} onChange={setOnline} />
+          <span className="text-small text-muted">{t(`bazar.online.${online}.desc`)}</span>
         </fieldset>
         {removeNote}
         {errorLine}
@@ -331,6 +340,9 @@ export default function BazarNewEvent() {
           </fieldset>
         </Section>
       </div>
+      <Section n={5} title={t('bazar.online.title')} sub={t('bazar.online.sub')}>
+        <OnlineStockCards value={online} onChange={setOnline} />
+      </Section>
 
       {errorLine}
       <div className="bg-grey-900 text-[#F2F4F7] rounded-2xl px-4 py-3.5 flex items-center gap-4 flex-wrap" data-testid="bazar-preview">
@@ -345,6 +357,9 @@ export default function BazarNewEvent() {
         <span className="flex items-center gap-1.5 flex-wrap">
           {methodsText && <span className="px-2.5 py-1 rounded bg-white/[0.08] text-small text-grey-100">{methodsText}</span>}
           <span className="px-2.5 py-1 rounded bg-white/[0.08] text-small text-grey-100">{t('bazar.r1.form.roleCount', { count: roles.length })}</span>
+          <span className="px-2.5 py-1 rounded bg-white/[0.08] text-small text-grey-100" data-testid="bazar-preview-online">
+            {t(`bazar.online.${online}.preview`)}
+          </span>
         </span>
         <span className="flex items-center gap-2.5 ms-auto">
           <button type="button" onClick={() => navigate('/bazar')}

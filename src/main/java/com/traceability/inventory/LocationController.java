@@ -118,6 +118,8 @@ public class LocationController {
      * Issue 2 — what happens to Shopify while stock sits at this (non-main) location: 'remove' (the
      * units leave the Traced Main Warehouse count when sent here) or 'leave' (Shopify unchanged).
      * A transfer snapshots the mode when it is sent, so a change applies to later transfers only.
+     * Bazar B8: while a bazar at this location hasn't been sent yet, the mode is that bazar's online stock choice —
+     * changing it to the other mode is refused (409 BAZAR_ONLINE_STOCK_CONFLICT, BazarOnlineStock).
      */
     @PutMapping("/{id}/shopify-sync-mode")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -129,11 +131,16 @@ public class LocationController {
         }
         return tx.execute(status -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?", id, tenantId);
+                "SELECT is_fulfillment, shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR UPDATE",
+                id, tenantId);
             if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Location not found");
             if (Boolean.TRUE.equals(rows.get(0).get("is_fulfillment"))) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "The main warehouse is always counted in Shopify — this setting is for other locations.");
+            }
+            if (!mode.equals(rows.get(0).get("shopify_sync_mode"))
+                    && com.traceability.bazar.BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, id, null) > 0) {
+                throw com.traceability.bazar.BazarOnlineStock.conflict();
             }
             jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, id, tenantId);
             return Map.<String, Object>of("id", id.toString(), "shopify_sync_mode", mode);

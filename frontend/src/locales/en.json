@@ -6594,6 +6594,31 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "online": {
+      "title": "Online stock",
+      "sub": "What happens to these pieces in your Shopify store while they're at the bazar.",
+      "default": "Default",
+      "remove": {
+        "title": "Remove from online stock",
+        "desc": "While pieces are at the bazar they can't sell online. Leftovers go back when the bazar ends.",
+        "phone": "Remove online · Default",
+        "preview": "Off online stock",
+        "tag": "Off online"
+      },
+      "leave": {
+        "title": "Keep showing online",
+        "desc": "Your Shopify stock isn't touched when pieces go to the bazar. Pieces sold at the bazar come off your online stock automatically.",
+        "phone": "Keep online",
+        "preview": "Shown online",
+        "tag": "Shown online"
+      },
+      "keepNote": "Bazar pieces stay in your online stock while they're at the bazar.",
+      "row": "Online stock",
+      "change": "Change",
+      "locked": "Can't be changed once the stock is sent.",
+      "dialogTitle": "Online stock for this bazar",
+      "save": "Save"
+    },
     "r4": {
       "today": "Today",
       "sellTitle": "Selling · {{name}}",
@@ -7063,6 +7088,8 @@
       "confirmTitle": "Mark as sent?",
       "confirmBody_one": "{{count}} piece leaves for the bazar. It comes off your online stock in Shopify until it's back. You can't scan more pieces out after this.",
       "confirmBody_other": "{{count}} pieces leave for the bazar. They come off your online stock in Shopify until they're back. You can't scan more pieces out after this.",
+      "confirmBodyKeep_one": "{{count}} piece leaves for the bazar. Your Shopify stock isn't touched. You can't scan more pieces out after this.",
+      "confirmBodyKeep_other": "{{count}} pieces leave for the bazar. Your Shopify stock isn't touched. You can't scan more pieces out after this.",
       "scanDone": "Done — back to the event"
     },
     "start": {
