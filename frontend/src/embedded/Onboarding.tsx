@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   Page, Card, BlockStack, InlineStack, Text, Button, TextField, Checkbox, Banner, Badge, Spinner, Link, Box,
+  ChoiceList,
 } from '@shopify/polaris'
 import { onboardingCopy, type OnboardingCopy } from './onboardingCopy'
 import type { EmbeddedLang } from './embeddedLocale'
@@ -103,6 +104,8 @@ export default function Onboarding({ lang, authFetch, onSignedUp }: {
   const [prefill, setPrefill] = useState<Prefill | null>(null)
   const [form, setForm] = useState<Form>({ tenantName: '', name: '', phone: '', email: '', password: '', consent: false })
   const [errors, setErrors] = useState<FieldErrors>({})
+  // Bazar B9a — "Sell at a bazar" sends intent 'bazar'; the default sends no intent (the body is as before).
+  const [purpose, setPurpose] = useState<'orders' | 'bazar'>('orders')
   const [banner, setBanner] = useState<null | 'emailTaken' | 'failed' | 'rules' | { message: string }>(null)
   const [busy, setBusy] = useState(false)
   const prefilled = useRef(false)
@@ -141,7 +144,8 @@ export default function Onboarding({ lang, authFetch, onSignedUp }: {
       const r = await authFetch('/api/v1/embedded/onboarding/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, tenantName: form.tenantName.trim(), email: form.email.trim() }),
+        body: JSON.stringify({ ...form, tenantName: form.tenantName.trim(), email: form.email.trim(),
+                               ...(purpose === 'bazar' ? { intent: 'bazar' } : {}) }),
       })
       if (r.ok) {
         const body = await r.json() as { email: string; signInUrl: string; signInValidMinutes: number }
@@ -240,6 +244,9 @@ export default function Onboarding({ lang, authFetch, onSignedUp }: {
                   <ShopChip copy={copy} shop={shop} name={null} />
                 </BlockStack>
               )}
+              <ChoiceList title={copy.purposeTitle} selected={[purpose]}
+                          onChange={v => setPurpose(v[0] === 'bazar' ? 'bazar' : 'orders')}
+                          choices={[{ label: copy.purposeOrders, value: 'orders' }, { label: copy.purposeBazar, value: 'bazar' }]} />
               <TextField label={copy.businessName} value={form.tenantName} onChange={v => set('tenantName', v)}
                          autoComplete="organization" error={errors.tenantName} />
               <TextField label={copy.yourName} value={form.name} onChange={v => set('name', v)} autoComplete="name" />

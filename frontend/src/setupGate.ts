@@ -10,8 +10,9 @@ import { request, type SetupStep } from './api'
  */
 
 /** Onboarding O2 — the post-gate screen an owner goes to once (GET /me setupIntro; the backend's
- *  OnboardingProgressService.setupIntro is the one rule): Flow-3 courier, then Flow-4 "You're connected". */
-export type SetupIntro = 'courier' | 'ready' | null
+ *  OnboardingProgressService.setupIntro is the one rule): Flow-3 courier, then Flow-4 "You're connected" — or, for a
+ *  store that signed up to sell at a bazar (Bazar B9a), 'bazar' (/setup/bazar) instead of both. */
+export type SetupIntro = 'courier' | 'ready' | 'bazar' | null
 
 export interface SetupState {
   step: SetupStep
@@ -33,7 +34,7 @@ export function loadSetupState(): Promise<SetupState> {
       .then(me => ({
         step: (me?.setupStep === 'shopify' || me?.setupStep === 'address') ? me.setupStep : null,
         warehouseAddressNeeded: me?.warehouseAddressNeeded === true,
-        intro: (me?.setupIntro === 'courier' || me?.setupIntro === 'ready') ? me.setupIntro : null,
+        intro: (me?.setupIntro === 'courier' || me?.setupIntro === 'ready' || me?.setupIntro === 'bazar') ? me.setupIntro : null,
         name: typeof me?.name === 'string' && me.name.trim() ? me.name.trim() : null,
       }) as SetupState)
       .catch(() => OPEN)

@@ -79,7 +79,7 @@ public class EmbeddedOnboardingService {
         requireUnlinked(shop);
         ObjectNode attribution = JsonNodeFactory.instance.objectNode().put("utmSource", ATTRIBUTION_SOURCE);
         SignupRequest req = new SignupRequest(form.tenantName(), form.name(), form.email(), form.phone(),
-                form.password(), form.consent(), attribution);
+                form.password(), form.consent(), attribution, form.intent());
         String phone = authService.validateSignup(req);
 
         ShopifyGateway.TokenResponse tokens = gateway.exchangeSessionToken(shop, sessionToken);

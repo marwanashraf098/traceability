@@ -48,13 +48,17 @@ function SetupGateInner({ children }: { children: ReactNode }) {
  * station mode never get here (SetupGate), and the backend never sends an intro for the demo / review
  * tenants, a hidden card or a tenant that has seen it.
  */
+const INTRO_PATH: Record<Exclude<SetupIntro, null>, string> = {
+  courier: '/setup/courier', ready: '/setup/ready', bazar: '/setup/bazar',
+}
+
 function IntroRedirect({ intro, children }: { intro: SetupIntro; children: ReactNode }) {
   const navigate = useNavigate()
   const go = getRoleFromToken() === 'owner' ? intro : null
   const [checked, setChecked] = useState(go === null)
   useEffect(() => {
     if (go === null) return
-    if (takeIntroRedirect(go)) navigate(go === 'courier' ? '/setup/courier' : '/setup/ready', { replace: true })
+    if (takeIntroRedirect(go)) navigate(INTRO_PATH[go], { replace: true })
     else setChecked(true)
   }, [go, navigate])
   if (!checked) return <GateSpinner />
