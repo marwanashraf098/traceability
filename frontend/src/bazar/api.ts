@@ -49,9 +49,18 @@ export interface BazarToday extends BazarTotals {
   business_day: string
 }
 
+/** B8 — online stock per bazar: 'remove' = off online stock while at the bazar (default), 'leave' = kept showing online. */
+export type OnlineStock = 'remove' | 'leave'
+
 export interface BazarEventDetail extends BazarEventRow {
   transfer_sent_at: string | null
   transfer_shopify_sync_mode: string | null
+  /** B8: the location's mode (the bazar's choice until Mark sent). */
+  location_shopify_sync_mode?: OnlineStock
+  /** B8: the send's snapshot once sent, else the location's. */
+  online_stock?: OnlineStock
+  /** B8: true once the event isn't a draft or its transfer isn't being prepared — the choice can't change. */
+  online_stock_locked?: boolean
   payment_methods: PaymentMethod[]
   seller_roles: SellerRole[]
   discount_pct: string | number | null
@@ -246,10 +255,17 @@ export interface CreateBazarEvent {
   locationName?: string | null
   paymentMethods: PaymentMethod[]
   sellerRoles: SellerRole[]
+  /** B8 — omitted = 'remove'. */
+  shopifySyncMode?: OnlineStock
 }
 
 export function createBazarEvent(req: CreateBazarEvent) {
   return bazarFetch<BazarEventDetail>('/bazar-events', { method: 'POST', body: JSON.stringify(req) })
+}
+
+/** B8 — change the online stock choice; only while the event is a draft and nothing was sent (409 after). */
+export function setBazarOnlineStock(eventId: string, mode: OnlineStock) {
+  return bazarFetch<BazarEventDetail>(`${base(eventId)}/online-stock`, { method: 'PUT', body: JSON.stringify({ mode }) })
 }
 
 /** Like the transfer scan-out: 200 with success / code. A coded refusal (event ended, …) comes back the same way. */
@@ -698,7 +714,7 @@ type Money2 = string | number
 
 export interface BazarReport {
   event: { id: string; name: string; status: BazarStatus; starts_on: string; ends_on: string; started_at: string | null;
-           ended_at: string | null; location_name: string }
+           ended_at: string | null; location_name: string; online_stock?: OnlineStock }
   revenue: Money2
   money_in: Money2
   pieces_sold: number

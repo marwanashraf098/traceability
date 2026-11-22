@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { OnlineStockTag } from './OnlineStock'
 import { ArrowLeft, Download } from 'lucide-react'
 import { BazarError, downloadBazarCustomers, getBazarReport, type BazarReport } from '../../bazar/api'
 import { toNumber, transferCode } from '../../bazar/format'
@@ -73,6 +74,7 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
           <Chip tone={TONE_CHIP[STATUS_TONE[r.event.status]]} testId="report-status">
             {t(`bazar.status.${r.event.status}`)}{transferClosed ? ` · ${t('bazar.r2.report.transferClosed')}` : ''}
           </Chip>
+          <OnlineStockTag mode={r.event.online_stock} />
         </div>
         <span className="text-body text-muted">
           {r.event.location_name} · <span>{rangeLabel(r.event.starts_on, r.event.ends_on, lang)}</span>

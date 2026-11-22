@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Loader2, ScanLine } from 'lucide-react'
 import {
-  BazarError, markBazarSent, orderedMethods, startBazarEvent, type BazarEventDetail,
+  BazarError, markBazarSent, orderedMethods, setBazarOnlineStock, startBazarEvent, type BazarEventDetail, type OnlineStock,
 } from '../../../bazar/api'
+import { OnlineStockCards, OnlineStockTag } from '../OnlineStock'
 import { toNumber, transferCode } from '../../../bazar/format'
 import { resetCapabilitiesCache } from '../../../capabilities'
 import { Button, Modal, cn } from '../../../components/ui'
@@ -38,6 +39,24 @@ export function SetupView({ ev, reload, onChanged }: {
   const sent = ev.transfer_status === 'sent'
   const pieces = ev.counts.sent
   const allPriced = prices.rows != null && prices.rows.length > 0 && totals.missing === 0
+  const online: OnlineStock = ev.online_stock === 'leave' ? 'leave' : 'remove'
+  const [changing, setChanging] = useState<OnlineStock | null>(null)
+  const [savingOnline, setSavingOnline] = useState(false)
+  const [onlineError, setOnlineError] = useState<string | null>(null)
+
+  async function saveOnline() {
+    if (!changing) return
+    setSavingOnline(true)
+    setOnlineError(null)
+    try {
+      onChanged(await setBazarOnlineStock(ev.id, changing))
+      setChanging(null)
+    } catch (e) {
+      setOnlineError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+    } finally {
+      setSavingOnline(false)
+    }
+  }
 
   async function act(kind: 'send' | 'start') {
     setBusy(kind)
@@ -98,6 +117,20 @@ export function SetupView({ ev, reload, onChanged }: {
             )}
             {preparing && pieces === 0 && <p className="text-small text-muted">{t('bazar.transfer.scanFirst')}</p>}
             <p className="text-small text-muted">{t('bazar.transfer.note')}</p>
+            <div className="flex items-center gap-3 rounded-[10px] border border-line px-3 py-2.5" data-testid="bazar-online-row">
+              <span className="flex flex-col min-w-0 me-auto">
+                <span className="text-small text-muted">{t('bazar.online.row')}</span>
+                <span className="text-body font-semibold text-primary">{t(`bazar.online.${online}.title`)}</span>
+                {ev.online_stock_locked && <span className="text-small text-muted">{t('bazar.online.locked')}</span>}
+              </span>
+              <OnlineStockTag mode={online} />
+              {!ev.online_stock_locked && (
+                <button type="button" className="text-body font-semibold text-trace-blue" data-testid="bazar-online-change"
+                        onClick={() => { setOnlineError(null); setChanging(online) }}>
+                  {t('bazar.online.change')}
+                </button>
+              )}
+            </div>
           </Card>
           <SellersCard eventId={ev.id} />
         </div>
@@ -130,9 +163,24 @@ export function SetupView({ ev, reload, onChanged }: {
         </span>
       </div>
 
+      {changing && (
+        <Modal title={t('bazar.online.dialogTitle')} onClose={() => setChanging(null)}>
+          <div className="flex flex-col gap-4" data-testid="bazar-online-dialog">
+            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change" />
+            {onlineError && <p role="alert" className="text-body text-critical">{onlineError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setChanging(null)}>{t('bazar.form.cancel')}</Button>
+              <Button onClick={saveOnline} loading={savingOnline}>{t('bazar.online.save')}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {confirmSend && (
         <Modal title={t('bazar.transfer.confirmTitle')} onClose={() => setConfirmSend(false)}>
-          <p className="text-body text-primary">{t('bazar.transfer.confirmBody', { count: pieces })}</p>
+          <p className="text-body text-primary">
+            {t(online === 'leave' ? 'bazar.transfer.confirmBodyKeep' : 'bazar.transfer.confirmBody', { count: pieces })}
+          </p>
           <div className="flex justify-end gap-2 mt-5">
             <Button variant="secondary" onClick={() => setConfirmSend(false)}>{t('bazar.form.cancel')}</Button>
             <Button onClick={() => act('send')} loading={busy === 'send'}>{t('bazar.transfer.markSent')}</Button>

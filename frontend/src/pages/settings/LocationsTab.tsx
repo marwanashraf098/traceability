@@ -108,9 +108,9 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
  * transfer snapshots this when it is sent, so a change applies to the next transfer.
  */
 function SyncModeSelect({ loc, onSaved }: { loc: Location; onSaved: (mode: 'remove' | 'leave') => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(false)
+  const [err, setErr] = useState<string | false>(false)
   if (loc.is_fulfillment) {
     return <span className="text-xs text-muted">{t('locations.syncMode.mainNa')}</span>
   }
@@ -122,10 +122,16 @@ function SyncModeSelect({ loc, onSaved }: { loc: Location; onSaved: (mode: 'remo
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
       })
-      if (!res.ok) throw new Error(res.statusText)
+      if (!res.ok) {
+        // Bazar B8: a location with an unsent bazar refuses the other mode (409 with a coded message) — show it.
+        const body = await res.json().catch(() => null) as { message_en?: string; message_ar?: string } | null
+        const msg = i18n.language === 'ar' ? body?.message_ar : body?.message_en
+        setErr(msg || t('common.error'))
+        return
+      }
       onSaved(mode)
     } catch {
-      setErr(true)
+      setErr(t('common.error'))
     } finally {
       setBusy(false)
     }
@@ -143,7 +149,7 @@ function SyncModeSelect({ loc, onSaved }: { loc: Location; onSaved: (mode: 'remo
         <option value="remove">{t('locations.syncMode.remove')}</option>
         <option value="leave">{t('locations.syncMode.leave')}</option>
       </select>
-      {err && <p className="text-xs text-danger mt-0.5">{t('common.error')}</p>}
+      {err && <p className="text-xs text-danger mt-0.5" role="alert">{err}</p>}
     </div>
   )
 }

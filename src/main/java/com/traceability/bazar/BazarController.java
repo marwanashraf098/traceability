@@ -87,6 +87,13 @@ public class BazarController {
         return bazar.markSent(eventId, principal.userId());
     }
 
+    /** B8 — Remove from online stock / Keep showing online; only while draft and preparing (locked after send). */
+    @PutMapping("/{eventId}/online-stock")
+    public Map<String, Object> setOnlineStock(@PathVariable UUID eventId, @RequestBody OnlineStockRequest req,
+                                              @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.setOnlineStock(eventId, req == null ? null : req.mode(), principal.userId());
+    }
+
     @PostMapping("/{eventId}/start")
     public Map<String, Object> start(@PathVariable UUID eventId,
                                      @AuthenticationPrincipal CustomUserDetails principal) {
@@ -123,6 +130,8 @@ public class BazarController {
                                 String shopifySyncMode, BigDecimal discountPct, BigDecimal roundTo) {}
 
     public record ScanRequest(String barcode, UUID relayEventId) {}
+
+    public record OnlineStockRequest(String mode) {}
 
     public record CountRequest(@com.fasterxml.jackson.annotation.JsonProperty("variant_id") UUID variantId,
                                Integer quantity,

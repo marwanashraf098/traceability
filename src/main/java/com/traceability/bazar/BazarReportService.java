@@ -71,6 +71,7 @@ public class BazarReportService {
         e.put("started_at", ev.get("started_at"));
         e.put("ended_at", ev.get("ended_at"));
         e.put("location_name", ev.get("location_name"));
+        e.put("online_stock", ev.get("online_stock"));   // B8: the send's snapshot, else the location's (before send)
         out.put("event", e);
 
         out.put("revenue", revenue);
@@ -277,8 +278,10 @@ public class BazarReportService {
     private Map<String, Object> event(UUID tenantId, UUID eventId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT e.id, e.name, e.status, e.starts_on, e.ends_on, e.started_at, e.ended_at, e.transfer_id, " +
-            "       e.location_id, e.payment_methods, l.name AS location_name " +
-            "FROM bazar_events e JOIN locations l ON l.id = e.location_id WHERE e.id = ? AND e.tenant_id = ?",
+            "       e.location_id, e.payment_methods, l.name AS location_name, " +
+            "       COALESCE(t.shopify_sync_mode, l.shopify_sync_mode) AS online_stock " +
+            "FROM bazar_events e JOIN locations l ON l.id = e.location_id " +
+            "JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id WHERE e.id = ? AND e.tenant_id = ?",
             eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
