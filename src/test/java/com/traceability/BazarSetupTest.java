@@ -381,6 +381,11 @@ class BazarSetupTest {
         receive(a, eventA, "req-i1", List.of(line(a.shirtS(), 2, true)), HttpStatus.OK);
         assertThat(json(send(HttpMethod.GET, "/api/v1/bazar-setup", b.token(), null), HttpStatus.OK)).containsEntry("batch", null);
         assertThat(send(HttpMethod.GET, "/api/v1/bazar-setup/lower", b.token(), null).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(send(HttpMethod.GET, "/api/v1/bazar-setup/lower.csv", b.token(), null).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        // B's picker lists only B's catalog.
+        when(stock.topVariantsByStock(any(), any(), any(), any(), anyInt())).thenReturn(new Page(List.of(), false, null));
+        assertThat(otherByVariant(json(send(HttpMethod.GET, "/api/v1/bazar-setup/products", b.token(), null), HttpStatus.OK)).keySet())
+            .containsExactlyInAnyOrder(b.shirtS().toString(), b.shirtM().toString(), b.scarf().toString());
         // B can't receive into A's event, nor A's variants.
         ResponseEntity<String> r = send(HttpMethod.POST, "/api/v1/bazar-setup/receive", b.token(),
             Map.of("eventId", eventA, "requestId", "req-i1-b", "lines", List.of(line(b.shirtS(), 1, true))));
@@ -391,6 +396,26 @@ class BazarSetupTest {
         assertThat(r2.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(r2.getBody()).contains("BAZAR_VARIANT_NOT_FOUND");
         assertThat(count("SELECT count(*) FROM pieces WHERE tenant_id = ?", b.tenant())).isZero();
+
+        // Once B has its own batch, B's list and CSV show only B's pieces, and A's show only A's.
+        receive(b, eventB, "req-i1-d", List.of(line(b.scarf(), 1, false)), HttpStatus.OK);
+        assertThat(lowerVariants(b)).containsExactly(b.scarf().toString());
+        assertThat(lowerVariants(a)).containsExactly(a.shirtS().toString());
+        String csvB = new String(http.exchange(base() + "/api/v1/bazar-setup/lower.csv", HttpMethod.GET,
+            new HttpEntity<>(auth(b.token())), byte[].class).getBody(), StandardCharsets.UTF_8);
+        assertThat(csvB).contains("SCARF-i1b").doesNotContain("i1a");
+        String csvA = new String(http.exchange(base() + "/api/v1/bazar-setup/lower.csv", HttpMethod.GET,
+            new HttpEntity<>(auth(a.token())), byte[].class).getBody(), StandardCharsets.UTF_8);
+        assertThat(csvA).contains("SHIRT-S-i1a").doesNotContain("i1b");
+        assertThat(json(send(HttpMethod.GET, "/api/v1/bazar-setup", b.token(), null), HttpStatus.OK).get("batch").toString())
+            .contains(eventB.toString()).doesNotContain(eventA.toString());
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> lowerVariants(Shop s) throws Exception {
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) json(send(HttpMethod.GET, "/api/v1/bazar-setup/lower",
+            s.token(), null), HttpStatus.OK).get("rows");
+        return rows.stream().map(r -> String.valueOf(r.get("variantId"))).toList();
     }
 
     // ── c1 ───────────────────────────────────────────────────────────────────
