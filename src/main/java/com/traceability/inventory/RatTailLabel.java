@@ -17,7 +17,7 @@ import java.util.List;
  * <pre>
  *   x 0–20 mm   Flag A — Code 128 of the P-code, bars y 4.3–10.7 mm, the code under it (5.5 pt, baseline 1.75)
  *   x 20–40 mm  the tail — never printed
- *   x 40–60 mm  Flag B — name 6.5 pt bold (→ 5 → "…"), variant 6 pt (→ 4.75 → "…"), SKU 6 pt; no price
+ *   x 40–60 mm  Flag B — the name (bold 6 pt, up to 2 lines), then "variant · SKU" (5.5 pt); no price
  * </pre>
  * All ink stays ≥ 1 mm inside each flag. Both flags print the same way up.
  *
@@ -27,13 +27,20 @@ import java.util.List;
  * the 0.24 pt dot grid, so a 300 dpi printer draws every bar edge on a dot boundary with nothing resampled. The
  * symbol is centred in Flag A by its actual module count.
  *
- * <p><b>Text</b> direction: when the name or variant contains Arabic, the RTL baselines are used (they leave room for
- * the Arabic letters' ink envelope — a Latin-first name with Arabic in it needs the same room), and each Flag B line
- * is aligned by its own direction: right-to-left lines end at 58.6 mm, left-to-right lines (the SKU always) start at
- * 41.4 mm. Shaping and bidi are LabelTextFitter's (ICU4J), fonts LabelFonts' (no new font).
+ * <p><b>Flag B</b> (piece label and separator alike): lines 1–2 the product name, bold 6 pt, wrapped at word
+ * boundaries to at most 2 lines — when it needs more (or one word is wider than a line) the whole name shrinks in
+ * 0.25 pt steps down to 5 pt until it fits 2 lines — and "…" only when it still doesn't fit at 5 pt. Line 3 the
+ * variant and the SKU joined with " | " (regular 5.5 pt → 4.75 →
+ * "…"; "Default Title" hidden, an empty part skipped, nothing at all → no line 3). The lines that exist are centred
+ * as a block in the 1–11 mm safe area, line to line by the font's ink envelope (Arabic's when the name or variant
+ * contains Arabic — its letters and tashkeel reach further) plus a fixed gap, so lines never touch.
+ *
+ * <p>Direction: when the name or variant contains Arabic, every Flag B line ends at 58.6 mm (right-aligned);
+ * otherwise every line starts at 41.4 mm. Each line's own bidi keeps a Latin SKU in Latin order. Shaping and bidi
+ * are LabelTextFitter's (ICU4J), fonts LabelFonts' (no new font).
  *
  * <p><b>Separator</b> (label runs and tag stock print one before each group): no barcode and no code — Flag A shows
- * only "× N" (the group's label count), Flag B the name and variant (no SKU).
+ * only "× N" (the group's label count), Flag B the same lines as the group's labels.
  */
 public final class RatTailLabel {
 
@@ -55,14 +62,19 @@ public final class RatTailLabel {
 
     static final float TEXT_LEFT_MM = 41.4f, TEXT_RIGHT_MM = 58.6f;
     static final float TEXT_MAX_WIDTH_MM = TEXT_RIGHT_MM - TEXT_LEFT_MM;   // 17.2
-    static final float NAME_START = 6.5f, NAME_FLOOR = 5f;
-    static final float VARIANT_START = 6f, VARIANT_FLOOR = 4.75f;
-    static final float SKU_SIZE = 6f;
-
-    /** Piece label baselines (mm): name / variant / SKU, and name / SKU when the variant is hidden. */
-    static final float[] PIECE_LTR = {8.45f, 5.4f, 2.3f}, PIECE_RTL = {8.6f, 5.2f, 2.2f}, PIECE_NO_VARIANT = {7.2f, 3.9f};
-    /** Separator baselines (mm): name / variant. */
-    static final float[] SEPARATOR_LTR = {7.2f, 3.9f}, SEPARATOR_RTL = {7.4f, 3.8f};
+    /** Flag B's lines are centred in this band (the safe area, mm). */
+    static final float TEXT_BOTTOM_MM = SAFE_MM, TEXT_TOP_MM = HEIGHT_MM - SAFE_MM;
+    static final int NAME_MAX_LINES = 2;
+    static final float NAME_START = 6f, NAME_FLOOR = 5f, NAME_STEP = 0.25f;
+    static final float DETAIL_START = 5.5f, DETAIL_FLOOR = 4.75f;
+    static final String DETAIL_JOIN = " | ";
+    /** Clear space between one line's ink envelope and the next (mm). */
+    static final float LINE_GAP_MM = 0.35f;
+    /**
+     * Ink envelope per em, {ascent, descent}: Latin (NotoSans accents ≈ 0.944 above, descenders ≈ 0.24 below) and
+     * Arabic (letters +1.01 / −0.421, tashkeel inside). Three Arabic lines at full size: 9.6 mm ≤ the 10 mm band.
+     */
+    static final float[] LATIN_ENVELOPE = {0.96f, 0.27f}, ARABIC_ENVELOPE = {1.02f, 0.43f};
 
     private RatTailLabel() {}
 
@@ -71,7 +83,8 @@ public final class RatTailLabel {
         return spec != null && Math.abs(spec.widthMm() - WIDTH_MM) < 0.01f && Math.abs(spec.heightMm() - HEIGHT_MM) < 0.01f;
     }
 
-    public enum Row { CODE, NAME, VARIANT, SKU, COUNT }
+    /** NAME = a line of the product name (one or two); DETAIL = "variant | SKU". */
+    public enum Row { CODE, NAME, DETAIL, COUNT }
 
     /** One bar: x and width in points. */
     public record Bar(float x, float w) {}
@@ -127,42 +140,26 @@ public final class RatTailLabel {
 
     public static Layout piece(String shortCode, String productTitle, String variantTitle, String sku) {
         String code = clean(shortCode);
-        Texts t = texts(productTitle, variantTitle);
-        String skuText = clean(sku);
         List<Line> lines = new ArrayList<>();
-        boolean ellipsized = false;
-
         LabelTextFitter.Fit c = LabelTextFitter.fit(code, LabelFonts.Face.REGULAR, CODE_SIZE, CODE_SIZE, 1, FLAG_A_END_MM * MM);
         lines.add(centredInFlagA(Row.CODE, c, CODE_BASELINE_MM));
-
-        float[] base = t.variant.isEmpty() ? PIECE_NO_VARIANT : (t.arabic ? PIECE_RTL : PIECE_LTR);
-        int i = 0;
-        if (!t.name.isEmpty()) ellipsized |= flagB(lines, Row.NAME, name(t.name), base[i]);
-        i++;
-        if (!t.variant.isEmpty()) {
-            ellipsized |= flagB(lines, Row.VARIANT, variant(t.variant), base[i]);
-            i++;
-        }
-        if (!skuText.isEmpty()) {
-            ellipsized |= flagB(lines, Row.SKU, LabelTextFitter.fit(skuText, LabelFonts.Face.REGULAR, SKU_SIZE, SKU_SIZE, 1,
-                TEXT_MAX_WIDTH_MM * MM, LabelTextFitter.Cut.GRAPHEME), base[i]);
-        }
+        boolean ellipsized = flagB(lines, productTitle, variantTitle, sku);
         return new Layout(WIDTH_MM * MM, HEIGHT_MM * MM, bars(code), List.copyOf(lines), ellipsized);
     }
 
-    /** The page before a group of {@code count} labels: "× N" on Flag A, name + variant on Flag B, no barcode. */
-    public static Layout separator(int count, String productTitle, String variantTitle) {
+    /** The page before a group of {@code count} labels: "× N" on Flag A, the group's Flag B, no barcode. */
+    public static Layout separator(int count, String productTitle, String variantTitle, String sku) {
         if (count < 1) throw new IllegalArgumentException("a separator heads at least one label");
-        Texts t = texts(productTitle, variantTitle);
         List<Line> lines = new ArrayList<>();
-        boolean ellipsized = false;
         LabelTextFitter.Fit n = LabelTextFitter.fit(countText(count), LabelFonts.Face.BOLD, COUNT_SIZE, COUNT_SIZE, 1,
             (FLAG_A_END_MM - 2 * SAFE_MM) * MM);
         lines.add(centredInFlagA(Row.COUNT, n, COUNT_BASELINE_MM));
-        float[] base = t.arabic ? SEPARATOR_RTL : SEPARATOR_LTR;
-        if (!t.name.isEmpty()) ellipsized |= flagB(lines, Row.NAME, name(t.name), base[0]);
-        if (!t.variant.isEmpty()) ellipsized |= flagB(lines, Row.VARIANT, variant(t.variant), base[1]);
+        boolean ellipsized = flagB(lines, productTitle, variantTitle, sku);
         return new Layout(WIDTH_MM * MM, HEIGHT_MM * MM, null, List.copyOf(lines), ellipsized);
+    }
+
+    public static Layout separator(int count, String productTitle, String variantTitle) {
+        return separator(count, productTitle, variantTitle, null);
     }
 
     /** "× 12" — U+00D7 MULTIPLICATION SIGN, a space, the count. */
@@ -172,38 +169,82 @@ public final class RatTailLabel {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private record Texts(String name, String variant, boolean arabic) {}
+    /** Name lines (≤ 2) and the "variant · SKU" line, before positioning. */
+    record FlagB(List<LabelTextFitter.Line> name, float nameSize, LabelTextFitter.Line detail, float detailSize,
+                 boolean arabic, boolean ellipsized) {}
 
     /** Same rules as PieceLabelLayout: "Default Title" hidden; a blank name takes the variant's place. */
-    private static Texts texts(String productTitle, String variantTitle) {
+    static FlagB flagBText(String productTitle, String variantTitle, String sku) {
         String name = clean(productTitle);
         String variant = clean(variantTitle);
         if ("Default Title".equalsIgnoreCase(variant)) variant = "";
         if (name.isEmpty()) { name = variant; variant = ""; }
-        return new Texts(name, variant, LabelFonts.containsArabic(name) || LabelFonts.containsArabic(variant));
+        boolean arabic = LabelFonts.containsArabic(name) || LabelFonts.containsArabic(variant);
+        float max = TEXT_MAX_WIDTH_MM * MM;
+
+        List<LabelTextFitter.Line> nameLines = List.of();
+        float nameSize = NAME_START;
+        boolean ellipsized = false;
+        if (!name.isEmpty()) {
+            while (nameSize > NAME_FLOOR + 0.001f && !fitsTwoLines(name, nameSize, max)) nameSize -= NAME_STEP;
+            LabelTextFitter.Fit f = LabelTextFitter.fit(name, LabelFonts.Face.BOLD, nameSize, nameSize, NAME_MAX_LINES, max);
+            nameLines = f.lines();
+            ellipsized = f.ellipsized();
+        }
+
+        String detail = String.join(DETAIL_JOIN, java.util.stream.Stream.of(variant, clean(sku))
+            .filter(x -> !x.isEmpty()).toList());
+        LabelTextFitter.Line detailLine = null;
+        float detailSize = DETAIL_START;
+        if (!detail.isEmpty()) {
+            LabelTextFitter.Fit f = LabelTextFitter.fit(detail, LabelFonts.Face.REGULAR, DETAIL_START, DETAIL_FLOOR, 1, max);
+            detailLine = f.lines().get(0);
+            detailSize = f.size();
+            ellipsized |= f.ellipsized();
+        }
+        return new FlagB(nameLines, nameSize, detailLine, detailSize, arabic, ellipsized);
     }
 
-    private static LabelTextFitter.Fit name(String name) {
-        return LabelTextFitter.fit(name, LabelFonts.Face.BOLD, NAME_START, NAME_FLOOR, 1, TEXT_MAX_WIDTH_MM * MM);
+    /** Positions Flag B: the lines centred as a block in 1–11 mm, aligned by the label's direction. */
+    private static boolean flagB(List<Line> out, String productTitle, String variantTitle, String sku) {
+        FlagB t = flagBText(productTitle, variantTitle, sku);
+        record Pending(Row row, LabelTextFitter.Line line, float size) {}
+        List<Pending> pending = new ArrayList<>();
+        for (LabelTextFitter.Line l : t.name()) pending.add(new Pending(Row.NAME, l, t.nameSize()));
+        if (t.detail() != null) pending.add(new Pending(Row.DETAIL, t.detail(), t.detailSize()));
+        if (pending.isEmpty()) return false;
+
+        float[] env = t.arabic() ? ARABIC_ENVELOPE : LATIN_ENVELOPE;
+        float gap = LINE_GAP_MM * MM;
+        float height = (pending.size() - 1) * gap;
+        for (Pending p : pending) height += (env[0] + env[1]) * p.size();
+        float top = (TEXT_BOTTOM_MM + TEXT_TOP_MM) / 2f * MM + height / 2f;
+        for (Pending p : pending) {
+            float baseline = top - env[0] * p.size();
+            LabelTextFitter.Line l = p.line();
+            float x = t.arabic() ? TEXT_RIGHT_MM * MM - l.width() : TEXT_LEFT_MM * MM;
+            out.add(new Line(p.row(), l.runs(), l.logical(), p.size(), x, baseline, l.width(), l.rtl()));
+            top = baseline - env[1] * p.size() - gap;
+        }
+        return t.ellipsized();
     }
 
-    private static LabelTextFitter.Fit variant(String variant) {
-        return LabelTextFitter.fit(variant, LabelFonts.Face.REGULAR, VARIANT_START, VARIANT_FLOOR, 1, TEXT_MAX_WIDTH_MM * MM);
+    /** At {@code size} every word fits a line and the name wraps into at most 2 lines. */
+    private static boolean fitsTwoLines(String name, float size, float max) {
+        return widestWord(name, size) <= max
+            && LabelTextFitter.wrap(name.replaceAll("\\s+", " "), LabelFonts.Face.BOLD, size, max).size() <= NAME_MAX_LINES;
+    }
+
+    private static float widestWord(String text, float size) {
+        float w = 0;
+        for (String word : text.split("\\s+")) w = Math.max(w, LabelTextFitter.measure(word, LabelFonts.Face.BOLD, size));
+        return w;
     }
 
     private static Line centredInFlagA(Row row, LabelTextFitter.Fit fit, float baselineMm) {
         LabelTextFitter.Line l = fit.lines().get(0);
         float x = (FLAG_A_END_MM * MM - l.width()) / 2f;
         return new Line(row, l.runs(), l.logical(), fit.size(), x, baselineMm * MM, l.width(), l.rtl());
-    }
-
-    /** One Flag B line: right-to-left ends at 58.6 mm, left-to-right starts at 41.4 mm. True when "…" was added. */
-    private static boolean flagB(List<Line> out, Row row, LabelTextFitter.Fit fit, float baselineMm) {
-        if (fit.lines().isEmpty()) return false;
-        LabelTextFitter.Line l = fit.lines().get(0);
-        float x = l.rtl() ? TEXT_RIGHT_MM * MM - l.width() : TEXT_LEFT_MM * MM;
-        out.add(new Line(row, l.runs(), l.logical(), fit.size(), x, baselineMm * MM, l.width(), l.rtl()));
-        return fit.ellipsized();
     }
 
     private static String clean(String s) {

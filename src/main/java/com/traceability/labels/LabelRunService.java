@@ -397,7 +397,7 @@ public class LabelRunService {
         if (part < 1 || part > parts.size()) throw LabelCodeException.invalidPart();
         List<LabelPdfRenderer.Page> pages = new ArrayList<>();
         for (Chunk c : parts.get(part - 1)) {
-            pages.add(new LabelPdfRenderer.Separator(c.productTitle(), c.variantTitle(), c.codes().size()));  // the group's HEADER
+            pages.add(new LabelPdfRenderer.Separator(c.productTitle(), c.variantTitle(), c.codes().size(), c.sku()));  // the group's HEADER
             for (String code : c.codes()) {
                 pages.add(new LabelPdfRenderer.Piece(code, c.productTitle(), c.variantTitle(), c.sku()));
             }

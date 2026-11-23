@@ -14,6 +14,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.PDFTextStripperByArea;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -179,8 +180,17 @@ class LabelSizeWiringTest {
         }
         assertAllPages(labelService.generatePieceLabel(pieceIds(s).get(0), null, null), 60, 12, 1);
         List<String> texts = pageTexts(labelService.generateSessionLabels(s, null, null));
-        String code = jdbc.queryForObject("SELECT short_code FROM pieces WHERE id = ?", String.class, pieceIds(s).get(0));
-        assertThat(texts.get(0)).contains(code).contains("RT-RING-7");
+        // Within a variant the session's labels print in piece-id order (B9b, LabelService.LABEL_ORDER_SQL), so
+        // the page order is not the short-code order: every code exactly once, one per page, each with the SKU.
+        List<String> codes = jdbc.queryForList("SELECT short_code FROM pieces WHERE receipt_id = ?", String.class, s);
+        List<String> printed = new ArrayList<>();
+        for (String t : texts) {
+            List<String> onPage = codes.stream().filter(t::contains).toList();
+            assertThat(onPage).as("one code per page: " + t).hasSize(1);
+            assertThat(t).contains("RT-RING-7");
+            printed.add(onPage.get(0));
+        }
+        assertThat(printed).containsExactlyInAnyOrderElementsOf(codes);
 
         UUID u = untaggedSession(rat, rat.ring(), 1);
         String untagged = pieceIds(u).get(0);
@@ -210,7 +220,7 @@ class LabelSizeWiringTest {
         runs.print(run, rat.owner());
         byte[] pdf = runs.pdf(run, 1);
         assertAllPages(pdf, 60, 12, 7);
-        assertSeparatorCounts(pageTexts(pdf), List.of(3, 2));
+        assertSeparatorCounts(pdf, List.of(3, 2));
 
         as(plain);
         UUID plainRun = runs.create(plain.owner(), "Nile Gold", null, List.of(new LabelRunService.CreateLine(plain.ring(), 2))).id();
@@ -231,7 +241,7 @@ class LabelSizeWiringTest {
             "w5-" + UUID.randomUUID(), rat.owner());
         byte[] pdf = tagStock.groupsPdf(s.id(), r.groups());
         assertAllPages(pdf, 60, 12, 7);
-        assertSeparatorCounts(pageTexts(pdf), List.of(4, 1));
+        assertSeparatorCounts(pdf, List.of(4, 1));
         tagStock.end(s.id(), rat.owner());
 
         untaggedSession(plain, plain.ring(), 2);
@@ -306,20 +316,40 @@ class LabelSizeWiringTest {
         }
     }
 
-    /** Each "× N" page is followed by exactly N label pages; the counts appear in this order. */
-    private static void assertSeparatorCounts(List<String> pages, List<Integer> expected) {
+    /**
+     * Each "× N" page is followed by exactly N label pages; the counts appear in this order. A separator's Flag A
+     * (x 0–20 mm) reads exactly "× N" and a label's Flag A exactly its P-code; no label page carries "×".
+     */
+    private static void assertSeparatorCounts(byte[] pdf, List<Integer> expected) throws IOException {
+        List<String> pages = pageTexts(pdf);
+        List<String> flagA = new ArrayList<>();
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (int p = 0; p < doc.getNumberOfPages(); p++) flagA.add(flagAText(doc, p));
+        }
         List<Integer> seen = new ArrayList<>();
         for (int i = 0; i < pages.size(); ) {
-            String page = pages.get(i);
-            String count = page.lines().map(String::strip).filter(l -> l.startsWith("× ")).findFirst()
-                .orElseThrow(() -> new AssertionError("this page should start a group: " + page));
+            String head = flagA.get(i);
+            assertThat(head).as("page " + (i + 1) + " should start a group").matches("× [0-9]+");
             assertThat(pages.get(i)).as("a separator carries no code").doesNotContainPattern("P[0-9]{6,}");
-            int n = Integer.parseInt(count.substring(2).strip());
+            int n = Integer.parseInt(head.substring(2));
+            assertThat(head).isEqualTo("× " + n);
             seen.add(n);
-            for (int k = 1; k <= n; k++) assertThat(pages.get(i + k)).doesNotContain("×").matches("(?s).*P[0-9]{6,}.*");
+            for (int k = 1; k <= n; k++) {
+                assertThat(flagA.get(i + k)).as("label page " + (i + k + 1)).matches("P[0-9]{6,}");
+                assertThat(pages.get(i + k)).doesNotContain("×");
+            }
             i += n + 1;
         }
         assertThat(seen).containsExactlyElementsOf(expected);
+    }
+
+    /** The text of Flag A (x 0–20 mm, full height) of page {@code page}, lines joined by one space. */
+    private static String flagAText(PDDocument doc, int page) throws IOException {
+        PDFTextStripperByArea strip = new PDFTextStripperByArea();
+        strip.addRegion("flagA", new java.awt.geom.Rectangle2D.Float(0, 0, 20 * MM, 12 * MM));
+        strip.extractRegions(doc.getPage(page));
+        return String.join(" ", strip.getTextForRegion("flagA").strip().lines().map(String::strip)
+            .filter(l -> !l.isEmpty()).toList());
     }
 
     /** The 50×25 group header as before: product and variant text only — no count, no barcode image. */
