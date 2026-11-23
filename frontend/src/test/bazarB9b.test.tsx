@@ -272,7 +272,7 @@ describe('w the wizard', () => {
     await user.click(screen.getByTestId('bazar-lower-csv'))
     await waitFor(() => expect(calls.some(c => c.url.includes('/bazar-setup/lower.csv?lang=en'))).toBe(true))
     await user.click(screen.getByTestId('bazar-setup-print'))
-    await waitFor(() => expect(calls.some(c => c.url.includes('/receiving/sessions/rc-l/labels?widthMm=50&heightMm=25'))).toBe(true))
+    await waitFor(() => expect(calls.some(c => c.url.endsWith('/receiving/sessions/rc-l/labels'))).toBe(true))
     expect(window.open).toHaveBeenCalled()
 
     // Done → Continue to your bazar.

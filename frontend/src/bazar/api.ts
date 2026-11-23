@@ -979,9 +979,12 @@ export async function downloadBazarLowerCsv(lang: string) {
   URL.revokeObjectURL(url)
 }
 
-/** The labelled receipt's labels (the existing Receiving labels PDF), opened in a new tab to print. */
-export async function openBazarSetupLabels(receiptId: string, widthMm = 50, heightMm = 25) {
-  const res = await authFetch(`/receiving/sessions/${encodeURIComponent(receiptId)}/labels?widthMm=${widthMm}&heightMm=${heightMm}`)
+/**
+ * The labelled receipt's labels (the existing Receiving labels PDF), opened in a new tab to print. No size is sent, so the
+ * store's own label size applies (LabelSizes.forTenant — e.g. a jewelry store's 60 × 12).
+ */
+export async function openBazarSetupLabels(receiptId: string) {
+  const res = await authFetch(`/receiving/sessions/${encodeURIComponent(receiptId)}/labels`)
   if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
   window.open(URL.createObjectURL(await res.blob()), '_blank')
 }
