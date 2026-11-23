@@ -1,6 +1,7 @@
 package com.traceability.labels;
 
 import com.traceability.inventory.LabelPdfRenderer;
+import com.traceability.inventory.LabelSizes;
 import com.traceability.inventory.PieceCodeCounter;
 import com.traceability.inventory.PieceLabelLayout;
 import com.traceability.inventory.ScanInputNormalizer;
@@ -25,8 +26,8 @@ import java.util.*;
  *   <li>{@link #voidCodes}: issued → voided only, all or nothing.</li>
  *   <li>{@link #resolve}: what a scanned code is to the label-code table.</li>
  *   <li>{@link #batchPdf}: the batch's still-issued codes printed as the NORMAL named piece label
- *       (code, product, variant, SKU — PieceLabelLayout via LabelPdfRenderer.render, 50×25 like every piece
- *       label today).</li>
+ *       (code, product, variant, SKU — LabelPdfRenderer.render at the tenant's label size, LabelSizes; a
+ *       packing code — one with an order — stays LabelSizes.PACK).</li>
  * </ul>
  * Binding a code to a piece is InventoryLedger.bindLabel (the ledger stays the only writer of pieces).
  */
@@ -35,7 +36,7 @@ public class LabelCodeService {
 
     public static final int MAX_CODES_PER_BATCH = 2000;
     public static final Set<String> KINDS = Set.of("pack", "tag", "factory", "replacement");
-    static final float LABEL_WIDTH_MM = 50f, LABEL_HEIGHT_MM = 25f;   // = LabelService.DEFAULT_*_MM
+    static final float LABEL_WIDTH_MM = LabelSizes.DEFAULT_WIDTH_MM, LABEL_HEIGHT_MM = LabelSizes.DEFAULT_HEIGHT_MM;
 
     /** One line of an issue request: {@code count} codes for {@code variantId} (order refs: packing only). */
     public record Line(UUID variantId, Integer count, UUID orderId, UUID orderItemId) {}
@@ -292,7 +293,10 @@ public class LabelCodeService {
             throw new LabelCodeException(HttpStatus.UNPROCESSABLE_ENTITY, LabelCodeException.Code.NO_ISSUED_CODES,
                 "These labels are already used or voided", "هذه الملصقات مستخدمة أو ملغاة");
         }
-        return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(LABEL_WIDTH_MM, LABEL_HEIGHT_MM));
+        boolean packing = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM label_codes WHERE tenant_id = ? AND id = ANY(?::uuid[]) AND order_id IS NOT NULL)",
+            Boolean.class, tenantId, codeIds.toArray(new UUID[0])));
+        return LabelPdfRenderer.render(labels, size(tenantId, packing));
     }
 
     /** The batch's still-issued codes as named piece labels (a reprint prints nothing bound or voided). */
@@ -319,6 +323,18 @@ public class LabelCodeService {
                 "Every code in this batch is already used or voided",
                 "كل رموز هذه الدفعة مستخدمة أو ملغاة");
         }
-        return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(LABEL_WIDTH_MM, LABEL_HEIGHT_MM));
+        boolean packing = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM label_code_batches WHERE tenant_id = ? AND id = ? AND kind = 'pack') " +
+            "    OR EXISTS (SELECT 1 FROM label_codes WHERE tenant_id = ? AND batch_id = ? AND order_id IS NOT NULL)",
+            Boolean.class, tenantId, batchId, tenantId, batchId));
+        return LabelPdfRenderer.render(labels, size(tenantId, packing));
+    }
+
+    /**
+     * The tenant's label size (LabelSizes), except packing labels — a code issued for an order (kind pack, or a pack
+     * screen's replacement) — which stay LabelSizes.PACK (50×25) whatever the setting.
+     */
+    private PieceLabelLayout.Spec size(UUID tenantId, boolean packing) {
+        return packing ? LabelSizes.PACK : LabelSizes.forTenant(jdbc, tenantId);
     }
 }

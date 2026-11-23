@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Eye } from 'lucide-react'
-import { getTenantSettings, updateTenantSettings, getConnections, bostaUpdateSettings, TenantSettings } from '../../api'
+import { getTenantSettings, updateTenantSettings, getConnections, bostaUpdateSettings, TenantSettings, LabelSize } from '../../api'
 
 // ── Segmented control ─────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ function SegmentedControl<T extends string>({
   testId?: string
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-line overflow-hidden">
+    <div className="inline-flex flex-wrap max-w-full rounded-lg border border-line overflow-hidden">
       {options.map(opt => (
         <button
           key={opt.value}
@@ -76,7 +76,7 @@ function SettingsRow({ label, hint, children }: { label: string; hint?: string; 
 interface TenantFields {
   name: string
   pickupAddress: string
-  labelSize: '40x25' | '50x25'
+  labelSize: LabelSize
   defaultLanguage: 'ar' | 'en'
   timezone: string
 }
@@ -106,7 +106,7 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
 
   const [name,            setName]            = useState('')
   const [pickupAddress,   setPickupAddress]   = useState('')
-  const [labelSize,       setLabelSize]       = useState<'40x25' | '50x25'>('40x25')
+  const [labelSize,       setLabelSize]       = useState<LabelSize>('40x25')
   const [defaultLanguage, setDefaultLanguage] = useState<'ar' | 'en'>('ar')
   const [timezone,        setTimezone]        = useState('Africa/Cairo')
   const [consentSettings, setConsentSettings] = useState<Pick<TenantSettings, 'consentPrivacyVersion' | 'consentTermsVersion' | 'consentAcceptedAt'> | null>(null)
@@ -230,9 +230,10 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
     (bostaConnected && awbLang !== awbSnapshot.awbLang)
   )
 
-  const labelOptions: { value: '40x25' | '50x25'; label: string }[] = [
+  const labelOptions: { value: LabelSize; label: string }[] = [
     { value: '40x25', label: '40×25 mm' },
     { value: '50x25', label: '50×25 mm' },
+    { value: '60x12', label: t('settings.labelSizeRatTail') },
   ]
 
   const langOptions: { value: 'ar' | 'en'; label: string }[] = [

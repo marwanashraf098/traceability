@@ -18,7 +18,7 @@ import java.util.*;
  *
  * Field ownership (see SHOW FIRST analysis):
  *   tenants.name              — business name
- *   tenants.label_width_mm    — label size (40x25 or 50x25)
+ *   tenants.label_width_mm    — label size (40x25, 50x25, or 60x12 = jewelry rat-tail; read by LabelSizes)
  *   tenants.label_height_mm
  *   tenants.default_language  — 'ar' | 'en'
  *   tenants.timezone          — IANA tz string, default 'Africa/Cairo'
@@ -46,7 +46,7 @@ public class TenantController {
     public record TenantSettingsRequest(
         String name,
         String pickupAddress,
-        String labelSize,       // "40x25" or "50x25"
+        String labelSize,       // "40x25", "50x25" or "60x12" (jewelry rat-tail)
         String defaultLanguage, // "ar" or "en"
         String timezone,
         String pickPackMode     // "order_queue" or "waybill_scan" (Pick & Pack S3)
@@ -74,7 +74,7 @@ public class TenantController {
                         if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found");
                         double w = rs.getDouble("label_width_mm");
                         double h = rs.getDouble("label_height_mm");
-                        String labelSize = (w == 40 && h == 25) ? "40x25" : "50x25";
+                        String labelSize = (w == 40 && h == 25) ? "40x25" : (w == 60 && h == 12) ? "60x12" : "50x25";
 
                         Map<String, Object> result = new LinkedHashMap<>();
                         result.put("name",            rs.getString("name"));
@@ -117,8 +117,9 @@ public class TenantController {
             switch (req.labelSize()) {
                 case "40x25" -> { labelW = 40.0; labelH = 25.0; }
                 case "50x25" -> { labelW = 50.0; labelH = 25.0; }
+                case "60x12" -> { labelW = 60.0; labelH = 12.0; }
                 default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "labelSize must be '40x25' or '50x25'");
+                    "labelSize must be '40x25', '50x25' or '60x12'");
             }
         }
 

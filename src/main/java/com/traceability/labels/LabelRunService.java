@@ -1,7 +1,6 @@
 package com.traceability.labels;
 
 import com.traceability.inventory.LabelPdfRenderer;
-import com.traceability.inventory.PieceLabelLayout;
 import com.traceability.receiving.ReceivingImportService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -398,13 +397,12 @@ public class LabelRunService {
         if (part < 1 || part > parts.size()) throw LabelCodeException.invalidPart();
         List<LabelPdfRenderer.Page> pages = new ArrayList<>();
         for (Chunk c : parts.get(part - 1)) {
-            pages.add(new LabelPdfRenderer.Separator(c.productTitle(), c.variantTitle()));     // the group's HEADER
+            pages.add(new LabelPdfRenderer.Separator(c.productTitle(), c.variantTitle(), c.codes().size()));  // the group's HEADER
             for (String code : c.codes()) {
                 pages.add(new LabelPdfRenderer.Piece(code, c.productTitle(), c.variantTitle(), c.sku()));
             }
         }
-        return LabelPdfRenderer.renderPages(pages,
-            PieceLabelLayout.Spec.of(LabelCodeService.LABEL_WIDTH_MM, LabelCodeService.LABEL_HEIGHT_MM));
+        return LabelPdfRenderer.renderPages(pages, com.traceability.inventory.LabelSizes.forTenant(jdbc, tenantId));
     }
 
     /** One line's issued codes (numeric order) — a group of the PDF, or part of one when the group is split. */

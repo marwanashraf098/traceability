@@ -2967,6 +2967,7 @@
     "pickupAddress": "Pickup address",
     "pickupAddressHint": "Where Bosta collects your parcels.",
     "labelSize": "Label size",
+    "labelSizeRatTail": "Jewelry rat-tail · 60 × 12 mm (needs a 300 dpi printer)",
     "awbFormat": "AWB label size",
     "awbFormatA4": "A4 — regular printer",
     "awbFormatA6": "A6 — 4×6 thermal label printer",
@@ -2981,7 +2982,7 @@
     "saved": "Settings saved.",
     "langNote": "This sets the account default only. The live UI language is toggled in the sidebar.",
     "errors": {
-      "labelSize": "Label size must be 40×25 or 50×25.",
+      "labelSize": "Label size must be 40×25, 50×25 or 60×12.",
       "language": "Language must be 'ar' or 'en'.",
       "generic": "Could not save settings. Please try again.",
       "businessSection": "Could not save business settings. Please try again.",

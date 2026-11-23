@@ -18,15 +18,15 @@ import org.springframework.transaction.annotation.Transactional;
  * reprint, Transfer reprint-outstanding): the queries, the label_reprints log and the size
  * defaults live here; the layout is PieceLabelLayout and the drawing LabelPdfRenderer.
  *
- * Size: 50×25 mm unless the caller passes widthMm/heightMm. The tenant's Settings value
- * (tenants.label_width_mm / label_height_mm) is not read yet — the layout fully supports 40×25.
+ * Size: the caller's widthMm/heightMm when given, else the tenant's Settings value (LabelSizes — 40×25, 50×25,
+ * or 60×12 = the jewelry rat-tail, RatTailLabel); 50×25 when none is set.
  */
 @Service
 public class LabelService {
 
-    // Default label size
-    static final float DEFAULT_WIDTH_MM  = 50f;
-    static final float DEFAULT_HEIGHT_MM = 25f;
+    // Default label size (no tenant setting) — LabelSizes is the one rule
+    static final float DEFAULT_WIDTH_MM  = LabelSizes.DEFAULT_WIDTH_MM;
+    static final float DEFAULT_HEIGHT_MM = LabelSizes.DEFAULT_HEIGHT_MM;
 
     private final JdbcTemplate jdbc;
     private final InventoryLedger ledger;
@@ -75,9 +75,7 @@ public class LabelService {
                 "No pieces found for session — finalize first");
         }
 
-        return renderPdf(pieces,
-            labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
-            labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
+        return renderPdf(pieces, LabelSizes.resolve(jdbc, tenantId, labelW_mm, labelH_mm));
     }
 
     /** Generates a PDF for a single piece by its ID (for reprint). */
@@ -99,9 +97,7 @@ public class LabelService {
         }
         refuseUntagged(pieces);
 
-        return renderPdf(pieces,
-            labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
-            labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
+        return renderPdf(pieces, LabelSizes.resolve(jdbc, tenantId, labelW_mm, labelH_mm));
     }
 
     /**
@@ -134,9 +130,7 @@ public class LabelService {
             pieces.add(row);
         }
         refuseUntagged(pieces);
-        return renderPdf(pieces,
-            labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
-            labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
+        return renderPdf(pieces, LabelSizes.resolve(jdbc, tenantId, labelW_mm, labelH_mm));
     }
 
     /**
@@ -200,9 +194,7 @@ public class LabelService {
         }
 
         String sku = (String) pieces.get(0).get("sku");
-        byte[] pdf = renderPdf(pieces,
-            labelW_mm != null ? labelW_mm : DEFAULT_WIDTH_MM,
-            labelH_mm != null ? labelH_mm : DEFAULT_HEIGHT_MM);
+        byte[] pdf = renderPdf(pieces, LabelSizes.resolve(jdbc, tenantId, labelW_mm, labelH_mm));
         return new VariantPdf(pdf, sku);
     }
 
@@ -300,8 +292,7 @@ public class LabelService {
      * print is the same 422 as an unfinalized session. While short_code is NOT NULL, nothing is
      * left out.
      */
-    private byte[] renderPdf(List<Map<String, Object>> pieces,
-                             float widthMm, float heightMm) throws IOException {
+    private byte[] renderPdf(List<Map<String, Object>> pieces, PieceLabelLayout.Spec spec) throws IOException {
         List<LabelPdfRenderer.Piece> labels = pieces.stream()
             .filter(p -> p.get("short_code") != null)
             .map(p -> new LabelPdfRenderer.Piece(
@@ -314,7 +305,7 @@ public class LabelService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "No labeled pieces to print");
         }
-        return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(widthMm, heightMm));
+        return LabelPdfRenderer.render(labels, spec);
     }
 
     /**
