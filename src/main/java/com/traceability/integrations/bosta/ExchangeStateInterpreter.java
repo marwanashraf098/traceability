@@ -78,6 +78,13 @@ public class ExchangeStateInterpreter {
      */
     public static final Set<String> KNOWN_FORWARD_LEG_STATES = FORWARD_LEG_STATES.keySet();
 
+    static {
+        // ExchangeBostaStep.PROGRESS orders exactly this vocabulary (commit-time reading) — never let them drift.
+        if (!KNOWN_FORWARD_LEG_STATES.equals(Set.copyOf(com.traceability.inventory.ExchangeBostaStep.PROGRESS))) {
+            throw new IllegalStateException("ExchangeBostaStep.PROGRESS differs from the type-30 forward-leg states");
+        }
+    }
+
     /**
      * @return the forward-leg internal state to apply, or empty if the delivery's most
      *         recently completed {@code timeline} milestone is missing or not one of the
@@ -88,6 +95,18 @@ public class ExchangeStateInterpreter {
         String value = latestCompletedTimelineValue(raw);
         if (value == null) return Optional.empty();
         return Optional.ofNullable(FORWARD_LEG_STATES.get(value));
+    }
+
+    /**
+     * S3b follow-up (2026-11-22) — ADVANCE-AT-COMMIT ONLY (BostaWebhookJob.advanceAtCommit); never the live webhook path,
+     * which keeps {@link #interpretForwardLeg}. The state of the FURTHEST recognised completed step
+     * ({@link com.traceability.inventory.ExchangeBostaStep#furthestRecognised}), so an exchange whose latest step is one
+     * this map doesn't know ("exchanged", "rescheduled") but that was picked up / out for exchange before is still
+     * placed where it is. Empty when no recognised step was completed.
+     */
+    public Optional<BostaStateMapper.MappedState> interpretFurthestForwardLeg(JsonNode raw) {
+        String value = com.traceability.inventory.ExchangeBostaStep.furthestRecognised(raw);
+        return value == null ? Optional.empty() : Optional.ofNullable(FORWARD_LEG_STATES.get(value));
     }
 
     /**

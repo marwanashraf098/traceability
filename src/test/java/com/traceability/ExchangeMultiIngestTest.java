@@ -65,6 +65,11 @@ import static org.mockito.Mockito.*;
  *       has a single line
  *   i9  app_user isolation: tenant B's ingest of the same AWB never resolves tenant A's unlinked row; same-tenant
  *       positive control
+ *   i13 / i14 (2026-11-22) prod timelines whose latest step is "exchanged" / "rescheduled" (unknown to the type-30
+ *       interpreter) after picked_up → out_for_exchange: auto-committed, the leg advanced at commit from the FURTHEST
+ *       recognised step (with_courier), never pickable; the live interpreter still reads them as unknown
+ *   i15 only an unknown step past "Pickup requested": no auto-commit, map / map-items 409 EXCHANGE_BOSTA_STEP_UNKNOWN,
+ *       catch-up SKIP "unknown Bosta step"; control at "Pickup requested" committed and pickable
  * </pre>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -512,6 +517,155 @@ class ExchangeMultiIngestTest {
             "WHERE sh.tracking_number = ? AND h.webhook_event_id IS NOT NULL", Integer.class, awb)).isEqualTo(1);
         assertThat(alertKeys(s)).as("suppression ended with the first Bosta update — detector unchanged from here")
             .anyMatch(k -> k.startsWith("exchange_unmapped_state|") && k.endsWith("|" + awb));
+    }
+
+    // ── i13–i15: Bosta steps the type-30 interpreter doesn't know (S3b follow-up, 2026-11-22) ──────────────
+
+    // Real prod timelines (open EXCHANGE_MULTI_ITEM rows, read 2026-11-22): the template's codes, dates and desc exactly
+    // as Bosta stored them. Latest completed step "exchanged" (code 23) / "rescheduled" (code 47), both after
+    // picked_up → in_transit → out_for_exchange.
+    static final String PROD_EXCHANGED_TIMELINE = "[" +
+        "{\"code\":10,\"date\":\"2026-10-06T11:27:02.394Z\",\"done\":true,\"value\":\"new\"}," +
+        "{\"code\":21,\"date\":\"2026-10-06T15:25:00.681Z\",\"done\":true,\"value\":\"picked_up\"}," +
+        "{\"code\":30,\"date\":\"2026-10-07T03:13:56.587Z\",\"done\":true,\"value\":\"in_transit\"}," +
+        "{\"code\":41,\"date\":\"2026-10-07T07:28:32.560Z\",\"desc\":\"1/3 attempts\",\"done\":true,\"value\":\"out_for_exchange\"}," +
+        "{\"code\":23,\"date\":\"2026-10-07T09:27:02.643Z\",\"done\":true,\"value\":\"exchanged\"}," +
+        "{\"code\":46,\"done\":false,\"value\":\"exchanged_returned\"}]";
+    static final String PROD_RESCHEDULED_TIMELINE = "[" +
+        "{\"code\":10,\"date\":\"2026-10-07T13:01:50.449Z\",\"done\":true,\"value\":\"new\"}," +
+        "{\"code\":21,\"date\":\"2026-10-07T15:31:53.617Z\",\"done\":true,\"value\":\"picked_up\"}," +
+        "{\"code\":30,\"date\":\"2026-10-08T04:45:11.583Z\",\"done\":true,\"value\":\"in_transit\"}," +
+        "{\"code\":41,\"date\":\"2026-10-08T07:30:06.400Z\",\"desc\":\"1/3 attempts\",\"done\":true,\"value\":\"out_for_exchange\"}," +
+        "{\"code\":47,\"date\":\"2026-10-08T14:24:28.639Z\",\"desc\":\"Retry delivery - the customer is not in the address.\",\"done\":true,\"value\":\"rescheduled\",\"exceptionCode\":1}," +
+        "{\"code\":46,\"done\":false,\"value\":\"exchanged_returned\"}]";
+    // The exchanged row with its recognised steps past pickup removed: only "Pickup requested" then a step Traced
+    // doesn't know (no such row in prod today — the case the guard exists for).
+    static final String UNKNOWN_ONLY_TIMELINE = "[" +
+        "{\"code\":10,\"date\":\"2026-10-06T11:27:02.394Z\",\"done\":true,\"value\":\"new\"}," +
+        "{\"code\":23,\"date\":\"2026-10-07T09:27:02.643Z\",\"done\":true,\"value\":\"exchanged\"}," +
+        "{\"code\":46,\"done\":false,\"value\":\"exchanged_returned\"}]";
+
+    /** {@code d} with Bosta's state and a whole stored timeline. */
+    BostaDelivery withTimeline(BostaDelivery d, int code, String value, String timelineJson) {
+        ObjectNode raw = (ObjectNode) d.raw().deepCopy();
+        raw.putObject("state").put("code", code).put("value", value);
+        try {
+            raw.set("timeline", mapper.readTree(timelineJson));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        return BostaDelivery.fromRaw(d.trackingNumber(), raw);
+    }
+
+    /**
+     * i13 / i14: latest step "exchanged" / "rescheduled" after earlier recognised steps → auto-committed and the leg
+     * advanced at commit from the FURTHEST recognised step (out_for_exchange → with_courier): never pickable (queue,
+     * waybill, gather), no alert, nothing else moved. The live interpreter still reads these timelines as unknown.
+     */
+    @Test
+    void i13_i14_prodExchangedAndRescheduled_advancedFromFurthestStep_neverPickable() {
+        Shop s = new Shop("I13", false, "BRK-47013-EG");
+        s.variant("Baggy Sweatpants", "Black / L", "BRK-I13-BLK-L");
+        s.variant("Never Quit Crewneck", "Beige / M", "BRK-I13-BEG-M");
+        String outDesc = "x1 Baggy Sweatpants – Black - L - SKU: BRK-I13-BLK-L // x1 Never Quit Crewneck - Beige - M - SKU: BRK-I13-BEG-M";
+        Set<String> alertsBefore = alertKeys(s);
+        String exchanged = tn(), rescheduled = tn();
+        ingest(s, withTimeline(delivery(exchanged, "BRK-47013-EG:BRK-47013-EG-R1", 2, outDesc, 2, "x2 back"),
+            23, "Picked up from consignee", PROD_EXCHANGED_TIMELINE));
+        ingest(s, withTimeline(delivery(rescheduled, "BRK-47013-EG:BRK-47013-EG-R2", 2, outDesc, 2, "x2 back"),
+            24, "Received at warehouse", PROD_RESCHEDULED_TIMELINE));
+
+        Map<String, UUID> orders = new LinkedHashMap<>();
+        for (String awb : List.of(exchanged, rescheduled)) {
+            UUID exc = s.internalOrder(awb);
+            assertThat(exc).as("auto-committed %s", awb).isNotNull();
+            orders.put(awb, exc);
+            assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, awb))
+                .as("advanced from out_for_exchange").isEqualTo("with_courier");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shipment_status_history h JOIN shipments sh ON sh.id = h.shipment_id " +
+                "WHERE sh.tracking_number = ?", Integer.class, awb)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ?", String.class, exc)).isEqualTo("new");
+            assertThat(s.as(() -> waybills.resolve(awb, null)).code()).isNotEqualTo(WaybillResolver.Code.OPEN);
+        }
+        Set<UUID> queue = new HashSet<>();
+        s.as(() -> fulfill.getQueue()).forEach(r -> queue.add((UUID) r.get("id")));
+        assertThat(queue).doesNotContainAnyElementsOf(orders.values());
+        List<String> gathered = s.as(() -> fulfill.getGatherList(null)).rows().stream()
+            .flatMap(r -> r.orderNumbers().stream()).toList();
+        for (String awb : orders.keySet()) assertThat(gathered).doesNotContain("EXC-" + awb);
+        assertThat(alertKeys(s)).as("no alert raised by advancing at commit").isEqualTo(alertsBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM piece_events WHERE tenant_id = ?", Integer.class, s.tenant)).isZero();
+        verifyNoInteractions(shopifyGateway);
+
+        // The live type-30 interpreter is unchanged: these timelines' latest step is still unknown to it.
+        for (String tl : List.of(PROD_EXCHANGED_TIMELINE, PROD_RESCHEDULED_TIMELINE)) {
+            assertThat(interpreter.interpretForwardLeg(withTimeline(delivery(tn(), null, 2, "x", 2, "y"), 23, "x", tl).raw())).isEmpty();
+        }
+    }
+
+    /**
+     * i15: past "Pickup requested" with NO recognised step past it → never auto-committed (needs_mapping, no order),
+     * map / map-items refused 409 EXCHANGE_BOSTA_STEP_UNKNOWN (EN + AR), the multi catch-up SKIP "unknown Bosta step"
+     * (dry run and apply, nothing written). Control: the same shape at "Pickup requested" is committed and pickable.
+     */
+    @Test
+    void i15_unknownStepOnlyPastPickup_noCommit_mapRefused409_catchUpSkips() {
+        Shop s = new Shop("I15", false, "BRK-47015-EG");
+        UUID blk = s.variant("Baggy Sweatpants", "Black / L", "BRK-I15-BLK-L");
+        UUID beg = s.variant("Never Quit Crewneck", "Beige / M", "BRK-I15-BEG-M");
+        String outDesc = "x1 Baggy Sweatpants – Black - L - SKU: BRK-I15-BLK-L // x1 Never Quit Crewneck - Beige - M - SKU: BRK-I15-BEG-M";
+        String awb = tn();
+        ingest(s, withTimeline(delivery(awb, "BRK-47015-EG:BRK-47015-EG-R1", 2, outDesc, 2, "x2 back"),
+            23, "Picked up from consignee", UNKNOWN_ONLY_TIMELINE));
+        assertThat(s.exchange(awb).get("status")).isEqualTo("needs_mapping");
+        assertThat(s.internalOrder(awb)).as("never auto-committed").isNull();
+
+        UUID id = (UUID) s.exchange(awb).get("id");
+        for (Runnable attempt : List.<Runnable>of(
+                () -> exchanges.mapItems(id, List.of(new ExchangeService.ItemRow(blk, 1, null), new ExchangeService.ItemRow(beg, 1, null)),
+                    List.of(new ExchangeService.ItemRow(null, 2, null)), null),
+                () -> exchanges.map(id, blk, beg))) {
+            Throwable t = org.assertj.core.api.Assertions.catchThrowable(() -> s.as(() -> { attempt.run(); return null; }));
+            assertThat(t).isInstanceOf(ExchangeBostaStepUnknownException.class);
+            com.traceability.ApiException api = (com.traceability.ApiException) t;
+            assertThat(api.errorCode()).isEqualTo("EXCHANGE_BOSTA_STEP_UNKNOWN");
+            assertThat(api.httpStatus().value()).isEqualTo(409);
+            assertThat(api.messageEn()).isEqualTo("Bosta shows this exchange already moved — check it in Bosta before mapping");
+            assertThat(api.messageAr()).isNotBlank();
+        }
+        assertThat(s.exchange(awb).get("status")).as("refused before the claim").isEqualTo("needs_mapping");
+        assertThat(s.internalOrder(awb)).isNull();
+
+        // The multi catch-up reports it SKIP and writes nothing (dry run AND apply).
+        Shop c = new Shop("I15c", false, "BRK-47016-EG");
+        c.variant("Baggy Sweatpants", "Black / L", "BRK-I15C-BLK-L");
+        c.variant("Never Quit Crewneck", "Beige / M", "BRK-I15C-BEG-M");
+        String cAwb = tn();
+        BostaDelivery cd = withTimeline(delivery(cAwb, "BRK-47016-EG:BRK-47016-EG-R1", 2,
+            outDesc.replace("BRK-I15-", "BRK-I15C-"), 2, "x2 back"), 23, "Picked up from consignee", UNKNOWN_ONLY_TIMELINE);
+        c.unlinked(cd);
+        when(bostaGateway.fetchDelivery(anyString(), eq(cAwb))).thenReturn(cd);
+        int events = jdbc.queryForObject("SELECT COUNT(*) FROM webhook_events", Integer.class);
+        for (boolean apply : new boolean[]{false, true}) {
+            assertThat(catchUp.run(c.tenant, apply)).singleElement().satisfies(r -> {
+                assertThat(r.verdict()).isEqualTo("SKIP");
+                assertThat(r.detail()).isEqualTo("unknown Bosta step");
+            });
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM webhook_events", Integer.class)).isEqualTo(events);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM exchanges WHERE tenant_id = ?", Integer.class, c.tenant)).isZero();
+        assertThat(c.unlinkedResolved(cAwb)).isFalse();
+
+        // Control: "Pickup requested" only → committed, leg 'created', pickable.
+        String live = tn();
+        ingest(s, atState(delivery(live, "BRK-47015-EG:BRK-47015-EG-R2", 2, outDesc, 2, "x2 back"), 10, "Pickup requested", "new"));
+        UUID liveExc = s.internalOrder(live);
+        assertThat(liveExc).isNotNull();
+        assertThat(jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE tracking_number = ?", String.class, live))
+            .isEqualTo("created");
+        Set<UUID> queue = new HashSet<>();
+        s.as(() -> fulfill.getQueue()).forEach(r -> queue.add((UUID) r.get("id")));
+        assertThat(queue).contains(liveExc);
     }
 
     /** {@code d} at Bosta state {@code code}, its timeline's latest completed milestone {@code milestone}. */

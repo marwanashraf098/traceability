@@ -4,6 +4,40 @@
 
 ## Current state
 
+**Exchange reference S3b — multi-item Bosta exchanges ingested (2026-11-19 → 22; MERGED e40312ee, follow-up branch
+`fix/exchange-bosta-step-furthest`; no migration, main / prod at V241; NOT deployed, catch-up NOT run).**
+- **Ingest:** a type 30 with Bosta itemsCount > 1 on either leg (`ExchangeMultiItem.isMulti` — counts decide, never the
+  description's separators) gets an exchanges row instead of an EXCHANGE_MULTI_ITEM unlinked row. Auto-mapping, in order:
+  an -R reference with a live Shopify-exchange shadow whose units match Bosta's counts both ways → linked to the shadow
+  (no internal:exchange: order, so no 4th decrement); else every SKU label line in the catalog and the label sum = the
+  count → one internal:exchange: order, one line per label line, auto_matched, inbound = one row of Bosta's count with
+  no variant; else needs_mapping with the rows prefilled. Outbound count with no returnSpecs → HELD (nothing written).
+  A multi-item exchange never gets one inbound variant (ExchangeInbound.fill skipped).
+- **Mapping screen:** `/map` only when Bosta counted 1 out and 1 in AND the screen has one row each way at quantity 1;
+  everything else posts `/map-items`.
+- **Advance at commit (`ExchangeLegAdvancer`, implemented by `BostaWebhookJob.advanceAtCommit`):** after every exchange
+  commit (map, map-items, auto-map, shadow links) a FRESH leg (forward, 'created', no history) is brought to Bosta's
+  current state through `applyMappedState` (webhookEventId null). No order-status write, no piece / ledger / Shopify
+  write (a new order has no allocations). `exchange_unmapped_state` leaves out a leg advanced at commit only
+  (`advancedAtCommitOnlySql`) until the first real Bosta update for the AWB. `PICKABLE_ORDERS_FILTER` untouched.
+- **Follow-up (approved 2026-11-22):** prod rows whose latest step is "exchanged" (code 23) / "rescheduled" (code 47)
+  stayed 'created' and pickable, because the interpreter doesn't know those steps. `inventory.ExchangeBostaStep` is THE
+  commit-time reading. Advance at commit uses the FURTHEST recognised completed step (by progress order:
+  new < picked_up < in_transit < out_for_exchange < exchanged_returned < out_for_return), via
+  `ExchangeStateInterpreter.interpretFurthestForwardLeg`. The live webhook path keeps `interpretForwardLeg` (latest
+  step), unchanged. Latest step past "Pickup requested" with no recognised step past it (`unknownPastPickup`): no
+  auto-commit (needs_mapping), map / map-items 409 `EXCHANGE_BOSTA_STEP_UNKNOWN` (EN + AR), catch-up SKIP "unknown
+  Bosta step". Traced-booked exchanges (`attachForRequest`) aren't gated. The interpreter's static check fails startup
+  if `PROGRESS` and its map ever differ.
+- **Catch-up / backfill** (`ExchangeMultiCatchUpService`, startup only, dry run unless apply): 203 open rows in prod. 28
+  are on 5 tenants with no connected store (SKIP); none has an exchanges row yet. As stored on 2026-11-22: 14 have an
+  unrecognised latest step (BROEK 3, MagRina 2, Seductionegypt 8, Little Toes 1). All 14 completed out_for_exchange
+  earlier, so all advance to with_courier, and none is "unknown only". The dry run re-fetches from Bosta, so counts
+  move.
+- **Next:** deploy, then the catch-up dry run per tenant, compared with the expectations above, before apply.
+- **Gotcha:** the live type-30 interpreter still answers empty for "exchanged" / "rescheduled". A leg already past
+  'created' just stays where it is on such an update. Extending the live vocabulary is a separate decision.
+
 **Disk IO budget — three biggest prod readers fixed (2026-11-22; branch `perf/disk-io` off origin/main 370593cf; V241;
 count gates MigrationSmokeTest 240 files, NotTracedBackfillTest 185).** Supabase warned the Disk IO budget is being
 depleted (Micro, 1 GB RAM). Measured on a local PG 17 bench shaped from Marawan's pg_stat_statements numbers (no query

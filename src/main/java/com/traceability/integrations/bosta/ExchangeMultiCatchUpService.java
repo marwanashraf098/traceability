@@ -31,7 +31,7 @@ import java.util.function.Supplier;
  * webhook's own verify-by-fetch on apply). A Bosta rate limit stops the run.
  *
  * <pre>
- *   SKIP(reason)              no store / store not connected / no active Bosta account / Bosta refuses the key (every
+ *   SKIP(reason)              unknown Bosta step (past pickup, no recognised step — ExchangeBostaStep) / no store / store not connected / no active Bosta account / Bosta refuses the key (every
  *                             row of the tenant), not an exchange, pre-connect (today's filter ignores it), counts
  *                             unreadable, Bosta no longer returns it (NOT_FOUND)
  *   WOULD_RESOLVE_EXISTING /  an exchanges row already exists for the AWB — apply only resolves the unlinked row
@@ -178,6 +178,8 @@ public class ExchangeMultiCatchUpService {
             return skip(tenantName, c, "pre-connect (ignored by today's filter)");
         }
         JsonNode raw = d.raw();
+        // S3b follow-up (2026-11-22): the same rule that keeps it from being committed (ExchangeBostaStep).
+        if (com.traceability.inventory.ExchangeBostaStep.unknownPastPickup(raw)) return skip(tenantName, c, "unknown Bosta step");
         ExchangeMultiItem.Counts counts = ExchangeMultiItem.counts(raw);
         boolean labelParses = ExchangeMultiItem.labelParses(raw);
         if (counts.out() < 1) return skip(tenantName, c, "outbound count unreadable");
