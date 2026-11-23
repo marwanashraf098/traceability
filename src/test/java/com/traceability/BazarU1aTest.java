@@ -85,6 +85,7 @@ class BazarU1aTest {
     @Autowired BazarSaleService sales;
     @Autowired BazarDayService  days;
     @Autowired BazarEndService  end;
+    @Autowired com.traceability.inventory.MainReconcileQueue queue;
     @MockBean ShopifyGateway shopify;
     @MockBean ShopifyTokenProvider tokenProvider;
 
@@ -389,6 +390,82 @@ class BazarU1aTest {
             assertThat(diff(run, a).get("note")).isNull();
         }
         verify(shopify, never()).pushMainReconcile(any(), any(), any(), any(), anyInt(), any(), any(), any());
+    }
+
+    // ── c1 / c2 — the Keep-bazar max wait (3 min from the first pending mark) ────────────────────────────────
+
+    /**
+     * A size selling every 20 s for 10 min, with the real 60 s debounce and the every-minute queue job. Every sale
+     * touches the mark, so the debounce alone never lets it run; the cap makes it due 3 min after its first pending
+     * mark — run on the next job tick (3–4 min) — and Shopify follows each time. Virtual clock: each 20 s tick ages
+     * the pending mark by 20 s before the next sale.
+     */
+    @Test
+    void c1_keep_sizeSellingEvery20s_getsARunAtLeastEvery3Min_shopifyFollows() {
+        UUID a = variant();
+        pieces(a, 31);
+        level(a, 31);
+        Map<String, Object> ev = live("leave", List.of(a), List.of(30));
+        UUID eventId = (UUID) ev.get("id");
+        clearQueue();
+        MainReconcileService s = writer(10);
+        s.setDebounceSeconds(60);
+        s.setKeepBazarMaxWaitSeconds(180);
+        List<Integer> runAt = new ArrayList<>();
+        int sold = 0;
+        for (int tick = 1; tick <= 30; tick++) {           // t = tick * 20 s
+            age(a, 20);
+            sales.sell(eventId, null, a, "c1-" + tick, "cash", actor);
+            sold++;
+            assertQueued(a, "bazar:sale");
+            if (tick % 3 == 0) {                            // the every-minute job
+                UUID run = TenantContext.runAs(tenant, () -> s.runQueued(tenant));
+                if (run != null) {
+                    runAt.add(tick * 20);
+                    assertThat(diff(run, a)).containsEntry("status", "confirmed").containsEntry("note", "keep_bazar_fast");
+                    assertThat(shopifyMain.get(item(a)).onHand()).as("Shopify follows at t=%ds", tick * 20)
+                        .isEqualTo(31 - sold);
+                }
+            }
+        }
+        assertThat(runAt).as("runs at %s", runAt).hasSizeGreaterThanOrEqualTo(2);
+        int last = 0;
+        for (int t : runAt) { assertThat(t - last).as("gap before t=%ds", t).isLessThanOrEqualTo(240); last = t; }
+        assertThat(600 - last).as("the open mark at the end").isLessThan(240);
+        verifyNoInteractions(alerter);
+    }
+
+    /** A webhook-queued variant (no bazar) keeps the plain debounce: 10 min pending but touched 30 s ago is not due. */
+    @Test
+    void c2_webhookQueuedVariant_debounceUnchanged() throws Exception {
+        clearQueue();
+        long n = 7_700_000_000L + seq.incrementAndGet();
+        UUID w = UUID.randomUUID();
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku, shopify_inventory_item_id, price) " +
+            "VALUES (?, ?, ?, ?, 'W', ?, ?, 500.00)", w, tenant, product, "gid://shopify/ProductVariant/" + n,
+            "SKU-W-" + n, item(w));
+        queue.onWebhook(tenant, "orders/updated",
+            new com.fasterxml.jackson.databind.ObjectMapper().readTree("{\"line_items\":[{\"variant_id\":" + n + "}]}"));
+        assertQueued(w, "webhook:orders/updated");
+        MainReconcileService s = writer(10);
+        s.setDebounceSeconds(60);
+        s.setKeepBazarMaxWaitSeconds(180);
+        jdbc.update("UPDATE main_reconcile_variant_state SET pending_since = now() - interval '10 minutes', " +
+            "pending_touched_at = now() - interval '30 seconds' WHERE tenant_id = ? AND variant_id = ?", tenant, w);
+        assertThat(TenantContext.runAs(tenant, () -> s.runQueued(tenant))).as("not due: touched 30 s ago").isNull();
+        assertQueued(w, "webhook:orders/updated");
+        jdbc.update("UPDATE main_reconcile_variant_state SET pending_touched_at = now() - interval '61 seconds' " +
+            "WHERE tenant_id = ? AND variant_id = ?", tenant, w);
+        UUID run = TenantContext.runAs(tenant, () -> s.runQueued(tenant));
+        assertThat(run).as("due after the 60 s debounce").isNotNull();
+        assertNotQueued(w);
+    }
+
+    /** The virtual clock: the variant's pending mark becomes {@code seconds} older. */
+    private void age(UUID v, int seconds) {
+        jdbc.update("UPDATE main_reconcile_variant_state SET pending_since = pending_since - ? * interval '1 second', " +
+            "pending_touched_at = pending_touched_at - ? * interval '1 second' " +
+            "WHERE tenant_id = ? AND variant_id = ? AND pending_since IS NOT NULL", seconds, seconds, tenant, v);
     }
 
     private Map<String, Object> state(UUID v) {

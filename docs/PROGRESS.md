@@ -23,9 +23,12 @@ migration; NOT merged, not deployed).**
   APPLIED write, so moves already written are never counted again; every in-flight skip (claims, transfer sync, pending /
   recent-ambiguous reconcile write, Part 1) still wins; the compare-and-set + fresh read still drops it if Shopify
   moved; Remove-mode pieces are not in the set; it goes through the brake like any write (explained units exempt, a
-  held run holds it too). Only read when the tenant has a Keep bazar (`KEEP_BAZAR_EXISTS_SQL`). Edge left: the 60 s
-  debounce is per touch, so a size selling more than once a minute keeps postponing its queued run (the 4-hourly
-  sweep still catches it).
+  held run holds it too). Only read when the tenant has a Keep bazar (`KEEP_BAZAR_EXISTS_SQL`).
+- **Keep-bazar max wait (approved 2026-11-23):** the 60 s debounce restarts on every touch, so a size selling more than
+  once a minute kept postponing its queued run. `runQueued` now also takes a variant whose pending mark is a bazar one
+  (`pending_source LIKE 'bazar:%'`) once its FIRST pending mark is `traced.main-reconcile.keep-bazar-max-wait-seconds`
+  (180) old → run on the next minute's job (3–4 min). Every bazar sale re-stamps the source and keeps pending_since,
+  so the cap holds while it sells; webhook / claim marks keep the plain debounce exactly (MARK_SQL untouched).
 - **Brake exemption (approved 2026-11-22):** `MainReconcileBrake.KEEP_BAZAR_NET_SQL` — per variant, the net of its
   pieces' `out_on_transfer → sold/damaged/lost` (−1) and back (+1) moves, made while on a Keep bazar's transfer (sent →
   closed), since the variant's last APPLIED reconcile write, up to the run's read time. `explained(delta, net)` = same
@@ -47,7 +50,8 @@ migration; NOT merged, not deployed).**
 - Tests: BazarU1aTest (q1 Keep queues per event + condition, q2 Remove queues nothing, b1 30 Keep sales written / not
   held / no alert, b2 non-bazar 30 drift held, b3 Remove-bazar sales not exempt, d1 close brings damaged home, l1
   needs_close / pieces_out, f1 a size selling every 3 min drops on the next queued run after each sale, f2 unexplained
-  remainder waits for two runs with its chain kept, f3 non-bazar drift never fast, f4 Remove-mode sales never fast); bazarU1a.test.tsx (8). Each fix revert-checked. Strings: `bazar.u1a` (EN + AR).
+  remainder waits for two runs with its chain kept, f3 non-bazar drift never fast, f4 Remove-mode sales never fast, c1 a size selling every 20 s for 10 min gets a run every ≤ 4 min and Shopify follows,
+  c2 a webhook-queued variant keeps the 60 s debounce); bazarU1a.test.tsx (8). Each fix revert-checked. Strings: `bazar.u1a` (EN + AR).
 
 **Disk IO budget — three biggest prod readers fixed (2026-11-22; branch `perf/disk-io` off origin/main 370593cf; V241;
 count gates MigrationSmokeTest 240 files, NotTracedBackfillTest 185).** Supabase warned the Disk IO budget is being

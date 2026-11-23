@@ -105,6 +105,12 @@ public class MainReconcileService {
     private int confirmAfterMinutes = 10;
     private int part1WindowDays = 30;
     private int debounceSeconds = 60;
+    /**
+     * U1a cap: a variant whose pending mark is a bazar one (pending_source 'bazar:…', BazarKeepModeQueue) is due at
+     * most this long after its FIRST pending mark, however many more sales keep touching it — a size selling more than
+     * once a minute would otherwise keep postponing its run past the debounce. Webhook / claim marks: unchanged.
+     */
+    private int keepBazarMaxWaitSeconds = 180;
     private int queueBatch = 500;
     private int cancelledFulfillmentWindowMinutes = 60;
     private int storeSkipRowMinutes = 60;
@@ -228,6 +234,10 @@ public class MainReconcileService {
     @Autowired
     public void setDebounceSeconds(@Value("${traced.main-reconcile.debounce-seconds:60}") int s) { this.debounceSeconds = s; }
     @Autowired
+    public void setKeepBazarMaxWaitSeconds(@Value("${traced.main-reconcile.keep-bazar-max-wait-seconds:180}") int s) {
+        this.keepBazarMaxWaitSeconds = s;
+    }
+    @Autowired
     public void setQueueBatch(@Value("${traced.main-reconcile.queue-batch:500}") int n) { this.queueBatch = n; }
 
     /** A cancelled / errored fulfillment younger than this skips its variant (Shopify may re-fulfill); older → ignored. */
@@ -284,7 +294,10 @@ public class MainReconcileService {
 
     // ── entry points ────────────────────────────────────────────────────────────────────────────────────────────
 
-    /** The debounced per-variant run: variants queued and untouched for debounce-seconds. Returns the run id or null. */
+    /**
+     * The debounced per-variant run: variants queued and untouched for debounce-seconds — or, for a bazar mark, pending
+     * for keep-bazar-max-wait-seconds since the first mark (U1a cap). Returns the run id or null.
+     */
     public UUID runQueued(UUID tenantId) {
         requireTenant(tenantId);
         // 2026-11-15 (prod lock waits / pile-up): a queued run never waits behind a sweep, the seed or an activation —
@@ -295,8 +308,10 @@ public class MainReconcileService {
         }
         List<UUID> due = tx.execute(s -> jdbc.queryForList(
             "SELECT variant_id FROM main_reconcile_variant_state WHERE tenant_id = ? AND pending_since IS NOT NULL " +
-            "  AND pending_touched_at < now() - ? * interval '1 second' ORDER BY pending_since LIMIT ?",
-            UUID.class, tenantId, debounceSeconds, queueBatch));
+            "  AND (pending_touched_at < now() - ? * interval '1 second' " +
+            "       OR (pending_source LIKE 'bazar:%' AND pending_since <= now() - ? * interval '1 second')) " +
+            "ORDER BY pending_since LIMIT ?",
+            UUID.class, tenantId, debounceSeconds, keepBazarMaxWaitSeconds, queueBatch));
         if (due == null || due.isEmpty()) return null;
         return run(tenantId, "variant", due, null, true);
     }
