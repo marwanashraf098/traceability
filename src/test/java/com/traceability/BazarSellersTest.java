@@ -169,10 +169,23 @@ class BazarSellersTest {
         return UUID.fromString(String.valueOf(((Map<String, Object>) added.get("seller")).get("user_id")));
     }
 
-    /** Opens the link without following the redirect. */
+    /**
+     * B10: opens the link the way a browser does — the GET (which only redirects to the landing page, the token stays
+     * in the fragment), then "Start selling" (POST /api/v1/auth/seller-invite/redeem). Returns the redeem's response.
+     */
     private HttpResponse<String> open(String link) throws Exception {
         String path = link.substring(appUrl.length());
-        return noRedirect.send(HttpRequest.newBuilder(URI.create(base() + path)).GET().build(),
+        int hash = path.indexOf('#');
+        HttpResponse<String> get = noRedirect.send(
+            HttpRequest.newBuilder(URI.create(base() + path.substring(0, hash))).GET().build(),
+            HttpResponse.BodyHandlers.ofString());
+        assertThat(get.statusCode()).isEqualTo(302);
+        String location = get.headers().firstValue("location").orElseThrow();
+        String t = location.substring(location.indexOf("t=") + 2);
+        String token = path.substring(hash + "#token=".length());
+        return noRedirect.send(HttpRequest.newBuilder(URI.create(base() + "/api/v1/auth/seller-invite/redeem"))
+                .header("Content-Type", "application/json").header("Origin", appUrl)
+                .POST(HttpRequest.BodyPublishers.ofString("{\"t\":\"" + t + "\",\"token\":\"" + token + "\"}")).build(),
             HttpResponse.BodyHandlers.ofString());
     }
 
@@ -193,7 +206,7 @@ class BazarSellersTest {
     /** Opens a fresh link and returns the seller's access token. */
     private String signIn(String link) throws Exception {
         HttpResponse<String> r = open(link);
-        assertThat(r.statusCode()).isEqualTo(302);
+        assertThat(r.statusCode()).isEqualTo(200);
         ResponseEntity<AccessTokenResponse> t = refresh(refreshCookie(r));
         assertThat(t.getStatusCode()).isEqualTo(HttpStatus.OK);
         return t.getBody().accessToken();
@@ -225,20 +238,20 @@ class BazarSellersTest {
         String ev = liveEvent(1, List.of("owner", "worker")).get(0);
         Map<String, Object> added = addSeller(ownerA, ev, Map.of("name", "Mona", "phone", "01012345678"));
         String link = (String) added.get("link");
-        assertThat(link).startsWith(appUrl + "/auth/seller-invite?token=");
+        assertThat(link).startsWith(appUrl + "/auth/seller-invite?t=" + tenantA + "#token=");
         assertThat(added.get("workers_allowed")).isEqualTo(true);
 
         HttpResponse<String> first = open(link);
-        assertThat(first.statusCode()).isEqualTo(302);
-        assertThat(first.headers().firstValue("location").orElseThrow()).isEqualTo(appUrl + "/bazar/join/" + ev);
+        assertThat(first.statusCode()).isEqualTo(200);
+        assertThat(first.body()).contains("\"event_id\":\"" + ev + "\"");
         assertThat(refreshCookie(first)).isNotNull();
         // The session is the invited worker's, in tenant A.
         assertThat(jdbc.queryForObject("SELECT count(*) FROM refresh_tokens WHERE user_id = ? AND tenant_id = ? " +
             "AND created_via = 'magic_link' AND revoked_at IS NULL", Integer.class, sellerId(added), tenantA)).isEqualTo(1);
 
         HttpResponse<String> second = open(link);
-        assertThat(second.statusCode()).isEqualTo(302);
-        assertThat(second.headers().firstValue("location").orElseThrow()).isEqualTo(appUrl + "/bazar/invite-expired");
+        assertThat(second.statusCode()).isEqualTo(409);
+        assertThat(second.body()).contains("\"reason\":\"used\"");
         assertThat(refreshCookie(second)).as("no session from a used link").isNull();
     }
 
@@ -254,8 +267,12 @@ class BazarSellersTest {
         // … and past it.
         jdbc.update("UPDATE magic_link_tokens SET expires_at = now() - interval '1 second' WHERE token_hash = ?",
             AuthRepository.sha256(raw));
+        jdbc.update("UPDATE bazar_seller_invites SET created_at = now() - interval '2 days', " +
+            "expires_at = now() - interval '1 second' WHERE token_hash = ?",
+            AuthRepository.sha256(raw));
         HttpResponse<String> r = open(link);
-        assertThat(r.headers().firstValue("location").orElseThrow()).isEqualTo(appUrl + "/bazar/invite-expired");
+        assertThat(r.statusCode()).isEqualTo(409);
+        assertThat(r.body()).contains("\"reason\":\"expired\"");
         assertThat(refreshCookie(r)).isNull();
     }
 
@@ -415,7 +432,7 @@ class BazarSellersTest {
         List<String> ev = liveEvent(1, List.of("owner", "worker"));
         Map<String, Object> added = addSeller(ownerA, ev.get(0), Map.of("name", "Lander"));
         HttpResponse<String> r = open((String) added.get("link"));
-        assertThat(r.headers().firstValue("location").orElseThrow()).endsWith("/bazar/join/" + ev.get(0));
+        assertThat(r.body()).contains("\"event_id\":\"" + ev.get(0) + "\"");
         String token = refresh(refreshCookie(r)).getBody().accessToken();
         Map me = call(token, HttpMethod.GET, "/api/v1/bazar-events/" + ev.get(0) + "/sellers/me", null).getBody();
         assertThat(me.get("can_sell")).isEqualTo(true);
@@ -488,7 +505,8 @@ class BazarSellersTest {
             .get("sellers").toString()).doesNotContain(seller.toString());
         // The unused link opens nothing.
         HttpResponse<String> late = open(spare);
-        assertThat(late.headers().firstValue("location").orElseThrow()).isEqualTo(appUrl + "/bazar/invite-expired");
+        assertThat(late.statusCode()).isEqualTo(409);
+        assertThat(late.body()).contains("\"reason\":\"removed\"");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL",
             Integer.class, seller)).isZero();
     }

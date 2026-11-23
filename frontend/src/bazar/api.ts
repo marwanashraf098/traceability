@@ -157,6 +157,15 @@ export interface BazarSalesPage {
 }
 
 /** A failure the server answered with its own code (never retried). */
+/** The words for an error the server sent no message for — by status, never the code. */
+export function fallbackMessage(status: number, lang: 'en' | 'ar'): string {
+  if (status === 403) {
+    return lang === 'ar' ? 'لا يمكنك القيام بهذا — اطلب من المالك أو المدير.'
+      : "You can't do this — ask an owner or manager."
+  }
+  return lang === 'ar' ? 'حدث خطأ. حاول مرة أخرى.' : 'Something went wrong. Try again.'
+}
+
 export class BazarError extends Error {
   code: string
   status: number
@@ -167,8 +176,9 @@ export class BazarError extends Error {
     super(body.code)
     this.code = body.code
     this.status = status
-    this.messageEn = body.message_en ?? body.code
-    this.messageAr = body.message_ar ?? body.message_en ?? body.code
+    // B10: a body without a message (a bare 403 from a role check, a proxy error) never shows its code ("HTTP_403").
+    this.messageEn = body.message_en ?? fallbackMessage(status, 'en')
+    this.messageAr = body.message_ar ?? (body.message_en ? body.message_en : fallbackMessage(status, 'ar'))
     this.details = body.details && typeof body.details === 'object' && !Array.isArray(body.details)
       ? body.details as Record<string, unknown> : null
   }
@@ -851,6 +861,62 @@ export function setBazarSellerPin(pin: string) {
 
 export function getBazarSellerRoster(eventId: string) {
   return bazarFetch<{ id: string; name: string; locked: boolean; lockedUntil: string | null }[]>(`${base(eventId)}/sellers/roster`)
+}
+
+// ── B10 — opening a seller invite (no sign-in needed): the landing page's check, then "Start selling" ───────────
+
+/** valid · used · expired · replaced (a newer link was sent) · removed · unknown · legacy (a link from before B10). */
+export type SellerInviteStatus = 'valid' | 'used' | 'expired' | 'replaced' | 'removed' | 'unknown' | 'legacy'
+
+export interface SellerInviteCheck {
+  status: SellerInviteStatus
+  store_name?: string
+  event_name?: string
+  seller_name?: string
+  seller_id?: string
+}
+
+async function invitePost<T>(path: 'check' | 'redeem', t: string | null, token: string): Promise<T> {
+  const access = getAccessToken()
+  let res: Response
+  try {
+    res = await fetch(`/api/v1/auth/seller-invite/${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(access ? { Authorization: `Bearer ${access}` } : {}) },
+      body: JSON.stringify(t ? { t, token } : { token }),
+    })
+  } catch {
+    throw new BazarNetworkError('network')
+  }
+  if (res.status >= 500) throw new BazarNetworkError('server')
+  let body: unknown = null
+  try { body = await res.json() } catch { /* empty */ }
+  if (!res.ok) {
+    const b = body as { code?: string } | null
+    throw new BazarError(res.status, b?.code ? b as { code: string } : { code: `HTTP_${res.status}` })
+  }
+  return body as T
+}
+
+/** Reads only — what the link is and whose it is. */
+export function checkSellerInvite(t: string | null, token: string) {
+  return invitePost<SellerInviteCheck>('check', t, token)
+}
+
+/**
+ * Uses the link up and signs this browser in as the seller (the refresh cookie is set; this browser's previous
+ * session is ended). The caller stores the access token and opens /bazar/join/{event_id}.
+ */
+export function redeemSellerInvite(t: string | null, token: string) {
+  return invitePost<{ access_token: string; event_id: string }>('redeem', t, token)
+}
+
+/** The refusal reason of a BAZAR_INVITE_REFUSED error, if it is one. */
+export function inviteRefusal(e: unknown): string | null {
+  if (!(e instanceof BazarError) || e.code !== 'BAZAR_INVITE_REFUSED') return null
+  const r = e.details?.reason
+  return typeof r === 'string' ? r : 'unknown'
 }
 
 /** wa.me with the invite text prefilled; an Egyptian mobile (01…) goes straight to that chat. */

@@ -1,5 +1,6 @@
 import { clearAccessToken, getAccessToken, setAccessToken } from './auth'
 import type { SignupAttribution } from './metaPixel'
+import { sessionSwitch, userOfToken } from './session'
 
 const BASE = '/api/v1'
 
@@ -7,7 +8,13 @@ const BASE = '/api/v1'
 // we never fire more than one refresh at a time.
 let refreshPromise: Promise<string> | null = null
 
+/** B10: the refresh cookie now belongs to another user than this tab's token (another tab changed the session). */
+export class SessionChangedError extends Error {
+  constructor() { super('session_changed') }
+}
+
 async function doRefresh(): Promise<string> {
+  const before = userOfToken(getAccessToken())
   const res = await fetch(BASE + '/auth/refresh', { method: 'POST', credentials: 'include' })
   if (!res.ok) {
     clearAccessToken()
@@ -15,6 +22,13 @@ async function doRefresh(): Promise<string> {
   }
   const data: { accessToken: string } = await res.json()
   setAccessToken(data.accessToken)
+  // B10: never carry on as someone else — no retry of the call that hit the 401; the app starts over as the
+  // cookie's user (header, sidebar, role guards and every cache rebuilt).
+  const after = userOfToken(data.accessToken)
+  if (before && after && before !== after) {
+    sessionSwitch.reload()
+    throw new SessionChangedError()
+  }
   return data.accessToken
 }
 
@@ -44,7 +58,9 @@ async function refreshOrLogout(isRetry: boolean): Promise<void> {
       refreshPromise = doRefresh().finally(() => { refreshPromise = null })
     }
     await refreshPromise
-  } catch {
+  } catch (e) {
+    // B10: the session changed hands — the app is reloading as the new user; the call is not retried.
+    if (e instanceof SessionChangedError) throw new Error('Unauthenticated')
     clearAccessToken()
     window.location.href = '/login'
     throw new Error('Unauthenticated')

@@ -103,7 +103,7 @@ const SELLERS = (over: Partial<Record<string, unknown>> = {}) => ({
   sellers: [{ user_id: 'u-mona', name: 'Mona', phone: '01012345678', has_pin: false, added_at: '2026-11-19T10:00:00Z' }],
   ...over,
 })
-const LINK = 'https://app.tracedtech.com/auth/seller-invite?token=abc'
+const LINK = 'https://app.tracedtech.com/auth/seller-invite?t=t-1#token=abc'
 
 describe('Sellers panel (owner / manager)', () => {
   test('warns while workers can\'t sell, and allows them', async () => {

@@ -106,13 +106,19 @@ export function SellersPanel({ eventId }: { eventId: string }) {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {!ended && (
-                    <Button size="sm" variant="secondary" loading={busy === 'link:' + s.user_id} onClick={() => sendLink(s)}>
-                      {s.has_pin ? t('bazar.sellers.newLink') : t('bazar.sellers.getLink')}
-                    </Button>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-wrap gap-2">
+                    {!ended && (
+                      <Button size="sm" variant="secondary" loading={busy === 'link:' + s.user_id} onClick={() => sendLink(s)}>
+                        {s.has_pin ? t('bazar.sellers.newLink') : t('bazar.sellers.getLink')}
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(s)}>{t('bazar.sellers.remove')}</Button>
+                  </div>
+                  {/* B10: a link was sent already — a new one cancels it. */}
+                  {!ended && s.last_invited_at && (
+                    <span className="text-small text-muted" data-testid="seller-row-replaces">{t('bazar.sellers.replacesNote')}</span>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(s)}>{t('bazar.sellers.remove')}</Button>
                 </div>
               )}
             </li>
@@ -210,6 +216,8 @@ function LinkBox({ link, onDone }: { link: BazarSellerLink & { name: string; pho
       <p className="text-small font-semibold text-primary">{t('bazar.sellers.linkFor', { name: link.name })}</p>
       <code className="text-small text-primary break-all font-mono" dir="ltr" data-testid="seller-link-url">{link.link}</code>
       <p className="text-small text-muted">{t('bazar.sellers.linkNote')}</p>
+      {/* B10: sending again cancels the earlier link (it shows "a newer link was sent" to whoever opens it). */}
+      <p className="text-small text-muted" data-testid="seller-link-replaces">{t('bazar.sellers.replacesNote')}</p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" iconStart={Copy} onClick={() => {
           navigator.clipboard?.writeText(link.link).then(() => setCopied(true)).catch(() => setCopied(false))

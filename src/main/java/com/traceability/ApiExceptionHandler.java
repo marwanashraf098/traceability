@@ -372,7 +372,8 @@ public class ApiExceptionHandler {
         return "A data constraint was violated";
     }
 
-    record AccessDeniedBody(String error, String path, String authorities) {}
+    // B10: the caller's authorities are logged (below), never sent to the browser.
+    record AccessDeniedBody(String error, String path) {}
 
     // Must be caught explicitly: @PreAuthorize throws AccessDeniedException through Spring MVC,
     // which DispatcherServlet would otherwise pass to ExceptionHandlerExceptionResolver before
@@ -393,7 +394,7 @@ public class ApiExceptionHandler {
         log.warn("Access denied: user={} authorities=[{}] {}", user, authorities,
                  request.getMethod() + " " + request.getRequestURI());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-            .body(new AccessDeniedBody("ACCESS_DENIED", request.getRequestURI(), authorities));
+            .body(new AccessDeniedBody("ACCESS_DENIED", request.getRequestURI()));
     }
 
     record DbErrorBody(String error, String detail) {}

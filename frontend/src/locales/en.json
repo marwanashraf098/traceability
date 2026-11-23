@@ -7225,6 +7225,7 @@
       "none": "No customer"
     },
     "close": {
+      "managersOnly": "Only owners and managers can close the day.",
       "title": "Close the day",
       "dayLabel": "Day {{n}} · {{date}}",
       "todayLabel": "Today · {{date}}",
@@ -7406,6 +7407,7 @@
       "cancel": "Cancel",
       "linkFor": "Sign-in link for {{name}}",
       "linkNote": "Works once, for 24 hours. Anyone with this link can sign in as this seller — send it only to them.",
+      "replacesNote": "Sending a new link cancels the one you sent before — only the newest link works.",
       "copy": "Copy link",
       "copied": "Copied",
       "whatsApp": "Send on WhatsApp",
@@ -7445,6 +7447,25 @@
       "removedBody": "Ask the owner if this is a mistake.",
       "expiredTitle": "This sign-in link can't be used",
       "expiredBody": "This link has expired — ask the owner for a new one."
+    },
+    "invite": {
+      "failed": "This link didn't load. Check your connection and try again.",
+      "titleNoName": "Sell at the bazar",
+      "sellingAs": "You'll sell as {{name}}.",
+      "start": "Start selling",
+      "signedInAs": "You're signed in as {{name}} ({{role}}) on this phone.",
+      "continueAs": "Continue as {{name}}?",
+      "continueAsSeller": "Continue with this seller link?",
+      "signsOut": "{{name}} will be signed out of this phone.",
+      "cancel": "Cancel",
+      "continue": "Continue",
+      "refused": {
+        "used": "This link was already used. Ask the owner to send you a new one.",
+        "expired": "This link has expired — ask the owner for a new one.",
+        "replaced": "A newer link was sent to you, so this one no longer works. Use the newest link, or ask the owner for a new one.",
+        "removed": "You're no longer a seller at this bazar. Ask the owner if this is a mistake.",
+        "unknown": "This link doesn't work. Ask the owner to send you a new one."
+      }
     },
     "menu": {
       "open": "Bazar menu",
