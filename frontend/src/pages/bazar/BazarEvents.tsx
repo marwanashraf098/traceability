@@ -11,6 +11,7 @@ import { eventDay, toNumber } from '../../bazar/format'
 import { TableSkeleton, cn, type BadgeTone } from '../../components/ui'
 import { cairoToday, dayCount, daysFrom, pickOverview, type OverviewState } from './r1/overviewState'
 import { DateTile, Eyebrow, Tag, amount, percent, rangeLabel, weekdayShort, type TagTone } from './r1/parts'
+import { FinishEventLink, needsFinish } from './FinishEvent'
 
 export const STATUS_TONE: Record<BazarStatus, BadgeTone> = { draft: 'warning', live: 'success', ended: 'neutral' }
 
@@ -436,6 +437,7 @@ function LastBazarPanel({ ev }: { ev: BazarEventRow }) {
           </div>
         </>
       )}
+      {needsFinish(ev.status, ev.transfer_status) && <FinishEventLink eventId={ev.id} piecesOut={ev.pieces_out} dark />}
       <Link to={`/bazar/${ev.id}/report`} className="text-small font-semibold text-[#93B4FF] hover:underline w-fit inline-flex items-center gap-1">
         {t('bazar.r1.overview.seeReport')}<ArrowRight size={13} aria-hidden className="rtl:-scale-x-100" />
       </Link>
@@ -469,6 +471,7 @@ function AfterHero({ ev, first }: { ev: BazarEventRow; first: boolean }) {
             {notReceived !== 0 && <Stat value={amount(notReceived)} label={t('bazar.r1.overview.notReceived')} bad />}
           </StatRow>
         )}
+        {needsFinish(ev.status, ev.transfer_status) && <FinishEventLink eventId={ev.id} piecesOut={ev.pieces_out} dark />}
         <Link to={`/bazar/${ev.id}/report`} className="text-body font-semibold text-[#93B4FF] hover:underline w-fit inline-flex items-center gap-1">
           {t('bazar.r1.overview.seeFullReport')}<ArrowRight size={14} aria-hidden className="rtl:-scale-x-100" />
         </Link>
@@ -564,6 +567,7 @@ function PastList({ rows }: { rows: BazarEventRow[] }) {
               <span className="text-small text-muted truncate">
                 {t('bazar.r1.overview.dayCount', { count: dayCount(r.starts_on, r.ends_on) })} · {r.location_name}
               </span>
+              {needsFinish(r.status, r.transfer_status) && <FinishEventLink eventId={r.id} piecesOut={r.pieces_out} />}
             </span>
             <span className="hidden sm:inline-flex"><Tag tone={TAG_FOR_STATUS[r.status]}>{t(`bazar.status.${r.status}`)}</Tag></span>
             <ChevronRight size={18} aria-hidden className="text-muted shrink-0 rtl:-scale-x-100" />

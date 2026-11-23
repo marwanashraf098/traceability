@@ -446,7 +446,10 @@ public class BazarService {
         UUID tenantId = requireEnabled();
         return jdbc.queryForList(
             "SELECT e.id, e.name, e.starts_on, e.ends_on, e.status, e.location_id, l.name AS location_name, " +
-            "       e.transfer_id, t.status AS transfer_status, e.created_at " +
+            "       e.transfer_id, t.status AS transfer_status, e.created_at, " +
+            // U1a: pieces still out on the transfer (neither sold, back, damaged nor lost) — "finish the event".
+            "       (SELECT COUNT(*) FROM transfer_pieces tp WHERE tp.transfer_id = t.id AND tp.tenant_id = t.tenant_id " +
+            "          AND tp.outcome IS NULL)::int AS pieces_out " +
             "FROM bazar_events e JOIN locations l ON l.id = e.location_id JOIN transfers t ON t.id = e.transfer_id " +
             "WHERE e.tenant_id = ? ORDER BY e.created_at DESC, e.id DESC", tenantId);
     }

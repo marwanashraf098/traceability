@@ -6990,6 +6990,19 @@
     "alertLink": "ماذا يعني هذا؟"
   },
   "bazar": {
+    "u1a": {
+      "closeDay": "إغلاق اليوم",
+      "closeDayOn": "إغلاق يوم · {{date}}",
+      "oldestOpen": "هذا أقدم يوم ما زال مفتوحًا — {{date}}.",
+      "stillOut_zero": "{{count}} قطعة ما زالت بالخارج",
+      "stillOut_one": "قطعة واحدة ما زالت بالخارج",
+      "stillOut_two": "قطعتان ما زالتا بالخارج",
+      "stillOut_few": "{{count}} قطع ما زالت بالخارج",
+      "stillOut_many": "{{count}} قطعة ما زالت بالخارج",
+      "stillOut_other": "{{count}} قطعة ما زالت بالخارج",
+      "closeTransferToFinish": "أغلق النقل لإنهاء البازار",
+      "finishEvent": "إنهاء البازار"
+    },
     "online": {
       "title": "المخزون الأونلاين",
       "sub": "ماذا يحدث لهذه القطع في متجرك على Shopify أثناء وجودها في البازار.",

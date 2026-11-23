@@ -110,6 +110,11 @@ public final class MainReconcileRules {
     public static final String NOTE_UNFULFILLED_CAPPED = "unfulfilled_capped";
     /** Diff note: the parts summed below 0 and the target was floored at 0. */
     public static final String NOTE_TARGET_FLOORED = "target_floored";
+    /**
+     * Diff note (U1a fast path): confirmed without the two-run wait because Keep-mode bazar piece changes explain the
+     * written part ({@link MainReconcileBrake#explained}); an unexplained remainder still waits for two runs.
+     */
+    public static final String NOTE_KEEP_BAZAR_FAST = "keep_bazar_fast";
 
     public static final List<String> SKIP_ORDER = List.of(NOT_LINKED, SHOPIFY_UNREAD, RECONCILE_WRITE_IN_FLIGHT, PART1_IN_FLIGHT,
         ARRIVAL_REVISIT_PENDING, CLAIM_IN_FLIGHT, CLAIM_AMBIGUOUS, STOCK_TAKE_SYNC_IN_FLIGHT, TRANSFER_SYNC_IN_FLIGHT,

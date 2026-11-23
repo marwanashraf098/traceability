@@ -30,7 +30,9 @@ import java.util.UUID;
  *       damaged at the bazar → brought home, still damaged. Same {@code client_request_id} again → the first
  *       answer (replayed).</li>
  *   <li><b>Mark lost</b>: only pieces still outstanding (sold ones never are — a sale resolves its transfer piece).</li>
- *   <li><b>Close transfer</b>: when sent = sold + back + damaged + lost (nothing outstanding).</li>
+ *   <li><b>Close transfer</b>: when sent = sold + back + damaged + lost (nothing outstanding). U1a: every damaged
+ *       piece still at the bazar location is first brought home damaged (bringBackDamagedForBazar, metadata
+ *       {@code "via":"transfer_close"}) — scanning it on End event stays optional; nothing is left stranded.</li>
  * </ul>
  */
 @Service
@@ -49,6 +51,12 @@ public class BazarEndService {
         this.transfers = transfers;
         this.days = days;
     }
+
+    /** U1a: a Keep-mode bazar's lost / close queue their variants for Main reconcile (after commit). */
+    private BazarKeepModeQueue keepQueue;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKeepQueue(BazarKeepModeQueue keepQueue) { this.keepQueue = keepQueue; }
 
     // ── End ──────────────────────────────────────────────────────────────────
 
@@ -86,16 +94,10 @@ public class BazarEndService {
     /** Days with any money row that are open or changed after their close — the End event block. */
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> daysNeedingClose(UUID eventId, BazarSaleService.Actor actor) {
-        UUID tenantId = TenantContext.require();
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> d : (List<Map<String, Object>>) days.days(eventId, actor).get("days")) {
             String status = (String) d.get("status");
-            if (!"open".equals(status) && !"changed_after_close".equals(status)) continue;
-            boolean money = Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM bazar_payments p " +
-                "WHERE p.event_id = ? AND p.tenant_id = ? AND p.business_day = ?::date)",
-                Boolean.class, eventId, tenantId, d.get("business_day")));
-            if (!money) continue;
+            if (!Boolean.TRUE.equals(d.get("needs_close"))) continue;   // U1a: BazarDayService's one rule
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("business_day", d.get("business_day"));
             row.put("day_number", d.get("day_number"));
@@ -408,6 +410,7 @@ public class BazarEndService {
         for (Map.Entry<UUID, List<String>> e : byLine.entrySet()) {
             transfers.markLostForBazar(transferId, e.getKey(), e.getValue(), actor.userId());
         }
+        if (keepQueue != null) keepQueue.pieces(tenantId, transferId, ids, BazarKeepModeQueue.LOST);
         return leftovers(tenantId, ev);
     }
 
@@ -434,7 +437,15 @@ public class BazarEndService {
                 "ما زالت " + c.get("outstanding") + " قطعة/قطع لم تُمسح للعودة ولم تُسجَّل كمفقودة.",
                 HttpStatus.CONFLICT, d);
         }
+        // U1a: the damaged pieces nobody scanned home come home now, still damaged (the ledger's location move).
+        @SuppressWarnings("unchecked") List<Map<String, Object>> away =
+            (List<Map<String, Object>>) before.get("damaged_to_bring_home");
+        for (Map<String, Object> p : away) {
+            transfers.bringBackDamagedForBazar(transferId, (String) p.get("piece_id"), actor.userId(), null,
+                "transfer_close");
+        }
         transfers.closeTransferForBazar(transferId, actor.userId());
+        if (keepQueue != null) keepQueue.transfer(tenantId, transferId, BazarKeepModeQueue.CLOSE);
         Map<String, Object> out = leftovers(tenantId, ev);
         out.put("replayed", false);
         return out;

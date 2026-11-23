@@ -33,6 +33,8 @@ export interface BazarEventRow {
   transfer_id: string
   transfer_status: string
   created_at: string
+  /** U1a: pieces still out on the transfer (neither sold, back, damaged nor lost). */
+  pieces_out?: number
 }
 
 /** Money that moved (payments − refunds) and revenue (sales − returns); B3 adds returns / exchanges / revenue. */
@@ -560,6 +562,8 @@ export interface BazarDay {
   business_day: string
   day_number: number
   is_today: boolean
+  /** U1a: open or changed after its close, with money — the day still needs closing. */
+  needs_close?: boolean
   money: BazarTotals
   status: BazarDayStatus
   close: {

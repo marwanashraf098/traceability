@@ -1133,8 +1133,15 @@ public class TransferService {
      * send). The ledger records the arrival (status unchanged). Returns false when the piece isn't a damaged piece of
      * this transfer still away from main. ONE caller: BazarEndService.
      */
+    /**
+     * U1a: {@code via} (e.g. "transfer_close" — the close brings the rest home) is written into the event's metadata.
+     * Keep this full-body overload FIRST, above the 4-argument one: BazarEndTest's source guard
+     * (damagedBringHome_movesThePieceOnlyThroughInventoryLedger) reads the body of the first
+     * {@code bringBackDamagedForBazar(} in this file and checks it moves the piece only through InventoryLedger.
+     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public boolean bringBackDamagedForBazar(UUID transferId, String pieceId, UUID actorUserId, String clientRequestId) {
+    public boolean bringBackDamagedForBazar(UUID transferId, String pieceId, UUID actorUserId, String clientRequestId,
+                                            String via) {
         UUID tenantId = TenantContext.require();
         if (!isBazarTransfer(transferId, tenantId)) throw transferNotFound();
         UUID main = fulfillmentLocationId(tenantId);
@@ -1146,9 +1153,16 @@ public class TransferService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         if (clientRequestId != null) m.put("client_request_id", clientRequestId);
+        if (via != null) m.put("via", via);
         // The location move + its event go through InventoryLedger — the one writer of piece changes.
         if (!ledger.bringBackDamaged(pieceId, main, actorUserId, writeJson(m))) return false;
         return true;
+    }
+
+    /** The scan / tap path (no {@code via}). */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean bringBackDamagedForBazar(UUID transferId, String pieceId, UUID actorUserId, String clientRequestId) {
+        return bringBackDamagedForBazar(transferId, pieceId, actorUserId, clientRequestId, null);
     }
 
     // ── Reconcile: classify shortfall ────────────────────────────────────────

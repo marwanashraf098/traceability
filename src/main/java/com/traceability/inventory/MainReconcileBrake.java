@@ -20,6 +20,14 @@ import java.util.*;
  * Denominator: a sweep's own total on_hand at Main (every level it read); a per-variant run uses the latest write
  * sweep's total, else the levels it read itself (smaller → the units floor decides).
  *
+ * Keep-bazar exemption (U1a, approved 2026-11-22): a busy Keep-mode bazar ('leave' — Shopify keeps showing the pieces
+ * while they're away) easily confirms 20+ units in one window, all of them really gone. The part of a variant's
+ * difference that its Keep-bazar piece changes explain is not weighed: per variant, the net of its pieces' moves
+ * out_on_transfer → sold / damaged / lost (−1) and back (+1), made while the piece was away on a Keep bazar's transfer,
+ * since the variant's last APPLIED reconcile write (that write already put Shopify in line with everything before it),
+ * up to the run's read time — counted only in the delta's direction and never more than |delta| ({@link #explained}).
+ * Remove-mode bazars (their send already left Shopify) and every non-bazar difference are weighed exactly as before.
+ *
  * Held run: status 'skipped', skip_reason 'large_change_held', counts and diffs kept as computed. Alert: once per
  * store — again only after a run evaluated under the limit, or realert-hours after the last alert. Evaluated under the
  * seed's per-tenant advisory lock, so two concurrent runs of one store can't both alert. Not a bean: built by
@@ -53,6 +61,38 @@ final class MainReconcileBrake {
         this.percent = percent;
         this.realertHours = realertHours;
         this.confirmAfterMinutes = confirmAfterMinutes;
+    }
+
+    /**
+     * U1a: per variant, the net Keep-bazar change of the Main target since the variant's last applied reconcile write
+     * (negative = pieces sold / damaged / lost at a Keep bazar). A move counts only while the piece was on a Keep bazar's
+     * transfer (sent → closed) — the only moves that change the target with no Shopify write behind them.
+     */
+    static final String KEEP_BAZAR_NET_SQL =
+        "WITH v AS (SELECT unnest(CAST(? AS uuid[])) AS variant_id), " +
+        "s AS (SELECT v.variant_id, (SELECT max(w.created_at) FROM main_reconcile_writes w " +
+        "        WHERE w.tenant_id = ? AND w.variant_id = v.variant_id AND w.status = 'applied') AS since FROM v) " +
+        "SELECT p.variant_id, SUM(CASE " +
+        "    WHEN e.from_status::text = 'out_on_transfer' AND e.to_status::text IN ('sold', 'damaged', 'lost') THEN -1 " +
+        "    WHEN e.from_status::text IN ('sold', 'damaged', 'lost') AND e.to_status::text = 'out_on_transfer' THEN 1 " +
+        "    ELSE 0 END) AS net " +
+        "FROM s JOIN pieces p ON p.tenant_id = ? AND p.variant_id = s.variant_id " +
+        "JOIN piece_events e ON e.piece_id = p.id AND e.tenant_id = p.tenant_id " +
+        "WHERE (s.since IS NULL OR e.occurred_at > s.since) AND e.occurred_at <= ?::timestamptz " +
+        "  AND ((e.from_status::text = 'out_on_transfer' AND e.to_status::text IN ('sold', 'damaged', 'lost')) " +
+        "    OR (e.from_status::text IN ('sold', 'damaged', 'lost') AND e.to_status::text = 'out_on_transfer')) " +
+        "  AND EXISTS (SELECT 1 FROM transfer_pieces tp " +
+        "      JOIN transfers t ON t.id = tp.transfer_id AND t.tenant_id = tp.tenant_id " +
+        "      JOIN bazar_events be ON be.transfer_id = t.id AND be.tenant_id = t.tenant_id " +
+        "      WHERE tp.piece_id = p.id AND tp.tenant_id = p.tenant_id AND t.shopify_sync_mode = 'leave' " +
+        "        AND e.occurred_at >= COALESCE(t.sent_at, t.created_at) " +
+        "        AND (t.closed_at IS NULL OR e.occurred_at <= t.closed_at)) " +
+        "GROUP BY p.variant_id";
+
+    /** The part of {@code delta} that {@code keepNet} explains: same direction only, never more than |delta|. */
+    static int explained(int delta, int keepNet) {
+        if (delta == 0 || keepNet == 0 || Integer.signum(delta) != Integer.signum(keepNet)) return 0;
+        return Math.min(Math.abs(delta), Math.abs(keepNet));
     }
 
     /** The limit: max(units, floor(percent% of on_hand)). Over it = held. */
@@ -106,8 +146,26 @@ final class MainReconcileBrake {
                 }
             }
 
-            int up = 0, down = 0;
-            for (Item i : items) { if (i.delta() > 0) up += i.delta(); else down += -i.delta(); }
+            // U1a: what Keep-bazar piece changes explain is not weighed.
+            Map<UUID, Integer> keepNet = new HashMap<>();
+            if (!items.isEmpty()) {
+                jdbc.query(KEEP_BAZAR_NET_SQL,
+                    rs -> { keepNet.put(rs.getObject(1, UUID.class), rs.getInt(2)); },
+                    MainReconcileService.uuidArray(items.stream().map(Item::variantId).distinct().toList()),
+                    tenantId, tenantId, readAt);
+            }
+            int up = 0, down = 0, exempt = 0;
+            for (Item i : items) {
+                int ex = explained(i.delta(), keepNet.getOrDefault(i.variantId(), 0));
+                exempt += ex;
+                int weighed = Math.abs(i.delta()) - ex;
+                if (i.delta() > 0) up += weighed; else down += weighed;
+            }
+            if (exempt > 0) {
+                org.slf4j.LoggerFactory.getLogger(MainReconcileBrake.class).info(
+                    "Main reconcile brake run {} tenant={}: {} unit(s) explained by Keep-mode bazar changes, not weighed",
+                    runId, tenantId, exempt);
+            }
             long total = (long) up + down;
             int lim = limit(units, percent, onHand);
             boolean held = over(units, percent, onHand, total);

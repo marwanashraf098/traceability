@@ -143,7 +143,7 @@ function PieceLine({ p }: { p: BazarLeftoverPiece }) {
  * damaged still to bring home, the pieces not scanned back (Mark lost — one row, or ticked together), and Close the
  * transfer (only once every piece is accounted for).
  */
-export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide }: {
+export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide, reportTo }: {
   eventId: string
   initial: BazarLeftovers
   onClosed: (l: BazarLeftovers) => void
@@ -151,6 +151,8 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide }: {
   noCamera?: boolean
   /** R3 — the computer's End event page: scan + counts left, not back yet + close right. Same panel. */
   wide?: boolean
+  /** U1a: once the transfer is closed, the green box carries a primary "View report" to this link. */
+  reportTo?: string
 }) {
   const { t } = useTranslation()
   const [l, setL] = useState<BazarLeftovers>(initial)
@@ -381,6 +383,11 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide }: {
         <section className="rounded-xl bg-success/10 border border-success/30 px-4 py-3 flex flex-col gap-0.5" data-testid="transfer-closed">
           <span className="font-semibold text-success-text">{t('bazar.end.closedTitle')}</span>
           <span className="text-small text-primary">{t('bazar.end.closedBody')}</span>
+          {reportTo && (
+            <Link to={reportTo} className={cn(btn, primary, 'mt-2.5 sm:w-auto sm:self-start sm:px-6')} data-testid="end-view-report">
+              {t('bazar.end.viewReport')}
+            </Link>
+          )}
         </section>
       ) : (
         <section className="bg-grey-900 text-[#F2F4F7] rounded-2xl p-4 flex flex-col gap-3" data-testid="leftovers-close-box">

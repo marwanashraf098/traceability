@@ -7,7 +7,8 @@ import { Spinner, cn } from '../../../components/ui'
 import type { BazarLive } from '../../../capabilities'
 import { CloseDayForm, CloseResultView, DayStatusBadge, dayTitle } from '../CloseDayForm'
 import { NotLiveScreen, PhoneFrame, useBazarLive } from './shared'
-import { amount } from '../r1/parts'
+import { defaultCloseDay } from '../closeDayDefault'
+import { amount, dayLabel } from '../r1/parts'
 
 /**
  * Bazar POS B4 — CLOSE THE DAY on the phone (mockup page 1, step 8). Owner / manager only. Today by default; an
@@ -40,7 +41,7 @@ function CloseScreen({ live }: { live: BazarLive }) {
   const todayDay = days.find(d => d.is_today) ?? days[days.length - 1]
   // Days that still need the owner: open, or changed after their close (today always shows).
   const needing = days.filter(d => d.is_today || d.status === 'open' || d.status === 'changed_after_close')
-  const day = days.find(d => d.business_day === picked) ?? todayDay
+  const day = days.find(d => d.business_day === picked) ?? defaultCloseDay(days) ?? todayDay
   const todayMoney = days.find(d => d.is_today)?.money
 
   const Back = i18n.dir() === 'rtl' ? ArrowRight : ArrowLeft
@@ -114,6 +115,11 @@ function CloseScreen({ live }: { live: BazarLive }) {
             </h2>
             <DayStatusBadge day={day} />
           </div>
+          {!picked && !day.is_today && day.needs_close && (
+            <p className="text-small text-warning-text -mt-1" data-testid="close-day-oldest">
+              {t('bazar.u1a.oldestOpen', { date: dayLabel(day.business_day, i18n.language) })}
+            </p>
+          )}
           <CloseDayForm key={day.business_day + ':' + day.close_count} eventId={eventId} day={day}
                         methods={orderedMethods(data.payment_methods)}
                         onClosed={d => { setClosed(d); load() }} />

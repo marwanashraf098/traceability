@@ -60,6 +60,11 @@ public class MainReconcileService {
     /** Postgres uuid order (unsigned bytes) = lowercase text order; THE lock order for main_reconcile_variant_state. */
     static final Comparator<UUID> VARIANT_ORDER = Comparator.comparing(UUID::toString);
 
+    /** U1a: the tenant has a Keep-mode ('leave') bazar transfer — only then is the Keep-bazar fast path read. */
+    static final String KEEP_BAZAR_EXISTS_SQL =
+        "SELECT EXISTS (SELECT 1 FROM bazar_events be JOIN transfers t ON t.id = be.transfer_id AND t.tenant_id = be.tenant_id " +
+        "WHERE be.tenant_id = ? AND t.shopify_sync_mode = 'leave')";
+
     private static final String INSERT_DIFF_SQL =
         "INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
         "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
@@ -717,8 +722,17 @@ public class MainReconcileService {
             int checked = 0, inSync = 0, skipped = 0, differences = 0, confirmed = 0, up = 0, down = 0, damagedMismatch = 0;
             Map<String, Integer> byReason = new TreeMap<>();
             long confirmMillis = confirmAfterMinutes * 60_000L;
+            // U1a fast path: does this tenant have any Keep-mode bazar at all? (one cheap read; no → nothing changes)
+            boolean anyKeepBazar = Boolean.TRUE.equals(tx.execute(st -> jdbc.queryForObject(KEEP_BAZAR_EXISTS_SQL,
+                Boolean.class, tenantId)));
 
             for (List<UUID> chunk : chunks(ids)) {
+                Map<UUID, Integer> keepNet = new HashMap<>();
+                if (anyKeepBazar) {
+                    tx.executeWithoutResult(st -> jdbc.query(MainReconcileBrake.KEEP_BAZAR_NET_SQL,
+                        rs -> { keepNet.put(rs.getObject(1, UUID.class), rs.getInt(2)); },
+                        uuidArray(chunk), tenantId, tenantId, readAt));
+                }
                 List<Map<String, Object>> rows = tx.execute(st -> named.queryForList(MainReconcileRules.EVALUATE_SQL,
                     new MapSqlParameterSource("t", tenantId).addValue("main", main.id()).addValue("mainGid", main.gid())
                         .addValue("mainNum", main.numeric()).addValue("ids", uuidArray(chunk))
@@ -769,6 +783,7 @@ public class MainReconcileService {
                     }
                     State prev = states.get(variantId);
                     String status;
+                    Integer chainDelta = delta;   // what the two-run chain remembers (U1a: the unexplained remainder)
                     Timestamp deltaSince = null;
                     Timestamp recheckAt = null;
 
@@ -783,19 +798,31 @@ public class MainReconcileService {
                     } else {
                         differences++;
                         if (lv.damaged() != tDamaged) damagedMismatch++;
-                        boolean sameChain = prev != null && prev.lastDelta() != null && prev.lastDelta().equals(delta)
-                            && prev.deltaSince() != null
+                        // U1a fast path: the part Keep-bazar piece changes explain needs no two-run wait; the two-run
+                        // chain runs on the unexplained REMAINDER only (so a size that keeps selling still drops).
+                        int fast = MainReconcileBrake.explained(delta, keepNet.getOrDefault(variantId, 0));
+                        int rest = delta - Integer.signum(delta) * fast;
+                        chainDelta = rest;
+                        boolean sameChain = rest != 0 && prev != null && prev.lastDelta() != null
+                            && prev.lastDelta().equals(rest) && prev.deltaSince() != null
                             && (prev.lastEventAt() == null || prev.lastEventAt().before(prev.deltaSince()));
-                        deltaSince = sameChain ? prev.deltaSince() : readAt;
-                        if (sameChain && readAt.getTime() - prev.deltaSince().getTime() >= confirmMillis) {
+                        deltaSince = rest == 0 ? null : sameChain ? prev.deltaSince() : readAt;
+                        boolean restConfirmed = sameChain && readAt.getTime() - prev.deltaSince().getTime() >= confirmMillis;
+                        int toWrite = restConfirmed ? delta : Integer.signum(delta) * fast;
+                        if (toWrite != 0) {
                             status = "confirmed";
                             confirmed++;
-                            if (delta > 0) up += delta; else down += -delta;
-                            if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand, target,
-                                custody, away, fulfilled, unpicked, owed, unfulfilled, delta, longs(r.get("settle_claims")),
-                                uuids(r.get("settle_part1")), uuids(r.get("settle_writes"))));
+                            if (fast > 0) note = note == null ? MainReconcileRules.NOTE_KEEP_BAZAR_FAST
+                                : note + "," + MainReconcileRules.NOTE_KEEP_BAZAR_FAST;
+                            if (toWrite > 0) up += toWrite; else down += -toWrite;
+                            if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand,
+                                onHand + toWrite, custody, away, fulfilled, unpicked, owed, unfulfilled, toWrite,
+                                longs(r.get("settle_claims")), uuids(r.get("settle_part1")), uuids(r.get("settle_writes")),
+                                toWrite != delta));
                         } else {
                             status = "unconfirmed";
+                        }
+                        if (rest != 0 && !restConfirmed) {
                             recheckAt = new Timestamp(deltaSince.getTime() + confirmMillis - debounceSeconds * 1000L + 1000L);
                         }
                     }
@@ -806,7 +833,7 @@ public class MainReconcileService {
                             lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince,
                             unfulfilled, unfulfilledRaw, note, unpicked});
                     }
-                    Integer keepDelta = skip != null ? null : delta;
+                    Integer keepDelta = skip != null ? null : chainDelta;
                     stateRows.put(variantId, new Object[]{tenantId, variantId, readAt, runId, keepDelta, deltaSince,
                         recheckAt, recheckAt, recheckAt});
                 }
