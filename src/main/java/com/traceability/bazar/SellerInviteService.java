@@ -108,8 +108,9 @@ public class SellerInviteService {
         guard(caller);
         Map<String, Object> out = new LinkedHashMap<>();
         if (token == null || token.isBlank()) {
-            refused("unknown", "check", null, null, null);
-            out.put("status", "unknown");
+            // The page opened without its #token= (an app dropped the fragment): the page says the link is incomplete.
+            refused("missing_token", "check", null, t == null || t.isBlank() ? null : uuid(t), null);
+            out.put("status", "missing_token");
             return out;
         }
         if (t == null || t.isBlank()) {
@@ -144,8 +145,8 @@ public class SellerInviteService {
     public Redeemed redeem(String t, String token, Caller caller) {
         guard(caller);
         if (token == null || token.isBlank()) {
-            refused("unknown", "redeem", null, null, null);
-            throw refusal("unknown");
+            refused("missing_token", "redeem", null, t == null || t.isBlank() ? null : uuid(t), null);
+            throw refusal("missing_token");
         }
         Redeemed r = (t == null || t.isBlank()) ? redeemLegacy(token) : redeemCurrent(t, token);
         endPreviousSession(caller);
@@ -293,6 +294,10 @@ public class SellerInviteService {
             case "removed" -> {
                 en = "You're no longer a seller at this bazar. Ask the owner if this is a mistake.";
                 ar = "لم تعد بائعًا في هذا البازار. اسأل المالك إذا كان هذا خطأ.";
+            }
+            case "missing_token" -> {
+                en = "This link is incomplete. Open it again from the message, or ask the owner for a new one.";
+                ar = "هذا الرابط غير مكتمل. افتحه مرة أخرى من الرسالة، أو اطلب من المالك رابطًا جديدًا.";
             }
             default -> {
                 en = "This link doesn't work. Ask the owner to send you a new one.";

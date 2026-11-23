@@ -7464,7 +7464,8 @@
         "expired": "This link has expired — ask the owner for a new one.",
         "replaced": "A newer link was sent to you, so this one no longer works. Use the newest link, or ask the owner for a new one.",
         "removed": "You're no longer a seller at this bazar. Ask the owner if this is a mistake.",
-        "unknown": "This link doesn't work. Ask the owner to send you a new one."
+        "unknown": "This link doesn't work. Ask the owner to send you a new one.",
+        "missing_token": "This link is incomplete. Open it again from the message, or ask the owner for a new one."
       }
     },
     "menu": {

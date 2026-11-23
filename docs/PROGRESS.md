@@ -12,6 +12,8 @@ owner's session, the sidebar kept "Owner", Close day got 403 and showed "You cou
 - **Link:** `{app}/auth/seller-invite?t=<tenantId>#token=<raw>` — the token is in the FRAGMENT (never sent to a
   server, never in a log, kept by the browser across the 302). GET `/auth/seller-invite` reads / writes nothing: 302 →
   `/bazar/invite?t=…` (a pre-B10 link `?token=` → `/bazar/invite#token=…`).
+  No `#token` on the landing page (an app dropped the fragment) → "This link is incomplete…" and a check with an empty
+  token, logged as refusal `reason=missing_token` (check and redeem).
 - **`SellerInviteService`** (bazar): POST `/api/v1/auth/seller-invite/check` (reads only, under tenant t + RLS) and
   `/redeem` (row locked → refused unless valid → hatch #6 via `MagicLinkService.consumeSellerInvite`, its ONE caller →
   `redeemed_at` stamped → cookie + {access_token, event_id}; the browser's previous session (Authorization sid) is

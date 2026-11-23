@@ -48,12 +48,16 @@ export default function BazarInvite() {
   const [token] = useState(() => tokenFromHash(hash))
   const [check, setCheck] = useState<SellerInviteCheck | null>(null)
   const [signed, setSigned] = useState<Signed | undefined>(undefined)
-  const [refused, setRefused] = useState<string | null>(token ? null : 'unknown')
+  const [refused, setRefused] = useState<string | null>(token ? null : 'missing_token')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!token) return
+    if (!token) {
+      // An app dropped the #token= fragment: the server logs the refusal (missing_token); the page already says why.
+      checkSellerInvite(tenant, '').catch(() => {})
+      return
+    }
     let cancelled = false
     checkSellerInvite(tenant, token).then(c => {
       if (cancelled) return

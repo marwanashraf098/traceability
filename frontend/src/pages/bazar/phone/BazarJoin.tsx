@@ -119,7 +119,7 @@ export function BazarInviteExpired() {
   return <InviteRefused reason={params.get('reason') ?? 'expired'} />
 }
 
-const REFUSALS = ['used', 'expired', 'replaced', 'removed'] as const
+const REFUSALS = ['used', 'expired', 'replaced', 'removed', 'missing_token'] as const
 
 /**
  * B10: a seller link that can't be used — says why (used / expired / a newer link was sent / no longer a seller /

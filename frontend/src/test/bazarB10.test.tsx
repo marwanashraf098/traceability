@@ -208,11 +208,16 @@ describe('the landing page — opening the link uses nothing up', () => {
     expect(getAccessToken()).toBeNull()
   })
 
-  test('no token in the link → "doesn\'t work", nothing is called', async () => {
-    install(noSession)
+  test('no #token (an app dropped the fragment) → "incomplete", the refusal is logged, nothing is redeemed', async () => {
+    install(noSession, on('POST', '/auth/seller-invite/check', () => json(200, { status: 'missing_token' })))
     renderAt(`/bazar/invite?t=${TENANT}`, inviteRoutes)
-    expect(await screen.findByTestId('bazar-invite-expired')).toHaveTextContent("This link doesn't work.")
-    expect(calls.some(c => c.url.includes('/seller-invite/'))).toBe(false)
+    const page = await screen.findByTestId('bazar-invite-expired')
+    expect(page).toHaveTextContent(
+      'This link is incomplete. Open it again from the message, or ask the owner for a new one.')
+    expect(page.dataset.reason).toBe('missing_token')
+    await waitFor(() => expect(calls.some(c => c.url.includes('/seller-invite/check'))).toBe(true))
+    expect(calls.find(c => c.url.includes('/seller-invite/check'))!.body).toEqual({ t: TENANT, token: '' })
+    expect(calls.some(c => c.url.includes('/redeem'))).toBe(false)
   })
 })
 

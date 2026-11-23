@@ -400,6 +400,19 @@ class SellerInviteFlowTest {
     }
 
     @Test
+    void missingToken_isRefusedAsMissingToken_andLogged(CapturedOutput out) throws Exception {
+        HttpResponse<String> c = check(tenantA.toString(), "");
+        assertThat(c.statusCode()).isEqualTo(200);
+        assertThat(c.body()).contains("\"status\":\"missing_token\"");
+        HttpResponse<String> r = redeem(tenantA.toString(), "");
+        assertThat(r.statusCode()).isEqualTo(409);
+        assertThat(r.body()).contains("\"reason\":\"missing_token\"").contains("This link is incomplete.");
+        assertThat(out.getAll())
+            .contains("Seller invite refused reason=missing_token phase=check userId=null tenantId=" + tenantA)
+            .contains("Seller invite refused reason=missing_token phase=redeem userId=null tenantId=" + tenantA);
+    }
+
+    @Test
     void perIpLimit_refusesWith429() throws Exception {
         for (String ip : List.of("127.0.0.1", "0:0:0:0:0:0:0:1")) {
             String bucket = "seller-invite-ip:" + ReflectionTestUtils.invokeMethod(invites, "hmac", ip);
