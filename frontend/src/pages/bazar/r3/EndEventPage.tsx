@@ -6,11 +6,11 @@ import {
   BazarError, getBazarEvent, getBazarLeftovers, type BazarEventDetail, type BazarLeftovers,
 } from '../../../bazar/api'
 import { resetCapabilitiesCache } from '../../../capabilities'
-import { Spinner, cn } from '../../../components/ui'
+import { Spinner } from '../../../components/ui'
 import { EndEventPanel, LeftoversPanel } from '../Leftovers'
 import { amount } from '../r1/parts'
 import { Chip } from '../r2/parts'
-import { StepsStrip, btnPrimary, cairoDateTime } from './parts'
+import { StepsStrip, cairoDateTime } from './parts'
 
 /**
  * Bazar R3 — /bazar/:id/end-event: End the event as a page on the computer (design/bazar-v2 V2_EndEvent), in the
@@ -87,12 +87,8 @@ export default function EndEventPage() {
         </section>
       ) : (
         <>
-          <LeftoversPanel eventId={ev.id} initial={left} noCamera wide onClosed={l => { setLeft(l); load() }} />
-          {closed && (
-            <Link to={`/bazar/${id}/report`} className={cn(btnPrimary, 'self-start')} data-testid="end-view-report">
-              {t('bazar.end.viewReport')}
-            </Link>
-          )}
+          <LeftoversPanel eventId={ev.id} initial={left} noCamera wide reportTo={`/bazar/${id}/report`}
+                          onClosed={l => { setLeft(l); load() }} />
         </>
       )}
     </div>

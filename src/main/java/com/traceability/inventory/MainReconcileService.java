@@ -60,6 +60,11 @@ public class MainReconcileService {
     /** Postgres uuid order (unsigned bytes) = lowercase text order; THE lock order for main_reconcile_variant_state. */
     static final Comparator<UUID> VARIANT_ORDER = Comparator.comparing(UUID::toString);
 
+    /** U1a: the tenant has a Keep-mode ('leave') bazar transfer — only then is the Keep-bazar fast path read. */
+    static final String KEEP_BAZAR_EXISTS_SQL =
+        "SELECT EXISTS (SELECT 1 FROM bazar_events be JOIN transfers t ON t.id = be.transfer_id AND t.tenant_id = be.tenant_id " +
+        "WHERE be.tenant_id = ? AND t.shopify_sync_mode = 'leave')";
+
     private static final String INSERT_DIFF_SQL =
         "INSERT INTO main_reconcile_diffs (tenant_id, run_id, variant_id, status, skip_reason, " +
         "custody_at_main, away_counted, fulfilled_from_main, part1_owed, target, shopify_on_hand, " +
@@ -100,6 +105,12 @@ public class MainReconcileService {
     private int confirmAfterMinutes = 10;
     private int part1WindowDays = 30;
     private int debounceSeconds = 60;
+    /**
+     * U1a cap: a variant whose pending mark is a bazar one (pending_source 'bazar:…', BazarKeepModeQueue) is due at
+     * most this long after its FIRST pending mark, however many more sales keep touching it — a size selling more than
+     * once a minute would otherwise keep postponing its run past the debounce. Webhook / claim marks: unchanged.
+     */
+    private int keepBazarMaxWaitSeconds = 180;
     private int queueBatch = 500;
     private int cancelledFulfillmentWindowMinutes = 60;
     private int storeSkipRowMinutes = 60;
@@ -223,6 +234,10 @@ public class MainReconcileService {
     @Autowired
     public void setDebounceSeconds(@Value("${traced.main-reconcile.debounce-seconds:60}") int s) { this.debounceSeconds = s; }
     @Autowired
+    public void setKeepBazarMaxWaitSeconds(@Value("${traced.main-reconcile.keep-bazar-max-wait-seconds:180}") int s) {
+        this.keepBazarMaxWaitSeconds = s;
+    }
+    @Autowired
     public void setQueueBatch(@Value("${traced.main-reconcile.queue-batch:500}") int n) { this.queueBatch = n; }
 
     /** A cancelled / errored fulfillment younger than this skips its variant (Shopify may re-fulfill); older → ignored. */
@@ -279,7 +294,10 @@ public class MainReconcileService {
 
     // ── entry points ────────────────────────────────────────────────────────────────────────────────────────────
 
-    /** The debounced per-variant run: variants queued and untouched for debounce-seconds. Returns the run id or null. */
+    /**
+     * The debounced per-variant run: variants queued and untouched for debounce-seconds — or, for a bazar mark, pending
+     * for keep-bazar-max-wait-seconds since the first mark (U1a cap). Returns the run id or null.
+     */
     public UUID runQueued(UUID tenantId) {
         requireTenant(tenantId);
         // 2026-11-15 (prod lock waits / pile-up): a queued run never waits behind a sweep, the seed or an activation —
@@ -290,8 +308,10 @@ public class MainReconcileService {
         }
         List<UUID> due = tx.execute(s -> jdbc.queryForList(
             "SELECT variant_id FROM main_reconcile_variant_state WHERE tenant_id = ? AND pending_since IS NOT NULL " +
-            "  AND pending_touched_at < now() - ? * interval '1 second' ORDER BY pending_since LIMIT ?",
-            UUID.class, tenantId, debounceSeconds, queueBatch));
+            "  AND (pending_touched_at < now() - ? * interval '1 second' " +
+            "       OR (pending_source LIKE 'bazar:%' AND pending_since <= now() - ? * interval '1 second')) " +
+            "ORDER BY pending_since LIMIT ?",
+            UUID.class, tenantId, debounceSeconds, keepBazarMaxWaitSeconds, queueBatch));
         if (due == null || due.isEmpty()) return null;
         return run(tenantId, "variant", due, null, true);
     }
@@ -717,8 +737,17 @@ public class MainReconcileService {
             int checked = 0, inSync = 0, skipped = 0, differences = 0, confirmed = 0, up = 0, down = 0, damagedMismatch = 0;
             Map<String, Integer> byReason = new TreeMap<>();
             long confirmMillis = confirmAfterMinutes * 60_000L;
+            // U1a fast path: does this tenant have any Keep-mode bazar at all? (one cheap read; no → nothing changes)
+            boolean anyKeepBazar = Boolean.TRUE.equals(tx.execute(st -> jdbc.queryForObject(KEEP_BAZAR_EXISTS_SQL,
+                Boolean.class, tenantId)));
 
             for (List<UUID> chunk : chunks(ids)) {
+                Map<UUID, Integer> keepNet = new HashMap<>();
+                if (anyKeepBazar) {
+                    tx.executeWithoutResult(st -> jdbc.query(MainReconcileBrake.KEEP_BAZAR_NET_SQL,
+                        rs -> { keepNet.put(rs.getObject(1, UUID.class), rs.getInt(2)); },
+                        uuidArray(chunk), tenantId, tenantId, readAt));
+                }
                 List<Map<String, Object>> rows = tx.execute(st -> named.queryForList(MainReconcileRules.EVALUATE_SQL,
                     new MapSqlParameterSource("t", tenantId).addValue("main", main.id()).addValue("mainGid", main.gid())
                         .addValue("mainNum", main.numeric()).addValue("ids", uuidArray(chunk))
@@ -769,6 +798,7 @@ public class MainReconcileService {
                     }
                     State prev = states.get(variantId);
                     String status;
+                    Integer chainDelta = delta;   // what the two-run chain remembers (U1a: the unexplained remainder)
                     Timestamp deltaSince = null;
                     Timestamp recheckAt = null;
 
@@ -783,19 +813,31 @@ public class MainReconcileService {
                     } else {
                         differences++;
                         if (lv.damaged() != tDamaged) damagedMismatch++;
-                        boolean sameChain = prev != null && prev.lastDelta() != null && prev.lastDelta().equals(delta)
-                            && prev.deltaSince() != null
+                        // U1a fast path: the part Keep-bazar piece changes explain needs no two-run wait; the two-run
+                        // chain runs on the unexplained REMAINDER only (so a size that keeps selling still drops).
+                        int fast = MainReconcileBrake.explained(delta, keepNet.getOrDefault(variantId, 0));
+                        int rest = delta - Integer.signum(delta) * fast;
+                        chainDelta = rest;
+                        boolean sameChain = rest != 0 && prev != null && prev.lastDelta() != null
+                            && prev.lastDelta().equals(rest) && prev.deltaSince() != null
                             && (prev.lastEventAt() == null || prev.lastEventAt().before(prev.deltaSince()));
-                        deltaSince = sameChain ? prev.deltaSince() : readAt;
-                        if (sameChain && readAt.getTime() - prev.deltaSince().getTime() >= confirmMillis) {
+                        deltaSince = rest == 0 ? null : sameChain ? prev.deltaSince() : readAt;
+                        boolean restConfirmed = sameChain && readAt.getTime() - prev.deltaSince().getTime() >= confirmMillis;
+                        int toWrite = restConfirmed ? delta : Integer.signum(delta) * fast;
+                        if (toWrite != 0) {
                             status = "confirmed";
                             confirmed++;
-                            if (delta > 0) up += delta; else down += -delta;
-                            if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand, target,
-                                custody, away, fulfilled, unpicked, owed, unfulfilled, delta, longs(r.get("settle_claims")),
-                                uuids(r.get("settle_part1")), uuids(r.get("settle_writes"))));
+                            if (fast > 0) note = note == null ? MainReconcileRules.NOTE_KEEP_BAZAR_FAST
+                                : note + "," + MainReconcileRules.NOTE_KEEP_BAZAR_FAST;
+                            if (toWrite > 0) up += toWrite; else down += -toWrite;
+                            if (write) candidates.add(new MainReconcileWriter.Candidate(variantId, item, onHand,
+                                onHand + toWrite, custody, away, fulfilled, unpicked, owed, unfulfilled, toWrite,
+                                longs(r.get("settle_claims")), uuids(r.get("settle_part1")), uuids(r.get("settle_writes")),
+                                toWrite != delta));
                         } else {
                             status = "unconfirmed";
+                        }
+                        if (rest != 0 && !restConfirmed) {
                             recheckAt = new Timestamp(deltaSince.getTime() + confirmMillis - debounceSeconds * 1000L + 1000L);
                         }
                     }
@@ -806,7 +848,7 @@ public class MainReconcileService {
                             lv == null || onHand == null ? null : lv.damaged(), tDamaged, delta, deltaSince,
                             unfulfilled, unfulfilledRaw, note, unpicked});
                     }
-                    Integer keepDelta = skip != null ? null : delta;
+                    Integer keepDelta = skip != null ? null : chainDelta;
                     stateRows.put(variantId, new Object[]{tenantId, variantId, readAt, runId, keepDelta, deltaSince,
                         recheckAt, recheckAt, recheckAt});
                 }

@@ -6721,6 +6721,15 @@
         "cta": "Set up your bazar"
       }
     },
+    "u1a": {
+      "closeDay": "Close day",
+      "closeDayOn": "Close day · {{date}}",
+      "oldestOpen": "This is the oldest day still open — {{date}}.",
+      "stillOut_one": "{{count}} piece still out",
+      "stillOut_other": "{{count}} pieces still out",
+      "closeTransferToFinish": "Close the transfer to finish",
+      "finishEvent": "Finish the event"
+    },
     "online": {
       "title": "Online stock",
       "sub": "What happens to these pieces in your Shopify store while they're at the bazar.",

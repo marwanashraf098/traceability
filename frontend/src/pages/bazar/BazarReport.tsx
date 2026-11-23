@@ -10,6 +10,7 @@ import { STATUS_TONE } from './BazarEvents'
 import { dayCount } from './r1/overviewState'
 import { amount, rangeLabel, weekdayShort } from './r1/parts'
 import { Chip, Legend, Money, StackBar, money, type ChipTone } from './r2/parts'
+import { FinishEventCallout, needsFinish } from './FinishEvent'
 
 // Bazar POS B5 — the event report (mockup page 1, step 10): /bazar/:id/report, in-shell (computer and phone). Read-
 // only, owner / manager. Built from GET /report only (bazar tables + the linked transfer).
@@ -80,6 +81,8 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
           {r.event.location_name} · <span>{rangeLabel(r.event.starts_on, r.event.ends_on, lang)}</span>
         </span>
       </div>
+
+      {needsFinish(r.event.status, tr.status) && <FinishEventCallout eventId={r.event.id} piecesOut={tr.outstanding} />}
 
       <ReportKpis r={r} />
 

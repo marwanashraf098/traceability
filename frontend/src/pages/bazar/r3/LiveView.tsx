@@ -13,6 +13,7 @@ import { QrCode } from '../../../phone/PhonePairModal'
 import { SaleBadge } from '../phone/SaleSheets'
 import { DayStatusBadge, dayTitle } from '../CloseDayForm'
 import { LeftoverCounts } from '../Leftovers'
+import { defaultCloseDay } from '../closeDayDefault'
 import { Eyebrow, Tag, amount, dayLabel, percent, rangeLabel, weekdayShort } from '../r1/parts'
 import { Chip, Money, StackBar } from '../r2/parts'
 import { PricesCard, usePriceData } from './PricesCard'
@@ -54,6 +55,11 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
   const [left, setLeft] = useState<BazarLeftovers | null>(null)
 
   const loadDays = useCallback(() => listBazarDays(ev.id).then(setDays).catch(() => {}), [ev.id])
+  // U1a: the button opens the oldest day still needing a close (closeDayDefault) — its date shown when it isn't today.
+  const closeTarget = days ? defaultCloseDay(days.days) : undefined
+  const closeDayLabel = closeTarget && !closeTarget.is_today
+    ? t('bazar.u1a.closeDayOn', { date: dayLabel(closeTarget.business_day, lang) })
+    : t('bazar.u1a.closeDay')
   const loadToday = useCallback(() => {
     if (!live) return
     getBazarToday(ev.id).then(v => setToday(validToday(v) ? v : null)).catch(() => setToday(null))
@@ -98,7 +104,7 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
         actions={live ? (
           <>
             <button type="button" className={btnSecondary} data-testid="desktop-close-day" disabled={!days?.days.length}
-                    onClick={() => navigate(`/bazar/${ev.id}/close-day`)}>{t('bazar.r3.header.closeToday')}</button>
+                    onClick={() => navigate(`/bazar/${ev.id}/close-day`)}>{closeDayLabel}</button>
             <MoreMenu label={t('bazar.r3.header.more')} items={[
               { key: 'prices', label: t('bazar.prices.changePrices'), onSelect: () => setTab('prices') },
               { key: 'sellers', label: t('bazar.r3.header.inviteSellers'), onSelect: () => setTab('sellers') },

@@ -9,11 +9,12 @@ import { Spinner, cn } from '../../../components/ui'
 import { CloseDayForm, CloseResultView, DayStatusBadge, dayTitle } from '../CloseDayForm'
 import { dayLabel } from '../r1/parts'
 import { btnSecondary } from './parts'
+import { defaultCloseDay } from '../closeDayDefault'
 
 /**
  * Bazar R3 — /bazar/:id/close-day: Close the day as a page on the computer (design/bazar-v2 V2_CloseDay), in the normal
- * shell, owner / manager. Replaces the event page's modal; the phone keeps /bazar/:id/close. The day: ?day=, else today
- * (else the last day) — as the modal did. The form is R2's CloseDayForm, unchanged in behaviour (wide layout).
+ * shell, owner / manager. Replaces the event page's modal; the phone keeps /bazar/:id/close. The day: ?day=, else the
+ * oldest day that still needs closing, else today, else the last day (U1a — closeDayDefault). The form is R2's CloseDayForm, unchanged in behaviour (wide layout).
  */
 export default function CloseDayPage() {
   const { id } = useParams<{ id: string }>()
@@ -44,7 +45,7 @@ export default function CloseDayPage() {
 
   const days = data.days
   const asked = params.get('day')
-  const day = days.find(d => d.business_day === asked) ?? days.find(d => d.is_today) ?? days[days.length - 1]
+  const day = days.find(d => d.business_day === asked) ?? defaultCloseDay(days)
   const back = `/bazar/${id}?tab=days`
 
   return (
@@ -94,6 +95,11 @@ export default function CloseDayPage() {
             <h2 className="text-h4 font-bold text-primary">{t('bazar.r2.close.closeDay', { day: dayTitle(t, day, lang) })}</h2>
             <DayStatusBadge day={day} />
           </div>
+          {!asked && !day.is_today && day.needs_close && (
+            <p className="text-body text-warning-text -mt-2" data-testid="close-day-oldest">
+              {t('bazar.u1a.oldestOpen', { date: dayLabel(day.business_day, lang) })}
+            </p>
+          )}
           <CloseDayForm key={day.business_day + ':' + day.close_count} eventId={id} day={day} compact wide
                         methods={orderedMethods(data.payment_methods)}
                         onClosed={d => { setClosed(d); loadDays() }} />

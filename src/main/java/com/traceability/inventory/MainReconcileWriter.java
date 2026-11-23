@@ -33,7 +33,18 @@ final class MainReconcileWriter {
     /** One confirmed difference to write. */
     record Candidate(UUID variantId, String item, int shopifyOnHand, int target, int custody, int away, int fulfilled,
                      int unpicked, int owed, int unfulfilled, int delta, List<Long> settleClaims, List<UUID> settlePart1,
-                     List<UUID> settleWrites) {}
+                     List<UUID> settleWrites, boolean keepChain) {
+        /**
+         * {@code keepChain} (U1a): only the Keep-bazar-explained part of a difference is written; the unexplained
+         * remainder's two-run chain must survive the write, so an applied write doesn't clear it.
+         */
+        Candidate(UUID variantId, String item, int shopifyOnHand, int target, int custody, int away, int fulfilled,
+                  int unpicked, int owed, int unfulfilled, int delta, List<Long> settleClaims, List<UUID> settlePart1,
+                  List<UUID> settleWrites) {
+            this(variantId, item, shopifyOnHand, target, custody, away, fulfilled, unpicked, owed, unfulfilled, delta,
+                settleClaims, settlePart1, settleWrites, false);
+        }
+    }
 
     record Main(UUID id, String gid) {}
 
@@ -241,8 +252,10 @@ final class MainReconcileWriter {
                         settled.addObject().put("table", "main_reconcile_writes").put("id", id.toString());
                     }
                 }
-                jdbc.update("UPDATE main_reconcile_variant_state SET last_delta = NULL, delta_since = NULL " +
-                            "WHERE tenant_id = ? AND variant_id = ?", tenantId, settle.variantId());
+                if (!settle.keepChain()) {
+                    jdbc.update("UPDATE main_reconcile_variant_state SET last_delta = NULL, delta_since = NULL " +
+                                "WHERE tenant_id = ? AND variant_id = ?", tenantId, settle.variantId());
+                }
             }
             jdbc.update("UPDATE main_reconcile_writes SET status = ?, fresh_on_hand = COALESCE(?, fresh_on_hand), " +
                         "  change_from_quantity = COALESCE(?, change_from_quantity), error = ?, settled = ?::jsonb, finished_at = now() " +

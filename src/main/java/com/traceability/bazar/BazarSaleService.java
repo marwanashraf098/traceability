@@ -69,6 +69,16 @@ public class BazarSaleService {
         this.ledger = ledger;
     }
 
+    /** U1a: a Keep-mode bazar's piece changes queue their variants for Main reconcile (after commit). */
+    private BazarKeepModeQueue keepQueue;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKeepQueue(BazarKeepModeQueue keepQueue) { this.keepQueue = keepQueue; }
+
+    private void queueKeep(UUID tenantId, Map<String, Object> ev, List<String> pieceIds, String source) {
+        if (keepQueue != null) keepQueue.pieces(tenantId, (UUID) ev.get("transfer_id"), pieceIds, source);
+    }
+
     /** The caller: user id + role ('owner' / 'manager' / 'worker'). */
     public record Actor(UUID userId, String role) {
         boolean manages() { return role != null && MANAGERS.contains(role.toLowerCase()); }
@@ -272,6 +282,7 @@ public class BazarSaleService {
             if (e.getActual() == PieceStatus.SOLD) throw alreadySold(tenantId, p.pieceId(), eventId);
             throw notHere();
         }
+        queueKeep(tenantId, ev, List.of(p.pieceId()), BazarKeepModeQueue.SALE);
 
         int claimed = jdbc.update(
             "UPDATE transfer_pieces SET outcome = 'sold', outcome_verified = true, outcome_at = now(), outcome_by = ? " +
@@ -576,7 +587,10 @@ public class BazarSaleService {
         if (damaged) {
             ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, PieceStatus.DAMAGED, RETURN_DAMAGED_EVENT,
                 actor.userId(), new TransitionContext(null, null, locationId, null, meta, null));
+            // U1a: the Lookup "Condition" follows the status, as on every other path into damaged.
+            jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?", pieceId, tenantId);
         }
+        queueKeep(tenantId, ev, List.of(pieceId), BazarKeepModeQueue.RETURN);
         int moved = damaged
             ? jdbc.update("UPDATE transfer_pieces SET outcome = 'condemned', outcome_verified = true, " +
                 "outcome_at = now(), outcome_by = ? WHERE id = ? AND tenant_id = ? AND outcome = 'sold'",
@@ -722,6 +736,7 @@ public class BazarSaleService {
             actor.userId(), new TransitionContext(null, null, (UUID) ev.get("location_id"), null,
                 "{\"event_id\":\"" + eventId + "\",\"transfer_id\":\"" + ev.get("transfer_id")
                     + "\",\"sale_id\":\"" + saleId + "\"}", null));
+        queueKeep(tenantId, ev, List.of((String) sale.get("piece_id")), BazarKeepModeQueue.UNDO);
 
         int reopened = jdbc.update(
             "UPDATE transfer_pieces SET outcome = NULL, outcome_verified = NULL, outcome_at = NULL, outcome_by = NULL " +
@@ -1143,6 +1158,7 @@ public class BazarSaleService {
                 "WHERE id = (SELECT line_id FROM transfer_pieces WHERE id = ?) AND tenant_id = ?",
                 l.get("transfer_piece_id"), tenantId);
         }
+        queueKeep(tenantId, ev, lines.stream().map(l -> (String) l.get("piece_id")).toList(), BazarKeepModeQueue.UNDO);
         jdbc.update("UPDATE bazar_sales SET status = 'undone', undone_at = now(), undone_by = ?, updated_at = now() " +
             "WHERE receipt_id = ? AND tenant_id = ?", actor.userId(), receiptId, tenantId);
         jdbc.update("UPDATE bazar_receipts SET status = 'undone', undone_at = now(), undone_by = ?, updated_at = now() " +

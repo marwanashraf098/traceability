@@ -4,6 +4,55 @@
 
 ## Current state
 
+**Bazar U1a — must-fix bugs from the 2026-11-22 E2E (2026-11-23; branch `feat/bazar-u1a` off origin/main e40312ee; no
+migration — V242 (B10) still the last; merged to main 2026-11-23 after B9b + B10, NOT deployed).**
+- **Keep mode now lowers Shopify within minutes, not up to 4 h.** A Keep bazar ('leave') writes no claim row, so no V201
+  trigger queued its variants. `bazar.BazarKeepModeQueue` (the ONE rule: the transfer's snapshot `shopify_sync_mode =
+  'leave'`) queues the piece's variant after commit on sale (single, cart, exchange's new piece), undo, undo receipt,
+  return (good / damaged, exchange's old piece), mark lost, and close (every variant of the transfer). Scan-back good and
+  bring-back by count are left out (they don't change the target). Remove mode queues nothing (byte-identical).
+  `MainReconcileQueue.onTracedChange` → `TRACED_MARK_SQL`: the same row + lock order as MARK_SQL, REQUIRES_NEW from
+  afterCommit, 2 s lock_timeout + retryMark, and it does NOT stamp `last_event_at` (that stays "a Shopify event"). Timing
+  = 60 s debounce + the every-minute queue job → written 1–2 min after each Keep-bazar change (fast path below).
+- **Keep-bazar fast path (approved 2026-11-23):** in `MainReconcileService.compute`, the part of a variant's delta that
+  `KEEP_BAZAR_NET_SQL` explains (`MainReconcileBrake.explained` — the same set as the brake exemption) is confirmed on
+  the run that first sees it (diff note `keep_bazar_fast`); the two-run chain runs on the unexplained REMAINDER only
+  (`last_delta` = remainder; `Candidate.keepChain` stops the applied partial write clearing it). Before this, a size
+  that kept selling restarted the 10-min chain every sale and never dropped during a busy bazar. Why safe: the write is
+  never more than |delta| (target − Shopify's fresh on_hand) in the delta's own direction; the window starts at the last
+  APPLIED write, so moves already written are never counted again; every in-flight skip (claims, transfer sync, pending /
+  recent-ambiguous reconcile write, Part 1) still wins; the compare-and-set + fresh read still drops it if Shopify
+  moved; Remove-mode pieces are not in the set; it goes through the brake like any write (explained units exempt, a
+  held run holds it too). Only read when the tenant has a Keep bazar (`KEEP_BAZAR_EXISTS_SQL`).
+- **Keep-bazar max wait (approved 2026-11-23):** the 60 s debounce restarts on every touch, so a size selling more than
+  once a minute kept postponing its queued run. `runQueued` now also takes a variant whose pending mark is a bazar one
+  (`pending_source LIKE 'bazar:%'`) once its FIRST pending mark is `traced.main-reconcile.keep-bazar-max-wait-seconds`
+  (180) old → run on the next minute's job (3–4 min). Every bazar sale re-stamps the source and keeps pending_since,
+  so the cap holds while it sells; webhook / claim marks keep the plain debounce exactly (MARK_SQL untouched).
+- **Brake exemption (approved 2026-11-22):** `MainReconcileBrake.KEEP_BAZAR_NET_SQL` — per variant, the net of its
+  pieces' `out_on_transfer → sold/damaged/lost` (−1) and back (+1) moves, made while on a Keep bazar's transfer (sent →
+  closed), since the variant's last APPLIED reconcile write, up to the run's read time. `explained(delta, net)` = same
+  direction only, at most |delta|; that part isn't weighed (logged per run). Remove bazars and non-bazar drift are weighed
+  as before.
+- **Damaged pieces come home at close:** `BazarEndService.closeTransfer` brings every damaged piece still away home first
+  (`TransferService.bringBackDamagedForBazar(…, via)` → `InventoryLedger.bringBackDamaged`, event metadata
+  `"via":"transfer_close"`). Scanning one on End event stays optional. The bazar return-damaged path sets
+  `pieces.condition = 'damaged'`. The 2 stuck test-store pieces (P000047, P000014) are left as they are (no backfill, by
+  decision). Not done (ticket): condition on a condemned scan-back in generic Transfers.
+- **Finish the event:** `BazarDayService.dayReport` adds `needs_close` (THE "still needs closing" rule; End event's block
+  reads it). `BazarService.list` adds `pieces_out`. The report (`FinishEventCallout`) and the list + ended heroes
+  (`FinishEventLink`) say "N pieces still out" / "Close the transfer to finish" → /bazar/:id/end-event while an ended
+  bazar's transfer isn't closed. The green "Transfer closed" box carries the primary View report
+  (`LeftoversPanel reportTo`; EndEventPage's separate link removed).
+- **Close day** opens the oldest day that needs closing (`pages/bazar/closeDayDefault.ts`: `?day=` → needs_close →
+  today → last; computer + phone), with "This is the oldest day still open — <date>". The event page's button reads
+  "Close day" (+ " · <date>" when that day isn't today).
+- Tests: BazarU1aTest (q1 Keep queues per event + condition, q2 Remove queues nothing, b1 30 Keep sales written / not
+  held / no alert, b2 non-bazar 30 drift held, b3 Remove-bazar sales not exempt, d1 close brings damaged home, l1
+  needs_close / pieces_out, f1 a size selling every 3 min drops on the next queued run after each sale, f2 unexplained
+  remainder waits for two runs with its chain kept, f3 non-bazar drift never fast, f4 Remove-mode sales never fast, c1 a size selling every 20 s for 10 min gets a run every ≤ 4 min and Shopify follows,
+  c2 a webhook-queued variant keeps the 60 s debounce); bazarU1a.test.tsx (8). Each fix revert-checked. Strings: `bazar.u1a` (EN + AR).
+
 **Bazar B10 — seller invite links survive WhatsApp's preview; no silent session switch (2026-11-23; branch
 `feat/bazar-b10` off origin/main e40312ee; V242; count gates MigrationSmokeTest 241 files, NotTracedBackfillTest 186;
 merged to main 2026-11-23, NOT deployed).** Prod 2026-11-22 (test20): WhatsApp's link preview did the GET first and used the token up
@@ -71,22 +120,8 @@ then Shopify size position, then piece id — created_at alone printed a batch i
 millisecond). Tests: BazarSetupTest (11), BazarSetupFlagOffTest, BazarSetupNoStatusWriterGuardTest,
 frontend bazarB9b (10); revert-checked.
 
-**Rat-tail Flag B, second layout (2026-11-23; branch `feat/rattail-flagb`; no migration; merged to main, NOT
-deployed).** Live PDFs: names cut at one line ("The Collection…") with empty lines under them, and two groups'
-separators reading the same. Now (piece label AND separator, 60 × 12 only; 50×25 / 40×25 untouched): name bold 6 pt on
-up to 2 lines — when it needs more (or one word is wider than a line) the whole name shrinks in 0.25 pt steps to 5 pt
-to fit 2 lines, then "…" (`RatTailLabel.flagBText`); line 3 = "variant | SKU" (5.5 → 4.75 → "…", Default Title
-hidden, empty parts skipped, none → no line 3); the lines that exist centred as a block in 1–11 mm by the font's ink
-envelope (Arabic's when name / variant has Arabic) + 0.35 mm gap; an Arabic label right-aligns every line at 58.6 mm.
-The separator carries the group's SKU (`Separator.sku`, passed by label runs + tag stock; ignored at other sizes).
-"The Collection Snowboard: Liquid" prints in full at 5.25 pt; "…: Hydrogen" ends in "…" at 5 pt (the SKU tells the
-two apart). Tests: new `RatTailFlagBTest` (11); RatTailLabelTest r6 / r7 / r8 / s1 rewritten for the layout
-(approved), Flag B text read by area; LabelSizeWiringTest w4 / w5 read "× N" from Flag A only
-(PDFTextStripperByArea) and assert it exactly; w2 made order-independent (approved) — since B9b a session's labels
-print in piece-id order within a variant, so "page 1 = lowest code" was false on main.
-
 **Jewelry rat-tail label 60 × 12 mm + tenant label size wired (2026-11-23; branch `feat/rattail-label` off main
-7c882c05; MERGED 8a541ce7, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
+7c882c05; no migration; NOT merged, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
 - Tenant size is now READ: `LabelSizes.forTenant` (tenants.label_width_mm / label_height_mm; NULL → 50×25) is THE size
   of every one-piece-per-page label PDF — LabelService (receiving session / variant / reprint, Lookup / Returns /
   Transfer reprints), LabelCodeService.batchPdf / codesPdf (code-first, factory extra label, tag-stock leftovers),

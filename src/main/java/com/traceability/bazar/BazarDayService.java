@@ -160,7 +160,9 @@ public class BazarDayService {
     /**
      * The per-day money summary — B4's days list and the B5 report read the same thing:
      * {business_day, is_today, money {by_method, total, sales, returns, exchanges, revenue}, status, close | null,
-     * close_count, opening_float_default {amount, source}}.
+     * close_count, opening_float_default {amount, source}, needs_close}. U1a: {@code needs_close} is THE "this day still
+     * needs closing" rule — open or changed after its close, with any money row — read by End event's block and by the
+     * Close day page's default day (the oldest one that needs it).
      */
     public Map<String, Object> dayReport(UUID tenantId, Map<String, Object> ev, LocalDate day) {
         UUID eventId = (UUID) ev.get("id");
@@ -184,6 +186,11 @@ public class BazarDayService {
             status = ((BigDecimal) close.get("not_received_total")).signum() > 0 ? "closed_short" : "closed_balanced";
         }
         out.put("status", status);
+        out.put("needs_close", ("open".equals(status) || "changed_after_close".equals(status))
+            && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM bazar_payments p " +
+                "WHERE p.event_id = ? AND p.tenant_id = ? AND p.business_day = ?::date)",
+                Boolean.class, eventId, tenantId, day.toString())));
         out.put("close", close == null ? null : closeView(close, methods));
         out.put("close_count", jdbc.queryForObject(
             "SELECT COUNT(*) FROM bazar_day_closes WHERE event_id = ? AND tenant_id = ? AND business_day = ?::date",

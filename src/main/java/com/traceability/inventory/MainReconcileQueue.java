@@ -59,12 +59,29 @@ public class MainReconcileQueue {
         "            AND l.shopify_location_id = 'gid://shopify/Location/' || ?)";
     static final String ORDER_PREDICATE = "v.external_id = ANY(CAST(? AS text[]))";
 
+    /**
+     * U1a (2026-11-22): a Traced-side change Main reconcile must look at within a minute — a Keep-mode bazar's sale,
+     * undo, return, exchange, lost or close (BazarKeepModeQueue). Same queue row and lock order as MARK_SQL, but NOT a
+     * Shopify event: last_event_at is left alone (the two-run rule's "no Shopify event in between" stays Shopify's).
+     */
+    static final String TRACED_MARK_SQL =
+        "INSERT INTO main_reconcile_variant_state AS s (tenant_id, variant_id, pending_since, pending_touched_at, " +
+        "  pending_source) " +
+        "SELECT v.tenant_id, v.id, now(), now(), ? FROM variants v WHERE v.tenant_id = ? AND v.id = ANY(CAST(? AS uuid[])) " +
+        "ORDER BY v.id " +
+        "ON CONFLICT (tenant_id, variant_id) DO UPDATE SET " +
+        "  pending_since = COALESCE(s.pending_since, now()), pending_touched_at = now(), " +
+        "  pending_source = EXCLUDED.pending_source";
+
     static final int MAX_RETRIES = 5;
     static final String KIND_INVENTORY = "inventory";
     static final String KIND_ORDER = "order";
+    static final String KIND_TRACED = "traced";
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
+    /** U1a: the Traced mark runs from afterCommit, where a REQUIRED template would join the finished transaction. */
+    private final TransactionTemplate txNew;
     private JobScheduler jobScheduler;
     private long lockTimeoutMs = 2000;
     private long retryBaseSeconds = 15;
@@ -72,6 +89,8 @@ public class MainReconcileQueue {
     public MainReconcileQueue(JdbcTemplate jdbc, PlatformTransactionManager txm) {
         this.jdbc = jdbc;
         this.tx   = new TransactionTemplate(txm);
+        this.txNew = new TransactionTemplate(txm);
+        this.txNew.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Autowired(required = false)
@@ -102,6 +121,34 @@ public class MainReconcileQueue {
             }
         } catch (RuntimeException e) {
             log.warn("Main reconcile queue: {} for tenant {} not queued: {}", topic, tenantId, e.toString());
+        }
+    }
+
+    /**
+     * U1a: queue these variants for Main reconcile because Traced changed them ({@code source}, e.g. "bazar:sale").
+     * Inside a transaction the mark runs after it commits (its own short transaction, the 2 s lock_timeout, the retry
+     * job on a lock timeout) — never inside the caller's, so a sale never waits on a reconcile and never fails because
+     * of the queue; a rolled-back change queues nothing. Outside a transaction it runs now. Never throws.
+     */
+    public void onTracedChange(UUID tenantId, java.util.Collection<UUID> variantIds, String source) {
+        if (tenantId == null || variantIds == null || variantIds.isEmpty()) return;
+        List<String> ids = variantIds.stream().filter(java.util.Objects::nonNull).map(UUID::toString)
+            .distinct().sorted().toList();
+        if (ids.isEmpty()) return;
+        Runnable mark = () -> {
+            try {
+                TenantContext.runAs(tenantId, (Runnable) () -> markOrRetry(tenantId, source, KIND_TRACED, ids, Instant.now(), 0));
+            } catch (RuntimeException e) {
+                log.warn("Main reconcile queue: {} for tenant {} not queued: {}", source, tenantId, e.toString());
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCommit() { mark.run(); }
+                });
+        } else {
+            mark.run();
         }
     }
 
@@ -137,9 +184,12 @@ public class MainReconcileQueue {
 
     private void mark(UUID tenantId, String topic, String kind, List<String> args, Instant eventAt) {
         Timestamp at = Timestamp.from(eventAt);
-        tx.executeWithoutResult(s -> {
+        (KIND_TRACED.equals(kind) ? txNew : tx).executeWithoutResult(s -> {
             jdbc.execute("SET LOCAL lock_timeout = '" + Math.max(1, lockTimeoutMs) + "ms'");
-            if (KIND_INVENTORY.equals(kind)) {
+            if (KIND_TRACED.equals(kind)) {
+                jdbc.update(TRACED_MARK_SQL, topic, tenantId, MainReconcileService.uuidArray(
+                    args.stream().map(UUID::fromString).toList()));
+            } else if (KIND_INVENTORY.equals(kind)) {
                 jdbc.update(MARK_SQL.formatted(INVENTORY_PREDICATE), "webhook:" + topic, at, topic, tenantId,
                     args.get(0), args.get(1));
             } else {
