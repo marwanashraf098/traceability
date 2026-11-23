@@ -15,6 +15,7 @@ import { Tag, amount, rangeLabel } from '../r1/parts'
 import { Chip } from '../r2/parts'
 import { PricesCard, priceTotals, usePriceData } from './PricesCard'
 import { SellersCard } from './SellersCard'
+import { BazarLowerChecklistLine } from '../setup/LowerThese'
 import { Card, EventHeader, StepsStrip, btnPrimary, btnSecondary } from './parts'
 
 /**
@@ -96,6 +97,9 @@ export function SetupView({ ev, reload, onChanged }: {
         { title: t('bazar.r1.steps.s3'), sub: rule, state: allPriced ? 'done' : sent || pieces > 0 ? 'current' : 'todo' },
         { title: t('bazar.r1.steps.s4'), sub: t('bazar.r1.overview.sub.starts', { date: rangeLabel(ev.starts_on, ev.starts_on, lang) }), state: 'todo' },
       ]} />
+
+      {/* B9b — Get ready's "Lower stock at the location you took it from" line, until Done. */}
+      <BazarLowerChecklistLine eventId={ev.id} />
 
       {error && <p role="alert" className="text-body text-critical">{error}</p>}
 

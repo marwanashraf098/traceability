@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Bazar B9b — guided bazar setup for new signups (2026-11-23; branch `feat/bazar-b9b`; merged to main 2026-11-23, NOT deployed; no migration — V241 still the
+latest).** Only with `BAZAR_SIGNUP_ENABLED` on (prod: off) AND signup intent 'bazar' AND `tenants.bazar_enabled`
+(`BazarSetupService.on` — the one gate; GET /me `bazarSetup: true` only then, owner / manager). `/setup/bazar` → the
+wizard `/bazar/setup` (owner): 1 Your bazar (the normal create + B8's Remove / Keep pair) → 2 Pick products (catalog,
+steppers, "N in your other locations" = Shopify total − Traced Main, read-only `ShopifyVariantStockGateway`, no
+transaction open, a failed read hides it) → 3 Barcodes (labels / no barcodes, mixable per product) → receive (ONE
+request, ONE transaction: a print_stick and a count_only receipt through `ReceivingService` createSession / addLine /
+finalize only — `BazarSetupNoStatusWriterGuardTest`; the existing receiving +N at Traced Main, nothing at any other
+Shopify location) → "Lower these at the location you took them from" (list + CSV + "Done, I lowered them") → Continue
+to your bazar (Get ready; prices + send stay there — B9c). The batch lives in `onboarding_prefs.bazarSetup`
+({eventId, requestId, labelledReceiptId, countOnlyReceiptId, pieces, receivedAt, loweredAt, loweredBy}), written only
+by `OnboardingProgressService.writeBazarSetup` (not a PATCH key); same requestId → same receipts; a new batch is refused
+(409 BAZAR_SETUP_LOWER_FIRST) until the last one is lowered; Done stamps once (audit `bazar_setup_lowered`). Reminders
+until Done: a card on /bazar and a line on Get ready for that bazar. Collections not shipped (search + All + Selected).
+**Label order (every session print):** `LabelService.LABEL_ORDER_SQL` = first receipt line of the variant, then product,
+then Shopify size position, then piece id — created_at alone printed a batch in random order (ULIDs are random within a
+millisecond). Tests: BazarSetupTest (11), BazarSetupFlagOffTest, BazarSetupNoStatusWriterGuardTest,
+frontend bazarB9b (10); revert-checked.
+
 **Jewelry rat-tail label 60 × 12 mm + tenant label size wired (2026-11-23; branch `feat/rattail-label` off main
 7c882c05; no migration; NOT merged, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
 - Tenant size is now READ: `LabelSizes.forTenant` (tenants.label_width_mm / label_height_mm; NULL → 50×25) is THE size

@@ -71,7 +71,12 @@ public class BazarException extends RuntimeException {
         BAZAR_PIECE_HAS_BARCODE,
         // B8 — online stock per bazar
         BAZAR_ONLINE_STOCK_CONFLICT,
-        BAZAR_ONLINE_STOCK_LOCKED
+        BAZAR_ONLINE_STOCK_LOCKED,
+        // B9b — guided bazar setup (new signups)
+        BAZAR_SETUP_NOTHING_PICKED,
+        BAZAR_SETUP_LOWER_FIRST,
+        BAZAR_SETUP_NO_MAIN_WAREHOUSE,
+        BAZAR_SETUP_NO_LIST
     }
 
     private final Code       code;

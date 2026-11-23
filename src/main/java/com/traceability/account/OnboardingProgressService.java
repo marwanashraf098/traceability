@@ -62,6 +62,10 @@ import java.util.*;
  * ({@link #recordSignupIntent}, through the same writer as {@link #updatePrefs}); it is NOT a PATCH key
  * ({@link #SIGNUP_KEYS}). It is an onboarding hint only — never a stock or Shopify mode. For such a tenant the gate
  * asks for Shopify only (SetupStatus) and the intro is {@link #INTRO_BAZAR} (/setup/bazar) until setupIntroSeen.
+ *
+ * Bazar B9b — {@code bazarSetup}: the guided bazar setup's ONE batch (the pieces it received into Traced Main and
+ * whether the owner has lowered them at the Shopify location they came from). Written only by
+ * {@link #writeBazarSetup} (BazarSetupService), never by PATCH (not a {@link #PREF_KEYS} key).
  */
 @Service
 public class OnboardingProgressService {
@@ -73,6 +77,8 @@ public class OnboardingProgressService {
     /** Written only at signup (recordSignupIntent) — PATCH refuses them like any unknown key. */
     public static final Set<String> SIGNUP_KEYS   = Set.of("intent");
     public static final String INTENT_BAZAR = "bazar";
+    /** Bazar B9b — written only by {@link #writeBazarSetup}; PATCH refuses it like any unknown key. */
+    public static final String BAZAR_SETUP_KEY = "bazarSetup";
     static final int PACE_MIN = 1, PACE_MAX = 10_000;
 
     /**
@@ -227,7 +233,21 @@ public class OnboardingProgressService {
         writePrefs(ownerUserId, validate(Map.of("intent", intent), true));
     }
 
+    /**
+     * Bazar B9b — replaces the tenant's {@code bazarSetup} batch. Caller's transaction (BazarSetupService, which has
+     * locked the tenant row); one audit row named {@code auditAction}.
+     */
+    @Transactional
+    public void writeBazarSetup(UUID actorUserId, Map<String, Object> batch, String auditAction) {
+        if (batch == null || batch.isEmpty()) throw bad("no bazar setup given");
+        writePrefs(actorUserId, Map.of(BAZAR_SETUP_KEY, batch), auditAction);
+    }
+
     private void writePrefs(UUID actorUserId, Map<String, Object> clean) {
+        writePrefs(actorUserId, clean, "onboarding_prefs_set");
+    }
+
+    private void writePrefs(UUID actorUserId, Map<String, Object> clean, String auditAction) {
         UUID tenantId = TenantContext.require();
         String json;
         try {
@@ -239,7 +259,7 @@ public class OnboardingProgressService {
         jdbc.update("UPDATE tenants SET onboarding_prefs = onboarding_prefs || ?::jsonb " +
                     "|| CASE WHEN ? THEN jsonb_build_object('cardChosenAt', now()) ELSE '{}'::jsonb END WHERE id = ?",
             json, clean.containsKey("card"), tenantId);
-        audit.record(actorUserId, "onboarding_prefs_set", "tenant", tenantId.toString(), clean);
+        audit.record(actorUserId, auditAction, "tenant", tenantId.toString(), clean);
     }
 
     /**

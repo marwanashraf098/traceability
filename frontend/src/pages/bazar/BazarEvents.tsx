@@ -11,6 +11,7 @@ import { eventDay, toNumber } from '../../bazar/format'
 import { TableSkeleton, cn, type BadgeTone } from '../../components/ui'
 import { cairoToday, dayCount, daysFrom, pickOverview, type OverviewState } from './r1/overviewState'
 import { DateTile, Eyebrow, Tag, amount, percent, rangeLabel, weekdayShort, type TagTone } from './r1/parts'
+import { BazarSetupReminderCard } from './setup/LowerThese'
 
 export const STATUS_TONE: Record<BazarStatus, BadgeTone> = { draft: 'warning', live: 'success', ended: 'neutral' }
 
@@ -80,6 +81,8 @@ export default function BazarEvents() {
         </Link>
       </div>
 
+      {/* B9b — "Lower these" reminder until Done (only while the guided setup is on). */}
+      <BazarSetupReminderCard />
       {error && <p role="alert" className="text-body text-critical">{error}</p>}
       {!rows && !error && <TableSkeleton rows={3} cols={4} />}
       {state && <Overview state={state} />}

@@ -199,6 +199,8 @@ describe('Overview page', () => {
       on('GET', '/bazar-events/now', () => json(200, detail('now'))),
       on('GET', '/bazar-events/now/days', () => json(200, days)),
       on('GET', '/bazar-events/now/today', () => json(200, today)),
+      // A normal bazar tenant: /me without B9b's bazarSetup (BAZAR_SIGNUP_ENABLED off).
+      on('GET', '/me', () => json(200, { role: 'owner', bazar: true })),
     )
     renderOverview()
     const hero = await screen.findByTestId('bazar-hero-live')
@@ -216,9 +218,15 @@ describe('Overview page', () => {
     expect(hero.textContent).not.toMatch(/sellers on|last sale|busiest/i)
     // The past list keeps the name as the row's link (ended → report).
     expect(screen.getByText('Bazar old').closest('a')?.getAttribute('href')).toBe('/bazar/old/report')
-    // Only the three approved reads for the live hero.
+    // Only the three approved reads for the live hero — plus /me: B9b's reminder card asks the capabilities (in the
+    // app the shell's one cached /me read per token; here the page renders without the shell). Exact, so any other
+    // new request still fails this.
+    await waitFor(() => expect(calls.some(c => c.url.endsWith('/me'))).toBe(true))
     const reads = calls.map(c => c.url.replace(/^.*\/api\/v1/, '')).sort()
-    expect(reads).toEqual(['/bazar-events', '/bazar-events/now', '/bazar-events/now/days', '/bazar-events/now/today'])
+    expect(reads).toEqual(['/bazar-events', '/bazar-events/now', '/bazar-events/now/days', '/bazar-events/now/today', '/me'])
+    // A normal tenant (B9b off): the Overview never asks /bazar-setup.
+    await new Promise(r => setTimeout(r, 20))
+    expect(calls.some(c => c.url.includes('/bazar-setup'))).toBe(false)
   })
 
   test('live hero falls back to the list-row fields when its reads fail — the rest of the page is unaffected', async () => {

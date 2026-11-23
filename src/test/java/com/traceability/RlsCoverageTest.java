@@ -314,6 +314,22 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        Map.entry("/api/v1/bazar-setup",
+            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
+            "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
+        Map.entry("/api/v1/bazar-setup/products",
+            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
+            "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
+        Map.entry("/api/v1/bazar-setup/lower",
+            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
+            "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
+        Map.entry("/api/v1/bazar-setup/lower.csv",
+            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
+            "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
         Map.entry("/api/v1/exchanges/{id}/original-lines",
             "app_user HTTP isolation + positive control in ExchangeMultiItemHttpAppUserTest.h3"),
         Map.entry("/api/v1/exchanges/{id}/order-search",

@@ -28,10 +28,20 @@ public class UserService {
     private final PasswordEncoder encoder;
     private final AuditService    audit;
 
+    /** Bazar B9b — the BAZAR_SIGNUP_ENABLED setting, for /me's bazarSetup (null: a hand-built service, never on). */
+    private final com.traceability.bazar.BazarSignup bazarSignup;
+
     public UserService(JdbcTemplate jdbc, PasswordEncoder encoder, AuditService audit) {
-        this.jdbc    = jdbc;
-        this.encoder = encoder;
-        this.audit   = audit;
+        this(jdbc, encoder, audit, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public UserService(JdbcTemplate jdbc, PasswordEncoder encoder, AuditService audit,
+                       com.traceability.bazar.BazarSignup bazarSignup) {
+        this.jdbc        = jdbc;
+        this.encoder     = encoder;
+        this.audit       = audit;
+        this.bazarSignup = bazarSignup;
     }
 
     // ── List ──────────────────────────────────────────────────────────────────
@@ -92,6 +102,12 @@ public class UserService {
             self.put("bazar", true);
             Map<String, Object> live = com.traceability.bazar.Bazar.liveFor(jdbc, tenantId, userId, (String) self.get("role"));
             if (live != null) self.put("bazarLive", live);
+            // Bazar B9b — the guided bazar setup is on (BazarSetupService's gate): the screens may ask /bazar-setup.
+            // Owner / manager only, and only sent when on, so every other /me is unchanged.
+            if (!"worker".equals(self.get("role")) && bazarSignup != null
+                    && com.traceability.bazar.BazarSetupService.on(jdbc, tenantId, bazarSignup.enabled())) {
+                self.put("bazarSetup", true);
+            }
         }
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a
         // station tablet that is the PIN-switched-in worker, never the owner who signed the tablet in.

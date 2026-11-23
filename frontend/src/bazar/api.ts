@@ -886,3 +886,105 @@ export function newRequestId(): string {
 
 /** The seller's own undo window (B2 UNDO_WINDOW_SECONDS); owners / managers may undo any time while live. */
 export const SELLER_UNDO_WINDOW_MS = 120_000
+
+// ── B9b — guided bazar setup for new signups (BAZAR_SIGNUP_ENABLED only) ─────
+// Every /bazar-setup endpoint answers 404 unless the server setting is on, the store signed up to sell at a bazar and
+// bazar is on for it — the screens then show nothing of it (getBazarSetup → null).
+
+export interface BazarSetupBatch {
+  eventId: string
+  eventName: string | null
+  eventStatus: BazarStatus | null
+  labelledReceiptId: string | null
+  countOnlyReceiptId: string | null
+  pieces: number
+  receivedAt: string | null
+  lowered: boolean
+  loweredAt: string | null
+}
+
+export interface BazarSetupStatus {
+  on: true
+  canSetUp: boolean
+  batch: BazarSetupBatch | null
+}
+
+/** null when the guided setup isn't on for this store (404) — or can't be reached (403). */
+export async function getBazarSetup(): Promise<BazarSetupStatus | null> {
+  try {
+    return await bazarFetch<BazarSetupStatus>('/bazar-setup')
+  } catch (e) {
+    if (e instanceof BazarError && (e.status === 404 || e.status === 403)) return null
+    throw e
+  }
+}
+
+export interface BazarSetupVariant {
+  id: string
+  /** null = the product's only size ("Default Title"). */
+  title: string | null
+  sku: string | null
+  price: number | string | null
+  /** Shopify's total minus Traced Main; null = unknown (the read failed or stopped early). */
+  otherLocations: number | null
+}
+
+export interface BazarSetupProduct {
+  id: string
+  title: string
+  imageUrl: string | null
+  variants: BazarSetupVariant[]
+}
+
+export function getBazarSetupProducts() {
+  return bazarFetch<{ products: BazarSetupProduct[]; stockKnown: boolean }>('/bazar-setup/products')
+}
+
+export interface BazarSetupLine { variantId: string; quantity: number; labels: boolean }
+
+/** Receive the pick into Traced Main (labelled + count-only receipts). The same requestId again returns the same batch. */
+export function receiveBazarSetup(eventId: string, requestId: string, lines: BazarSetupLine[]) {
+  return bazarFetch<BazarSetupStatus>('/bazar-setup/receive', {
+    method: 'POST', body: JSON.stringify({ eventId, requestId, lines }),
+  })
+}
+
+export interface BazarLowerRow {
+  variantId: string
+  productTitle: string
+  variantTitle: string | null
+  sku: string | null
+  quantity: number
+}
+
+export function getBazarLowerList() {
+  return bazarFetch<{ rows: BazarLowerRow[]; total: number; lowered: boolean; loweredAt: string | null }>('/bazar-setup/lower')
+}
+
+export function markBazarLowered() {
+  return bazarFetch<BazarSetupStatus>('/bazar-setup/lower-done', { method: 'POST' })
+}
+
+/** The "lower these" list as a CSV file (headers in the screen's language). */
+export async function downloadBazarLowerCsv(lang: string) {
+  const res = await authFetch(`/bazar-setup/lower.csv?lang=${lang.startsWith('ar') ? 'ar' : 'en'}`)
+  if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'bazar-lower-these.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/**
+ * The labelled receipt's labels (the existing Receiving labels PDF), opened in a new tab to print. No size is sent, so the
+ * store's own label size applies (LabelSizes.forTenant — e.g. a jewelry store's 60 × 12).
+ */
+export async function openBazarSetupLabels(receiptId: string) {
+  const res = await authFetch(`/receiving/sessions/${encodeURIComponent(receiptId)}/labels`)
+  if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
+  window.open(URL.createObjectURL(await res.blob()), '_blank')
+}

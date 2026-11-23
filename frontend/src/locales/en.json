@@ -6595,6 +6595,132 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "wizard": {
+      "loading": "Loading…",
+      "egp": "EGP",
+      "oneSize": "One size",
+      "stepOf": "Step {{n}} of {{total}}",
+      "back": "Back",
+      "steps": {
+        "s1": "Your bazar",
+        "s2": "Pick products",
+        "s3": "Barcodes",
+        "s4": "Prices",
+        "s5": "Ready"
+      },
+      "bazar": {
+        "welcome": "Welcome",
+        "hero": "Let's get your bazar ready. About 10 minutes.",
+        "list": {
+          "s1": "Tell us about your bazar",
+          "s1d": "Name, days, how customers pay",
+          "s2": "Pick the products you'll take",
+          "s2d": "Straight from your Shopify store",
+          "s3": "Barcodes — or none",
+          "s3d": "Print labels, or sell by tapping",
+          "s4": "Set bazar prices",
+          "s4d": "Shopify prices stay the same",
+          "s5": "Sell from your phone",
+          "s5d": "Scan = sold. Close each day in a minute"
+        },
+        "nothingChanges": "Traced adds the pieces you take to Traced Main in your Shopify. Nothing else in your store changes.",
+        "title": "Your bazar",
+        "changeLater": "You can change any of this later.",
+        "name": "Bazar name",
+        "where": "Where is it?",
+        "who": "Who's selling with you?",
+        "justMe": "Just me",
+        "team": "Me + team",
+        "next": "Next · pick products"
+      },
+      "pick": {
+        "title": "What are you taking?",
+        "sub": "Tick a product, then how many of each size. These come from your Shopify store.",
+        "search_one": "Search {{count}} product",
+        "search_other": "Search {{count}} products",
+        "searchLabel": "Search your products",
+        "all": "All",
+        "selected": "Selected · {{count}}",
+        "empty": "No products yet. Your Shopify products show here once they're imported.",
+        "other_one": "{{count}} in your other locations",
+        "other_other": "{{count}} in your other locations",
+        "pcs_one": "{{count}} pc",
+        "pcs_other": "{{count}} pcs",
+        "taking": "You're taking",
+        "piecesProducts_one": "pieces · {{count}} product",
+        "piecesProducts_other": "pieces · {{count}} products",
+        "worth": "Worth {{amount}} EGP at Shopify prices",
+        "noteTitle": "Your Shopify stock",
+        "note": "Traced adds these pieces to Traced Main in your Shopify. Next you'll get a short list of what to lower at the location you took them from, so nothing counts twice.",
+        "selectedPieces_one": "{{count}} piece selected",
+        "selectedPieces_other": "{{count}} pieces selected",
+        "next": "Next · barcodes",
+        "nextPhone_one": "{{count}} piece · next: barcodes",
+        "nextPhone_other": "{{count}} pieces · next: barcodes"
+      },
+      "barcodes": {
+        "title": "How will you sell at the bazar?",
+        "sub": "You can mix: labels on some, no barcodes for the rest.",
+        "labels": {
+          "title": "Print barcode labels",
+          "desc": "One label per piece. Scan it with your phone = sold.",
+          "p1": "Fastest in a rush — one scan per sale",
+          "p2": "Each piece tracked: returns, lost pieces, report",
+          "m1": "Needs a label printer (or A4 label sheets)"
+        },
+        "none": {
+          "title": "No barcodes",
+          "desc": "Tap the product and size on your phone.",
+          "p1": "Nothing to stick on the clothes",
+          "p2": "Send them to the bazar by count",
+          "m1": "A few seconds slower per sale"
+        },
+        "labelSize": "Label size: 50 × 25 mm",
+        "mixTitle": "Which products get labels?",
+        "mixLabels": "Labels",
+        "mixNone": "No barcodes",
+        "footer": "Labels print in the order you'll pack them.",
+        "receive_one": "Add {{count}} piece to Traced Main",
+        "receive_other": "Add {{count}} pieces to Traced Main"
+      },
+      "lower": {
+        "title": "Lower these at the location you took them from",
+        "body": "Traced added these pieces to Traced Main in your Shopify. In Shopify, lower the same amounts at the location you took them from, so nothing counts twice. Traced doesn't change that location for you.",
+        "product": "Product",
+        "size": "Size",
+        "quantity": "Quantity",
+        "total": "Total",
+        "csv": "Download CSV",
+        "csvFailed": "Couldn't download the list. Try again.",
+        "done": "Done, I lowered them",
+        "lowered": "Lowered",
+        "labelsReady": "Your labels are ready to print.",
+        "print": "Print labels",
+        "printFailed": "Couldn't open the labels. Try again.",
+        "later": "I'll do it later — go to my bazar"
+      },
+      "done": {
+        "title": "Nothing counts twice now",
+        "body": "Next, set your bazar prices and send the pieces on Get ready. Pieces without barcodes go with “Send by count”.",
+        "continue": "Continue to your bazar"
+      },
+      "reminder": {
+        "title_one": "Lower {{count}} piece at the location you took it from",
+        "title_other": "Lower {{count}} pieces at the location you took them from",
+        "body": "In Shopify, so nothing counts twice. Traced already added them to Traced Main.",
+        "view": "View list"
+      },
+      "line": {
+        "title": "Lower stock at the location you took it from",
+        "sub_one": "{{count}} piece · in Shopify",
+        "sub_other": "{{count}} pieces · in Shopify"
+      },
+      "startCard": {
+        "title": "Bring your products to the bazar",
+        "body": "Pick what you'll take, choose labels or none, and Traced gets it ready.",
+        "cta": "Set up your bazar"
+      }
+    },
     "online": {
       "title": "Online stock",
       "sub": "What happens to these pieces in your Shopify store while they're at the bazar.",
