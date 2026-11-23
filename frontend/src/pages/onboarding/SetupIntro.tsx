@@ -331,6 +331,9 @@ function SetupBazar() {
     }
   }, [])
 
+  // B9b: with the guided bazar setup on (GET /me bazarSetup), this page is the wizard — straight there.
+  if (caps.bazarSetup) return <Navigate to="/bazar/setup" replace />
+
   return (
     <GateFrame width="medium">
       <div className="flex flex-col gap-6" data-testid="setup-bazar">

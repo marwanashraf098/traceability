@@ -41,6 +41,19 @@ public class LabelService {
         this.ledger = ledger;
     }
 
+    /**
+     * A session's labels print in the order they'll be packed: by the session's lines (the first line of each variant,
+     * in the order the lines were added), then product, then size (Shopify's position, else the size's name), then piece id. A finalize creates every piece at the
+     * same instant and piece ids are random within a millisecond, so created_at alone printed a batch in a random
+     * order (Bazar B9b). Aliases: {@code p} pieces, {@code v} variants, {@code pr} products.
+     */
+    public static final String LABEL_ORDER_SQL =
+        "ORDER BY (SELECT min(rl.created_at) FROM receipt_lines rl " +
+        "          WHERE rl.receipt_id = p.receipt_id AND rl.tenant_id = p.tenant_id AND rl.variant_id = p.variant_id) " +
+        "         NULLS LAST, lower(pr.title), pr.title, " +
+        "         CASE WHEN v.raw->>'position' ~ '^[0-9]{1,6}$' THEN (v.raw->>'position')::int END NULLS LAST, " +
+        "         v.title, v.id, p.id";
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
@@ -67,7 +80,7 @@ public class LabelService {
             "JOIN variants v ON v.id = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "WHERE p.receipt_id = ? AND p.tenant_id = ? " +
-            "ORDER BY p.created_at",
+            LABEL_ORDER_SQL,
             sessionId, tenantId);
 
         if (pieces.isEmpty()) {

@@ -597,6 +597,11 @@ class ShadowOrderLeakTest {
         }
         reg("PUT /api/v1/bazar-events/{eventId}/online-stock",
             skip("Bazar B8 — a bazar's online stock choice (its event location's shopify_sync_mode); touches no orders"));
+        for (String k : List.of("GET /api/v1/bazar-setup", "GET /api/v1/bazar-setup/products",
+                "POST /api/v1/bazar-setup/receive", "GET /api/v1/bazar-setup/lower", "GET /api/v1/bazar-setup/lower.csv",
+                "POST /api/v1/bazar-setup/lower-done")) {
+            reg(k, skip("Bazar B9b — guided bazar setup (catalog, receiving into Traced Main, the lower list); touches no orders"));
+        }
         for (String k : List.of(
                 "POST /api/v1/bazar-events/{eventId}/sell", "POST /api/v1/bazar-events/{eventId}/sales/{saleId}/undo",
                 "PUT /api/v1/bazar-events/{eventId}/sales/{saleId}/payment",
