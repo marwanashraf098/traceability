@@ -281,7 +281,7 @@ public class TagStockService {
             if (rows.isEmpty()) continue;
             Map<String, Object> first = rows.get(0);
             pages.add(new com.traceability.inventory.LabelPdfRenderer.Separator(
-                (String) first.get("product_title"), (String) first.get("variant_title"), rows.size()));
+                (String) first.get("product_title"), (String) first.get("variant_title"), rows.size(), (String) first.get("sku")));
             for (Map<String, Object> r : rows) {
                 pages.add(new com.traceability.inventory.LabelPdfRenderer.Piece((String) r.get("code"),
                     (String) r.get("product_title"), (String) r.get("variant_title"), (String) r.get("sku")));

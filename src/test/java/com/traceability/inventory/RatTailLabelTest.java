@@ -18,6 +18,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.PDFTextStripperByArea;
 import org.apache.pdfbox.text.TextPosition;
 import org.junit.jupiter.api.Test;
 
@@ -40,15 +41,15 @@ import static org.assertj.core.api.Assertions.*;
  *   r3  nothing drawn in the tail (x 20–40 mm): no rectangle or glyph in the content stream, every pixel white
  *   r4  every inked pixel is ≥ 1 mm inside a flag (Flag A x 1–19, Flag B x 41–59, y 1–11)
  *   r5  Flag B lines' ink never overlaps — Latin, Arabic with tashkeel, mixed, no variant
- *   r6  truncation: a long name → 5 pt + "…", a long variant → 4.75 pt + "…", a long SKU cut with "…" at 6 pt; all
- *       within 17.2 mm; a medium name only shrinks
- *   r7  direction: LTR lines start at 41.4 mm (baselines 8.45 / 5.4 / 2.3); with Arabic the RTL baselines
- *       (8.6 / 5.2 / 2.2) and an Arabic line ends at 58.6 mm; the SKU stays left at 41.4; "Default Title" hidden →
- *       name + SKU at 7.2 / 3.9
- *   r8  one 60 × 12 page per label, vector bars (no image), and the page text is exactly code, name, variant, SKU
- *       (no price)
- *   s1  separator: no barcode (no rectangle, the decoder finds nothing at 300 dpi); Flag A text exactly "× N"; name +
- *       variant on Flag B, no SKU; baselines 7.2 / 3.9 (LTR) and 7.4 / 3.8 (RTL); tail empty; safe area
+ *   r6  truncation: a long name → 2 lines at 5 pt + "…", a long "variant | SKU" → 4.75 pt + "…"; all within
+ *       17.2 mm; a short name stays 6 pt, untouched
+ *   r7  direction: Latin lines start at 41.4 mm; with Arabic in the name or variant every Flag B line ends at 58.6 mm
+ *       (the SKU stays Latin, at the visual left of line 3); the lines are centred in 1–11 mm; "Default Title" hidden
+ *       → name + SKU; the code row unchanged
+ *   r8  one 60 × 12 page per label, vector bars (no image), Flag A text exactly the code, Flag B exactly name +
+ *       "variant | SKU" (no price)
+ *   s1  separator: no barcode (no rectangle, the decoder finds nothing at 300 dpi); Flag A text exactly "× N"; Flag B
+ *       the group's name + "variant | SKU"; centred; Arabic right-aligned; tail empty; safe area
  *   g1  at 50 × 25 a separator with a count draws exactly what the count-less separator draws (header pages
  *       unchanged); a rat-tail page refuses a place sticker and a count-less separator
  */
@@ -176,53 +177,53 @@ class RatTailLabelTest {
     void r6_truncation() {
         RatTailLabel.Layout l = RatTailLabel.piece("P008874", LONG_NAME,
             "Rose Gold Plated Medium Adjustable Extra Long Chain", "BRC-INF-RG-M-XL-2026-SPECIAL-EDITION");
-        RatTailLabel.Line name = line(l, RatTailLabel.Row.NAME), variant = line(l, RatTailLabel.Row.VARIANT),
-            sku = line(l, RatTailLabel.Row.SKU);
-        assertThat(name.size()).isEqualTo(5f);
-        assertThat(name.logical()).endsWith("…").startsWith("Sterling Silver");
-        assertThat(variant.size()).isEqualTo(4.75f);
-        assertThat(variant.logical()).endsWith("…");
-        assertThat(sku.size()).isEqualTo(6f);
-        assertThat(sku.logical()).endsWith("…").startsWith("BRC-INF");
+        List<RatTailLabel.Line> name = rows(l, RatTailLabel.Row.NAME);
+        RatTailLabel.Line detail = line(l, RatTailLabel.Row.DETAIL);
+        assertThat(name).hasSize(2).allSatisfy(n -> assertThat(n.size()).isEqualTo(5f));
+        assertThat(name.get(0).logical()).startsWith("Sterling Silver");
+        assertThat(name.get(1).logical()).endsWith("…");
+        assertThat(detail.size()).isEqualTo(4.75f);
+        assertThat(detail.logical()).startsWith("Rose Gold").endsWith("…");
         assertThat(l.ellipsized()).isTrue();
-        for (RatTailLabel.Line x : List.of(name, variant, sku)) assertThat(x.width()).isLessThanOrEqualTo(17.2f * MM + 1e-3f);
+        for (RatTailLabel.Line x : flagB(l)) assertThat(x.width()).isLessThanOrEqualTo(17.2f * MM + 1e-3f);
 
-        RatTailLabel.Line medium = line(RatTailLabel.piece("P1", "Silver Anklet Set", "S", "X"), RatTailLabel.Row.NAME);
-        assertThat(medium.size()).isLessThan(6.5f).isGreaterThanOrEqualTo(5f);
-        assertThat(medium.logical()).isEqualTo("Silver Anklet Set");
-        RatTailLabel.Line shortName = line(RatTailLabel.piece("P1", "Ring", "S", "X"), RatTailLabel.Row.NAME);
-        assertThat(shortName.size()).isEqualTo(6.5f);
+        RatTailLabel.Layout shortName = RatTailLabel.piece("P1", "Ring", "S", "X");
+        assertThat(rows(shortName, RatTailLabel.Row.NAME)).singleElement()
+            .satisfies(n -> assertThat(n.size()).isEqualTo(6f))
+            .satisfies(n -> assertThat(n.logical()).isEqualTo("Ring"));
+        assertThat(shortName.ellipsized()).isFalse();
     }
 
     @Test
-    void r7_direction_alignment_and_baselines() {
+    void r7_direction_alignment_and_centring() {
         RatTailLabel.Layout ltr = RatTailLabel.piece("P008870", "Gold Hoop", "Small", "EAR-S");
-        assertBaselines(ltr, 8.45f, 5.4f, 2.3f);
-        for (RatTailLabel.Line x : ltr.lines()) {
-            if (x.row() != RatTailLabel.Row.CODE) assertThat(x.x()).isCloseTo(41.4f * MM, within(1e-3f));
-        }
+        assertThat(ltr.lines()).extracting(RatTailLabel.Line::row)
+            .containsExactly(RatTailLabel.Row.CODE, RatTailLabel.Row.NAME, RatTailLabel.Row.DETAIL);
+        for (RatTailLabel.Line x : flagB(ltr)) assertThat(x.x()).isCloseTo(41.4f * MM, within(1e-3f));
+        assertThat(line(ltr, RatTailLabel.Row.DETAIL).logical()).isEqualTo("Small | EAR-S");
+        RatTailFlagBTest.assertCentred(ltr);
 
         RatTailLabel.Layout rtl = RatTailLabel.piece("P008871", "خاتم فضة", "مقاس 7", "RING-925-7");
-        assertBaselines(rtl, 8.6f, 5.2f, 2.2f);
-        for (RatTailLabel.Row row : List.of(RatTailLabel.Row.NAME, RatTailLabel.Row.VARIANT)) {
-            RatTailLabel.Line x = line(rtl, row);
-            assertThat(x.rtl()).isTrue();
-            assertThat(x.x() + x.width()).as(row + " right edge").isCloseTo(58.6f * MM, within(1e-3f));
+        for (RatTailLabel.Line x : flagB(rtl)) {
+            assertThat(x.x() + x.width()).as(x.row() + " right edge").isCloseTo(58.6f * MM, within(1e-3f));
         }
-        RatTailLabel.Line sku = line(rtl, RatTailLabel.Row.SKU);
-        assertThat(sku.rtl()).isFalse();
-        assertThat(sku.x()).isCloseTo(41.4f * MM, within(1e-3f));
+        assertThat(line(rtl, RatTailLabel.Row.NAME).rtl()).isTrue();
+        RatTailLabel.Line detail = line(rtl, RatTailLabel.Row.DETAIL);
+        assertThat(detail.logical()).isEqualTo("مقاس 7 | RING-925-7");
+        assertThat(detail.rtl()).isTrue();
+        assertThat(detail.runs().get(0).text()).as("the SKU stays Latin, at the visual left").startsWith("RING-925-7");
+        RatTailFlagBTest.assertCentred(rtl);
 
-        // Arabic only in the variant → the RTL baselines; the Latin name stays left-aligned.
+        // Arabic only in the variant → an Arabic label: Arabic line spacing, every line right-aligned.
         RatTailLabel.Layout mixed = RatTailLabel.piece("P1", "Gold Ring", "مقاس 7", "R7");
-        assertBaselines(mixed, 8.6f, 5.2f, 2.2f);
-        assertThat(line(mixed, RatTailLabel.Row.NAME).x()).isCloseTo(41.4f * MM, within(1e-3f));
+        for (RatTailLabel.Line x : flagB(mixed)) assertThat(x.x() + x.width()).isCloseTo(58.6f * MM, within(1e-3f));
+        RatTailFlagBTest.assertCentred(mixed);
 
         RatTailLabel.Layout noVariant = RatTailLabel.piece("P008875", "Pendant", "Default Title", "PEN-01");
         assertThat(noVariant.lines()).extracting(RatTailLabel.Line::row)
-            .containsExactly(RatTailLabel.Row.CODE, RatTailLabel.Row.NAME, RatTailLabel.Row.SKU);
-        assertThat(line(noVariant, RatTailLabel.Row.NAME).baseline()).isCloseTo(7.2f * MM, within(1e-3f));
-        assertThat(line(noVariant, RatTailLabel.Row.SKU).baseline()).isCloseTo(3.9f * MM, within(1e-3f));
+            .containsExactly(RatTailLabel.Row.CODE, RatTailLabel.Row.NAME, RatTailLabel.Row.DETAIL);
+        assertThat(line(noVariant, RatTailLabel.Row.DETAIL).logical()).isEqualTo("PEN-01");
+        RatTailFlagBTest.assertCentred(noVariant);
 
         RatTailLabel.Line code = line(ltr, RatTailLabel.Row.CODE);
         assertThat(code.size()).isEqualTo(5.5f);
@@ -247,13 +248,10 @@ class RatTailLabelTest {
                     assertThat(page.getResources().isImageXObject(name)).as("vector bars, no bitmap").isFalse();
                 }
             }
-            PDFTextStripper strip = new PDFTextStripper();
-            strip.setStartPage(1); strip.setEndPage(1);
-            assertThat(strip.getText(doc).strip().lines().map(String::strip).toList())
-                .containsExactlyInAnyOrder("P008870", "Gold Hoop Earrings", "Small", "EAR-S");
-            strip.setStartPage(3); strip.setEndPage(3);
-            assertThat(strip.getText(doc).strip().lines().map(String::strip).toList())
-                .containsExactlyInAnyOrder("P008872", "Anklet", "ANK");
+            assertThat(areaText(doc, 0, 0, 20)).isEqualTo("P008870");
+            assertThat(areaText(doc, 0, 40, 60)).isEqualTo("Gold Hoop Earrings Small | EAR-S");
+            assertThat(areaText(doc, 2, 0, 20)).isEqualTo("P008872");
+            assertThat(areaText(doc, 2, 40, 60)).isEqualTo("Anklet ANK");
         }
     }
 
@@ -266,36 +264,37 @@ class RatTailLabelTest {
             assertThat(doc.getNumberOfPages()).isEqualTo(1);
             assertThat(ops(doc.getPage(0))).as("no rectangle at all").doesNotContain("re");
             assertThat(flagAText(doc)).isEqualTo("× 12");
-            PDFTextStripper strip = new PDFTextStripper();
-            assertThat(strip.getText(doc).strip().lines().map(String::strip).toList())
-                .containsExactlyInAnyOrder("× 12", "Gold Hoop Earrings", "Small / Yellow Gold");
+            assertThat(areaText(doc, 0, 0, 20)).isEqualTo("× 12");
+            assertThat(areaText(doc, 0, 40, 60)).isEqualTo("Gold Hoop Earrings Small / Yellow Gold");
         }
         BufferedImage img = image(pdf, 0);
         assertThatThrownBy(() -> decode(img)).isInstanceOf(NotFoundException.class);
 
+        try (PDDocument doc = Loader.loadPDF(LabelPdfRenderer.renderPages(
+                List.of(new LabelPdfRenderer.Separator("Gold Hoop Earrings", "Small", 4, "EAR-S")), RAT_TAIL))) {
+            assertThat(areaText(doc, 0, 0, 20)).isEqualTo("× 4");
+            assertThat(areaText(doc, 0, 40, 60)).as("the group's own line 3").isEqualTo("Gold Hoop Earrings Small | EAR-S");
+        }
+
         RatTailLabel.Layout ltr = RatTailLabel.separator(12, "Gold Hoop Earrings", "Small");
         assertThat(ltr.bars()).isNull();
-        assertThat(ltr.lines()).extracting(RatTailLabel.Line::row)
-            .containsExactly(RatTailLabel.Row.COUNT, RatTailLabel.Row.NAME, RatTailLabel.Row.VARIANT);
+        assertThat(ltr.lines()).extracting(RatTailLabel.Line::row).first().isEqualTo(RatTailLabel.Row.COUNT);
+        assertThat(ltr.lines()).extracting(RatTailLabel.Line::row).last().isEqualTo(RatTailLabel.Row.DETAIL);
         RatTailLabel.Line count = line(ltr, RatTailLabel.Row.COUNT);
         assertThat(count.logical()).isEqualTo("× 12");
         assertThat(count.size()).isEqualTo(9f);
         assertThat(count.runs()).allMatch(r -> r.face() == LabelFonts.Face.BOLD);
         assertThat(count.baseline()).isCloseTo(4.8f * MM, within(1e-3f));
         assertThat(count.x() + count.width() / 2).isCloseTo(10 * MM, within(1e-3f));
-        assertThat(line(ltr, RatTailLabel.Row.NAME).baseline()).isCloseTo(7.2f * MM, within(1e-3f));
-        assertThat(line(ltr, RatTailLabel.Row.VARIANT).baseline()).isCloseTo(3.9f * MM, within(1e-3f));
+        RatTailFlagBTest.assertCentred(ltr);
 
         RatTailLabel.Layout rtl = RatTailLabel.separator(3, "خاتم فضة", "مقاس 7");
-        assertThat(line(rtl, RatTailLabel.Row.NAME).baseline()).isCloseTo(7.4f * MM, within(1e-3f));
-        assertThat(line(rtl, RatTailLabel.Row.VARIANT).baseline()).isCloseTo(3.8f * MM, within(1e-3f));
-        RatTailLabel.Line n = line(rtl, RatTailLabel.Row.NAME);
-        assertThat(n.x() + n.width()).isCloseTo(58.6f * MM, within(1e-3f));
+        for (RatTailLabel.Line x : flagB(rtl)) assertThat(x.x() + x.width()).isCloseTo(58.6f * MM, within(1e-3f));
+        RatTailFlagBTest.assertCentred(rtl);
 
         try (PDDocument doc = Loader.loadPDF(separatorPdf(7, "Ring", "Default Title"))) {
-            assertThat(flagAText(doc)).isEqualTo("× 7");
-            assertThat(new PDFTextStripper().getText(doc).strip().lines().map(String::strip).toList())
-                .containsExactlyInAnyOrder("× 7", "Ring");
+            assertThat(areaText(doc, 0, 0, 20)).isEqualTo("× 7");
+            assertThat(areaText(doc, 0, 40, 60)).isEqualTo("Ring");
         }
         assertThatThrownBy(() -> RatTailLabel.separator(0, "Ring", null)).isInstanceOf(IllegalArgumentException.class);
     }
@@ -426,10 +425,20 @@ class RatTailLabelTest {
         }
     }
 
-    static void assertBaselines(RatTailLabel.Layout l, float name, float variant, float sku) {
-        assertThat(line(l, RatTailLabel.Row.NAME).baseline()).isCloseTo(name * MM, within(1e-3f));
-        assertThat(line(l, RatTailLabel.Row.VARIANT).baseline()).isCloseTo(variant * MM, within(1e-3f));
-        assertThat(line(l, RatTailLabel.Row.SKU).baseline()).isCloseTo(sku * MM, within(1e-3f));
+    static List<RatTailLabel.Line> rows(RatTailLabel.Layout l, RatTailLabel.Row row) {
+        return l.lines().stream().filter(x -> x.row() == row).toList();
+    }
+
+    static List<RatTailLabel.Line> flagB(RatTailLabel.Layout l) {
+        return l.lines().stream().filter(x -> x.row() == RatTailLabel.Row.NAME || x.row() == RatTailLabel.Row.DETAIL).toList();
+    }
+
+    /** The text drawn between x0 and x1 mm (full height) of page {@code page}, its lines joined by one space. */
+    static String areaText(PDDocument doc, int page, float x0Mm, float x1Mm) throws IOException {
+        PDFTextStripperByArea strip = new PDFTextStripperByArea();
+        strip.addRegion("r", new java.awt.geom.Rectangle2D.Float(x0Mm * MM, 0, (x1Mm - x0Mm) * MM, 12 * MM));
+        strip.extractRegions(doc.getPage(page));
+        return String.join(" ", strip.getTextForRegion("r").strip().lines().map(String::strip).filter(x -> !x.isEmpty()).toList());
     }
 
     static RatTailLabel.Line line(RatTailLabel.Layout l, RatTailLabel.Row row) {

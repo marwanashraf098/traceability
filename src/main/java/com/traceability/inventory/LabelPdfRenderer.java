@@ -42,10 +42,15 @@ public final class LabelPdfRenderer {
      * The page between two orders' packing labels: plain text, NO barcode (so it can never be scanned as a
      * piece). {@code line2} null → one line only. {@code count} = the labels that follow in the group — drawn only on
      * the 60 × 12 rat-tail separator ("× N", RatTailLabel.separator), required there; ignored at every other size.
+     * {@code sku} = the group's SKU, shown only on the rat-tail separator (beside the variant); ignored elsewhere.
      */
-    public record Separator(String line1, String line2, Integer count) implements Page {
+    public record Separator(String line1, String line2, Integer count, String sku) implements Page {
         public Separator(String line1, String line2) {
-            this(line1, line2, null);
+            this(line1, line2, null, null);
+        }
+
+        public Separator(String line1, String line2, Integer count) {
+            this(line1, line2, count, null);
         }
     }
 
@@ -221,7 +226,7 @@ public final class LabelPdfRenderer {
         if (item instanceof Piece p) {
             layout = RatTailLabel.piece(p.shortCode(), p.productTitle(), p.variantTitle(), p.sku());
         } else if (item instanceof Separator sep && sep.count() != null) {
-            layout = RatTailLabel.separator(sep.count(), sep.line1(), sep.line2());
+            layout = RatTailLabel.separator(sep.count(), sep.line1(), sep.line2(), sep.sku());
         } else {
             throw new IllegalArgumentException("A 60 × 12 rat-tail label prints piece labels and counted separators only");
         }
