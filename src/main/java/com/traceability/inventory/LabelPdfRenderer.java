@@ -40,9 +40,14 @@ public final class LabelPdfRenderer {
 
     /**
      * The page between two orders' packing labels: plain text, NO barcode (so it can never be scanned as a
-     * piece). {@code line2} null → one line only.
+     * piece). {@code line2} null → one line only. {@code count} = the labels that follow in the group — drawn only on
+     * the 60 × 12 rat-tail separator ("× N", RatTailLabel.separator), required there; ignored at every other size.
      */
-    public record Separator(String line1, String line2) implements Page {}
+    public record Separator(String line1, String line2, Integer count) implements Page {
+        public Separator(String line1, String line2) {
+            this(line1, line2, null);
+        }
+    }
 
     /**
      * A shelf / box sticker: the barcode holds {@code scanCode} (Q + digits, never changes); under it the readable
@@ -86,7 +91,12 @@ public final class LabelPdfRenderer {
     public static byte[] renderPages(List<? extends Page> pages, PieceLabelLayout.Spec spec) throws IOException {
         try (PDDocument doc = new PDDocument()) {
             LabelFonts.Loaded fonts = new LabelFonts.Loaded(doc);
+            boolean ratTail = RatTailLabel.is(spec);
             for (Page item : pages) {
+                if (ratTail) {
+                    drawRatTail(doc, fonts, item);
+                    continue;
+                }
                 if (item instanceof Separator sep) {
                     drawSeparator(doc, fonts, sep, spec);
                     continue;
@@ -200,6 +210,40 @@ public final class LabelPdfRenderer {
             cs.showText(run.text());
             cs.endText();
             x += LabelFonts.width(List.of(run), line.size());
+        }
+    }
+
+    // ── Jewelry rat-tail (60 × 12 mm) — geometry in RatTailLabel; vector bars, never a bitmap ──
+
+    /** One 60 × 12 page: a piece label (bars + code + Flag B) or a group separator (× N + Flag B, no barcode). */
+    private static void drawRatTail(PDDocument doc, LabelFonts.Loaded fonts, Page item) throws IOException {
+        RatTailLabel.Layout layout;
+        if (item instanceof Piece p) {
+            layout = RatTailLabel.piece(p.shortCode(), p.productTitle(), p.variantTitle(), p.sku());
+        } else if (item instanceof Separator sep && sep.count() != null) {
+            layout = RatTailLabel.separator(sep.count(), sep.line1(), sep.line2());
+        } else {
+            throw new IllegalArgumentException("A 60 × 12 rat-tail label prints piece labels and counted separators only");
+        }
+        PDPage page = new PDPage(new PDRectangle(layout.pageWidth(), layout.pageHeight()));
+        doc.addPage(page);
+        try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+            if (layout.bars() != null) {
+                RatTailLabel.Bars b = layout.bars();
+                for (RatTailLabel.Bar bar : b.bars()) cs.addRect(bar.x(), b.y(), bar.w(), b.h());
+                cs.fill();
+            }
+            for (RatTailLabel.Line line : layout.lines()) {
+                float x = line.x();
+                for (LabelFonts.Run run : line.runs()) {
+                    cs.beginText();
+                    cs.setFont(fonts.font(run.face()), line.size());
+                    cs.newLineAtOffset(x, line.baseline());
+                    cs.showText(run.text());
+                    cs.endText();
+                    x += LabelFonts.width(List.of(run), line.size());
+                }
+            }
         }
     }
 

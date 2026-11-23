@@ -281,7 +281,7 @@ public class TagStockService {
             if (rows.isEmpty()) continue;
             Map<String, Object> first = rows.get(0);
             pages.add(new com.traceability.inventory.LabelPdfRenderer.Separator(
-                (String) first.get("product_title"), (String) first.get("variant_title")));
+                (String) first.get("product_title"), (String) first.get("variant_title"), rows.size()));
             for (Map<String, Object> r : rows) {
                 pages.add(new com.traceability.inventory.LabelPdfRenderer.Piece((String) r.get("code"),
                     (String) r.get("product_title"), (String) r.get("variant_title"), (String) r.get("sku")));
@@ -293,7 +293,7 @@ public class TagStockService {
                 LabelCodeException.Code.NO_ISSUED_CODES, "These labels are already used or voided", "هذه الملصقات مستخدمة أو ملغاة");
         }
         return com.traceability.inventory.LabelPdfRenderer.renderPages(pages,
-            com.traceability.inventory.PieceLabelLayout.Spec.of(LabelCodeService.LABEL_WIDTH_MM, LabelCodeService.LABEL_HEIGHT_MM));
+            com.traceability.inventory.LabelSizes.forTenant(jdbc, tenantId));
     }
 
     /**

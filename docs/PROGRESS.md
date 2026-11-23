@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Jewelry rat-tail label 60 × 12 mm + tenant label size wired (2026-11-23; branch `feat/rattail-label` off main
+7c882c05; no migration; NOT merged, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
+- Tenant size is now READ: `LabelSizes.forTenant` (tenants.label_width_mm / label_height_mm; NULL → 50×25) is THE size
+  of every one-piece-per-page label PDF — LabelService (receiving session / variant / reprint, Lookup / Returns /
+  Transfer reprints), LabelCodeService.batchPdf / codesPdf (code-first, factory extra label, tag-stock leftovers),
+  label runs, tag stock. Explicit widthMm / heightMm request params still win (`LabelSizes.resolve`). Before this the
+  setting was saved and ignored: **Allshades and BANDED (40×25 in Settings) now get 40×25 pages**; The Snouts has
+  50×25 stored (unchanged); every other tenant NULL → 50×25.
+- Packing labels stay `LabelSizes.PACK` (50×25) whatever the setting: PackLabelService untouched, and
+  LabelCodeService's PDFs fall back to PACK for any code issued for an order (kind pack / a pack screen's
+  replacement). Small-label pack separators = backlog (need a design).
+- (60, 12) ⇒ `RatTailLabel` (pure geometry) drawn by `LabelPdfRenderer.drawRatTail`; any other size ⇒ the existing
+  layout + bitmap barcode, byte-for-byte unchanged (PieceLabelGoldenTest). Flag A x 0–20: Code 128 of the P-code as
+  VECTOR rects from ZXing's module row (MARGIN 0; 3.5.3 already encodes compactly: P+6 = 90 modules, P+7/P+8 = 101,
+  P+9 = 112), module 0.48 pt = 2 dots @300 dpi, start snapped to the 0.24 pt dot grid, centred by module count, bars
+  y 4.3–10.7; code 5.5 pt NotoSans Regular, baseline 1.75. Tail x 20–40 never printed. Flag B: name 6.5 bold → 5 →
+  "…", variant 6 → 4.75 → "…", SKU 6 (grapheme "…"); baselines LTR 8.45 / 5.4 / 2.3, RTL 8.6 / 5.2 / 2.2, no
+  variant 7.2 / 3.9; RTL lines end at 58.6, LTR (SKU always) start at 41.4. No price.
+- Separator (label runs + tag stock only, 60×12 only): `Separator(line1, line2, count)` — Flag A only "× N" bold 9 pt
+  baseline 4.8, no barcode / no code; Flag B name + variant (no SKU) at 7.2 / 3.9 (RTL 7.4 / 3.8). A rat-tail page
+  refuses a count-less separator and any place sticker (IllegalArgumentException). At 50×25 / 40×25 the count is
+  ignored — header pages unchanged.
+- Settings → Business: third option "Jewelry rat-tail · 60 × 12 mm (needs a 300 dpi printer)" (EN + AR);
+  TenantController allow-list + GET map `60x12`. The local SegmentedControl now wraps (phone width).
+- Decision (deviation, approved in spirit of "RTL (Arabic name or variant)"): the RTL baselines are used when the name
+  or variant CONTAINS Arabic, not only when it starts with Arabic — "Ring خاتم" at LTR baselines overlapped by 0.05 mm.
+  Alignment is per line (its own direction).
+- Gotchas: 17.2 mm is tight — "Gold Hoop Earrings" only fits at the 5 pt floor; names over ~18 characters get "…".
+  P+7 quiet zone is 1.44 mm (8.5 modules) per side; decodes at 300 dpi in tests, confirm on the real printer. A 203 dpi
+  printer cannot print this label correctly (0.48 pt = 1.35 dots).
+- Tests (new classes only): RatTailLabelTest (12 — encoding/codewords, dot grid, 300 dpi decode, 2-px bars, tail
+  empty by ops + pixels, safe area by pixels, ink non-overlap incl. tashkeel, truncation, RTL, separators, 50×25
+  unchanged), LabelSizeWiringTest (7 — 40×25 tenant, rat-tail paths, code-first, label runs, tag stock, pack pinned,
+  settings round-trip).
+- Next: physical test print on 60×12 die-cut stock at 300 dpi (registration of the tail, scan at P+6 and P+7).
+
 **Exchange reference S3b — multi-item Bosta exchanges ingested (2026-11-19 → 22; MERGED e40312ee, follow-up branch
 `fix/exchange-bosta-step-furthest`; no migration, main / prod at V241; NOT deployed, catch-up NOT run).**
 - **Ingest:** a type 30 with Bosta itemsCount > 1 on either leg (`ExchangeMultiItem.isMulti` — counts decide, never the

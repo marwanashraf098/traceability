@@ -1221,10 +1221,13 @@ export function setOnboardingStep(step: OnboardingStep['key'], checked: boolean)
 
 // ── Tenant settings (FR-1.4) ──────────────────────────────────────────────────
 
+/** Settings → Business label size; '60x12' = the jewelry rat-tail label (needs a 300 dpi printer). */
+export type LabelSize = '40x25' | '50x25' | '60x12'
+
 export interface TenantSettings {
   name: string
   pickupAddress: string | null
-  labelSize: '40x25' | '50x25'
+  labelSize: LabelSize
   defaultLanguage: 'ar' | 'en'
   timezone: string
   /** Pick & Pack S3 — how the store packs; owner-only to change. */
