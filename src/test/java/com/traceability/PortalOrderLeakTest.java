@@ -575,6 +575,9 @@ class PortalOrderLeakTest {
                 "DELETE /api/v1/pack-sessions/pairings/mine", "POST /api/v1/scan-pair/claim", "POST /api/v1/scan-pair/scan")) {
             reg(k, skip(R_IDENTITY));
         }
+        // B10 — a seller invite's landing-page read and its redeem (sign-in): identity, no order data.
+        reg("POST /api/v1/auth/seller-invite/check",     skip(R_IDENTITY));
+        reg("POST /api/v1/auth/seller-invite/redeem",    skip(R_IDENTITY));
         reg("POST /api/v1/demo/reseed",                  skip("demo tenant only (DemoSeeder) — never a portal row"));
         reg("POST /api/v1/public/demo/start",            skip("demo tenant only (DemoSeeder) — never a portal row"));
         reg("POST /api/v1/ops/review-tenant",            skip(R_OPS));

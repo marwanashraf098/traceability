@@ -4,6 +4,54 @@
 
 ## Current state
 
+**Bazar B10 — seller invite links survive WhatsApp's preview; no silent session switch (2026-11-23; branch
+`feat/bazar-b10` off origin/main e40312ee; V242; count gates MigrationSmokeTest 241 files, NotTracedBackfillTest 186;
+merged to main 2026-11-23, NOT deployed).** Prod 2026-11-22 (test20): WhatsApp's link preview did the GET first and used the token up
+(the seller's own tap → invite-expired); opening a seller link where the owner was signed in silently replaced the
+owner's session, the sidebar kept "Owner", Close day got 403 and showed "You counted 0" / "HTTP_403".
+- **Link:** `{app}/auth/seller-invite?t=<tenantId>#token=<raw>` — the token is in the FRAGMENT (never sent to a
+  server, never in a log, kept by the browser across the 302). GET `/auth/seller-invite` reads / writes nothing: 302 →
+  `/bazar/invite?t=…` (a pre-B10 link `?token=` → `/bazar/invite#token=…`).
+  No `#token` on the landing page (an app dropped the fragment) → "This link is incomplete…" and a check with an empty
+  token, logged as refusal `reason=missing_token` (check and redeem).
+- **`SellerInviteService`** (bazar): POST `/api/v1/auth/seller-invite/check` (reads only, under tenant t + RLS) and
+  `/redeem` (row locked → refused unless valid → hatch #6 via `MagicLinkService.consumeSellerInvite`, its ONE caller →
+  `redeemed_at` stamped → cookie + {access_token, event_id}; the browser's previous session (Authorization sid) is
+  revoked `logout_device`). State has ONE definition, `SellerInviteService.STATE_SQL`: used / replaced (a newer invite
+  for the same event + seller — "send again" cancels the earlier link) / removed / expired / valid; refusals are 409
+  `BAZAR_INVITE_REFUSED` {reason}, checked BEFORE the consume (a refused link isn't burned). Legacy links (no t):
+  consume first, then the same states; a refused one's new session is revoked at once. Origin must equal
+  `shopify.app-url`'s origin (no Origin → the Referer's origin; Safari fallback) — CORS alone lets admin.shopify.com /
+  *.myshopify.com send credentialed POSTs; 403 `BAZAR_INVITE_ORIGIN`. Per-IP 60/h
+  (`traced.bazar.invite-ip-max-per-hour`) in `embedded_onboarding_attempts`, bucket `seller-invite-ip:<HMAC>` (hatch
+  #16 purges it). Logs: `Seller invite checked|redeemed|refused reason=… phase=… userId tenantId eventId` — never the
+  token or its hash.
+- **/auth/magic refuses a seller-invite token** (`MagicLinkService.consume(…, sellerInvite=false)`: after the consume,
+  before any refresh token — the token stays consumed, no session).
+- **V242:** `bazar_seller_invites.redeemed_at` + `GRANT UPDATE (redeemed_at)` (RLS unchanged); comment on
+  embedded_onboarding_attempts. No new hatch.
+- **403 body:** `AccessDeniedBody(error, path)` — authorities only in the server log.
+- **Frontend:** `/bazar/invite` (`BazarInvite.tsx`, no sign-in): check → store / bazar / seller + "Start selling";
+  someone else signed in → "You're signed in as X (Role) on this phone. Continue as Y?" Continue / Cancel; refusal
+  page per reason (`InviteRefused`, also `/bazar/invite-expired?reason=`). After redeem: unchanged `/bazar/join` → PIN
+  → Sell. `session.ts`: a refresh that returns ANOTHER user's token → `sessionSwitch.reload()` (to `/`), the 401'd call
+  NOT retried; redeem announces on BroadcastChannel `traced-session` → other signed-in tabs reload. `BazarError` with no
+  message → words by status (403 "You can't do this — ask an owner or manager."), never the code. `CloseDayForm`:
+  worker / 403 from preview or close → "Only owners and managers can close the day." Sellers panel: "Sending a new link
+  cancels the one you sent before" (link box + rows already sent one); Copy link stays next to WhatsApp.
+- **Tests:** SellerInviteFlowTest (13; GET×2 then redeem, redeem×2 → used, send-again → replaced on check + redeem and
+  not consumed + /auth/magic refused, every reason + wrong tenant, legacy, Origin incl. *.myshopify.com + Referer
+  fallback, 429, signed-in owner session ended only on this browser, logs w/o token, link → check → redeem → PIN →
+  sell, 403 body keys, app_user RLS + column grant); bazarB10.test.tsx (17). Revert-checked: every backend rule (9) and
+  frontend rule (4) goes red when undone. Edited existing (approved): BazarSellersTest (open/signIn helpers → GET +
+  redeem; 228/232/239/254/257/417/490 assertions), bazarB6b LINK, the two count gates, the two leak registries.
+- **Gotchas:** `ui.tsx` Button drops `data-testid` — test by role. `TenantContext.runAs` + `TransactionTemplate`: the
+  tenant GUC is set when the tx STARTS, so `MagicLinkService.consume` opens no outer tx (the role read must start under
+  the link's tenant); the redeem's outer tx starts under t and the inner ones join it.
+- **Pre-existing, not fixed:** `AuthController.pinSwitch` calls `revokeRefreshTokenById` with no transaction → on
+  app_user (prod) the previous token is probably NOT revoked (refresh_tokens is under RLS). Worth a look.
+- **Before relying on it:** check on a real iPhone that WhatsApp keeps the `#token=` part when it makes the link
+  tappable, and that prod `SHOPIFY_APP_URL` is exactly `https://app.tracedtech.com` (no trailing slash / path).
 **Bazar B9b — guided bazar setup for new signups (2026-11-23; branch `feat/bazar-b9b`; merged to main 2026-11-23, NOT deployed; no migration — V241 still the
 latest).** Only with `BAZAR_SIGNUP_ENABLED` on (prod: off) AND signup intent 'bazar' AND `tenants.bazar_enabled`
 (`BazarSetupService.on` — the one gate; GET /me `bazarSetup: true` only then, owner / manager). `/setup/bazar` → the

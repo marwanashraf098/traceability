@@ -4,14 +4,11 @@ import com.traceability.account.AuditService;
 import com.traceability.account.UserService;
 import com.traceability.identity.AuthRepository;
 import com.traceability.identity.MagicLinkService;
-import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
 import java.util.LinkedHashMap;
@@ -48,18 +45,16 @@ public class BazarSellerService {
     private final AuthRepository      authRepository;
     private final AuditService        audit;
     private final PasswordEncoder     encoder;
-    private final TransactionTemplate tx;
     private final UserService         users;
 
     public BazarSellerService(JdbcTemplate jdbc, MagicLinkService magicLinks, AuthRepository authRepository,
-                              AuditService audit, PasswordEncoder encoder, PlatformTransactionManager txm,
+                              AuditService audit, PasswordEncoder encoder,
                               UserService users) {
         this.jdbc           = jdbc;
         this.magicLinks     = magicLinks;
         this.authRepository = authRepository;
         this.audit          = audit;
         this.encoder        = encoder;
-        this.tx             = new TransactionTemplate(txm);
         this.users          = users;
     }
 
@@ -293,26 +288,6 @@ public class BazarSellerService {
             "FROM bazar_event_sellers s JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id " +
             "WHERE s.tenant_id = ? AND s.event_id = ? AND s.removed_at IS NULL AND u.active AND u.pin_code IS NOT NULL " +
             "ORDER BY u.name", tenantId, eventId);
-    }
-
-    // ── Opening the link (SellerInviteController) ───────────────────────────
-
-    /** Where an opened invite lands: its event, or null (not an invite / the seller was removed — {@code removed}). */
-    public record Landing(UUID eventId, boolean removed) {}
-
-    /** Runs under the link's tenant, after hatch #6 consumed it. */
-    public Landing landing(UUID tenantId, UUID userId, String tokenHash) {
-        return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
-            List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT i.event_id, (es.removed_at IS NOT NULL OR es.id IS NULL) AS removed " +
-                "FROM bazar_seller_invites i LEFT JOIN bazar_event_sellers es " +
-                "  ON es.event_id = i.event_id AND es.user_id = i.user_id " +
-                "WHERE i.tenant_id = ? AND i.user_id = ? AND i.token_hash = ?", tenantId, userId, tokenHash);
-            if (rows.isEmpty()) return null;
-            boolean removed = Boolean.TRUE.equals(rows.get(0).get("removed"));
-            if (removed) authRepository.revokeAllRefreshTokens(userId);
-            return new Landing((UUID) rows.get(0).get("event_id"), removed);
-        }));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

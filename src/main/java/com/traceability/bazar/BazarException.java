@@ -76,7 +76,10 @@ public class BazarException extends RuntimeException {
         BAZAR_SETUP_NOTHING_PICKED,
         BAZAR_SETUP_LOWER_FIRST,
         BAZAR_SETUP_NO_MAIN_WAREHOUSE,
-        BAZAR_SETUP_NO_LIST
+        BAZAR_SETUP_NO_LIST,
+        // B10 — opening a seller invite (check / redeem)
+        BAZAR_INVITE_REFUSED,
+        BAZAR_INVITE_ORIGIN
     }
 
     private final Code       code;

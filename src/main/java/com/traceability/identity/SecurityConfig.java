@@ -120,8 +120,11 @@ public class SecurityConfig {
                     "/auth/shopify/install",
                     "/auth/shopify/callback",
                     "/auth/magic",
-                    // Bazar B6b — a seller invite link: consumed through hatch #6 (consume_magic_link), like /auth/magic.
+                    // Bazar B6b / B10 — a seller invite link: the GET only redirects to the landing page; its check
+                    // (reads) and redeem (hatch #6 consume_magic_link) are the two POSTs below.
                     "/auth/seller-invite",
+                    "/api/v1/auth/seller-invite/check",
+                    "/api/v1/auth/seller-invite/redeem",
                     // FR-DEMO Day 2 — explicit entry (not relying on the SPA fallback below,
                     // which is dotless-path-only and not meant to cover a real data-writing
                     // POST). Rides the same unauthenticated pass-through as /api/v1/auth/login:

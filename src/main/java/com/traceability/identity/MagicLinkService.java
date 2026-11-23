@@ -111,14 +111,17 @@ public class MagicLinkService {
      * {@link #issueSignInLink}): the "Add seller" invite of a bazar WORKER, sent by the owner / manager over WhatsApp.
      * Called only from {@code BazarSellerService} (EmbeddedOnboardingTest.s6 guards both callers). Never emailed.
      * Same table, hash-at-rest and single-use consume through hatch #6 as every link; 24 h; bound to that user +
-     * tenant. Opened at {@code /auth/seller-invite} (SellerInviteController), which consumes it with
-     * {@link #consumeMagicLinkFor}. Never log the returned URL.
+     * tenant. Opened at {@code /auth/seller-invite} (SellerInviteController → the landing page; B10), redeemed with
+     * {@link #consumeSellerInvite}. Never log the returned URL.
      */
     public SellerInviteLink issueSellerInviteLink(UUID userId, UUID tenantId) {
         Instant expiresAt = Instant.now().plus(SELLER_INVITE_TTL_MINUTES, ChronoUnit.MINUTES);
         String rawToken = storeToken(userId, tenantId, SELLER_INVITE_TTL_MINUTES);
         log.info("Seller invite link issued userId={} tenantId={}", userId, tenantId);
-        return new SellerInviteLink(appUrl + "/auth/seller-invite?token=" + rawToken,
+        // B10: the tenant in the query (the landing page's check runs under it, RLS), the token in the FRAGMENT — a
+        // browser never sends a fragment to a server, so neither a link preview nor an access log ever sees it, and a
+        // redirect without its own fragment keeps it (SellerInviteController → /bazar/invite).
+        return new SellerInviteLink(appUrl + "/auth/seller-invite?t=" + tenantId + "#token=" + rawToken,
             AuthRepository.sha256(rawToken), expiresAt);
     }
 
@@ -149,14 +152,29 @@ public class MagicLinkService {
      * to the caller — MAGIC_LINK_INVALID in every case.
      */
     public TokenResponse consumeMagicLink(String rawToken) {
-        return consumeMagicLinkFor(rawToken).tokens();
+        return consume(rawToken, false).tokens();
     }
 
     /** What a consumed link signed in: the tokens, whose they are, and the token's SHA-256. */
     public record Consumed(TokenResponse tokens, UUID userId, UUID tenantId, String tokenHash) {}
 
-    /** {@link #consumeMagicLink}, also saying who signed in (B6b: the seller invite lands on its event). */
-    public Consumed consumeMagicLinkFor(String rawToken) {
+    /**
+     * B10 — the seller invite's redeem (SellerInviteService.redeem, its ONE caller): {@link #consumeMagicLink} that
+     * accepts a seller invite's token and says who signed in. Joins the caller's transaction (the redeem holds the
+     * invite row locked while the token is consumed).
+     */
+    public Consumed consumeSellerInvite(String rawToken) {
+        return consume(rawToken, true);
+    }
+
+    /**
+     * B10: a seller invite's token signs in ONLY through the seller-invite redeem (its replaced / removed / used checks
+     * live there) — /auth/magic refuses it like any invalid link (consumed, no session). Checked after the consume,
+     * before any refresh token is issued. No transaction is opened around the steps (each opens its own, as before —
+     * the role read must run in a transaction that STARTS under the link's tenant), so at /auth/magic the token stays
+     * consumed; the seller-invite redeem calls this inside its own transaction under the invite's tenant.
+     */
+    private Consumed consume(String rawToken, boolean sellerInvite) {
         String hash = AuthRepository.sha256(rawToken.trim());
 
         record Row(UUID userId, UUID tenantId) {}
@@ -187,6 +205,17 @@ public class MagicLinkService {
 
         if (role == null) {
             throw magicLinkInvalid();
+        }
+
+        if (!sellerInvite) {
+            Boolean isInvite = TenantContext.runAs(row.tenantId(), () -> tx.execute(s -> jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM bazar_seller_invites WHERE tenant_id = ? AND token_hash = ?)",
+                Boolean.class, row.tenantId(), hash)));
+            if (Boolean.TRUE.equals(isInvite)) {
+                log.info("Magic link refused: a seller invite opened at /auth/magic userId={} tenantId={}",
+                    row.userId(), row.tenantId());
+                throw magicLinkInvalid();
+            }
         }
 
         return TenantContext.runAs(row.tenantId(), () -> {

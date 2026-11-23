@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { BazarError, getBazarSellerMe, setBazarSellerPin, type BazarSellerMe } from '../../../bazar/api'
 import { resetCapabilitiesCache } from '../../../capabilities'
@@ -115,12 +115,24 @@ function PinPicker({ name, onSet }: { name: string; onSet: () => void }) {
 
 /** /bazar/invite-expired — no sign-in needed. */
 export function BazarInviteExpired() {
+  const [params] = useSearchParams()
+  return <InviteRefused reason={params.get('reason') ?? 'expired'} />
+}
+
+const REFUSALS = ['used', 'expired', 'replaced', 'removed', 'missing_token'] as const
+
+/**
+ * B10: a seller link that can't be used — says why (used / expired / a newer link was sent / no longer a seller /
+ * doesn't work) and to ask the owner for a new one.
+ */
+export function InviteRefused({ reason }: { reason: string }) {
   const { t } = useTranslation()
+  const key = (REFUSALS as readonly string[]).includes(reason) ? reason : 'unknown'
   return (
     <div className="min-h-[100dvh] bg-base flex flex-col items-center justify-center gap-3 px-6 text-center"
-         data-testid="bazar-invite-expired">
+         data-testid="bazar-invite-expired" data-reason={key}>
       <p className="text-h4 text-primary">{t('bazar.join.expiredTitle')}</p>
-      <p className="text-body text-muted max-w-xs">{t('bazar.join.expiredBody')}</p>
+      <p className="text-body text-muted max-w-xs">{t(`bazar.invite.refused.${key}`)}</p>
     </div>
   )
 }

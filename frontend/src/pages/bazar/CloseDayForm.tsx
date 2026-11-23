@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Loader2 } from 'lucide-react'
 import {
-  closeBazarDayOnce, previewBazarClose,
+  BazarError, closeBazarDayOnce, managesBazar, previewBazarClose,
   type BazarCloseEntry, type BazarClosePreview, type BazarCloseResult, type BazarDay, type PaymentMethod,
 } from '../../bazar/api'
 import { formatMoney, shortDate, toNumber } from '../../bazar/format'
@@ -90,6 +90,9 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact, wide }:
   const [note, setNote] = useState('')
   const [preview, setPreview] = useState<BazarClosePreview | null>(null)
   const [previewing, setPreviewing] = useState(false)
+  // B10: a 403 from the preview or the close (this browser's session isn't an owner / manager any more) — the form
+  // gives way to a plain sentence; never "You counted 0" or a raw code.
+  const [denied, setDenied] = useState(false)
   const cmd = useRetryingCommand<BazarDay>()
 
   const cardOn = methods.includes('card')
@@ -116,7 +119,7 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact, wide }:
     const timer = window.setTimeout(() => {
       previewBazarClose(eventId, day.business_day, entry)
         .then(p => { if (!cancelled) setPreview(p) })
-        .catch(() => {})
+        .catch(e => { if (!cancelled && e instanceof BazarError && e.status === 403) setDenied(true) })
         .finally(() => { if (!cancelled) setPreviewing(false) })
     }, 300)
     return () => { cancelled = true; window.clearTimeout(timer) }
@@ -137,6 +140,15 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact, wide }:
     if (!ready) return
     const n = note.trim() || null
     cmd.run((requestId, timeoutMs) => closeBazarDayOnce(eventId, day.business_day, entry, n, requestId, timeoutMs))
+  }
+
+  const closeDenied = cmd.state.kind === 'error' && cmd.state.error.status === 403
+  if (!managesBazar() || denied || closeDenied) {
+    return (
+      <p role="alert" className="text-body text-critical" data-testid="close-managers-only">
+        {t('bazar.close.managersOnly')}
+      </p>
+    )
   }
 
   const field = cn('input w-full font-bold tabular-nums border-[1.5px] focus:border-trace-blue', compact ? 'h-12 text-h4' : 'h-14 text-h3')
