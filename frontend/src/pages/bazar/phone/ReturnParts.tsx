@@ -1,17 +1,17 @@
 import { useCallback, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Camera, CameraOff, Keyboard, Loader2, WifiOff } from 'lucide-react'
+import { CameraOff, Keyboard, Loader2, WifiOff } from 'lucide-react'
 import CameraReader, { type CameraError } from '../../scanpair/CameraReader'
 import type { BazarError, BazarSale, ReturnCondition } from '../../../bazar/api'
 import { formatMoney, saleTime, sellErrorText } from '../../../bazar/format'
 import type { CommandState } from '../../../bazar/useRetryingCommand'
 import { cn } from '../../../components/ui'
+import { useCameraGate, type CameraGateMode } from '../../../bazar/cameraGate'
+import { useCameraShown } from '../../../bazar/cameraPref'
+import { CameraGateOverlay, CameraHiddenBar } from '../r4/parts'
 
 // Bazar POS B3 — pieces shared by the phone's Return and Exchange screens (mockup page 1, step 7).
-
-/** The camera reports the same code many times a second: one read per code per 2 s (the Sell screen's rule). */
-const DUPLICATE_MS = 2_000
 
 /** Sell · Return · Exchange — the segmented switch under the phone header. */
 export function PhoneTabs({ eventId, active }: { eventId: string; active: 'sell' | 'return' | 'exchange' }) {
@@ -36,22 +36,24 @@ export function PhoneTabs({ eventId, active }: { eventId: string; active: 'sell'
 }
 
 /**
- * The one code entry of a Return / Exchange screen: the phone's camera, plus a field a HID scanner types into (or the
- * seller, after "Type a code"). Every code goes to {@code onCode}.
+ * The one code entry of a Return / Exchange / Leftovers screen: the phone's camera, plus a field a HID scanner types
+ * into (or the seller, after "Type a code"). Every code goes to {@code onCode}. C1: the camera goes through the camera
+ * gate — {@code gateMode} 'pause' (one aim, one code) by default, 'pile' for Leftovers scan-back — and the box can be
+ * hidden ("Hide camera" / "Use camera", remembered per device).
  */
-export function CodeEntry({ onCode, disabled, hint, noCamera }: {
+export function CodeEntry({ onCode, disabled, hint, noCamera, gateMode = 'pause' }: {
   onCode: (code: string) => void
   disabled?: boolean
   hint: string
   /** B5 desktop: the scan field only (a HID scanner) — no camera box. */
   noCamera?: boolean
+  gateMode?: CameraGateMode
 }) {
   const { t } = useTranslation()
-  const [cameraOn, setCameraOn] = useState(true)
+  const [cameraShown, setCameraShown] = useCameraShown()
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
   const [typing, setTyping] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const lastRead = useRef<{ code: string; at: number } | null>(null)
 
   const submit = useCallback((raw: string) => {
     const code = raw.replace(/\s+/g, '')
@@ -60,33 +62,31 @@ export function CodeEntry({ onCode, disabled, hint, noCamera }: {
     onCode(code)
   }, [onCode, disabled])
 
-  const onCameraRead = useCallback((raw: string) => {
-    const code = raw.trim()
-    const now = Date.now()
-    const last = lastRead.current
-    if (!code || (last && last.code === code && now - last.at < DUPLICATE_MS)) return
-    lastRead.current = { code, at: now }
-    submit(code)
-  }, [submit])
+  const gate = useCameraGate({ mode: gateMode, onCode: c => { submit(c) }, busy: disabled })
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
+  const live = cameraShown && !cameraError && !disabled
 
   return (
     <div className="flex flex-col gap-2">
-      {!noCamera && <div className="relative h-36 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
-        {cameraOn && !cameraError && !disabled
-          ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
+      {!noCamera && cameraShown && <div className="relative h-36 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
+        {live
+          ? <div className="w-full"><CameraReader active onRead={gate.onRead} onFrame={gate.onFrame} onError={onCameraError} /></div>
           : (
             <p className="w-full px-6 text-center text-small text-[#D1D5DB]">
               {cameraError ? t(`bazar.sell.camera.${cameraError}`) : t('bazar.sell.camera.off')}
             </p>
           )}
         <span className="absolute bottom-2 inset-x-0 text-center text-small text-[#D1D5DB] pointer-events-none">{hint}</span>
-        <button type="button" onClick={() => { setCameraError(null); setCameraOn(v => !v) }}
-          aria-label={cameraOn ? t('bazar.sell.cameraOff') : t('bazar.sell.cameraOn')}
+        {live && <CameraGateOverlay notice={gate.notice} waitingForClear={gate.waitingForClear} onScanNext={gate.scanNext} />}
+        <button type="button" onClick={() => { setCameraError(null); setCameraShown(false) }}
+          aria-label={t('bazar.c1.hideCamera')} data-testid="hide-camera"
           className="absolute top-2 end-2 w-11 h-11 rounded-full bg-black/55 text-white flex items-center justify-center">
-          {cameraOn ? <CameraOff size={18} /> : <Camera size={18} />}
+          <CameraOff size={18} />
         </button>
       </div>}
+      {!noCamera && !cameraShown && (
+        <CameraHiddenBar onUse={() => { setCameraError(null); setCameraShown(true) }} />
+      )}
       <div className="flex items-center gap-2">
         <input
           ref={inputRef}

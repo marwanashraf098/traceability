@@ -332,12 +332,12 @@ describe('Quick sell — scan = sold', () => {
     expect(await screen.findByText(/P0000001 is already being sold/)).toBeInTheDocument()
     expect(sells()).toHaveLength(1)
     await userEvent.setup().click(screen.getByRole('button', { name: 'fake-camera-read' }))   // camera: another piece
-    expect(sells()).toHaveLength(1)                                                           // waits its turn
+    expect(sells()).toHaveLength(1)
     release()
     expect(await screen.findByTestId('sell-card-sold')).toBeInTheDocument()
-    // the OTHER piece (camera) was queued and is sold next — one request for it
-    await waitFor(() => expect(sells()).toHaveLength(2))
-    expect((sells()[1].body as Record<string, string>).code).toBe('P0000777')
+    // C1: a camera read during an in-flight sale is ignored, never queued — no request for it
+    await new Promise(r => setTimeout(r, 400))
+    expect(sells()).toHaveLength(1)
   })
 
   test('camera: the same code read twice within 2 s is one scan', async () => {
