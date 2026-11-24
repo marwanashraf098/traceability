@@ -23,7 +23,9 @@ right after the first.
   AND `(pointer: fine)` AND maxTouchPoints 0 (jsdom → phone). Computer default hidden ("Use camera"), touch default
   shown ("Hide camera" replaces the old per-screen camera on/off button); the choice is stored in localStorage
   `traced.bazar.camera` (try/catch). EndEventPage's `noCamera` still hides it outright.
-- Tests: cameraGate.test.ts (14), bazarC1.test.tsx (18), cameraReaderFrames.test.tsx (4); 12 revert checks each fail.
+- Tests: cameraGate.test.ts (14), bazarC1.test.tsx (19), cameraReaderFrames.test.tsx (4); 13 revert checks each fail.
+  A network failure is NOT an error card: "Checking…" retries with the same request id (B6 design) and the gate
+  un-pauses after the server's answer card + a clear view (test "network failure").
   Approved test edits: bazarB6 "no double request" (camera read during an in-flight sale ignored) and bazarR4's two
   hashes (CameraReader, Sell scan routing). Strings `bazar.c1` (EN + AR).
 - Known: iPhone (ZXing) may keep returning one label while two are in view — then "two labels" can't show, but the

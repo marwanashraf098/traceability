@@ -227,6 +227,28 @@ describe('Quick sale — one aim, one sale', () => {
     await waitFor(() => expect(soldCodes()).toEqual(['P0000001', 'P0000002']))
   })
 
+  test('network failure: "Checking…" keeps the camera closed; once the server answers, a clear view un-pauses (no Scan next)', async () => {
+    let attempts = 0
+    install(...base(), on('POST', '/sell', init => {
+      attempts += 1
+      if (attempts === 1) return Promise.reject(new TypeError('Failed to fetch'))
+      return json(200, sale((JSON.parse(String(init?.body)) as { code: string }).code))
+    }))
+    await renderSell()
+    await frame(['P0000001'])
+    await screen.findByTestId('sell-card-checking')
+    await frame(['P0000002'])                       // while checking: ignored, never queued
+    await screen.findByTestId('sell-card-sold')
+    const ids = sells().map(c => (c.body as { client_request_id: string }).client_request_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toBe(ids[1])                     // the same request, asked again — one sale
+    await frame(['P0000002'])
+    expect(sells()).toHaveLength(2)                 // paused after the card…
+    await clearView()                               // …until the view is clear — no "Scan next" tap
+    await frame(['P0000002'])
+    await waitFor(() => expect(soldCodes()).toEqual(['P0000001', 'P0000001', 'P0000002']))
+  })
+
   test('the error card pauses too; a clear view after it lets the next label sell', async () => {
     let first = true
     install(...base(), on('POST', '/sell', init => {
