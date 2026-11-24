@@ -233,7 +233,7 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide, rep
         </div>
         {scanning && (
           <>
-            <CodeEntry onCode={onCode} disabled={cmd.busy} hint={t('bazar.end.scanHint')} noCamera={noCamera} />
+            <CodeEntry onCode={onCode} disabled={cmd.busy} hint={t('bazar.end.scanHint')} noCamera={noCamera} gateMode="pile" />
             {cmd.state.kind !== 'done' && <CommandStatus state={cmd.state} />}
             {last && (
               <section role="status" data-testid={`scan-back-${last.result}`}

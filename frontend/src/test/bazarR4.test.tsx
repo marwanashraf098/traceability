@@ -177,7 +177,8 @@ describe('R4 safety guard — the scan path is byte-for-byte as before R4', () =
   test.each([
     ['hooks/useScanner.ts', '192d281261b42ea0b7464d3bdb15b342feaf46a2c284f39cbfac46acd6610697'],
     ['bazar/useScanBurst.ts', '67ac2123d8b807e025fcbd5c12acdc07fa6b03fb3dde03b8c5497a51695e1203'],
-    ['pages/scanpair/CameraReader.tsx', '4fcaff9f93f2a94b4f835ef0891eb4651d42099aaf0f56ee6671d3dc6653b66a'],
+    // C1 (2026-11-24, approved): CameraReader changed on purpose — only the optional onFrame prop.
+    ['pages/scanpair/CameraReader.tsx', 'c5cdaedf98f9188445134f08edfe757e583bd14f8dfcffc6e9653c18c84dfdd6'],
   ])('%s is unchanged', (path, hash) => {
     expect(sha(src(path))).toBe(hash)
   })
@@ -191,7 +192,8 @@ describe('R4 safety guard — the scan path is byte-for-byte as before R4', () =
   test('the Sell scan routing (useScanner options, quick / cart / #number / tap / camera reads) is unchanged', () => {
     const s = src('pages/bazar/phone/BazarSell.tsx')
     const block = s.slice(s.indexOf('  const scanner = useScanner({'), s.indexOf('  const onCameraError'))
-    expect(sha(flat(block))).toBe('c3d04c31d76da117776fe2d00532a4b551fefff341d9c447990b2fa485b3ca4a')
+    // C1 (2026-11-24, approved): the camera reads go through the camera gate (useCameraGate) on purpose.
+    expect(sha(flat(block))).toBe('91752b219bc2374bdd00fd7a0ca97f6ae7569e300008c13523d50bcdcec5e0d6')
   })
 
   test('the cart\'s click-refocus listener and its scan-burst hook are unchanged', () => {

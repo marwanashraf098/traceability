@@ -4,6 +4,32 @@
 
 ## Current state
 
+**Bazar C1 — one aim of the camera = one scan; camera hidden on a computer (2026-11-24; branch `feat/bazar-c1` off
+origin/main 7403906b; frontend only, no migration; pushed, NOT merged, NOT deployed).** Prod 2026-11-22 (E2E Bazae):
+one aim sold P000056 then P000055 0.8 s apart. Cause: CameraReader passes every decode on (native: every barcode of a
+frame), the screens dropped only the SAME code within 2 s, and the second code went to useScanner's FIFO and was sold
+right after the first.
+- **`bazar/cameraGate.ts` is THE camera rule** (camera frames only — HID / typed codes never go through it). Settle
+  250 ms: exactly one distinct code → sent; two or more (one frame or across the window) → none + "Two labels in view —
+  scan one at a time". 'pause' mode (quick sale, cart, Return / Exchange): after a send, ignore everything until the
+  result is shown (quick sale: SOLD / error / undone card — submit returns 'await') AND the view has been empty ≥ 600 ms
+  over ≥ 3 attempts (a code restarts it), or "Scan next"; while a quick sale is in flight (any source) camera codes are
+  ignored, never queued. 'pile' mode (Leftovers scan-back, approved): settle + two-labels, a code already sent ignored
+  until an empty view, NO empty-view wait. Timings in `cameraGateTiming`.
+- **CameraReader: one optional prop `onFrame(codes)`** (every attempt, [] = native empty detect / ZXing
+  NotFoundException; a ZXing checksum/format error reports nothing); when given, onRead isn't called. ScanPairPage
+  (warehouse) doesn't pass it → identical behaviour. useScanner / ScanShell / useScanBurst unchanged (diff empty).
+- **Camera box per device** (`bazar/cameraPref.ts`): `isComputer()` = matchMedia exists AND no `(any-pointer: coarse)`
+  AND `(pointer: fine)` AND maxTouchPoints 0 (jsdom → phone). Computer default hidden ("Use camera"), touch default
+  shown ("Hide camera" replaces the old per-screen camera on/off button); the choice is stored in localStorage
+  `traced.bazar.camera` (try/catch). EndEventPage's `noCamera` still hides it outright.
+- Tests: cameraGate.test.ts (14), bazarC1.test.tsx (18), cameraReaderFrames.test.tsx (4); 12 revert checks each fail.
+  Approved test edits: bazarB6 "no double request" (camera read during an in-flight sale ignored) and bazarR4's two
+  hashes (CameraReader, Sell scan routing). Strings `bazar.c1` (EN + AR).
+- Known: iPhone (ZXing) may keep returning one label while two are in view — then "two labels" can't show, but the
+  pause still stops the second sale. scannerBurst.browser.test's 6 `getMe().then` unhandled errors are pre-existing on
+  main.
+
 **Bazar U1a — must-fix bugs from the 2026-11-22 E2E (2026-11-23; branch `feat/bazar-u1a` off origin/main e40312ee; no
 migration — V242 (B10) still the last; merged to main 2026-11-23 after B9b + B10, NOT deployed).**
 - **Keep mode now lowers Shopify within minutes, not up to 4 h.** A Keep bazar ('leave') writes no claim row, so no V201

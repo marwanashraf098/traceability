@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { FileText, Loader2, ScanLine, Search, Undo2, WifiOff } from 'lucide-react'
@@ -11,6 +11,8 @@ import {
 import { sellTiming, useQuickSell, type SellCard } from '../../../bazar/useQuickSell'
 import { pieceTitle, saleTime, sellErrorText } from '../../../bazar/format'
 import { cn } from '../../../components/ui'
+import { useCameraGate } from '../../../bazar/cameraGate'
+import { useCameraShown } from '../../../bazar/cameraPref'
 import type { BazarLive } from '../../../capabilities'
 import { NotLiveScreen, useBazarLive, useBazarToday, useTodaySales } from './shared'
 import {
@@ -25,7 +27,7 @@ import { PickSheet } from './PickSheet'
 import { ProductGrid } from './ProductGrid'
 import { amount } from '../r1/parts'
 import {
-  CameraChips, Columns, Label, ModeTabs, R4Header, R4Screen, ReadyPill, SCAN_FIELD, StickyAction, Thumb, TodayLine,
+  CameraChips, CameraGateOverlay, CameraHiddenBar, Columns, Label, ModeTabs, R4Header, R4Screen, ReadyPill, SCAN_FIELD, StickyAction, Thumb, TodayLine,
   TodayPill, useSellerName,
 } from '../r4/parts'
 
@@ -38,9 +40,6 @@ function savedMode(eventId: string): Mode {
 function saveMode(eventId: string, m: Mode) {
   try { sessionStorage.setItem(`bazar-sell-mode:${eventId}`, m) } catch { /* private mode */ }
 }
-
-/** The camera reports the same code many times a second: one read per code per 2 s (ScanPairPage's rule). */
-const DUPLICATE_MS = 2_000
 
 /**
  * Bazar POS B6 — QUICK MODE (mockup step 6): every scan is a sale. B6c — CART MODE (step 6c): scan several pieces,
@@ -79,7 +78,7 @@ function Sell({ live }: { live: BazarLive }) {
     { kind: 'sale' | 'customer'; sale: BazarSale } | { kind: 'receipt'; receipt: BazarReceipt }
     | { kind: 'pick'; number: number | null } | null>(null)
   const [typing, setTyping] = useState(false)
-  const [cameraOn, setCameraOn] = useState(true)
+  const [cameraShown, setCameraShown] = useCameraShown()
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
   const [dropped, setDropped] = useState<string | null>(null)
 
@@ -92,20 +91,21 @@ function Sell({ live }: { live: BazarLive }) {
     focusPaused: sheet !== null || typing,
   })
 
-  /** Quick mode: one code (or a B7a tapped-size ref) → one sale, through the scanner's single-flight queue. */
-  const sendQuick = useCallback((code: string) => {
-    if (scanner.pending >= MAX_QUEUED_SCANS) { scanner.handleScan(code); return }   // refused loudly by the scanner
+  /** Quick mode: one code (or a B7a tapped-size ref) → one sale, through the scanner's single-flight queue. True = sent. */
+  const sendQuick = useCallback((code: string): boolean => {
+    if (scanner.pending >= MAX_QUEUED_SCANS) { scanner.handleScan(code); return false }   // refused loudly by the scanner
     if (!quick.enqueue(code)) {
       if (scanner.inputRef.current) scanner.inputRef.current.value = ''
       setDropped(code)
-      return
+      return false
     }
     setDropped(null)
     scanner.handleScan(code)
+    return true
   }, [scanner, quick])
 
-  /** Every way a code arrives (camera, HID scanner, typed) goes through here. */
-  const submit = useCallback((raw: string) => {
+  /** Every way a code arrives (camera, HID scanner, typed) goes through here. 'await' = a quick sale was started. */
+  const submit = useCallback((raw: string): 'await' | void => {
     const code = raw.trim()
     if (!code) return
     // B7a: "12" / "#12" — the price sheet's product number (never a piece code: those have 6+ digits). It opens
@@ -122,7 +122,7 @@ function Sell({ live }: { live: BazarLive }) {
       if (scanner.inputRef.current) scanner.inputRef.current.value = ''
       return
     }
-    sendQuick(code)
+    return sendQuick(code) ? 'await' : undefined
   }, [scanner, mode, cart, sendQuick])
 
   /** B7a: a tapped size — the same path as a scan (quick: a sale; cart: a line); the server picks the piece. */
@@ -148,15 +148,17 @@ function Sell({ live }: { live: BazarLive }) {
     finally { setSheetBusy(false) }
   }, [eventId, i18n.language])
 
-  const lastRead = useRef<{ code: string; at: number } | null>(null)
-  const onCameraRead = useCallback((raw: string) => {
-    const code = raw.trim()
-    const now = Date.now()
-    const last = lastRead.current
-    if (!code || (last && last.code === code && now - last.at < DUPLICATE_MS)) return
-    lastRead.current = { code, at: now }
-    submit(code)
-  }, [submit])
+  // C1: one aim of the camera = one code. Quick mode: no camera code while a sale is in flight (from any source), and
+  // after a camera sale the camera pauses until its SOLD / error card is shown and the view is clear (or Scan next).
+  const gate = useCameraGate({
+    mode: 'pause',
+    onCode: submit,
+    busy: mode === 'quick' && (quick.busy || scanner.scanning || scanner.pending > 0),
+  })
+  const { resultShown } = gate
+  useEffect(() => {
+    if (quick.card.kind === 'sold' || quick.card.kind === 'error' || quick.card.kind === 'undone') resultShown()
+  }, [quick.card, resultShown])
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
 
   const sellerName = useSellerName()
@@ -169,15 +171,21 @@ function Sell({ live }: { live: BazarLive }) {
   const recent = (sales ?? []).slice(0, 20)
   // R4: "Scanner ready" is display only — no sheet open and not typing (no focus listener).
   const scannerReady = sheet === null && !typing
-  const cameraLive = cameraOn && !cameraError
+  const cameraLive = cameraShown && !cameraError
+  const onType = () => {
+    const next = !typing
+    setTyping(next)
+    if (next) setTimeout(() => scanner.inputRef.current?.focus(), 0)
+  }
   const scanBlock = (
     <>
         {/* The camera band (phone: dark, under the top bar) and the one scan input. */}
         <div className="-mx-4 px-4 pb-4 bg-sidebar flex flex-col gap-2.5 lg:mx-0 lg:p-0 lg:bg-transparent lg:gap-3">
-        {/* The phone's camera is its scanner (no pairing). */}
+        {/* The phone's camera is its scanner (no pairing). C1: hidden on a computer unless "Use camera". */}
+        {cameraShown ? (
         <div className="relative h-44 lg:h-24 lg:order-2 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
-          {cameraOn && !cameraError
-            ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
+          {cameraLive
+            ? <div className="w-full"><CameraReader active onRead={gate.onRead} onFrame={gate.onFrame} onError={onCameraError} /></div>
             : (
               <p className="w-full px-6 text-center text-small text-[#D1D5DB]">
                 {cameraError ? t(`bazar.sell.camera.${cameraError}`) : t('bazar.sell.camera.off')}
@@ -186,14 +194,13 @@ function Sell({ live }: { live: BazarLive }) {
           <span className="absolute bottom-2 inset-x-0 text-center text-small text-[#D1D5DB] pointer-events-none">
             {mode === 'cart' ? t('bazar.cart.scanHint') : t('bazar.sell.scanHint')}
           </span>
+          {cameraLive && <CameraGateOverlay notice={gate.notice} waitingForClear={gate.waitingForClear} onScanNext={gate.scanNext} />}
           <CameraChips state={cameraLive ? t('bazar.r4.cameraReady') : t('bazar.r4.cameraOff')} typing={typing}
-            cameraOn={cameraOn} onToggleCamera={() => { setCameraError(null); setCameraOn(v => !v) }}
-            onType={() => {
-              const next = !typing
-              setTyping(next)
-              if (next) setTimeout(() => scanner.inputRef.current?.focus(), 0)
-            }} />
+            onHide={() => { setCameraError(null); setCameraShown(false) }} onType={onType} />
         </div>
+        ) : (
+          <CameraHiddenBar onUse={() => { setCameraError(null); setCameraShown(true) }} typing={typing} onType={onType} />
+        )}
 
         {/* HID scanner / typed code: the one scan input (its props as before). It opens no keyboard until "Type". */}
         <div className={cn(SCAN_FIELD, scannerReady && 'lg:[&_input::placeholder]:text-transparent')}>

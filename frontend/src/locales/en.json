@@ -6721,6 +6721,13 @@
         "cta": "Set up your bazar"
       }
     },
+    "c1": {
+      "twoLabels": "Two labels in view — scan one at a time",
+      "moveAway": "Move the camera off the label to scan the next one.",
+      "scanNext": "Scan next",
+      "hideCamera": "Hide camera",
+      "useCamera": "Use camera"
+    },
     "u1a": {
       "closeDay": "Close day",
       "closeDayOn": "Close day · {{date}}",
