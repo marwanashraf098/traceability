@@ -120,8 +120,23 @@ then Shopify size position, then piece id — created_at alone printed a batch i
 millisecond). Tests: BazarSetupTest (11), BazarSetupFlagOffTest, BazarSetupNoStatusWriterGuardTest,
 frontend bazarB9b (10); revert-checked.
 
+**Rat-tail 60 × 12 label + tenant label-size fix + Flag B 2-line layout — DEPLOYED 2026-11-23/24, live-checked on
+testReciving / The Snouts / Allshades; physical test print pending.** Merges: 8a541ce7 (label + label size; fixes
+40×25 for Allshades and BANDED) and 044ca23e (Flag B); no migration. Branches `feat/rattail-label` /
+`feat/rattail-flagb` deleted. **Flag B (both the piece label and the separator, 60 × 12 only):** the name bold 6 pt on
+up to 2 lines — when it needs more (or one word is wider than a line) the whole name shrinks in 0.25 pt steps to 5 pt
+to fit 2 lines, then "…" (`RatTailLabel.flagBText`); line 3 = "variant | SKU" (5.5 → 4.75 → "…", Default Title
+hidden, empty parts skipped, none → no line 3); the lines that exist centred as a block in 1–11 mm by the font's ink
+envelope (Arabic's when the name / variant has Arabic) + 0.35 mm gap; an Arabic label right-aligns every line at
+58.6 mm. The separator carries its group's SKU (`Separator.sku`, from label runs + tag stock; ignored at other sizes)
+so two groups never read the same. "The Collection Snowboard: Liquid" prints in full at 5.25 pt; "…: Hydrogen" ends
+in "…" at 5 pt. Tests: RatTailFlagBTest (11); RatTailLabelTest r6 / r7 / r8 / s1 rewritten for the layout (Flag A /
+Flag B text read by area); LabelSizeWiringTest w4 / w5 read "× N" from Flag A only (PDFTextStripperByArea), w2
+order-independent (since B9b a session prints in piece-id order within a variant). The first build's notes follow.
+- **Next:** physical test print on 60 × 12 die-cut stock at 300 dpi — tail registration; scan a P + 6 and a P + 7.
+
 **Jewelry rat-tail label 60 × 12 mm + tenant label size wired (2026-11-23; branch `feat/rattail-label` off main
-7c882c05; no migration; NOT merged, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
+7c882c05; no migration; merged 8a541ce7, deployed — see the entry above).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
 - Tenant size is now READ: `LabelSizes.forTenant` (tenants.label_width_mm / label_height_mm; NULL → 50×25) is THE size
   of every one-piece-per-page label PDF — LabelService (receiving session / variant / reprint, Lookup / Returns /
   Transfer reprints), LabelCodeService.batchPdf / codesPdf (code-first, factory extra label, tag-stock leftovers),
