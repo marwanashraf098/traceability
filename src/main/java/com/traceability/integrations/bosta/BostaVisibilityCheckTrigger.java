@@ -73,6 +73,27 @@ public class BostaVisibilityCheckTrigger {
         this.multiCatchUpApply = apply;
     }
 
+    private ExchangeLegRepairService legRepair;
+    private String legRepairOnStartup = "";
+    private boolean legRepairApply;
+    private String legRepairAwbs = "";
+
+    /**
+     * 2026-11-24 — the exchange replacement leg repair (ExchangeLegRepairService). BOSTA_EXCHANGE_LEG_REPAIR_ON_STARTUP=
+     * <tenant ids> ('all' is refused), optional BOSTA_EXCHANGE_LEG_REPAIR_AWBS, dry run unless _APPLY=true. One job per
+     * tenant, one-shot per startup; remove the lines after the run.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setLegRepair(ExchangeLegRepairService legRepair,
+                             @Value("${bosta.exchange-leg-repair.on-startup:}") String onStartup,
+                             @Value("${bosta.exchange-leg-repair.apply:false}") boolean apply,
+                             @Value("${bosta.exchange-leg-repair.awbs:}") String awbs) {
+        this.legRepair = legRepair;
+        this.legRepairOnStartup = onStartup;
+        this.legRepairApply = apply;
+        this.legRepairAwbs = awbs;
+    }
+
     private PreConnectReprocessService preConnectReprocess;
     private String preConnectOnStartup = "";
     private String preConnectTrackings = "";
@@ -174,6 +195,20 @@ public class BostaVisibilityCheckTrigger {
                     final UUID t = tenantId;
                     jobScheduler.enqueue(() -> svc.runAndLog(t, mApply));
                     log.info("Multi-item exchange catch-up enqueued for tenant {} (apply={})", t, mApply);
+                }
+            }
+        }
+        if (legRepair != null && legRepairOnStartup != null && !legRepairOnStartup.isBlank()) {
+            if (legRepairOnStartup.trim().equalsIgnoreCase("all")) {
+                log.warn("bosta.exchange-leg-repair.on-startup: 'all' is refused — list tenant ids");
+            } else {
+                final boolean lApply = legRepairApply;
+                final String lAwbs = legRepairAwbs == null ? "" : legRepairAwbs;
+                final ExchangeLegRepairService svc = legRepair;
+                for (UUID tenantId : tenants(legRepairOnStartup)) {
+                    final UUID t = tenantId;
+                    jobScheduler.enqueue(() -> svc.runAndLog(t, lApply, lAwbs));
+                    log.info("Exchange leg repair enqueued for tenant {} (apply={})", t, lApply);
                 }
             }
         }
