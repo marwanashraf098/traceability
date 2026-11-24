@@ -70,9 +70,19 @@ public class BazarSetupController {
         return setup.lowerDone(principal.userId(), isOwner(principal));
     }
 
+    /** B9c — "Next: prices": put the lowered batch's pieces on the bazar's send (owner, like the rest of the wizard). */
+    @PostMapping("/send-batch")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> sendBatch(@RequestBody SendBatchRequest req,
+                                         @AuthenticationPrincipal CustomUserDetails principal) {
+        return setup.sendBatch(req == null ? null : req.requestId(), principal.userId(), true);
+    }
+
     private static boolean isOwner(CustomUserDetails p) {
         return p != null && "owner".equalsIgnoreCase(p.role());
     }
+
+    public record SendBatchRequest(String requestId) {}
 
     public record ReceiveRequest(UUID eventId, String requestId, List<BazarSetupService.Line> lines) {}
 }

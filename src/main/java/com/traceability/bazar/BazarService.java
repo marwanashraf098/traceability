@@ -180,6 +180,33 @@ public class BazarService {
     }
 
     /**
+     * B9c — the guided setup puts its batch on the bazar's send: exactly the pieces of the batch's receipts still at
+     * Main (TransferService.scanOutReceiptPiecesForBazar — the same claim-and-send as a scan). Draft events only; each
+     * size sent gets its price row like a first scan-out. ONE caller: BazarSetupService (behind its gate).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.ReceiptSendResult sendReceipts(UUID eventId, List<UUID> receiptIds, String clientRequestId,
+                                                          UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = event(tenantId, eventId, false);
+        if ("ended".equals(ev.get("status"))) throw ended();
+        if (!"draft".equals(ev.get("status"))) throw notDraft();
+        TransferService.ReceiptSendResult r = transfers.scanOutReceiptPiecesForBazar((UUID) ev.get("transfer_id"),
+            receiptIds, actorUserId, crid);
+        if (!r.success()) {
+            if ("TRANSFER_NOT_OPEN".equals(r.code())) {
+                throw new BazarException(BazarException.Code.BAZAR_SEND_CLOSED, r.messageEn(), r.messageAr(),
+                    HttpStatus.CONFLICT);
+            }
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        }
+        for (UUID v : r.variantIds()) ensurePrice(tenantId, ev, v);
+        return r;
+    }
+
+    /**
      * B7d — take pieces back off the send before Mark sent: one scanned piece by its code (exactly one of
      * {@code code}), or {@code quantity} pieces of a size, the newest added first. Each piece is back available at
      * the main warehouse, nothing reaches Shopify. The same {@code clientRequestId} again changes nothing more.

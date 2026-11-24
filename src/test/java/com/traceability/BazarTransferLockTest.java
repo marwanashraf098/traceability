@@ -276,7 +276,7 @@ class BazarTransferLockTest {
 
     // ── the bazar entry points have ONE caller ───────────────────────────────
 
-    private static final Pattern BAZAR_ENTRY = Pattern.compile("\\.(scanOutForBazar|markSentForBazar|createBazarTransfer)\\(");
+    private static final Pattern BAZAR_ENTRY = Pattern.compile("\\.(scanOutForBazar|markSentForBazar|createBazarTransfer|scanOutReceiptPiecesForBazar)\\(");
 
     @Test
     void bazarEntryPoints_areCalledOnlyByBazarService() throws IOException {

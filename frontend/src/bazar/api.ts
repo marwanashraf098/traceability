@@ -971,6 +971,12 @@ export interface BazarSetupBatch {
   receivedAt: string | null
   lowered: boolean
   loweredAt: string | null
+  /** B9c — the bazar's send: 'preparing' until Mark sent, then 'sent' (later states once the bazar ends). */
+  transferStatus?: string | null
+  /** B9c — pieces of the batch on the bazar's send. */
+  onSend?: number
+  /** B9c — pieces of the batch still at Traced Main to put on the send. */
+  leftAtMain?: number
 }
 
 export interface BazarSetupStatus {
@@ -1033,6 +1039,16 @@ export function getBazarLowerList() {
 
 export function markBazarLowered() {
   return bazarFetch<BazarSetupStatus>('/bazar-setup/lower-done', { method: 'POST' })
+}
+
+/**
+ * B9c — put the lowered batch's pieces on the bazar's send (exactly the batch's pieces, through the same send as a scan).
+ * The same requestId again sends nothing more; {@code left} > 0 → call again with a new id for the rest.
+ */
+export function sendBazarSetupBatch(requestId: string) {
+  return bazarFetch<{ sent: number; left: number; replayed: boolean; status: BazarSetupStatus }>('/bazar-setup/send-batch', {
+    method: 'POST', body: JSON.stringify({ requestId }),
+  })
 }
 
 /** The "lower these" list as a CSV file (headers in the screen's language). */

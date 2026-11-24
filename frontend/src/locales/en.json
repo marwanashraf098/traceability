@@ -6696,12 +6696,11 @@
         "lowered": "Lowered",
         "labelsReady": "Your labels are ready to print.",
         "print": "Print labels",
-        "printFailed": "Couldn't open the labels. Try again.",
-        "later": "I'll do it later — go to my bazar"
+        "printFailed": "Couldn't open the labels. Try again."
       },
       "done": {
-        "title": "Nothing counts twice now",
-        "body": "Next, set your bazar prices and send the pieces on Get ready. Pieces without barcodes go with “Send by count”.",
+        "title": "Your bazar is live",
+        "body": "At the bazar, just open Traced on your phone: the live event opens first.",
         "continue": "Continue to your bazar"
       },
       "reminder": {
@@ -6719,6 +6718,18 @@
         "title": "Bring your products to the bazar",
         "body": "Pick what you'll take, choose labels or none, and Traced gets it ready.",
         "cta": "Set up your bazar"
+      },
+      "later": "Continue to your bazar",
+      "prices": {
+        "title": "Set your bazar prices",
+        "sub_one": "{{count}} piece is on its way to the bazar. Shopify prices stay the same.",
+        "sub_other": "{{count}} pieces are on their way to the bazar. Shopify prices stay the same.",
+        "sending": "Putting your pieces on the bazar's send…",
+        "retry": "Try again",
+        "next": "Next · ready"
+      },
+      "ready": {
+        "title": "Send them and start"
       }
     },
     "u1a": {
