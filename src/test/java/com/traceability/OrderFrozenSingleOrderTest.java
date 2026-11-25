@@ -165,8 +165,9 @@ class OrderFrozenSingleOrderTest {
         event(allocated(o, "released", "available"), o, e6leg, "packed", "return_pending_inspection");
         expect("e6", o, false);
 
-        o = f.orderWith("w1", "new", 0, "internal:portal:" + UUID.randomUUID());
-        jdbc.update("UPDATE orders SET origin = 'portal_pre_connect' WHERE id = ?", o);
+        o = jdbc.queryForObject("INSERT INTO orders (tenant_id, store_id, external_id, number, status, origin, shopify_order_gid, " +
+            "placed_at) VALUES (?, ?, ?, '#w1', 'delivered', 'portal_pre_connect', ?, now()) RETURNING id", UUID.class,
+            f.tenant, f.store, "internal:portal:" + UUID.randomUUID(), "gid://shopify/Order/" + System.nanoTime());
         history(leg(o, "forward"), "with_courier"); expect("w1", o, false);
         o = jdbc.queryForObject("INSERT INTO orders (tenant_id, store_id, external_id, number, status, origin, placed_at) " +
             "VALUES (?, ?, ?, '#1-X1', 'confirmed', 'shopify_exchange', now()) RETURNING id", UUID.class,
