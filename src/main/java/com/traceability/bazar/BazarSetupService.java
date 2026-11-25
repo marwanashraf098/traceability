@@ -120,7 +120,7 @@ public class BazarSetupService {
         UUID eventId = uuid(b.get("eventId"));
         v.put("eventId", eventId);
         List<Map<String, Object>> ev = eventId == null ? List.of() : jdbc.queryForList(
-            "SELECT name, status FROM bazar_events WHERE id = ? AND tenant_id = ?", eventId, tenantId);
+            "SELECT name, status FROM bazar_events WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL", eventId, tenantId);
         v.put("eventName", ev.isEmpty() ? null : ev.get(0).get("name"));
         v.put("eventStatus", ev.isEmpty() ? null : ev.get(0).get("status"));
         v.put("labelledReceiptId", uuid(b.get("labelledReceiptId")));
@@ -254,7 +254,7 @@ public class BazarSetupService {
         }
         if (eventId == null) throw invalid("Choose the bazar first.", "اختر البازار أولًا.");
         List<Map<String, Object>> ev = jdbc.queryForList(
-            "SELECT name, status FROM bazar_events WHERE id = ? AND tenant_id = ?", eventId, tenantId);
+            "SELECT name, status FROM bazar_events WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL", eventId, tenantId);
         if (ev.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);

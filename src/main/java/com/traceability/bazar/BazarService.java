@@ -118,7 +118,9 @@ public class BazarService {
                     "اختر موقع بازار (فعالية)، وليس مستودعًا أو متجرًا.", HttpStatus.UNPROCESSABLE_ENTITY);
             }
             if (!mode.equals(l.get("shopify_sync_mode"))) {
-                if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, null) > 0) throw BazarOnlineStock.conflict();
+                if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, null) > 0) {
+                    throw BazarOnlineStock.conflict(jdbc, tenantId, locationId, null);
+                }
                 jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, locationId, tenantId);
             }
             return locationId;
@@ -176,7 +178,7 @@ public class BazarService {
             quantity == null ? 0 : quantity, actorUserId, crid);
         if (!r.success()) throw countRefused(r);
         ensurePrice(tenantId, ev, r.variantId());
-        return r;
+        return withLabelledCodes(tenantId, r);
     }
 
     /**
@@ -200,7 +202,18 @@ public class BazarService {
             ? transfers.removeScannedFromSendForBazar(transferId, code, actorUserId, crid)
             : transfers.removeCountFromSendForBazar(transferId, variantId, quantity == null ? 0 : quantity, actorUserId, crid);
         if (!r.success()) throw countRefused(r);
-        return r;
+        return withLabelledCodes(tenantId, r);
+    }
+
+    /** U1b: the moved pieces' label codes (pieces with a short code), oldest piece id order — names what to put back. */
+    private TransferService.CountResult withLabelledCodes(UUID tenantId, TransferService.CountResult r) {
+        if (r.pieceIds() == null || r.pieceIds().isEmpty()) return r.withLabelledCodes(List.of());
+        String in = String.join(", ", java.util.Collections.nCopies(r.pieceIds().size(), "?"));
+        List<Object> args = new java.util.ArrayList<>(List.of(tenantId));
+        args.addAll(r.pieceIds());
+        return r.withLabelledCodes(jdbc.queryForList(
+            "SELECT short_code FROM pieces WHERE tenant_id = ? AND short_code IS NOT NULL AND id IN (" + in + ") " +
+            "ORDER BY short_code", String.class, args.toArray()));
     }
 
     private static String requestId(String clientRequestId) {
@@ -261,10 +274,38 @@ public class BazarService {
             "SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR UPDATE",
             String.class, locationId, tenantId);
         if (!mode.equals(current)) {
-            if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, eventId) > 0) throw BazarOnlineStock.conflict();
+            if (BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, locationId, eventId) > 0) {
+                throw BazarOnlineStock.conflict(jdbc, tenantId, locationId, eventId);
+            }
             jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, locationId, tenantId);
         }
         return detail(tenantId, eventId);
+    }
+
+    // ── Delete (U1b) ─────────────────────────────────────────────────────────
+
+    /**
+     * U1b — deletes a DRAFT bazar while nothing was ever scanned out for it: soft delete (deleted_at / deleted_by,
+     * V243 — app_user has no DELETE on bazar_events) and its linked transfer cancelled through
+     * {@link TransferService#cancelForBazar} (the generic cancel's "never scanned" rule, plus pieces taken back off
+     * the send). Refused (409 BAZAR_EVENT_NOT_DRAFT) once the event started or its stock was sent; 422
+     * TRANSFER_HAS_PIECES once anything was scanned out. Every bazar read leaves the event out afterwards.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void delete(UUID eventId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = event(tenantId, eventId, true);
+        if (!"draft".equals(ev.get("status"))) throw notDraft();
+        String transferStatus = jdbc.queryForObject("SELECT status FROM transfers WHERE id = ? AND tenant_id = ?",
+            String.class, ev.get("transfer_id"), tenantId);
+        if (!"preparing".equals(transferStatus)) {
+            throw new BazarException(BazarException.Code.BAZAR_CANT_DELETE,
+                "The stock was already sent to this bazar, so it can't be deleted.",
+                "تم إرسال البضاعة إلى هذا البازار بالفعل، لذلك لا يمكن حذفه.", HttpStatus.CONFLICT);
+        }
+        transfers.cancelForBazar((UUID) ev.get("transfer_id"), actorUserId);
+        jdbc.update("UPDATE bazar_events SET deleted_at = now(), deleted_by = ?, updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'draft' AND deleted_at IS NULL", actorUserId, eventId, tenantId);
     }
 
     // ── Start ────────────────────────────────────────────────────────────────
@@ -345,13 +386,19 @@ public class BazarService {
             throw invalid("Use whole pounds — no piasters (for example 1840, not 1840.97).",
                 "استخدم جنيهات كاملة — بدون قروش (مثلًا 1840 وليس 1840.97).");
         }
-        requireVariant(tenantId, variantId);
+        BigDecimal base = requireVariant(tenantId, variantId);
+        // U1b (approved 2026-11-24): a typed price equal to the rule's price (or Shopify's, with no rule) is not a custom
+        // price — the row keeps the rule's source ('bulk' / 'default'), so a sale of it records that source, and a later
+        // rule change still moves it. Only a different price is an override.
+        BazarPricing.Priced ruled = BazarPricing.forVariant(base,
+            (BigDecimal) ev.get("discount_pct"), (BigDecimal) ev.get("round_to"));
+        String source = ruled != null && ruled.price().compareTo(price) == 0 ? ruled.source() : "override";
         jdbc.update(
             "INSERT INTO bazar_event_prices (tenant_id, event_id, variant_id, price, source, updated_by) " +
-            "VALUES (?, ?, ?, ?, 'override', ?) " +
-            "ON CONFLICT (event_id, variant_id) DO UPDATE SET price = EXCLUDED.price, source = 'override', " +
+            "VALUES (?, ?, ?, ?, ?, ?) " +
+            "ON CONFLICT (event_id, variant_id) DO UPDATE SET price = EXCLUDED.price, source = EXCLUDED.source, " +
             "  updated_at = now(), updated_by = EXCLUDED.updated_by",
-            tenantId, eventId, variantId, price, actorUserId);
+            tenantId, eventId, variantId, price, source, actorUserId);
         return prices(tenantId, eventId);
     }
 
@@ -451,7 +498,7 @@ public class BazarService {
             "       (SELECT COUNT(*) FROM transfer_pieces tp WHERE tp.transfer_id = t.id AND tp.tenant_id = t.tenant_id " +
             "          AND tp.outcome IS NULL)::int AS pieces_out " +
             "FROM bazar_events e JOIN locations l ON l.id = e.location_id JOIN transfers t ON t.id = e.transfer_id " +
-            "WHERE e.tenant_id = ? ORDER BY e.created_at DESC, e.id DESC", tenantId);
+            "WHERE e.tenant_id = ? AND e.deleted_at IS NULL ORDER BY e.created_at DESC, e.id DESC", tenantId);
     }
 
     @Transactional(readOnly = true)
@@ -471,7 +518,7 @@ public class BazarService {
             "       e.payment_methods, e.seller_roles, e.discount_pct, e.round_to, " +
             "       e.created_by, e.created_at, e.started_at, e.started_by, e.ended_at " +
             "FROM bazar_events e JOIN locations l ON l.id = e.location_id JOIN transfers t ON t.id = e.transfer_id " +
-            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId));
+            "WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL", eventId, tenantId));
         out.put("payment_methods", toList(out.get("payment_methods")));
         out.put("seller_roles", toList(out.get("seller_roles")));
         // Counts from the transfer's pieces (sold = pieces sold at the bazar, B2 — transfer_pieces outcome 'sold').
@@ -487,6 +534,13 @@ public class BazarService {
             counts.put(k, ((Number) c.get(k)).intValue());
         }
         out.put("counts", counts);
+        // U1b: Delete is offered only for a draft whose transfer is preparing and never had a piece scanned out.
+        out.put("deletable", "draft".equals(out.get("status")) && "preparing".equals(out.get("transfer_status"))
+            && Boolean.FALSE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.transfer_id = ? AND tp.tenant_id = ?) " +
+                "    OR EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = ? " +
+                "      AND pe.event_type IN ('transferred_out', 'removed_from_transfer') AND pe.metadata->>'transfer_id' = ?)",
+                Boolean.class, out.get("transfer_id"), tenantId, tenantId, out.get("transfer_id").toString())));
         // B2: today's (Africa/Cairo) takings by payment method.
         @SuppressWarnings("unchecked")
         List<String> methods = (List<String>) out.get("payment_methods");
@@ -510,7 +564,7 @@ public class BazarService {
     private Map<String, Object> event(UUID tenantId, UUID eventId, boolean forUpdate) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT id, status, location_id, transfer_id, discount_pct, round_to FROM bazar_events " +
-            "WHERE id = ? AND tenant_id = ?" + (forUpdate ? " FOR UPDATE" : ""), eventId, tenantId);
+            "WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL" + (forUpdate ? " FOR UPDATE" : ""), eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);

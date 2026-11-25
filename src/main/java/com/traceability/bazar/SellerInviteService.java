@@ -62,7 +62,7 @@ public class SellerInviteService {
         "       t.name AS store_name, e.name AS event_name, u.name AS seller_name " +
         "FROM bazar_seller_invites i " +
         "JOIN tenants t ON t.id = i.tenant_id " +
-        "JOIN bazar_events e ON e.id = i.event_id AND e.tenant_id = i.tenant_id " +
+        "JOIN bazar_events e ON e.id = i.event_id AND e.tenant_id = i.tenant_id AND e.deleted_at IS NULL " +
         "JOIN users u ON u.id = i.user_id AND u.tenant_id = i.tenant_id " +
         "LEFT JOIN bazar_event_sellers es ON es.tenant_id = i.tenant_id AND es.event_id = i.event_id " +
         "      AND es.user_id = i.user_id " +

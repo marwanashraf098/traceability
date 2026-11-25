@@ -4,6 +4,45 @@
 
 ## Current state
 
+**Bazar U1b — smaller fixes from the 2026-11-22 E2E (2026-11-24; branch `feat/bazar-u1b` off origin/main 7403906b; V243;
+count gates MigrationSmokeTest 242 files, NotTracedBackfillTest 187; merged to main 2026-11-26, NOT deployed).** Per-bazar sale
+numbering was split out (own ticket).
+- **Delete a draft bazar (V243, soft delete):** `bazar_events.deleted_at / deleted_by` (CHECK: draft only; pair). `DELETE
+  /api/v1/bazar-events/{id}` (owner / manager) → `BazarService.delete`: draft + transfer preparing (else 409
+  BAZAR_CANT_DELETE / BAZAR_EVENT_NOT_DRAFT) → `TransferService.cancelForBazar` (ONE caller; the generic cancel's "never
+  scanned" rule PLUS any `transferred_out` / `removed_from_transfer` piece event of the transfer — a piece taken back off
+  the send still blocks; 422 TRANSFER_HAS_PIECES). Every bazar read filters `deleted_at IS NULL` (list, every per-event
+  lookup → 404, `Bazar.liveFor`, `unsentBazarsAt`, the clash lookup, seller invite join, TURNS_OFF_SQL, setup wizard
+  reads). Detail adds `deletable`. Leak registries: SKIP. Not done: sellers "Add seller"-created for a deleted draft stay
+  active (no event to remove them from).
+- **Online-stock clash** names the bazar in the way: `BazarOnlineStock.conflict(jdbc, tenant, location, except)` →
+  details {blocking_event_id, blocking_event_name}, message says the choice applies to the whole location (also from
+  Settings › Locations). Screens link to it; the online-stock row / dialog / New bazar say it's per location.
+- **Typed price equal to the rule's price keeps the rule's source** (`setOverride`: equal to `BazarPricing.forVariant`
+  → 'bulk' / 'default', else 'override'). Oxygen on the test store (2026-11-22 21:17, E2E Bazae, rule −20 % / 5,
+  Shopify 1025 → 820): the row was saved by hand as 'override' at 820 = the rule's own price; its cart sale copied it.
+- **Grid tap prefers unlabelled pieces** (`pickPiece` ORDER BY short_code IS NOT NULL first). Catalog sizes carry
+  `left_unlabelled` (event catalog only); `needsScan` (left > 0, 0 unlabelled) → the Sell screen asks for a scan of the
+  piece in hand (existing scan input; `pickOrAsk` sits OUTSIDE BazarSell's R4-hashed routing block — that block and every
+  scanner / camera file are unchanged).
+- **Send by count / Remove from this send** return `labelled_codes` (CountResult, NON_NULL — generic transfers
+  byte-identical): "Collect these: P… · P…" / "Removed P000057 — put this one back."
+- **Report:** busiest hours = kept sales only (status active), every hour first → last (0s included), + `pieces`;
+  `unsold_products` ("0/N" rows under What sold); `has_sizes` ("These products have no sizes."); names wrap.
+  `GET …/report/orders.csv` (one row per piece sold, undone left out, audit `bazar_orders_export`) and `GET
+  …/report.pdf?lang=` (`BazarReportPdf`, page 1 only: tiles incl. "below Shopify prices", money by day, by method × day,
+  close notes, pieces per hour). Page 2 of V2_ReportPDF not built.
+- **Price sheet:** colour column named after the products' shared Shopify option (`ExchangeOptions.colourAxisName`),
+  else "Variant"; colour / sizes columns hidden when empty (a sold-out product then says so in its price cell).
+- **UI:** "Default Title" hidden everywhere (`variantName`, `sizeName`, pick sheet "One size"); Keep-mode bottom bar;
+  "EGP at bazar" tile steps down; Shopify price crossed out only when different; Custom chip shows the %; an emptied
+  price box goes back and says "A price is needed. Still 820."; red outline clears on a valid price; discount box empty
+  with a hint, "Applied −20%" after; grid names two lines; cart text no longer cut; End event step header counts live
+  (`LeftoversPanel onChange`); Close day neutral until a number is typed; "Back to selling" bar (phone, Layout,
+  sessionStorage `bazar-selling-event`, no fetch).
+- Tests: BazarU1bTest (12: d1–d4, o1, p1, t1, c1, r1–r3, s1), bazarU1b.test.tsx (26). Every fix revert-checked.
+- Merge additions: BazarReportDownloadsHttpAppUserTest (whole app as app_user: CSV + PDF own 200, worker 403, other tenant 404); RlsCoverageTest COVERED + BazarReportGuardTest bazar_receipts (approved).
+
 **Incident 2026-11-25 — the per-order freeze check saturated the DB (20:00–23:00 Cairo: 365 slow queries, 27
 timeouts, watchdog restart 22:46). Branch `fix/order-frozen-check-perf`; no migration.**
 - **Root cause (generic-plan tenant poisoning):** Postgres estimates the RLS predicate `tenant_id =

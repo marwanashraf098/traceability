@@ -343,7 +343,7 @@ describe('Report', () => {
     expect(screen.getByTestId('report-status').textContent).toBe('Ended · transfer closed')
     expect(screen.getByTestId('report-status').className).not.toMatch(/rounded-full/)
     // Nothing the report doesn't return.
-    expect(document.body.textContent).not.toMatch(/Download PDF|Export orders|Plan next bazar|vs Shopify/)
+    expect(document.body.textContent).not.toMatch(/Plan next bazar|vs Shopify/)   // U1b added Download PDF + Export orders
   })
 
   test('no lost / still-out pieces: the transfer card shows no "still out" line', async () => {

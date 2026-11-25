@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom'
+import { BackToSellingBar } from '../pages/bazar/BackToSelling'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, ReactNode } from 'react'
 import { LogOut, Globe, Search, ChevronDown, Bell, Menu } from 'lucide-react'
@@ -284,6 +285,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         <main className="flex-1 overflow-y-auto p-6 max-[899px]:p-4">
           {children}
         </main>
+        {/* Bazar U1b — phone: back to the sell screen left earlier in this tab (session storage only, no fetch). */}
+        <BackToSellingBar />
       </div>
     </div>
     </MeProvider>

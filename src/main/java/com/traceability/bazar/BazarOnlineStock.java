@@ -3,6 +3,9 @@ package com.traceability.bazar;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -30,19 +33,42 @@ public final class BazarOnlineStock {
     public static int unsentBazarsAt(JdbcTemplate jdbc, UUID tenantId, UUID locationId, UUID exceptEventId) {
         Integer n = jdbc.queryForObject(
             "SELECT COUNT(*) FROM bazar_events e JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id " +
-            "WHERE e.tenant_id = ? AND e.location_id = ? AND t.status = 'preparing' AND e.id IS DISTINCT FROM ?",
+            "WHERE e.tenant_id = ? AND e.location_id = ? AND t.status = 'preparing' AND e.deleted_at IS NULL AND e.id IS DISTINCT FROM ?",
             Integer.class, tenantId, locationId, exceptEventId);
         return n == null ? 0 : n;
     }
 
-    /** 409 — another bazar at this location that hasn't been sent yet has the other online-stock choice. */
-    public static BazarException conflict() {
+    /**
+     * 409 — another bazar at this location that hasn't been sent yet has the other online-stock choice. U1b: names the
+     * bazar in the way (the newest such one) — {@code details} {blocking_event_id, blocking_event_name} — so the screen
+     * can link to it, and says the choice belongs to the whole location.
+     */
+    public static BazarException conflict(JdbcTemplate jdbc, UUID tenantId, UUID locationId, UUID exceptEventId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT e.id, e.name FROM bazar_events e JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id " +
+            "WHERE e.tenant_id = ? AND e.location_id = ? AND t.status = 'preparing' AND e.deleted_at IS NULL " +
+            "AND e.id IS DISTINCT FROM ? ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
+            tenantId, locationId, exceptEventId);
+        if (rows.isEmpty()) return conflict(null, null);
+        return conflict((UUID) rows.get(0).get("id"), (String) rows.get(0).get("name"));
+    }
+
+    static BazarException conflict(UUID blockingId, String blockingName) {
+        Map<String, Object> d = null;
+        String en = "Another bazar at this location", ar = "يوجد بازار آخر في هذا الموقع";
+        if (blockingId != null) {
+            d = new LinkedHashMap<>();
+            d.put("blocking_event_id", blockingId);
+            d.put("blocking_event_name", blockingName);
+            en = "\"" + blockingName + "\" is at this location too";
+            ar = "بازار «" + blockingName + "» في هذا الموقع أيضًا";
+        }
         return new BazarException(BazarException.Code.BAZAR_ONLINE_STOCK_CONFLICT,
-            "Another bazar at this location hasn't been sent yet and has the other online stock choice. " +
-            "Send or change that bazar first, or pick another location.",
-            "يوجد بازار آخر في هذا الموقع لم يُرسَل بعد واختياره للمخزون أونلاين مختلف. " +
+            en + ", hasn't been sent yet and has the other online stock choice. The choice applies to the whole " +
+            "location — send or change that bazar first, or pick another location.",
+            ar + " ولم يُرسَل بعد واختياره للمخزون أونلاين مختلف. الاختيار ينطبق على الموقع كله — " +
             "أرسل ذلك البازار أو غيّر اختياره أولًا، أو اختر موقعًا آخر.",
-            HttpStatus.CONFLICT);
+            HttpStatus.CONFLICT, d);
     }
 
     /** 409 — the choice can't change once the stock was sent (the transfer's snapshot is final). */

@@ -283,6 +283,11 @@ class RlsCoverageTest {
             "/api/v1/bazar-events/{eventId}/leftovers",
             "/api/v1/bazar-events/{eventId}/report",
             "/api/v1/bazar-events/{eventId}/report/customers.csv",
+            // Bazar U1b — orders CSV + report PDF, owner / manager only, every read under TenantContext + RLS:
+            // the whole app as app_user in BazarReportDownloadsHttpAppUserTest (own data 200, worker 403, another
+            // tenant's owner 404 with none of the event's data, no export audited).
+            "/api/v1/bazar-events/{eventId}/report/orders.csv",
+            "/api/v1/bazar-events/{eventId}/report.pdf",
             // Bazar POS B6b — every read under TenantContext + RLS (bazar_event_sellers / bazar_seller_invites / users);
             // another tenant's event → 404 and another tenant's worker → not found in BazarSellersTest.wrongTenant_isRefused,
             // app_user isolation with a same-tenant positive control in

@@ -3,7 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { OnlineStockTag } from './OnlineStock'
 import { ArrowLeft, Download } from 'lucide-react'
-import { BazarError, downloadBazarCustomers, getBazarReport, type BazarReport } from '../../bazar/api'
+import {
+  BazarError, downloadBazarCustomers, downloadBazarOrders, downloadBazarReportPdf, getBazarReport, type BazarReport,
+} from '../../bazar/api'
 import { toNumber, transferCode } from '../../bazar/format'
 import { Button, Spinner, cn, type BadgeTone } from '../../components/ui'
 import { STATUS_TONE } from './BazarEvents'
@@ -48,6 +50,9 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
   const lang = i18n.language
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState(false)
+  const [fileBusy, setFileBusy] = useState<'orders' | 'pdf' | null>(null)
+  const [fileError, setFileError] = useState(false)
+  const unsold = r.unsold_products ?? []
   const nr = r.money_not_received
   const maxDay = Math.max(1, ...r.sales_by_day.map(d => Math.abs(toNumber(d.revenue))))
   const maxHour = Math.max(1, ...r.busiest_hours.map(h => h.sales))
@@ -64,8 +69,19 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
     finally { setExporting(false) }
   }
 
+  // U1b: Export orders (CSV) and Download PDF, at the top as in design/bazar-v2 V2_Report.
+  async function download(kind: 'orders' | 'pdf') {
+    setFileBusy(kind)
+    setFileError(false)
+    try {
+      if (kind === 'orders') await downloadBazarOrders(id, `bazar-orders-${r.event.starts_on}.csv`)
+      else await downloadBazarReportPdf(id, `bazar-report-${r.event.starts_on}.pdf`, lang)
+    } catch { setFileError(true) } finally { setFileBusy(null) }
+  }
+
   return (
     <div className="flex flex-col gap-5 max-w-[1120px]" data-testid="bazar-report">
+      <div className="flex items-end justify-between gap-4 flex-wrap">
       <div className="flex flex-col gap-1">
         <Link to="/bazar" className="text-small text-muted hover:text-primary self-start inline-flex items-center gap-1">
           <ArrowLeft size={14} aria-hidden className="rtl:-scale-x-100" />{t('bazar.title')}
@@ -81,6 +97,16 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
           {r.event.location_name} · <span>{rangeLabel(r.event.starts_on, r.event.ends_on, lang)}</span>
         </span>
       </div>
+      <div className="flex items-center gap-2.5 flex-wrap" data-testid="report-downloads">
+        <Button variant="secondary" onClick={() => download('orders')} loading={fileBusy === 'orders'}>
+          {t('bazar.u1b.report.exportOrders')}
+        </Button>
+        <Button variant="secondary" onClick={() => download('pdf')} loading={fileBusy === 'pdf'}>
+          {t('bazar.u1b.report.downloadPdf')}
+        </Button>
+      </div>
+      </div>
+      {fileError && <p role="alert" className="text-small text-critical">{t('bazar.report.exportFailed')}</p>}
 
       {needsFinish(r.event.status, tr.status) && <FinishEventCallout eventId={r.event.id} piecesOut={tr.outstanding} />}
 
@@ -118,9 +144,15 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
         </Card>
 
         <Card title={t('bazar.r2.report.whatSold')} sub={t('bazar.r2.report.whatSoldSub')} testId="report-top-products">
-          {r.top_products.length === 0 ? <Empty /> : r.top_products.map(p => (
-            <SoldRow key={p.product_title} label={p.product_title} sold={p.sold} sent={p.sent} revenue={p.revenue} />
-          ))}
+          {r.top_products.length === 0 && unsold.length === 0 ? <Empty /> : <>
+            {r.top_products.map(p => (
+              <SoldRow key={p.product_title} label={p.product_title} sold={p.sold} sent={p.sent} revenue={p.revenue} />
+            ))}
+            {/* U1b: what didn't sell — "0 of N". */}
+            {unsold.map(p => (
+              <SoldRow key={`unsold-${p.product_title}`} label={p.product_title} sold={0} sent={p.sent} revenue={0} testId="report-unsold" />
+            ))}
+          </>}
         </Card>
       </div>
 
@@ -206,7 +238,9 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title={t('bazar.report.topSizes')} testId="report-top-sizes">
-          {r.top_sizes.length === 0 ? <Empty /> : r.top_sizes.map(p => (
+          {r.has_sizes === false
+            ? <p className="text-body text-muted" data-testid="report-no-sizes">{t('bazar.u1b.report.noSizes')}</p>
+            : r.top_sizes.length === 0 ? <Empty /> : r.top_sizes.map(p => (
             <SoldRow key={p.product_title + p.variant_title} label={`${p.product_title} · ${p.variant_title}`}
                      sold={p.sold} sent={p.sent} revenue={p.revenue} />
           ))}
@@ -290,10 +324,14 @@ function Card({ title, sub, children, testId }: { title: string; sub?: string; c
 }
 
 /** A product (or size) row: name, a sold-of-taken bar, "8/10", the money. */
-function SoldRow({ label, sold, sent, revenue }: { label: string; sold: number; sent: number; revenue: string | number }) {
+function SoldRow({ label, sold, sent, revenue, testId }: {
+  label: string; sold: number; sent: number; revenue: string | number; testId?: string
+}) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1">
-      <span className="font-semibold text-primary truncate">{label}</span>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1"
+         data-testid={testId}>
+      {/* U1b: the whole name, wrapped — never cut. */}
+      <span className="font-semibold text-primary break-words">{label}</span>
       <div aria-hidden className="hidden sm:block h-1.5 rounded-sm bg-charcoal overflow-hidden">
         <div className="h-full bg-grey-900" style={{ width: `${sent ? Math.min(100, (sold / sent) * 100) : 0}%` }} />
       </div>

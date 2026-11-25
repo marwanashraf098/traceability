@@ -79,7 +79,9 @@ public class BazarException extends RuntimeException {
         BAZAR_SETUP_NO_LIST,
         // B10 — opening a seller invite (check / redeem)
         BAZAR_INVITE_REFUSED,
-        BAZAR_INVITE_ORIGIN
+        BAZAR_INVITE_ORIGIN,
+        // U1b — delete a draft bazar
+        BAZAR_CANT_DELETE
     }
 
     private final Code       code;

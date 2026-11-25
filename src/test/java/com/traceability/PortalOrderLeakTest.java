@@ -598,6 +598,8 @@ class PortalOrderLeakTest {
         }
         reg("PUT /api/v1/bazar-events/{eventId}/online-stock",
             skip("Bazar B8 — a bazar's online stock choice (its event location's shopify_sync_mode); touches no orders"));
+        reg("DELETE /api/v1/bazar-events/{eventId}",
+            skip("Bazar U1b — soft-deletes a draft bazar and cancels its never-scanned transfer; touches no orders"));
         for (String k : List.of("GET /api/v1/bazar-setup", "GET /api/v1/bazar-setup/products",
                 "POST /api/v1/bazar-setup/receive", "GET /api/v1/bazar-setup/lower", "GET /api/v1/bazar-setup/lower.csv",
                 "POST /api/v1/bazar-setup/lower-done")) {
@@ -661,7 +663,8 @@ class PortalOrderLeakTest {
                 "POST /api/v1/bazar-events/{eventId}/end", "GET /api/v1/bazar-events/{eventId}/leftovers",
                 "POST /api/v1/bazar-events/{eventId}/scan-back", "POST /api/v1/bazar-events/{eventId}/mark-lost",
                 "POST /api/v1/bazar-events/{eventId}/close-transfer", "GET /api/v1/bazar-events/{eventId}/report",
-                "GET /api/v1/bazar-events/{eventId}/report/customers.csv")) {
+                "GET /api/v1/bazar-events/{eventId}/report/customers.csv",
+                "GET /api/v1/bazar-events/{eventId}/report/orders.csv", "GET /api/v1/bazar-events/{eventId}/report.pdf")) {
             reg(k, skip("Bazar POS B5 — end event, leftovers on the bazar transfer, event report (bazar tables, the "
                 + "event's transfer); touches no orders"));
         }

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import {
-  matchesQuery, sizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
+  matchesQuery, productSizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../../bazar/catalog'
 import { formatMoney } from '../../../bazar/format'
 import { cn } from '../../../components/ui'
@@ -59,7 +59,7 @@ export function ProductGrid({ catalog, onPick }: {
             return (
               <li key={s.variant_id}>
                 <button type="button" disabled={out} onClick={() => onPick(p, s)} data-testid="grid-tile"
-                  aria-label={t('bazar.pick.tileLabel', { name: `${p.title} · ${sizeName(p, s)}` })}
+                  aria-label={t('bazar.pick.tileLabel', { name: productSizeName(p, s) })} title={productSizeName(p, s)}
                   className={cn('w-full rounded-xl border border-line bg-surface overflow-hidden text-start flex flex-col',
                     out ? 'opacity-50 cursor-not-allowed' : 'hover:border-trace-blue')}>
                   <span className="relative block">
@@ -70,8 +70,11 @@ export function ProductGrid({ catalog, onPick }: {
                     {p.number != null && <span className="absolute top-2 start-2"><NumberTag n={p.number} /></span>}
                   </span>
                   <span className="p-2.5 flex flex-col gap-0.5">
-                    <span className="font-semibold text-primary truncate">{p.title}</span>
-                    <span className="text-small text-muted truncate">{[p.colour, s.size].filter(Boolean).join(' · ') || '—'}</span>
+                    {/* U1b: two lines for the name — the end (what tells two products apart) isn't cut off. */}
+                    <span className="font-semibold text-primary line-clamp-2 break-words leading-5 min-h-10" data-testid="grid-tile-name">{p.title}</span>
+                    {[p.colour, s.size].some(Boolean) && (
+                      <span className="text-small text-muted truncate">{[p.colour, s.size].filter(Boolean).join(' · ')}</span>
+                    )}
                     <span className="font-bold tabular-nums text-primary mt-1">
                       {s.price == null ? '—' : formatMoney(s.price).replace(/^EGP /, '')}
                     </span>

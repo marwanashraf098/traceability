@@ -65,7 +65,7 @@ public class BazarSellerService {
     static final String TURNS_OFF_SQL =
         "EXISTS (SELECT 1 FROM bazar_event_sellers c WHERE c.tenant_id = ? AND c.user_id = u.id AND c.created_user) " +
         "AND NOT EXISTS (SELECT 1 FROM bazar_event_sellers o JOIN bazar_events oe ON oe.id = o.event_id " +
-        "  WHERE o.user_id = u.id AND o.event_id <> ? AND o.removed_at IS NULL AND oe.status <> 'ended')";
+        "  WHERE o.user_id = u.id AND o.event_id <> ? AND o.removed_at IS NULL AND oe.status <> 'ended' AND oe.deleted_at IS NULL)";
 
     public record AddSeller(UUID userId, String name, String phone) {}
 
@@ -335,7 +335,7 @@ public class BazarSellerService {
 
     private Map<String, Object> event(UUID tenantId, UUID eventId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT id, name, status, seller_roles FROM bazar_events WHERE id = ? AND tenant_id = ?", eventId, tenantId);
+            "SELECT id, name, status, seller_roles FROM bazar_events WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL", eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);

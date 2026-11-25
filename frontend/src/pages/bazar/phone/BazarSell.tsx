@@ -20,10 +20,11 @@ import {
 } from './SaleSheets'
 import { CartPanel, ReceiptSheet, useCart } from './CartMode'
 import {
-  findVariant, getPriceSheet, productNumber, sizeName, tapRef, tappedVariant, useBazarCatalog,
+  findVariant, getPriceSheet, needsScan, productNumber, productSizeName, sizeName, tapRef, tappedVariant, useBazarCatalog,
   type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../../bazar/catalog'
 import { PickSheet } from './PickSheet'
+import { rememberSelling } from '../BackToSelling'
 import { ProductGrid } from './ProductGrid'
 import { amount } from '../r1/parts'
 import {
@@ -56,6 +57,8 @@ export default function BazarSell() {
 function Sell({ live }: { live: BazarLive }) {
   const { t, i18n } = useTranslation()
   const eventId = live.eventId
+  // U1b: other screens offer "Back to selling" to this event (session only).
+  useEffect(() => { rememberSelling(eventId) }, [eventId])
   const methods = useMemo(() => orderedMethods(live.paymentMethods), [live.paymentMethods])
   const method = defaultMethod(live.paymentMethods)
   const { sales, setSales, reload } = useTodaySales(eventId, live.businessDay)
@@ -161,6 +164,25 @@ function Sell({ live }: { live: BazarLive }) {
   }, [quick.card, resultShown])
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
 
+  /**
+   * U1b — a tapped size with only LABELLED pieces left: never let Traced choose which labelled piece is sold (the one in
+   * the customer's hand would then not sell). The seller scans it through the existing scan input; otherwise the tap
+   * goes the unchanged B7a way ({@link pick}).
+   */
+  const [scanAsk, setScanAsk] = useState<string | null>(null)
+  const pickOrAsk = useCallback((p: BazarCatalogProduct, size: BazarCatalogSize) => {
+    if (needsScan(size)) {
+      setSheet(null)
+      setScanAsk(productSizeName(p, size))
+      setTimeout(() => scanner.inputRef.current?.focus(), 0)
+      return
+    }
+    setScanAsk(null)
+    pick(p, size)
+  }, [pick, scanner])
+  // A new sale / cart line means the piece was scanned — the ask is done.
+  useEffect(() => { setScanAsk(null) }, [sales, cart.codes])
+
   const sellerName = useSellerName()
   const pickButton = (
     <button type="button" onClick={() => setSheet({ kind: 'pick', number: null })} data-testid="open-pick"
@@ -228,7 +250,13 @@ function Sell({ live }: { live: BazarLive }) {
         </div>
         {/* B7a: no barcode — pick a product (phone: a sheet, at the bottom in Quick; computer: the grid below). */}
         {mode === 'cart' && pickButton}
-        <div className="hidden lg:block"><ProductGrid catalog={catalog} onPick={pick} /></div>
+        <div className="hidden lg:block"><ProductGrid catalog={catalog} onPick={pickOrAsk} /></div>
+        {scanAsk && (
+          <p role="status" data-testid="bazar-scan-ask"
+             className="rounded-lg border border-trace-blue/40 bg-trace-blue/[0.06] px-3 py-2 text-body text-primary">
+            {t('bazar.u1b.sell.scanLabelled', { name: scanAsk })}
+          </p>
+        )}
         {dropped && <p className="text-small text-muted" role="status">{t('bazar.sell.alreadySending', { code: labelFor(dropped) })}</p>}
         {scanner.queueFull && <p className="text-small text-critical" role="alert">{t('bazar.sell.queueFull')}</p>}
         {scanner.pending > 0 && <p className="text-small text-muted">{t('bazar.sell.waiting', { count: scanner.pending })}</p>}
@@ -341,7 +369,7 @@ function Sell({ live }: { live: BazarLive }) {
       )}
 
       {sheet?.kind === 'pick' && (
-        <PickSheet catalog={catalog} startNumber={sheet.number} mode={mode} onPick={pick}
+        <PickSheet catalog={catalog} startNumber={sheet.number} mode={mode} onPick={pickOrAsk}
                    onClose={() => setSheet(null)} onScanBurst={submit} />
       )}
 
