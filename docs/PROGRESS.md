@@ -36,9 +36,23 @@ timeouts, watchdog restart 22:46). Branch `fix/order-frozen-check-perf`; no migr
   other context, and pg_prepared_statements never holds the readers on a pooled connection (control: an ordinary
   statement is prepared).
 - Suite 2026-11-26: 4,969 tests, only ExchangeBackfillTest red (expected). MERGED to main — deploy = app-only rebuild.
-- **Follow-up (not done):** every other app_user statement has the same poisoning exposure (any generic plan made
-  under a small tenant). Candidates: `ALTER ROLE app_user SET plan_cache_mode = force_custom_plan`, or pgjdbc
-  `prepareThreshold=0` on the app pool URL — both trade planning CPU for safety; measure before choosing.
+- **LIVE ON PROD — emergency role setting (applied by Marawan 2026-11-25 23:23 Cairo, before this fix deployed):**
+  `ALTER ROLE app_user SET plan_cache_mode = force_custom_plan`, then every app_user connection recycled to pick it
+  up (a role setting only applies to NEW sessions). Why: the poisoning isn't limited to the freeze check — any
+  app_user statement pgjdbc server-prepares can get a generic plan made under a small / empty tenant and reuse it for
+  the biggest one; forcing custom plans stops that for every statement at once, while the code fix was still on its
+  way. Cost: every execution is planned (more planning CPU per statement); nothing measured yet. It is a database
+  setting, not in any migration or in the repo — a fresh environment / restore won't have it.
+  - **Check:** `SELECT rolname, rolconfig FROM pg_roles WHERE rolname = 'app_user';` (shows
+    `{plan_cache_mode=force_custom_plan}`).
+  - **Undo:** `ALTER ROLE app_user RESET plan_cache_mode;` then recycle the app_user connections (restart the app, or
+    wait for Hikari to replace them) — existing sessions keep the old value until they reconnect.
+  - Before undoing: decide whether other hot single-row app_user queries need the same treatment as the freeze
+    check (unprepared, or rewritten to start from their own key); after undoing, watch pg_stat_statements for
+    statements whose max time jumps.
+- **Follow-up (open):** keep the role setting, or replace it — e.g. pgjdbc `prepareThreshold=0` on the app pool URL,
+  or per-statement fixes like this one. Measure planning CPU on prod (pg_stat_statements `total_plan_time`, needs
+  `pg_stat_statements.track_planning`) before choosing.
 
 **Bazar C1 — one aim of the camera = one scan; camera hidden on a computer (2026-11-24; branch `feat/bazar-c1` off
 origin/main 7403906b; frontend only, no migration; pushed, NOT merged, NOT deployed).** Prod 2026-11-22 (E2E Bazae):
