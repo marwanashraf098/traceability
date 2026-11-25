@@ -35,6 +35,7 @@ timeouts, watchdog restart 22:46). Branch `fix/order-frozen-check-perf`; no migr
   event / return-intake only / portal pre-connect / shadow / no order), wrong tenant id → false, app_user RLS own /
   other context, and pg_prepared_statements never holds the readers on a pooled connection (control: an ordinary
   statement is prepared).
+- Suite 2026-11-26: 4,969 tests, only ExchangeBackfillTest red (expected). MERGED to main — deploy = app-only rebuild.
 - **Follow-up (not done):** every other app_user statement has the same poisoning exposure (any generic plan made
   under a small tenant). Candidates: `ALTER ROLE app_user SET plan_cache_mode = force_custom_plan`, or pgjdbc
   `prepareThreshold=0` on the app pool URL — both trade planning CPU for safety; measure before choosing.
