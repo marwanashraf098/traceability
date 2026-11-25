@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus, Printer, Search } from 'lucide-react'
 import {
-  BazarError, createBazarEvent, getBazarEvent, getBazarSetup, getBazarSetupProducts, METHOD_ORDER, openBazarSetupLabels,
-  receiveBazarSetup, type BazarSetupProduct, type BazarSetupStatus, type OnlineStock, type PaymentMethod, type SellerRole,
+  BazarError, createBazarEvent, getBazarEvent, getBazarSetup, getBazarSetupProducts, markBazarSent, METHOD_ORDER,
+  openBazarSetupLabels, receiveBazarSetup, sendBazarSetupBatch, setBazarOnlineStock, startBazarEvent,
+  type BazarEventDetail, type BazarSetupProduct, type BazarSetupStatus, type OnlineStock, type PaymentMethod,
+  type SellerRole,
 } from '../../../bazar/api'
-import { cn } from '../../../components/ui'
-import { OnlineStockPhonePair } from '../OnlineStock'
+import { resetCapabilitiesCache } from '../../../capabilities'
+import { Button, Modal, cn } from '../../../components/ui'
+import { OnlineStockCards, OnlineStockPhonePair, OnlineStockTag } from '../OnlineStock'
+import { PricesCard, priceTotals, usePriceData } from '../r3/PricesCard'
 import RangeCalendar from '../r1/RangeCalendar'
 import { cairoToday, dayCount } from '../r1/overviewState'
 import { Eyebrow, amount, rangeLabel, useIsPhone } from '../r1/parts'
@@ -20,12 +24,17 @@ import { LowerTheseList } from './LowerThese'
  *   1 Your bazar   — the same create call as /bazar/new (+ B8's online stock pair, Remove by default)
  *   2 Pick products — the Traced catalog, a stepper per size, "N in your other locations" (Shopify total − Traced Main)
  *   3 Barcodes      — labels or no barcodes (you can mix, per product) → received into Traced Main (one request)
- *   → "Lower these at the location you took them from" (list, CSV, Done) → Continue to your bazar (Get ready).
- * Steps 4 (Prices) and 5 (Ready) are Get ready's. The bazar being set up and the receive's request id are remembered in
- * this browser so a reload resumes; a received batch resumes at its list from the server.
+ *   → "Lower these at the location you took them from" (list, CSV, Done)
+ *   4 Prices        — B9c: the batch's pieces go on the bazar's send (POST /bazar-setup/send-batch — exactly the
+ *                     batch's pieces, the same send as a scan), then Get ready's PricesCard (bulk % / round / custom)
+ *   5 Ready         — B9c: the online stock choice (Remove / Keep, changeable until sent), Mark as sent (Get ready's
+ *                     confirm — the existing send), then Start → the bazar is live.
+ * "Continue to your bazar" (the header link) leaves the wizard at any step; everything is on Get ready too. The bazar
+ * being set up and the receive's request id are remembered in this browser so a reload resumes at Pick; once received,
+ * the server's status decides (not lowered → the list; lowered, draft: send preparing → Prices, sent → Ready).
  */
 
-type Step = 'bazar' | 'pick' | 'barcodes' | 'lower' | 'done'
+type Step = 'bazar' | 'pick' | 'barcodes' | 'lower' | 'prices' | 'ready' | 'done'
 const STORE_KEY = 'traced.bazarSetup.v1'
 interface Saved { eventId?: string; requestId?: string }
 
@@ -60,6 +69,12 @@ export default function BazarSetupWizard() {
       if (s.batch && !s.batch.lowered) {
         setEventId(s.batch.eventId); setEventName(s.batch.eventName ?? ''); setStep('lower'); return
       }
+      // B9c: a lowered batch whose bazar is still being set up resumes at Prices (send preparing) or Ready (sent).
+      if (s.batch && s.batch.lowered && s.batch.eventStatus === 'draft'
+          && (s.batch.transferStatus === 'preparing' || s.batch.transferStatus === 'sent')) {
+        setEventId(s.batch.eventId); setEventName(s.batch.eventName ?? '')
+        setStep(s.batch.transferStatus === 'sent' ? 'ready' : 'prices'); return
+      }
       const saved = readSaved()
       if (saved.eventId) {
         const ev = await getBazarEvent(saved.eventId).catch(() => null)
@@ -78,7 +93,7 @@ export default function BazarSetupWizard() {
   if (!status || !status.canSetUp) return <Navigate to="/bazar" replace />
 
   return (
-    <Frame step={step!}>
+    <Frame step={step!} laterTo={eventId && step !== 'done' ? `/bazar/${encodeURIComponent(eventId)}` : null}>
       {step === 'bazar' && (
         <YourBazar created={eventId ? eventName : null}
           onNext={(id, name) => {
@@ -91,8 +106,12 @@ export default function BazarSetupWizard() {
           onReceived={s => { setStatus(s); writeSaved({ eventId: eventId ?? undefined }); setStep('lower') }} />
       )}
       {step === 'lower' && (
-        <LowerStep status={status} onDone={s => { setStatus(s); clearSaved(); setStep('done') }} eventId={eventId} />
+        <LowerStep status={status} onDone={s => { setStatus(s); clearSaved(); setStep('prices') }} />
       )}
+      {step === 'prices' && eventId && (
+        <PricesStep eventId={eventId} leftAtMain={status.batch?.leftAtMain ?? 0} onNext={() => setStep('ready')} />
+      )}
+      {step === 'ready' && eventId && <ReadyStep eventId={eventId} onBack={() => setStep('prices')} onStarted={() => setStep('done')} />}
       {step === 'done' && <DoneStep eventId={eventId} />}
     </Frame>
   )
@@ -100,9 +119,9 @@ export default function BazarSetupWizard() {
 
 // ── Frame: the top bar with the five steps ───────────────────────────────────
 
-const STEP_INDEX: Record<Step, number> = { bazar: 1, pick: 2, barcodes: 3, lower: 3, done: 4 }
+const STEP_INDEX: Record<Step, number> = { bazar: 1, pick: 2, barcodes: 3, lower: 3, prices: 4, ready: 5, done: 6 }
 
-function Frame({ step, children }: { step: Step; children: ReactNode }) {
+function Frame({ step, laterTo, children }: { step: Step; laterTo: string | null; children: ReactNode }) {
   const { t } = useTranslation()
   const phone = useIsPhone()
   const current = STEP_INDEX[step]
@@ -115,9 +134,10 @@ function Frame({ step, children }: { step: Step; children: ReactNode }) {
             <div className="flex items-center justify-between">
               <span className="text-[20px] font-bold text-primary">traced<span className="text-trace-blue">.</span></span>
               <span className="text-small text-muted" data-testid="bazar-setup-step">
-                {t('bazar.wizard.stepOf', { n: current, total: 5 })} · {names[current - 1]}
+                {current <= 5 ? <>{t('bazar.wizard.stepOf', { n: current, total: 5 })} · {names[current - 1]}</> : names[4]}
               </span>
             </div>
+            {laterTo && <LaterLink to={laterTo} />}
             <div aria-hidden className="grid grid-cols-5 gap-1.5">
               {[1, 2, 3, 4, 5].map(n => (
                 <span key={n} className={cn('h-1 rounded-sm', n < current ? 'bg-success' : n === current ? 'bg-trace-blue' : 'bg-line')} />
@@ -145,11 +165,21 @@ function Frame({ step, children }: { step: Step; children: ReactNode }) {
                 )
               })}
             </ol>
+            {laterTo && <LaterLink to={laterTo} />}
           </div>
         )}
       </header>
       <main className="max-w-[1120px] mx-auto px-4 sm:px-6 py-6 sm:py-8">{children}</main>
     </div>
+  )
+}
+
+/** "Continue to your bazar" — leaves the wizard at any step (everything is on Get ready too). */
+function LaterLink({ to }: { to: string }) {
+  const { t } = useTranslation()
+  return (
+    <Link to={to} className="text-body font-semibold text-trace-blue hover:underline shrink-0 self-start sm:self-auto"
+          data-testid="bazar-setup-later">{t('bazar.wizard.later')}</Link>
   )
 }
 
@@ -601,8 +631,8 @@ function BarcodesStep({ eventId, picked, pieces, qty, labelsOn, setLabelsOn, non
 
 // ── Lower these → Done → Continue ────────────────────────────────────────────
 
-function LowerStep({ status, eventId, onDone }: {
-  status: BazarSetupStatus; eventId: string | null; onDone: (s: BazarSetupStatus) => void
+function LowerStep({ status, onDone }: {
+  status: BazarSetupStatus; onDone: (s: BazarSetupStatus) => void
 }) {
   const { t } = useTranslation()
   const b = status.batch
@@ -626,9 +656,236 @@ function LowerStep({ status, eventId, onDone }: {
       <div className="card p-4 sm:p-5">
         <LowerTheseList onDone={onDone} />
       </div>
-      {eventId && (
-        <Link to={`/bazar/${encodeURIComponent(eventId)}`} className="text-body text-muted hover:text-primary self-start"
-              data-testid="bazar-setup-later">{t('bazar.wizard.lower.later')}</Link>
+    </div>
+  )
+}
+
+// ── 4 Prices (B9c) ───────────────────────────────────────────────────────────
+
+function PricesStep({ eventId, leftAtMain, onNext }: { eventId: string; leftAtMain: number; onNext: () => void }) {
+  const { t, i18n } = useTranslation()
+  const lang = i18n.language
+  const phone = useIsPhone()
+  const [ev, setEv] = useState<BazarEventDetail | null>(null)
+  const [sending, setSending] = useState(leftAtMain > 0)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  // One request id per chunk of the batch: a retry after a lost answer re-sends the SAME id (nothing sent twice).
+  const [requestId, setRequestId] = useState(newRequestId)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setError(null)
+      try {
+        if (leftAtMain > 0 || attempt > 0) {
+          setSending(true)
+          let id = requestId
+          for (let i = 0; i < 50; i++) {
+            const r = await sendBazarSetupBatch(id)
+            if (cancelled) return
+            if (r.left <= 0 || r.sent === 0) break
+            id = newRequestId()
+            setRequestId(id)
+          }
+        }
+        const next = await getBazarEvent(eventId)
+        if (!cancelled) { setEv(next); setSending(false) }
+      } catch (e) {
+        if (cancelled) return
+        setSending(false)
+        setError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId, attempt])
+
+  if (error) {
+    return (
+      <div className="card p-5 flex flex-col gap-3 max-w-[640px]" data-testid="bazar-setup-send-error">
+        <p role="alert" className="text-body text-critical">{error}</p>
+        <button type="button" className={cn(btnPrimary, 'self-start')} onClick={() => setAttempt(a => a + 1)}
+                data-testid="bazar-setup-send-retry">{t('bazar.wizard.prices.retry')}</button>
+      </div>
+    )
+  }
+  if (sending || !ev) {
+    return (
+      <div className="flex items-center gap-3 text-body text-muted" data-testid="bazar-setup-sending">
+        <Loader2 className="animate-spin" aria-hidden />{t('bazar.wizard.prices.sending')}
+      </div>
+    )
+  }
+  return <PricesBody ev={ev} phone={phone} onNext={onNext} />
+}
+
+function PricesBody({ ev, phone, onNext }: { ev: BazarEventDetail; phone: boolean; onNext: () => void }) {
+  const { t } = useTranslation()
+  const prices = usePriceData(ev)
+  const totals = priceTotals(prices)
+  return (
+    <div className={cn('flex flex-col gap-5', phone && 'pb-24')} data-testid="bazar-setup-prices">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-h3 font-bold text-primary">{t('bazar.wizard.prices.title')}</h1>
+        <p className="text-body text-muted">{t('bazar.wizard.prices.sub', { count: ev.counts.sent })}</p>
+      </div>
+      <PricesCard ev={ev} data={prices} />
+      <Footer left={prices.rows && totals.missing > 0
+        ? t('bazar.r1.overview.sub.missing', { count: totals.missing })
+        : t('bazar.wizard.stepOf', { n: 4, total: 5 })}>
+        <button type="button" className={cn(btnPrimary, phone && 'w-full h-[52px]')} onClick={onNext}
+                data-testid="bazar-setup-next">
+          {t('bazar.wizard.prices.next')}<ArrowRight size={16} aria-hidden className="rtl:-scale-x-100" />
+        </button>
+      </Footer>
+    </div>
+  )
+}
+
+// ── 5 Ready (B9c) — Get ready's send and start, same calls and confirms ──────
+
+function ReadyStep({ eventId, onBack, onStarted }: { eventId: string; onBack: () => void; onStarted: () => void }) {
+  const { t, i18n } = useTranslation()
+  const lang = i18n.language
+  const phone = useIsPhone()
+  const [ev, setEv] = useState<BazarEventDetail | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [confirmSend, setConfirmSend] = useState(false)
+  const [busy, setBusy] = useState<'send' | 'start' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [changing, setChanging] = useState<OnlineStock | null>(null)
+  const [savingOnline, setSavingOnline] = useState(false)
+  const [onlineError, setOnlineError] = useState<string | null>(null)
+
+  const load = useCallback(() => getBazarEvent(eventId).then(setEv, e => {
+    setLoadError(e instanceof BazarError ? e.message_(lang) : t('bazar.loadFailed'))
+  }), [eventId, lang, t])
+  useEffect(() => { load() }, [load])
+
+  if (loadError) return <p role="alert" className="text-body text-critical">{loadError}</p>
+  if (!ev) return <Loader2 className="animate-spin text-muted" aria-label={t('bazar.wizard.loading')} />
+
+  const sent = ev.transfer_status === 'sent'
+  const preparing = ev.transfer_status === 'preparing'
+  const pieces = ev.counts.sent
+  const online: OnlineStock = ev.online_stock === 'leave' ? 'leave' : 'remove'
+
+  async function act(kind: 'send' | 'start') {
+    setBusy(kind)
+    setError(null)
+    try {
+      if (kind === 'send') {
+        setEv(await markBazarSent(eventId))
+      } else {
+        await startBazarEvent(eventId)
+        resetCapabilitiesCache()   // GET /me's bazarLive changes
+        onStarted()
+      }
+    } catch (e) {
+      setError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+      load()
+    } finally {
+      setBusy(null)
+      setConfirmSend(false)
+    }
+  }
+
+  async function saveOnline() {
+    if (!changing) return
+    setSavingOnline(true)
+    setOnlineError(null)
+    try {
+      setEv(await setBazarOnlineStock(eventId, changing))
+      setChanging(null)
+    } catch (e) {
+      setOnlineError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+    } finally {
+      setSavingOnline(false)
+    }
+  }
+
+  return (
+    <div className={cn('flex flex-col gap-5 max-w-[760px]', phone && 'pb-24')} data-testid="bazar-setup-ready">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-h3 font-bold text-primary">{t('bazar.wizard.ready.title')}</h1>
+        <p className="text-body text-muted">{sent ? t('bazar.start.ready') : t('bazar.r3.setup.sendHint')}</p>
+      </div>
+      <div className="card p-4 sm:p-5 flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <span className="flex flex-col me-auto min-w-0">
+            <span className="text-h4 font-bold text-primary" data-testid="bazar-setup-ready-pieces">
+              {t('bazar.r3.setup.ready', { count: pieces })}
+            </span>
+            <span className="text-small text-muted">{ev.name}</span>
+          </span>
+          <span className={cn('text-small font-semibold', sent ? 'text-success-text' : 'text-muted')}>
+            {sent ? t('bazar.transfer.sent') : t('bazar.transfer.preparing')}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 rounded-[10px] border border-line px-3 py-2.5" data-testid="bazar-online-row">
+          <span className="flex flex-col min-w-0 me-auto">
+            <span className="text-small text-muted">{t('bazar.online.row')}</span>
+            <span className="text-body font-semibold text-primary">{t(`bazar.online.${online}.title`)}</span>
+            <span className="text-small text-muted">
+              {ev.online_stock_locked ? t('bazar.online.locked') : t(`bazar.online.${online}.desc`)}
+            </span>
+          </span>
+          <OnlineStockTag mode={online} />
+          {!ev.online_stock_locked && (
+            <button type="button" className="text-body font-semibold text-trace-blue" data-testid="bazar-online-change"
+                    onClick={() => { setOnlineError(null); setChanging(online) }}>
+              {t('bazar.online.change')}
+            </button>
+          )}
+        </div>
+        {error && <p role="alert" className="text-body text-critical">{error}</p>}
+      </div>
+      <Footer left={t('bazar.wizard.stepOf', { n: 5, total: 5 })}>
+        {preparing && !phone && (
+          <button type="button" className={btnSecondary} onClick={onBack} data-testid="bazar-setup-back">
+            <ArrowLeft size={16} aria-hidden className="rtl:-scale-x-100" />{t('bazar.wizard.back')}
+          </button>
+        )}
+        {preparing && (
+          <button type="button" className={cn(btnPrimary, phone && 'w-full h-[52px]')} onClick={() => setConfirmSend(true)}
+                  disabled={pieces === 0 || busy === 'send'} data-testid="bazar-mark-sent">
+            {busy === 'send' && <Loader2 size={16} className="animate-spin" aria-hidden />}
+            {t('bazar.r3.setup.markSent', { count: pieces })}
+          </button>
+        )}
+        {sent && (
+          <button type="button" className={cn(btnPrimary, phone && 'w-full h-[52px]')} onClick={() => act('start')}
+                  disabled={busy === 'start'} data-testid="bazar-start">
+            {busy === 'start' && <Loader2 size={16} className="animate-spin" aria-hidden />}
+            {t('bazar.start.button')}
+          </button>
+        )}
+      </Footer>
+
+      {changing && (
+        <Modal title={t('bazar.online.dialogTitle')} onClose={() => setChanging(null)}>
+          <div className="flex flex-col gap-4" data-testid="bazar-online-dialog">
+            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change" />
+            {onlineError && <p role="alert" className="text-body text-critical">{onlineError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setChanging(null)}>{t('bazar.form.cancel')}</Button>
+              <Button onClick={saveOnline} loading={savingOnline}>{t('bazar.online.save')}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirmSend && (
+        <Modal title={t('bazar.transfer.confirmTitle')} onClose={() => setConfirmSend(false)}>
+          <p className="text-body text-primary" data-testid="bazar-send-confirm-body">
+            {t(online === 'leave' ? 'bazar.transfer.confirmBodyKeep' : 'bazar.transfer.confirmBody', { count: pieces })}
+          </p>
+          <div className="flex justify-end gap-2 mt-5">
+            <Button variant="secondary" onClick={() => setConfirmSend(false)}>{t('bazar.form.cancel')}</Button>
+            <Button onClick={() => act('send')} loading={busy === 'send'}>{t('bazar.transfer.markSent')}</Button>
+          </div>
+        </Modal>
       )}
     </div>
   )

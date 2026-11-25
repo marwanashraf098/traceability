@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Bazar B9c — the guided setup's last part: prices, send, start (2026-11-24; branch `feat/bazar-b9b` after B9b;
+no migration — main ends at V243 (U1b); merged to main 2026-11-26 after C1 + U1b, NOT deployed).** Same gate as B9b (`BazarSetupService.on`;
+flag off = nothing changes). After "Done, I lowered them" the wizard goes on instead of stopping:
+- **Put the batch on the send** — `POST /bazar-setup/send-batch {requestId}` (owner; 409 BAZAR_SETUP_NO_LIST without a
+  batch, BAZAR_SETUP_LOWER_FIRST before Done) → `BazarService.sendReceipts` (draft only; `ensurePrice` per size sent) →
+  NEW `TransferService.scanOutReceiptPiecesForBazar(transferId, receiptIds, actor, requestId)`: EXACTLY the batch's
+  pieces (both receipts — labelled and count-only) available at Traced Main and on no open transfer, oldest first, up to
+  `MAX_RECEIPT_MOVE` (1000) per call, each through the existing private `claimAndSend` (same writer as a scan and a send
+  by count); rows locked FOR UPDATE (waiting, never skipped) and a scan's concurrent claim rolls the whole call back;
+  retry-safe by request id (`metadata.by = 'receipt'`). Why not send by count: it picks the OLDEST pieces of a size at
+  Main, so older stock would go instead of the labelled pieces in hand. Nothing reaches Shopify here — the −N at Main is
+  still Mark sent's `claimSend` (Remove), none for Keep. `BazarTransferLockTest`'s one-caller guard now lists the new
+  entry point (BazarService only).
+- **Status** (`GET /bazar-setup` batch): `transferStatus`, `onSend`, `leftAtMain` (read-only counts over the batch's
+  receipts).
+- **Wizard** (`BazarSetupWizard`): 4 Prices — sends the batch (chunks, a new id per chunk; a failed call's Try again
+  re-sends the SAME id), then Get ready's `PricesCard` (bulk % / round / custom, unchanged); 5 Ready — the bazar's online
+  stock row with Change (Get ready's dialog, locked once sent), Mark as sent with Get ready's Remove / Keep confirm, then
+  Start → "Your bazar is live" → the live page. Resume from the server: not lowered → the list; lowered + draft + send
+  preparing → Prices (sends what's left, nothing if none); sent → Ready; live / ended → a new setup. "Continue to your
+  bazar" is a header link on every step once the bazar exists (replaces the Lower step's "I'll do it later" link).
+- **U1b:** Prices uses U1b's `PricesCard` (U1b changed it in place, same props — merging origin/main 1025baef was the switch; no restyle here).
+- Tests: BazarSetupSendTest (6: s1 exact pieces not older same-size stock + prices + no Shopify before sent + status;
+  s2 replay / only what's left; s3 LOWER_FIRST / NO_LIST; s4 Mark sent → claimSend row (Remove) / none (Keep), then
+  SEND_CLOSED / NOT_DRAFT; s5 gate 404 / 403 / other tenant; g2 claimAndSend has exactly three callers),
+  BazarSetupSendFlagOffTest (404, nothing moves), frontend bazarB9c (6); bazarB9b w1 now ends at Prices (approved);
+  PortalOrderLeakTest / ShadowOrderLeakTest registry: send-batch added to B9b's SKIP entry (approved). Full backend run:
+  4971 tests, only ExchangeBackfillTest red (allowed); frontend 265 files / 2236 tests green.
+  Revert-checked: backend R1–R5 (oldest-first, no ensurePrice, no lowered check, no replay, no draft check), frontend
+  F1–F5 (no send, no resume, no link, one confirm text, new id on retry).
+
 **Bazar U1b — smaller fixes from the 2026-11-22 E2E (2026-11-24; branch `feat/bazar-u1b` off origin/main 7403906b; V243;
 count gates MigrationSmokeTest 242 files, NotTracedBackfillTest 187; merged to main 2026-11-26, NOT deployed).** Per-bazar sale
 numbering was split out (own ticket).
@@ -218,8 +249,8 @@ owner's session, the sidebar kept "Owner", Close day got 403 and showed "You cou
   app_user (prod) the previous token is probably NOT revoked (refresh_tokens is under RLS). Worth a look.
 - **Before relying on it:** check on a real iPhone that WhatsApp keeps the `#token=` part when it makes the link
   tappable, and that prod `SHOPIFY_APP_URL` is exactly `https://app.tracedtech.com` (no trailing slash / path).
-**Bazar B9b — guided bazar setup for new signups (2026-11-23; branch `feat/bazar-b9b`; merged to main 2026-11-23, NOT deployed; no migration — V241 still the
-latest).** Only with `BAZAR_SIGNUP_ENABLED` on (prod: off) AND signup intent 'bazar' AND `tenants.bazar_enabled`
+**Bazar B9b — guided bazar setup for new signups (2026-11-23; branch `feat/bazar-b9b`; merged to main 2026-11-23, NOT deployed; no migration — main is at
+V242).** Only with `BAZAR_SIGNUP_ENABLED` on (prod: off) AND signup intent 'bazar' AND `tenants.bazar_enabled`
 (`BazarSetupService.on` — the one gate; GET /me `bazarSetup: true` only then, owner / manager). `/setup/bazar` → the
 wizard `/bazar/setup` (owner): 1 Your bazar (the normal create + B8's Remove / Keep pair) → 2 Pick products (catalog,
 steppers, "N in your other locations" = Shopify total − Traced Main, read-only `ShopifyVariantStockGateway`, no
@@ -227,7 +258,7 @@ transaction open, a failed read hides it) → 3 Barcodes (labels / no barcodes, 
 request, ONE transaction: a print_stick and a count_only receipt through `ReceivingService` createSession / addLine /
 finalize only — `BazarSetupNoStatusWriterGuardTest`; the existing receiving +N at Traced Main, nothing at any other
 Shopify location) → "Lower these at the location you took them from" (list + CSV + "Done, I lowered them") → Continue
-to your bazar (Get ready; prices + send stay there — B9c). The batch lives in `onboarding_prefs.bazarSetup`
+to your bazar (Get ready; prices + send were there until B9c, below). The batch lives in `onboarding_prefs.bazarSetup`
 ({eventId, requestId, labelledReceiptId, countOnlyReceiptId, pieces, receivedAt, loweredAt, loweredBy}), written only
 by `OnboardingProgressService.writeBazarSetup` (not a PATCH key); same requestId → same receipts; a new batch is refused
 (409 BAZAR_SETUP_LOWER_FIRST) until the last one is lowered; Done stamps once (audit `bazar_setup_lowered`). Reminders

@@ -420,6 +420,12 @@ public class TransferService {
 
 
     private String transferMeta(UUID transferId, String transferType, boolean viaPhone, String clientRequestId) {
+        return transferMeta(transferId, transferType, viaPhone, clientRequestId, "count");
+    }
+
+    /** {@code by}: how a retry-keyed send picked its pieces — "count" (B7d) or "receipt" (B9c). */
+    private String transferMeta(UUID transferId, String transferType, boolean viaPhone, String clientRequestId,
+                                String by) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         // "reason" the transition happened — the transfer's category (showroom/dryclean/
@@ -428,7 +434,7 @@ public class TransferService {
         m.put("reason", transferType);
         if (viaPhone) m.put("via", "phone");                 // Q1b
         if (clientRequestId != null) {                       // Bazar B7d: sent by count (the retry key)
-            m.put("by", "count");
+            m.put("by", by);
             m.put("client_request_id", clientRequestId);
         }
         return writeJson(m);
@@ -505,6 +511,103 @@ public class TransferService {
             qtyOut = c.qtyOut();
         }
         return CountResult.success(variantId, picked, qtyOut, false);
+    }
+
+    /** Most pieces one receipt send (B9c) moves per call; the rest stay at Main and a next call sends them. */
+    public static final int MAX_RECEIPT_MOVE = 1000;
+
+    /**
+     * Bazar B9c — the guided setup's "put the batch on the send": EXACTLY the pieces of the given receipts (labelled
+     * and count-only alike) that are available AT THE MAIN WAREHOUSE and on no open transfer, oldest first, up to
+     * {@link #MAX_RECEIPT_MOVE}. Never another piece of the same size (a send by count picks the oldest at Main — a
+     * different piece than the labelled one in hand). ONLY a bazar transfer, ONLY while it is preparing; ONE caller:
+     * BazarService. Each piece goes through the SAME claim-and-send as a scan and a send by count
+     * ({@link #claimAndSend}); nothing reaches Shopify here (the −N at Main is Mark sent's claimSend). All or
+     * nothing: the rows are locked (FOR UPDATE, waiting — never skipped), and a piece a concurrent scan claimed
+     * first (a scan doesn't lock the piece row) rolls the whole call back. Retry-safe: the {@code clientRequestId}
+     * is written into every send event's metadata under a per-request lock; the same id again returns the first
+     * result and sends nothing.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ReceiptSendResult scanOutReceiptPiecesForBazar(UUID transferId, List<UUID> receiptIds, UUID actorUserId,
+                                                          String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-receipt-out", clientRequestId);
+        List<UUID> receipts = receiptIds == null ? List.of() : receiptIds.stream().filter(Objects::nonNull).toList();
+        List<Map<String, Object>> done = jdbc.queryForList(
+            "SELECT pe.piece_id, p.variant_id FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id " +
+            "WHERE pe.tenant_id = ? AND pe.event_type = 'transferred_out' " +
+            "AND pe.metadata->>'client_request_id' = ? AND pe.metadata->>'transfer_id' = ? ORDER BY pe.id",
+            tenantId, clientRequestId, transferId.toString());
+        if (!done.isEmpty()) {
+            return ReceiptSendResult.success(done.stream().map(r -> (String) r.get("piece_id")).toList(),
+                distinctVariants(done), receiptPiecesLeft(tenantId, receipts), true);
+        }
+
+        Map<String, Object> transfer = shareBazarPreparing(transferId, tenantId);
+        if (transfer == null) return ReceiptSendResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found",
+            "لم يتم العثور على عملية النقل");
+        if (!"preparing".equals(transfer.get("status"))) {
+            CountResult closed = sendClosed();
+            return ReceiptSendResult.rejected(closed.code(), closed.messageEn(), closed.messageAr());
+        }
+        if (receipts.isEmpty()) return ReceiptSendResult.success(List.of(), List.of(), 0, false);
+        UUID main = fulfillmentLocationId(tenantId);
+        UUID destination = (UUID) transfer.get("destination_location_id");
+
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(receipts);
+        args.add(main);
+        args.add(MAX_RECEIPT_MOVE);
+        List<Map<String, Object>> picked = jdbc.queryForList(
+            "SELECT p.id, p.variant_id FROM pieces p WHERE p.tenant_id = ? " +
+            "AND p.receipt_id IN (" + placeholders(receipts.size()) + ") " +
+            "AND p.status = 'available' AND p.current_location_id = ? " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
+            "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF p",
+            args.toArray());
+        String meta = transferMeta(transferId, BAZAR_TYPE, false, clientRequestId, "receipt");
+        List<String> sent = new ArrayList<>();
+        for (Map<String, Object> row : picked) {
+            String pieceId = (String) row.get("id");
+            Claimed c = claimAndSend(tenantId, transferId, destination, pieceId, (UUID) row.get("variant_id"), main,
+                actorUserId, meta);
+            if (c == null) {
+                // A scan claimed one of these pieces in between — the transaction is aborted; roll everything back.
+                throw new TransferException(TransferException.Code.TRANSFER_SEND_CONFLICT,
+                    "The stock changed while sending — nothing was sent. Try again.",
+                    "تغيّر المخزون أثناء الإرسال — لم يُرسل شيء. حاول مرة أخرى.", HttpStatus.CONFLICT);
+            }
+            sent.add(pieceId);
+        }
+        return ReceiptSendResult.success(sent, distinctVariants(picked), receiptPiecesLeft(tenantId, receipts), false);
+    }
+
+    /** Pieces of these receipts still available at Main and on no open transfer (what a next receipt send would move). */
+    private int receiptPiecesLeft(UUID tenantId, List<UUID> receipts) {
+        if (receipts == null || receipts.isEmpty()) return 0;
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(receipts);
+        args.add(fulfillmentLocationId(tenantId));
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*)::int FROM pieces p WHERE p.tenant_id = ? " +
+            "AND p.receipt_id IN (" + placeholders(receipts.size()) + ") " +
+            "AND p.status = 'available' AND p.current_location_id = ? " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL)",
+            Integer.class, args.toArray());
+        return n == null ? 0 : n;
+    }
+
+    private static String placeholders(int n) {
+        return String.join(",", java.util.Collections.nCopies(n, "?"));
+    }
+
+    private static List<UUID> distinctVariants(List<Map<String, Object>> rows) {
+        Set<UUID> out = new LinkedHashSet<>();
+        for (Map<String, Object> r : rows) out.add((UUID) r.get("variant_id"));
+        return new ArrayList<>(out);
     }
 
     /**
@@ -1821,6 +1924,26 @@ public class TransferService {
         public CountResult withLabelledCodes(List<String> codes) {
             return new CountResult(success, code, messageEn, messageAr, variantId, count, available, pieceIds, qtyOut,
                 replayed, codes);
+        }
+    }
+
+    /** Bazar B9c — a receipt send: the pieces moved, the sizes they belong to, and how many of the receipts are left. */
+    public record ReceiptSendResult(
+            boolean success,
+            String  code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            List<String> pieceIds,
+            List<UUID> variantIds,
+            int     left,
+            boolean replayed) {
+
+        static ReceiptSendResult success(List<String> pieceIds, List<UUID> variantIds, int left, boolean replayed) {
+            return new ReceiptSendResult(true, "SENT", null, null, pieceIds, variantIds, left, replayed);
+        }
+
+        static ReceiptSendResult rejected(String code, String messageEn, String messageAr) {
+            return new ReceiptSendResult(false, code, messageEn, messageAr, List.of(), List.of(), 0, false);
         }
     }
 

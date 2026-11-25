@@ -6,6 +6,7 @@ import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.integrations.shopify.ShopifyVariantStockGateway;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.inventory.ReceivingService;
+import com.traceability.inventory.TransferService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -64,10 +66,12 @@ public class BazarSetupService {
     private final ShopifyTokenProvider tokens;
     private final ShopifyVariantStockGateway stockGateway;
     private final ObjectMapper mapper;
+    private final BazarService bazar;
 
     public BazarSetupService(JdbcTemplate jdbc, PlatformTransactionManager txm, BazarSignup signup,
                              ReceivingService receiving, OnboardingProgressService prefs, StoreRepository stores,
-                             ShopifyTokenProvider tokens, ShopifyVariantStockGateway stockGateway, ObjectMapper mapper) {
+                             ShopifyTokenProvider tokens, ShopifyVariantStockGateway stockGateway, ObjectMapper mapper,
+                             BazarService bazar) {
         this.jdbc = jdbc;
         this.readTx = new TransactionTemplate(txm);
         this.readTx.setReadOnly(true);
@@ -78,6 +82,7 @@ public class BazarSetupService {
         this.tokens = tokens;
         this.stockGateway = stockGateway;
         this.mapper = mapper;
+        this.bazar = bazar;
     }
 
     // ── Gate ─────────────────────────────────────────────────────────────────
@@ -129,6 +134,20 @@ public class BazarSetupService {
         v.put("receivedAt", b.get("receivedAt"));
         v.put("lowered", b.get("loweredAt") != null);
         v.put("loweredAt", b.get("loweredAt"));
+        // B9c — where the batch's pieces are now: on this bazar's send, still at Main to send, and the send's status.
+        List<UUID> receipts = receiptsOf(b);
+        List<Map<String, Object>> tr = eventId == null ? List.of() : jdbc.queryForList(
+            "SELECT t.id, t.status FROM bazar_events e JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id " +
+            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+        UUID transferId = tr.isEmpty() ? null : (UUID) tr.get(0).get("id");
+        v.put("transferStatus", tr.isEmpty() ? null : tr.get(0).get("status"));
+        v.put("onSend", transferId == null ? 0 : batchCount(tenantId, receipts,
+            "EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.tenant_id = p.tenant_id " +
+            "AND tp.transfer_id = ?)", transferId));
+        v.put("leftAtMain", batchCount(tenantId, receipts,
+            "p.status = 'available' AND p.current_location_id = (SELECT id FROM locations l WHERE l.tenant_id = p.tenant_id " +
+            "AND l.is_fulfillment) AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL)",
+            null));
         return v;
     }
 
@@ -417,6 +436,51 @@ public class BazarSetupService {
             prefs.writeBazarSetup(actorUserId, next, "bazar_setup_lowered");
         }
         return status(owner);
+    }
+
+    // ── B9c: put the batch on the bazar's send ───────────────────────────────
+
+    /**
+     * "Next: prices" after Done — the batch's pieces still at Main go on the bazar's send through
+     * BazarService.sendReceipts (the existing claim-and-send; nothing here moves a piece). Only once the batch was
+     * lowered (409 BAZAR_SETUP_LOWER_FIRST before). The same {@code requestId} again sends nothing more; {@code left}
+     * &gt; 0 means a next call (a new request id) sends the rest.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> sendBatch(String requestId, UUID actorUserId, boolean owner) {
+        UUID tenantId = requireOn();
+        if (requestId == null || requestId.isBlank() || requestId.length() > 100) {
+            throw invalid("Missing request id.", "معرّف الطلب مفقود.");
+        }
+        Map<String, Object> b = readBatch(tenantId, false);
+        if (b == null) throw noList();
+        if (b.get("loweredAt") == null) {
+            throw new BazarException(BazarException.Code.BAZAR_SETUP_LOWER_FIRST,
+                "Lower these at the location you took them from first, then send them to the bazar.",
+                "خفّض هذه القطع في الموقع الذي أخذتها منه أولًا، ثم أرسلها إلى البازار.", HttpStatus.CONFLICT);
+        }
+        UUID eventId = uuid(b.get("eventId"));
+        if (eventId == null) throw noList();
+        TransferService.ReceiptSendResult r = bazar.sendReceipts(eventId, receiptsOf(b), requestId, actorUserId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sent", r.pieceIds().size());
+        out.put("left", r.left());
+        out.put("replayed", r.replayed());
+        out.put("status", status(owner));
+        return out;
+    }
+
+    private int batchCount(UUID tenantId, List<UUID> receipts, String where, Object extra) {
+        if (receipts.isEmpty()) return 0;
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(receipts);
+        if (extra != null) args.add(extra);
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*)::int FROM pieces p WHERE p.tenant_id = ? AND p.receipt_id IN (" +
+            String.join(",", Collections.nCopies(receipts.size(), "?")) + ") AND " + where,
+            Integer.class, args.toArray());
+        return n == null ? 0 : n;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

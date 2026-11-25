@@ -19,7 +19,7 @@ import { StationProvider } from '../components/StationProvider'
  *   o1 off (GET /me without bazarSetup): no /bazar-setup request anywhere; /bazar/setup → /bazar; no card, no line;
  *      /setup/bazar stays the B9a placeholder
  *   w1 the whole flow: Your bazar (+ online stock pair) → Pick (other locations, steppers) → Barcodes (mix) → receive
- *      (one request, labels per product) → Lower these (rows, CSV, print) → Done → Continue to your bazar
+ *      (one request, labels per product) → Lower these (rows, CSV, print) → Done → Prices (B9c) → Continue to your bazar
  *   w2 resume: a received batch opens at its list; a remembered draft bazar opens at Pick
  *   w3 a failed receive keeps the same request id on the next try
  *   w4 count-only pieces are listed exactly like labelled ones ("One size", quantity)
@@ -198,8 +198,13 @@ function wizardHandlers(state: { batch: Record<string, unknown> | null; failRece
     on('GET', '/bazar-setup/lower', () => json(200, LOWER)),
     on('GET', '/bazar-setup/lower.csv', () => json(200, 'csv')),
     on('POST', '/bazar-setup/lower-done', () => {
-      state.batch = batch({ lowered: true, loweredAt: '2026-11-21T11:00:00Z' })
+      state.batch = batch({ lowered: true, loweredAt: '2026-11-21T11:00:00Z', transferStatus: 'preparing', onSend: 0, leftAtMain: 6 })
       return json(200, { on: true, canSetUp: true, batch: state.batch })
+    }),
+    // B9c: after Done the wizard puts the batch on the bazar's send, then Prices.
+    on('POST', '/bazar-setup/send-batch', () => {
+      state.batch = { ...state.batch, onSend: 6, leftAtMain: 0 }
+      return json(200, { sent: 6, left: 0, replayed: false, status: { on: true, canSetUp: true, batch: state.batch } })
     }),
     on('GET', `/receiving/sessions/rc-l/labels`, () => json(200, 'pdf')),
     ...eventHandlers(),
@@ -275,11 +280,12 @@ describe('w the wizard', () => {
     await waitFor(() => expect(calls.some(c => c.url.endsWith('/receiving/sessions/rc-l/labels'))).toBe(true))
     expect(window.open).toHaveBeenCalled()
 
-    // Done → Continue to your bazar.
+    // Done → Prices (B9c: the batch goes on the bazar's send first) → Continue to your bazar.
     await user.click(screen.getByTestId('bazar-lower-done'))
-    expect(await screen.findByTestId('bazar-setup-done')).toBeInTheDocument()
+    expect(await screen.findByTestId('bazar-setup-prices')).toBeInTheDocument()
     expect(calls.filter(c => c.url.endsWith('/bazar-setup/lower-done'))).toHaveLength(1)
-    await user.click(screen.getByTestId('bazar-setup-continue'))
+    expect(calls.filter(c => c.url.endsWith('/bazar-setup/send-batch'))).toHaveLength(1)
+    await user.click(screen.getByTestId('bazar-setup-later'))
     expect(await screen.findByTestId('where')).toHaveTextContent(`/bazar/${EV}`)
   })
 
