@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Loader2, Minus, Plus, X } from 'lucide-react'
-import { BazarError, removeFromSendOnce, sendByCountOnce } from '../../bazar/api'
+import { BazarError, removeFromSendOnce, sendByCountOnce, type BazarCountResult } from '../../bazar/api'
 import {
-  getBazarSendStock, sizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
+  getBazarSendStock, productSizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../bazar/catalog'
 import { sellErrorText } from '../../bazar/format'
 import { useRetryingCommand, type CommandState } from '../../bazar/useRetryingCommand'
@@ -74,7 +74,8 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
   const [qty, setQty] = useState(1)
   const [confirming, setConfirming] = useState(false)
   const [sent, setSent] = useState<number | null>(null)
-  const cmd = useRetryingCommand<{ count: number }>()
+  const [collect, setCollect] = useState<string[]>([])
+  const cmd = useRetryingCommand<BazarCountResult>()
 
   const reload = useCallback(() => getBazarSendStock(eventId)
     .then(s => { setStock(s); setStockFailed(false); return s })
@@ -92,6 +93,7 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
   useEffect(() => {
     if (cmd.state.kind !== 'done') return
     setSent(cmd.state.result.count)
+    setCollect(cmd.state.result.labelled_codes ?? [])
     setPicked(null)
     setQty(1)
     setConfirming(false)
@@ -137,7 +139,7 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-body font-medium text-primary truncate" data-testid="send-by-count-size">
-                {picked.product.title} · {sizeName(picked.product, picked.size)}
+                {productSizeName(picked.product, picked.size)}
               </p>
               <p className="text-small text-muted" data-testid="send-by-count-numbers">
                 {t('bazar.count.atMain', { count: atMain })}
@@ -167,6 +169,13 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
           {t('bazar.count.sent', { count: sent })}
         </p>
       )}
+      {/* U1b: labelled pieces Traced picked — collect exactly these (another label of the same size won't sell). */}
+      {sent != null && cmd.state.kind === 'done' && collect.length > 0 && (
+        <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2" data-testid="send-by-count-collect">
+          <p className="text-small font-semibold text-warning-text">{t('bazar.u1b.count.collect', { count: collect.length })}</p>
+          <p className="font-mono text-body text-primary break-words" dir="ltr">{collect.join(' · ')}</p>
+        </div>
+      )}
       {stockFailed && <p role="alert" className="text-small text-danger">{t('bazar.count.loadFailed')}</p>}
 
       {picking && (
@@ -186,20 +195,34 @@ export function RemoveCount({ eventId, variantId, max, onRemoved }: {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [qty, setQty] = useState(1)
-  const cmd = useRetryingCommand<{ count: number }>()
+  const [removed, setRemoved] = useState<{ count: number; codes: string[] } | null>(null)
+  const cmd = useRetryingCommand<BazarCountResult>()
 
   useEffect(() => {
     if (cmd.state.kind !== 'done') return
     setOpen(false)
     setQty(1)
+    // U1b: say which pieces came off — a labelled one by its code, so the right piece goes back on the shelf.
+    setRemoved({ count: cmd.state.result.count, codes: cmd.state.result.labelled_codes ?? [] })
     onRemoved()
   }, [cmd.state]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) {
     return (
-      <Button variant="tertiary" size="sm" onClick={() => { cmd.reset(); setOpen(true) }}>
-        {t('bazar.count.remove')}
-      </Button>
+      <div className="flex flex-col items-end gap-1">
+        <Button variant="tertiary" size="sm" onClick={() => { cmd.reset(); setRemoved(null); setOpen(true) }}>
+          {t('bazar.count.remove')}
+        </Button>
+        {removed && (
+          <p role="status" className="text-small text-primary text-end whitespace-normal max-w-[260px]" data-testid="remove-count-done">
+            {removed.codes.length > 0
+              ? <>{t('bazar.u1b.count.removedCodes', { count: removed.codes.length })}{' '}
+                  <span dir="ltr" className="font-mono font-semibold">{removed.codes.join(' · ')}</span>
+                  {' — '}{t('bazar.u1b.count.putBack', { count: removed.codes.length })}</>
+              : t('bazar.u1b.count.removedUnlabelled', { count: removed.count })}
+          </p>
+        )}
+      </div>
     )
   }
   return (
@@ -230,7 +253,7 @@ export function RemoveScanButton({ eventId, code, onRemoved, onError }: {
   onError: (e: BazarError) => void
 }) {
   const { t } = useTranslation()
-  const cmd = useRetryingCommand<{ count: number }>()
+  const cmd = useRetryingCommand<BazarCountResult>()
   useEffect(() => {
     if (cmd.state.kind === 'done') onRemoved()
     if (cmd.state.kind === 'error') onError(cmd.state.error)

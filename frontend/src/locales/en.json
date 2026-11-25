@@ -6730,6 +6730,52 @@
       "closeTransferToFinish": "Close the transfer to finish",
       "finishEvent": "Finish the event"
     },
+    "u1b": {
+      "online": {
+        "wholeLocation": "This choice is for the whole location — every bazar held there uses it.",
+        "wholeLocationNamed": "Applies to every bazar at {{location}}.",
+        "openBlocking": "Open “{{name}}”"
+      },
+      "setup": {
+        "sendHintKeep": "Mark them as sent when they leave the warehouse — your online stock doesn't change."
+      },
+      "delete": {
+        "button": "Delete bazar",
+        "title": "Delete “{{name}}”?",
+        "body": "Nothing was scanned out for it yet. It's removed from your bazars and its transfer is cancelled. This can't be undone.",
+        "confirm": "Delete bazar"
+      },
+      "prices": {
+        "applied": "Applied −{{pct}}%",
+        "discountHint": "Type a discount, then Apply.",
+        "needed": "A price is needed. Still {{price}}.",
+        "wholePounds": "Use whole pounds, 0 or more."
+      },
+      "count": {
+        "collect_one": "Collect this labelled piece:",
+        "collect_other": "Collect these {{count}} labelled pieces:",
+        "removedCodes_one": "Removed",
+        "removedCodes_other": "Removed {{count}}:",
+        "putBack_one": "put this one back.",
+        "putBack_other": "put these back.",
+        "removedUnlabelled_one": "Removed 1 piece without a label.",
+        "removedUnlabelled_other": "Removed {{count}} pieces without a label."
+      },
+      "sell": {
+        "scanLabelled": "{{name}}: scan the piece in the customer's hand — the ones left have labels."
+      },
+      "report": {
+        "exportOrders": "Export orders (CSV)",
+        "downloadPdf": "Download PDF",
+        "noSizes": "These products have no sizes."
+      },
+      "close": {
+        "notCounted": "Not counted",
+        "typeToSee": "Type what you counted to see the difference."
+      },
+      "backToSelling": "Back to selling",
+      "backToSellingClose": "Hide"
+    },
     "online": {
       "title": "Online stock",
       "sub": "What happens to these pieces in your Shopify store while they're at the bazar.",

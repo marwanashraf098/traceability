@@ -7,7 +7,7 @@ import {
   currentUserId, getBazarLeftovers, getBazarReport, getBazarToday, isReceipt, listBazarDays, listBazarSales, orderedMethods,
   type BazarDays, type BazarEventDetail, type BazarLeftovers, type BazarReport, type BazarSaleRow, type BazarTodaySummary,
 } from '../../../bazar/api'
-import { eventDay, pieceTitle, saleTime, toNumber, transferCode } from '../../../bazar/format'
+import { eventDay, pieceTitle, saleTime, toNumber, transferCode, variantName } from '../../../bazar/format'
 import { Spinner, cn } from '../../../components/ui'
 import { QrCode } from '../../../phone/PhonePairModal'
 import { SaleBadge } from '../phone/SaleSheets'
@@ -381,7 +381,7 @@ function SalesTable({ ev, rows }: { ev: BazarEventDetail; rows: BazarSaleRow[] }
                   <span className={cn('font-semibold text-primary', s.status === 'undone' && 'line-through text-muted')}>{s.product_title}</span>
                   {(s.status !== 'active' || s.exchange_of_sale_number) && <Badge sale={s} />}
                 </span>
-                {s.variant_title && <span className="block text-small text-muted">{s.variant_title}</span>}
+                {variantName(s.variant_title) && <span className="block text-small text-muted">{variantName(s.variant_title)}</span>}
                 <span className="sm:hidden block text-small text-muted">{s.seller_name}{s.method ? ` · ${t(`bazar.method.${s.method}`)}` : ''}</span>
               </td>
               <td className="tbl-cell text-small text-muted hidden sm:table-cell">{s.seller_name}</td>

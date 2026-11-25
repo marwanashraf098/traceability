@@ -41,11 +41,13 @@ public class BazarCatalogService {
     }
 
     /** One size of a product group. */
-    public record Size(UUID variantId, String title, String size, BigDecimal price, int left) {}
+    /** {@code unlabelled}: U1b — of {@code left}, the pieces with no label (short code); null when the view has no such count. */
+    public record Size(UUID variantId, String title, String size, BigDecimal price, int left, Integer unlabelled) {}
 
     /** A product + colour group with its number. */
+    /** {@code colourAxis}: U1b — the Shopify option name(s) of the colour part ("Colour", "Material"), else null. */
     public record Group(Integer number, UUID productId, String title, String colour, String imageUrl, String category,
-                        List<Size> sizes) {
+                        List<Size> sizes, String colourAxis) {
         int left() { return sizes.stream().mapToInt(Size::left).sum(); }
     }
 
@@ -84,6 +86,8 @@ public class BazarCatalogService {
                 m.put("size", s.size());
                 m.put("price", s.price() == null ? null : s.price().setScale(2));
                 m.put("left", s.left());
+                // U1b: a tap sells an unlabelled piece first; 0 here with left > 0 → the screen asks for a scan.
+                if (s.unlabelled() != null) m.put("left_unlabelled", s.unlabelled());
                 if (committed != null) m.put("committed", committed.getOrDefault(s.variantId(), 0L));
                 sizes.add(m);
             }
@@ -109,7 +113,7 @@ public class BazarCatalogService {
             "SELECT e.id, e.name, e.status, e.seller_roles, e.transfer_id, e.starts_on::text AS starts_on, " +
             "       e.ends_on::text AS ends_on, l.name AS location_name " +
             "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
-            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+            "WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL", eventId, tenantId);
         if (evs.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
@@ -129,7 +133,7 @@ public class BazarCatalogService {
             "SELECT e.id, e.name, e.status, e.seller_roles, e.transfer_id, e.starts_on::text AS starts_on, " +
             "       e.ends_on::text AS ends_on, l.name AS location_name " +
             "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
-            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+            "WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL", eventId, tenantId);
     }
 
     private Catalog build(UUID tenantId, UUID eventId, Map<String, Object> ev) {
@@ -139,12 +143,15 @@ public class BazarCatalogService {
             "       pr.product_type_norm AS category, bp.price, " +
             "       (SELECT count(*) FROM transfer_pieces tp JOIN pieces pc ON pc.id = tp.piece_id AND pc.tenant_id = tp.tenant_id " +
             "         WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL " +
-            "           AND pc.status = 'out_on_transfer' AND pc.variant_id = v.id)::int AS left_count " +
+            "           AND pc.status = 'out_on_transfer' AND pc.variant_id = v.id)::int AS left_count, " +
+            "       (SELECT count(*) FROM transfer_pieces tp JOIN pieces pc ON pc.id = tp.piece_id AND pc.tenant_id = tp.tenant_id " +
+            "         WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL " +
+            "           AND pc.status = 'out_on_transfer' AND pc.variant_id = v.id AND pc.short_code IS NULL)::int AS left_unlabelled " +
             "FROM variants v JOIN products pr ON pr.id = v.product_id AND pr.tenant_id = v.tenant_id " +
             "LEFT JOIN bazar_event_prices bp ON bp.event_id = ? AND bp.variant_id = v.id AND bp.tenant_id = v.tenant_id " +
             "WHERE v.tenant_id = ? AND v.id IN (" + BazarService.shownVariantsSql() + ") " +
             "ORDER BY pr.title, pr.id, v.title, v.id",
-            ev.get("transfer_id"), tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
+            ev.get("transfer_id"), tenantId, ev.get("transfer_id"), tenantId, eventId, tenantId, eventId, tenantId, eventId, tenantId);
 
         Map<String, Group> byKey = groupRows(rows);
         List<Group> groups = new ArrayList<>();
@@ -152,7 +159,7 @@ public class BazarCatalogService {
         for (Map.Entry<String, Group> e : byKey.entrySet()) {
             Group g = e.getValue();
             groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
-                g.category(), g.sizes()));
+                g.category(), g.sizes(), g.colourAxis()));
         }
         groups.sort(Comparator.comparing((Group g) -> g.number() == null ? Integer.MAX_VALUE : g.number())
             .thenComparing(Group::title, String.CASE_INSENSITIVE_ORDER));
@@ -178,13 +185,15 @@ public class BazarCatalogService {
                     (String) r.get("variant_raw"))).toList();
             Map<UUID, ExchangeOptions.ColourSize> split =
                 ExchangeOptions.colourAndSize(members, (String) family.get(0).get("product_raw"));
+            String colourAxis = ExchangeOptions.colourAxisName(members, (String) family.get(0).get("product_raw"));
             Map<String, List<Size>> sizesByColour = new LinkedHashMap<>();
             for (Map<String, Object> r : family) {
                 ExchangeOptions.ColourSize cs = split.get((UUID) r.get("variant_id"));
                 String colourKey = cs.colour() == null ? "" : cs.colour();
                 sizesByColour.computeIfAbsent(colourKey, k -> new ArrayList<>()).add(new Size(
                     (UUID) r.get("variant_id"), (String) r.get("variant_title"), cs.size(),
-                    (BigDecimal) r.get("price"), ((Number) r.get("left_count")).intValue()));
+                    (BigDecimal) r.get("price"), ((Number) r.get("left_count")).intValue(),
+                    r.get("left_unlabelled") == null ? null : ((Number) r.get("left_unlabelled")).intValue()));
             }
             Map<String, Object> head = family.get(0);
             for (Map.Entry<String, List<Size>> e : sizesByColour.entrySet()) {
@@ -192,7 +201,7 @@ public class BazarCatalogService {
                 sizes.sort(SIZE_ORDER);
                 Group g = new Group(null, (UUID) head.get("product_id"), (String) head.get("product_title"),
                     e.getKey().isEmpty() ? null : e.getKey(), (String) head.get("image_url"),
-                    blankToNull((String) head.get("category")), sizes);
+                    blankToNull((String) head.get("category")), sizes, colourAxis);
                 byKey.put(key(g.productId(), e.getKey()), g);
             }
         }
@@ -214,7 +223,7 @@ public class BazarCatalogService {
             "SELECT e.id, e.name, e.status, e.discount_pct, e.round_to, e.starts_on::text AS starts_on, " +
             "       e.ends_on::text AS ends_on, l.name AS location_name " +
             "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
-            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+            "WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL", eventId, tenantId);
         if (evs.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
@@ -253,7 +262,7 @@ public class BazarCatalogService {
         for (Map.Entry<String, Group> e : byKey.entrySet()) {
             Group g = e.getValue();
             groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
-                g.category(), g.sizes()));
+                g.category(), g.sizes(), g.colourAxis()));
         }
         groups.sort(Comparator.comparing(Group::title, String.CASE_INSENSITIVE_ORDER)
             .thenComparing(g -> g.colour() == null ? "" : g.colour(), String.CASE_INSENSITIVE_ORDER));
@@ -275,7 +284,7 @@ public class BazarCatalogService {
             "SELECT e.id, e.name, e.status, e.seller_roles, e.transfer_id, e.starts_on::text AS starts_on, " +
             "       e.ends_on::text AS ends_on, l.name AS location_name " +
             "FROM bazar_events e LEFT JOIN locations l ON l.id = e.location_id AND l.tenant_id = e.tenant_id " +
-            "WHERE e.id = ? AND e.tenant_id = ?", eventId, tenantId);
+            "WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL", eventId, tenantId);
         if (evs.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
@@ -306,7 +315,7 @@ public class BazarCatalogService {
         for (Map.Entry<String, Group> e : byKey.entrySet()) {
             Group g = e.getValue();
             groups.add(new Group(numbers.get(e.getKey()), g.productId(), g.title(), g.colour(), g.imageUrl(),
-                g.category(), g.sizes()));
+                g.category(), g.sizes(), g.colourAxis()));
         }
         groups.sort(Comparator.comparing((Group g) -> g.number() == null ? Integer.MAX_VALUE : g.number())
             .thenComparing(Group::title, String.CASE_INSENSITIVE_ORDER));

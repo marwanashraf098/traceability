@@ -7166,6 +7166,68 @@
       "closeTransferToFinish": "أغلق النقل لإنهاء البازار",
       "finishEvent": "إنهاء البازار"
     },
+    "u1b": {
+      "online": {
+        "wholeLocation": "هذا الاختيار للموقع كله — كل بازار يُقام هناك يستخدمه.",
+        "wholeLocationNamed": "ينطبق على كل بازار في {{location}}.",
+        "openBlocking": "افتح «{{name}}»"
+      },
+      "setup": {
+        "sendHintKeep": "أكّد الإرسال عند خروجها من المستودع — مخزونك أونلاين لا يتغيّر."
+      },
+      "delete": {
+        "button": "حذف البازار",
+        "title": "حذف «{{name}}»؟",
+        "body": "لم تُخرج أي قطعة له بعد. سيُحذف من بازاراتك وتُلغى عملية النقل الخاصة به. لا يمكن التراجع عن ذلك.",
+        "confirm": "حذف البازار"
+      },
+      "prices": {
+        "applied": "تم تطبيق −{{pct}}%",
+        "discountHint": "اكتب نسبة الخصم، ثم اضغط تطبيق.",
+        "needed": "السعر مطلوب. ما زال {{price}}.",
+        "wholePounds": "استخدم جنيهات كاملة، 0 أو أكثر."
+      },
+      "count": {
+        "collect_zero": "اجمع هذه القطع المُلصقة:",
+        "collect_one": "اجمع هذه القطعة المُلصقة:",
+        "collect_two": "اجمع هاتين القطعتين المُلصقتين:",
+        "collect_few": "اجمع هذه القطع المُلصقة ({{count}}):",
+        "collect_many": "اجمع هذه القطع المُلصقة ({{count}}):",
+        "collect_other": "اجمع هذه القطع المُلصقة ({{count}}):",
+        "removedCodes_zero": "تم حذف:",
+        "removedCodes_one": "تم حذف",
+        "removedCodes_two": "تم حذف قطعتين:",
+        "removedCodes_few": "تم حذف {{count}}:",
+        "removedCodes_many": "تم حذف {{count}}:",
+        "removedCodes_other": "تم حذف {{count}}:",
+        "putBack_zero": "أرجعها.",
+        "putBack_one": "أرجع هذه القطعة.",
+        "putBack_two": "أرجعهما.",
+        "putBack_few": "أرجعها.",
+        "putBack_many": "أرجعها.",
+        "putBack_other": "أرجعها.",
+        "removedUnlabelled_zero": "لم تُحذف أي قطعة.",
+        "removedUnlabelled_one": "تم حذف قطعة بدون ملصق.",
+        "removedUnlabelled_two": "تم حذف قطعتين بدون ملصق.",
+        "removedUnlabelled_few": "تم حذف {{count}} قطع بدون ملصق.",
+        "removedUnlabelled_many": "تم حذف {{count}} قطعة بدون ملصق.",
+        "removedUnlabelled_other": "تم حذف {{count}} قطعة بدون ملصق."
+      },
+      "sell": {
+        "scanLabelled": "{{name}}: امسح القطعة التي في يد العميل — القطع المتبقية عليها ملصقات."
+      },
+      "report": {
+        "exportOrders": "تصدير الطلبات (CSV)",
+        "downloadPdf": "تنزيل PDF",
+        "noSizes": "هذه المنتجات ليس لها مقاسات."
+      },
+      "close": {
+        "notCounted": "لم يُعد",
+        "typeToSee": "اكتب ما عددته لترى الفرق."
+      },
+      "backToSelling": "العودة إلى البيع",
+      "backToSellingClose": "إخفاء"
+    },
     "online": {
       "title": "المخزون الأونلاين",
       "sub": "ماذا يحدث لهذه القطع في متجرك على Shopify أثناء وجودها في البازار.",

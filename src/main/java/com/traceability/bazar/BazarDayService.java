@@ -478,7 +478,7 @@ public class BazarDayService {
 
     private Map<String, Object> event(UUID tenantId, UUID eventId, String lock) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT e.id, e.status, e.payment_methods FROM bazar_events e WHERE e.id = ? AND e.tenant_id = ?" + lock,
+            "SELECT e.id, e.status, e.payment_methods FROM bazar_events e WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL" + lock,
             eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,

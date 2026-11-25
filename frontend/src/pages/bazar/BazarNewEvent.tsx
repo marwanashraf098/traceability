@@ -8,7 +8,9 @@ import { listLocations, type LocationRow } from '../../api'
 import {
   BazarError, createBazarEvent, METHOD_ORDER, type OnlineStock, type PaymentMethod, type SellerRole,
 } from '../../bazar/api'
-import { OnlineStockCards, OnlineStockPhonePair } from './OnlineStock'
+import {
+  BlockingBazarLink, OnlineStockCards, OnlineStockPhonePair, OnlineStockWholeLocation, blockingBazar,
+} from './OnlineStock'
 import { Button, Input, Modal, cn } from '../../components/ui'
 import RangeCalendar from './r1/RangeCalendar'
 import { cairoToday, dayCount, daysFrom } from './r1/overviewState'
@@ -117,6 +119,7 @@ export default function BazarNewEvent() {
   const [online, setOnline] = useState<OnlineStock>('remove')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [blocking, setBlocking] = useState<{ id: string; name: string } | null>(null)
   const [whereOpen, setWhereOpen] = useState(false)
 
   useEffect(() => {
@@ -132,6 +135,7 @@ export default function BazarNewEvent() {
   async function submit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    setBlocking(null)
     if (!name.trim()) { setError(t('bazar.form.nameRequired')); return }
     if (where === 'new' && locationName.trim().length < 3) { setError(t('bazar.form.locationRequired')); return }
     if (where === 'existing' && !locationId) { setError(t('bazar.form.pickLocation')); return }
@@ -151,6 +155,7 @@ export default function BazarNewEvent() {
       navigate(`/bazar/${ev.id}`)
     } catch (err) {
       setError(err instanceof BazarError ? err.message_(i18n.language) : t('bazar.saveFailed'))
+      setBlocking(blockingBazar(err))
     } finally {
       setSaving(false)
     }
@@ -237,7 +242,12 @@ export default function BazarNewEvent() {
     ? <p className="text-small text-muted" data-testid="bazar-remove-note">{t('bazar.form.removeNote')}</p>
     : <p className="text-small text-muted" data-testid="bazar-keep-note">{t('bazar.online.keepNote')}</p>
 
-  const errorLine = error && <p role="alert" className="text-body text-critical">{error}</p>
+  const errorLine = error && (
+    <div className="flex flex-col gap-1">
+      <p role="alert" className="text-body text-critical">{error}</p>
+      <BlockingBazarLink bazar={blocking} />
+    </div>
+  )
   const createLabel = t('bazar.r1.form.create')
 
   if (phone) {
@@ -277,6 +287,7 @@ export default function BazarNewEvent() {
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2"><Eyebrow>{t('bazar.online.title')}</Eyebrow></legend>
           <OnlineStockPhonePair value={online} onChange={setOnline} />
+          <OnlineStockWholeLocation />
           <span className="text-small text-muted">{t(`bazar.online.${online}.desc`)}</span>
         </fieldset>
         {removeNote}
@@ -342,6 +353,7 @@ export default function BazarNewEvent() {
       </div>
       <Section n={5} title={t('bazar.online.title')} sub={t('bazar.online.sub')}>
         <OnlineStockCards value={online} onChange={setOnline} />
+        <OnlineStockWholeLocation />
       </Section>
 
       {errorLine}

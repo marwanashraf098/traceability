@@ -101,27 +101,39 @@ public class BazarReportService {
         }
         out.put("sales_by_day", byDay);
 
-        // Busiest hours: every sale made (undone ones never happened; a cart is one sale), by its Cairo hour, all days.
-        int[] hours = new int[24];
+        // Busiest hours (U1b): sales that STAYED sold (status active — undone, returned and exchanged-back ones are
+        // left out; a cart is one sale while one of its lines is kept), and the pieces they kept, by Cairo hour, all
+        // days. Every hour from the first sale's hour to the last one's is listed (0 when quiet), so one busy hour isn't
+        // a lone bar — the bazar's open hours, as its sales show them.
+        int[] hours = new int[24], hourPieces = new int[24];
+        int firstHour = 24, lastHour = -1;
         for (Map<String, Object> r : jdbc.queryForList(
                 "SELECT EXTRACT(HOUR FROM s.sold_at AT TIME ZONE 'Africa/Cairo')::int AS h, " +
-                "       COUNT(DISTINCT COALESCE(s.receipt_id, s.id)) AS n " +
-                "FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status <> 'undone' GROUP BY 1",
+                "       COUNT(DISTINCT COALESCE(s.receipt_id, s.id)) AS n, COUNT(*) AS pieces " +
+                "FROM bazar_sales s WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' GROUP BY 1",
                 eventId, tenantId)) {
-            hours[((Number) r.get("h")).intValue()] = ((Number) r.get("n")).intValue();
+            int h = ((Number) r.get("h")).intValue();
+            hours[h] = ((Number) r.get("n")).intValue();
+            hourPieces[h] = ((Number) r.get("pieces")).intValue();
+            firstHour = Math.min(firstHour, h);
+            lastHour = Math.max(lastHour, h);
         }
         List<Map<String, Object>> busiest = new ArrayList<>();
-        for (int h = 0; h < 24; h++) {
-            if (hours[h] == 0) continue;
+        for (int h = firstHour; h <= lastHour; h++) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("hour", h);
             row.put("sales", hours[h]);
+            row.put("pieces", hourPieces[h]);
             busiest.add(row);
         }
         out.put("busiest_hours", busiest);
 
         out.put("top_products", top(tenantId, eventId, (UUID) ev.get("transfer_id"), false));
         out.put("top_sizes", top(tenantId, eventId, (UUID) ev.get("transfer_id"), true));
+        // U1b: products sent that sold nothing ("0 of N" under What sold), and whether any product sent has sizes —
+        // when none has, Top sizes says so instead of "No sales yet".
+        out.put("unsold_products", unsold(tenantId, eventId, (UUID) ev.get("transfer_id")));
+        out.put("has_sizes", hasSizes(tenantId, (UUID) ev.get("transfer_id")));
 
         // Payment split: money in per method and its share of the total.
         Map<String, BigDecimal> byMethod = (Map<String, BigDecimal>) totals.get("by_method");
@@ -201,6 +213,37 @@ public class BazarReportService {
         return out;
     }
 
+    /** Products with pieces sent on the bazar's transfer and no sale kept: title, sent. By title. */
+    private List<Map<String, Object>> unsold(UUID tenantId, UUID eventId, UUID transferId) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT pr.title AS product_title, COUNT(*) AS sent FROM transfer_pieces tp " +
+                "JOIN pieces p ON p.id = tp.piece_id JOIN variants v ON v.id = p.variant_id " +
+                "JOIN products pr ON pr.id = v.product_id WHERE tp.transfer_id = ? AND tp.tenant_id = ? " +
+                "AND NOT EXISTS (SELECT 1 FROM bazar_sales s JOIN variants sv ON sv.id = s.variant_id " +
+                "  WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' AND sv.product_id = pr.id) " +
+                "GROUP BY pr.id, pr.title ORDER BY pr.title, pr.id",
+                transferId, tenantId, eventId, tenantId)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("product_title", r.get("product_title"));
+            row.put("sold", 0);
+            row.put("sent", ((Number) r.get("sent")).intValue());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /** Any variant sent on the transfer has a real size / option name (not Shopify's "Default Title"). */
+    private boolean hasSizes(UUID tenantId, UUID transferId) {
+        for (String t : jdbc.queryForList(
+                "SELECT DISTINCT v.title FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id " +
+                "JOIN variants v ON v.id = p.variant_id WHERE tp.transfer_id = ? AND tp.tenant_id = ?",
+                String.class, transferId, tenantId)) {
+            if (variantTitle(t) != null) return true;
+        }
+        return false;
+    }
+
     /** From each day's CURRENT close: cash short / over, card short / over, InstaPay not received, and the total. */
     private Map<String, Object> notReceived(UUID tenantId, UUID eventId, List<Map<String, Object>> byDay) {
         Map<String, Object> r = jdbc.queryForMap(
@@ -260,6 +303,90 @@ public class BazarReportService {
         return csv.toString();
     }
 
+    // ── Report PDF (U1b, page 1) ─────────────────────────────────────────────
+
+    /**
+     * The report's page 1 as an A4 PDF ({@link BazarReportPdf}): the same report and day list numbers, plus "below
+     * Shopify prices" = Σ (Shopify price − net price) over the pieces still sold where the bazar sold below Shopify.
+     * Owner / manager only (the report's own check). No customer data on it, so no audit row.
+     */
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public byte[] reportPdf(UUID eventId, BazarSaleService.Actor actor, String lang) {
+        Map<String, Object> r = report(eventId, actor);
+        UUID tenantId = BazarEndService.requireManagerTenant(jdbc, actor);
+        Map<String, Object> ev = event(tenantId, eventId);
+        List<Map<String, Object>> dayRows = (List<Map<String, Object>>) days.days(eventId, actor).get("days");
+        BigDecimal below = jdbc.queryForObject(
+            "SELECT COALESCE(SUM(GREATEST(v.price - s.net_price, 0)), 0) FROM bazar_sales s " +
+            "JOIN variants v ON v.id = s.variant_id WHERE s.event_id = ? AND s.tenant_id = ? AND s.status = 'active' " +
+            "AND v.price IS NOT NULL", BigDecimal.class, eventId, tenantId);
+        String transferCode = "TR-" + ev.get("transfer_id").toString().replace("-", "").substring(0, 6).toUpperCase();
+        return BazarReportPdf.pdf(new BazarReportPdf.Data(r, dayRows,
+            BazarSaleService.toList(ev.get("payment_methods")), below, transferCode), lang);
+    }
+
+    // ── Orders CSV (U1b) ─────────────────────────────────────────────────────
+
+    /**
+     * One row per piece sold at the event (a cart line is a row with its receipt's number): number, day, time, seller,
+     * product, variant (never "Default Title"), SKU, piece code, bazar price, discount, net, payment method, status
+     * (sold / returned / exchanged), customer name and phone. Undone sales never happened — left out. Owner / manager
+     * only; audit-logged (bazar_orders_export), like the customers export.
+     */
+    @Transactional
+    public String ordersCsv(UUID eventId, BazarSaleService.Actor actor) {
+        UUID tenantId = BazarEndService.requireManagerTenant(jdbc, actor);
+        event(tenantId, eventId);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT COALESCE(s.sale_number, rc.receipt_number) AS number, s.business_day, s.sold_at, u.name AS seller, " +
+            "       pr.title AS product, v.title AS variant, v.sku, pc.short_code AS piece_code, s.price, s.discount, " +
+            "       s.net_price, s.status, s.customer_name, s.customer_phone, " +
+            "       EXISTS (SELECT 1 FROM bazar_sales xn WHERE xn.exchange_of_sale_id = s.id AND xn.tenant_id = s.tenant_id) AS exchanged, " +
+            "       (SELECT bp.method FROM bazar_payments bp WHERE bp.tenant_id = s.tenant_id " +
+            "          AND (bp.sale_id = s.id OR bp.receipt_id = s.receipt_id) AND bp.kind = 'payment' " +
+            "        ORDER BY EXISTS (SELECT 1 FROM bazar_payments x WHERE x.voids_payment_id = bp.id), " +
+            "                 bp.created_at DESC, bp.id DESC LIMIT 1) AS method " +
+            "FROM bazar_sales s JOIN users u ON u.id = s.sold_by JOIN pieces pc ON pc.id = s.piece_id " +
+            "JOIN variants v ON v.id = s.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN bazar_receipts rc ON rc.id = s.receipt_id AND rc.tenant_id = s.tenant_id " +
+            "WHERE s.event_id = ? AND s.tenant_id = ? AND s.status <> 'undone' " +
+            "ORDER BY s.sold_at, COALESCE(s.line_no, 0), s.id", eventId, tenantId);
+        StringBuilder csv = new StringBuilder(
+            "number,day,time,seller,product,variant,sku,piece,price,discount,net,method,status,customer_name,customer_phone\n");
+        DateTimeFormatter hm = DateTimeFormatter.ofPattern("HH:mm");
+        for (Map<String, Object> r : rows) {
+            Object sa = r.get("sold_at");
+            OffsetDateTime at = sa instanceof OffsetDateTime o ? o : ((Timestamp) sa).toInstant().atOffset(java.time.ZoneOffset.UTC);
+            String status = "active".equals(r.get("status")) ? "sold"
+                : Boolean.TRUE.equals(r.get("exchanged")) ? "exchanged" : "returned";
+            csv.append(String.format("B-%04d", ((Number) r.get("number")).intValue())).append(',')
+               .append(r.get("business_day")).append(',')
+               .append(at.atZoneSameInstant(CAIRO).format(hm)).append(',')
+               .append(cell((String) r.get("seller"))).append(',')
+               .append(cell((String) r.get("product"))).append(',')
+               .append(cell(variantTitle((String) r.get("variant")))).append(',')
+               .append(cell((String) r.get("sku"))).append(',')
+               .append(cell((String) r.get("piece_code"))).append(',')
+               .append(money(r.get("price"))).append(',')
+               .append(money(r.get("discount"))).append(',')
+               .append(money(r.get("net_price"))).append(',')
+               .append(cell((String) r.get("method"))).append(',')
+               .append(status).append(',')
+               .append(cell((String) r.get("customer_name"))).append(',')
+               .append(cell((String) r.get("customer_phone"))).append('\n');
+        }
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("event_id", eventId.toString());
+        meta.put("rows", rows.size());
+        audit.record(actor.userId(), "bazar_orders_export", "bazar_event", eventId.toString(), meta);
+        return csv.toString();
+    }
+
+    private static String money(Object v) {
+        return v == null ? "0.00" : ((BigDecimal) v).setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
     /** RFC 4180 quoting, and a leading ' on anything a spreadsheet would run as a formula. */
     static String cell(String v) {
         if (v == null) return "";
@@ -281,7 +408,7 @@ public class BazarReportService {
             "       e.location_id, e.payment_methods, l.name AS location_name, " +
             "       COALESCE(t.shopify_sync_mode, l.shopify_sync_mode) AS online_stock " +
             "FROM bazar_events e JOIN locations l ON l.id = e.location_id " +
-            "JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id WHERE e.id = ? AND e.tenant_id = ?",
+            "JOIN transfers t ON t.id = e.transfer_id AND t.tenant_id = e.tenant_id WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL",
             eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,

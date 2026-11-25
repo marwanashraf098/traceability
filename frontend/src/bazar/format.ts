@@ -33,8 +33,18 @@ export function liveLabel(t: TFunction, day: number, count: number): string {
   return day >= 1 && day <= count ? t('bazar.status.liveDay', { day, count }) : t('bazar.status.live')
 }
 
+/**
+ * U1b: a variant's name as shown — null for Shopify's "Default Title" (a product without sizes / options) and for
+ * blanks, so no screen shows "· Default Title" or a lone "—" for it.
+ */
+export function variantName(title: string | null | undefined): string | null {
+  const v = title?.trim()
+  return !v || v.toLowerCase() === 'default title' ? null : v
+}
+
 export function pieceTitle(s: Pick<BazarSale, 'product_title' | 'variant_title'>): string {
-  return s.variant_title ? `${s.product_title} · ${s.variant_title}` : s.product_title
+  const v = variantName(s.variant_title)
+  return v ? `${s.product_title} · ${v}` : s.product_title
 }
 
 /** "TR-1A2B3C" — a short handle for the event's transfer (transfers have no number of their own). */

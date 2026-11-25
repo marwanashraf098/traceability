@@ -107,6 +107,27 @@ public class ExchangeOptions {
         return out;
     }
 
+    /**
+     * Bazar U1b — the Shopify option name(s) of {@link #colourAndSize}'s colour part for ONE product: the names of its
+     * non-size axes joined " / " ("Colour", "Material"), null when the product has no such axis or no stored names.
+     */
+    public static String colourAxisName(List<FamilyMember> members, String productRawJson) {
+        JsonNode productRaw = parse(productRawJson);
+        List<Variant> family = new ArrayList<>();
+        for (FamilyMember m : members) {
+            family.add(new Variant(m.id(), m.title(), values(parse(m.rawJson()), m.title()), productRaw));
+        }
+        List<String> names = new ArrayList<>();
+        boolean sizeTaken = false;
+        for (Map<String, Object> a : axes(family)) {
+            if ("size".equals(a.get("kind")) && !sizeTaken) { sizeTaken = true; continue; }
+            Object n = a.get("name");
+            if (n == null || n.toString().isBlank()) return null;
+            names.add(n.toString().trim());
+        }
+        return names.isEmpty() ? null : String.join(" / ", names);
+    }
+
     /** Option values of one variant: REST option1..3 when stored, else the title split on " / ". */
     static List<String> values(JsonNode raw, String title) {
         List<String> out = new ArrayList<>();

@@ -13,7 +13,7 @@ import {
 import { useCapabilities } from '../capabilities'
 import TransferCollectList from './putaway/TransferCollectList'
 import { bazarScanOut, type BazarError } from '../bazar/api'
-import { sellErrorText } from '../bazar/format'
+import { sellErrorText, variantName } from '../bazar/format'
 import { RemoveCount, RemoveScanButton, SendByCountPanel } from './bazar/SendByCount'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
@@ -194,7 +194,7 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
                   {transfer.lines.map(line => (
                     <tr key={line.id} className="tbl-row">
                       <td className="tbl-cell text-primary">
-                        {line.product_title} · {line.variant_title}
+                        {line.product_title}{variantName(line.variant_title) && ` · ${variantName(line.variant_title)}`}
                         {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
                       </td>
                       <td className="tbl-cell text-end font-mono text-h3 text-primary">{line.qty_out}</td>

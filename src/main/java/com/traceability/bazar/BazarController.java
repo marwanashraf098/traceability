@@ -53,6 +53,13 @@ public class BazarController {
         return bazar.get(eventId);
     }
 
+    /** U1b — delete a draft bazar that nothing was ever scanned out for (soft delete; its transfer is cancelled). */
+    @DeleteMapping("/{eventId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable UUID eventId, @AuthenticationPrincipal CustomUserDetails principal) {
+        bazar.delete(eventId, principal.userId());
+    }
+
     @PostMapping("/{eventId}/scan-out")
     public TransferService.ScanOutResult scanOut(@PathVariable UUID eventId, @RequestBody ScanRequest req,
                                                  @AuthenticationPrincipal CustomUserDetails principal) {

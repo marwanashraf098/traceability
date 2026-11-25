@@ -905,6 +905,41 @@ public class TransferService {
         }
     }
 
+    /**
+     * Bazar U1b: preparing → cancelled for a DRAFT bazar that is being deleted — the same "never scanned" rule as
+     * {@link #cancel} (transfer_pieces is checked after the lock; a removed-from-send piece leaves a removed_from_transfer
+     * piece event, so the piece history is checked too: once anything was scanned out, the bazar can't be deleted).
+     * ONE caller: BazarService.delete.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void cancelForBazar(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        if (!BAZAR_TYPE.equals(transfer.get("transfer_type"))) throw transferNotFound();
+        String status = (String) transfer.get("status");
+        if (!"preparing".equals(status)) throw transferNotPreparing(status);
+        if (piecesEverScanned(transferId, tenantId) > 0 || everScannedOut(transferId, tenantId)) {
+            throw new TransferException(TransferException.Code.TRANSFER_HAS_PIECES,
+                "Pieces were scanned out for this bazar, so it can't be deleted.",
+                "تم إخراج قطع لهذا البازار، لذلك لا يمكن حذفه.",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'cancelled', cancelled_at = now(), cancelled_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'preparing'",
+            actorUserId, transferId, tenantId);
+        if (rows == 0) throw statusRaceConflict();
+    }
+
+    /** Any piece ever scanned onto this transfer — including ones taken back off the send (their rows are deleted). */
+    private boolean everScannedOut(UUID transferId, UUID tenantId) {
+        Boolean b = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = ? " +
+            "  AND pe.event_type IN ('transferred_out', 'removed_from_transfer') AND pe.metadata->>'transfer_id' = ?)",
+            Boolean.class, tenantId, transferId.toString());
+        return Boolean.TRUE.equals(b);
+    }
+
     // ── Reconcile: begin ─────────────────────────────────────────────────────
 
     /**
@@ -1769,14 +1804,23 @@ public class TransferService {
             int     available,
             List<String> pieceIds,
             int     qtyOut,
-            boolean replayed) {
+            boolean replayed,
+            // Bazar U1b: the label codes (short codes) of the moved pieces that carry one, so the bazar screen can name
+            // the pieces to collect / put back. Null — left out of the JSON — everywhere else.
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @JsonProperty("labelled_codes") List<String> labelledCodes) {
 
         static CountResult success(UUID variantId, List<String> pieceIds, int qtyOut, boolean replayed) {
-            return new CountResult(true, "SENT", null, null, variantId, pieceIds.size(), 0, pieceIds, qtyOut, replayed);
+            return new CountResult(true, "SENT", null, null, variantId, pieceIds.size(), 0, pieceIds, qtyOut, replayed, null);
         }
 
         static CountResult rejected(String code, String messageEn, String messageAr, int available) {
-            return new CountResult(false, code, messageEn, messageAr, null, 0, available, List.of(), 0, false);
+            return new CountResult(false, code, messageEn, messageAr, null, 0, available, List.of(), 0, false, null);
+        }
+
+        public CountResult withLabelledCodes(List<String> codes) {
+            return new CountResult(success, code, messageEn, messageAr, variantId, count, available, pieceIds, qtyOut,
+                replayed, codes);
         }
     }
 

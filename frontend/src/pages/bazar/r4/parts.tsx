@@ -348,7 +348,7 @@ export function PieceCard({ catalog, variantId, title, code, line, price, onClea
       <div className="flex-1 min-w-0 flex flex-col">
         <span className="font-semibold text-primary truncate text-start" dir="auto">{title}</span>
         {code && <span className="text-small text-muted font-mono" dir="ltr">{code}</span>}
-        <span className="text-small text-muted truncate">{line}</span>
+        <span className="text-small text-muted whitespace-normal break-words">{line}</span>
       </div>
       <span className="text-h4 font-bold tabular-nums shrink-0" dir="ltr">
         {price == null ? '—' : amount(price)}

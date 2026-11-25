@@ -73,6 +73,8 @@ export interface BazarEventDetail extends BazarEventRow {
   today: BazarToday
   /** The whole event (B3). */
   totals?: BazarTotals
+  /** U1b: a draft whose transfer is preparing and never had a piece scanned out — Delete is offered. */
+  deletable?: boolean
 }
 
 export interface BazarPriceRow {
@@ -300,6 +302,8 @@ export interface BazarCountResult {
   pieceIds: string[]
   qtyOut: number
   replayed: boolean
+  /** U1b: the label codes of the moved pieces that carry one (what to collect / put back). */
+  labelled_codes?: string[]
 }
 
 /** B7d — send `quantity` of a size; Traced picks the pieces at Main. One attempt; retried with the SAME request id. */
@@ -320,6 +324,11 @@ export function removeFromSendOnce(eventId: string, what: { code: string } | { v
   return bazarFetch<BazarCountResult>(`${base(eventId)}/remove-from-send`, {
     method: 'POST', timeoutMs, body: JSON.stringify(body),
   })
+}
+
+/** U1b — delete a draft bazar nothing was ever scanned out for (204). */
+export function deleteBazarEvent(eventId: string) {
+  return bazarFetch<null>(base(eventId), { method: 'DELETE' })
 }
 
 export function markBazarSent(eventId: string) {
@@ -744,7 +753,12 @@ export interface BazarReport {
   exchanges: number
   sales_by_day: { business_day: string; day_number: number; sales: number; revenue: Money2; money_in: Money2;
                   status: BazarDayStatus }[]
-  busiest_hours: { hour: number; sales: number }[]
+  /** U1b: kept sales only, every hour from the first sale's to the last one's (0 when quiet). */
+  busiest_hours: { hour: number; sales: number; pieces?: number }[]
+  /** U1b: products sent that sold nothing. */
+  unsold_products?: { product_title: string; sold: number; sent: number }[]
+  /** U1b: false when no product sent has sizes. */
+  has_sizes?: boolean
   top_products: { product_title: string; sold: number; sent: number; sell_through: Money2 | null; revenue: Money2 }[]
   top_sizes: { product_title: string; variant_title: string; sold: number; sent: number; sell_through: Money2 | null;
                revenue: Money2 }[]
@@ -762,7 +776,21 @@ export function getBazarReport(eventId: string) {
 
 /** The customers CSV (owner / manager; audit-logged) — downloaded as a file. */
 export async function downloadBazarCustomers(eventId: string, fileName: string) {
-  const res = await authFetch(`${base(eventId)}/report/customers.csv`)
+  return downloadBazarFile(`${base(eventId)}/report/customers.csv`, fileName)
+}
+
+/** U1b — the orders CSV (every piece sold; audit-logged). */
+export async function downloadBazarOrders(eventId: string, fileName: string) {
+  return downloadBazarFile(`${base(eventId)}/report/orders.csv`, fileName)
+}
+
+/** U1b — the report PDF (page 1: money by day, by payment method, pieces sold per hour). */
+export async function downloadBazarReportPdf(eventId: string, fileName: string, lang: string) {
+  return downloadBazarFile(`${base(eventId)}/report.pdf?lang=${encodeURIComponent(lang)}`, fileName)
+}
+
+async function downloadBazarFile(path: string, fileName: string) {
+  const res = await authFetch(path)
   if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)

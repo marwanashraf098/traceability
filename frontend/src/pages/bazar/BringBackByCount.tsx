@@ -6,7 +6,7 @@ import {
   type BazarLeftovers, type BazarScanBackResult,
 } from '../../bazar/api'
 import {
-  getBazarBringBackStock, sizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
+  getBazarBringBackStock, productSizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../bazar/catalog'
 import { useRetryingCommand } from '../../bazar/useRetryingCommand'
 import { cn } from '../../components/ui'
@@ -74,7 +74,7 @@ export function BringBackByCountPanel({ eventId, leftovers, onDone }: {
           <div className="flex items-start justify-between gap-3">
             <span className="flex flex-col min-w-0">
               <span className="font-semibold text-primary truncate" data-testid="bring-back-size">
-                {picked.product.title} · {sizeName(picked.product, picked.size)}
+                {productSizeName(picked.product, picked.size)}
               </span>
               <span className="text-small text-muted" data-testid="bring-back-out">{t('bazar.bringBack.out', { count: out })}</span>
             </span>
