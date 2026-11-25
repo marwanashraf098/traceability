@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Incident 2026-11-25 — the per-order freeze check saturated the DB (20:00–23:00 Cairo: 365 slow queries, 27
+timeouts, watchdog restart 22:46). Branch `fix/order-frozen-check-perf`; no migration.**
+- **Root cause (generic-plan tenant poisoning):** Postgres estimates the RLS predicate `tenant_id =
+  NULLIF(current_setting('app.current_tenant'))::uuid` with the tenant that is current WHEN THE PLAN IS MADE (prod
+  EXPLAIN: 3,701 rows for the tenant set). pgjdbc server-prepares after 5 runs and Postgres caches a generic plan per
+  connection; built while a tenant with ~no rows (or no tenant) was current, it believes "the tenant has 1 row", turns
+  each correlated EXISTS of `OrderLineFreeze.frozenSql` into a `hashed SubPlan` over an uncorrelated scan of the
+  WHOLE tenant (shipments / history, pieces, piece_events — prod's auto_explain shows exactly that), and is then
+  reused for the biggest tenant. Local repro (PG 16, 106k orders / 860k piece events, app_user): 56.9 s / 9.8M
+  buffers; through pgjdbc on one connection 50.6 s.
+- **Callers (one call per save each, no in-transaction repeats — nothing cached):** `ShopifySyncService` webhook
+  upsert + import upsert (`isFrozen`), `TrackingChanges.lockAndCheckFrozen` (GenericShipments.decide on a tracking
+  edit; BostaRelink.attempt, one tx per unlinked row), FulfillService unpack (`isFrozen`, + clauses 1–2) and
+  `hasEverShippedPastCreated` (every scan / complete — clause 1 alone, same risk).
+- **Fix:** single-order readers in `OrderLineFreeze` — `isFrozen`, `hasShippedPastCreated`, `hasLeftCustody` — that
+  (a) have no correlated sublink: MATERIALIZED CTEs keyed on the order (`legs` = shipments by order_id, `alloc` =
+  order_items by order_id → allocations), history / pieces / piece_events by those keys; clause 1 reads "a forward
+  leg has a history row not in created / cancelled / terminated" (equal to movementRowSql's reading); (b) run
+  UNPREPARED (`OrderLineFreeze.unprepared`: pgjdbc `setPrepareThreshold(0)`, reflective — pgjdbc is runtime scope),
+  so each call is planned with its own values and the current tenant. (a) alone still went tenant-wide under a
+  poisoned generic plan (139 ms / 55k buffers) — (b) is what makes it impossible. `frozenSql` (set-based readers:
+  ExceptionService, OrderReopen, PackListService, ShopifyShadowOrders) is unchanged and stays THE rule.
+- **Numbers (largest local tenant, app_user):** old custom 0.12 ms / 58 buf, generic same-tenant 0.13 ms / 58, poisoned
+  56.9 s / 9.8M; new custom 0.13 ms / 42 buf (not frozen; 14 frozen), generic same-tenant 0.12 ms / 42, and the
+  poisoned case can't occur (never prepared). Old vs new on all 106,500 local orders: 0 differences, 0.31 ms avg.
+- Test `OrderFrozenSingleOrderTest`: old frozenSql vs new on every branch (history moved / created only / cancelled
+  never moved / terminated after moving / dead leg + moved leg / return leg only / packed-delivered / packed-packed /
+  released / event on own forward leg / NULL shipment / own return leg / another order's leg / another order's
+  event / return-intake only / portal pre-connect / shadow / no order), wrong tenant id → false, app_user RLS own /
+  other context, and pg_prepared_statements never holds the readers on a pooled connection (control: an ordinary
+  statement is prepared).
+- **Follow-up (not done):** every other app_user statement has the same poisoning exposure (any generic plan made
+  under a small tenant). Candidates: `ALTER ROLE app_user SET plan_cache_mode = force_custom_plan`, or pgjdbc
+  `prepareThreshold=0` on the app pool URL — both trade planning CPU for safety; measure before choosing.
+
 **Bazar C1 — one aim of the camera = one scan; camera hidden on a computer (2026-11-24; branch `feat/bazar-c1` off
 origin/main 7403906b; frontend only, no migration; pushed, NOT merged, NOT deployed).** Prod 2026-11-22 (E2E Bazae):
 one aim sold P000056 then P000055 0.8 s apart. Cause: CameraReader passes every decode on (native: every barcode of a

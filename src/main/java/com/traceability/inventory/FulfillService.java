@@ -1530,13 +1530,8 @@ public class FulfillService {
                 "Order " + n + " is being cancelled. Unpack its pieces from the cancellation on Pick & Pack instead.",
                 "الطلب " + n + " قيد الإلغاء. فُكّ قطعه من شاشة الإلغاء في التجهيز والتغليف بدلاً من ذلك.");
         }
-        Boolean leftCustody = jdbc.queryForObject(
-            "SELECT " + OrderLineFreeze.shippedPastCreatedSql("?", "?") + " OR EXISTS (" +
-            "  SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id JOIN pieces p ON p.id = a.piece_id " +
-            "  WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status = 'packed' " +
-            "    AND p.status::text IN (" + OrderLineFreeze.leftCustodySqlList() + "))",
-            Boolean.class, orderId, tenantId, orderId, tenantId);
-        if (Boolean.TRUE.equals(leftCustody)) {
+        // Clauses 1 + 2 of OrderLineFreeze, single-order form (incident 2026-11-25: never a tenant-wide plan).
+        if (OrderLineFreeze.hasLeftCustody(jdbc, orderId, tenantId)) {
             throw new UnpackOrderException(UnpackOrderException.Code.LEFT_CUSTODY,
                 "Order " + n + " has already left with the courier. It can't be unpacked.",
                 "الطلب " + n + " خرج بالفعل مع شركة الشحن. لا يمكن فكّه.");
@@ -1729,10 +1724,7 @@ public class FulfillService {
         "This exchange ended in Shopify — there is nothing left to pack";
 
     private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {
-        Boolean exists = jdbc.queryForObject(
-            "SELECT " + OrderLineFreeze.shippedPastCreatedSql("?", "?"),
-            Boolean.class, orderId, tenantId);
-        return Boolean.TRUE.equals(exists);
+        return OrderLineFreeze.hasShippedPastCreated(jdbc, orderId, tenantId);
     }
 
     /**
