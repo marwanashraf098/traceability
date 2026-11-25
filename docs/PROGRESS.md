@@ -5,7 +5,7 @@
 ## Current state
 
 **Bazar B9c — the guided setup's last part: prices, send, start (2026-11-24; branch `feat/bazar-b9b` after B9b;
-no migration — main at V242, U1b takes V243; NOT merged, NOT deployed).** Same gate as B9b (`BazarSetupService.on`;
+no migration — main ends at V243 (U1b); merged to main 2026-11-26 after C1 + U1b, NOT deployed).** Same gate as B9b (`BazarSetupService.on`;
 flag off = nothing changes). After "Done, I lowered them" the wizard goes on instead of stopping:
 - **Put the batch on the send** — `POST /bazar-setup/send-batch {requestId}` (owner; 409 BAZAR_SETUP_NO_LIST without a
   batch, BAZAR_SETUP_LOWER_FIRST before Done) → `BazarService.sendReceipts` (draft only; `ensurePrice` per size sent) →
@@ -25,7 +25,7 @@ flag off = nothing changes). After "Done, I lowered them" the wizard goes on ins
   Start → "Your bazar is live" → the live page. Resume from the server: not lowered → the list; lowered + draft + send
   preparing → Prices (sends what's left, nothing if none); sent → Ready; live / ended → a new setup. "Continue to your
   bazar" is a header link on every step once the bazar exists (replaces the Lower step's "I'll do it later" link).
-- **U1b:** Prices uses `PricesCard` as it is on main; rebase onto U1b's version once it lands (no restyle here).
+- **U1b:** Prices uses U1b's `PricesCard` (U1b changed it in place, same props — merging origin/main 1025baef was the switch; no restyle here).
 - Tests: BazarSetupSendTest (6: s1 exact pieces not older same-size stock + prices + no Shopify before sent + status;
   s2 replay / only what's left; s3 LOWER_FIRST / NO_LIST; s4 Mark sent → claimSend row (Remove) / none (Keep), then
   SEND_CLOSED / NOT_DRAFT; s5 gate 404 / 403 / other tenant; g2 claimAndSend has exactly three callers),
@@ -34,6 +34,123 @@ flag off = nothing changes). After "Done, I lowered them" the wizard goes on ins
   4971 tests, only ExchangeBackfillTest red (allowed); frontend 265 files / 2236 tests green.
   Revert-checked: backend R1–R5 (oldest-first, no ensurePrice, no lowered check, no replay, no draft check), frontend
   F1–F5 (no send, no resume, no link, one confirm text, new id on retry).
+
+**Bazar U1b — smaller fixes from the 2026-11-22 E2E (2026-11-24; branch `feat/bazar-u1b` off origin/main 7403906b; V243;
+count gates MigrationSmokeTest 242 files, NotTracedBackfillTest 187; merged to main 2026-11-26, NOT deployed).** Per-bazar sale
+numbering was split out (own ticket).
+- **Delete a draft bazar (V243, soft delete):** `bazar_events.deleted_at / deleted_by` (CHECK: draft only; pair). `DELETE
+  /api/v1/bazar-events/{id}` (owner / manager) → `BazarService.delete`: draft + transfer preparing (else 409
+  BAZAR_CANT_DELETE / BAZAR_EVENT_NOT_DRAFT) → `TransferService.cancelForBazar` (ONE caller; the generic cancel's "never
+  scanned" rule PLUS any `transferred_out` / `removed_from_transfer` piece event of the transfer — a piece taken back off
+  the send still blocks; 422 TRANSFER_HAS_PIECES). Every bazar read filters `deleted_at IS NULL` (list, every per-event
+  lookup → 404, `Bazar.liveFor`, `unsentBazarsAt`, the clash lookup, seller invite join, TURNS_OFF_SQL, setup wizard
+  reads). Detail adds `deletable`. Leak registries: SKIP. Not done: sellers "Add seller"-created for a deleted draft stay
+  active (no event to remove them from).
+- **Online-stock clash** names the bazar in the way: `BazarOnlineStock.conflict(jdbc, tenant, location, except)` →
+  details {blocking_event_id, blocking_event_name}, message says the choice applies to the whole location (also from
+  Settings › Locations). Screens link to it; the online-stock row / dialog / New bazar say it's per location.
+- **Typed price equal to the rule's price keeps the rule's source** (`setOverride`: equal to `BazarPricing.forVariant`
+  → 'bulk' / 'default', else 'override'). Oxygen on the test store (2026-11-22 21:17, E2E Bazae, rule −20 % / 5,
+  Shopify 1025 → 820): the row was saved by hand as 'override' at 820 = the rule's own price; its cart sale copied it.
+- **Grid tap prefers unlabelled pieces** (`pickPiece` ORDER BY short_code IS NOT NULL first). Catalog sizes carry
+  `left_unlabelled` (event catalog only); `needsScan` (left > 0, 0 unlabelled) → the Sell screen asks for a scan of the
+  piece in hand (existing scan input; `pickOrAsk` sits OUTSIDE BazarSell's R4-hashed routing block — that block and every
+  scanner / camera file are unchanged).
+- **Send by count / Remove from this send** return `labelled_codes` (CountResult, NON_NULL — generic transfers
+  byte-identical): "Collect these: P… · P…" / "Removed P000057 — put this one back."
+- **Report:** busiest hours = kept sales only (status active), every hour first → last (0s included), + `pieces`;
+  `unsold_products` ("0/N" rows under What sold); `has_sizes` ("These products have no sizes."); names wrap.
+  `GET …/report/orders.csv` (one row per piece sold, undone left out, audit `bazar_orders_export`) and `GET
+  …/report.pdf?lang=` (`BazarReportPdf`, page 1 only: tiles incl. "below Shopify prices", money by day, by method × day,
+  close notes, pieces per hour). Page 2 of V2_ReportPDF not built.
+- **Price sheet:** colour column named after the products' shared Shopify option (`ExchangeOptions.colourAxisName`),
+  else "Variant"; colour / sizes columns hidden when empty (a sold-out product then says so in its price cell).
+- **UI:** "Default Title" hidden everywhere (`variantName`, `sizeName`, pick sheet "One size"); Keep-mode bottom bar;
+  "EGP at bazar" tile steps down; Shopify price crossed out only when different; Custom chip shows the %; an emptied
+  price box goes back and says "A price is needed. Still 820."; red outline clears on a valid price; discount box empty
+  with a hint, "Applied −20%" after; grid names two lines; cart text no longer cut; End event step header counts live
+  (`LeftoversPanel onChange`); Close day neutral until a number is typed; "Back to selling" bar (phone, Layout,
+  sessionStorage `bazar-selling-event`, no fetch).
+- Tests: BazarU1bTest (12: d1–d4, o1, p1, t1, c1, r1–r3, s1), bazarU1b.test.tsx (26). Every fix revert-checked.
+- Merge additions: BazarReportDownloadsHttpAppUserTest (whole app as app_user: CSV + PDF own 200, worker 403, other tenant 404); RlsCoverageTest COVERED + BazarReportGuardTest bazar_receipts (approved).
+
+**Incident 2026-11-25 — the per-order freeze check saturated the DB (20:00–23:00 Cairo: 365 slow queries, 27
+timeouts, watchdog restart 22:46). Branch `fix/order-frozen-check-perf`; no migration.**
+- **Root cause (generic-plan tenant poisoning):** Postgres estimates the RLS predicate `tenant_id =
+  NULLIF(current_setting('app.current_tenant'))::uuid` with the tenant that is current WHEN THE PLAN IS MADE (prod
+  EXPLAIN: 3,701 rows for the tenant set). pgjdbc server-prepares after 5 runs and Postgres caches a generic plan per
+  connection; built while a tenant with ~no rows (or no tenant) was current, it believes "the tenant has 1 row", turns
+  each correlated EXISTS of `OrderLineFreeze.frozenSql` into a `hashed SubPlan` over an uncorrelated scan of the
+  WHOLE tenant (shipments / history, pieces, piece_events — prod's auto_explain shows exactly that), and is then
+  reused for the biggest tenant. Local repro (PG 16, 106k orders / 860k piece events, app_user): 56.9 s / 9.8M
+  buffers; through pgjdbc on one connection 50.6 s.
+- **Callers (one call per save each, no in-transaction repeats — nothing cached):** `ShopifySyncService` webhook
+  upsert + import upsert (`isFrozen`), `TrackingChanges.lockAndCheckFrozen` (GenericShipments.decide on a tracking
+  edit; BostaRelink.attempt, one tx per unlinked row), FulfillService unpack (`isFrozen`, + clauses 1–2) and
+  `hasEverShippedPastCreated` (every scan / complete — clause 1 alone, same risk).
+- **Fix:** single-order readers in `OrderLineFreeze` — `isFrozen`, `hasShippedPastCreated`, `hasLeftCustody` — that
+  (a) have no correlated sublink: MATERIALIZED CTEs keyed on the order (`legs` = shipments by order_id, `alloc` =
+  order_items by order_id → allocations), history / pieces / piece_events by those keys; clause 1 reads "a forward
+  leg has a history row not in created / cancelled / terminated" (equal to movementRowSql's reading); (b) run
+  UNPREPARED (`OrderLineFreeze.unprepared`: pgjdbc `setPrepareThreshold(0)`, reflective — pgjdbc is runtime scope),
+  so each call is planned with its own values and the current tenant. (a) alone still went tenant-wide under a
+  poisoned generic plan (139 ms / 55k buffers) — (b) is what makes it impossible. `frozenSql` (set-based readers:
+  ExceptionService, OrderReopen, PackListService, ShopifyShadowOrders) is unchanged and stays THE rule.
+- **Numbers (largest local tenant, app_user):** old custom 0.12 ms / 58 buf, generic same-tenant 0.13 ms / 58, poisoned
+  56.9 s / 9.8M; new custom 0.13 ms / 42 buf (not frozen; 14 frozen), generic same-tenant 0.12 ms / 42, and the
+  poisoned case can't occur (never prepared). Old vs new on all 106,500 local orders: 0 differences, 0.31 ms avg.
+- Test `OrderFrozenSingleOrderTest`: old frozenSql vs new on every branch (history moved / created only / cancelled
+  never moved / terminated after moving / dead leg + moved leg / return leg only / packed-delivered / packed-packed /
+  released / event on own forward leg / NULL shipment / own return leg / another order's leg / another order's
+  event / return-intake only / portal pre-connect / shadow / no order), wrong tenant id → false, app_user RLS own /
+  other context, and pg_prepared_statements never holds the readers on a pooled connection (control: an ordinary
+  statement is prepared).
+- Suite 2026-11-26: 4,969 tests, only ExchangeBackfillTest red (expected). MERGED to main — deploy = app-only rebuild.
+- **LIVE ON PROD — emergency role setting (applied by Marawan 2026-11-25 23:23 Cairo, before this fix deployed):**
+  `ALTER ROLE app_user SET plan_cache_mode = force_custom_plan`, then every app_user connection recycled to pick it
+  up (a role setting only applies to NEW sessions). Why: the poisoning isn't limited to the freeze check — any
+  app_user statement pgjdbc server-prepares can get a generic plan made under a small / empty tenant and reuse it for
+  the biggest one; forcing custom plans stops that for every statement at once, while the code fix was still on its
+  way. Cost: every execution is planned (more planning CPU per statement); nothing measured yet. It is a database
+  setting, not in any migration or in the repo — a fresh environment / restore won't have it.
+  - **Check:** `SELECT rolname, rolconfig FROM pg_roles WHERE rolname = 'app_user';` (shows
+    `{plan_cache_mode=force_custom_plan}`).
+  - **Undo:** `ALTER ROLE app_user RESET plan_cache_mode;` then recycle the app_user connections (restart the app, or
+    wait for Hikari to replace them) — existing sessions keep the old value until they reconnect.
+  - Before undoing: decide whether other hot single-row app_user queries need the same treatment as the freeze
+    check (unprepared, or rewritten to start from their own key); after undoing, watch pg_stat_statements for
+    statements whose max time jumps.
+- **Follow-up (open):** keep the role setting, or replace it — e.g. pgjdbc `prepareThreshold=0` on the app pool URL,
+  or per-statement fixes like this one. Measure planning CPU on prod (pg_stat_statements `total_plan_time`, needs
+  `pg_stat_statements.track_planning`) before choosing.
+
+**Bazar C1 — one aim of the camera = one scan; camera hidden on a computer (2026-11-24; branch `feat/bazar-c1` off
+origin/main 7403906b; frontend only, no migration; pushed, NOT merged, NOT deployed).** Prod 2026-11-22 (E2E Bazae):
+one aim sold P000056 then P000055 0.8 s apart. Cause: CameraReader passes every decode on (native: every barcode of a
+frame), the screens dropped only the SAME code within 2 s, and the second code went to useScanner's FIFO and was sold
+right after the first.
+- **`bazar/cameraGate.ts` is THE camera rule** (camera frames only — HID / typed codes never go through it). Settle
+  250 ms: exactly one distinct code → sent; two or more (one frame or across the window) → none + "Two labels in view —
+  scan one at a time". 'pause' mode (quick sale, cart, Return / Exchange): after a send, ignore everything until the
+  result is shown (quick sale: SOLD / error / undone card — submit returns 'await') AND the view has been empty ≥ 600 ms
+  over ≥ 3 attempts (a code restarts it), or "Scan next"; while a quick sale is in flight (any source) camera codes are
+  ignored, never queued. 'pile' mode (Leftovers scan-back, approved): settle + two-labels, a code already sent ignored
+  until an empty view, NO empty-view wait. Timings in `cameraGateTiming`.
+- **CameraReader: one optional prop `onFrame(codes)`** (every attempt, [] = native empty detect / ZXing
+  NotFoundException; a ZXing checksum/format error reports nothing); when given, onRead isn't called. ScanPairPage
+  (warehouse) doesn't pass it → identical behaviour. useScanner / ScanShell / useScanBurst unchanged (diff empty).
+- **Camera box per device** (`bazar/cameraPref.ts`): `isComputer()` = matchMedia exists AND no `(any-pointer: coarse)`
+  AND `(pointer: fine)` AND maxTouchPoints 0 (jsdom → phone). Computer default hidden ("Use camera"), touch default
+  shown ("Hide camera" replaces the old per-screen camera on/off button); the choice is stored in localStorage
+  `traced.bazar.camera` (try/catch). EndEventPage's `noCamera` still hides it outright.
+- Tests: cameraGate.test.ts (14), bazarC1.test.tsx (19), cameraReaderFrames.test.tsx (4); 13 revert checks each fail.
+  A network failure is NOT an error card: "Checking…" retries with the same request id (B6 design) and the gate
+  un-pauses after the server's answer card + a clear view (test "network failure").
+  Approved test edits: bazarB6 "no double request" (camera read during an in-flight sale ignored) and bazarR4's two
+  hashes (CameraReader, Sell scan routing). Strings `bazar.c1` (EN + AR).
+- Known: iPhone (ZXing) may keep returning one label while two are in view — then "two labels" can't show, but the
+  pause still stops the second sale. scannerBurst.browser.test's 6 `getMe().then` unhandled errors are pre-existing on
+  main.
 
 **Bazar U1a — must-fix bugs from the 2026-11-22 E2E (2026-11-23; branch `feat/bazar-u1a` off origin/main e40312ee; no
 migration — V242 (B10) still the last; merged to main 2026-11-23 after B9b + B10, NOT deployed).**
@@ -151,8 +268,23 @@ then Shopify size position, then piece id — created_at alone printed a batch i
 millisecond). Tests: BazarSetupTest (11), BazarSetupFlagOffTest, BazarSetupNoStatusWriterGuardTest,
 frontend bazarB9b (10); revert-checked.
 
+**Rat-tail 60 × 12 label + tenant label-size fix + Flag B 2-line layout — DEPLOYED 2026-11-23/24, live-checked on
+testReciving / The Snouts / Allshades; physical test print pending.** Merges: 8a541ce7 (label + label size; fixes
+40×25 for Allshades and BANDED) and 044ca23e (Flag B); no migration. Branches `feat/rattail-label` /
+`feat/rattail-flagb` deleted. **Flag B (both the piece label and the separator, 60 × 12 only):** the name bold 6 pt on
+up to 2 lines — when it needs more (or one word is wider than a line) the whole name shrinks in 0.25 pt steps to 5 pt
+to fit 2 lines, then "…" (`RatTailLabel.flagBText`); line 3 = "variant | SKU" (5.5 → 4.75 → "…", Default Title
+hidden, empty parts skipped, none → no line 3); the lines that exist centred as a block in 1–11 mm by the font's ink
+envelope (Arabic's when the name / variant has Arabic) + 0.35 mm gap; an Arabic label right-aligns every line at
+58.6 mm. The separator carries its group's SKU (`Separator.sku`, from label runs + tag stock; ignored at other sizes)
+so two groups never read the same. "The Collection Snowboard: Liquid" prints in full at 5.25 pt; "…: Hydrogen" ends
+in "…" at 5 pt. Tests: RatTailFlagBTest (11); RatTailLabelTest r6 / r7 / r8 / s1 rewritten for the layout (Flag A /
+Flag B text read by area); LabelSizeWiringTest w4 / w5 read "× N" from Flag A only (PDFTextStripperByArea), w2
+order-independent (since B9b a session prints in piece-id order within a variant). The first build's notes follow.
+- **Next:** physical test print on 60 × 12 die-cut stock at 300 dpi — tail registration; scan a P + 6 and a P + 7.
+
 **Jewelry rat-tail label 60 × 12 mm + tenant label size wired (2026-11-23; branch `feat/rattail-label` off main
-7c882c05; no migration; NOT merged, NOT deployed).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
+7c882c05; no migration; merged 8a541ce7, deployed — see the entry above).** ClickUp "Jewelry rat-tail label (60×12 mm)", Sprint 2.
 - Tenant size is now READ: `LabelSizes.forTenant` (tenants.label_width_mm / label_height_mm; NULL → 50×25) is THE size
   of every one-piece-per-page label PDF — LabelService (receiving session / variant / reprint, Lookup / Returns /
   Transfer reprints), LabelCodeService.batchPdf / codesPdf (code-first, factory extra label, tag-stock leftovers),

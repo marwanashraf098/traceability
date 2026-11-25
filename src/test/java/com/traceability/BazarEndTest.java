@@ -459,7 +459,7 @@ class BazarEndTest {
 
         assertThat(r.get("customers_saved")).isEqualTo(2);
         List<Map<String, Object>> hours = (List<Map<String, Object>>) r.get("busiest_hours");
-        assertThat(hours.stream().mapToInt(h -> (Integer) h.get("sales")).sum()).isEqualTo(7);
+        assertThat(hours.stream().mapToInt(h -> (Integer) h.get("sales")).sum()).isEqualTo(4);   // U1b: only sales still sold count
         Map<String, Object> tr = (Map<String, Object>) r.get("transfer");
         assertThat(tr.get("sent")).isEqualTo(9);
         assertThat(tr.get("sold")).isEqualTo(4);

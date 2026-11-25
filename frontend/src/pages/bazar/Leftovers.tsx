@@ -6,7 +6,7 @@ import {
   BazarError, closeBazarTransfer, endBazarEvent, markBazarLost, scanBackOnce,
   type BazarLeftoverPiece, type BazarLeftovers, type BazarScanBackResult,
 } from '../../bazar/api'
-import { shortDate, transferCode } from '../../bazar/format'
+import { pieceTitle, shortDate, transferCode } from '../../bazar/format'
 import { useRetryingCommand } from '../../bazar/useRetryingCommand'
 import { CodeEntry, CommandStatus, ErrorCard } from './phone/ReturnParts'
 import { cn } from '../../components/ui'
@@ -27,7 +27,7 @@ const secondary = 'border border-line bg-surface text-primary'
 const small = 'h-9 px-3 rounded-lg text-small font-semibold whitespace-nowrap disabled:opacity-60'
 
 const pieceName = (p: Pick<BazarLeftoverPiece, 'product_title' | 'variant_title'>) =>
-  p.variant_title ? `${p.product_title} · ${p.variant_title}` : p.product_title
+  pieceTitle(p)
 
 /** "End the event?" — what ending does, the days that still need closing (BAZAR_DAYS_NOT_CLOSED), the button. */
 export function EndEventPanel({ eventId, name, onEnded, closeDaysTo }: {
@@ -143,10 +143,12 @@ function PieceLine({ p }: { p: BazarLeftoverPiece }) {
  * damaged still to bring home, the pieces not scanned back (Mark lost — one row, or ticked together), and Close the
  * transfer (only once every piece is accounted for).
  */
-export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide, reportTo }: {
+export function LeftoversPanel({ eventId, initial, onClosed, onChange, noCamera, wide, reportTo }: {
   eventId: string
   initial: BazarLeftovers
   onClosed: (l: BazarLeftovers) => void
+  /** U1b: every new leftovers state (a scan back, Mark lost …) — the page's step header counts live from it. */
+  onChange?: (l: BazarLeftovers) => void
   /** Desktop: the scan field only (a HID scanner), no camera. */
   noCamera?: boolean
   /** R3 — the computer's End event page: scan + counts left, not back yet + close right. Same panel. */
@@ -166,6 +168,7 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide, rep
   const [error, setError] = useState<BazarError | null>(null)
 
   useEffect(() => { setL(initial) }, [initial])
+  useEffect(() => { if (l !== initial) onChange?.(l) }, [l]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (cmd.state.kind === 'done') {
       const r = cmd.state.result
@@ -233,7 +236,7 @@ export function LeftoversPanel({ eventId, initial, onClosed, noCamera, wide, rep
         </div>
         {scanning && (
           <>
-            <CodeEntry onCode={onCode} disabled={cmd.busy} hint={t('bazar.end.scanHint')} noCamera={noCamera} />
+            <CodeEntry onCode={onCode} disabled={cmd.busy} hint={t('bazar.end.scanHint')} noCamera={noCamera} gateMode="pile" />
             {cmd.state.kind !== 'done' && <CommandStatus state={cmd.state} />}
             {last && (
               <section role="status" data-testid={`scan-back-${last.result}`}

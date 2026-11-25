@@ -21,7 +21,7 @@ import {
   useSentenceMoney,
 } from '../r4/parts'
 import { notReturnable, useLookup } from './BazarReturn'
-import { sizeName, useBazarCatalog, type BazarCatalogProduct, type BazarCatalogSize } from '../../../bazar/catalog'
+import { productSizeName, useBazarCatalog, type BazarCatalogProduct, type BazarCatalogSize } from '../../../bazar/catalog'
 import { FindSaleSheet } from './FindSale'
 import { PickSheet } from './PickSheet'
 
@@ -181,7 +181,7 @@ function ExchangeScreen({ live }: { live: BazarLive }) {
                 </div>
                 {newTapped ? (
                   <PieceCard testId="exchange-new" tone="new" catalog={catalog} variantId={newTapped.size.variant_id}
-                             title={`${newTapped.product.title} · ${sizeName(newTapped.product, newTapped.size)}`}
+                             title={productSizeName(newTapped.product, newTapped.size)}
                              line={t('bazar.pick.tappedLine')} price={newTapped.size.price ?? 0}
                              onClear={cmd.busy ? undefined : () => setNewTapped(null)} />
                 ) : newPiece ? (

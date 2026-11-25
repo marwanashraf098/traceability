@@ -204,7 +204,9 @@ export function CloseDayForm({ eventId, day, methods, onClosed, compact, wide }:
     </>
   )
 
-  const summary = <CloseResultView result={result} loading={previewing && !preview} day={day} hideTakeHome />
+  // U1b: nothing counted yet → the summary stays neutral (no red "Short" for the whole day before a number is typed).
+  const nothingTyped = (cash == null || Number.isNaN(cash)) && (!cardOn || card == null || Number.isNaN(card))
+  const summary = <CloseResultView result={result} loading={previewing && !preview} day={day} hideTakeHome pending={nothingTyped} />
 
   const drawer = (
     <>
@@ -294,8 +296,10 @@ function TakeHome({ result }: { result: BazarCloseResult }) {
  * The dark difference card: the day's sales / refunds counts, per method expected vs entered, the total difference,
  * the "X EGP not received" box with its split, money over, and (unless the drawer block shows it) take-home.
  */
-export function CloseResultView({ result, loading, day, hideTakeHome }: {
+export function CloseResultView({ result, loading, day, hideTakeHome, pending }: {
   result: BazarCloseResult | null; loading?: boolean; day?: BazarDay; hideTakeHome?: boolean
+  /** U1b: nothing typed yet — expected amounts only; no short / over, no "not received". */
+  pending?: boolean
 }) {
   const { t, i18n } = useTranslation()
   if (!result) {
@@ -332,8 +336,9 @@ export function CloseResultView({ result, loading, day, hideTakeHome }: {
               <span className="font-semibold">{t(`bazar.method.${row.method}`)}</span>
               <span className="text-end tabular-nums text-sidebar-text" dir="ltr">{plain(row.expected)}</span>
               <span className={cn('text-end tabular-nums font-semibold min-w-[96px]',
-                row.state === 'even' ? 'text-[#86EFAC]' : row.state === 'over' ? 'text-[#FCD34D]' : 'text-[#FCA5A5]')}>
-                {row.state === 'even' ? t('bazar.close.state.even')
+                pending ? 'text-sidebar-text' : row.state === 'even' ? 'text-[#86EFAC]' : row.state === 'over' ? 'text-[#FCD34D]' : 'text-[#FCA5A5]')}>
+                {pending ? t('bazar.u1b.close.notCounted')
+                  : row.state === 'even' ? t('bazar.close.state.even')
                   : t(`bazar.close.state.${row.state}`, { amount: plain(Math.abs(toNumber(row.difference))) })}
               </span>
             </div>
@@ -343,18 +348,20 @@ export function CloseResultView({ result, loading, day, hideTakeHome }: {
           <span>{t('bazar.r2.close.shouldHave')}</span><span dir="ltr" className="tabular-nums font-semibold">{amount(expected)}</span>
         </div>
         <div className="flex justify-between gap-3 text-body text-grey-100">
-          <span>{t('bazar.r2.close.youCounted')}</span><span dir="ltr" className="tabular-nums font-semibold">{amount(entered)}</span>
+          <span>{t('bazar.r2.close.youCounted')}</span><span dir="ltr" className="tabular-nums font-semibold">{pending ? '—' : amount(entered)}</span>
         </div>
         <div className="flex items-baseline justify-between gap-3 pt-2 border-t border-grey-700" data-testid="close-difference">
           <span className="font-semibold">{t('bazar.r2.close.difference')}</span>
           <span dir="ltr" className={cn('text-[28px] leading-8 font-bold tabular-nums',
-            diff < 0 ? 'text-[#FCA5A5]' : diff > 0 ? 'text-[#FCD34D]' : 'text-[#86EFAC]')}>
-            {diff < 0 ? '− ' : diff > 0 ? '+ ' : ''}{amount(Math.abs(diff))}
+            pending ? 'text-sidebar-text' : diff < 0 ? 'text-[#FCA5A5]' : diff > 0 ? 'text-[#FCD34D]' : 'text-[#86EFAC]')}>
+            {pending ? '—' : <>{diff < 0 ? '− ' : diff > 0 ? '+ ' : ''}{amount(Math.abs(diff))}</>}
           </span>
         </div>
       </div>
 
-      {notReceived > 0 ? (
+      {pending ? (
+        <p className="text-small text-muted" data-testid="close-pending">{t('bazar.u1b.close.typeToSee')}</p>
+      ) : notReceived > 0 ? (
         <section role="alert" className="rounded-xl bg-critical/10 border border-critical/40 px-4 py-3 flex flex-col gap-1" data-testid="close-not-received">
           <span className="text-h4 font-bold text-critical-text tabular-nums">
             {t('bazar.close.notReceivedTitle', { amount: money(notReceived) })}
@@ -375,7 +382,7 @@ export function CloseResultView({ result, loading, day, hideTakeHome }: {
           <Check size={18} aria-hidden />{t('bazar.close.allReceived')}
         </section>
       )}
-      {over > 0 && (
+      {!pending && over > 0 && (
         <section className="rounded-xl bg-warning/10 border border-warning/30 px-4 py-3 flex flex-col gap-0.5" data-testid="close-over">
           <span className="font-bold text-warning-text tabular-nums">{t('bazar.close.overTitle', { amount: money(over) })}</span>
           <span className="text-small text-primary">{t('bazar.close.overBody')}</span>

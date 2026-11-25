@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Loader2, ScanLine } from 'lucide-react'
 import {
-  BazarError, markBazarSent, orderedMethods, setBazarOnlineStock, startBazarEvent, type BazarEventDetail, type OnlineStock,
+  BazarError, deleteBazarEvent, markBazarSent, orderedMethods, setBazarOnlineStock, startBazarEvent, type BazarEventDetail,
+  type OnlineStock,
 } from '../../../bazar/api'
-import { OnlineStockCards, OnlineStockTag } from '../OnlineStock'
+import {
+  BlockingBazarLink, OnlineStockCards, OnlineStockTag, OnlineStockWholeLocation, blockingBazar,
+} from '../OnlineStock'
 import { toNumber, transferCode } from '../../../bazar/format'
 import { resetCapabilitiesCache } from '../../../capabilities'
 import { Button, Modal, cn } from '../../../components/ui'
@@ -44,16 +47,35 @@ export function SetupView({ ev, reload, onChanged }: {
   const [changing, setChanging] = useState<OnlineStock | null>(null)
   const [savingOnline, setSavingOnline] = useState(false)
   const [onlineError, setOnlineError] = useState<string | null>(null)
+  const [blocking, setBlocking] = useState<{ id: string; name: string } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  async function deleteIt() {
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteBazarEvent(ev.id)
+      navigate('/bazar')
+    } catch (e) {
+      setDeleteError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+      setDeleting(false)
+      reload()
+    }
+  }
 
   async function saveOnline() {
     if (!changing) return
     setSavingOnline(true)
     setOnlineError(null)
+    setBlocking(null)
     try {
       onChanged(await setBazarOnlineStock(ev.id, changing))
       setChanging(null)
     } catch (e) {
       setOnlineError(e instanceof BazarError ? e.message_(lang) : t('bazar.saveFailed'))
+      setBlocking(blockingBazar(e))
     } finally {
       setSavingOnline(false)
     }
@@ -84,12 +106,18 @@ export function SetupView({ ev, reload, onChanged }: {
         back={{ to: '/bazar', label: t('bazar.title') }}
         tag={<Tag tone="amber" testId="bazar-event-tag">{t('bazar.r3.setup.tag', { when: whenText(t, ev.starts_on, cairoToday()) })}</Tag>}
         meta={<>{ev.location_name} · <span>{rangeLabel(ev.starts_on, ev.ends_on, lang)}</span> · {methods}</>}
-        actions={
+        actions={<>
+          {ev.deletable && (
+            <button type="button" className={cn(btnSecondary, 'text-critical-text')} data-testid="bazar-delete"
+                    onClick={() => { setDeleteError(null); setConfirmDelete(true) }}>
+              {t('bazar.u1b.delete.button')}
+            </button>
+          )}
           <button type="button" className={btnSecondary}
                   onClick={() => document.getElementById('bazar-sellers-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
             {t('bazar.r3.header.inviteSellers')}
           </button>
-        } />
+        </>} />
 
       <StepsStrip testId="bazar-setup-steps" steps={[
         { title: t('bazar.r3.setup.steps.details'), sub: `${ev.location_name} · ${rangeLabel(ev.starts_on, ev.ends_on, lang)}`, state: 'done' },
@@ -125,12 +153,14 @@ export function SetupView({ ev, reload, onChanged }: {
               <span className="flex flex-col min-w-0 me-auto">
                 <span className="text-small text-muted">{t('bazar.online.row')}</span>
                 <span className="text-body font-semibold text-primary">{t(`bazar.online.${online}.title`)}</span>
-                {ev.online_stock_locked && <span className="text-small text-muted">{t('bazar.online.locked')}</span>}
+                {ev.online_stock_locked
+                  ? <span className="text-small text-muted">{t('bazar.online.locked')}</span>
+                  : <span className="text-small text-muted">{t('bazar.u1b.online.wholeLocationNamed', { location: ev.location_name })}</span>}
               </span>
               <OnlineStockTag mode={online} />
               {!ev.online_stock_locked && (
                 <button type="button" className="text-body font-semibold text-trace-blue" data-testid="bazar-online-change"
-                        onClick={() => { setOnlineError(null); setChanging(online) }}>
+                        onClick={() => { setOnlineError(null); setBlocking(null); setChanging(online) }}>
                   {t('bazar.online.change')}
                 </button>
               )}
@@ -149,7 +179,9 @@ export function SetupView({ ev, reload, onChanged }: {
             {t('bazar.r3.setup.ready', { count: pieces })}
             {prices.rows && prices.rows.length > 0 && ` · ${totals.missing === 0 ? t('bazar.r3.setup.allPriced') : t('bazar.r1.overview.sub.missing', { count: totals.missing })}`}
           </span>
-          <span className="text-small text-sidebar-text">{sent ? t('bazar.start.ready') : t('bazar.r3.setup.sendHint')}</span>
+          <span className="text-small text-sidebar-text" data-testid="bazar-setup-hint">
+            {sent ? t('bazar.start.ready') : online === 'leave' ? t('bazar.u1b.setup.sendHintKeep') : t('bazar.r3.setup.sendHint')}
+          </span>
         </span>
         <span className="flex items-center gap-2.5 flex-wrap">
           {preparing && (
@@ -171,11 +203,26 @@ export function SetupView({ ev, reload, onChanged }: {
         <Modal title={t('bazar.online.dialogTitle')} onClose={() => setChanging(null)}>
           <div className="flex flex-col gap-4" data-testid="bazar-online-dialog">
             <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change" />
+            <OnlineStockWholeLocation location={ev.location_name} />
             {onlineError && <p role="alert" className="text-body text-critical">{onlineError}</p>}
+            <BlockingBazarLink bazar={blocking} />
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setChanging(null)}>{t('bazar.form.cancel')}</Button>
               <Button onClick={saveOnline} loading={savingOnline}>{t('bazar.online.save')}</Button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirmDelete && (
+        <Modal title={t('bazar.u1b.delete.title', { name: ev.name })} onClose={() => setConfirmDelete(false)}>
+          <p className="text-body text-primary">{t('bazar.u1b.delete.body')}</p>
+          {deleteError && <p role="alert" className="text-body text-critical mt-3">{deleteError}</p>}
+          <div className="flex justify-end gap-2 mt-5">
+            <Button variant="secondary" onClick={() => setConfirmDelete(false)}>{t('bazar.form.cancel')}</Button>
+            <Button variant="danger" onClick={deleteIt} loading={deleting}>
+              {t('bazar.u1b.delete.confirm')}
+            </Button>
           </div>
         </Modal>
       )}
@@ -195,10 +242,15 @@ export function SetupView({ ev, reload, onChanged }: {
   )
 }
 
+/** U1b: a long number steps its size down so "7,607,500" fits the tile instead of "7,607.…". */
+export function counterSize(value: string): string {
+  return value.length > 9 ? 'text-body' : value.length > 6 ? 'text-body-lg' : 'text-h4'
+}
+
 function Counter({ value, label, testId }: { value: string; label: string; testId?: string }) {
   return (
     <div className="rounded-[10px] border border-line px-3 py-2.5 flex flex-col min-w-0" data-testid={testId}>
-      <span dir="ltr" className="text-h4 font-bold text-primary tabular-nums text-start truncate">{value}</span>
+      <span dir="ltr" className={cn(counterSize(value), 'font-bold text-primary tabular-nums text-start whitespace-nowrap')}>{value}</span>
       <span className="text-small text-muted truncate">{label}</span>
     </div>
   )

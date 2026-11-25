@@ -4,7 +4,7 @@ import { ChevronDown, ChevronUp, Search } from 'lucide-react'
 import {
   matchesQuery, sizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../../bazar/catalog'
-import { formatMoney, toNumber } from '../../../bazar/format'
+import { formatMoney, toNumber, variantName } from '../../../bazar/format'
 import { useScanBurst } from '../../../bazar/useScanBurst'
 import { cn } from '../../../components/ui'
 import { Sheet } from './shared'
@@ -114,7 +114,7 @@ export function PickSheet({ catalog, startNumber, mode, onPick, onClose, onScanB
                                 out ? 'border-dashed border-line text-muted opacity-50'
                                   : picked === s.variant_id ? 'bg-trace-blue border-trace-blue text-white'
                                     : 'border-line bg-surface text-primary')}>
-                              <span className="font-bold leading-tight">{s.size ?? s.title ?? t('bazar.pick.oneSize')}</span>
+                              <span className="font-bold leading-tight">{s.size ?? variantName(s.title) ?? t('bazar.pick.oneSize')}</span>
                               {!find && (
                                 <span className="text-[11px] leading-tight">
                                   {send ? t(leftKey, { count: s.left })

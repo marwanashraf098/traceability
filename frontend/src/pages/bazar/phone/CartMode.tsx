@@ -212,7 +212,7 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, cata
                       <span className="flex-1 min-w-0 flex flex-col">
                         <span className={cn('font-semibold truncate', err ? 'text-critical-text' : 'text-primary')}>{title}</span>
                         {tapped
-                          ? <span className="text-small text-muted truncate" data-testid="cart-line-tapped">{t('bazar.pick.tappedLine')}</span>
+                          ? <span className="text-small text-muted whitespace-normal break-words" data-testid="cart-line-tapped">{t('bazar.pick.tappedLine')}</span>
                           : <span className="text-small text-muted font-mono" dir="ltr">{l?.piece_code ?? code}</span>}
                         {err && <span role="alert" className="text-small text-critical-text" data-testid="cart-line-error">{err}</span>}
                       </span>
@@ -260,7 +260,8 @@ export function CartPanel({ eventId, cart, methods, defaultMethod, scanner, cata
             <MethodChips methods={methods} value={method} busy={null} disabled={cmd.busy} onPick={setMethod} />
 
             {/* R4: the customer's two boxes, always shown (still optional, still sent with Complete). */}
-            <fieldset className="grid grid-cols-2 gap-2" disabled={cmd.busy}>
+            {/* U1b: one box per row — side by side the placeholders were cut ("Customer name (option…"). */}
+            <fieldset className="grid grid-cols-1 gap-2" disabled={cmd.busy} data-testid="cart-customer">
               <legend className="sr-only">{t('bazar.cart.customer')}</legend>
               <Input value={name} maxLength={80} autoComplete="off" placeholder={t('bazar.r4.customerNameOpt')}
                      aria-label={t('bazar.customer.name')} onChange={e => setName(e.target.value)} />

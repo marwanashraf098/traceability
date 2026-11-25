@@ -668,6 +668,56 @@ class ExchangeMultiIngestTest {
         assertThat(queue).contains(liveExc);
     }
 
+    // ── i16 / i17: a Bosta rate limit never ends the catch-up (2026-11-24) ─────────────────────────────────
+
+    /**
+     * i16: Bosta answers 429 twice (Retry-After 7 s, then none) then OK → the row is processed after two back-offs
+     * (7 s, then 60 s = 30 s doubled), and the next row too. i17: 429 on all 5 attempts → that row RATE_LIMITED (4
+     * back-offs: 30, 60, 120, 240 s), the rows after it still processed. Waits are recorded, never slept.
+     */
+    @Test
+    void i16_i17_rateLimited_backsOffAndRetries_thenMovesOn() {
+        List<Long> waits = new ArrayList<>();
+        catchUp.setSleeper(waits::add);
+        try {
+            Shop s = new Shop("I16", false, "#1616");
+            String a = tn(), b = tn();
+            BostaDelivery da = delivery(a, null, 2, "two out", 2, "two back");
+            BostaDelivery db = delivery(b, null, 2, "two out", 2, "two back");
+            s.unlinked(da);
+            s.unlinked(db);
+            when(bostaGateway.fetchDelivery(anyString(), eq(a)))
+                .thenThrow(new BostaRateLimitException(7)).thenThrow(new BostaRateLimitException(0)).thenReturn(da);
+            when(bostaGateway.fetchDelivery(anyString(), eq(b))).thenReturn(db);
+            List<ExchangeMultiCatchUpService.Row> rows = catchUp.run(s.tenant, false);
+            assertThat(verdict(rows, a)).as("processed after two 429s").isEqualTo("WOULD_CREATE");
+            assertThat(verdict(rows, b)).as("the run continued").isEqualTo("WOULD_CREATE");
+            assertThat(waits).containsExactly(7L, 60L);
+            verify(bostaGateway, times(3)).fetchDelivery(anyString(), eq(a));
+
+            waits.clear();
+            Shop t = new Shop("I17", false, "#1717");
+            String x = tn(), y = tn(), z = tn();
+            for (String awb : List.of(x, y, z)) t.unlinked(delivery(awb, null, 2, "two out", 2, "two back"));
+            when(bostaGateway.fetchDelivery(anyString(), eq(x))).thenThrow(new BostaRateLimitException(0));
+            for (String awb : List.of(y, z)) {
+                when(bostaGateway.fetchDelivery(anyString(), eq(awb))).thenReturn(delivery(awb, null, 2, "two out", 2, "two back"));
+            }
+            rows = catchUp.run(t.tenant, false);
+            assertThat(rows).hasSize(3);
+            assertThat(row(rows, x).verdict()).isEqualTo("RATE_LIMITED");
+            assertThat(row(rows, x).detail()).contains("5 attempts");
+            verify(bostaGateway, times(5)).fetchDelivery(anyString(), eq(x));
+            assertThat(waits).containsExactly(30L, 60L, 120L, 240L);
+            assertThat(verdict(rows, y)).isEqualTo("WOULD_CREATE");
+            assertThat(verdict(rows, z)).isEqualTo("WOULD_CREATE");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM exchanges WHERE tenant_id = ?", Integer.class, t.tenant))
+                .as("dry run").isZero();
+        } finally {
+            catchUp.setSleeper(sec -> Thread.sleep(sec * 1000L));
+        }
+    }
+
     /** {@code d} at Bosta state {@code code}, its timeline's latest completed milestone {@code milestone}. */
     BostaDelivery atState(BostaDelivery d, int code, String value, String milestone) {
         ObjectNode raw = (ObjectNode) d.raw().deepCopy();

@@ -2,7 +2,9 @@ package com.traceability.inventory;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.util.List;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -139,14 +141,121 @@ public final class OrderLineFreeze {
                "             AND s_lw.order_id = " + orderIdExpr + " AND s_lw.shipment_leg = 'forward')))";
     }
 
+    /*
+     * Incident 2026-11-25 — the single-order readers below. {@link #frozenSql} stays THE rule for set-based readers
+     * (a list query evaluates it per row); a caller that asks about ONE order uses these instead. They return exactly
+     * the same boolean (OrderFrozenSingleOrderTest compares them with frozenSql on every branch) but are written so
+     * that no plan can start from the tenant:
+     *
+     *  - no correlated sublink — every set is a MATERIALIZED CTE keyed on the order id (shipments by order_id,
+     *    order_items by order_id → allocations), so Postgres can't turn an EXISTS into a "hashed SubPlan" over the
+     *    whole tenant (prod's plan: an uncorrelated scan of the tenant's shipments / pieces / piece_events, then a
+     *    hash probe — 20-120 s, ~450k-670k buffers per call);
+     *  - clause 1 reads "a forward leg has a history row not in created / cancelled / terminated": the same as
+     *    {@link #movementRowSql} (a cancelled / terminated row counts only when the leg has such a row anyway);
+     *  - executed UNPREPARED (pgjdbc prepareThreshold 0 — {@link #unprepared}), so every call is planned with its own
+     *    values and the CURRENT tenant. Postgres estimates the RLS predicate tenant_id = current_setting(…) with the
+     *    tenant set when the plan is made; a generic plan cached on a connection while a small tenant was current
+     *    believes "the tenant has 1 row" and is then reused for the biggest tenant. That poisoning is the root cause;
+     *    a custom plan can't carry it.
+     */
+
+    /** The order's forward legs (no tenant filter on the id set — {@link #pieceLeftWithOrderSql}'s s_lw has none). */
+    private static final String LEGS_CTE =
+        "legs AS MATERIALIZED (SELECT s.id, s.tenant_id FROM shipments s " +
+        "  WHERE s.order_id = ? AND s.shipment_leg = 'forward')";
+
+    private static final String MOVED_SQL =
+        "EXISTS (SELECT 1 FROM legs l JOIN shipment_status_history h ON h.shipment_id = l.id " +
+        "  WHERE l.tenant_id = ? AND h.internal_state NOT IN ('created', 'cancelled', 'terminated'))";
+
+    /** Binds: order, tenant. Clause 1 alone ({@link #shippedPastCreatedSql} for one order). */
+    static final String SHIPPED_PAST_CREATED_ONE_SQL =
+        "WITH " + LEGS_CTE + " SELECT " + MOVED_SQL;
+
+    /** The order's allocations (order_items by order_id — order_items has no tenant index to start from). */
+    private static final String ALLOC_CTE =
+        "alloc AS MATERIALIZED (SELECT a.piece_id, a.status FROM order_items oi " +
+        "  JOIN allocations a ON a.order_item_id = oi.id WHERE oi.order_id = ? AND oi.tenant_id = ?)";
+
+    private static String packedLeftSql() {
+        return "EXISTS (SELECT 1 FROM alloc c JOIN pieces p ON p.id = c.piece_id " +
+               "  WHERE c.status = 'packed' AND p.status::text IN (" + leftCustodySqlList() + "))";
+    }
+
+    /** Binds: order, order, tenant, tenant. Clauses 1 + 2 (FulfillService.unpack's "already left with the courier"). */
+    static final String LEFT_CUSTODY_ONE_SQL =
+        "WITH " + LEGS_CTE + ", " + ALLOC_CTE + " SELECT " + MOVED_SQL + " OR " + packedLeftSql();
+
+    /** Clauses 1-3 over the two CTEs. Binds: tenant, order. */
+    private static final String FROZEN_CLAUSES_ONE_SQL =
+        "(" + MOVED_SQL + " OR " + packedLeftSql() +
+        " OR EXISTS (SELECT 1 FROM alloc c JOIN piece_events pe ON pe.piece_id = c.piece_id " +
+        "      WHERE pe.order_id = ? AND pe.to_status::text IN ('with_courier', 'delivered') " +
+        "        AND (pe.shipment_id IS NULL OR pe.shipment_id IN (SELECT l.id FROM legs l))))";
+
     /**
-     * True when the order's line quantities are frozen. Runs on the caller's connection / tenant context.
-     * Shopify ingest only — a portal pre-connect order is not in warehouse_orders and reads as not frozen.
+     * True when the order's line quantities are frozen ({@link #frozenSql}, the whole rule for one order). Runs on the
+     * caller's connection / tenant context. Shopify ingest only — a portal pre-connect order is not in
+     * warehouse_orders and reads as not frozen.
      */
     public static boolean isFrozen(JdbcTemplate jdbc, UUID orderId, UUID tenantId) {
-        List<Boolean> frozen = jdbc.queryForList(
-            "SELECT " + frozenSql("o.id", "o.tenant_id") + " FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?",
-            Boolean.class, orderId, tenantId);
-        return !frozen.isEmpty() && Boolean.TRUE.equals(frozen.get(0));
+        // Binds: order (legs), order + tenant (alloc), order + tenant (warehouse_orders), tenant + order (clauses).
+        return one(jdbc,
+            "WITH " + LEGS_CTE + ", " + ALLOC_CTE + " " +
+            "SELECT EXISTS (SELECT 1 FROM warehouse_orders o WHERE o.id = ? AND o.tenant_id = ?) AND " +
+            FROZEN_CLAUSES_ONE_SQL,
+            orderId, orderId, tenantId, orderId, tenantId, tenantId, orderId);
+    }
+
+    /** {@link #shippedPastCreatedSql} for one order — FulfillService's ALREADY_SHIPPED guard (every scan). */
+    public static boolean hasShippedPastCreated(JdbcTemplate jdbc, UUID orderId, UUID tenantId) {
+        return one(jdbc, SHIPPED_PAST_CREATED_ONE_SQL, orderId, tenantId);
+    }
+
+    /** Clause 1 OR clause 2 for one order: the forward leg moved, or a packed piece is out of custody. */
+    public static boolean hasLeftCustody(JdbcTemplate jdbc, UUID orderId, UUID tenantId) {
+        return one(jdbc, LEFT_CUSTODY_ONE_SQL, orderId, orderId, tenantId, tenantId);
+    }
+
+    private static boolean one(JdbcTemplate jdbc, String sql, Object... binds) {
+        Boolean b = jdbc.query(con -> {
+            PreparedStatement ps = unprepared(con, sql);
+            for (int i = 0; i < binds.length; i++) ps.setObject(i + 1, binds[i]);
+            return ps;
+        }, rs -> rs.next() && rs.getBoolean(1));
+        return Boolean.TRUE.equals(b);
+    }
+
+    /**
+     * A statement pgjdbc never server-prepares (prepareThreshold 0): sent as the unnamed statement every time, so
+     * Postgres plans it with the bound values and the current tenant — never a cached generic plan.
+     */
+    static PreparedStatement unprepared(Connection con, String sql) throws SQLException {
+        PreparedStatement ps = con.prepareStatement(sql);
+        if (PG_STATEMENT != null && ps.isWrapperFor(PG_STATEMENT)) {
+            try {
+                SET_PREPARE_THRESHOLD.invoke(ps.unwrap(PG_STATEMENT), 0);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("pgjdbc setPrepareThreshold failed", e);
+            }
+        }
+        return ps;
+    }
+
+    // pgjdbc is a runtime dependency (pom scope runtime), so its statement interface is reached reflectively.
+    private static final Class<?> PG_STATEMENT;
+    private static final java.lang.reflect.Method SET_PREPARE_THRESHOLD;
+    static {
+        Class<?> c = null;
+        java.lang.reflect.Method m = null;
+        try {
+            c = Class.forName("org.postgresql.PGStatement");
+            m = c.getMethod("setPrepareThreshold", int.class);
+        } catch (ReflectiveOperationException e) {
+            c = null;
+        }
+        PG_STATEMENT = c;
+        SET_PREPARE_THRESHOLD = m;
     }
 }

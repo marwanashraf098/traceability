@@ -5,7 +5,7 @@ import {
   BazarError, clearBazarPrice, listBazarPrices, setBazarBulkRule, setBazarPrice,
   type BazarEventDetail, type BazarPriceRow,
 } from '../../../bazar/api'
-import { toNumber } from '../../../bazar/format'
+import { toNumber, variantName } from '../../../bazar/format'
 import { Input, Spinner, cn } from '../../../components/ui'
 import { amount } from '../r1/parts'
 import { Chip } from '../r2/parts'
@@ -97,8 +97,9 @@ export function PricesCard({ ev, data, live }: { ev: BazarEventDetail; data: Pri
       <div className="flex items-center gap-2 flex-wrap self-start rounded-xl border border-line bg-charcoal px-2.5 py-2">
         <label className="flex items-center gap-1.5 text-small text-muted whitespace-nowrap">
           {t('bazar.r3.prices.everything')}
+          {/* U1b: no "20" placeholder — it read as a discount already set. Empty with a hint until Apply. */}
           <Input className="w-16 h-9 text-center font-semibold" inputMode="decimal" value={discount} onChange={e => setDiscount(e.target.value)}
-                 aria-label={t('bazar.prices.discountAria')} placeholder="20" />%
+                 aria-label={t('bazar.prices.discountAria')} aria-describedby="bazar-discount-state" />%
         </label>
         <label className="flex items-center gap-1.5 text-small text-muted whitespace-nowrap">
           {t('bazar.r3.prices.roundTo')}
@@ -114,6 +115,11 @@ export function PricesCard({ ev, data, live }: { ev: BazarEventDetail; data: Pri
           </button>
         )}
       </div>
+      <p id="bazar-discount-state" className="-mt-1.5 text-small" data-testid="bazar-discount-state">
+        {ev.discount_pct != null
+          ? <span className="font-semibold text-success-text">{t('bazar.u1b.prices.applied', { pct: toNumber(ev.discount_pct) })}</span>
+          : <span className="text-muted">{t('bazar.u1b.prices.discountHint')}</span>}
+      </p>
 
       {error && <p role="alert" className="text-small text-critical">{error}</p>}
       {missing > 0 && (
@@ -186,30 +192,43 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
   const shown = row.price == null ? '' : String(toNumber(row.price))
   const [value, setValue] = useState(shown)
   const [invalid, setInvalid] = useState(false)
+  // U1b: an emptied box goes back to the price it had and says why (a price is needed), never silently.
+  const [kept, setKept] = useState<string | null>(null)
   useEffect(() => { setValue(shown); setInvalid(false) }, [shown])
+
+  const isPrice = (v: string) => v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number.isInteger(Number(v))
+
+  function change(v: string) {
+    setValue(v)
+    setKept(null)
+    if (invalid && isPrice(v.trim())) setInvalid(false)   // the red outline clears as soon as a valid price is typed
+  }
 
   function commit() {
     const v = value.trim()
-    if (v === shown) return
-    const n = Number(v)
+    if (v === '' && shown !== '') { setValue(shown); setInvalid(false); setKept(shown); return }
+    if (v === shown) { setInvalid(false); return }
     // B3: whole pounds only — no piasters.
-    if (v === '' || !Number.isFinite(n) || n < 0 || !Number.isInteger(n)) { setInvalid(true); return }
+    if (!isPrice(v)) { setInvalid(true); return }
     setInvalid(false)
-    onSave(n)
+    onSave(Number(v))
   }
 
   const shop = row.shopify_price == null ? null : toNumber(row.shopify_price)
   const price = row.price == null ? null : toNumber(row.price)
   const sourceLabel = row.source === 'bulk' ? t('bazar.prices.sourceRule') : row.source === 'default' ? t('bazar.prices.sourceShopify') : null
+  const differs = price != null && shop != null && price !== shop
 
   return (
     <tr className="tbl-row" data-testid={`price-row-${row.variant_id}`}>
       <td className="tbl-cell">
         <span className="block font-semibold text-primary min-w-[120px]">{row.product_title}</span>
-        <span className="text-small text-muted">{[row.variant_title, row.sku].filter(Boolean).join(' · ')}</span>
+        <span className="text-small text-muted">{[variantName(row.variant_title), row.sku].filter(Boolean).join(' · ')}</span>
       </td>
       <td className="tbl-cell text-end tabular-nums text-primary" dir="ltr">{qty ?? '—'}</td>
-      <td className="tbl-cell text-end tabular-nums text-muted line-through" dir="ltr">{shop == null ? '—' : amount(shop)}</td>
+      {/* U1b: crossed out only when the bazar price is different. */}
+      <td className={cn('tbl-cell text-end tabular-nums text-muted', differs && 'line-through')} dir="ltr"
+          data-testid={`price-shop-${row.variant_id}`}>{shop == null ? '—' : amount(shop)}</td>
       <td className="tbl-cell text-end">
         <div className="flex items-center justify-end gap-2">
           {row.source === 'override' && (
@@ -217,19 +236,24 @@ function PriceRow({ row, qty, disabled, onSave, onClear }: {
                     disabled={disabled} onClick={onClear}>{t('bazar.prices.clearOverride')}</button>
           )}
           <Input className={cn('w-28 h-10 text-end font-semibold tabular-nums', row.source === 'override' && 'border-trace-blue')}
-                 inputMode="decimal" dir="ltr" value={value} invalid={invalid} disabled={disabled}
+                 inputMode="decimal" dir="ltr" value={value} invalid={invalid} aria-invalid={invalid || undefined} disabled={disabled}
                  aria-label={t('bazar.prices.priceAria', { name: row.product_title })}
-                 onChange={e => setValue(e.target.value)} onBlur={commit}
+                 onChange={e => change(e.target.value)} onBlur={commit}
                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
         </div>
-        {price == null
+        {kept != null
+          ? <span role="status" className="block mt-1 text-small font-semibold text-warning-text" data-testid={`price-kept-${row.variant_id}`}>
+              {t('bazar.u1b.prices.needed', { price: amount(Number(kept)) })}</span>
+          : invalid
+          ? <span role="alert" className="block mt-1 text-small font-semibold text-critical-text">{t('bazar.u1b.prices.wholePounds')}</span>
+          : price == null
           ? <span className="block mt-1 text-small font-semibold text-warning-text">{t('bazar.prices.noPrice')}</span>
           : sourceLabel && <span className="block mt-1 text-small text-muted">{sourceLabel}</span>}
       </td>
       <td className="tbl-cell text-end">
         {row.source === 'override'
-          ? <Chip tone="info">{t('bazar.r3.prices.custom')}</Chip>
-          : price != null && shop != null && price !== shop
+          ? <Chip tone="info">{t('bazar.r3.prices.custom')}{differs && <span dir="ltr">{' · '}{pct(price!, shop!)}</span>}</Chip>
+          : differs
             ? <Chip tone={price < shop ? 'good' : 'warn'}><span dir="ltr">{pct(price, shop)}</span></Chip>
             : null}
       </td>

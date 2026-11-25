@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BrowserMultiFormatReader, BarcodeFormat, type IScannerControls } from '@zxing/browser'
-import { DecodeHintType } from '@zxing/library'
+import { DecodeHintType, NotFoundException } from '@zxing/library'
 import { Flashlight, FlashlightOff } from 'lucide-react'
 
 // S6 — the phone's camera as a barcode reader (from the 2026-10-02 camera spike): rear camera
@@ -11,6 +11,10 @@ import { Flashlight, FlashlightOff } from 'lucide-react'
 // iPhone Safari has no BarcodeDetector. Formats: Code 128 (piece labels, Bosta's barcodes) and
 // QR (Bosta's waybill QR holds "BOSTA_<tracking number>"). Every decode is passed to onRead;
 // the page decides what to do with it (duplicate suppression, sending).
+//
+// C1 (2026-11-24, bazar): optional `onFrame` — when given, every read attempt reports ALL the codes it saw, [] when it
+// saw no barcode (native: an empty detect; ZXing: NotFoundException), and onRead is not called. A page that doesn't
+// pass it (ScanPairPage, the warehouse phone scanner) gets exactly the old behaviour: every decode to onRead.
 
 interface DetectedBarcode { rawValue: string; format: string }
 interface BarcodeDetectorLike { detect(source: CanvasImageSource): Promise<DetectedBarcode[]> }
@@ -25,17 +29,21 @@ const ZXING_FORMATS = [BarcodeFormat.CODE_128, BarcodeFormat.QR_CODE]
 
 export type CameraError = 'insecure' | 'unsupported' | 'denied' | 'failed'
 
-export default function CameraReader({ active, onRead, onError }: {
+export default function CameraReader({ active, onRead, onError, onFrame }: {
   /** Camera on (the page turns it off when the pairing ends). */
   active: boolean
   onRead: (code: string) => void
   onError: (e: CameraError) => void
+  /** C1: one call per read attempt with every code seen ([] = no barcode in view); replaces onRead when given. */
+  onFrame?: (codes: string[]) => void
 }) {
   const { t } = useTranslation()
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const onReadRef = useRef(onRead)
   onReadRef.current = onRead
+  const onFrameRef = useRef(onFrame)
+  onFrameRef.current = onFrame
   const [ready, setReady] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
   const [torchOn, setTorchOn] = useState(false)
@@ -96,7 +104,11 @@ export default function CameraReader({ active, onRead, onError }: {
         const loop = async () => {
           if (stopped) return
           try {
-            if (video.readyState >= 2) for (const b of await detector.detect(video)) onReadRef.current(b.rawValue)
+            if (video.readyState >= 2) {
+              const found = await detector.detect(video)
+              if (onFrameRef.current) onFrameRef.current(found.map(b => b.rawValue))
+              else for (const b of found) onReadRef.current(b.rawValue)
+            }
           } catch { /* unreadable frame */ }
           if (!stopped) timer = window.setTimeout(loop, 60)
         }
@@ -109,7 +121,12 @@ export default function CameraReader({ active, onRead, onError }: {
         const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 60, delayBetweenScanSuccess: 60 })
         let controls: IScannerControls | null = null
         let stopped = false
-        reader.decodeFromVideoElement(video, result => { if (result) onReadRef.current(result.getText()) })
+        reader.decodeFromVideoElement(video, (result, error) => {
+          if (onFrameRef.current) {
+            if (result) onFrameRef.current([result.getText()])
+            else if (error instanceof NotFoundException) onFrameRef.current([])
+          } else if (result) onReadRef.current(result.getText())
+        })
           .then(c => { if (stopped) c.stop(); else controls = c })
           .catch(() => onError('failed'))
         stopDecode = () => { stopped = true; controls?.stop() }

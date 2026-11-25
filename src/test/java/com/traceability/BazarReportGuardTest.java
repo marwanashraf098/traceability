@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BazarReportGuardTest {
 
     private static final Set<String> ALLOWED_TABLES = Set.of(
-        "bazar_events", "bazar_sales", "bazar_payments", "bazar_day_closes",
+        "bazar_events", "bazar_sales", "bazar_payments", "bazar_day_closes", "bazar_receipts",
         "transfers", "transfer_pieces", "transfer_lines",
         "pieces", "variants", "products", "users", "locations", "piece_events", "sent", "sold");
 

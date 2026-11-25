@@ -140,7 +140,7 @@ public class LocationController {
             }
             if (!mode.equals(rows.get(0).get("shopify_sync_mode"))
                     && com.traceability.bazar.BazarOnlineStock.unsentBazarsAt(jdbc, tenantId, id, null) > 0) {
-                throw com.traceability.bazar.BazarOnlineStock.conflict();
+                throw com.traceability.bazar.BazarOnlineStock.conflict(jdbc, tenantId, id, null);
             }
             jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, id, tenantId);
             return Map.<String, Object>of("id", id.toString(), "shopify_sync_mode", mode);

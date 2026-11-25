@@ -1,6 +1,7 @@
+import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check, CloudOff, Globe } from 'lucide-react'
-import type { OnlineStock } from '../../bazar/api'
+import { BazarError, type OnlineStock } from '../../bazar/api'
 import { cn } from '../../components/ui'
 import { Tag } from './r1/parts'
 
@@ -73,5 +74,32 @@ export function OnlineStockTag({ mode, dark }: { mode: OnlineStock | null | unde
     <Tag tone={mode === 'leave' ? 'info' : 'neutral'} dark={dark} testId="bazar-online-tag">
       {t(`bazar.online.${mode}.tag`)}
     </Tag>
+  )
+}
+
+/** U1b — the choice belongs to the bazar's location: every bazar there shares it (said under the cards / the row). */
+export function OnlineStockWholeLocation({ location }: { location?: string | null }) {
+  const { t } = useTranslation()
+  return (
+    <p className="text-small text-muted" data-testid="bazar-online-whole-location">
+      {location ? t('bazar.u1b.online.wholeLocationNamed', { location }) : t('bazar.u1b.online.wholeLocation')}
+    </p>
+  )
+}
+
+/** U1b — the bazar in the way of an online-stock change (BAZAR_ONLINE_STOCK_CONFLICT details), as a link; else null. */
+export function blockingBazar(e: unknown): { id: string; name: string } | null {
+  if (!(e instanceof BazarError) || e.code !== 'BAZAR_ONLINE_STOCK_CONFLICT' || !e.details) return null
+  const id = e.details.blocking_event_id, name = e.details.blocking_event_name
+  return typeof id === 'string' && typeof name === 'string' ? { id, name } : null
+}
+
+export function BlockingBazarLink({ bazar }: { bazar: { id: string; name: string } | null }) {
+  const { t } = useTranslation()
+  if (!bazar) return null
+  return (
+    <Link to={`/bazar/${bazar.id}`} className="text-body font-semibold text-trace-blue underline" data-testid="bazar-blocking-link">
+      {t('bazar.u1b.online.openBlocking', { name: bazar.name })}
+    </Link>
   )
 }

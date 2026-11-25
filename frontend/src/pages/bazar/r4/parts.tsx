@@ -7,6 +7,8 @@ import { getMe } from '../../../api'
 import type { BazarLive } from '../../../capabilities'
 import { findVariant, type BazarCatalog, type BazarCatalogProduct } from '../../../bazar/catalog'
 import { liveLabel } from '../../../bazar/format'
+import { useCameraGate, type CameraGateNotice } from '../../../bazar/cameraGate'
+import { useCameraShown } from '../../../bazar/cameraPref'
 import { cn } from '../../../components/ui'
 import { ProductThumb } from '../phone/PickSheet'
 import { Tag, amount } from '../r1/parts'
@@ -226,13 +228,12 @@ export const SCAN_FIELD = cn(
   'lg:[&_input]:h-[60px] lg:[&_input]:text-body-lg lg:[&_input]:border-2 lg:[&_input]:border-trace-blue lg:[&_input]:pe-40',
 )
 
-/** The dark camera band: the camera box with its chips (state, Type code, camera on / off). */
-export function CameraChips({ state, typing, onType, cameraOn, onToggleCamera }: {
+/** The dark camera band: the camera box with its chips (state, Type code, Hide camera — C1, remembered per device). */
+export function CameraChips({ state, typing, onType, onHide }: {
   state: string
   typing: boolean
   onType: () => void
-  cameraOn: boolean
-  onToggleCamera: () => void
+  onHide: () => void
 }) {
   const { t } = useTranslation()
   return (
@@ -245,31 +246,82 @@ export function CameraChips({ state, typing, onType, cameraOn, onToggleCamera }:
             typing ? 'bg-trace-blue text-white' : 'bg-black/60 text-white')}>
           <Keyboard size={14} aria-hidden />{t('bazar.sell.typeCode')}
         </button>
-        <button type="button" onClick={onToggleCamera}
-          aria-label={cameraOn ? t('bazar.sell.cameraOff') : t('bazar.sell.cameraOn')}
+        <button type="button" onClick={onHide} aria-label={t('bazar.c1.hideCamera')} data-testid="hide-camera"
           className="w-9 h-9 rounded-md bg-black/60 text-white flex items-center justify-center">
-          {cameraOn ? <CameraOff size={16} /> : <Camera size={16} />}
+          <CameraOff size={16} />
         </button>
       </span>
     </>
   )
 }
 
-/** The camera reads the same code many times a second: one read per code per 2 s (ReturnParts' rule). */
-const DUPLICATE_MS = 2_000
+/**
+ * C1 — the camera box is hidden (a computer's default, or the seller chose "Hide camera"): a small "Use camera"
+ * button instead, plus the Type chip when the screen has one.
+ */
+export function CameraHiddenBar({ onUse, typing, onType }: { onUse: () => void; typing?: boolean; onType?: () => void }) {
+  const { t } = useTranslation()
+  const chip = 'h-9 px-3 rounded-md text-[12px] font-semibold flex items-center gap-1.5 border'
+  return (
+    <div className="flex items-center gap-2 lg:order-2" data-testid="camera-hidden-bar">
+      <button type="button" onClick={onUse} data-testid="use-camera"
+        className={cn(chip, 'bg-black/40 text-white border-white/20 lg:bg-surface lg:text-primary lg:border-line')}>
+        <Camera size={14} aria-hidden />{t('bazar.c1.useCamera')}
+      </button>
+      {onType && (
+        <button type="button" onClick={onType} aria-pressed={typing}
+          className={cn(chip, typing ? 'bg-trace-blue text-white border-trace-blue'
+            : 'bg-black/40 text-white border-white/20 lg:bg-surface lg:text-primary lg:border-line')}>
+          <Keyboard size={14} aria-hidden />{t('bazar.sell.typeCode')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * C1 — what the camera gate says over the camera box: "Two labels in view", or (paused after a scan) "Move the camera
+ * off the label" with "Scan next".
+ */
+export function CameraGateOverlay({ notice, waitingForClear, onScanNext }: {
+  notice: CameraGateNotice
+  waitingForClear: boolean
+  onScanNext: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      {waitingForClear && (
+        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-2 px-6 text-center"
+             data-testid="camera-paused">
+          <p className="text-small text-white">{t('bazar.c1.moveAway')}</p>
+          <button type="button" onClick={onScanNext} data-testid="camera-scan-next"
+            className="h-11 px-5 rounded-xl bg-white text-[#111827] text-body font-semibold">
+            {t('bazar.c1.scanNext')}
+          </button>
+        </div>
+      )}
+      {notice === 'twoLabels' && !waitingForClear && (
+        <p role="alert" data-testid="camera-two-labels"
+           className="absolute inset-x-3 top-14 rounded-md bg-critical px-3 py-2 text-center text-small font-semibold text-white">
+          {t('bazar.c1.twoLabels')}
+        </p>
+      )}
+    </>
+  )
+}
 
 /**
  * R4 look of ReturnParts' CodeEntry (Return / Exchange): the camera band, plus the field a HID scanner types into (or
- * the seller, after "Type code"). Same behaviour as CodeEntry: whitespace stripped, one read per code per 2 s, every
- * code to {@code onCode}; same test ids.
+ * the seller, after "Type code"). Same behaviour as CodeEntry: whitespace stripped, every code to {@code onCode}; same
+ * test ids. C1: the camera goes through the camera gate ('pause' — one aim, one code), and the box can be hidden.
  */
 export function R4CodeEntry({ onCode, disabled, hint }: { onCode: (code: string) => void; disabled?: boolean; hint: string }) {
   const { t } = useTranslation()
-  const [cameraOn, setCameraOn] = useState(true)
+  const [cameraShown, setCameraShown] = useCameraShown()
   const [cameraError, setCameraError] = useState<CameraError | null>(null)
   const [typing, setTyping] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const lastRead = useRef<{ code: string; at: number } | null>(null)
 
   const submit = useCallback((raw: string) => {
     const code = raw.replace(/\s+/g, '')
@@ -278,36 +330,34 @@ export function R4CodeEntry({ onCode, disabled, hint }: { onCode: (code: string)
     onCode(code)
   }, [onCode, disabled])
 
-  const onCameraRead = useCallback((raw: string) => {
-    const code = raw.trim()
-    const now = Date.now()
-    const last = lastRead.current
-    if (!code || (last && last.code === code && now - last.at < DUPLICATE_MS)) return
-    lastRead.current = { code, at: now }
-    submit(code)
-  }, [submit])
+  const gate = useCameraGate({ mode: 'pause', onCode: c => { submit(c) }, busy: disabled })
   const onCameraError = useCallback((e: CameraError) => setCameraError(e), [])
-  const live = cameraOn && !cameraError && !disabled
+  const live = cameraShown && !cameraError && !disabled
+  const onType = () => {
+    const next = !typing
+    setTyping(next)
+    if (next) setTimeout(() => inputRef.current?.focus(), 0)
+  }
 
   return (
     <div className="-mx-4 px-4 pb-4 bg-sidebar flex flex-col gap-2.5 lg:mx-0 lg:p-0 lg:bg-transparent">
+      {cameraShown ? (
       <div className="relative h-40 lg:h-24 rounded-2xl bg-[#1A1F27] overflow-hidden flex items-center" data-testid="bazar-camera-box">
         {live
-          ? <div className="w-full"><CameraReader active onRead={onCameraRead} onError={onCameraError} /></div>
+          ? <div className="w-full"><CameraReader active onRead={gate.onRead} onFrame={gate.onFrame} onError={onCameraError} /></div>
           : (
             <p className="w-full px-6 text-center text-small text-[#D1D5DB]">
               {cameraError ? t(`bazar.sell.camera.${cameraError}`) : t('bazar.sell.camera.off')}
             </p>
           )}
         <span className="absolute bottom-2 inset-x-0 text-center text-small text-[#D1D5DB] pointer-events-none">{hint}</span>
+        {live && <CameraGateOverlay notice={gate.notice} waitingForClear={gate.waitingForClear} onScanNext={gate.scanNext} />}
         <CameraChips state={live ? t('bazar.r4.cameraReady') : t('bazar.r4.cameraOff')} typing={typing}
-          cameraOn={cameraOn} onToggleCamera={() => { setCameraError(null); setCameraOn(v => !v) }}
-          onType={() => {
-            const next = !typing
-            setTyping(next)
-            if (next) setTimeout(() => inputRef.current?.focus(), 0)
-          }} />
+          onHide={() => { setCameraError(null); setCameraShown(false) }} onType={onType} />
       </div>
+      ) : (
+        <CameraHiddenBar onUse={() => { setCameraError(null); setCameraShown(true) }} typing={typing} onType={onType} />
+      )}
       <input
         ref={inputRef}
         type="text"
@@ -348,7 +398,7 @@ export function PieceCard({ catalog, variantId, title, code, line, price, onClea
       <div className="flex-1 min-w-0 flex flex-col">
         <span className="font-semibold text-primary truncate text-start" dir="auto">{title}</span>
         {code && <span className="text-small text-muted font-mono" dir="ltr">{code}</span>}
-        <span className="text-small text-muted truncate">{line}</span>
+        <span className="text-small text-muted whitespace-normal break-words">{line}</span>
       </div>
       <span className="text-h4 font-bold tabular-nums shrink-0" dir="ltr">
         {price == null ? '—' : amount(price)}

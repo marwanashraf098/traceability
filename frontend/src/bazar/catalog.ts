@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { authFetch } from '../api'
 import { BazarError, bazarGet } from './api'
+import { variantName } from './format'
 
 // Bazar POS B7a / B7b — selling without barcodes: the event's catalog (products by #number with sizes, bazar prices
 // and what's left), the short-number rule, tapped-size refs, and the A4 price sheet.
@@ -14,6 +15,8 @@ export interface BazarCatalogSize {
   left: number
   /** B7d send stock only: online orders' committed demand for this size (as Inventory shows it). */
   committed?: number
+  /** U1b (event catalog): of `left`, the pieces with no label. A tap sells one of these first. */
+  left_unlabelled?: number
 }
 
 export interface BazarCatalogProduct {
@@ -96,9 +99,23 @@ export function tappedVariant(ref: string): string | null {
   return i < 0 ? rest : rest.slice(0, i)
 }
 
-/** "White / M", "M", "Grey" — what a size button / a tapped line is called. */
+/** "White / M", "M", "Grey" — what a size button / a tapped line is called ("" for a product without sizes). */
 export function sizeName(p: BazarCatalogProduct, s: BazarCatalogSize): string {
-  return [p.colour, s.size].filter(Boolean).join(' / ') || s.title || ''
+  return [p.colour, s.size].filter(Boolean).join(' / ') || variantName(s.title) || ''
+}
+
+/** "Linen shirt · White / M", or just "Mug" when the product has no sizes. */
+export function productSizeName(p: BazarCatalogProduct, s: BazarCatalogSize): string {
+  const n = sizeName(p, s)
+  return n ? `${p.title} · ${n}` : p.title
+}
+
+/**
+ * U1b: only LABELLED pieces of this size are left at the bazar — a tap would let Traced choose which labelled piece
+ * is sold (and the one in the customer's hand would then not sell), so the screen asks for a scan of it instead.
+ */
+export function needsScan(s: BazarCatalogSize): boolean {
+  return s.left > 0 && s.left_unlabelled === 0
 }
 
 /** Search: name, colour or "#12" / "12" (the number matches exactly). */

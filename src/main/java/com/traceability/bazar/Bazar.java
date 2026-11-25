@@ -38,7 +38,7 @@ public final class Bazar {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT e.id, e.name, e.starts_on, e.ends_on, e.payment_methods, " +
             "       ((now() AT TIME ZONE 'Africa/Cairo')::date)::text AS business_day " +
-            "FROM bazar_events e WHERE e.tenant_id = ? AND e.status = 'live' AND ? = ANY (e.seller_roles) " +
+            "FROM bazar_events e WHERE e.tenant_id = ? AND e.status = 'live' AND e.deleted_at IS NULL AND ? = ANY (e.seller_roles) " +
             "  AND NOT " + BazarSellers.REMOVED_FROM_E_SQL + " " +
             "ORDER BY e.started_at DESC NULLS LAST, e.created_at DESC, e.id DESC LIMIT 1",
             tenantId, role.toLowerCase(), userId);

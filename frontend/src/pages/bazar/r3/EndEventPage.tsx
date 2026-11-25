@@ -87,7 +87,7 @@ export default function EndEventPage() {
         </section>
       ) : (
         <>
-          <LeftoversPanel eventId={ev.id} initial={left} noCamera wide reportTo={`/bazar/${id}/report`}
+          <LeftoversPanel eventId={ev.id} initial={left} noCamera wide reportTo={`/bazar/${id}/report`} onChange={setLeft}
                           onClosed={l => { setLeft(l); load() }} />
         </>
       )}

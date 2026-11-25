@@ -162,7 +162,7 @@ public class BazarSaleService {
     }
 
     /**
-     * B7a — THE piece choice for a tapped variant: the OLDEST piece scanned out to this bazar that is still open on its
+     * B7a — THE piece choice for a tapped variant (U1b: unlabelled pieces first): the OLDEST piece scanned out to this bazar that is still open on its
      * transfer (no outcome) and {@code out_on_transfer}. {@code FOR UPDATE OF tp SKIP LOCKED}: a piece another
      * seller's sale is writing right now is skipped (never waited on — a plain FOR UPDATE could come back empty after
      * the wait even with another piece free); the ledger's race-guarded UPDATE in writePiece stays the referee.
@@ -181,7 +181,10 @@ public class BazarSaleService {
             "FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id AND p.tenant_id = tp.tenant_id " +
             "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.status = 'out_on_transfer' " +
             "  AND p.variant_id = ?" + notIn + " " +
-            "ORDER BY tp.created_at, tp.id LIMIT 1 FOR UPDATE OF tp SKIP LOCKED", args.toArray());
+            // U1b (approved 2026-11-24): an UNLABELLED piece first (no short code — nobody can scan it, so a tap is the
+            // only way to sell it); a labelled piece is the customer's own piece in hand, so the screen asks for its scan
+            // once only labelled ones are left (catalog left_unlabelled = 0). Oldest added first within each.
+            "ORDER BY (p.short_code IS NOT NULL), tp.created_at, tp.id LIMIT 1 FOR UPDATE OF tp SKIP LOCKED", args.toArray());
         if (rows.isEmpty()) throw soldOut(tenantId, ev, variantId);
         return rows.get(0);
     }
@@ -1822,7 +1825,7 @@ public class BazarSaleService {
     private Map<String, Object> event(UUID tenantId, UUID eventId, String lock) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT e.id, e.status, e.location_id, e.transfer_id, e.payment_methods, e.seller_roles " +
-            "FROM bazar_events e WHERE e.id = ? AND e.tenant_id = ?" + lock, eventId, tenantId);
+            "FROM bazar_events e WHERE e.id = ? AND e.tenant_id = ? AND e.deleted_at IS NULL" + lock, eventId, tenantId);
         if (rows.isEmpty()) {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
                 "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);

@@ -83,6 +83,31 @@ public class BazarEndController {
             .body(body);
     }
 
+    /** U1b — the report's page 1 as an A4 PDF, {@code lang} en (default) | ar. */
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @GetMapping("/report.pdf")
+    public ResponseEntity<byte[]> reportPdf(@PathVariable UUID eventId,
+                                            @org.springframework.web.bind.annotation.RequestParam(required = false) String lang,
+                                            @AuthenticationPrincipal CustomUserDetails p) {
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_PDF)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"bazar-report.pdf\"")
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .body(report.reportPdf(eventId, actor(p), lang));
+    }
+
+    /** U1b — every piece sold at the event, one row each — audit-logged. */
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @GetMapping("/report/orders.csv")
+    public ResponseEntity<byte[]> ordersCsv(@PathVariable UUID eventId, @AuthenticationPrincipal CustomUserDetails p) {
+        byte[] body = ("\uFEFF" + report.ordersCsv(eventId, actor(p))).getBytes(StandardCharsets.UTF_8);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"bazar-orders.csv\"")
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+            .body(body);
+    }
+
     /** B7d-2 — N leftovers of a size without a barcode back good (scan-back's rule: the event's sellers). */
     @PostMapping("/bring-back-by-count")
     public Map<String, Object> bringBackByCount(@PathVariable UUID eventId, @RequestBody BringBackRequest req,

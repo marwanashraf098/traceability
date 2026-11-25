@@ -28,7 +28,10 @@ import java.util.function.Supplier;
  * the ops startup trigger only ({@link BostaVisibilityCheckTrigger}: bosta.exchange-multi.catch-up.on-startup =
  * tenant ids, .apply). One job per tenant, every DB touch under that tenant (RLS). No Bosta write; the reads are v0
  * fetchDelivery with the tenant's key through the shared rate limiter (BACKGROUND), one per row in a dry run (plus the
- * webhook's own verify-by-fetch on apply). A Bosta rate limit stops the run.
+ * webhook's own verify-by-fetch on apply). A Bosta rate limit (2026-11-24) never ends the run: the row's fetch is retried
+ * after a back-off (Bosta's Retry-After when given, else 30 s doubling per attempt, capped at 5 min), at
+ * most {@link #MAX_ATTEMPTS} attempts; then that row is RATE_LIMITED and the run moves on to the next row. A progress
+ * line {@code EXCHANGE_MULTI_CATCHUP_PROGRESS} every 10 rows.
  *
  * <pre>
  *   SKIP(reason)              unknown Bosta step (past pickup, no recognised step — ExchangeBostaStep) / no store / store not connected / no active Bosta account / Bosta refuses the key (every
@@ -63,6 +66,24 @@ public class ExchangeMultiCatchUpService {
     private final PreConnectDeliveryFilter filter;
     private final ObjectMapper mapper;
     private BostaKeyHealth keyHealth;
+
+    /** Fetch attempts per row on a Bosta rate limit before the row is reported RATE_LIMITED. */
+    static final int MAX_ATTEMPTS = 5;
+    static final long FIRST_BACKOFF_SECONDS = 30;
+    static final long MAX_BACKOFF_SECONDS = 300;
+
+    /** Waits the given seconds — replaceable in tests (no real-clock waits). */
+    public interface Sleeper { void sleep(long seconds) throws InterruptedException; }
+    private Sleeper sleeper = seconds -> Thread.sleep(seconds * 1000L);
+
+    /** Tests only: replace the back-off wait. */
+    public void setSleeper(Sleeper sleeper) { this.sleeper = sleeper; }
+
+    /** The wait before attempt {@code failed + 1}: Bosta's Retry-After when given, else min(5 min, 30 s × 2^(failed − 1)). */
+    static long backoffSeconds(int failed, long retryAfterSeconds) {
+        if (retryAfterSeconds > 0) return retryAfterSeconds;
+        return Math.min(MAX_BACKOFF_SECONDS, FIRST_BACKOFF_SECONDS << Math.min(failed - 1, 10));
+    }
 
     public ExchangeMultiCatchUpService(JdbcTemplate jdbc, PlatformTransactionManager txm, BostaWebhookJob webhookJob,
                                        BostaGateway bosta, EncryptionService encryption, PreConnectDeliveryFilter filter,
@@ -125,6 +146,7 @@ public class ExchangeMultiCatchUpService {
         String apiKey = encryption.decrypt(inTenant(tenantId, () -> jdbc.queryForObject(
             "SELECT api_key_encrypted FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
             String.class, tenantId)));
+        int done = 0;
         for (Candidate c : candidates) {
             Row r;
             try {
@@ -134,7 +156,9 @@ public class ExchangeMultiCatchUpService {
                     e.getClass().getSimpleName());
             }
             out.add(r);
-            if ("RATE_LIMITED".equals(r.verdict())) break;
+            if (++done % 10 == 0) {
+                log.info("EXCHANGE_MULTI_CATCHUP_PROGRESS tenant {} {}/{} rows", tenantId, done, candidates.size());
+            }
         }
         return out;
     }
@@ -164,14 +188,30 @@ public class ExchangeMultiCatchUpService {
             return verdict(tenantName, c, n > 0 ? "RESOLVED_EXISTING" : "SKIP", null, n > 0 ? null : "already resolved");
         }
 
-        BostaDelivery d;
-        try {
-            d = bosta.fetchDelivery(apiKey, tn);
-        } catch (BostaRateLimitException e) {
-            return verdict(tenantName, c, "RATE_LIMITED", null, "retry after " + e.getRetryAfterSeconds() + " s — run stopped");
-        } catch (DeliveryNotFoundException e) {
-            return skip(tenantName, c, "Bosta no longer returns it");
+        BostaDelivery fetched;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                fetched = bosta.fetchDelivery(apiKey, tn);
+                break;
+            } catch (BostaRateLimitException e) {
+                if (attempt >= MAX_ATTEMPTS) {
+                    return verdict(tenantName, c, "RATE_LIMITED", null,
+                        "still rate limited after " + MAX_ATTEMPTS + " attempts — moved on to the next row");
+                }
+                long wait = backoffSeconds(attempt, e.getRetryAfterSeconds());
+                log.info("Multi-item exchange catch-up tenant {}: Bosta rate limit on attempt {} — retrying in {} s",
+                    tenantId, attempt, wait);
+                try {
+                    sleeper.sleep(wait);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return verdict(tenantName, c, "RATE_LIMITED", null, "interrupted while backing off");
+                }
+            } catch (DeliveryNotFoundException e) {
+                return skip(tenantName, c, "Bosta no longer returns it");
+            }
         }
+        final BostaDelivery d = fetched;
         if (d == null) return skip(tenantName, c, "Bosta no longer returns it");
         if (d.typeCode() != 30) return skip(tenantName, c, "not an exchange (type " + d.typeCode() + ")");
         if (Boolean.TRUE.equals(inTenant(tenantId, () -> filter.shouldIgnore(tenantId, tn, d)))) {
