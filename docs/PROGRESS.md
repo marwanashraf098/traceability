@@ -52,7 +52,7 @@ bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` nee
   signup POST; MeTourSignalsTest.m3 expects setupPurpose 'ask' for owner / manager, keeping V244's bazar_enabled =
   false fixture); the purpose step no longer writes bazar_enabled (V244 removed BazarSignup's switch). **Waiting for
   approval → approved and done 2026-11-26:** `BazarSignupIntentTest.e1` (added by V244) asserts that with BAZAR_SIGNUP_ENABLED off
-  /me has no `bazarSetup` and /bazar-setup is 404 — the opposite of the approved gate (bazar alone). Proposed: expect
+  /me has no `bazarSetup` and /bazar-setup is 404 — the opposite of the approved gate (bazar alone). Now expects
   `bazarSetup: true` and 200 there.
 - **Needs approval (existing tests NOT edited, red on this branch) — both approved 2026-11-26 and done:**
   - `signupMetaPixel.test.tsx` "sends cookies + URL attribution…" reads `fetchMock.mock.calls[0]` as the signup POST —
