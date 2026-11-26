@@ -160,7 +160,7 @@ class MeTourSignalsTest {
 
     private Tenant tenant(String tag) {
         UUID id = UUID.randomUUID(), loc = UUID.randomUUID();
-        owner.update("INSERT INTO tenants (id, name) VALUES (?, ?)", id, "Tours " + tag);
+        owner.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, ?, false)", id, "Tours " + tag);
         owner.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
                      "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true)", loc, id);
         return new Tenant(id, loc, user(id, "owner", tag), user(id, "manager", tag), user(id, "worker", tag));
