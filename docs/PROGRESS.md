@@ -4,6 +4,36 @@
 
 ## Current state
 
+**Bazar U1c — small fixes from the 2026-11-26 E2E test (2026-11-26; branch `feat/bazar-u1c` off origin/main, rebased
+onto 25bcfbc6 after the wizard-entry merge; NO migration — next free still V245; pushed, NOT merged, NOT deployed).**
+- **Send by count = stock WITHOUT a label only** (`TransferService.scanOutByCountForBazar`: `short_code IS NULL`).
+  "Has a label" = `pieces.short_code IS NOT NULL` — it means Traced issued a code, NOT that a sticker is on the piece
+  (first prints aren't recorded per piece). Fewer unlabelled than asked → those are sent, code `SENT_PARTIAL` +
+  `requested` / `labelled_at_main` + "Only N without labels. The other X have labels — scan them." (X = min(asked − N,
+  labelled at Main); `requested` is in the send events' metadata so a replay repeats it). None → 409
+  `BAZAR_PIECES_HAVE_LABELS` "These pieces have labels — scan them instead. If you never printed their labels,
+  reprint them from the receipt." (details `labelled_at_main`); nothing at Main → `BAZAR_NOT_ENOUGH_AT_MAIN` as before.
+  The send no longer carries `labelled_codes` (remove-from-send still does — put-back names). send-stock sizes carry
+  `left_unlabelled`; SendByCount shows "N without labels · M with labels (scan them)" (only when M > 0), caps the
+  picker at N, shows the all-labelled line and the partial warning; the U1b collect box and its strings are gone.
+- Bring back by count: wording only ("barcode" → "labels", backend + the bringBack strings), still all or nothing.
+- Report (web): hour columns capped at 48px and centred (the PDF caps at 46 pt). "What sold" reads the new
+  `top_items` (per variant; `variant_title` only for a real variant, never "Default Title"; falls back to
+  `top_products`). `top_sizes` was the same per-variant list (minus Default Title) → its card is removed, the key
+  stays. `top_products` unchanged (Live view "Selling best" uses it).
+- PDF: Shopify tile "VS SHOPIFY · 319 EGP · below Shopify prices" (whole pounds, HALF_UP); Counted tile "· Balanced" /
+  "· 20 short" / "· 20 over" (AR مطابق / ناقص / زيادة). Money-by-day Difference column unchanged.
+- Orders CSV: "returned (damaged)" / "exchanged (damaged)" from `bazar_sales.return_condition` (an exchanged
+  original is status 'returned' with a condition).
+- Suites (after rebase): vitest 2,324 / 2,324; backend 5,019, only ExchangeBackfillTest red (allowed).
+- Tests: new BazarU1cTest (r1 top_items, r2 CSV), BazarReportPdfWordingTest (unit, no DB), bazarU1c.test.tsx (hours cap,
+  What sold, fallback); approved edits — BazarSendByCountTest c1 / c2 / c3 / r2 / s1 + javadoc, BazarSendByCountShopifyTest
+  (scan the labelled one), BazarU1aTest `live()` (scans labelled pieces, counts the rest), BazarU1bTest c1 / r3,
+  BazarBringBackByCountTest b2 (wording), bazarU1b (collect → partial + all-labelled tests; Top sizes asserts gone),
+  bazarB5 (top_items fixture, card gone), bazarB7d2 helper (wording). Revert checks red for each item (8).
+- **Gotcha:** a print-and-stick receipt whose labels were never physically printed still reads as labelled — send by
+  count refuses it; the way out is reprinting that receipt's labels (the refusal says so).
+
 **Bazar wizard entry — "Set up from new stock" + "What will you use Traced for?" (2026-11-26; branch
 `feat/bazar-wizard-entry` off origin/main b62f049b; NO migration — V244 is the separate bazar-default slice, V245 not
 needed; pushed, NOT merged, NOT deployed).** Step 0 (prod testBazar): the wizard was unreachable — the web signup had no
