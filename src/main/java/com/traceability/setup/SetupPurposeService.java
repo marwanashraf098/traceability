@@ -1,7 +1,6 @@
 package com.traceability.setup;
 
 import com.traceability.account.OnboardingProgressService;
-import com.traceability.bazar.BazarSignup;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -21,8 +20,7 @@ import java.util.UUID;
  *       ({@link SetupStatus#step} null). The tenant row is locked first, so two answers can't both land.</li>
  *   <li>Routing follows the existing rules: 'bazar' skips the address gate and Bosta (SetupStatus / setupIntro read
  *       intent = 'bazar' exactly); 'orders' and 'both' take the full flow ('both' is offered the wizard at the end).</li>
- *   <li>'bazar' / 'both' also switch bazar on — the same {@link BazarSignup} switch as a bazar signup, only while
- *       BAZAR_SIGNUP_ENABLED is on.</li>
+ *   <li>Nothing else is written: bazar is on by default since V244 (the answer never switches it).</li>
  * </ul>
  */
 @Service
@@ -30,12 +28,10 @@ public class SetupPurposeService {
 
     private final JdbcTemplate jdbc;
     private final OnboardingProgressService prefs;
-    private final BazarSignup bazarSignup;
 
-    public SetupPurposeService(JdbcTemplate jdbc, OnboardingProgressService prefs, BazarSignup bazarSignup) {
+    public SetupPurposeService(JdbcTemplate jdbc, OnboardingProgressService prefs) {
         this.jdbc = jdbc;
         this.prefs = prefs;
-        this.bazarSignup = bazarSignup;
     }
 
     @Transactional
@@ -57,7 +53,6 @@ public class SetupPurposeService {
                 "Your setup is already finished.", "تم الانتهاء من الإعداد بالفعل.", HttpStatus.CONFLICT);
         }
         prefs.recordSetupPurpose(actorUserId, purpose);
-        if (!"orders".equals(purpose)) bazarSignup.enableForSetupPurpose(actorUserId);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("purpose", purpose);
         out.put("setupStep", SetupStatus.step(jdbc, tenantId));

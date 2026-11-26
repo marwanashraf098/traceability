@@ -82,7 +82,7 @@ class BazarSaleServiceTest {
         variantNoPrice = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Bazar Sale Co', true)", tenantId);
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Other Sale Co', true)", otherTenantId);
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Off Sale Co')", offTenantId);
+        jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Off Sale Co', false)", offTenantId);
         ownerId   = user("owner", "Owner Omar");
         managerId = user("manager", "Manager Mona");
         worker1Id = user("worker", "Seller Sara");

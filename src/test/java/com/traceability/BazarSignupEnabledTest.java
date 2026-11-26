@@ -39,12 +39,12 @@ import static org.mockito.Mockito.when;
 
 /**
  * Bazar B9a — BAZAR_SIGNUP_ENABLED=true (traced.bazar.signup-enabled). Whole app as app_user, real HTTP.
- *   f1 web bazar signup → tenants.bazar_enabled true in the signup transaction, one bazar_enabled_at_signup audit row,
- *      /me bazar true
+ *   f1 web bazar signup → tenants.bazar_enabled true (the V244 default — signup no longer writes it), /me bazar true,
+ *      the bazar setup wizard (/bazar-setup) reachable
  *   f2 App Store bazar signup → the same
- *   f3 normal signups (no intent, another intent, App Store default) → bazar_enabled false, no audit row
- *   f4 a failed bazar signup (duplicate email) leaves no tenant and no audit row
- * (BazarSignupIntentTest runs with the setting off: bazar stays false for every signup.)
+ *   f3 normal signups (no intent, another intent, App Store default) → bazar_enabled true too (V244 default), no prefs
+ *   f4 a failed bazar signup (duplicate email) leaves no tenant
+ * (BazarSignupIntentTest runs with the setting off: bazar still on, /bazar-setup answers 404.)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -124,23 +124,22 @@ class BazarSignupEnabledTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void f1_webBazarSignup_switchesBazarOn_oneAuditRow() throws Exception {
+    void f1_webBazarSignup_bazarOn_setupReachable() throws Exception {
         String mail = mail("f1");
         String token = webSignup(mail, "bazar");
         UUID tenant = tenantOf(mail);
         assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant)).isTrue();
-        assertThat(owner.queryForObject(
-            "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup' " +
-            "AND actor_user_id = (SELECT id FROM users WHERE email = ?)", Integer.class, tenant, mail)).isEqualTo(1);
         assertThat(mapper.readValue(prefs(tenant), Map.class)).isEqualTo(Map.of("intent", "bazar"));
         connect(tenant, "f1");
         Map<String, Object> me = me(token);
         assertThat(me.get("bazar")).isEqualTo(true);
         assertThat(me.get("setupIntro")).isEqualTo("bazar");
+        assertThat(send(HttpMethod.GET, "/api/v1/bazar-setup", token, null).getStatusCode())
+            .as("BAZAR_SIGNUP_ENABLED on → the setup wizard is reachable").isEqualTo(HttpStatus.OK);
     }
 
     @Test
-    void f2_appStoreBazarSignup_switchesBazarOn() throws Exception {
+    void f2_appStoreBazarSignup_bazarOn_setupReachable() throws Exception {
         String shop = "b9a-f2-" + System.nanoTime() + ".myshopify.com";
         String mail = mail("f2");
         Map<String, Object> form = signupBody(mail);
@@ -148,13 +147,14 @@ class BazarSignupEnabledTest {
         assertThat(embeddedSignup(shop, form).getStatusCode()).isEqualTo(HttpStatus.OK);
         UUID tenant = tenantOf(mail);
         assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant)).isTrue();
-        assertThat(owner.queryForObject(
-            "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup'", Integer.class, tenant)).isEqualTo(1);
-        assertThat(me(login(mail)).get("bazar")).isEqualTo(true);
+        String token = login(mail);
+        assertThat(me(token).get("bazar")).isEqualTo(true);
+        assertThat(send(HttpMethod.GET, "/api/v1/bazar-setup", token, null).getStatusCode())
+            .as("BAZAR_SIGNUP_ENABLED on → the setup wizard is reachable").isEqualTo(HttpStatus.OK);
     }
 
     @Test
-    void f3_normalSignups_neverTouchBazar() throws Exception {
+    void f3_normalSignups_bazarOnByDefault() throws Exception {
         String mail = mail("f3");
         webSignup(mail, null);
         String other = mail("f3o");
@@ -164,9 +164,8 @@ class BazarSignupEnabledTest {
         assertThat(embeddedSignup(shop, signupBody(app)).getStatusCode()).isEqualTo(HttpStatus.OK);
         for (String m : List.of(mail, other, app)) {
             UUID tenant = tenantOf(m);
-            assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant)).as(m).isFalse();
-            assertThat(owner.queryForObject(
-                "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup'", Integer.class, tenant)).isZero();
+            assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant))
+                .as("%s: V244 default", m).isTrue();
             assertThat(prefs(tenant)).isEqualTo("{}");
         }
     }
@@ -175,25 +174,15 @@ class BazarSignupEnabledTest {
     void f4_failedBazarSignup_leavesNothing() throws Exception {
         String mail = mail("f4");
         webSignup(mail, "bazar");
-        long audits = owner.queryForObject("SELECT count(*) FROM audit_log WHERE action = 'bazar_enabled_at_signup'", Long.class);
         Map<String, Object> body = signupBody(mail);
         body.put("intent", "bazar");
         body.put("tenantName", "Dup Co");
         assertThat(http.postForEntity(base() + "/api/v1/auth/signup", new HttpEntity<>(body, json()), String.class)
             .getStatusCode().is2xxSuccessful()).isFalse();
         assertThat(owner.queryForObject("SELECT count(*) FROM tenants WHERE name = 'Dup Co'", Long.class)).isZero();
-        assertThat(owner.queryForObject("SELECT count(*) FROM audit_log WHERE action = 'bazar_enabled_at_signup'", Long.class))
-            .isEqualTo(audits);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
-
-    private void assertBazarOff(UUID tenant) {
-        assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant))
-            .as("BAZAR_SIGNUP_ENABLED off").isFalse();
-        assertThat(owner.queryForObject(
-            "SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup'", Integer.class, tenant)).isZero();
-    }
 
     private String base() { return "http://localhost:" + port; }
 

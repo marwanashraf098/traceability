@@ -114,8 +114,9 @@ portal:
 # One-time all-statuses catalog re-import for stores connected before 2026-09-29
 # (CatalogBackfillJob). Kill switch: TRACED_CATALOG_BACKFILL_ENABLED=false.
 traced:
-  # Bazar B9a (BazarSignup): a signup with intent 'bazar' (/signup?for=bazar, or "Sell at a bazar" in the App Store
-  # onboarding form) switches tenants.bazar_enabled on in the signup transaction. Default false = ops switch it on.
+  # Bazar B9a (BazarSignup): gates the bazar setup wizard for a signup with intent 'bazar' (/signup?for=bazar, or
+  # "Sell at a bazar" in the App Store onboarding form). Off = /bazar-setup answers 404. tenants.bazar_enabled itself
+  # is on by default since V244 (not set at signup any more).
   bazar:
     signup-enabled: ${BAZAR_SIGNUP_ENABLED:false}
   # Returns portal fees per-store rollout (PortalFeesRollout): comma-separated tenant ids that get fees while

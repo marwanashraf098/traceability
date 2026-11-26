@@ -30,8 +30,8 @@ bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` nee
   {purpose: orders | bazar | both} (`SetupPurposeService`, owner only) — locks the tenant row, 400 SETUP_PURPOSE_INVALID,
   409 SETUP_PURPOSE_ALREADY_SET when an intent is stored, 409 SETUP_FINISHED when `SetupStatus.step` is null; written
   through the ONE prefs writer (`OnboardingProgressService.recordSetupPurpose`: `intent` + `intentFrom: 'setup'`, audit
-  `setup_purpose_set`); bazar / both also call `BazarSignup.enableForSetupPurpose` (flag-gated, audit source
-  'setup_purpose'). `intent` / `intentFrom` stay refused as PATCH keys; the signup's `intent` still accepts 'bazar' only.
+  `setup_purpose_set`); nothing else is written (after merging V244 the answer never touches `bazar_enabled`).
+  `intent` / `intentFrom` stay refused as PATCH keys; the signup's `intent` still accepts 'bazar' only.
   GET /me `setupPurpose`: 'ask' while setupStep 'shopify' and no intent (owner / manager), else the answer when
   `intentFrom = 'setup'`, else absent. Routing reuses the existing rules unchanged: SetupStatus / setupIntro compare
   intent = 'bazar' exactly, so 'both' and 'orders' take address + Bosta; 'bazar' skips them → /setup/bazar → wizard.
@@ -54,6 +54,19 @@ bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` nee
   - `MeTourSignalsTest.m3_onlyTheTwoBooleansAreNew` — a /me key golden for a fresh (gated) tenant: owner and manager
     now also carry `setupPurpose: 'ask'`. Fix: add it to that tenant's expected keys (owner / manager), or seed the
     tenant with an intent.
+**V244 — bazar on by default (2026-11-26; branch `feat/bazar-enabled-default` off origin/main b62f049b; merged to main
+2026-11-26, NOT deployed).**
+- `V244__bazar_enabled_default_true.sql`: `tenants.bazar_enabled` DEFAULT true + `UPDATE … SET true WHERE false` (a no-op
+  in prod — all 108 tenants were switched on by hand; kept so a fresh DB matches). Ops can still switch one tenant off.
+- `BazarSignup` no longer writes anything: the enable-at-signup UPDATE and the `bazar_enabled_at_signup` audit row are
+  gone (dead with default true; `AuthService` no longer depends on it). `BAZAR_SIGNUP_ENABLED` stays — (superseded by the wizard entry above: it now only shows the signup page's
+  "I'm here for the bazar" link; the wizard's gate is bazar alone).
+- Tests: "off" fixture tenants now say `bazar_enabled = false` explicitly (BazarHttp / SalesHttp / CartHttp / DaysHttp /
+  EndHttp / TodayCustomerHttp / Me / EventService / SaleService tests, MeTourSignalsTest's tenant helper); signup tests
+  expect bazar true for every signup (`assertBazarOnByDefault`), f1 / f2 assert /bazar-setup 200 with the setting on,
+  e1 (setting off) 404; new `BazarEnabledDefaultTest` (V243 off tenant → V244 flips it; new tenant default true).
+- **Gotcha:** any test that builds a tenant with `INSERT INTO tenants (id, name)` and then expects no bazar — or an
+  exact /me key set — must now set `bazar_enabled = false` itself; /me carries `"bazar": true` for every default tenant.
 
 **URGENT fix — exchange advance-at-commit never ran on prod (2026-11-24; branch `fix/exchange-advance-at-commit-tenant`
 off origin/main ade98935; no migration; pushed, NOT merged, NOT deployed).** BROEK multi catch-up apply 13:41–13:50

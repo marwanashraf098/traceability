@@ -57,8 +57,8 @@ import static org.mockito.Mockito.when;
  *       an unknown value → 400.</li>
  *   <li>b2 owner only (manager / worker 403); another tenant's prefs untouched.</li>
  *   <li>b3 refused once setup is finished (409 SETUP_FINISHED) and when signup already set an intent (no 'ask').</li>
- *   <li>b4 routing: bazar → no address step, intro 'bazar', bazar on (audit source setup_purpose); orders / both →
- *       address step.</li>
+ *   <li>b4 routing: bazar → no address step, intro 'bazar'; orders / both → address step; bazar_enabled never
+ *       written by the answer (V244 default).</li>
  *   <li>b5 public signup config: no token, bazarSignup true (BazarSetupFlagOffTest has the false side).</li>
  * </ul>
  */
@@ -360,11 +360,11 @@ class BazarWizardEntryTest {
             } else {
                 assertThat(me).as(p).containsEntry("setupStep", "address").containsEntry("setupPurpose", p);
             }
-            // bazar / both switch bazar on (the signup's switch, BAZAR_SIGNUP_ENABLED on here); orders never does.
+            // The answer never switches bazar (on by default since V244): left exactly as it was, no bazar audit row.
             assertThat(owner.queryForObject("SELECT bazar_enabled FROM tenants WHERE id = ?", Boolean.class, tenant))
-                .as(p).isEqualTo(!p.equals("orders"));
-            assertThat(count("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup' " +
-                "AND metadata->>'source' = 'setup_purpose'", tenant)).as(p).isEqualTo(p.equals("orders") ? 0 : 1);
+                .as(p).isFalse();
+            assertThat(count("SELECT count(*) FROM audit_log WHERE tenant_id = ? AND action = 'bazar_enabled_at_signup'",
+                tenant)).as(p).isZero();
             tokens.put(p, token);
         }
     }
