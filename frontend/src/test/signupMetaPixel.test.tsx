@@ -94,7 +94,9 @@ describe('Signup page Meta Pixel', () => {
     await fillAndSubmit('owner@acme.com')
     await screen.findByText('OVERVIEW')
 
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    // The signup POST (the page also asks /public/signup-config on mount — wizard entry).
+    const signupCall = fetchMock.mock.calls.find(c => String(c[0]).endsWith('/auth/signup') && c[1]?.method === 'POST')!
+    const body = JSON.parse(signupCall[1].body)
     expect(body.attribution).toEqual({
       fbp: 'fb.1.1727500000000.1234567890',
       fbc: 'fb.1.1727500000000.IwAR0abc',
