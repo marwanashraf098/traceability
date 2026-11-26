@@ -267,13 +267,13 @@ class BazarBringBackByCountTest {
         BazarException more = refused(() -> end.bringBackByCount(eventId, other, 2, "b2-" + UUID.randomUUID(), ownerA));
         assertThat(more.code()).isEqualTo(BazarException.Code.BAZAR_NOT_ENOUGH_UNTAGGED);
         assertThat(more.details()).containsEntry("untagged", 1).containsEntry("labelled", 2);
-        assertThat(more.messageEn()).contains("Only 1 without a barcode").contains("scan the 2 with a barcode");
+        assertThat(more.messageEn()).contains("Only 1 without a label").contains("scan the 2 with labels");
         assertThat(status(u)).as("all or nothing").isEqualTo("out_on_transfer");
 
         assertThat(end.bringBackByCount(eventId, other, 1, "b2-" + UUID.randomUUID(), ownerA).get("count")).isEqualTo(1);
         BazarException labelledOnly = refused(() -> end.bringBackByCount(eventId, other, 1, "b2-" + UUID.randomUUID(), ownerA));
         assertThat(labelledOnly.code()).isEqualTo(BazarException.Code.BAZAR_NOT_ENOUGH_UNTAGGED);
-        assertThat(labelledOnly.messageEn()).isEqualTo("These pieces have a barcode — scan them back one by one.");
+        assertThat(labelledOnly.messageEn()).isEqualTo("These pieces have labels — scan them back one by one.");
         assertThat(status(l1)).isEqualTo("out_on_transfer");
         assertThat(status(l2)).isEqualTo("out_on_transfer");
         // The scan still brings a labelled one back.

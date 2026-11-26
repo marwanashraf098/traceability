@@ -66,7 +66,7 @@ export function Status({ state, testId }: { state: CommandState<unknown>; testId
 
 /** "Send by count": product → size → how many, with Main's stock and online orders' committed demand. */
 export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [stock, setStock] = useState<BazarCatalog | null>(null)
   const [stockFailed, setStockFailed] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -74,7 +74,7 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
   const [qty, setQty] = useState(1)
   const [confirming, setConfirming] = useState(false)
   const [sent, setSent] = useState<number | null>(null)
-  const [collect, setCollect] = useState<string[]>([])
+  const [partial, setPartial] = useState<string | null>(null)
   const cmd = useRetryingCommand<BazarCountResult>()
 
   const reload = useCallback(() => getBazarSendStock(eventId)
@@ -87,13 +87,18 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
     ? stock?.products.flatMap(p => p.sizes).find(s => s.variant_id === picked.size.variant_id) ?? null
     : null
   const atMain = size?.left ?? 0
+  // U1c: a send by count takes pieces WITHOUT a label only — labelled ones are scanned.
+  const unlabelled = Math.min(atMain, size?.left_unlabelled ?? atMain)
+  const labelled = atMain - unlabelled
   const committed = size?.committed ?? 0
   const short = committed > 0 && atMain - qty < committed
 
   useEffect(() => {
     if (cmd.state.kind !== 'done') return
-    setSent(cmd.state.result.count)
-    setCollect(cmd.state.result.labelled_codes ?? [])
+    const res = cmd.state.result
+    setSent(res.count)
+    setPartial(res.code === 'SENT_PARTIAL'
+      ? ((i18n.language.startsWith('ar') ? res.message_ar : res.message_en) ?? res.message_en ?? null) : null)
     setPicked(null)
     setQty(1)
     setConfirming(false)
@@ -105,6 +110,7 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
     setPicking(false)
     cmd.reset()
     setSent(null)
+    setPartial(null)
     setPicked({ product, size: s })
     setQty(1)
     setConfirming(false)
@@ -142,7 +148,9 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
                 {productSizeName(picked.product, picked.size)}
               </p>
               <p className="text-small text-muted" data-testid="send-by-count-numbers">
-                {t('bazar.count.atMain', { count: atMain })}
+                {labelled > 0
+                  ? t('bazar.u1c.count.split', { n: unlabelled, labelled })
+                  : t('bazar.count.atMain', { count: atMain })}
                 {committed > 0 && <> · {t('bazar.count.committed', { count: committed })}</>}
               </p>
             </div>
@@ -150,14 +158,19 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
               {t('bazar.count.change')}
             </Button>
           </div>
-          <Stepper value={qty} max={Math.max(1, Math.min(MAX, atMain))} onChange={changeQty} testId="send-by-count" />
+          <Stepper value={qty} max={Math.max(1, Math.min(MAX, unlabelled))} onChange={changeQty} testId="send-by-count" />
+          {unlabelled === 0 && labelled > 0 && (
+            <p role="status" className="text-small text-warning-text" data-testid="send-by-count-all-labelled">
+              {t('bazar.u1c.count.allLabelled')}
+            </p>
+          )}
           {short && (
             <p role="alert" className="text-small text-warning-text flex items-start gap-2" data-testid="send-by-count-warning">
               <AlertTriangle size={16} className="shrink-0 mt-0.5" aria-hidden />
               <span>{t('bazar.count.warning', { count: committed, left: Math.max(0, atMain - qty) })}</span>
             </p>
           )}
-          <Button className="w-full" onClick={sendIt} disabled={cmd.busy || atMain === 0}>
+          <Button className="w-full" onClick={sendIt} disabled={cmd.busy || unlabelled === 0}>
             {confirming ? t('bazar.count.sendAnyway', { count: qty }) : t('bazar.count.send', { count: qty })}
           </Button>
         </div>
@@ -169,12 +182,12 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
           {t('bazar.count.sent', { count: sent })}
         </p>
       )}
-      {/* U1b: labelled pieces Traced picked — collect exactly these (another label of the same size won't sell). */}
-      {sent != null && cmd.state.kind === 'done' && collect.length > 0 && (
-        <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2" data-testid="send-by-count-collect">
-          <p className="text-small font-semibold text-warning-text">{t('bazar.u1b.count.collect', { count: collect.length })}</p>
-          <p className="font-mono text-body text-primary break-words" dir="ltr">{collect.join(' · ')}</p>
-        </div>
+      {/* U1c: fewer pieces without a label than asked — those were sent; the labelled ones are scanned. */}
+      {sent != null && cmd.state.kind === 'done' && partial && (
+        <p role="alert" className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-small font-semibold text-warning-text"
+           data-testid="send-by-count-partial">
+          {partial}
+        </p>
       )}
       {stockFailed && <p role="alert" className="text-small text-danger">{t('bazar.count.loadFailed')}</p>}
 

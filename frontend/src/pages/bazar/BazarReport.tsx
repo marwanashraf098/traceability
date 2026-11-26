@@ -23,6 +23,8 @@ const pctText = (v: string | number | null | undefined) => (v == null ? '—' : 
 
 const TONE_CHIP: Record<BadgeTone, ChipTone> = { success: 'good', warning: 'warn', critical: 'bad', neutral: 'neutral', info: 'info' }
 const DAY_CHIP: Record<string, ChipTone> = { open: 'neutral', closed_balanced: 'good', closed_short: 'warn', changed_after_close: 'warn' }
+/** U1c: the widest an hour's bar column gets (one busy hour must not fill the card). */
+const HOUR_MAX_W = 'max-w-[48px]'
 const METHOD_COLOR: Record<string, string> = { cash: 'bg-[#16A34A]', instapay: 'bg-trace-blue', card: 'bg-warning' }
 
 export default function BazarReportPage() {
@@ -53,6 +55,9 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
   const [fileBusy, setFileBusy] = useState<'orders' | 'pdf' | null>(null)
   const [fileError, setFileError] = useState(false)
   const unsold = r.unsold_products ?? []
+  // U1c: per variant ("Board · Electric"); top_products (per product) only when the server has no top_items.
+  const sold: { product_title: string; variant_title?: string; sold: number; sent: number; revenue: string | number }[] =
+    r.top_items ?? r.top_products
   const nr = r.money_not_received
   const maxDay = Math.max(1, ...r.sales_by_day.map(d => Math.abs(toNumber(d.revenue))))
   const maxHour = Math.max(1, ...r.busiest_hours.map(h => h.sales))
@@ -144,9 +149,11 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
         </Card>
 
         <Card title={t('bazar.r2.report.whatSold')} sub={t('bazar.r2.report.whatSoldSub')} testId="report-top-products">
-          {r.top_products.length === 0 && unsold.length === 0 ? <Empty /> : <>
-            {r.top_products.map(p => (
-              <SoldRow key={p.product_title} label={p.product_title} sold={p.sold} sent={p.sent} revenue={p.revenue} />
+          {sold.length === 0 && unsold.length === 0 ? <Empty /> : <>
+            {sold.map(p => (
+              <SoldRow key={`${p.product_title}·${p.variant_title ?? ''}`}
+                       label={p.variant_title ? `${p.product_title} · ${p.variant_title}` : p.product_title}
+                       sold={p.sold} sent={p.sent} revenue={p.revenue} testId="report-sold" />
             ))}
             {/* U1b: what didn't sell — "0 of N". */}
             {unsold.map(p => (
@@ -159,11 +166,12 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
       <Card title={t('bazar.report.hours')} testId="report-hours"
         sub={peak ? t('bazar.r2.report.busiest', { from: hh(peak.hour), to: hh(peak.hour + 1), count: peak.sales }) : t('bazar.report.hoursSub')}>
         {r.busiest_hours.length === 0 ? <Empty /> : (
-          <div className="flex items-end gap-1.5 sm:gap-3 h-44 pt-4 border-b border-line" dir="ltr">
+          // U1c: each hour's column is capped (like the PDF's 46 pt bars), so one or two hours read as normal bars.
+          <div className="flex items-end justify-center gap-1.5 sm:gap-3 h-44 pt-4 border-b border-line" dir="ltr">
             {r.busiest_hours.map(h => {
               const top = peak != null && h.hour === peak.hour
               return (
-                <div key={h.hour} className="flex-1 h-full flex flex-col items-center justify-end gap-1 min-w-0">
+                <div key={h.hour} data-testid="report-hour" className={cn('flex-1 h-full flex flex-col items-center justify-end gap-1 min-w-0', HOUR_MAX_W)}>
                   <span className={cn('text-[11px] font-semibold tabular-nums', top ? 'text-trace-blue' : 'text-muted')}>{h.sales}</span>
                   <div className={cn('w-full rounded-t-md', top ? 'bg-trace-blue' : 'bg-[#CBD5E1]')}
                        style={{ height: `${(h.sales / maxHour) * 100}%` }} />
@@ -173,8 +181,8 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
           </div>
         )}
         {r.busiest_hours.length > 0 && (
-          <div className="flex gap-1.5 sm:gap-3 -mt-1" dir="ltr" aria-hidden>
-            {r.busiest_hours.map(h => <span key={h.hour} className="flex-1 text-center text-[11px] text-muted tabular-nums">{hh(h.hour)}</span>)}
+          <div className="flex justify-center gap-1.5 sm:gap-3 -mt-1" dir="ltr" aria-hidden>
+            {r.busiest_hours.map(h => <span key={h.hour} className={cn('flex-1 text-center text-[11px] text-muted tabular-nums', HOUR_MAX_W)}>{hh(h.hour)}</span>)}
           </div>
         )}
         <span className="text-small text-muted">{t('bazar.report.hoursSub')}</span>
@@ -236,15 +244,8 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
         </Card>
       </div>
 
+      {/* U1c: the "Top sizes" card is gone — "What sold" now lists every variant (top_sizes stays in the data). */}
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title={t('bazar.report.topSizes')} testId="report-top-sizes">
-          {r.has_sizes === false
-            ? <p className="text-body text-muted" data-testid="report-no-sizes">{t('bazar.u1b.report.noSizes')}</p>
-            : r.top_sizes.length === 0 ? <Empty /> : r.top_sizes.map(p => (
-            <SoldRow key={p.product_title + p.variant_title} label={`${p.product_title} · ${p.variant_title}`}
-                     sold={p.sold} sent={p.sent} revenue={p.revenue} />
-          ))}
-        </Card>
         <Card title={t('bazar.report.notReceived')} sub={t('bazar.report.notReceivedSub')} testId="report-not-received">
           <Line label={t('bazar.report.cashShort')} value={money(nr.cash_short)} />
           <Line label={t('bazar.report.cardShort')} value={money(nr.card_short)} />

@@ -88,7 +88,7 @@ async function chooseM(user: ReturnType<typeof userEvent.setup>) {
   const sheet = await screen.findByTestId('bazar-pick-sheet')
   expect(sheet).toHaveTextContent('Bring back from the bazar')
   await user.click(within(sheet).getAllByTestId('pick-product')[0].querySelector('button')!)
-  expect(within(sheet).getAllByTestId('pick-size')[0]).toHaveTextContent('3 without a barcode still out')
+  expect(within(sheet).getAllByTestId('pick-size')[0]).toHaveTextContent('3 without labels still out')
   await user.click(within(sheet).getAllByTestId('pick-size')[0])
   await user.click(within(sheet).getByTestId('pick-sell'))
 }

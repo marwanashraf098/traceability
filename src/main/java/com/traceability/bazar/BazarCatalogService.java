@@ -211,7 +211,8 @@ public class BazarCatalogService {
     /**
      * B7d — "Send by count": what the main warehouse can send to this bazar, as the catalog's shape — every size
      * with available pieces at Main (labelled and untagged — status available, located at the main warehouse; the
-     * same count Inventory's on hand uses), its bazar price (the event's row, else the event's rule on the Shopify
+     * same count Inventory's on hand uses; U1c: {@code left_unlabelled} = those without a label, the only ones a send
+     * by count takes), its bazar price (the event's row, else the event's rule on the Shopify
      * price) and {@code committed}: online orders' demand for it, derived at read time by
      * {@link com.traceability.inventory.VariantStockService} exactly as Inventory shows it. The event's existing
      * #numbers are shown; none is assigned here. Owners / managers (the controller).
@@ -233,8 +234,9 @@ public class BazarCatalogService {
         for (Map<String, Object> r : jdbc.queryForList(
                 "SELECT v.id AS variant_id, v.title AS variant_title, v.raw::text AS variant_raw, v.price AS shopify_price, " +
                 "       pr.id AS product_id, pr.title AS product_title, pr.raw::text AS product_raw, pr.image_url, " +
-                "       pr.product_type_norm AS category, bp.price, a.n AS left_count " +
-                "FROM (SELECT p.variant_id, count(*)::int AS n FROM pieces p " +
+                "       pr.product_type_norm AS category, bp.price, a.n AS left_count, a.u AS left_unlabelled " +
+                "FROM (SELECT p.variant_id, count(*)::int AS n, " +
+                "             count(*) FILTER (WHERE p.short_code IS NULL)::int AS u FROM pieces p " +
                 "      WHERE p.tenant_id = ? AND p.status = 'available' " +
                 "        AND p.current_location_id IN (SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment) " +
                 "      GROUP BY p.variant_id) a " +

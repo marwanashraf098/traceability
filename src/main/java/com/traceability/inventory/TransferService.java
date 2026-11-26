@@ -446,15 +446,18 @@ public class TransferService {
     public static final int MAX_COUNT_MOVE = 500;
 
     /**
-     * Bazar POS B7d: send {@code quantity} pieces of a variant to the bazar without scanning them — for stock that
-     * has no barcode (count-only receiving) as much as for labelled stock. ONLY a bazar transfer, ONLY while it is
-     * preparing; ONE caller: BazarService. Traced picks the pieces: available AT THE MAIN WAREHOUSE (untagged pieces
-     * only exist there, and Shopify's −N at Mark sent is counted at Main), labelled or untagged, oldest received
-     * first, {@code FOR UPDATE SKIP LOCKED} so two counts at once never take the same piece. All or nothing: fewer
-     * than {@code quantity} free pieces → nothing is sent and the answer says how many are. Each piece goes through
-     * the SAME claim-and-send as a scan ({@link #claimAndSend}) — the scan path alone refuses an untagged piece.
-     * Retry-safe: the {@code clientRequestId} is written into every send event's metadata under a per-request lock;
-     * the same id again returns the first result and sends nothing.
+     * Bazar POS B7d / U1c: send {@code quantity} pieces of a variant to the bazar without scanning them — for stock
+     * WITHOUT a label only (U1c, approved 2026-11-26: a labelled piece is scanned — another label of the same size
+     * wouldn't sell at the bazar). "Without a label" is {@code short_code IS NULL} (count-only receiving, never tagged).
+     * ONLY a bazar transfer, ONLY while it is preparing; ONE caller: BazarService. Traced picks the pieces: available
+     * AT THE MAIN WAREHOUSE (Shopify's −N at Mark sent is counted at Main), unlabelled, oldest received first,
+     * {@code FOR UPDATE SKIP LOCKED} so two counts at once never take the same piece. Fewer unlabelled pieces than
+     * asked → the ones there are are sent and the answer is {@code SENT_PARTIAL} (it says how many labelled ones are at
+     * Main — scan them); none unlabelled → refused {@code PIECES_HAVE_LABELS} when labelled ones are there, else
+     * {@code NOT_ENOUGH_AT_MAIN}. Each piece goes through the SAME claim-and-send as a scan ({@link #claimAndSend}) —
+     * the scan path alone refuses an untagged piece. Retry-safe: the {@code clientRequestId} (and the quantity asked)
+     * is written into every send event's metadata under a per-request lock; the same id again returns the first
+     * result and sends nothing.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public CountResult scanOutByCountForBazar(UUID transferId, UUID variantId, int quantity, UUID actorUserId,
@@ -462,14 +465,19 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
         requestLock(tenantId, "bazar-count-out", clientRequestId);
         List<Map<String, Object>> done = jdbc.queryForList(
-            "SELECT pe.piece_id, p.variant_id FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id " +
+            "SELECT pe.piece_id, p.variant_id, pe.metadata->>'requested' AS requested FROM piece_events pe " +
+            "JOIN pieces p ON p.id = pe.piece_id " +
             "WHERE pe.tenant_id = ? AND pe.event_type = 'transferred_out' " +
             "AND pe.metadata->>'client_request_id' = ? AND pe.metadata->>'transfer_id' = ? ORDER BY pe.id",
             tenantId, clientRequestId, transferId.toString());
         if (!done.isEmpty()) {
             UUID v = (UUID) done.get(0).get("variant_id");
-            return CountResult.success(v, done.stream().map(r -> (String) r.get("piece_id")).toList(),
-                lineQtyOut(transferId, v), true);
+            List<String> ids = done.stream().map(r -> (String) r.get("piece_id")).toList();
+            Object asked = done.get(0).get("requested");
+            int requested = asked == null ? ids.size() : Integer.parseInt(asked.toString());
+            CountResult r = CountResult.success(v, ids, lineQtyOut(transferId, v), true);
+            return requested > ids.size()
+                ? r.partial(requested, labelledAtMain(tenantId, v, fulfillmentLocationId(tenantId))) : r;
         }
 
         Map<String, Object> transfer = shareBazarPreparing(transferId, tenantId);
@@ -485,19 +493,28 @@ public class TransferService {
 
         List<String> picked = jdbc.queryForList(
             "SELECT p.id FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
-            "AND p.status = 'available' AND p.current_location_id = ? " +
+            "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NULL " +
             "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
             "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF p SKIP LOCKED",
             String.class, tenantId, variantId, main, quantity);
-        if (picked.size() < quantity) {
-            int n = picked.size();
-            return CountResult.rejected("NOT_ENOUGH_AT_MAIN",
-                n == 0 ? "None of this size is available at the main warehouse."
-                       : "Only " + n + " of this size " + (n == 1 ? "is" : "are") + " available at the main warehouse.",
-                n == 0 ? "لا توجد قطع متاحة من هذا المقاس في المستودع الرئيسي."
-                       : "المتاح من هذا المقاس في المستودع الرئيسي " + n + " فقط.", n);
+        if (picked.isEmpty()) {
+            int labelled = labelledAtMain(tenantId, variantId, main);
+            if (labelled > 0) {
+                return new CountResult(false, "PIECES_HAVE_LABELS",
+                    "These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt.",
+                    "هذه القطع عليها ملصقات — امسحها بدلًا من ذلك. إذا لم تطبع ملصقاتها من قبل، أعد طباعتها من جلسة الاستلام.",
+                    null, 0, 0, List.of(), 0, false, null, null, labelled);
+            }
+            return CountResult.rejected("NOT_ENOUGH_AT_MAIN", "None of this size is available at the main warehouse.",
+                "لا توجد قطع متاحة من هذا المقاس في المستودع الرئيسي.", 0);
         }
-        String meta = transferMeta(transferId, BAZAR_TYPE, false, clientRequestId);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("reason", BAZAR_TYPE);
+        m.put("by", "count");
+        m.put("client_request_id", clientRequestId);
+        m.put("requested", quantity);
+        String meta = writeJson(m);
         int qtyOut = 0;
         for (String pieceId : picked) {
             Claimed c = claimAndSend(tenantId, transferId, destination, pieceId, variantId, main, actorUserId, meta);
@@ -510,7 +527,17 @@ public class TransferService {
             }
             qtyOut = c.qtyOut();
         }
-        return CountResult.success(variantId, picked, qtyOut, false);
+        CountResult r = CountResult.success(variantId, picked, qtyOut, false);
+        return picked.size() < quantity ? r.partial(quantity, labelledAtMain(tenantId, variantId, main)) : r;
+    }
+
+    /** U1c — labelled pieces of a size free to send at Main (available, a label code, on no open transfer). */
+    private int labelledAtMain(UUID tenantId, UUID variantId, UUID main) {
+        return jdbc.queryForObject(
+            "SELECT count(*)::int FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
+            "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NOT NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL)",
+            Integer.class, tenantId, variantId, main);
     }
 
     /** Most pieces one receipt send (B9c) moves per call; the rest stay at Main and a next call sends them. */
@@ -1909,21 +1936,43 @@ public class TransferService {
             int     qtyOut,
             boolean replayed,
             // Bazar U1b: the label codes (short codes) of the moved pieces that carry one, so the bazar screen can name
-            // the pieces to collect / put back. Null — left out of the JSON — everywhere else.
+            // the pieces to put back after a removal. Null — left out of the JSON — everywhere else.
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            @JsonProperty("labelled_codes") List<String> labelledCodes) {
+            @JsonProperty("labelled_codes") List<String> labelledCodes,
+            // Bazar U1c: a send by count that found fewer unlabelled pieces than asked — the quantity asked, and the
+            // labelled pieces of the size at Main (to scan). Null — left out — everywhere else.
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Integer requested,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @JsonProperty("labelled_at_main") Integer labelledAtMain) {
 
         static CountResult success(UUID variantId, List<String> pieceIds, int qtyOut, boolean replayed) {
-            return new CountResult(true, "SENT", null, null, variantId, pieceIds.size(), 0, pieceIds, qtyOut, replayed, null);
+            return new CountResult(true, "SENT", null, null, variantId, pieceIds.size(), 0, pieceIds, qtyOut, replayed,
+                null, null, null);
         }
 
         static CountResult rejected(String code, String messageEn, String messageAr, int available) {
-            return new CountResult(false, code, messageEn, messageAr, null, 0, available, List.of(), 0, false, null);
+            return new CountResult(false, code, messageEn, messageAr, null, 0, available, List.of(), 0, false, null,
+                null, null);
         }
 
         public CountResult withLabelledCodes(List<String> codes) {
             return new CountResult(success, code, messageEn, messageAr, variantId, count, available, pieceIds, qtyOut,
-                replayed, codes);
+                replayed, codes, requested, labelledAtMain);
+        }
+
+        /**
+         * U1c — fewer unlabelled pieces than asked were sent: code SENT_PARTIAL and the message (EN + AR). "The other X"
+         * = the rest asked for, at most the labelled pieces at Main; none → only "Only N without labels."
+         */
+        CountResult partial(int asked, int labelled) {
+            int n = count, x = Math.min(asked - n, labelled);
+            String en = (n == 1 ? "Only 1 without a label." : "Only " + n + " without labels.")
+                + (x <= 0 ? "" : x == 1 ? " The other 1 has a label — scan it." : " The other " + x + " have labels — scan them.");
+            String ar = (n == 1 ? "قطعة واحدة فقط بدون ملصق." : "بدون ملصقات " + n + " فقط.")
+                + (x <= 0 ? "" : x == 1 ? " القطعة الباقية عليها ملصق — امسحها." : " الـ " + x + " الباقية عليها ملصقات — امسحها.");
+            return new CountResult(success, "SENT_PARTIAL", en, ar, variantId, count, available, pieceIds, qtyOut,
+                replayed, labelledCodes, asked, labelled);
         }
     }
 

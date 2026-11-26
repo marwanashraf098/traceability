@@ -161,9 +161,11 @@ public class BazarService {
     }
 
     /**
-     * B7d — send {@code quantity} pieces of a size without scanning them (stock with or without a barcode). Traced
-     * picks them at the main warehouse, oldest first, all or nothing (TransferService.scanOutByCountForBazar). The
-     * same {@code clientRequestId} again returns the first answer and sends nothing more.
+     * B7d / U1c — send {@code quantity} pieces of a size without scanning them: stock WITHOUT a label only (a
+     * labelled piece is scanned). Traced picks them at the main warehouse, oldest first; fewer unlabelled than asked →
+     * those are sent and the answer is SENT_PARTIAL with its message; none → 409 BAZAR_PIECES_HAVE_LABELS (labelled
+     * ones there) or BAZAR_NOT_ENOUGH_AT_MAIN (TransferService.scanOutByCountForBazar). The same
+     * {@code clientRequestId} again returns the first answer and sends nothing more.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public TransferService.CountResult sendByCount(UUID eventId, UUID variantId, Integer quantity,
@@ -178,7 +180,7 @@ public class BazarService {
             quantity == null ? 0 : quantity, actorUserId, crid);
         if (!r.success()) throw countRefused(r);
         ensurePrice(tenantId, ev, r.variantId());
-        return withLabelledCodes(tenantId, r);
+        return r;
     }
 
     /**
@@ -232,7 +234,7 @@ public class BazarService {
         return withLabelledCodes(tenantId, r);
     }
 
-    /** U1b: the moved pieces' label codes (pieces with a short code), oldest piece id order — names what to put back. */
+    /** U1b: the removed pieces' label codes (pieces with a short code), by code — names what to put back on the shelf. */
     private TransferService.CountResult withLabelledCodes(UUID tenantId, TransferService.CountResult r) {
         if (r.pieceIds() == null || r.pieceIds().isEmpty()) return r.withLabelledCodes(List.of());
         String in = String.join(", ", java.util.Collections.nCopies(r.pieceIds().size(), "?"));
@@ -255,6 +257,9 @@ public class BazarService {
         return switch (r.code()) {
             case "NOT_ENOUGH_AT_MAIN" -> new BazarException(BazarException.Code.BAZAR_NOT_ENOUGH_AT_MAIN,
                 r.messageEn(), r.messageAr(), HttpStatus.CONFLICT, Map.of("available", r.available()));
+            case "PIECES_HAVE_LABELS" -> new BazarException(BazarException.Code.BAZAR_PIECES_HAVE_LABELS,
+                r.messageEn(), r.messageAr(), HttpStatus.CONFLICT,
+                Map.of("labelled_at_main", r.labelledAtMain() == null ? 0 : r.labelledAtMain()));
             case "NOT_ON_THIS_SEND" -> new BazarException(BazarException.Code.BAZAR_NOT_ON_SEND,
                 r.messageEn(), r.messageAr(), HttpStatus.CONFLICT, Map.of("on_send", r.available()));
             case "TRANSFER_NOT_OPEN" -> new BazarException(BazarException.Code.BAZAR_SEND_CLOSED,

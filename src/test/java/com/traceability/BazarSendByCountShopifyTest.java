@@ -140,8 +140,10 @@ class BazarSendByCountShopifyTest {
         UUID eventId = (UUID) ev.get("id");
         UUID transferId = (UUID) ev.get("transfer_id");
 
-        assertThat(bazar.sendByCount(eventId, variant, 3, "count-1", owner).pieceIds())
-            .containsExactly(tagged, untaggedCounted, untaggedNever);
+        // U1c: a count takes only pieces without a label — the labelled one is scanned.
+        assertThat(bazar.scanOut(eventId, "BC-" + tagged, owner, false).success()).isTrue();
+        assertThat(bazar.sendByCount(eventId, variant, 2, "count-1", owner).pieceIds())
+            .containsExactly(untaggedCounted, untaggedNever);
         assertThat(bazar.scanOut(eventId, "BC-" + removed, owner, false).success()).isTrue();
         assertThat(bazar.removeFromSend(eventId, "BC-" + removed, null, null, "remove-1", owner).pieceIds())
             .containsExactly(removed);
