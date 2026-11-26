@@ -4,6 +4,53 @@
 
 ## Current state
 
+**Bazar customer details on request — find / export / delete one bazar customer's name and phone (ClickUp
+123ru7v2cq1; 2026-11-26; branch `feat/bazar-customer-data` off origin/main 1025baef; NO migration — main ends at V243; merged to main 2026-11-26 after B9c, NOT
+deployed).**
+- **Where a bazar customer's details live (Step 0):** ONLY `bazar_sales.customer_name / customer_phone` — quick sales,
+  cart lines (a receipt's customer is its lines'; `bazar_receipts` has no customer columns), exchanges' new sales,
+  undone and returned rows. Not in payments, day closes, piece_events metadata, the report PDF, any cache or browser
+  storage; the export audit rows carry `{event_id, rows}` only. Shopify's privacy flows don't touch bazar data — this
+  is the only path.
+- **A customer** = the Customers card's key (`BazarCustomerDataService.CUSTOMER_KEY`): their phone (stored
+  01XXXXXXXXX), else `name:` + lower(trim(name)) for rows with no phone. The screen ticks several keys together (one
+  person's phone rows + name-only rows). Search: a phone in any usual shape (`BazarSaleService.normalizePhone`: 010…,
+  +20 10…, 0020…, 20…, 10 digits, spaces / dashes, Arabic digits) → exact; digits that aren't a phone → 400; else 2–80
+  characters of a name, case-insensitive contains (LIKE wildcards escaped). ≤ 50 customers (`more`).
+- **Endpoints** (`BazarCustomerDataController`, all POST with a JSON body — a phone / name never in a URL):
+  `/api/v1/bazar-customers/search` + `/export` (owner / manager), `/delete-preview` + `/delete` (owner only; manager
+  and worker 403). 404 BAZAR_NOT_ENABLED when bazar is off; 404 BAZAR_CUSTOMER_NOT_FOUND when nothing matches
+  (another store's customer reads as nobody).
+- **Export:** every row of the keys, undone ones included (status sold / returned / exchanged / undone): bazar, day,
+  time, number, product, variant, sku, piece, price, discount, net, method, status, customer_name, customer_phone.
+  Audit `bazar_customer_export` {customers, rows, bazars}.
+- **Delete:** anonymise in place — `BazarSaleService.clearCustomerDetails` (the ONE bazar_sales writer, BazarSaleGuardTest)
+  sets the two columns NULL on the rows `delete` found and locked (FOR UPDATE); price, discount, net, status, receipt,
+  payments untouched, so every total stays. The delete sends the preview's `rows` back (`expected_rows`); a different
+  count → 409 BAZAR_CUSTOMER_CHANGED, nothing changed (the dialog re-reads the count). Audit `bazar_customer_delete`
+  {customers, rows, receipts, bazars} + who / when (audit_log columns). Never a name, a phone or a hash of one in any
+  log. Can't be undone. After it: Customers card, customers.csv and orders.csv no longer show them.
+- **`/sales/find` is now POST** (`{variant_id, phone, receipt}` body; same rules, same answers) — the Return / Exchange
+  "No label? Find the sale" (`findBazarSales`). `BazarNoPersonalQueryParamGuardTest`: no controller in the bazar
+  package (or whose path mentions bazar) takes a `@RequestParam` named like phone / name / customer.
+- **UI:** "Customer details" link on /bazar → `/bazar/customers` (`BazarCustomerDetails.tsx`, OwnerOnlyRoute = owner +
+  manager): search, tick, Export CSV, Delete (owner only; preview dialog with the count, "can't be undone"). Strings
+  `bazar.customerData` (EN + AR).
+- **Registries (approved):** PortalOrderLeakTest + ShadowOrderLeakTest — the 4 endpoints SKIP, `sales/find` re-keyed
+  GET → POST; RlsCoverageTest — the stale GET `sales/find` COVERED entry removed (it lists GET endpoints only; its
+  isolation coverage stays in BazarReturnByProductTest). BazarReturnByProductTest's `find` helper sends a body (request
+  shape only); bazarB7c / bazarB7d tests expect POST + body.
+- **Tests:** BazarCustomerDataHttpAppUserTest (11, whole app as app_user: phone shapes, name search, bad queries, who,
+  export rows + undone, audit PII-free, another store finds / exports only its own and its delete clears only its own
+  row, preview, stale count 409, delete clears everything / keeps every money column and report figure but
+  customers_saved / customers.csv / orders.csv / sales list), BazarNoPersonalQueryParamGuardTest, bazarCustomerDetails.test.tsx (8).
+  Revert-checked: phone not normalised, undone left out of export / of delete, UPDATE also zeroing discount, a key in
+  the export audit meta, expected-rows check removed, no @Transactional on delete, `@RequestParam phone` back on find;
+  frontend: phone back in the URL, delete without expected_rows. Dropping the tenant filter from the delete stays green
+  — RLS (app_user) still confines it; that's the test proving RLS, not a gap.
+- Not done / follow-ups: no index on customer_phone (bazar volume is small); a Shopify customers/data_request or
+  redact does not include bazar sales (different customers, no link).
+
 **Bazar B9c — the guided setup's last part: prices, send, start (2026-11-24; branch `feat/bazar-b9b` after B9b;
 no migration — main ends at V243 (U1b); merged to main 2026-11-26 after C1 + U1b, NOT deployed).** Same gate as B9b (`BazarSetupService.on`;
 flag off = nothing changes). After "Done, I lowered them" the wizard goes on instead of stopping:

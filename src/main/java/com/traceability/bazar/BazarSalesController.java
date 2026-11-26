@@ -51,14 +51,14 @@ public class BazarSalesController {
 
     /**
      * B7c: no label — the active sales of a variant at this event (newest first, at most 10), optionally by the
-     * customer's phone or the receipt number. Never chooses: the screen confirms one or lists several.
+     * customer's phone or the receipt number. Never chooses: the screen confirms one or lists several. A POST with the
+     * phone in the JSON body (customer details, 2026-11-26) — never in the URL, where access logs would keep it. A read:
+     * nothing is written.
      */
-    @GetMapping("/sales/find")
-    public Map<String, Object> findSales(@PathVariable UUID eventId, @RequestParam UUID variant,
-                                         @RequestParam(required = false) String phone,
-                                         @RequestParam(required = false) String receipt,
+    @PostMapping("/sales/find")
+    public Map<String, Object> findSales(@PathVariable UUID eventId, @RequestBody FindSalesRequest req,
                                          @AuthenticationPrincipal CustomUserDetails principal) {
-        return sales.findSales(eventId, variant, phone, receipt, actor(principal));
+        return sales.findSales(eventId, req.variantId(), req.phone(), req.receipt(), actor(principal));
     }
 
     @PostMapping("/sales/{saleId}/undo")
@@ -157,6 +157,11 @@ public class BazarSalesController {
     public record CartLineRequest(String code,
                                   @com.fasterxml.jackson.annotation.JsonProperty("variant_id")
                                   @com.fasterxml.jackson.annotation.JsonAlias("variantId") UUID variantId) {}
+
+    /** B7c find: the size, and optionally the customer's phone / the receipt number — in the body, never the URL. */
+    public record FindSalesRequest(@com.fasterxml.jackson.annotation.JsonProperty("variant_id")
+                                   @com.fasterxml.jackson.annotation.JsonAlias("variantId") UUID variantId,
+                                   String phone, String receipt) {}
 
     /** {@code code} (a scan) or B7a {@code variant_id} (a tap — the server picks the piece). */
     public record SellRequest(String code,

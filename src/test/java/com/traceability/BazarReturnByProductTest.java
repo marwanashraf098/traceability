@@ -199,7 +199,15 @@ class BazarReturnByProductTest {
 
     @SuppressWarnings("rawtypes")
     private ResponseEntity<Map> find(String token, String ev, UUID variant, String extra) {
-        return call(token, HttpMethod.GET, "/api/v1/bazar-events/" + ev + "/sales/find?variant=" + variant + extra, null);
+        // POST with a JSON body since the customer-details slice; extra keeps the old "&phone=…&receipt=…" shape.
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("variant_id", variant);
+        for (String kv : extra.split("&")) {
+            if (kv.isEmpty()) continue;
+            int i = kv.indexOf('=');
+            body.put(kv.substring(0, i), kv.substring(i + 1));
+        }
+        return call(token, HttpMethod.POST, "/api/v1/bazar-events/" + ev + "/sales/find", body);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

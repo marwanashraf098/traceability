@@ -22,6 +22,8 @@ const ScanPairPage = lazy(() => import('./pages/scanpair/ScanPairPage'))
 // main bundle. The desktop setup screens are lazy too (only bazar tenants ever open them).
 const BazarEvents     = lazy(() => import('./pages/bazar/BazarEvents'))
 const BazarNewEvent   = lazy(() => import('./pages/bazar/BazarNewEvent'))
+// Customer details on request: find / export / delete one bazar customer's name and phone (owner / manager).
+const BazarCustomerDetails = lazy(() => import('./pages/bazar/BazarCustomerDetails'))
 // Bazar B9b — the guided bazar setup for new bazar signups (only while GET /bazar-setup says it's on).
 const BazarSetupWizard = lazy(() => import('./pages/bazar/setup/BazarSetupWizard'))
 const BazarEventPage  = lazy(() => import('./pages/bazar/BazarEventPage'))
@@ -693,6 +695,9 @@ export default function App() {
         <Route path="/bazar/setup" element={<RequireAuth><StrictOwnerRoute>
           <Suspense fallback={null}><BazarSetupWizard /></Suspense>
         </StrictOwnerRoute></RequireAuth>} />
+        <Route path="/bazar/customers" element={<RequireAuth><OwnerOnlyRoute>
+          <Layout><Suspense fallback={null}><BazarCustomerDetails /></Suspense></Layout>
+        </OwnerOnlyRoute></RequireAuth>} />
         <Route path="/bazar/new" element={<RequireAuth><OwnerOnlyRoute>
           <Layout><Suspense fallback={null}><BazarNewEvent /></Suspense></Layout>
         </OwnerOnlyRoute></RequireAuth>} />

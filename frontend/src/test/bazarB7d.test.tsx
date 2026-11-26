@@ -311,7 +311,7 @@ describe('return — the refund is what the server gives back', () => {
       on('GET', '/api/v1/me', () => json(200, { name: 'X', email: 'x@y', role: 'worker', bazar: true, bazarLive: live })),
       on('GET', `/bazar-events/${EVENT}/catalog`, () => json(200, { ...STOCK, event_status: 'live', products: [
         { ...STOCK.products[0], sizes: [{ variant_id: 'v-s', title: 'White / S', size: 'S', price: '960.00', left: 0 }] }] })),
-      on('GET', '/sales/find', () => json(200, { variant_id: 'v-s', count: 1, sales: [sold] })),
+      on('POST', '/sales/find', () => json(200, { variant_id: 'v-s', count: 1, sales: [sold] })),
     )
     renderAt(`/bazar/${EVENT}/return`, <Route path="/bazar/:id/return" element={<BazarReturn />} />)
     const user = userEvent.setup()

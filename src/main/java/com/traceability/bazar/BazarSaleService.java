@@ -805,6 +805,20 @@ public class BazarSaleService {
         return saleView(tenantId, saleId, actor);
     }
 
+    /**
+     * Customer details — delete one customer's details on request: clears customer_name AND customer_phone on exactly
+     * these sale rows (the caller, {@link BazarCustomerDataService#delete}, has found and locked them). Nothing else on
+     * the row changes — price, discount, net price, status, receipt, payments — so every total stays the same. Kept
+     * here because this service is the ONE writer of bazar_sales (BazarSaleGuardTest). Returns the rows changed.
+     */
+    int clearCustomerDetails(UUID tenantId, List<UUID> saleIds) {
+        if (saleIds.isEmpty()) return 0;
+        String ids = "{" + String.join(",", saleIds.stream().map(UUID::toString).toList()) + "}";
+        return jdbc.update(
+            "UPDATE bazar_sales SET customer_name = NULL, customer_phone = NULL, updated_at = now() " +
+            "WHERE tenant_id = ? AND id = ANY(?::uuid[])", tenantId, ids);
+    }
+
     /** Sets both fields (null / blank clears one). The phone is stored as 01XXXXXXXXX; anything else is refused. */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> setCustomer(UUID eventId, UUID saleId, String name, String phone, Actor actor) {

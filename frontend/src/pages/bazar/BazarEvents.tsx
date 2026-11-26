@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronRight, Plus } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, Plus, UserSearch } from 'lucide-react'
 import {
   BazarError, currentUserId, getBazarEvent, getBazarReport, getBazarToday, listBazarDays, listBazarEvents, listBazarPrices,
   orderedMethods, type BazarDay, type BazarDays, type BazarEventDetail, type BazarEventRow, type BazarPriceRow,
@@ -74,12 +74,19 @@ export default function BazarEvents() {
           <h1 className="text-[28px] leading-9 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-primary">{t('bazar.title')}</h1>
           <p className="hidden sm:block text-body text-muted">{t('bazar.r1.overview.subtitle')}</p>
         </div>
+        <div className="flex items-center gap-2">
+        <Link to="/bazar/customers" data-testid="bazar-customer-details-link"
+          className="inline-flex items-center gap-1.5 h-[42px] px-4 rounded-[10px] border border-line text-primary hover:bg-elevated font-semibold text-body">
+          <UserSearch size={16} aria-hidden />
+          <span>{t('bazar.customerData.link')}</span>
+        </Link>
         <Link to="/bazar/new" aria-label={t('bazar.r1.overview.newBazar')}
           className="inline-flex items-center gap-1.5 h-[42px] px-4 sm:px-[18px] rounded-[10px] bg-trace-blue hover:bg-trace-blue-hover text-white font-semibold text-body">
           <Plus size={16} aria-hidden />
           <span className="hidden sm:inline">{t('bazar.r1.overview.newBazar')}</span>
           <span className="sm:hidden">{t('bazar.r1.overview.newShort')}</span>
         </Link>
+        </div>
       </div>
 
       {/* B9b — "Lower these" reminder until Done (only while the guided setup is on). */}
