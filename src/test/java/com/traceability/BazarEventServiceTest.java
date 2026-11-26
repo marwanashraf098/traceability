@@ -75,7 +75,7 @@ class BazarEventServiceTest {
         variantNoPrice = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Bazar Co', true)", tenantId);
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Other Bazar Co', true)", otherTenantId);
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'No Bazar Co')", offTenantId);
+        jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'No Bazar Co', false)", offTenantId);
         jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
             "VALUES (?, ?, 'Owner', 'owner@bazar-event-test.com', 'h', 'owner')", actorId, tenantId);
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +

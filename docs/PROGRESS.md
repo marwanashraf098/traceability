@@ -4,6 +4,20 @@
 
 ## Current state
 
+**V244 — bazar on by default (2026-11-26; branch `feat/bazar-enabled-default` off origin/main b62f049b; merged to main
+2026-11-26, NOT deployed).**
+- `V244__bazar_enabled_default_true.sql`: `tenants.bazar_enabled` DEFAULT true + `UPDATE … SET true WHERE false` (a no-op
+  in prod — all 108 tenants were switched on by hand; kept so a fresh DB matches). Ops can still switch one tenant off.
+- `BazarSignup` no longer writes anything: the enable-at-signup UPDATE and the `bazar_enabled_at_signup` audit row are
+  gone (dead with default true; `AuthService` no longer depends on it). `BAZAR_SIGNUP_ENABLED` stays — it still gates the
+  bazar intent's setup wizard (`BazarSetupService.on`, /me `bazarSetup`; off → /bazar-setup 404).
+- Tests: "off" fixture tenants now say `bazar_enabled = false` explicitly (BazarHttp / SalesHttp / CartHttp / DaysHttp /
+  EndHttp / TodayCustomerHttp / Me / EventService / SaleService tests, MeTourSignalsTest's tenant helper); signup tests
+  expect bazar true for every signup (`assertBazarOnByDefault`), f1 / f2 assert /bazar-setup 200 with the setting on,
+  e1 (setting off) 404; new `BazarEnabledDefaultTest` (V243 off tenant → V244 flips it; new tenant default true).
+- **Gotcha:** any test that builds a tenant with `INSERT INTO tenants (id, name)` and then expects no bazar — or an
+  exact /me key set — must now set `bazar_enabled = false` itself; /me carries `"bazar": true` for every default tenant.
+
 **URGENT fix — exchange advance-at-commit never ran on prod (2026-11-24; branch `fix/exchange-advance-at-commit-tenant`
 off origin/main ade98935; no migration; pushed, NOT merged, NOT deployed).** BROEK multi catch-up apply 13:41–13:50
 (main 3155bbc0): 0 of 70 committed replacement legs advanced at commit — every leg was written 'created' and moved
