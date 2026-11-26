@@ -15,7 +15,8 @@ export interface BazarCatalogSize {
   left: number
   /** B7d send stock only: online orders' committed demand for this size (as Inventory shows it). */
   committed?: number
-  /** U1b (event catalog): of `left`, the pieces with no label. A tap sells one of these first. */
+  /** U1b (event catalog): of `left`, the pieces with no label. A tap sells one of these first. U1c (send stock): the
+   *  only pieces a send by count takes. */
   left_unlabelled?: number
 }
 

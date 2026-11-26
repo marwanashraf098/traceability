@@ -302,8 +302,14 @@ export interface BazarCountResult {
   pieceIds: string[]
   qtyOut: number
   replayed: boolean
-  /** U1b: the label codes of the moved pieces that carry one (what to collect / put back). */
+  /** U1b: the label codes of the removed pieces that carry one (what to put back). Never on a send by count (U1c). */
   labelled_codes?: string[]
+  /** U1c: a send by count found fewer pieces without a label than asked (code SENT_PARTIAL) — what was asked, the
+   *  labelled pieces of the size at Main, and the server's message. */
+  requested?: number
+  labelled_at_main?: number
+  message_en?: string | null
+  message_ar?: string | null
 }
 
 /** B7d — send `quantity` of a size; Traced picks the pieces at Main. One attempt; retried with the SAME request id. */
@@ -763,6 +769,10 @@ export interface BazarReport {
   /** U1b: false when no product sent has sizes. */
   has_sizes?: boolean
   top_products: { product_title: string; sold: number; sent: number; sell_through: Money2 | null; revenue: Money2 }[]
+  /** U1c: "What sold", one row per variant; variant_title only when the product has real variants (never
+   *  "Default Title"). Absent on older servers — the card falls back to top_products. */
+  top_items?: { product_title: string; variant_title?: string; sold: number; sent: number; sell_through: Money2 | null;
+                revenue: Money2 }[]
   top_sizes: { product_title: string; variant_title: string; sold: number; sent: number; sell_through: Money2 | null;
                revenue: Money2 }[]
   payment_split: { method: PaymentMethod; amount: Money2; share: Money2 | null }[]

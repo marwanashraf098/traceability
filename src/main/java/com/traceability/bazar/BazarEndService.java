@@ -239,7 +239,7 @@ public class BazarEndService {
     // ── Bring back by count (B7d-2) ──────────────────────────────────────────
 
     /**
-     * B7d-2 — {@code quantity} leftovers of a size WITHOUT a barcode back good at main, without scanning: untagged
+     * B7d-2 — {@code quantity} leftovers of a size WITHOUT a label back good at main, without scanning: untagged
      * pieces still outstanding on the event's transfer, oldest received first, {@code FOR UPDATE OF tp SKIP LOCKED};
      * each goes through the scan-back's own good path (TransferService.reconcileScanBackByCountForBazar — the Shopify +1
      * per piece is the unchanged onTransferReturn gate). Labelled leftovers are never taken: they are scanned. All or
@@ -280,12 +280,12 @@ public class BazarEndService {
                 "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.outcome IS NULL AND p.variant_id = ? " +
                 "AND p.short_code IS NOT NULL", Integer.class, transferId, tenantId, variantId);
             String en = untagged == 0 && labelled > 0
-                ? "These pieces have a barcode — scan them back one by one."
-                : "Only " + untagged + " without a barcode " + (untagged == 1 ? "is" : "are") + " still out"
-                  + (labelled > 0 ? " — scan the " + labelled + " with a barcode." : ".");
+                ? "These pieces have labels — scan them back one by one."
+                : "Only " + untagged + " without a label " + (untagged == 1 ? "is" : "are") + " still out"
+                  + (labelled > 0 ? " — scan the " + labelled + " with labels." : ".");
             String ar = untagged == 0 && labelled > 0
-                ? "هذه القطع لها باركود — امسحها للعودة واحدة واحدة."
-                : "المتبقي بدون باركود " + untagged + " فقط" + (labelled > 0 ? " — امسح الـ " + labelled + " ذات الباركود." : ".");
+                ? "هذه القطع عليها ملصقات — امسحها للعودة واحدة واحدة."
+                : "المتبقي بدون ملصقات " + untagged + " فقط" + (labelled > 0 ? " — امسح الـ " + labelled + " ذات الملصقات." : ".");
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("untagged", untagged);
             d.put("labelled", labelled);

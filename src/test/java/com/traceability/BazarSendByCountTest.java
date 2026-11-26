@@ -30,15 +30,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Bazar POS B7d-1 — send by count and "remove from this send" on a bazar's linked transfer.
  * <ul>
- *   <li>Count send: available pieces AT MAIN only, labelled and untagged, oldest received first, the scan's own
- *       writes (transfer piece, ledger event, location, line count, price row); all or nothing; two counts at once
- *       never take the same piece; the same request id sends once; refused once sent; no path on a normal
- *       transfer.</li>
+ *   <li>Count send (U1c): available pieces AT MAIN WITHOUT A LABEL only, oldest received first, the scan's own
+ *       writes (transfer piece, ledger event, location, line count, price row); fewer unlabelled than asked → those
+ *       are sent (SENT_PARTIAL, how many labelled ones to scan); none unlabelled → refused (labels: scan them); two
+ *       counts at once never take the same piece; the same request id sends once; refused once sent; no path on a
+ *       normal transfer.</li>
  *   <li>Every non-bazar transfer still refuses an untagged piece (scan-out AND send-back); so does the bazar's own
  *       scan.</li>
  *   <li>Remove: a scanned piece by its code, or N of a size newest-added first — each piece available at Main again,
  *       the counts right (an emptied line gone), retry-safe, refused once sent; no Shopify claim of any kind.</li>
- *   <li>Stock at Main for the panel: labelled + untagged at Main only, committed demand exactly as Inventory.</li>
+ *   <li>Stock at Main for the panel: labelled + untagged at Main only (and, U1c, how many have no label), committed
+ *       demand exactly as Inventory.</li>
  *   <li>Owner / manager only; another tenant's event 404; flag off 404; app_user isolation.</li>
  * </ul>
  */
@@ -243,10 +245,11 @@ class BazarSendByCountTest {
 
     @Test
     @SuppressWarnings("rawtypes")
-    void c1_picksTheOldestAtMain_labelledAndUntagged_throughTheScansOwnWrites() {
+    void c1_picksTheOldestUnlabelledAtMain_throughTheScansOwnWrites() {
         UUID v = variant("Count dress", "S");
-        String oldestTagged = piece(v, true, 50);
+        String oldestTagged = piece(v, true, 50);   // U1c: labelled — never taken by a count, however old
         String untagged = piece(v, false, 40);
+        String untagged2 = piece(v, false, 30);
         String newest = piece(v, true, 10);
         String olderAtSide = piece(v, true, 90, side, "available");
         String olderOnHold = piece(v, true, 95, main, "on_hold");
@@ -256,11 +259,13 @@ class BazarSendByCountTest {
         assertThat(r.getStatusCode()).as(String.valueOf(r.getBody())).isEqualTo(HttpStatus.OK);
         assertThat(r.getBody().get("count")).isEqualTo(2);
         assertThat(r.getBody().get("qtyOut")).isEqualTo(2);
-        assertThat(pieceIds(r)).containsExactly(oldestTagged, untagged);
-        assertThat(onSend(ev)).containsExactly(oldestTagged, untagged);
+        assertThat(r.getBody().get("code")).isEqualTo("SENT");
+        assertThat(r.getBody()).doesNotContainKeys("labelled_codes", "requested", "labelled_at_main");
+        assertThat(pieceIds(r)).containsExactly(untagged, untagged2);
+        assertThat(onSend(ev)).containsExactly(untagged, untagged2);
 
         UUID hall = eventLocation(ev);
-        for (String p : List.of(oldestTagged, untagged)) {
+        for (String p : List.of(untagged, untagged2)) {
             assertThat(status(p)).isEqualTo("out_on_transfer");
             assertThat(location(p)).isEqualTo(hall);
             assertThat(jdbc.queryForObject("SELECT from_location_id FROM transfer_pieces WHERE piece_id = ? AND outcome IS NULL",
@@ -272,7 +277,7 @@ class BazarSendByCountTest {
                 .containsEntry("t", "out_on_transfer").containsEntry("by", "count")
                 .containsEntry("tr", transferOf(ev).toString());
         }
-        for (String p : List.of(newest, olderAtSide)) assertThat(status(p)).isEqualTo("available");
+        for (String p : List.of(oldestTagged, newest, olderAtSide)) assertThat(status(p)).isEqualTo("available");
         assertThat(status(olderOnHold)).isEqualTo("on_hold");
         assertThat(qtyOut(ev, v)).isEqualTo(2);
         assertThat(count("SELECT count(*) FROM bazar_event_prices WHERE event_id = ?::uuid AND variant_id = ?", ev, v))
@@ -284,20 +289,58 @@ class BazarSendByCountTest {
 
     @Test
     @SuppressWarnings("rawtypes")
-    void c2_notEnoughAtMain_sendsNothing_andSaysHowMany() {
+    void c2_fewerUnlabelledThanAsked_sendsThem_noneUnlabelled_refusedScanThem() {
         UUID v = variant("Short dress", "M");
-        piece(v, true, 30);
-        piece(v, false, 20);
+        String tagged = piece(v, true, 30);
+        String untagged = piece(v, false, 20);
         piece(v, true, 10, side, "available");   // not at main: doesn't count
         String ev = draft();
-        ResponseEntity<Map> r = send(owner, ev, v, 3, crid());
-        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(r.getBody().get("code")).isEqualTo("BAZAR_NOT_ENOUGH_AT_MAIN");
-        assertThat(detail(r, "available")).isEqualTo(2);
-        assertThat(String.valueOf(r.getBody().get("message_en"))).contains("Only 2");
-        assertThat(onSend(ev)).isEmpty();
-        assertThat(qtyOut(ev, v)).isNull();
-        assertThat(count("SELECT count(*) FROM pieces WHERE variant_id = ? AND status = 'available'", v)).isEqualTo(3);
+        String id = crid();
+        ResponseEntity<Map> r = send(owner, ev, v, 3, id);
+        assertThat(r.getStatusCode()).as(String.valueOf(r.getBody())).isEqualTo(HttpStatus.OK);
+        assertThat(r.getBody().get("code")).isEqualTo("SENT_PARTIAL");
+        assertThat(r.getBody().get("count")).isEqualTo(1);
+        assertThat(r.getBody().get("requested")).isEqualTo(3);
+        assertThat(r.getBody().get("labelled_at_main")).isEqualTo(1);
+        assertThat(r.getBody().get("message_en")).isEqualTo("Only 1 without a label. The other 1 has a label — scan it.");
+        assertThat(r.getBody().get("message_ar")).isEqualTo("قطعة واحدة فقط بدون ملصق. القطعة الباقية عليها ملصق — امسحها.");
+        assertThat(onSend(ev)).containsExactly(untagged);
+        assertThat(status(tagged)).isEqualTo("available");
+        assertThat(qtyOut(ev, v)).isEqualTo(1);
+        // The same request again: the same partial answer, nothing more sent.
+        ResponseEntity<Map> again = send(owner, ev, v, 3, id);
+        assertThat(again.getBody()).containsEntry("code", "SENT_PARTIAL").containsEntry("replayed", true)
+            .containsEntry("message_en", r.getBody().get("message_en"));
+        assertThat(onSend(ev)).containsExactly(untagged);
+
+        // Nothing without a label left — the labelled one is refused: scan it (or reprint never-printed labels).
+        ResponseEntity<Map> labelled = send(owner, ev, v, 1, crid());
+        assertThat(labelled.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(labelled.getBody().get("code")).isEqualTo("BAZAR_PIECES_HAVE_LABELS");
+        assertThat(labelled.getBody().get("message_en")).isEqualTo(
+            "These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt.");
+        assertThat(labelled.getBody().get("message_ar")).isEqualTo(
+            "هذه القطع عليها ملصقات — امسحها بدلًا من ذلك. إذا لم تطبع ملصقاتها من قبل، أعد طباعتها من جلسة الاستلام.");
+        assertThat(detail(labelled, "labelled_at_main")).isEqualTo(1);
+        assertThat(onSend(ev)).containsExactly(untagged);
+        assertThat(status(tagged)).isEqualTo("available");
+
+        // Several labelled: "The other N have labels — scan them." (at most what was asked beyond those sent).
+        UUID w = variant("Many dress", "L");
+        piece(w, false, 40);
+        for (int i = 0; i < 4; i++) piece(w, true, 30 - i);
+        ResponseEntity<Map> many = send(owner, ev, w, 3, crid());
+        assertThat(many.getBody()).containsEntry("code", "SENT_PARTIAL").containsEntry("labelled_at_main", 4);
+        assertThat(many.getBody().get("message_en")).isEqualTo("Only 1 without a label. The other 2 have labels — scan them.");
+        assertThat(many.getBody().get("message_ar")).isEqualTo("قطعة واحدة فقط بدون ملصق. الـ 2 الباقية عليها ملصقات — امسحها.");
+        // Fewer unlabelled and no labelled either: only how many.
+        UUID x = variant("Few dress", "S");
+        piece(x, false, 40);
+        piece(x, false, 39);
+        ResponseEntity<Map> few = send(owner, ev, x, 5, crid());
+        assertThat(few.getBody()).containsEntry("code", "SENT_PARTIAL").containsEntry("count", 2)
+            .containsEntry("labelled_at_main", 0).containsEntry("message_en", "Only 2 without labels.")
+            .containsEntry("message_ar", "بدون ملصقات 2 فقط.");
 
         UUID none = variant("Empty dress", "M");
         ResponseEntity<Map> zero = send(owner, ev, none, 1, crid());
@@ -313,7 +356,9 @@ class BazarSendByCountTest {
     void c3_twoCountsAtOnce_neverTakeTheSamePiece() throws Exception {
         UUID v = variant("Busy dress", "L");
         Set<String> all = new HashSet<>();
-        for (int i = 0; i < 8; i++) all.add(piece(v, i % 2 == 0, 100 - i));
+        Set<String> labelled = new HashSet<>();
+        for (int i = 0; i < 8; i++) all.add(piece(v, false, 100 - i));
+        for (int i = 0; i < 3; i++) labelled.add(piece(v, true, 120 - i));   // U1c: older, labelled — never counted
         String ev = draft();
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CountDownLatch go = new CountDownLatch(1);
@@ -336,7 +381,8 @@ class BazarSendByCountTest {
         }
         assertThat(qtyOut(ev, v)).isEqualTo(8);
         assertThat(count("SELECT count(*) FROM pieces WHERE variant_id = ? AND status = 'out_on_transfer'", v)).isEqualTo(8);
-        assertThat(send(owner, ev, v, 1, crid()).getBody().get("code")).isEqualTo("BAZAR_NOT_ENOUGH_AT_MAIN");
+        for (String p : labelled) assertThat(status(p)).isEqualTo("available");
+        assertThat(send(owner, ev, v, 1, crid()).getBody().get("code")).isEqualTo("BAZAR_PIECES_HAVE_LABELS");
     }
 
     @Test
@@ -495,8 +541,10 @@ class BazarSendByCountTest {
         assertThat(qtyOut(ev, v)).as("the emptied line is deleted, as if never scanned").isNull();
         assertThat(count("SELECT count(*) FROM pieces WHERE variant_id = ? AND status = 'available' AND current_location_id = ?",
             v, main)).isEqualTo(3);
-        // Removed stock can be counted out again.
-        assertThat(send(owner, ev, v, 3, crid()).getBody().get("count")).isEqualTo(3);
+        // Removed stock can be counted out again (U1c: the two without a label; the labelled one is scanned).
+        assertThat(send(owner, ev, v, 3, crid()).getBody()).containsEntry("code", "SENT_PARTIAL").containsEntry("count", 2);
+        scan(owner, ev, code(t1));
+        assertThat(onSend(ev)).containsExactlyInAnyOrder(t1, u1, u2);
         assertNoShopifyClaims(ev);
     }
 
@@ -571,6 +619,7 @@ class BazarSendByCountTest {
             .flatMap(p -> ((List<Map>) p.get("sizes")).stream())
             .filter(s -> v.toString().equals(s.get("variant_id"))).findFirst().orElseThrow();
         assertThat(size.get("left")).as("labelled + untagged available at Main").isEqualTo(3);
+        assertThat(size.get("left_unlabelled")).as("U1c: the ones a send by count takes").isEqualTo(2);
         assertThat(((Number) size.get("committed")).intValue()).isEqualTo(2);
         // The same committed number Inventory shows (VariantStockService — Inventory's own rule).
         TenantContext.set(tenant);
@@ -580,12 +629,13 @@ class BazarSendByCountTest {
             TenantContext.clear();
         }
 
-        // Counted out → no longer at Main.
-        send(owner, ev, v, 3, crid());
+        // Counted out (U1c: only the two without a label) → the labelled one is still at Main, none without a label.
+        assertThat(send(owner, ev, v, 3, crid()).getBody()).containsEntry("code", "SENT_PARTIAL").containsEntry("count", 2);
         Map after = ((List<Map>) call(owner, HttpMethod.GET, "/api/v1/bazar-events/" + ev + "/send-stock", null)
             .getBody().get("products")).stream().flatMap(p -> ((List<Map>) p.get("sizes")).stream())
-            .filter(s -> v.toString().equals(s.get("variant_id"))).findFirst().orElse(null);
-        assertThat(after).as("nothing left at Main for this size").isNull();
+            .filter(s -> v.toString().equals(s.get("variant_id"))).findFirst().orElseThrow();
+        assertThat(after.get("left")).isEqualTo(1);
+        assertThat(after.get("left_unlabelled")).isEqualTo(0);
     }
 
     // ── who may use it ──────────────────────────────────────────────────────

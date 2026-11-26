@@ -308,15 +308,15 @@ describe('Remove from this send', () => {
 })
 
 describe('Send by count', () => {
-  test('labelled pieces Traced picked: the exact codes to collect are listed', async () => {
-    const stock = { event_id: EV, event_name: 'Z', event_status: 'draft', categories: [], products: [
-      { number: null, product_id: 'p1', title: 'Linen shirt', colour: null, image_url: null, category: null, left: 5,
-        price_min: '960', price_max: '960', sizes: [{ variant_id: 'v1', title: 'M', size: 'M', price: '960', left: 5, committed: 0 }] }] }
-    install(
-      on('GET', `/bazar-events/${EV}/send-stock`, () => json(200, stock)),
-      on('POST', `/bazar-events/${EV}/scan-out-by-count`, () => json(200, { success: true, code: 'SENT', variantId: 'v1',
-        count: 2, pieceIds: ['a', 'b'], qtyOut: 2, replayed: false, labelled_codes: ['P000051', 'P000052'] })),
-    )
+  // U1c: a send by count takes only pieces WITHOUT a label — the labelled ones are scanned; no "collect" list.
+  function stockOf(left: number, unlabelled: number) {
+    return { event_id: EV, event_name: 'Z', event_status: 'draft', categories: [], products: [
+      { number: null, product_id: 'p1', title: 'Linen shirt', colour: null, image_url: null, category: null, left,
+        price_min: '960', price_max: '960',
+        sizes: [{ variant_id: 'v1', title: 'M', size: 'M', price: '960', left, left_unlabelled: unlabelled, committed: 0 }] }] }
+  }
+
+  async function pickSize() {
     render(<MemoryRouter><I18nextProvider i18n={testI18n}><SendByCountPanel eventId={EV} onSent={() => {}} /></I18nextProvider></MemoryRouter>)
     await waitFor(() => expect(calls.some(c => c.path.endsWith('/send-stock'))).toBe(true))
     await userEvent.click(screen.getByRole('button', { name: en.bazar.count.chooseProduct }))
@@ -324,10 +324,33 @@ describe('Send by count', () => {
     await userEvent.click(within(within(sheet).getAllByTestId('pick-product')[0]).getAllByRole('button')[0])
     await userEvent.click(within(sheet).getAllByTestId('pick-size')[0])
     await userEvent.click(within(sheet).getByTestId('pick-sell'))
-    await userEvent.click(await screen.findByRole('button', { name: /Send 1/ }))
-    const box = await screen.findByTestId('send-by-count-collect')
-    expect(box.textContent).toContain('Collect these 2 labelled pieces:')
-    expect(box.textContent).toContain('P000051 · P000052')
+  }
+
+  test('fewer without a label than asked: the split is shown, the picker stops at them, the partial warning, no codes', async () => {
+    install(
+      on('GET', `/bazar-events/${EV}/send-stock`, () => json(200, stockOf(5, 2))),
+      on('POST', `/bazar-events/${EV}/scan-out-by-count`, () => json(200, { success: true, code: 'SENT_PARTIAL', variantId: 'v1',
+        count: 2, pieceIds: ['a', 'b'], qtyOut: 2, replayed: false, requested: 3, labelled_at_main: 3,
+        message_en: 'Only 2 without labels. The other 1 has a label — scan it.', message_ar: '…' })),
+    )
+    await pickSize()
+    expect(await screen.findByTestId('send-by-count-numbers')).toHaveTextContent('2 without labels · 3 with labels (scan them)')
+    const more = screen.getByTestId('send-by-count-more')
+    await userEvent.click(more)
+    expect(more).toBeDisabled()                                     // 2 = the ones without a label, not 5
+    await userEvent.click(screen.getByRole('button', { name: /Send 2/ }))
+    expect((await screen.findByTestId('send-by-count-partial')).textContent)
+      .toBe('Only 2 without labels. The other 1 has a label — scan it.')
+    expect(screen.queryByTestId('send-by-count-collect')).toBeNull()
+  })
+
+  test('every piece at Main has a label: says scan them (or reprint), send is off', async () => {
+    install(on('GET', `/bazar-events/${EV}/send-stock`, () => json(200, stockOf(3, 0))))
+    await pickSize()
+    expect((await screen.findByTestId('send-by-count-all-labelled')).textContent).toBe(
+      'These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt.')
+    expect(screen.getByRole('button', { name: /Send 1/ })).toBeDisabled()
+    expect(calls.some(c => c.path.endsWith('/scan-out-by-count'))).toBe(false)
   })
 })
 
@@ -515,8 +538,9 @@ describe('Report', () => {
     expect(unsold.textContent).toContain('0/2')
     const name = within(sold).getByText('Oxygen Long Sleeve Cotton Crew-Neck, Navy Blue Edition')
     expect(name.className).not.toContain('truncate')
-    expect(screen.getByTestId('report-no-sizes').textContent).toBe('These products have no sizes.')
-    expect(screen.getByTestId('report-top-sizes').textContent).not.toContain('No sales yet')
+    // U1c: the Top sizes card is gone — "What sold" names the variants itself.
+    expect(screen.queryByTestId('report-no-sizes')).toBeNull()
+    expect(screen.queryByTestId('report-top-sizes')).toBeNull()
   })
 
   test('the hours chart shows every hour it gets — quiet ones too', async () => {

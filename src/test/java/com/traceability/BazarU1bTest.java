@@ -436,23 +436,31 @@ class BazarU1bTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
-    void c1_sendByCount_andRemove_nameTheLabelCodesMoved() {
+    void c1_sendByCount_namesNoCodes_removeNamesTheLabelCodesMoved() {
         UUID v = variant("Count shirt", "L", "400");
         String a = piece(v, true, 50), b = piece(v, false, 40), c = piece(v, true, 30);
         String e = draft();
+        // U1c: a count sends only pieces without a label — no codes to collect; the labelled ones are scanned.
         ResponseEntity<Map> sent = call(owner, HttpMethod.POST, ev(e + "/scan-out-by-count"),
-            Map.of("variant_id", v.toString(), "quantity", 3, "client_request_id", crid()));
-        assertThat((List<String>) sent.getBody().get("labelled_codes")).containsExactlyInAnyOrder(code(a), code(c));
+            Map.of("variant_id", v.toString(), "quantity", 1, "client_request_id", crid()));
+        assertThat((List<String>) sent.getBody().get("pieceIds")).containsExactly(b);
+        assertThat(sent.getBody()).doesNotContainKey("labelled_codes");
+        scanOut(e, a);
+        scanOut(e, c);
 
         ResponseEntity<Map> removed = call(owner, HttpMethod.POST, ev(e + "/remove-from-send"),
             Map.of("variant_id", v.toString(), "quantity", 1, "client_request_id", crid()));
         assertThat((List<String>) removed.getBody().get("pieceIds")).containsExactly(c);
         assertThat((List<String>) removed.getBody().get("labelled_codes")).containsExactly(code(c));
 
-        ResponseEntity<Map> removedUntagged = call(owner, HttpMethod.POST, ev(e + "/remove-from-send"),
+        ResponseEntity<Map> removedA = call(owner, HttpMethod.POST, ev(e + "/remove-from-send"),
             Map.of("variant_id", v.toString(), "quantity", 1, "client_request_id", crid()));
-        assertThat((List<String>) removedUntagged.getBody().get("pieceIds")).containsExactly(b);
-        assertThat((List<String>) removedUntagged.getBody().get("labelled_codes")).isEmpty();
+        assertThat((List<String>) removedA.getBody().get("pieceIds")).containsExactly(a);
+        assertThat((List<String>) removedA.getBody().get("labelled_codes")).containsExactly(code(a));
+        ResponseEntity<Map> removedB = call(owner, HttpMethod.POST, ev(e + "/remove-from-send"),
+            Map.of("variant_id", v.toString(), "quantity", 1, "client_request_id", crid()));
+        assertThat((List<String>) removedB.getBody().get("pieceIds")).containsExactly(b);
+        assertThat((List<String>) removedB.getBody().get("labelled_codes")).isEmpty();
     }
 
     // ── r: report ────────────────────────────────────────────────────────────
@@ -543,7 +551,7 @@ class BazarU1bTest {
         String name = jdbc.queryForObject("SELECT name FROM bazar_events WHERE id = ?::uuid", String.class, e);
         assertThat(text).contains(name).contains("Bazar event report").contains("MONEY BY DAY")
             .contains("BY PAYMENT METHOD").contains("Cash").contains("Card").contains("PIECES SOLD PER HOUR")
-            .contains("18:00").contains("BELOW SHOPIFY").contains("200")   // 1000 − 800 on the one piece kept
+            .contains("18:00").contains("VS SHOPIFY").contains("200 EGP").contains("below Shopify prices")   // 1000 − 800 on the one piece kept
             .contains("800").contains("Not closed").contains("Page 1 of 1");
         try (PDDocument doc = Loader.loadPDF(pdf.getBody())) {
             assertThat(doc.getNumberOfPages()).isEqualTo(1);

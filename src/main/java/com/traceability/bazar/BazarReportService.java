@@ -130,6 +130,8 @@ public class BazarReportService {
 
         out.put("top_products", top(tenantId, eventId, (UUID) ev.get("transfer_id"), false));
         out.put("top_sizes", top(tenantId, eventId, (UUID) ev.get("transfer_id"), true));
+        // U1c: "What sold" one row per variant — variant_title only when it is a real variant (never "Default Title").
+        out.put("top_items", top(tenantId, eventId, (UUID) ev.get("transfer_id"), true, true));
         // U1b: products sent that sold nothing ("0 of N" under What sold), and whether any product sent has sizes —
         // when none has, Top sizes says so instead of "No sales yet".
         out.put("unsold_products", unsold(tenantId, eventId, (UUID) ev.get("transfer_id")));
@@ -182,6 +184,12 @@ public class BazarReportService {
 
     /** Products (or variants = "sizes") by pieces sold: sold, sent, sell-through, revenue. Top 10. */
     private List<Map<String, Object>> top(UUID tenantId, UUID eventId, UUID transferId, boolean byVariant) {
+        return top(tenantId, eventId, transferId, byVariant, false);
+    }
+
+    /** {@code withDefault}: per variant, keeping single-variant products ("Default Title") as rows with no variant_title. */
+    private List<Map<String, Object>> top(UUID tenantId, UUID eventId, UUID transferId, boolean byVariant,
+                                          boolean withDefault) {
         String key = byVariant ? "v.id" : "pr.id";
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> r : jdbc.queryForList(
@@ -199,11 +207,11 @@ public class BazarReportService {
                 "ORDER BY sold.n DESC, sold.total DESC, pr.title LIMIT 10",
                 transferId, tenantId, eventId, tenantId)) {
             String vt = variantTitle((String) r.get("variant_title"));
-            if (byVariant && vt == null) continue;              // "Default Title" is no size
+            if (byVariant && vt == null && !withDefault) continue;   // "Default Title" is no size
             int s = ((Number) r.get("sold")).intValue(), n = ((Number) r.get("sent")).intValue();
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("product_title", r.get("product_title"));
-            if (byVariant) row.put("variant_title", vt);
+            if (byVariant && vt != null) row.put("variant_title", vt);
             row.put("sold", s);
             row.put("sent", n);
             row.put("sell_through", ratio(s, n));
@@ -331,7 +339,7 @@ public class BazarReportService {
     /**
      * One row per piece sold at the event (a cart line is a row with its receipt's number): number, day, time, seller,
      * product, variant (never "Default Title"), SKU, piece code, bazar price, discount, net, payment method, status
-     * (sold / returned / exchanged), customer name and phone. Undone sales never happened — left out. Owner / manager
+     * (sold / returned / exchanged, "(damaged)" added when the piece came back damaged), customer name and phone. Undone sales never happened — left out. Owner / manager
      * only; audit-logged (bazar_orders_export), like the customers export.
      */
     @Transactional
@@ -341,7 +349,7 @@ public class BazarReportService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT COALESCE(s.sale_number, rc.receipt_number) AS number, s.business_day, s.sold_at, u.name AS seller, " +
             "       pr.title AS product, v.title AS variant, v.sku, pc.short_code AS piece_code, s.price, s.discount, " +
-            "       s.net_price, s.status, s.customer_name, s.customer_phone, " +
+            "       s.net_price, s.status, s.return_condition, s.customer_name, s.customer_phone, " +
             "       EXISTS (SELECT 1 FROM bazar_sales xn WHERE xn.exchange_of_sale_id = s.id AND xn.tenant_id = s.tenant_id) AS exchanged, " +
             "       (SELECT bp.method FROM bazar_payments bp WHERE bp.tenant_id = s.tenant_id " +
             "          AND (bp.sale_id = s.id OR bp.receipt_id = s.receipt_id) AND bp.kind = 'payment' " +
@@ -360,6 +368,8 @@ public class BazarReportService {
             OffsetDateTime at = sa instanceof OffsetDateTime o ? o : ((Timestamp) sa).toInstant().atOffset(java.time.ZoneOffset.UTC);
             String status = "active".equals(r.get("status")) ? "sold"
                 : Boolean.TRUE.equals(r.get("exchanged")) ? "exchanged" : "returned";
+            // U1c: a piece that came back damaged says so ("returned (damaged)", "exchanged (damaged)").
+            if (!"sold".equals(status) && "damaged".equals(r.get("return_condition"))) status += " (damaged)";
             csv.append(String.format("B-%04d", ((Number) r.get("number")).intValue())).append(',')
                .append(r.get("business_day")).append(',')
                .append(at.atZoneSameInstant(CAIRO).format(hm)).append(',')

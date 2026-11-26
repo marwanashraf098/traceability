@@ -6812,6 +6812,12 @@
       "closeTransferToFinish": "Close the transfer to finish",
       "finishEvent": "Finish the event"
     },
+    "u1c": {
+      "count": {
+        "split": "{{n}} without labels · {{labelled}} with labels (scan them)",
+        "allLabelled": "These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt."
+      }
+    },
     "u1b": {
       "online": {
         "wholeLocation": "This choice is for the whole location — every bazar held there uses it.",
@@ -6834,8 +6840,6 @@
         "wholePounds": "Use whole pounds, 0 or more."
       },
       "count": {
-        "collect_one": "Collect this labelled piece:",
-        "collect_other": "Collect these {{count}} labelled pieces:",
         "removedCodes_one": "Removed",
         "removedCodes_other": "Removed {{count}}:",
         "putBack_one": "put this one back.",
@@ -7748,13 +7752,13 @@
     },
     "bringBack": {
       "title": "Bring back by count",
-      "intro": "For leftovers without a barcode: choose the size and how many came back in good shape. Pieces with a barcode are scanned.",
+      "intro": "For leftovers without labels: choose the size and how many came back in good shape. Pieces with labels are scanned.",
       "choose": "Choose product and size",
       "pickTitle": "Bring back from the bazar",
-      "footnote": "Pieces without a barcode still at the bazar.",
+      "footnote": "Pieces without labels still at the bazar.",
       "bringHome": "Bring home",
-      "out_one": "{{count}} without a barcode still out",
-      "out_other": "{{count}} without a barcode still out",
+      "out_one": "{{count}} without a label still out",
+      "out_other": "{{count}} without labels still out",
       "bring_one": "Bring back {{count}} piece",
       "bring_other": "Bring back {{count}} pieces",
       "done_one": "{{count}} piece back in stock.",

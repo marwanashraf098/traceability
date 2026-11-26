@@ -128,6 +128,8 @@ const report = {
   busiest_hours: [{ hour: 13, sales: 3 }, { hour: 18, sales: 4 }],
   top_products: [{ product_title: 'Linen Shirt', sold: 3, sent: 6, sell_through: '0.5', revenue: '2100.00' }],
   top_sizes: [{ product_title: 'Linen Shirt', variant_title: 'L', sold: 2, sent: 2, sell_through: '1', revenue: '1600.00' }],
+  top_items: [{ product_title: 'Linen Shirt', variant_title: 'L', sold: 2, sent: 2, sell_through: '1', revenue: '1600.00' },
+              { product_title: 'Linen Shirt', variant_title: 'M', sold: 1, sent: 4, sell_through: '0.25', revenue: '500.00' }],
   payment_split: [{ method: 'cash', amount: '600.00', share: '0.25' }, { method: 'card', amount: '500.00', share: '0.2083' },
                   { method: 'instapay', amount: '1300.00', share: '0.5417' }],
   money_not_received: { cash_short: '50.00', cash_over: '0.00', card_short: '20.00', card_over: '0.00',
@@ -308,7 +310,8 @@ describe('Report page', () => {
       expect(screen.getByTestId('kpi-avg')).toHaveTextContent('600 EGP')
       expect(screen.getByTestId('report-not-received')).toHaveTextContent('70 EGP')
       expect(screen.getByTestId('report-not-received')).toHaveTextContent('1 day isn\'t closed')
-      expect(screen.getByTestId('report-top-sizes')).toHaveTextContent('Linen Shirt · L')
+      expect(screen.queryByTestId('report-top-sizes')).toBeNull()                       // U1c: card removed
+      expect(screen.getByTestId('report-top-products')).toHaveTextContent('Linen Shirt · L')
       expect(screen.getByTestId('report-transfer')).toHaveTextContent('Sent 9 = 4 sold + 3 back + 1 damaged + 1 lost')
       expect(screen.getByTestId('report-customers')).toHaveTextContent('2 customers saved')
       await userEvent.click(screen.getByRole('button', { name: /Export customers/ }))

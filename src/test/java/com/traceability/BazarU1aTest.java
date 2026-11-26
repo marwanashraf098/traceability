@@ -567,7 +567,18 @@ class BazarU1aTest {
             List.of("cash"), List.of("owner"), mode, null, null), owner);
         UUID eventId = (UUID) ev.get("id");
         for (int i = 0; i < variants.size(); i++) {
-            bazar.sendByCount(eventId, variants.get(i), counts.get(i), "send-" + eventId + "-" + i, owner);
+            // The oldest counts[i] pieces of the size at Main (as a send by count used to pick them). U1c: a count
+            // takes only pieces without a label, so the labelled ones are scanned out and the rest go by count.
+            List<Map<String, Object>> oldest = jdbc.queryForList(
+                "SELECT id, short_code FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? AND p.status = 'available' " +
+                "AND p.current_location_id = ? AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id " +
+                "AND tp.outcome IS NULL) ORDER BY p.created_at, p.id LIMIT ?", tenant, variants.get(i), main, counts.get(i));
+            int unlabelled = 0;
+            for (Map<String, Object> p : oldest) {
+                if (p.get("short_code") == null) unlabelled++;
+                else assertThat(bazar.scanOut(eventId, (String) p.get("short_code"), owner, false).success()).isTrue();
+            }
+            if (unlabelled > 0) bazar.sendByCount(eventId, variants.get(i), unlabelled, "send-" + eventId + "-" + i, owner);
         }
         bazar.markSent(eventId, owner);
         bazar.start(eventId, owner);
