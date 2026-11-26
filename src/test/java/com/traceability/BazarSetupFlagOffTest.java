@@ -31,8 +31,9 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Bazar B9b — BAZAR_SIGNUP_ENABLED off (the default, prod): even a store that signed up for a bazar and has bazar
- * switched on gets 404 from every /bazar-setup endpoint, Shopify's stock is never read, and nothing is written.
+ * Bazar B9b / wizard entry (2026-11-26) — BAZAR_SIGNUP_ENABLED off: the setting no longer gates the wizard. A NORMAL
+ * signup (no bazar intent) with bazar off gets 404 from every /bazar-setup endpoint (Shopify's stock never read,
+ * nothing written); once bazar is switched on the wizard opens for its owner (status 200, /me bazarSetup).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -79,7 +80,7 @@ class BazarSetupFlagOffTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void off_404Everywhere_evenForABazarSignupWithBazarOn_nothingRead_nothingWritten() {
+    void flagOff_bazarOff_404Everywhere_nothingRead_nothingWritten_thenBazarOn_wizardOpensWithoutIntent() {
         JdbcTemplate owner = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
         RestTemplate http = new RestTemplate(new JdkClientHttpRequestFactory(HttpClient.newBuilder().build()));
         http.setErrorHandler(new DefaultResponseErrorHandler() {
@@ -87,14 +88,15 @@ class BazarSetupFlagOffTest {
         });
         String base = "http://localhost:" + port;
         String mail = "b9b-off-" + System.nanoTime() + "@b9b.test";
+        // A normal signup: no intent (the wizard no longer needs one).
         Map<String, Object> f = new HashMap<>(Map.of("tenantName", "Off Co", "name", "Nour", "email", mail,
-            "phone", "+201012345678", "password", "pass1234", "consent", true, "intent", "bazar"));
+            "phone", "+201012345678", "password", "pass1234", "consent", true));
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
         ResponseEntity<Map> r = http.postForEntity(base + "/api/v1/auth/signup", new HttpEntity<>(f, h), Map.class);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         UUID tenant = owner.queryForObject("SELECT tenant_id FROM users WHERE email = ?", UUID.class, mail);
-        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenant);   // ops switched it on by hand
+        owner.update("UPDATE tenants SET bazar_enabled = false WHERE id = ?", tenant);   // bazar off, whatever the default
         String prefsBefore = owner.queryForObject("SELECT onboarding_prefs::text FROM tenants WHERE id = ?", String.class, tenant);
         h.setBearerAuth((String) r.getBody().get("accessToken"));
         for (String[] e : List.of(new String[]{"GET", "/api/v1/bazar-setup"}, new String[]{"GET", "/api/v1/bazar-setup/products"},
@@ -105,10 +107,22 @@ class BazarSetupFlagOffTest {
                 .getStatusCode()).as(e[1]).isEqualTo(HttpStatus.NOT_FOUND);
         }
         assertThat(http.exchange(base + "/api/v1/me", HttpMethod.GET, new HttpEntity<>(null, h), Map.class).getBody())
-            .containsEntry("bazar", true).doesNotContainKey("bazarSetup");
+            .doesNotContainKey("bazar").doesNotContainKey("bazarSetup").doesNotContainKey("shopifyConnected");
         assertThat(Mockito.mockingDetails(stock).getInvocations()).isEmpty();
         assertThat(owner.queryForObject("SELECT onboarding_prefs::text FROM tenants WHERE id = ?", String.class, tenant))
             .isEqualTo(prefsBefore);
         assertThat(owner.queryForObject("SELECT count(*) FROM receipts WHERE tenant_id = ?", Integer.class, tenant)).isZero();
+
+        // The signup page's public config says the setting is off (no "I'm here for the bazar" link).
+        assertThat(http.getForEntity(base + "/api/v1/public/signup-config", Map.class).getBody())
+            .isEqualTo(Map.of("bazarSignup", false));
+
+        // Bazar on (ops / V244's default) — with the setting still off and no intent, the wizard opens.
+        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenant);
+        ResponseEntity<Map> st = http.exchange(base + "/api/v1/bazar-setup", HttpMethod.GET, new HttpEntity<>(null, h), Map.class);
+        assertThat(st.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(st.getBody()).containsEntry("canSetUp", true).containsEntry("suggestStart", false);
+        assertThat(http.exchange(base + "/api/v1/me", HttpMethod.GET, new HttpEntity<>(null, h), Map.class).getBody())
+            .containsEntry("bazar", true).containsEntry("bazarSetup", true).containsEntry("shopifyConnected", false);
     }
 }

@@ -27,14 +27,26 @@ function toggleLang(i18n: { language: string; changeLanguage: (lng: string) => v
 }
 
 /** Shopify · Warehouse address · Bosta · then your first receiving. `current` = the step being done (0–2). */
-export function SetupStepper({ current }: { current: 0 | 1 | 2 }) {
+export function SetupStepper({ current, purpose = null }: {
+  /** 0 = Shopify, 1 = address, 2 = courier; -1 = the purpose step (only with {@code purpose}). */
+  current: -1 | 0 | 1 | 2
+  /** Wizard entry — the tenant has the "What will you use Traced for?" step (/me setupPurpose); null = the old stepper. */
+  purpose?: 'ask' | 'orders' | 'bazar' | 'both' | null
+}) {
   const { t } = useTranslation()
-  const labels = [t('setupGate.stepper.shopify'), t('setupGate.stepper.address'), t('setupGate.stepper.courier')]
+  const withPurpose = purpose !== null
+  // A bazar store skips the address and Bosta steps (SetupStatus / setupIntro): Shopify, then its bazar setup.
+  const labels = [
+    ...(withPurpose ? [t('setupGate.stepper.purpose')] : []),
+    t('setupGate.stepper.shopify'),
+    ...(purpose === 'bazar' ? [] : [t('setupGate.stepper.address'), t('setupGate.stepper.courier')]),
+  ]
+  const at = current + (withPurpose ? 1 : 0)
   return (
     <ol aria-label={t('setupGate.stepsLabel')} data-testid="setup-stepper"
       className="flex flex-wrap items-center gap-2 text-[13.5px] max-[900px]:order-3 max-[900px]:w-full">
       {labels.map((label, i) => {
-        const state = i < current ? 'done' : i === current ? 'current' : 'todo'
+        const state = i < at ? 'done' : i === at ? 'current' : 'todo'
         return (
           <li key={label} className="contents">
             <span data-state={state} aria-current={state === 'current' ? 'step' : undefined}
@@ -50,11 +62,11 @@ export function SetupStepper({ current }: { current: 0 | 1 | 2 }) {
               </span>
               {label}
             </span>
-            <span aria-hidden className={cn('w-7 h-0.5 rounded-full max-[480px]:w-3', i < current ? 'bg-success' : 'bg-line')} />
+            <span aria-hidden className={cn('w-7 h-0.5 rounded-full max-[480px]:w-3', i < at ? 'bg-success' : 'bg-line')} />
           </li>
         )
       })}
-      <li className="text-muted">{t('setupGate.stepper.then')}</li>
+      <li className="text-muted">{purpose === 'bazar' ? t('setupGate.stepper.thenBazar') : t('setupGate.stepper.then')}</li>
     </ol>
   )
 }

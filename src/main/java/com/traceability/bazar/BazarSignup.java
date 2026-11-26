@@ -5,9 +5,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Bazar B9a — the server setting {@code BAZAR_SIGNUP_ENABLED} ({@code traced.bazar.signup-enabled}, read once at
- * startup, default false). It gates the bazar signup intent's setup wizard ({@link BazarSetupService#on}, GET /me's
- * {@code bazarSetup}): off → every /bazar-setup endpoint answers 404. It no longer switches
- * {@code tenants.bazar_enabled} on at signup — since V244 every tenant has bazar by default.
+ * startup, default false). Since the wizard entry (2026-11-26) it only decides whether the web signup page offers
+ * "I'm here for the bazar" (public GET /api/v1/public/signup-config); it no longer gates the setup wizard
+ * ({@link BazarSetupService#on} = bazar on) and, since V244, never switches {@code tenants.bazar_enabled} on.
  */
 @Component
 public class BazarSignup {

@@ -130,6 +130,8 @@ public class SecurityConfig {
                     // POST). Rides the same unauthenticated pass-through as /api/v1/auth/login:
                     // JwtAuthenticationFilter/TenantContextFilter are no-ops with no token.
                     "/api/v1/public/demo/start",
+                    // Wizard entry — the signup page's public config (BAZAR_SIGNUP_ENABLED only; no DB read, no tenant).
+                    "/api/v1/public/signup-config",
                     // Returns portal (Step 4a) — unauthenticated, slug-resolved via hatch #14
                     // (resolve_tenant_by_portal_slug), then TenantContext.runAs + RLS.
                     "/api/v1/portal/**",

@@ -77,6 +77,8 @@ public class BazarException extends RuntimeException {
         BAZAR_SETUP_LOWER_FIRST,
         BAZAR_SETUP_NO_MAIN_WAREHOUSE,
         BAZAR_SETUP_NO_LIST,
+        // Wizard entry — Traced Main linked but Shopify not counting there yet, and the store already has pieces
+        BAZAR_SETUP_MAIN_NOT_COUNTING,
         // B10 — opening a seller invite (check / redeem)
         BAZAR_INVITE_REFUSED,
         BAZAR_INVITE_ORIGIN,

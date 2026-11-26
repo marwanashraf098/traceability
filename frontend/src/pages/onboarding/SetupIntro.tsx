@@ -66,6 +66,8 @@ function SetupCourier() {
   const [secret, setSecret] = useState<string | null>(null)
   const progress = useRef<OnboardingProgress | null>(null)
   const defaultCarrier = useRef<string | null>(null)
+  // Wizard entry — keep the "What will you use Traced for?" step in the stepper when it was answered there.
+  const purposeForStepper = useSetupState()?.purpose ?? null
 
   useEffect(() => {
     takeIntroRedirect('courier')   // shown: never redirected here again this page load
@@ -123,7 +125,7 @@ function SetupCourier() {
   ]
 
   return (
-    <GateFrame width="wide" stepper={<SetupStepper current={2} />}>
+    <GateFrame width="wide" stepper={<SetupStepper current={2} purpose={purposeForStepper} />}>
       <SetupColumns aside={<>
         <SidePanel title={t('setupIntro.courier.panelTitle')}
           lines={[t('setupIntro.courier.panel1'), t('setupIntro.courier.panel2'), t('setupIntro.courier.panel3')]} />
@@ -212,6 +214,10 @@ function SetupReady() {
   const navigate = useNavigate()
   const [courier, setCourier] = useState<CourierChip | null>(null)
   const marked = useRef(false)
+  // Wizard entry — a store that answered "Both" is offered its bazar setup here, at the end of the full flow.
+  const setup = useSetupState()
+  const caps = useCapabilities()
+  const offerBazar = setup?.purpose === 'both' && caps.bazarSetup && caps.shopifyConnected
 
   useEffect(() => {
     // Shown once: setupIntroSeen (best effort — a failed write just shows it again next time).
@@ -295,6 +301,18 @@ function SetupReady() {
             </Button>
           </div>
         </SetupCard>
+
+        {offerBazar && (
+          <SetupCard className="p-5 flex-row flex-wrap items-center gap-3" data-testid="setup-ready-bazar">
+            <span className="flex flex-col min-w-0 me-auto">
+              <span className="text-body font-semibold text-primary">{t('setupIntro.ready.bazarTitle')}</span>
+              <span className="text-small text-muted">{t('setupIntro.ready.bazarBody')}</span>
+            </span>
+            <Link to="/bazar/setup" className="text-body font-semibold text-trace-blue hover:text-trace-blue-hover">
+              {t('bazar.newStock.button')}
+            </Link>
+          </SetupCard>
+        )}
 
         <p className="text-center text-body text-muted">
           {t('setupIntro.ready.callLead')}{' '}

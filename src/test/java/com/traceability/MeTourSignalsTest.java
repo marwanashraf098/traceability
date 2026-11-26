@@ -140,7 +140,14 @@ class MeTourSignalsTest {
             Map<String, Object> m = me(t, role);
             Set<String> added = new TreeSet<>(m.keySet());
             added.removeAll(BEFORE_O5);
-            assertThat(added).as(role).containsExactly("hasEverClosedPickup", "hasEverScannedReturn");
+            // Wizard entry (2026-11-26): an owner / manager of a tenant still at the Shopify step with no intent also gets
+            // setupPurpose 'ask' ("What will you use Traced for?"); never a worker.
+            if (role.equals("worker")) {
+                assertThat(added).as(role).containsExactly("hasEverClosedPickup", "hasEverScannedReturn");
+            } else {
+                assertThat(added).as(role).containsExactly("hasEverClosedPickup", "hasEverScannedReturn", "setupPurpose");
+                assertThat(m.get("setupPurpose")).as(role).isEqualTo("ask");
+            }
             assertThat(m.get("hasEverClosedPickup")).isInstanceOf(Boolean.class);
             assertThat(m.get("hasEverScannedReturn")).isInstanceOf(Boolean.class);
         }

@@ -127,7 +127,8 @@ export function BazarSetupReminderCard() {
   if (!status) return null
   const b = status.batch
   if (!b) {
-    if (!status.canSetUp) return null
+    // Wizard entry: suggested only to a store that came for bazars; others use "Set up from new stock".
+    if (!status.canSetUp || status.suggestStart === false) return null
     return (
       <div className="card p-4 flex items-center gap-3 flex-wrap" data-testid="bazar-setup-start-card">
         <span className="flex flex-col min-w-0 me-auto">

@@ -77,6 +77,10 @@ public class OnboardingProgressService {
     /** Written only at signup (recordSignupIntent) — PATCH refuses them like any unknown key. */
     public static final Set<String> SIGNUP_KEYS   = Set.of("intent");
     public static final String INTENT_BAZAR = "bazar";
+    /** Wizard entry — "What will you use Traced for?" (web setup step, before Connect Shopify). */
+    public static final Set<String> SETUP_PURPOSES = Set.of("orders", "bazar", "both");
+    /** Marks an intent chosen on that step (not at signup): /me then keeps the step in the setup stepper. */
+    public static final String INTENT_FROM_KEY = "intentFrom";
     /** Bazar B9b — written only by {@link #writeBazarSetup}; PATCH refuses it like any unknown key. */
     public static final String BAZAR_SETUP_KEY = "bazarSetup";
     static final int PACE_MIN = 1, PACE_MAX = 10_000;
@@ -231,6 +235,20 @@ public class OnboardingProgressService {
     public void recordSignupIntent(UUID ownerUserId, String intent) {
         if (intent == null) return;
         writePrefs(ownerUserId, validate(Map.of("intent", intent), true));
+    }
+
+    /**
+     * Wizard entry — the setup step's choice ('orders' | 'bazar' | 'both', already checked by SetupPurposeService,
+     * which holds the tenant row lock and has checked intent is empty and setup unfinished). Written through the ONE
+     * prefs writer, with {@code intentFrom: 'setup'}; audit {@code setup_purpose_set}. Never a PATCH key.
+     */
+    @Transactional
+    public void recordSetupPurpose(UUID ownerUserId, String purpose) {
+        if (!SETUP_PURPOSES.contains(purpose)) throw bad("purpose must be one of " + new TreeSet<>(SETUP_PURPOSES));
+        Map<String, Object> clean = new LinkedHashMap<>();
+        clean.put("intent", purpose);
+        clean.put(INTENT_FROM_KEY, "setup");
+        writePrefs(ownerUserId, clean, "setup_purpose_set");
     }
 
     /**

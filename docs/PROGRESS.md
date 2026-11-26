@@ -4,13 +4,69 @@
 
 ## Current state
 
+**Bazar wizard entry — "Set up from new stock" + "What will you use Traced for?" (2026-11-26; branch
+`feat/bazar-wizard-entry` off origin/main b62f049b; NO migration — V244 is the separate bazar-default slice, V245 not
+needed; pushed, NOT merged, NOT deployed).** Step 0 (prod testBazar): the wizard was unreachable — the web signup had no
+bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` needed BAZAR_SIGNUP_ENABLED + intent 'bazar'.
+- **Part A — gate = bazar alone:** `BazarSetupService.on(jdbc, tenant)` = `Bazar.enabled` (intent + flag checks dropped,
+  `requireOn` too; the `BazarSignup` dependency left the class). Owner everything, manager reads (status, lower list,
+  Done — as before), worker 403, bazar off 404. GET /me: `bazarSetup` + `shopifyConnected` (a stores row not
+  disconnected) for owner / manager of a bazar store, only then. `UserService` lost its BazarSignup constructor.
+- **Status** adds `mainAvailable` (available pieces at Traced Main), `blocked` ('main_not_counting' | null) and
+  `suggestStart` (intent bazar / both — the old "Bring your products" card on /bazar shows only then; the frontend hides
+  it only on an explicit false). **Products** add per-size `atMain`.
+- **Block (`BazarSetupService.MAIN_NOT_COUNTING_SQL`):** Main linked in Shopify AND `shopify_counting_source` NULL AND the
+  tenant has any piece → receive 409 `BAZAR_SETUP_MAIN_NOT_COUNTING` ("Finish setting up Traced Main first"), checked
+  after the replay / LOWER_FIRST checks, before anything is created; the wizard shows a block screen when there's no
+  batch. Why: the receive would start the count through receiving and the initial seed could never run after it.
+  Main not linked → never blocked. Note: right after a receive, until its +N claim applies, a next batch is blocked too
+  (seconds in prod; the batch also needs Done first).
+- **Bazar page:** "Set up from new stock" (secondary) in the header and the empty state — owner only, needs
+  `bazarSetup` + `shopifyConnected`; the empty state leads with it only when `mainAvailable === 0` (else "Plan your
+  first bazar" first). A hint line under the buttons. **Wizard:** eyebrow "Set up from new stock"; `nothingChanges`
+  replaced by the "Use this only for stock that isn't in Traced yet…" copy (also shown on phone now); Pick shows
+  "N already at Traced Main" per size and a warning once such a size is picked (never blocks).
+- **Part B — setup step "What will you use Traced for?"** before Connect Shopify: `PUT /api/v1/setup/purpose`
+  {purpose: orders | bazar | both} (`SetupPurposeService`, owner only) — locks the tenant row, 400 SETUP_PURPOSE_INVALID,
+  409 SETUP_PURPOSE_ALREADY_SET when an intent is stored, 409 SETUP_FINISHED when `SetupStatus.step` is null; written
+  through the ONE prefs writer (`OnboardingProgressService.recordSetupPurpose`: `intent` + `intentFrom: 'setup'`, audit
+  `setup_purpose_set`); nothing else is written (after merging V244 the answer never touches `bazar_enabled`).
+  `intent` / `intentFrom` stay refused as PATCH keys; the signup's `intent` still accepts 'bazar' only.
+  GET /me `setupPurpose`: 'ask' while setupStep 'shopify' and no intent (owner / manager), else the answer when
+  `intentFrom = 'setup'`, else absent. Routing reuses the existing rules unchanged: SetupStatus / setupIntro compare
+  intent = 'bazar' exactly, so 'both' and 'orders' take address + Bosta; 'bazar' skips them → /setup/bazar → wizard.
+  Frontend: `OnboardingGate` shows `PurposeStep` (owner; managers keep the waiting screen); `SetupStepper` takes
+  `purpose` (adds "Your plan"; bazar drops address / Bosta, "Then: your bazar") — no `purpose` = the old stepper;
+  Flow-4 Ready offers "Set up from new stock" to 'both'. **Signup:** public `GET /api/v1/public/signup-config`
+  {bazarSignup} (permitAll, no DB) → "I'm here for the bazar" link (→ `?for=bazar`, other query keys kept) only when on.
+- **Tests:** BazarWizardEntryTest (9, app_user: a1 gate, a2 /me, a3 atMain / mainAvailable, a4 block, b1 set-once,
+  b2 owner-only / other tenant, b3 finished / signup intent, b4 routing + bazar switch, b5 public config); approved edits:
+  BazarSetupFlagOffTest (renamed, flipped: normal signup, bazar off 404 → on opens; + signup-config false),
+  BazarSetupSendFlagOffTest (flipped), BazarSetupTest.g1, BazarSetupSendTest.s5 (normal signup with bazar on passes the
+  gate); registries: PortalOrderLeakTest + ShadowOrderLeakTest (signup-config, setup/purpose SKIP), RlsCoverageTest
+  EXEMPT (signup-config). Frontend bazarWizardEntry (13). Revert-checked backend R1–R10, frontend F1–F11.
+- **Full runs:** backend 5014 tests, red: ExchangeBackfillTest (allowed), MeTourSignalsTest.m3 (below), and
+  ShadowOrderLeakTest.a (registry, fixed after the run, rerun green with PortalOrderLeakTest + RlsCoverageTest);
+  frontend 271 files / 2320 tests, red: signupMetaPixel (below).
+- **After merging origin/main 3f805577 (V244):** the two approved edits below are done (signupMetaPixel finds the
+  signup POST; MeTourSignalsTest.m3 expects setupPurpose 'ask' for owner / manager, keeping V244's bazar_enabled =
+  false fixture); the purpose step no longer writes bazar_enabled (V244 removed BazarSignup's switch). **Waiting for
+  approval → approved and done 2026-11-26:** `BazarSignupIntentTest.e1` (added by V244) asserts that with BAZAR_SIGNUP_ENABLED off
+  /me has no `bazarSetup` and /bazar-setup is 404 — the opposite of the approved gate (bazar alone). Now expects
+  `bazarSetup: true` and 200 there.
+- **Needs approval (existing tests NOT edited, red on this branch) — both approved 2026-11-26 and done:**
+  - `signupMetaPixel.test.tsx` "sends cookies + URL attribution…" reads `fetchMock.mock.calls[0]` as the signup POST —
+    the signup page now asks signup-config first, so call 0 is that GET. Fix: find the POST to /auth/signup.
+  - `MeTourSignalsTest.m3_onlyTheTwoBooleansAreNew` — a /me key golden for a fresh (gated) tenant: owner and manager
+    now also carry `setupPurpose: 'ask'`. Fix: add it to that tenant's expected keys (owner / manager), or seed the
+    tenant with an intent.
 **V244 — bazar on by default (2026-11-26; branch `feat/bazar-enabled-default` off origin/main b62f049b; merged to main
 2026-11-26, NOT deployed).**
 - `V244__bazar_enabled_default_true.sql`: `tenants.bazar_enabled` DEFAULT true + `UPDATE … SET true WHERE false` (a no-op
   in prod — all 108 tenants were switched on by hand; kept so a fresh DB matches). Ops can still switch one tenant off.
 - `BazarSignup` no longer writes anything: the enable-at-signup UPDATE and the `bazar_enabled_at_signup` audit row are
-  gone (dead with default true; `AuthService` no longer depends on it). `BAZAR_SIGNUP_ENABLED` stays — it still gates the
-  bazar intent's setup wizard (`BazarSetupService.on`, /me `bazarSetup`; off → /bazar-setup 404).
+  gone (dead with default true; `AuthService` no longer depends on it). `BAZAR_SIGNUP_ENABLED` stays — (superseded by the wizard entry above: it now only shows the signup page's
+  "I'm here for the bazar" link; the wizard's gate is bazar alone).
 - Tests: "off" fixture tenants now say `bazar_enabled = false` explicitly (BazarHttp / SalesHttp / CartHttp / DaysHttp /
   EndHttp / TodayCustomerHttp / Me / EventService / SaleService tests, MeTourSignalsTest's tenant helper); signup tests
   expect bazar true for every signup (`assertBazarOnByDefault`), f1 / f2 assert /bazar-setup 200 with the setting on,

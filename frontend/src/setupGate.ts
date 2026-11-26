@@ -14,15 +14,20 @@ import { request, type SetupStep } from './api'
  *  store that signed up to sell at a bazar (Bazar B9a), 'bazar' (/setup/bazar) instead of both. */
 export type SetupIntro = 'courier' | 'ready' | 'bazar' | null
 
+/** Wizard entry — /me setupPurpose: 'ask' = show "What will you use Traced for?" before Connect Shopify; a value = it
+ *  was answered on that step (the stepper keeps it); null = absent (an intent from signup, or an older tenant). */
+export type SetupPurpose = 'ask' | 'orders' | 'bazar' | 'both' | null
+
 export interface SetupState {
   step: SetupStep
+  purpose: SetupPurpose
   warehouseAddressNeeded: boolean
   intro: SetupIntro
   /** The signed-in user's name (the gate's "Welcome, …"). */
   name: string | null
 }
 
-const OPEN: SetupState = { step: null, warehouseAddressNeeded: false, intro: null, name: null }
+const OPEN: SetupState = { step: null, purpose: null, warehouseAddressNeeded: false, intro: null, name: null }
 
 let cache: { token: string; promise: Promise<SetupState> } | null = null
 
@@ -30,9 +35,11 @@ export function loadSetupState(): Promise<SetupState> {
   const token = getAccessToken()
   if (!token) return Promise.resolve(OPEN)
   if (cache?.token !== token) {
-    const promise = request<{ setupStep?: unknown; warehouseAddressNeeded?: unknown; setupIntro?: unknown; name?: unknown } | null>('/me')
+    const promise = request<{ setupStep?: unknown; setupPurpose?: unknown; warehouseAddressNeeded?: unknown; setupIntro?: unknown; name?: unknown } | null>('/me')
       .then(me => ({
         step: (me?.setupStep === 'shopify' || me?.setupStep === 'address') ? me.setupStep : null,
+        purpose: (me?.setupPurpose === 'ask' || me?.setupPurpose === 'orders' || me?.setupPurpose === 'bazar'
+                  || me?.setupPurpose === 'both') ? me.setupPurpose : null,
         warehouseAddressNeeded: me?.warehouseAddressNeeded === true,
         intro: (me?.setupIntro === 'courier' || me?.setupIntro === 'ready' || me?.setupIntro === 'bazar') ? me.setupIntro : null,
         name: typeof me?.name === 'string' && me.name.trim() ? me.name.trim() : null,

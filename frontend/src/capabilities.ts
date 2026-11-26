@@ -29,8 +29,10 @@ export interface Capabilities {
   bazar: boolean
   /** Bazar POS B6 — the live bazar the caller's role may sell at (RootRoute sends the phone there), else null. */
   bazarLive: BazarLive | null
-  /** Bazar B9b — the guided bazar setup is on (owner / manager; backend BAZAR_SIGNUP_ENABLED + a bazar signup). */
+  /** Bazar B9b — the guided bazar setup is on (owner / manager; backend: bazar on — wizard entry 2026-11-26). */
   bazarSetup: boolean
+  /** Wizard entry — the store has a Shopify store that isn't disconnected (sent only with bazarSetup). */
+  shopifyConnected: boolean
 }
 
 export interface BazarLive {
@@ -58,7 +60,8 @@ function parseBazarLive(v: unknown): BazarLive | null {
 }
 
 const NONE: Capabilities = { scanHelpers: false, demoMode: false, genericCourier: false, flexibleLabeling: false, places: false,
-                             placesEnabled: false, bazar: false, bazarLive: null, bazarSetup: false }
+                             placesEnabled: false, bazar: false, bazarLive: null, bazarSetup: false,
+                             shopifyConnected: false }
 
 let cache: { token: string; promise: Promise<Capabilities> } | null = null
 
@@ -68,7 +71,8 @@ export function loadCapabilities(): Promise<Capabilities> {
   if (cache?.token !== token) {
     const promise = request<{ scanHelpers?: unknown; demoMode?: unknown; genericCourier?: unknown;
                               flexibleLabeling?: unknown; places?: unknown; placesDormant?: unknown;
-                              bazar?: unknown; bazarLive?: unknown; bazarSetup?: unknown } | null>('/me')
+                              bazar?: unknown; bazarLive?: unknown; bazarSetup?: unknown;
+                              shopifyConnected?: unknown } | null>('/me')
       .then(me => ({ scanHelpers: me?.scanHelpers === true, demoMode: me?.demoMode === true,
                      genericCourier: me?.genericCourier === true,
                      flexibleLabeling: me?.flexibleLabeling === true,
@@ -76,7 +80,8 @@ export function loadCapabilities(): Promise<Capabilities> {
                      placesEnabled: me?.places === true,
                      bazar: me?.bazar === true,
                      bazarLive: me?.bazar === true ? parseBazarLive(me?.bazarLive) : null,
-                     bazarSetup: me?.bazar === true && me?.bazarSetup === true }))
+                     bazarSetup: me?.bazar === true && me?.bazarSetup === true,
+                     shopifyConnected: me?.bazar === true && me?.bazarSetup === true && me?.shopifyConnected === true }))
       .catch(() => NONE)
     cache = { token, promise }
   }

@@ -35,7 +35,7 @@ function SetupGateInner({ children }: { children: ReactNode }) {
   if (state === undefined) return <GateSpinner />
   if (done) return after === undefined ? <GateSpinner /> : <IntroRedirect intro={after}>{children}</IntroRedirect>
   if (state.step === null) return <IntroRedirect intro={state.intro}>{children}</IntroRedirect>
-  return <OnboardingGate step={state.step} name={state.name} onDone={() => {
+  return <OnboardingGate step={state.step} name={state.name} purpose={state.purpose} onDone={() => {
     setDone(true)
     loadSetupState().then(s => setAfter(s.intro))
   }} />

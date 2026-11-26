@@ -315,20 +315,23 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        // Wizard entry — no tenant data at all: a server setting (BAZAR_SIGNUP_ENABLED), unauthenticated, no DB read.
+        Map.entry("/api/v1/public/signup-config",
+            "public signup-page config: returns only the BAZAR_SIGNUP_ENABLED server setting — no DB read, no tenant data"),
         Map.entry("/api/v1/bazar-setup",
-            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "Bazar B9b guided setup: 404 unless bazar is on for the store (wizard entry); reads under TenantContext + RLS " +
             "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
             "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
         Map.entry("/api/v1/bazar-setup/products",
-            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "Bazar B9b guided setup: 404 unless bazar is on for the store (wizard entry); reads under TenantContext + RLS " +
             "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
             "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
         Map.entry("/api/v1/bazar-setup/lower",
-            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "Bazar B9b guided setup: 404 unless bazar is on for the store (wizard entry); reads under TenantContext + RLS " +
             "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
             "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
         Map.entry("/api/v1/bazar-setup/lower.csv",
-            "Bazar B9b guided setup: 404 unless BAZAR_SIGNUP_ENABLED (off in this class); reads under TenantContext + RLS " +
+            "Bazar B9b guided setup: 404 unless bazar is on for the store (wizard entry); reads under TenantContext + RLS " +
             "(tenants.onboarding_prefs, receipts, pieces, catalog); app_user isolation with a same-tenant control in " +
             "BazarSetupTest.i1 (whole app as app_user), gate in BazarSetupTest.g1 / BazarSetupFlagOffTest"),
         Map.entry("/api/v1/exchanges/{id}/original-lines",

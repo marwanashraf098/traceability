@@ -28,8 +28,13 @@ import java.util.*;
  * into Traced Main (labels or count only) → "Lower these at the location you took them from".
  *
  * <ul>
- *   <li><b>Gate</b> ({@link #on}): {@code BAZAR_SIGNUP_ENABLED} on AND the tenant's signup intent is 'bazar' AND
- *       {@code tenants.bazar_enabled}. Otherwise every endpoint answers 404 — normal tenants never see any of it.</li>
+ *   <li><b>Gate</b> ({@link #on}): {@code tenants.bazar_enabled} (Bazar.enabled) — nothing else (wizard entry,
+ *       2026-11-26: the signup intent and BAZAR_SIGNUP_ENABLED no longer gate it). Bazar off → every endpoint 404.
+ *       Owner does everything; manager reads (status, lower list, Done); worker 403 (controller).</li>
+ *   <li><b>Main block</b> ({@link #MAIN_NOT_COUNTING_SQL}): the main warehouse is linked in Shopify but Shopify isn't
+ *       counting there yet ({@code shopify_counting_source} NULL) and the store already has pieces → the receive is
+ *       refused (409 BAZAR_SETUP_MAIN_NOT_COUNTING): its +N would start the count through receiving and the initial
+ *       seed could never run after it. Status carries {@code blocked} so the wizard says so first.</li>
  *   <li><b>Receiving</b>: ONLY {@link ReceivingService}'s public methods (createSession → addLine → finalize), one
  *       print_stick receipt for the labelled products and one count_only receipt for the rest, in ONE transaction.
  *       Pieces are created by {@code InventoryLedger.batchReceive} inside finalize — this class writes no piece and no
@@ -59,7 +64,6 @@ public class BazarSetupService {
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate readTx;
-    private final BazarSignup signup;
     private final ReceivingService receiving;
     private final OnboardingProgressService prefs;
     private final StoreRepository stores;
@@ -68,14 +72,13 @@ public class BazarSetupService {
     private final ObjectMapper mapper;
     private final BazarService bazar;
 
-    public BazarSetupService(JdbcTemplate jdbc, PlatformTransactionManager txm, BazarSignup signup,
+    public BazarSetupService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                              ReceivingService receiving, OnboardingProgressService prefs, StoreRepository stores,
                              ShopifyTokenProvider tokens, ShopifyVariantStockGateway stockGateway, ObjectMapper mapper,
                              BazarService bazar) {
         this.jdbc = jdbc;
         this.readTx = new TransactionTemplate(txm);
         this.readTx.setReadOnly(true);
-        this.signup = signup;
         this.receiving = receiving;
         this.prefs = prefs;
         this.stores = stores;
@@ -89,22 +92,40 @@ public class BazarSetupService {
 
     /** The ONE gate. Caller's transaction and tenant context. */
     boolean on(UUID tenantId) {
-        return on(jdbc, tenantId, signup.enabled());
+        return on(jdbc, tenantId);
     }
 
-    /** The ONE gate, for GET /me's {@code bazarSetup} (UserService) too. {@code signupEnabled} = BazarSignup.enabled(). */
-    public static boolean on(JdbcTemplate jdbc, UUID tenantId, boolean signupEnabled) {
-        if (!signupEnabled) return false;
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT bazar_enabled AND COALESCE(onboarding_prefs->>'intent', '') = ? FROM tenants WHERE id = ?",
-            Boolean.class, OnboardingProgressService.INTENT_BAZAR, tenantId));
+    /** The ONE gate, for GET /me's {@code bazarSetup} (UserService) too: the store has bazar on. */
+    public static boolean on(JdbcTemplate jdbc, UUID tenantId) {
+        return Bazar.enabled(jdbc, tenantId);
     }
 
     private UUID requireOn() {
         UUID tenantId = TenantContext.require();
-        // Cheap before any SQL: the server setting off answers 404 with no read at all.
-        if (!signup.enabled() || !on(tenantId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        if (!on(tenantId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         return tenantId;
+    }
+
+    /**
+     * True when the wizard must not receive: Traced Main is linked in Shopify, Shopify isn't counting there yet
+     * (V167 {@code shopify_counting_source} NULL) and the store already has pieces. Param: tenant id (×3).
+     */
+    static final String MAIN_NOT_COUNTING_SQL =
+        "SELECT EXISTS (SELECT 1 FROM locations l WHERE l.tenant_id = ? AND l.is_fulfillment " +
+        "  AND l.shopify_sync_status = 'linked' AND l.shopify_location_id IS NOT NULL) " +
+        "AND shopify_counting_source(?) IS NULL " +
+        "AND EXISTS (SELECT 1 FROM pieces p WHERE p.tenant_id = ?)";
+
+    static boolean mainNotCounting(JdbcTemplate jdbc, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(MAIN_NOT_COUNTING_SQL, Boolean.class, tenantId, tenantId, tenantId));
+    }
+
+    /** Pieces available at Traced Main (the store's own stock the owner could send instead). */
+    static int availableAtMain(JdbcTemplate jdbc, UUID tenantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT count(*)::int FROM pieces p JOIN locations l ON l.id = p.current_location_id AND l.tenant_id = p.tenant_id " +
+            "WHERE p.tenant_id = ? AND l.is_fulfillment AND p.status = 'available'", Integer.class, tenantId);
+        return n == null ? 0 : n;
     }
 
     // ── Status (Overview card, Get ready line, the wizard's resume) ──────────
@@ -115,6 +136,13 @@ public class BazarSetupService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("on", true);
         out.put("canSetUp", owner);
+        out.put("mainAvailable", availableAtMain(jdbc, tenantId));
+        out.put("blocked", mainNotCounting(jdbc, tenantId) ? "main_not_counting" : null);
+        // The /bazar "Bring your products" card is suggested only to a store that came for bazars (intent bazar / both);
+        // everyone else reaches the wizard from the Bazar page's "Set up from new stock" buttons.
+        String intent = jdbc.queryForObject(
+            "SELECT COALESCE(onboarding_prefs->>'intent', '') FROM tenants WHERE id = ?", String.class, tenantId);
+        out.put("suggestStart", "bazar".equals(intent) || "both".equals(intent));
         out.put("batch", batchView(tenantId, readBatch(tenantId, false)));
         return out;
     }
@@ -157,7 +185,7 @@ public class BazarSetupService {
     public Map<String, Object> products() {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> catalog = readTx.execute(st -> {
-            if (!signup.enabled() || !on(tenantId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+            if (!on(tenantId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
             return catalog(tenantId);
         });
         Map<String, Integer> other = new HashMap<>();
@@ -181,7 +209,10 @@ public class BazarSetupService {
         Map<UUID, Map<String, Object>> byProduct = new LinkedHashMap<>();
         jdbc.query(
             "SELECT pr.id AS product_id, pr.title AS product_title, pr.image_url, " +
-            "       v.id AS variant_id, v.title AS variant_title, v.sku, v.price, v.external_id " +
+            "       v.id AS variant_id, v.title AS variant_title, v.sku, v.price, v.external_id, " +
+            "       (SELECT count(*)::int FROM pieces p JOIN locations l ON l.id = p.current_location_id " +
+            "          AND l.tenant_id = p.tenant_id AND l.is_fulfillment " +
+            "        WHERE p.tenant_id = v.tenant_id AND p.variant_id = v.id AND p.status = 'available') AS at_main " +
             "FROM products pr JOIN variants v ON v.product_id = pr.id AND v.tenant_id = pr.tenant_id " +
             "WHERE pr.tenant_id = ? AND pr.status = 'active' " +
             "ORDER BY lower(pr.title), pr.id, " + VARIANT_ORDER_SQL,
@@ -205,6 +236,7 @@ public class BazarSetupService {
                 BigDecimal price = rs.getBigDecimal("price");
                 v.put("price", price);
                 v.put("externalId", rs.getString("external_id"));
+                v.put("atMain", rs.getInt("at_main"));   // available pieces already at Traced Main (warn, never block)
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> vs = (List<Map<String, Object>>) p.get("variants");
                 vs.add(v);
@@ -270,6 +302,11 @@ public class BazarSetupService {
             throw new BazarException(BazarException.Code.BAZAR_SETUP_LOWER_FIRST,
                 "Lower the last list at the location you took the pieces from first, then add more.",
                 "خفّض القائمة السابقة في الموقع الذي أخذت منه القطع أولًا، ثم أضف المزيد.", HttpStatus.CONFLICT);
+        }
+        if (mainNotCounting(jdbc, tenantId)) {
+            throw new BazarException(BazarException.Code.BAZAR_SETUP_MAIN_NOT_COUNTING,
+                "Finish setting up Traced Main first: Shopify isn't counting your stock there yet.",
+                "أكمل إعداد Traced Main أولًا: Shopify لا يحسب مخزونك هناك بعد.", HttpStatus.CONFLICT);
         }
         if (eventId == null) throw invalid("Choose the bazar first.", "اختر البازار أولًا.");
         List<Map<String, Object>> ev = jdbc.queryForList(

@@ -28,20 +28,10 @@ public class UserService {
     private final PasswordEncoder encoder;
     private final AuditService    audit;
 
-    /** Bazar B9b — the BAZAR_SIGNUP_ENABLED setting, for /me's bazarSetup (null: a hand-built service, never on). */
-    private final com.traceability.bazar.BazarSignup bazarSignup;
-
     public UserService(JdbcTemplate jdbc, PasswordEncoder encoder, AuditService audit) {
-        this(jdbc, encoder, audit, null);
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
-    public UserService(JdbcTemplate jdbc, PasswordEncoder encoder, AuditService audit,
-                       com.traceability.bazar.BazarSignup bazarSignup) {
         this.jdbc        = jdbc;
         this.encoder     = encoder;
         this.audit       = audit;
-        this.bazarSignup = bazarSignup;
     }
 
     // ── List ──────────────────────────────────────────────────────────────────
@@ -90,6 +80,22 @@ public class UserService {
         self.put("setupStep", setupStep);
         self.put("warehouseAddressNeeded",
             !worker && com.traceability.setup.SetupStatus.addressNeeded(jdbc, tenantId, setupStep));
+        // Wizard entry — the setup step "What will you use Traced for?": 'ask' while the gate is at Shopify and no
+        // intent is stored; the answer ('orders' | 'bazar' | 'both') once it was given on that step (intentFrom
+        // 'setup'), so the stepper keeps showing it. Absent otherwise — every other /me is unchanged.
+        if (!worker) {
+            Map<String, Object> ip = jdbc.queryForMap(
+                "SELECT COALESCE(onboarding_prefs->>'intent', '') AS intent, " +
+                "       COALESCE(onboarding_prefs->>'" + OnboardingProgressService.INTENT_FROM_KEY + "', '') AS intent_from " +
+                "FROM tenants WHERE id = ?", tenantId);
+            String intent = (String) ip.get("intent");
+            if (intent.isEmpty() && com.traceability.setup.SetupStatus.SHOPIFY.equals(setupStep)) {
+                self.put("setupPurpose", "ask");
+            } else if ("setup".equals(ip.get("intent_from"))
+                    && OnboardingProgressService.SETUP_PURPOSES.contains(intent)) {
+                self.put("setupPurpose", intent);
+            }
+        }
         // Warehouse places S1 — zones / racks / shelves / boxes (Settings › Places).
         // Rollout: placesDormant — on, but no location set up yet (no live shelf or box): the place features stay
         // hidden (Put away, its badge and tile). Only sent with places on, so an off tenant's /me is unchanged.
@@ -102,11 +108,14 @@ public class UserService {
             self.put("bazar", true);
             Map<String, Object> live = com.traceability.bazar.Bazar.liveFor(jdbc, tenantId, userId, (String) self.get("role"));
             if (live != null) self.put("bazarLive", live);
-            // Bazar B9b — the guided bazar setup is on (BazarSetupService's gate): the screens may ask /bazar-setup.
-            // Owner / manager only, and only sent when on, so every other /me is unchanged.
-            if (!"worker".equals(self.get("role")) && bazarSignup != null
-                    && com.traceability.bazar.BazarSetupService.on(jdbc, tenantId, bazarSignup.enabled())) {
+            // Bazar B9b / wizard entry — the guided bazar setup is on (BazarSetupService's gate = bazar on): the screens
+            // may ask /bazar-setup. Owner / manager only. shopifyConnected (a store that isn't disconnected) rides
+            // with it: the "Set up from new stock" buttons stay hidden without one.
+            if (!"worker".equals(self.get("role")) && com.traceability.bazar.BazarSetupService.on(jdbc, tenantId)) {
                 self.put("bazarSetup", true);
+                self.put("shopifyConnected", Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM stores WHERE tenant_id = ? AND status <> 'disconnected')",
+                    Boolean.class, tenantId)));
             }
         }
         // Onboarding O1 (V220) — this user's tours done / pages opened. userId is the JWT's user: on a

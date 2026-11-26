@@ -54,8 +54,8 @@ import static org.mockito.Mockito.when;
  *      done right after signup (no address step), setupIntro 'bazar'.
  *   e2 App Store onboarding without intent: unchanged — gate 'address', no intent stored.
  *   BAZAR_SIGNUP_ENABLED is off here (the default): tenants.bazar_enabled is still true for every signup, bazar or
- *   not (the V244 default), but the bazar setup wizard (/bazar-setup) answers 404 (BazarSignupEnabledTest has the
- *   setting on).
+ *   not (the V244 default), and the bazar setup wizard (/bazar-setup) is reachable — since the wizard entry its gate is
+ *   bazar alone (BazarSignupEnabledTest has the setting on).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -285,9 +285,9 @@ class BazarSignupIntentTest {
         assertThat(me.get("setupStep")).isNull();
         assertThat(me.get("setupIntro")).isEqualTo("bazar");
         assertThat(me.get("warehouseAddressNeeded")).isEqualTo(true);
-        assertThat(me).containsEntry("bazar", true).doesNotContainKey("bazarSetup");
+        assertThat(me).containsEntry("bazar", true).containsEntry("bazarSetup", true);
         assertThat(send(HttpMethod.GET, "/api/v1/bazar-setup", token, null).getStatusCode())
-            .as("BAZAR_SIGNUP_ENABLED off → no setup wizard").isEqualTo(HttpStatus.NOT_FOUND);
+            .as("wizard entry: the setup's gate is bazar alone, BAZAR_SIGNUP_ENABLED off doesn't matter").isEqualTo(HttpStatus.OK);
     }
 
     @Test
