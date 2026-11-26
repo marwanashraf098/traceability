@@ -112,7 +112,8 @@ SELECT d.tenant_id, d.transfer_id, tt.main_id, 'queued', 'repair',
 FROM tr_decision d JOIN tr_tenants tt ON tt.tenant_id = d.tenant_id
 WHERE d.decision = 'queue_minus_1'
 GROUP BY d.tenant_id, d.transfer_id, tt.main_id
-ON CONFLICT (transfer_id) DO NOTHING;
+-- V245: UNIQUE(transfer_id) became a partial unique for the first send (batch_id IS NULL) — same rows.
+ON CONFLICT (transfer_id) WHERE batch_id IS NULL DO NOTHING;
 
 \if :{?commit}
 \if :commit

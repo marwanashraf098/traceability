@@ -859,14 +859,15 @@ public class ExceptionService {
             "UNION ALL " +
             "SELECT 'void_hold_sync_failed', 'CRITICAL', 'transfer', 'transfer_out', y.transfer_id::text, y.error, " +
             "       NULL, NULL, y.status, y.created_at, " +
-            "       'void_hold_sync_failed:transfer_out:' || y.transfer_id, y.status, NULL " +
+            // V245: a bazar top-up batch's claim has its own key (a first send's key is unchanged).
+            "       'void_hold_sync_failed:transfer_out:' || y.transfer_id || COALESCE(':batch:' || y.batch_id, ''), y.status, NULL " +
             "FROM transfer_shopify_syncs y " +
             "WHERE y.tenant_id = ? " +
             "  AND (y.status = 'failed_ambiguous' OR (y.status = 'failed' AND y.attempt_count >= " + TransferShopifySync.MAX_ATTEMPTS + ") " +
             "       OR (y.status = 'skipped' AND y.reason = '" + com.traceability.integrations.shopify.ShopifyMainLevelInactiveException.REASON + "')) " +
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
             "        AND er.exception_type = 'void_hold_sync_failed' " +
-            "        AND er.subject_key = 'void_hold_sync_failed:transfer_out:' || y.transfer_id) " +
+            "        AND er.subject_key = 'void_hold_sync_failed:transfer_out:' || y.transfer_id || COALESCE(':batch:' || y.batch_id, '')) " +
             // Part D P2 (2026-11-08): a stock-take write-off push / a Main reconcile Part 1 decrement that sent
             // NOTHING because an item has no active level at the Traced location (a write there would land on a
             // hidden level). A person re-activates the item at the location, then re-pushes / the next run sends.

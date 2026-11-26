@@ -100,6 +100,61 @@ public class BazarController {
         return bazar.markSent(eventId, principal.userId());
     }
 
+    // ── Top-up: add pieces to a live bazar (V245) ────────────────────────────
+
+    /** Opens the bazar's top-up batch (or returns the one already open). Live bazars only. */
+    @PostMapping("/{eventId}/batches")
+    public Map<String, Object> openBatch(@PathVariable UUID eventId,
+                                         @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.openBatch(eventId, principal.userId());
+    }
+
+    @GetMapping("/{eventId}/batches/current")
+    public Map<String, Object> currentBatch(@PathVariable UUID eventId) {
+        return bazar.currentBatch(eventId);
+    }
+
+    /** Lists one scanned piece on the batch (nothing moves until Send). */
+    @PostMapping("/{eventId}/batches/{batchId}/scan")
+    public TransferService.ScanOutResult batchScan(@PathVariable UUID eventId, @PathVariable UUID batchId,
+                                                   @RequestBody ScanRequest req,
+                                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.batchScan(eventId, batchId, req.barcode(), principal.userId());
+    }
+
+    @PostMapping("/{eventId}/batches/{batchId}/count")
+    public TransferService.CountResult batchCount(@PathVariable UUID eventId, @PathVariable UUID batchId,
+                                                  @RequestBody CountRequest req,
+                                                  @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.batchAddCount(eventId, batchId, req.variantId(), req.quantity(), req.clientRequestId(),
+            principal.userId());
+    }
+
+    @PostMapping("/{eventId}/batches/{batchId}/remove")
+    public TransferService.CountResult batchRemove(@PathVariable UUID eventId, @PathVariable UUID batchId,
+                                                   @RequestBody RemoveRequest req,
+                                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.batchRemove(eventId, batchId, req.code(), req.variantId(), req.quantity(), req.clientRequestId(),
+            principal.userId());
+    }
+
+    @PostMapping("/{eventId}/batches/{batchId}/discard")
+    public Map<String, Object> discardBatch(@PathVariable UUID eventId, @PathVariable UUID batchId,
+                                            @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.discardBatch(eventId, batchId, principal.userId());
+    }
+
+    /** "Send these to the bazar" — body {client_request_id}. */
+    @PostMapping("/{eventId}/batches/{batchId}/send")
+    public Map<String, Object> sendBatch(@PathVariable UUID eventId, @PathVariable UUID batchId,
+                                         @RequestBody SendBatchRequest req,
+                                         @AuthenticationPrincipal CustomUserDetails principal) {
+        return bazar.sendBatch(eventId, batchId, req.clientRequestId(), principal.userId());
+    }
+
+    public record SendBatchRequest(
+        @com.fasterxml.jackson.annotation.JsonProperty("client_request_id") String clientRequestId) {}
+
     /** B8 — Remove from online stock / Keep showing online; only while draft and preparing (locked after send). */
     @PutMapping("/{eventId}/online-stock")
     public Map<String, Object> setOnlineStock(@PathVariable UUID eventId, @RequestBody OnlineStockRequest req,

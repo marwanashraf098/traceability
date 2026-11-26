@@ -24,6 +24,8 @@ class BazarReportGuardTest {
     private static final Set<String> ALLOWED_TABLES = Set.of(
         "bazar_events", "bazar_sales", "bazar_payments", "bazar_day_closes", "bazar_receipts",
         "transfers", "transfer_pieces", "transfer_lines",
+        // Top-up (V245, approved 2026-11-27): End event reads whether a send batch is still open (read only).
+        "transfer_send_batches",
         "pieces", "variants", "products", "users", "locations", "piece_events", "sent", "sold");
 
     private static final Pattern TABLE = Pattern.compile("\\b(?:FROM|JOIN)\\s+([a-z_]+)\\b(?!\\.)");

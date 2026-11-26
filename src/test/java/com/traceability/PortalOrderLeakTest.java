@@ -649,6 +649,16 @@ class PortalOrderLeakTest {
                                 "POST /api/v1/bazar-events/{eventId}/remove-from-send")) {
             reg(k, skip("Bazar POS B7d — send N of a size to / take pieces off the bazar's transfer; touches no orders"));
         }
+        reg("GET /api/v1/bazar-events/{eventId}/batches/current",
+            skip("Bazar top-up (V245) — the bazar's open send batch: listed pieces per variant; lists no order"));
+        for (String k : List.of("POST /api/v1/bazar-events/{eventId}/batches",
+                                "POST /api/v1/bazar-events/{eventId}/batches/{batchId}/scan",
+                                "POST /api/v1/bazar-events/{eventId}/batches/{batchId}/count",
+                                "POST /api/v1/bazar-events/{eventId}/batches/{batchId}/remove",
+                                "POST /api/v1/bazar-events/{eventId}/batches/{batchId}/discard",
+                                "POST /api/v1/bazar-events/{eventId}/batches/{batchId}/send")) {
+            reg(k, skip("Bazar top-up (V245) — a live bazar's send batch: list pieces, then send them on the bazar's transfer; touches no orders"));
+        }
         reg("GET /api/v1/bazar-events/{eventId}/bring-back-stock",
             skip("Bazar POS B7d-2 — the event's untagged leftovers still out, per variant; touches no orders"));
         for (String k : List.of("POST /api/v1/bazar-events/{eventId}/bring-back-by-count",

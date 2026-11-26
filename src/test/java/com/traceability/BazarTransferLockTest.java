@@ -276,7 +276,10 @@ class BazarTransferLockTest {
 
     // ── the bazar entry points have ONE caller ───────────────────────────────
 
-    private static final Pattern BAZAR_ENTRY = Pattern.compile("\\.(scanOutForBazar|markSentForBazar|createBazarTransfer|scanOutReceiptPiecesForBazar)\\(");
+    private static final Pattern BAZAR_ENTRY = Pattern.compile("\\.(scanOutForBazar|markSentForBazar|createBazarTransfer|scanOutReceiptPiecesForBazar|" +
+        // Top-up (V245, approved 2026-11-27): the send batches of a live bazar.
+        "openSendBatchForBazar|addScannedToBatchForBazar|addCountToBatchForBazar|removeFromBatchForBazar|" +
+        "discardBatchForBazar|sendBatchForBazar)\\(");
 
     @Test
     void bazarEntryPoints_areCalledOnlyByBazarService() throws IOException {

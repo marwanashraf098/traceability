@@ -309,7 +309,11 @@ class RlsCoverageTest {
             // Bazar POS B7d-2 — untagged leftovers still out: TenantContext + RLS (transfer_pieces, pieces, variants,
             // products); another tenant's event → 404, a role outside seller_roles / a removed seller → 403 in
             // BazarBringBackByCountTest.p1_*, app_user isolation with a same-tenant positive control in its s1_.
-            "/api/v1/bazar-events/{eventId}/bring-back-stock"
+            "/api/v1/bazar-events/{eventId}/bring-back-stock",
+            // Bazar top-up (V245) — the open send batch: TenantContext + RLS (transfer_send_batches / _items, pieces,
+            // variants, products); the whole app as app_user in BazarTopupHttpAppUserTest: owner / manager 200, worker
+            // 403, another tenant's owner 404 and nothing changed.
+            "/api/v1/bazar-events/{eventId}/batches/current"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────

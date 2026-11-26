@@ -74,6 +74,17 @@ public class BazarEndService {
             throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_LIVE,
                 "Only a live bazar can be ended.", "يمكن إنهاء البازار الجاري فقط.", HttpStatus.CONFLICT);
         }
+        // Top-up (V245, approved 2026-11-27): a batch still being listed must be sent or discarded first — its list is
+        // the only record of the pieces set aside for the bazar. Batch actions hold the event FOR SHARE.
+        List<UUID> openBatch = jdbc.queryForList(
+            "SELECT id FROM transfer_send_batches WHERE transfer_id = ? AND tenant_id = ? AND status = 'open'",
+            UUID.class, ev.get("transfer_id"), tenantId);
+        if (!openBatch.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_TOPUP_OPEN,
+                "You're still adding pieces to this bazar. Send or discard them first.",
+                "ما زلت تضيف قطعًا لهذا البازار. أرسلها أو ألغِها أولًا.", HttpStatus.CONFLICT,
+                Map.of("batch_id", openBatch.get(0)));
+        }
         List<Map<String, Object>> needing = daysNeedingClose(eventId, actor);
         if (!needing.isEmpty()) {
             Map<String, Object> d = new LinkedHashMap<>();

@@ -91,7 +91,13 @@ public class BazarException extends RuntimeException {
         // Customer details — export / delete one customer's details on request
         BAZAR_OWNER_ONLY,
         BAZAR_CUSTOMER_NOT_FOUND,
-        BAZAR_CUSTOMER_CHANGED
+        BAZAR_CUSTOMER_CHANGED,
+        // Top-up — add pieces to a live bazar (V245)
+        BAZAR_TOPUP_OPEN,
+        BAZAR_BATCH_NOT_FOUND,
+        BAZAR_BATCH_NOT_OPEN,
+        BAZAR_BATCH_EMPTY,
+        BAZAR_BATCH_PIECES_CHANGED
     }
 
     private final Code       code;

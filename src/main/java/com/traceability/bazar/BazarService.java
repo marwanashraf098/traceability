@@ -552,6 +552,184 @@ public class BazarService {
         return (BigDecimal) v.get(0).get("price");
     }
 
+    // ── Top-up: add pieces to a live bazar (V245) ────────────────────────────
+
+    /**
+     * Top-up (approved 2026-11-27, design B) — more pieces for a LIVE bazar after Mark sent, on its SAME transfer, one
+     * batch at a time (TransferService's *BatchForBazar methods). An open batch is a list: nothing moves until
+     * {@link #sendBatch}. Every batch action holds the event FOR SHARE (End event's FOR UPDATE waits; End refuses
+     * while a batch is open). Owner / manager (the controller). Draft → use the normal send; ended → refused.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> openBatch(UUID eventId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        UUID batchId = transfers.openSendBatchForBazar((UUID) ev.get("transfer_id"), actorUserId);
+        return batchView(tenantId, batchId);
+    }
+
+    /** The open batch's list ({@code batch} null when none is open). */
+    @Transactional(readOnly = true)
+    public Map<String, Object> currentBatch(UUID eventId) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = event(tenantId, eventId, false);
+        List<UUID> open = jdbc.queryForList(
+            "SELECT id FROM transfer_send_batches WHERE transfer_id = ? AND tenant_id = ? AND status = 'open'",
+            UUID.class, ev.get("transfer_id"), tenantId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("batch", open.isEmpty() ? null : batchView(tenantId, open.get(0)));
+        return out;
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.ScanOutResult batchScan(UUID eventId, UUID batchId, String barcode, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        return transfers.addScannedToBatchForBazar((UUID) ev.get("transfer_id"), batchId, barcode, actorUserId);
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.CountResult batchAddCount(UUID eventId, UUID batchId, UUID variantId, Integer quantity,
+                                                     String clientRequestId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        if (variantId == null) throw invalid("Choose a product and size.", "اختر منتجًا ومقاسًا.");
+        requireVariant(tenantId, variantId);
+        TransferService.CountResult r = transfers.addCountToBatchForBazar((UUID) ev.get("transfer_id"), batchId,
+            variantId, quantity == null ? 0 : quantity, actorUserId, crid);
+        if (!r.success()) {
+            if ("PIECES_HAVE_LABELS".equals(r.code())) throw countRefused(r);   // U1c's refusal, unchanged
+            throw batchRefused(r.code(), r.messageEn(), r.messageAr(), r.available());
+        }
+        return r;   // U1c: a count result carries no labelled codes (only pieces without labels are listed)
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public TransferService.CountResult batchRemove(UUID eventId, UUID batchId, String code, UUID variantId,
+                                                   Integer quantity, String clientRequestId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        boolean byCode = code != null && !code.isBlank();
+        if (byCode == (variantId != null)) {
+            throw invalid("Remove one scanned piece, or a number of one size.", "احذف قطعة ممسوحة واحدة، أو عددًا من مقاس واحد.");
+        }
+        TransferService.CountResult r = transfers.removeFromBatchForBazar((UUID) ev.get("transfer_id"), batchId,
+            byCode ? code : null, byCode ? null : variantId, quantity == null ? 0 : quantity, actorUserId, crid);
+        if (!r.success()) throw batchRefused(r.code(), r.messageEn(), r.messageAr(), r.available());
+        return withLabelledCodes(tenantId, r);
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> discardBatch(UUID eventId, UUID batchId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        try {
+            transfers.discardBatchForBazar((UUID) ev.get("transfer_id"), batchId, actorUserId);
+        } catch (com.traceability.inventory.TransferException e) {
+            throw new BazarException(BazarException.Code.BAZAR_BATCH_NOT_OPEN, e.messageEn(), e.messageAr(),
+                HttpStatus.CONFLICT);
+        }
+        return detail(tenantId, eventId);
+    }
+
+    /**
+     * "Send these to the bazar" — the batch's pieces join the bazar's transfer through claimAndSend, its Shopify claim
+     * is written (Remove: −N at Main for exactly these pieces; Keep: nothing), and each size sent gets its price row like
+     * a first scan-out ({@link #ensurePrice}: the bazar's rule, else Shopify's price). The same {@code clientRequestId}
+     * again returns the first answer.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> sendBatch(UUID eventId, UUID batchId, String clientRequestId, UUID actorUserId) {
+        UUID tenantId = requireEnabled();
+        String crid = requestId(clientRequestId);
+        Map<String, Object> ev = liveEvent(tenantId, eventId);
+        // TODO(U1d): once U1d is on main — a batch Send on a Keep ('leave') transfer at a store where Main reconcile
+        // doesn't write must refuse with U1d's BAZAR_KEEP_UNAVAILABLE (the same rule U1d uses for Mark sent), before
+        // anything is claimed.
+        TransferService.BatchSendResult r = transfers.sendBatchForBazar((UUID) ev.get("transfer_id"), batchId,
+            actorUserId, crid);
+        if (!r.success()) {
+            if ("BATCH_PIECES_CHANGED".equals(r.code())) {
+                throw new BazarException(BazarException.Code.BAZAR_BATCH_PIECES_CHANGED, r.messageEn(), r.messageAr(),
+                    HttpStatus.CONFLICT, Map.of("blocked_codes", r.blockedCodes()));
+            }
+            throw batchRefused(r.code(), r.messageEn(), r.messageAr(), 0);
+        }
+        for (UUID v : r.variantIds()) ensurePrice(tenantId, ev, v);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sent", r.pieceIds().size());
+        out.put("piece_ids", r.pieceIds());
+        out.put("replayed", r.replayed());
+        out.put("event", detail(tenantId, eventId));
+        return out;
+    }
+
+    /** The event FOR SHARE, live only (draft → BAZAR_EVENT_NOT_LIVE, ended → BAZAR_EVENT_ENDED). */
+    private Map<String, Object> liveEvent(UUID tenantId, UUID eventId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, status, location_id, transfer_id, discount_pct, round_to FROM bazar_events " +
+            "WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL FOR SHARE", eventId, tenantId);
+        if (rows.isEmpty()) {
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        }
+        Map<String, Object> ev = new LinkedHashMap<>(rows.get(0));
+        if ("ended".equals(ev.get("status"))) throw ended();
+        if (!"live".equals(ev.get("status"))) {
+            throw new BazarException(BazarException.Code.BAZAR_EVENT_NOT_LIVE,
+                "More pieces can be added once the bazar is live — before that, add them to the send.",
+                "يمكن إضافة قطع أخرى بعد بدء البازار — قبل ذلك أضفها إلى الإرسال.", HttpStatus.CONFLICT);
+        }
+        return ev;
+    }
+
+    private static BazarException batchRefused(String code, String en, String ar, int available) {
+        return switch (code == null ? "" : code) {
+            case "NOT_ENOUGH_AT_MAIN" -> new BazarException(BazarException.Code.BAZAR_NOT_ENOUGH_AT_MAIN, en, ar,
+                HttpStatus.CONFLICT, Map.of("available", available));
+            case "NOT_ON_THIS_SEND" -> new BazarException(BazarException.Code.BAZAR_NOT_ON_SEND, en, ar,
+                HttpStatus.CONFLICT, Map.of("on_send", available));
+            case "TRANSFER_NOT_OPEN" -> new BazarException(BazarException.Code.BAZAR_SEND_CLOSED, en, ar, HttpStatus.CONFLICT);
+            case "BATCH_NOT_OPEN" -> new BazarException(BazarException.Code.BAZAR_BATCH_NOT_OPEN, en, ar, HttpStatus.CONFLICT);
+            case "BATCH_EMPTY" -> new BazarException(BazarException.Code.BAZAR_BATCH_EMPTY, en, ar, HttpStatus.CONFLICT);
+            case "BATCH_NOT_FOUND" -> new BazarException(BazarException.Code.BAZAR_BATCH_NOT_FOUND, en, ar, HttpStatus.NOT_FOUND);
+            case "INVALID_QUANTITY" -> invalid(en, ar);
+            default -> new BazarException(BazarException.Code.BAZAR_EVENT_NOT_FOUND,
+                "Bazar not found.", "لم يتم العثور على البازار.", HttpStatus.NOT_FOUND);
+        };
+    }
+
+    /** One batch's list: per size (count, label codes) and the total. */
+    private Map<String, Object> batchView(UUID tenantId, UUID batchId) {
+        Map<String, Object> b = new LinkedHashMap<>(jdbc.queryForMap(
+            "SELECT id, batch_no, status, created_at, sent_at FROM transfer_send_batches WHERE id = ? AND tenant_id = ?",
+            batchId, tenantId));
+        List<Map<String, Object>> lines = jdbc.queryForList(
+            "SELECT i.variant_id, v.sku, v.title AS variant_title, pr.title AS product_title, COUNT(*)::int AS count, " +
+            "       string_agg(p.short_code, ',' ORDER BY p.short_code) AS codes, " +
+            "       MAX(i.added_at) AS last_added " +
+            "FROM transfer_send_batch_items i JOIN variants v ON v.id = i.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "JOIN pieces p ON p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
+            "WHERE i.batch_id = ? AND i.tenant_id = ? AND i.removed_at IS NULL " +
+            "GROUP BY i.variant_id, v.sku, v.title, pr.title ORDER BY MAX(i.added_at) DESC, i.variant_id",
+            batchId, tenantId);
+        int total = 0;
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Map<String, Object> l : lines) {
+            Map<String, Object> m = new LinkedHashMap<>(l);
+            m.remove("last_added");
+            String codes = (String) l.get("codes");
+            m.put("codes", codes == null ? List.of() : List.of(codes.split(",")));
+            total += ((Number) l.get("count")).intValue();
+            out.add(m);
+        }
+        b.put("lines", out);
+        b.put("total", total);
+        return b;
+    }
+
     // ── Read ─────────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -600,6 +778,35 @@ public class BazarService {
             counts.put(k, ((Number) c.get(k)).intValue());
         }
         out.put("counts", counts);
+        // Top-up (V245): the sends — the first (batch 1, Mark sent) and every top-up batch sent since — and the batch
+        // still being listed, if any.
+        List<Map<String, Object>> batches = new java.util.ArrayList<>();
+        if (out.get("transfer_sent_at") != null) {
+            Map<String, Object> first = new LinkedHashMap<>();
+            first.put("batch_no", 1);
+            first.put("sent_at", out.get("transfer_sent_at"));
+            first.put("pieces", jdbc.queryForObject("SELECT COUNT(*)::int FROM transfer_pieces WHERE transfer_id = ? " +
+                "AND tenant_id = ? AND batch_id IS NULL", Integer.class, out.get("transfer_id"), tenantId));
+            batches.add(first);
+            batches.addAll(jdbc.queryForList(
+                "SELECT b.batch_no, b.sent_at, (SELECT COUNT(*)::int FROM transfer_pieces tp WHERE tp.batch_id = b.id " +
+                "  AND tp.tenant_id = b.tenant_id) AS pieces " +
+                "FROM transfer_send_batches b WHERE b.transfer_id = ? AND b.tenant_id = ? AND b.status = 'sent' " +
+                "ORDER BY b.batch_no", out.get("transfer_id"), tenantId));
+        }
+        out.put("batches", batches);
+        List<Map<String, Object>> open = jdbc.queryForList(
+            "SELECT b.id, b.batch_no, (SELECT COUNT(*)::int FROM transfer_send_batch_items i WHERE i.batch_id = b.id " +
+            "  AND i.tenant_id = b.tenant_id AND i.removed_at IS NULL) AS pieces " +
+            "FROM transfer_send_batches b WHERE b.transfer_id = ? AND b.tenant_id = ? AND b.status = 'open'",
+            out.get("transfer_id"), tenantId);
+        out.put("open_batch", open.isEmpty() ? null : open.get(0));
+        // Sizes shown for the bazar with no price yet ("N sizes have no price · Set prices").
+        out.put("no_price_count", jdbc.queryForObject(
+            "SELECT COUNT(*)::int FROM variants v " +
+            "LEFT JOIN bazar_event_prices bp ON bp.variant_id = v.id AND bp.event_id = ? AND bp.tenant_id = v.tenant_id " +
+            "WHERE v.tenant_id = ? AND bp.price IS NULL AND v.id IN (" + shownVariantsSql() + ")",
+            Integer.class, eventId, tenantId, eventId, tenantId, eventId, tenantId));
         // U1b: Delete is offered only for a draft whose transfer is preparing and never had a piece scanned out.
         out.put("deletable", "draft".equals(out.get("status")) && "preparing".equals(out.get("transfer_status"))
             && Boolean.FALSE.equals(jdbc.queryForObject(
