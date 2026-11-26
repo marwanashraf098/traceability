@@ -520,12 +520,15 @@ export interface BazarFoundSales {
   sales: BazarSale[]
 }
 
-/** B7c: the active sales of a size at this event (newest first), optionally by the customer's phone or receipt. */
+/**
+ * B7c: the active sales of a size at this event (newest first), optionally by the customer's phone or receipt.
+ * A POST: the phone travels in the body, never in the URL (access logs).
+ */
 export function findBazarSales(eventId: string, variantId: string, filters: { phone?: string; receipt?: string } = {}) {
-  const q = new URLSearchParams({ variant: variantId })
-  if (filters.phone?.trim()) q.set('phone', filters.phone.trim())
-  if (filters.receipt?.trim()) q.set('receipt', filters.receipt.trim())
-  return bazarFetch<BazarFoundSales>(`${base(eventId)}/sales/find?${q}`)
+  const body: Record<string, string> = { variant_id: variantId }
+  if (filters.phone?.trim()) body.phone = filters.phone.trim()
+  if (filters.receipt?.trim()) body.receipt = filters.receipt.trim()
+  return bazarFetch<BazarFoundSales>(`${base(eventId)}/sales/find`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 export interface BazarExchangeResult {
@@ -1085,4 +1088,63 @@ export async function openBazarSetupLabels(receiptId: string) {
   const res = await authFetch(`/receiving/sessions/${encodeURIComponent(receiptId)}/labels`)
   if (!res.ok) throw new BazarError(res.status, { code: `HTTP_${res.status}` })
   window.open(URL.createObjectURL(await res.blob()), '_blank')
+}
+
+// ── Customer details on request (find / export / delete one customer's name and phone) ─────────────────────────
+// Every call is a POST with a JSON body: a phone or a name never goes in a URL.
+
+export interface BazarCustomerMatch {
+  /** Their phone (01XXXXXXXXX), else "name:" + their name in lower case — what export / delete take. */
+  key: string
+  name: string | null
+  /** Every name saved with this key. */
+  names: string[]
+  phone: string | null
+  bazars: number
+  /** Every sale row held (undone and returned ones too). */
+  sales: number
+  /** Pieces they kept. */
+  pieces: number
+  total: string | number
+  last_visit: string
+}
+
+export interface BazarCustomerDeleteCounts { rows: number; receipts: number; bazars: number }
+
+/** Owner / manager: a phone in any usual shape, or 2+ letters of a name. */
+export function searchBazarCustomers(q: string) {
+  return bazarFetch<{ customers: BazarCustomerMatch[]; more: boolean }>('/bazar-customers/search',
+    { method: 'POST', body: JSON.stringify({ q }) })
+}
+
+/** Owner / manager: every bazar sale row of these customers as CSV (audit-logged) — downloaded as a file. */
+export async function exportBazarCustomers(keys: string[], fileName: string) {
+  const res = await authFetch('/bazar-customers/export', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys }),
+  })
+  if (!res.ok) {
+    let b: { code?: string } | null = null
+    try { b = await res.json() } catch { /* not JSON */ }
+    throw new BazarError(res.status, b?.code ? (b as { code: string }) : { code: `HTTP_${res.status}` })
+  }
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Owner only: what a delete would clear. Writes nothing. */
+export function previewBazarCustomerDelete(keys: string[]) {
+  return bazarFetch<BazarCustomerDeleteCounts>('/bazar-customers/delete-preview',
+    { method: 'POST', body: JSON.stringify({ keys }) })
+}
+
+/** Owner only: clears their name and phone on every bazar sale. Can't be undone. 409 when the preview is stale. */
+export function deleteBazarCustomers(keys: string[], expectedRows: number) {
+  return bazarFetch<BazarCustomerDeleteCounts>('/bazar-customers/delete',
+    { method: 'POST', body: JSON.stringify({ keys, expected_rows: expectedRows }) })
 }

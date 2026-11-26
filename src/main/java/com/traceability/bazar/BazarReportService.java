@@ -383,7 +383,7 @@ public class BazarReportService {
         return csv.toString();
     }
 
-    private static String money(Object v) {
+    static String money(Object v) {
         return v == null ? "0.00" : ((BigDecimal) v).setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 

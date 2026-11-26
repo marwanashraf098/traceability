@@ -631,8 +631,12 @@ class PortalOrderLeakTest {
                 "GET /api/v1/bazar-events/{eventId}/catalog", "GET /api/v1/bazar-events/{eventId}/price-sheet.pdf")) {
             reg(k, skip("Bazar POS B7 — the event's products / numbers / bazar prices / pieces left; touches no orders"));
         }
-        reg("GET /api/v1/bazar-events/{eventId}/sales/find",
-            skip("Bazar POS B7c — an event's bazar sales of one variant (by phone / receipt); touches no orders"));
+        reg("POST /api/v1/bazar-events/{eventId}/sales/find",
+            skip("Bazar POS B7c — an event's bazar sales of one variant (by phone / receipt, in the body); touches no orders"));
+        for (String k : List.of("POST /api/v1/bazar-customers/search", "POST /api/v1/bazar-customers/export",
+                                "POST /api/v1/bazar-customers/delete-preview", "POST /api/v1/bazar-customers/delete")) {
+            reg(k, skip("Bazar customer details — find / export / delete one customer's name and phone on bazar sales; touches no orders"));
+        }
         reg("GET /api/v1/bazar-events/{eventId}/send-stock",
             skip("Bazar POS B7d — pieces available at Main per variant + committed demand read ONLY through "
                 + "VariantStockService.computeAll (the GET /inventory/stock rule, checked there); lists no order"));

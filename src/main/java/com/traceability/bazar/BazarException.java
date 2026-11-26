@@ -81,7 +81,11 @@ public class BazarException extends RuntimeException {
         BAZAR_INVITE_REFUSED,
         BAZAR_INVITE_ORIGIN,
         // U1b — delete a draft bazar
-        BAZAR_CANT_DELETE
+        BAZAR_CANT_DELETE,
+        // Customer details — export / delete one customer's details on request
+        BAZAR_OWNER_ONLY,
+        BAZAR_CUSTOMER_NOT_FOUND,
+        BAZAR_CUSTOMER_CHANGED
     }
 
     private final Code       code;

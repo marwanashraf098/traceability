@@ -302,10 +302,6 @@ class RlsCoverageTest {
             // same-tenant positive control in BazarSellByProductTest.rls_appUser_seesOnlyItsOwnNumbers.
             "/api/v1/bazar-events/{eventId}/catalog",
             "/api/v1/bazar-events/{eventId}/price-sheet.pdf",
-            // Bazar POS B7c — sales of a variant at the event: read under TenantContext + RLS (bazar_sales, receipts,
-            // users); another tenant's event → 404, a role outside seller_roles / a removed seller → 403, and app_user
-            // isolation of bazar_sales with a same-tenant positive control in BazarReturnByProductTest.
-            "/api/v1/bazar-events/{eventId}/sales/find",
             // Bazar POS B7d — stock at Main to send by count: TenantContext + RLS (pieces, variants, products,
             // bazar prices; committed through VariantStockService); another tenant's event → 404, worker → 403, and
             // app_user isolation of the pieces it counts with a same-tenant positive control in BazarSendByCountTest.

@@ -168,7 +168,7 @@ function soldOf(id: string, number: string, over: Record<string, unknown> = {}) 
   return { ...soldSale('v-s'), id, sale_number: number, variant_title: 'White / S', price: '960.00', net_price: '960.00',
            customer_name: null, customer_phone: null, ...over }
 }
-const finds = () => calls.filter(c => c.method === 'GET' && c.url.includes('/sales/find'))
+const finds = () => calls.filter(c => c.method === 'POST' && c.url.includes('/sales/find'))
 const posts = (path: string) => calls.filter(c => c.method === 'POST' && c.url.endsWith(path))
 
 async function pickSize(user: ReturnType<typeof userEvent.setup>, productIndex: number, sizeIndex: number) {
@@ -180,7 +180,7 @@ async function pickSize(user: ReturnType<typeof userEvent.setup>, productIndex: 
 
 describe('return without a label', () => {
   test('find by size (a sold-out size too) → one match → confirm → the return goes by sale id', async () => {
-    install(on('GET', '/sales/find', () => json(200, found([soldOf('s-7', 'B-0107', { customer_name: 'Mona', customer_phone: '010•••••678' })]))),
+    install(on('POST', '/sales/find', () => json(200, found([soldOf('s-7', 'B-0107', { customer_name: 'Mona', customer_phone: '010•••••678' })]))),
       on('POST', '/return', () => json(200, { sale: { ...soldOf('s-7', 'B-0107'), status: 'returned', return_condition: 'good' },
         refund: { method: 'cash', amount: '960.00' }, replayed: false })), ...base())
     renderAt(`/bazar/${EVENT}/return`, <Route path="/bazar/:id/return" element={<BazarReturn />} />)
@@ -195,7 +195,7 @@ describe('return without a label', () => {
     expect(within(sheet).getByTestId('pick-sell')).toHaveTextContent('Find sales of White / S')
     await user.click(within(sheet).getByTestId('pick-sell'))
     await user.click(await screen.findByTestId('find-go'))
-    expect(finds()[0].url).toContain('variant=v-s')
+    expect(finds()[0].body).toMatchObject({ variant_id: 'v-s' })
     const one = await screen.findByTestId('find-one')
     expect(one).toHaveTextContent('B-0107')
     expect(one).toHaveTextContent('010•••••678')
@@ -211,7 +211,7 @@ describe('return without a label', () => {
   })
 
   test('several matches are listed (never one picked for the seller); the seller picks the right one', async () => {
-    install(on('GET', '/sales/find', () => json(200, found([
+    install(on('POST', '/sales/find', () => json(200, found([
         soldOf('s-9', 'B-0109', { seller_name: 'Hana' }), soldOf('s-8', 'B-0108', { customer_phone: '011•••••321' })], 14))),
       on('POST', '/return', () => json(200, { sale: { ...soldOf('s-8', 'B-0108'), status: 'returned' }, refund: null })), ...base())
     renderAt(`/bazar/${EVENT}/return`, <Route path="/bazar/:id/return" element={<BazarReturn />} />)
@@ -235,7 +235,7 @@ describe('return without a label', () => {
   })
 
   test('none → says so, nothing to confirm; phone and receipt narrow the search', async () => {
-    install(on('GET', '/sales/find', () => json(200, found([]))), ...base())
+    install(on('POST', '/sales/find', () => json(200, found([]))), ...base())
     renderAt(`/bazar/${EVENT}/return`, <Route path="/bazar/:id/return" element={<BazarReturn />} />)
     const user = userEvent.setup()
     await user.click(await screen.findByTestId('return-find'))
@@ -244,17 +244,15 @@ describe('return without a label', () => {
     await user.type(screen.getByTestId('find-receipt'), 'B-0057')
     await user.click(screen.getByTestId('find-go'))
     expect(await screen.findByTestId('find-none')).toHaveTextContent('No sale of Wool cardigan · Beige / S')
-    const url = new URL(finds()[0].url, 'http://x')
-    expect(url.searchParams.get('variant')).toBe('v-cs')
-    expect(url.searchParams.get('phone')).toBe('01012345678')
-    expect(url.searchParams.get('receipt')).toBe('B-0057')
+    expect(finds()[0].url).not.toContain('?')
+    expect(finds()[0].body).toEqual({ variant_id: 'v-cs', phone: '01012345678', receipt: 'B-0057' })
     expect(screen.queryByTestId('return-confirm')).not.toBeInTheDocument()
   })
 })
 
 describe('exchange without a label', () => {
   test('the old piece by its sale, the new one tapped → one exchange request with both ids', async () => {
-    install(on('GET', '/sales/find', () => json(200, found([soldOf('s-3', 'B-0103', { price: '800.00', net_price: '800.00',
+    install(on('POST', '/sales/find', () => json(200, found([soldOf('s-3', 'B-0103', { price: '800.00', net_price: '800.00',
         product_title: 'Wool cardigan', variant_title: 'Beige / S' })]))),
       on('POST', '/exchange', () => json(200, { old_sale: { ...soldOf('s-3', 'B-0103'), status: 'returned' },
         new_sale: soldOf('s-4', 'B-0104'), difference: '160.00', money: { kind: 'payment', method: 'cash', amount: '160.00' } })), ...base())
