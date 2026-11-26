@@ -61,6 +61,10 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
 
     private final JdbcTemplate        jdbc;
     private final TransactionTemplate tx;
+    // 2026-11-24 (BROEK): advanceAtCommit runs from an after-commit callback — a REQUIRED template there joins the
+    // ALREADY-COMMITTED transaction, so TenantAwareConnection never sets app.current_tenant and on app_user RLS the
+    // fresh-leg read found nothing (70 of 70 catch-up commits left at 'created'). Its own new transaction fixes that.
+    private final TransactionTemplate txNew;
     private final BostaGateway         bostaGateway;
     private final BostaStateMapper     stateMapper;
     private final EncryptionService    encryptionService;
@@ -94,6 +98,8 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
                             PreConnectDeliveryFilter preConnectFilter) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
+        this.txNew               = new TransactionTemplate(txm);
+        this.txNew.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.bostaGateway        = bostaGateway;
         this.stateMapper         = stateMapper;
         this.encryptionService   = encryptionService;
@@ -926,8 +932,15 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
      */
     @Override
     public void advanceAtCommit(UUID tenantId, String trackingNumber) {
+        // ONE new transaction (REQUIRES_NEW) around the read AND the write: called after the committing transaction, a
+        // REQUIRED template would join that committed transaction with no tenant set (see txNew). Every tx.execute
+        // inside applyMappedState joins this one, so the advance is all or nothing.
+        txNew.execute(st -> { advanceFreshLeg(tenantId, trackingNumber); return null; });
+    }
+
+    private void advanceFreshLeg(UUID tenantId, String trackingNumber) {
         record FreshLeg(UUID id, UUID orderId, String raw) {}
-        FreshLeg leg = tx.execute(s -> jdbc.query(
+        FreshLeg leg = jdbc.query(
             "SELECT s.id, s.order_id, e.raw::text AS raw FROM shipments s " +
             "JOIN exchanges e ON e.tenant_id = s.tenant_id AND e.tracking_number = s.tracking_number " +
             "WHERE s.tracking_number = ? AND s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward' " +
@@ -935,7 +948,7 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
             "  AND NOT EXISTS (SELECT 1 FROM shipment_status_history h WHERE h.shipment_id = s.id)",
             rs -> rs.next() ? new FreshLeg(rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
                 rs.getString("raw")) : null,
-            trackingNumber, tenantId));
+            trackingNumber, tenantId);
         if (leg == null || leg.raw() == null) return;
         JsonNode raw;
         try {
@@ -952,6 +965,88 @@ public class BostaWebhookJob implements com.traceability.inventory.ExchangeLegAd
             new ShipmentRow(leg.id(), leg.orderId()));
         log.info("Exchange {}: leg advanced at commit → {} (provider_state={})", trackingNumber,
             interpreted.get().shipmentInternalState(), raw.path("state").path("code").asInt(-1));
+    }
+
+    // ---- one-off repair (2026-11-24): exchange replacement legs advance-at-commit never reached ----
+
+    /** One leg's repair outcome — see {@link #repairExchangeLeg}. */
+    public record LegRepair(String verdict, String state, Integer bostaCode, String detail) {}
+
+    /** Hold reason written on a replacement order the repair can't place (shown on the order like any hold). */
+    public static final String REPAIR_HOLD_REASON = "Bosta shows this exchange already moved — check it in Bosta";
+
+    /**
+     * ExchangeLegRepairService only (one AWB, under the caller's tenant, ONE new transaction). The replacement
+     * order's newest forward Bosta leg (internal:exchange:<AWB>), still 'created' with no history past 'created':
+     * <ul>
+     *   <li>pieces reserved / packed for the order → LEFT_FOR_PERSON (never moved: no ledger, no Shopify);</li>
+     *   <li>Bosta's FURTHEST recognised step past "Pickup requested" (the advance-at-commit reading, from the newer of
+     *       the leg's and the exchange's stored raw) → ADVANCED (the same applyMappedState writer, webhookEventId null);</li>
+     *   <li>only unknown steps past "Pickup requested" (ExchangeBostaStep.unknownPastPickup) → HELD: the order is put
+     *       on hold (on_hold — PICKABLE_SHIPMENT_GATE / WaybillResolver ON_HOLD keep it out of picking) with
+     *       {@link #REPAIR_HOLD_REASON}; a person releases it;</li>
+     *   <li>still at "Pickup requested" → PICKUP_REQUESTED (correctly pickable, untouched).</li>
+     * </ul>
+     * Dry run ({@code apply} false) writes nothing and answers WOULD_ADVANCE / WOULD_HOLD. Never a Bosta call.
+     */
+    public LegRepair repairExchangeLeg(UUID tenantId, String trackingNumber, boolean apply) {
+        return txNew.execute(st -> {
+            record Leg(UUID id, UUID orderId, String state, boolean onHold, boolean movedHistory, boolean reserved,
+                       String shipRaw, String exRaw) {}
+            Leg leg = jdbc.query(
+                "SELECT s.id, s.order_id, s.internal_state::text AS state, o.on_hold, " +
+                "  EXISTS (SELECT 1 FROM shipment_status_history h WHERE h.shipment_id = s.id " +
+                "          AND h.internal_state <> 'created') AS moved_history, " +
+                "  EXISTS (SELECT 1 FROM order_items oi JOIN allocations a ON a.order_item_id = oi.id " +
+                "          WHERE oi.order_id = o.id AND oi.tenant_id = o.tenant_id AND a.status IN ('active','packed')) AS reserved, " +
+                "  s.raw::text AS ship_raw, e.raw::text AS ex_raw " +
+                "FROM merchant_orders o " +
+                "JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
+                "LEFT JOIN exchanges e ON e.tenant_id = o.tenant_id AND e.tracking_number = ? " +
+                "WHERE o.tenant_id = ? AND o.external_id = ? AND s.provider = 'bosta' " +
+                "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
+                rs -> rs.next() ? new Leg(rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                    rs.getString("state"), rs.getBoolean("on_hold"), rs.getBoolean("moved_history"),
+                    rs.getBoolean("reserved"), rs.getString("ship_raw"), rs.getString("ex_raw")) : null,
+                trackingNumber, tenantId, "internal:exchange:" + trackingNumber);
+            if (leg == null) return new LegRepair("NOT_FOUND", null, null, "no replacement order with a Bosta leg for this AWB");
+            JsonNode raw = newerRaw(leg.shipRaw(), leg.exRaw());
+            Integer code = raw == null ? null : raw.path("state").path("code").asInt(-1);
+            if (!"created".equals(leg.state())) return new LegRepair("ALREADY_PLACED", leg.state(), code, null);
+            if (leg.movedHistory()) return new LegRepair("LEFT_FOR_PERSON", leg.state(), code, "history past 'created' but the leg is 'created'");
+            if (leg.reserved()) return new LegRepair("LEFT_FOR_PERSON", leg.state(), code, "pieces reserved / packed for the replacement");
+            if (raw == null) return new LegRepair("LEFT_FOR_PERSON", leg.state(), code, "no stored Bosta raw");
+            java.util.Optional<BostaStateMapper.MappedState> furthest = exchangeStateInterpreter.interpretFurthestForwardLeg(raw);
+            if (furthest.isPresent() && !"created".equals(furthest.get().shipmentInternalState())) {
+                String to = furthest.get().shipmentInternalState();
+                if (!apply) return new LegRepair("WOULD_ADVANCE", to, code, null);
+                applyMappedState(null, tenantId, BostaDelivery.fromRaw(trackingNumber, raw), furthest.get(),
+                    new ShipmentRow(leg.id(), leg.orderId()));
+                String now = jdbc.queryForObject("SELECT internal_state::text FROM shipments WHERE id = ?", String.class, leg.id());
+                return new LegRepair("ADVANCED", now, code, null);
+            }
+            if (com.traceability.inventory.ExchangeBostaStep.unknownPastPickup(raw)) {
+                if (leg.onHold()) return new LegRepair("HELD", leg.state(), code, "already on hold");
+                if (!apply) return new LegRepair("WOULD_HOLD", leg.state(), code, "only steps Traced doesn't know past pickup");
+                jdbc.update("UPDATE merchant_orders SET on_hold = true, hold_reason = ? " +
+                    "WHERE id = ? AND tenant_id = ? AND on_hold = false", REPAIR_HOLD_REASON, leg.orderId(), tenantId);
+                return new LegRepair("HELD", leg.state(), code, "only steps Traced doesn't know past pickup");
+            }
+            return new LegRepair("PICKUP_REQUESTED", leg.state(), code, "Bosta still at Pickup requested — correctly pickable");
+        });
+    }
+
+    /** The stored raw Bosta updated last (updatedAt, ISO text), else whichever parses. */
+    private JsonNode newerRaw(String a, String b) {
+        JsonNode x = parse(a), y = parse(b);
+        if (x == null) return y;
+        if (y == null) return x;
+        return x.path("updatedAt").asText("").compareTo(y.path("updatedAt").asText("")) >= 0 ? x : y;
+    }
+
+    private JsonNode parse(String json) {
+        if (json == null) return null;
+        try { return mapper.readTree(json); } catch (Exception e) { return null; }
     }
 
     // ---- admin: re-interpret a stuck exchange forward leg (Step 3C-fix Part 2) ----

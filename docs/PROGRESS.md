@@ -4,6 +4,29 @@
 
 ## Current state
 
+**URGENT fix — exchange advance-at-commit never ran on prod (2026-11-24; branch `fix/exchange-advance-at-commit-tenant`
+off origin/main ade98935; no migration; pushed, NOT merged, NOT deployed).** BROEK multi catch-up apply 13:41–13:50
+(main 3155bbc0): 0 of 70 committed replacement legs advanced at commit — every leg was written 'created' and moved
+only when the status poll reached it 2–35 min later; the poll never places a leg whose LATEST step it doesn't know
+(2613051320 at 105 "On hold", 6340662943 at 23 "exchanged") → both still pickable. Cause: `advanceAtCommit` runs in an
+after-commit callback; its REQUIRED `tx.execute` joined the ALREADY-COMMITTED transaction, so TenantAwareConnection
+never set app.current_tenant and on app_user RLS the fresh-leg read returned nothing (silently). Every S3b test ran
+the app as postgres (BYPASSRLS).
+- **Fix:** `BostaWebhookJob.advanceAtCommit` runs read + write in ONE `PROPAGATION_REQUIRES_NEW` transaction (`txNew`).
+  Every other `ShopifyInventoryService.afterCommit` callback is an `@Async` method or a job enqueue (own thread) — not
+  affected.
+- **Repair (one-off, `ExchangeLegRepairService`):** `BOSTA_EXCHANGE_LEG_REPAIR_ON_STARTUP=<tenant ids>` (never 'all'),
+  optional `BOSTA_EXCHANGE_LEG_REPAIR_AWBS`, dry run unless `BOSTA_EXCHANGE_LEG_REPAIR_APPLY=true`; logs
+  `EXCHANGE_LEG_REPAIR` / `_SUMMARY`. Per replacement (internal:exchange:<AWB>, newest forward Bosta leg 'created'):
+  pieces reserved / packed → LEFT_FOR_PERSON; furthest recognised step past "Pickup requested" (newer of the leg's and
+  the exchange's stored raw) → ADVANCED through the same applyMappedState writer; only unknown steps past pickup →
+  HELD (order `on_hold`, reason "Bosta shows this exchange already moved — check it in Bosta"); still at Pickup
+  requested → PICKUP_REQUESTED (untouched). No Bosta call, no ledger write, no Shopify write.
+- Tests: `ExchangeLegAdvanceAppUserTest` (whole app as app_user, prod timelines 46 / 22 / 105 / 23 / 10): a1 catch-up
+  apply advances at commit; a2 repair dry run / apply / rerun. Revert check: REQUIRED template → a1 red ("created").
+- Not changed: replacement orders keep status 'new' after their leg is placed (pre-existing; the pick gate reads the
+  leg). The live interpreter still doesn't place a leg whose latest step is unknown.
+
 **Bazar customer details on request — find / export / delete one bazar customer's name and phone (ClickUp
 123ru7v2cq1; 2026-11-26; branch `feat/bazar-customer-data` off origin/main 1025baef; NO migration — main ends at V243; merged to main 2026-11-26 after B9c, NOT
 deployed).**

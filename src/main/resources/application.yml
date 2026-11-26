@@ -426,6 +426,13 @@ bosta:
     catch-up:
       on-startup: ""
       apply: false
+  # Exchange replacement leg repair (ExchangeLegRepairService, 2026-11-24): one-off, never scheduled —
+  # BOSTA_EXCHANGE_LEG_REPAIR_ON_STARTUP=<tenant ids> (never 'all'), optional BOSTA_EXCHANGE_LEG_REPAIR_AWBS=<AWBs>
+  # (+ _APPLY=true to write).
+  exchange-leg-repair:
+    on-startup: ""
+    apply: false
+    awbs: ""
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
   api-version: v0
