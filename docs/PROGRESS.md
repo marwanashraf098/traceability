@@ -51,7 +51,7 @@ bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` nee
 - **After merging origin/main 3f805577 (V244):** the two approved edits below are done (signupMetaPixel finds the
   signup POST; MeTourSignalsTest.m3 expects setupPurpose 'ask' for owner / manager, keeping V244's bazar_enabled =
   false fixture); the purpose step no longer writes bazar_enabled (V244 removed BazarSignup's switch). **Waiting for
-  approval, NOT merged to main:** `BazarSignupIntentTest.e1` (added by V244) asserts that with BAZAR_SIGNUP_ENABLED off
+  approval → approved and done 2026-11-26:** `BazarSignupIntentTest.e1` (added by V244) asserts that with BAZAR_SIGNUP_ENABLED off
   /me has no `bazarSetup` and /bazar-setup is 404 — the opposite of the approved gate (bazar alone). Proposed: expect
   `bazarSetup: true` and 200 there.
 - **Needs approval (existing tests NOT edited, red on this branch) — both approved 2026-11-26 and done:**
