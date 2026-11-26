@@ -48,7 +48,13 @@ bazar choice (only a hidden `/signup?for=bazar`), and `BazarSetupService.on` nee
 - **Full runs:** backend 5014 tests, red: ExchangeBackfillTest (allowed), MeTourSignalsTest.m3 (below), and
   ShadowOrderLeakTest.a (registry, fixed after the run, rerun green with PortalOrderLeakTest + RlsCoverageTest);
   frontend 271 files / 2320 tests, red: signupMetaPixel (below).
-- **Needs approval (existing tests NOT edited, red on this branch):**
+- **After merging origin/main 3f805577 (V244):** the two approved edits below are done (signupMetaPixel finds the
+  signup POST; MeTourSignalsTest.m3 expects setupPurpose 'ask' for owner / manager, keeping V244's bazar_enabled =
+  false fixture); the purpose step no longer writes bazar_enabled (V244 removed BazarSignup's switch). **Waiting for
+  approval, NOT merged to main:** `BazarSignupIntentTest.e1` (added by V244) asserts that with BAZAR_SIGNUP_ENABLED off
+  /me has no `bazarSetup` and /bazar-setup is 404 — the opposite of the approved gate (bazar alone). Proposed: expect
+  `bazarSetup: true` and 200 there.
+- **Needs approval (existing tests NOT edited, red on this branch) — both approved 2026-11-26 and done:**
   - `signupMetaPixel.test.tsx` "sends cookies + URL attribution…" reads `fetchMock.mock.calls[0]` as the signup POST —
     the signup page now asks signup-config first, so call 0 is that GET. Fix: find the POST to /auth/signup.
   - `MeTourSignalsTest.m3_onlyTheTwoBooleansAreNew` — a /me key golden for a fresh (gated) tenant: owner and manager
