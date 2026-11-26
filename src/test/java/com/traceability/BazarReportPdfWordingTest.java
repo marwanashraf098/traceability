@@ -16,6 +16,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ul>
  *   <li>w1 — the Shopify tile: "VS SHOPIFY · 319 EGP · below Shopify prices" (whole pounds, 318.9 → 319).</li>
  *   <li>w2 — the Counted tile: "Counted 1,167 · Balanced" / "· 20 short" / "· 20 over" (never "· 0" / "−20").</li>
+ *   <li>w3 — the Arabic page: "المعدود 1,167 · مطابق" and "أقل من أسعار Shopify". PDFBox gives the Arabic text back in
+ *       logical order, but puts the Latin "Shopify" run first ("Shopify أقل من أسعار"), so the words are matched
+ *       without that run's position.</li>
  * </ul>
  */
 class BazarReportPdfWordingTest {
@@ -58,8 +61,12 @@ class BazarReportPdfWordingTest {
     }
 
     private static String text(List<Map<String, Object>> days, String below) throws Exception {
+        return text(days, below, "en");
+    }
+
+    private static String text(List<Map<String, Object>> days, String below, String lang) throws Exception {
         byte[] pdf = BazarReportPdf.pdf(new BazarReportPdf.Data(report(), days, List.of("cash"), new BigDecimal(below),
-            "TR-ABC123"), "en");
+            "TR-ABC123"), lang);
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return new PDFTextStripper().getText(doc);
         }
@@ -81,5 +88,13 @@ class BazarReportPdfWordingTest {
         assertThat(text(closedDay("1167", "0"), "0")).contains("Counted 1,167 · Balanced").doesNotContain("1,167 · 0");
         assertThat(text(closedDay("1167", "-20"), "0")).contains("Counted 1,167 · 20 short").doesNotContain("· −20");
         assertThat(text(closedDay("1187", "20"), "0")).contains("Counted 1,187 · 20 over").doesNotContain("· +20");
+    }
+
+    @Test
+    void w3_arabic_balanced_andBelowShopifyPrices() throws Exception {
+        String t = text(closedDay("1167", "0"), "318.9", "ar");
+        assertThat(t).contains("المعدود 1,167 · مطابق").contains("319 EGP").contains("أقل من أسعار").contains("Shopify")
+            .doesNotContain("أقل من Shopify");
+        assertThat(text(closedDay("1167", "-20"), "0", "ar")).contains("المعدود 1,167 · ناقص 20");
     }
 }
