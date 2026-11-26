@@ -1,18 +1,18 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Check, Clock, Info, Store } from 'lucide-react'
+import { Check, Clock, Info, Store, Truck, Tent, Layers } from 'lucide-react'
 import { Button, Input, Spinner, cn } from '../../components/ui'
 import StoreFinder, { ErrorAlert } from '../settings/connections/StoreFinder'
 import { callbackErrorKey } from '../settings/connections/ShopifyConnectionCard'
 import ShippingRatesInstruction, { ShippingRatesConfirmed, ShippingCoverage } from '../settings/connections/ShippingRatesInstruction'
 import {
-  getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress,
+  getConnections, getRoleFromToken, getSetupAddress, getSetupShopifyLocations, saveSetupAddress, saveSetupPurpose,
   ServerMessageError, type ConnectionsStatus, type SetupAddressView, type SetupGovernorate, type SetupStep,
   type ShopifyLocationOption,
 } from '../../api'
 import { anyFilled, prefillFrom, withTimeout } from './addressPrefill'
-import { clearShopifyStepSeen, markShopifyStepSeen, refreshSetupStep, shopifyStepSeen } from '../../setupGate'
+import { clearShopifyStepSeen, markShopifyStepSeen, refreshSetupStep, shopifyStepSeen, type SetupPurpose } from '../../setupGate'
 import { GateFrame, SetupCard, SetupColumns, SetupHeading, SetupStepper, SidePanel } from './SetupLayout'
 
 export { GateFrame }
@@ -380,12 +380,86 @@ function ManagerWaiting({ step }: { step: 'shopify' | 'address' }) {
   )
 }
 
+type Purpose = 'orders' | 'bazar' | 'both'
+
+/**
+ * Wizard entry — "What will you use Traced for?" (before Connect Shopify, while /me setupPurpose is 'ask'). Saved once
+ * (PUT /setup/purpose); 'bazar' then skips the address and Bosta steps, 'both' takes the full flow and is offered the
+ * bazar setup at the end. The wording follows the App Store form's purpose list.
+ */
+export function PurposeStep({ name, onSaved }: { name: string | null; onSaved: (p: Purpose) => void }) {
+  const { t, i18n } = useTranslation()
+  const [choice, setChoice] = useState<Purpose | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const options: { value: Purpose; icon: typeof Truck }[] = [
+    { value: 'orders', icon: Truck }, { value: 'bazar', icon: Tent }, { value: 'both', icon: Layers },
+  ]
+  async function save(e?: FormEvent) {
+    e?.preventDefault()
+    if (!choice) return
+    setSaving(true); setError(null)
+    try {
+      await saveSetupPurpose(choice)
+      refreshSetupStep()
+      onSaved(choice)
+    } catch (err) {
+      // Already answered (another tab / device): go on with the stored answer on the next load.
+      if (err instanceof ServerMessageError && err.code === 'SETUP_PURPOSE_ALREADY_SET') { refreshSetupStep(); window.location.reload(); return }
+      setError(err instanceof ServerMessageError ? err.messageFor(i18n.language) : t('setupGate.purpose.failed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+  const who = firstName(name)
+  return (
+    <SetupColumns aside={
+      <SidePanel title={t('setupGate.purpose.panelTitle')} lines={[t('setupGate.purpose.panelBody')]} />
+    }>
+      <form onSubmit={save}>
+        <SetupCard data-testid="onboarding-step-purpose">
+          <SetupHeading eyebrow={t('setupGate.purpose.eyebrow')}
+            title={who ? t('setupGate.purpose.titleNamed', { name: who }) : t('setupGate.purpose.title')}
+            lead={t('setupGate.purpose.lead')} />
+          <fieldset className="flex flex-col gap-2.5">
+            <legend className="sr-only">{t('setupGate.purpose.title')}</legend>
+            {options.map(o => {
+              const Icon = o.icon
+              const on = choice === o.value
+              return (
+                <label key={o.value} data-testid={`purpose-${o.value}`}
+                  className={cn('relative flex items-start gap-3 rounded-xl border p-4 cursor-pointer',
+                    on ? 'border-trace-blue border-[1.5px] bg-trace-blue/[0.04]' : 'border-line hover:bg-elevated')}>
+                  <input type="radio" name="purpose" value={o.value} checked={on} onChange={() => setChoice(o.value)}
+                    className="mt-1 w-4 h-4 accent-trace-blue" />
+                  <Icon size={20} aria-hidden className={cn('mt-0.5 flex-shrink-0', on ? 'text-trace-blue' : 'text-muted')} />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-body font-semibold text-primary">{t(`setupGate.purpose.${o.value}`)}</span>
+                    <span className="text-small text-muted">{t(`setupGate.purpose.${o.value}Body`)}</span>
+                  </span>
+                </label>
+              )
+            })}
+          </fieldset>
+          {error && <ErrorAlert title={error} />}
+          <Button type="submit" variant="primary" size="lg" className="w-full" disabled={!choice} loading={saving}>
+            {t('setupGate.purpose.continue')}
+          </Button>
+        </SetupCard>
+      </form>
+    </SetupColumns>
+  )
+}
+
 /** The gate itself, for a tenant whose setupStep is not null. */
-export default function OnboardingGate({ step, onDone, name = null }: {
+export default function OnboardingGate({ step, onDone, name = null, purpose: initialPurpose = null }: {
   step: 'shopify' | 'address'
   onDone: () => void
   name?: string | null
+  /** Wizard entry — /me setupPurpose (null: no purpose step, the gate exactly as before). */
+  purpose?: SetupPurpose
 }) {
+  const [purpose, setPurpose] = useState<SetupPurpose>(initialPurpose)
   const role = getRoleFromToken()
   const [shopDomain, setShopDomain] = useState<string | null>(null)
   // Flow-1's "Connected" view — only on the device that showed the Shopify step (an App Store signup,
@@ -402,18 +476,25 @@ export default function OnboardingGate({ step, onDone, name = null }: {
   if (role !== 'owner') {
     return <GateFrame><ManagerWaiting step={step} /></GateFrame>
   }
+  if (step === 'shopify' && purpose === 'ask') {
+    return (
+      <GateFrame width="wide" stepper={<SetupStepper current={-1} purpose={purpose} />}>
+        <PurposeStep name={name} onSaved={setPurpose} />
+      </GateFrame>
+    )
+  }
   if (step === 'shopify') {
-    return <GateFrame width="wide" stepper={<SetupStepper current={0} />}><ConnectStep name={name} /></GateFrame>
+    return <GateFrame width="wide" stepper={<SetupStepper current={0} purpose={purpose} />}><ConnectStep name={name} /></GateFrame>
   }
   if (showConnected) {
     return (
-      <GateFrame width="wide" stepper={<SetupStepper current={1} />}>
+      <GateFrame width="wide" stepper={<SetupStepper current={1} purpose={purpose} />}>
         <ConnectedSummary name={name} onContinue={() => { clearShopifyStepSeen(); setShowConnected(false) }} />
       </GateFrame>
     )
   }
   return (
-    <GateFrame width="wide" stepper={<SetupStepper current={1} />}>
+    <GateFrame width="wide" stepper={<SetupStepper current={1} purpose={purpose} />}>
       <AddressStep mode="gate" shopDomain={shopDomain} onSaved={next => { if (next === null) onDone() }} />
     </GateFrame>
   )

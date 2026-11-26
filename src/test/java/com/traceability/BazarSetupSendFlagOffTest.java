@@ -31,8 +31,9 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Bazar B9c — BAZAR_SIGNUP_ENABLED off (the default, prod): POST /bazar-setup/send-batch answers 404 even for a store
- * that signed up for a bazar, has bazar switched on and a lowered batch; nothing moves and nothing is written.
+ * Bazar B9c / wizard entry (2026-11-26) — BAZAR_SIGNUP_ENABLED off no longer gates the setup: bazar does. With bazar
+ * off, POST /bazar-setup/send-batch answers 404 even with a lowered batch, nothing moves and nothing is written; with
+ * bazar on (setting still off, no intent) the setup is reachable and shows that batch.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -79,7 +80,7 @@ class BazarSetupSendFlagOffTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void off_sendBatch404_evenWithALoweredBatch_nothingMoves() {
+    void flagOff_bazarOff_sendBatch404_nothingMoves_bazarOn_setupReachable() {
         JdbcTemplate owner = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "postgres", "postgres"));
         RestTemplate http = new RestTemplate(new JdkClientHttpRequestFactory(HttpClient.newBuilder().build()));
         http.setErrorHandler(new DefaultResponseErrorHandler() {
@@ -88,13 +89,13 @@ class BazarSetupSendFlagOffTest {
         String base = "http://localhost:" + port;
         String mail = "b9c-off-" + System.nanoTime() + "@b9c.test";
         Map<String, Object> f = new HashMap<>(Map.of("tenantName", "Off Co", "name", "Nour", "email", mail,
-            "phone", "+201012345678", "password", "pass1234", "consent", true, "intent", "bazar"));
+            "phone", "+201012345678", "password", "pass1234", "consent", true));
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
         ResponseEntity<Map> r = http.postForEntity(base + "/api/v1/auth/signup", new HttpEntity<>(f, h), Map.class);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         UUID tenant = owner.queryForObject("SELECT tenant_id FROM users WHERE email = ?", UUID.class, mail);
-        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenant);   // ops switched it on by hand
+        owner.update("UPDATE tenants SET bazar_enabled = false WHERE id = ?", tenant);   // bazar off, whatever the default
         // A lowered batch as B9b would have left it (written by hand: the setup itself is off).
         owner.update("UPDATE tenants SET onboarding_prefs = jsonb_set(COALESCE(onboarding_prefs, '{}'::jsonb), '{bazarSetup}', " +
             "jsonb_build_object('eventId', gen_random_uuid()::text, 'requestId', 'x', 'labelledReceiptId', gen_random_uuid()::text, " +
@@ -107,5 +108,11 @@ class BazarSetupSendFlagOffTest {
             .isEqualTo(prefsBefore);
         assertThat(owner.queryForObject("SELECT count(*) FROM transfer_pieces WHERE tenant_id = ?", Integer.class, tenant)).isZero();
         assertThat(owner.queryForObject("SELECT count(*) FROM piece_events WHERE tenant_id = ?", Integer.class, tenant)).isZero();
+
+        // Bazar on, the setting still off, no intent: the setup is reachable (the gate is bazar alone).
+        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenant);
+        ResponseEntity<Map> st = http.exchange(base + "/api/v1/bazar-setup", HttpMethod.GET, new HttpEntity<>(null, h), Map.class);
+        assertThat(st.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((Map<String, Object>) st.getBody().get("batch")).containsEntry("lowered", true);
     }
 }

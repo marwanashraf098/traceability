@@ -36,12 +36,22 @@ public class BazarSignup {
     /** Caller's (the signup's) transaction, TenantContext = the new tenant. No-op while the setting is off. */
     @Transactional
     public void enableAtSignup(UUID ownerUserId) {
+        enable(ownerUserId, "signup_intent");
+    }
+
+    /** Wizard entry — the setup step's "Bazars" / "Both": the same switch, same setting, audit source 'setup_purpose'. */
+    @Transactional
+    public void enableForSetupPurpose(UUID ownerUserId) {
+        enable(ownerUserId, "setup_purpose");
+    }
+
+    private void enable(UUID ownerUserId, String source) {
         if (!enabled) return;
         UUID tenantId = TenantContext.require();
         int n = jdbc.update("UPDATE tenants SET bazar_enabled = true WHERE id = ? AND NOT bazar_enabled", tenantId);
         if (n == 1) {
             audit.record(ownerUserId, "bazar_enabled_at_signup", "tenant", tenantId.toString(),
-                Map.of("source", "signup_intent"));
+                Map.of("source", source));
         }
     }
 }

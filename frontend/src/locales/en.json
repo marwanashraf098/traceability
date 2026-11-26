@@ -2489,6 +2489,7 @@
     "title": "Create your account",
     "subtitle": "Set up your warehouse in a few minutes.",
     "subtitleBazar": "Set up Traced for your bazar in a few minutes.",
+    "bazarLink": "I'm here for the bazar",
     "businessName": "Business name",
     "ownerName": "Your name",
     "email": "Email",
@@ -5484,6 +5485,22 @@
     }
   },
   "setupGate": {
+    "purpose": {
+      "eyebrow": "Step 1",
+      "title": "What will you use Traced for?",
+      "titleNamed": "Welcome, {{name}}. What will you use Traced for?",
+      "lead": "We'll set up only what you need. You can do the rest later.",
+      "orders": "Online orders & shipping",
+      "ordersBody": "Pick, pack and ship your Shopify orders, track every piece and handle returns.",
+      "bazar": "Bazars & pop-up events",
+      "bazarBody": "Bring products to a bazar, sell from your phone and close each day in a minute.",
+      "both": "Both",
+      "bothBody": "Set up orders and shipping first, then your first bazar.",
+      "continue": "Continue",
+      "failed": "We couldn't save your answer. Try again.",
+      "panelTitle": "Why we ask",
+      "panelBody": "A bazar-only store skips the warehouse address and courier steps. Everything stays available later."
+    },
     "stepsLabel": "Setup steps",
     "step1Done": "Shopify connected",
     "connectTitle": "Welcome. Let's connect your store.",
@@ -5526,6 +5543,8 @@
       "cta": "Add address"
     },
     "stepper": {
+      "purpose": "Your plan",
+      "thenBazar": "Then: your bazar",
       "shopify": "Shopify",
       "address": "Warehouse address",
       "courier": "Bosta",
@@ -6239,6 +6258,8 @@
     "ready": {
       "title": "You're connected",
       "chipsLabel": "Setup",
+      "bazarTitle": "Your bazar is next",
+      "bazarBody": "You said you'll sell at bazars too. Bring products that aren't in Traced yet.",
       "chipShopify": "Shopify",
       "chipAddress": "Warehouse address",
       "chipBosta": "Bosta",
@@ -6595,6 +6616,18 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "newStock": {
+      "button": "Set up from new stock",
+      "hint": "Set up from new stock adds pieces that aren't in Traced yet. Already have them in Traced? Plan your first bazar and send them from stock.",
+      "atMain_one": "{{count}} already at Traced Main",
+      "atMain_other": "{{count}} already at Traced Main",
+      "atMainWarning_one": "{{count}} piece of the sizes you picked is already at Traced Main. If it's the same stock, don't add it again — plan your first bazar and send it from stock.",
+      "atMainWarning_other": "{{count}} pieces of the sizes you picked are already at Traced Main. If it's the same stock, don't add it again — plan your first bazar and send them from stock.",
+      "blockTitle": "Finish setting up Traced Main first",
+      "blockBody": "Traced Main is linked in your Shopify, but Shopify isn't counting your stock there yet, and you already have pieces in Traced. Finish setting up Traced Main (Settings › Connections) before adding new stock here.",
+      "blockSettings": "Open Connections",
+      "blockBack": "Back to Bazar"
+    },
     "customerData": {
       "link": "Customer details",
       "title": "Customer details",
@@ -6640,7 +6673,7 @@
         "s5": "Ready"
       },
       "bazar": {
-        "welcome": "Welcome",
+        "welcome": "Set up from new stock",
         "hero": "Let's get your bazar ready. About 10 minutes.",
         "list": {
           "s1": "Tell us about your bazar",
@@ -6654,7 +6687,7 @@
           "s5": "Sell from your phone",
           "s5d": "Scan = sold. Close each day in a minute"
         },
-        "nothingChanges": "Traced adds the pieces you take to Traced Main in your Shopify. Nothing else in your store changes.",
+        "nothingChanges": "Use this only for stock that isn't in Traced yet. Traced adds these pieces to Traced Main in your Shopify, then you lower the same amounts at the location you took them from. If the pieces are already in Traced, use Plan your first bazar and send them from stock.",
         "title": "Your bazar",
         "changeLater": "You can change any of this later.",
         "name": "Bazar name",

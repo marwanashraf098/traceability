@@ -916,6 +916,21 @@ export function signup(
   })
 }
 
+/**
+ * Wizard entry — GET /api/v1/public/signup-config (no token): {bazarSignup} = BAZAR_SIGNUP_ENABLED. The signup page
+ * shows "I'm here for the bazar" only when it is true; any failure reads as false.
+ */
+export async function getSignupConfig(): Promise<{ bazarSignup: boolean }> {
+  try {
+    const res = await fetch(`${BASE}/public/signup-config`)
+    if (!res.ok) return { bazarSignup: false }
+    const b = await res.json() as { bazarSignup?: unknown } | null
+    return { bazarSignup: b?.bazarSignup === true }
+  } catch {
+    return { bazarSignup: false }
+  }
+}
+
 // ── FR-DEMO Day 3: public live-demo start ───────────────────────────────────────
 //
 // POST /api/v1/public/demo/start is unauthenticated (no token, no cookie) and throws
@@ -4995,6 +5010,13 @@ export function getSetupShopifyLocations() {
 }
 
 /** Saves the main warehouse address; answers the tenant's setupStep after the save (null = gate done). */
+/** Wizard entry — "What will you use Traced for?", once (409 SETUP_PURPOSE_ALREADY_SET / SETUP_FINISHED after). */
+export function saveSetupPurpose(purpose: 'orders' | 'bazar' | 'both') {
+  return requestReadable<{ purpose: string; setupStep: SetupStep }>('/setup/purpose', {
+    method: 'PUT', body: JSON.stringify({ purpose }),
+  })
+}
+
 export function saveSetupAddress(address: WarehouseAddressInput) {
   return requestReadable<{ setupStep: SetupStep }>('/setup/address', {
     method: 'PUT', body: JSON.stringify(address),

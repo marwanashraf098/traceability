@@ -580,6 +580,9 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/auth/seller-invite/redeem",    skip(R_IDENTITY));
         reg("POST /api/v1/demo/reseed",                  skip("demo tenant only (DemoSeeder) — never a portal row"));
         reg("POST /api/v1/public/demo/start",            skip("demo tenant only (DemoSeeder) — never a portal row"));
+        // Wizard entry — the signup page's public config (a server setting, no DB) and the setup purpose (one pref).
+        reg("GET /api/v1/public/signup-config",          skip("server setting only (BAZAR_SIGNUP_ENABLED) — no tenant, no DB read"));
+        reg("PUT /api/v1/setup/purpose",                 skip(R_CONFIG));
         reg("POST /api/v1/ops/review-tenant",            skip(R_OPS));
         reg("POST /api/v1/ops/review-tenant/{tenantId}/seed", skip(R_OPS));
         reg("POST /api/v1/ops/receipt-reversal",          skip(R_OPS));   // one-off, removed after the run

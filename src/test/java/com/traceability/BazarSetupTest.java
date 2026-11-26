@@ -138,14 +138,14 @@ class BazarSetupTest {
     // ── g1 ───────────────────────────────────────────────────────────────────
 
     @Test
-    void g1_gate_normalSignupAndBazarOff_404_workerForbidden_managerReadsOnly() throws Exception {
+    void g1_gate_normalSignupWithBazarOn200_bazarOff404_workerForbidden_managerReadsOnly() throws Exception {
+        // Wizard entry (2026-11-26): the gate is bazar alone — a normal signup (no intent) with bazar on gets the setup.
         String normalMail = mail("g1n");
         String normal = signup(normalMail, null);
         connect(tenantOf(normalMail));
-        for (String[] e : endpoints()) {
-            assertThat(send(HttpMethod.valueOf(e[0]), e[1], normal, body(e)).getStatusCode()).as("normal %s", e[1])
-                .isEqualTo(HttpStatus.NOT_FOUND);
-        }
+        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenantOf(normalMail));
+        assertThat(json(send(HttpMethod.GET, "/api/v1/bazar-setup", normal, null), HttpStatus.OK))
+            .containsEntry("on", true).containsEntry("canSetUp", true).containsEntry("batch", null);
 
         Shop s = shop("g1");
         owner.update("UPDATE tenants SET bazar_enabled = false WHERE id = ?", s.tenant());
@@ -171,7 +171,7 @@ class BazarSetupTest {
         assertThat(json(send(HttpMethod.GET, "/api/v1/me", s.token(), null), HttpStatus.OK)).containsEntry("bazarSetup", true);
         assertThat(json(send(HttpMethod.GET, "/api/v1/me", manager, null), HttpStatus.OK)).containsEntry("bazarSetup", true);
         assertThat(json(send(HttpMethod.GET, "/api/v1/me", worker, null), HttpStatus.OK)).doesNotContainKey("bazarSetup");
-        assertThat(json(send(HttpMethod.GET, "/api/v1/me", normal, null), HttpStatus.OK)).doesNotContainKey("bazarSetup");
+        assertThat(json(send(HttpMethod.GET, "/api/v1/me", normal, null), HttpStatus.OK)).containsEntry("bazarSetup", true);
     }
 
     // ── p1 ───────────────────────────────────────────────────────────────────

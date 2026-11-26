@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronRight, Plus, UserSearch } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, PackagePlus, Plus, UserSearch } from 'lucide-react'
 import {
   BazarError, currentUserId, getBazarEvent, getBazarReport, getBazarToday, listBazarDays, listBazarEvents, listBazarPrices,
   orderedMethods, type BazarDay, type BazarDays, type BazarEventDetail, type BazarEventRow, type BazarPriceRow,
@@ -11,7 +11,9 @@ import { eventDay, toNumber } from '../../bazar/format'
 import { TableSkeleton, cn, type BadgeTone } from '../../components/ui'
 import { cairoToday, dayCount, daysFrom, pickOverview, type OverviewState } from './r1/overviewState'
 import { DateTile, Eyebrow, Tag, amount, percent, rangeLabel, weekdayShort, type TagTone } from './r1/parts'
-import { BazarSetupReminderCard } from './setup/LowerThese'
+import { BazarSetupReminderCard, useBazarSetupStatus } from './setup/LowerThese'
+import { useCapabilities } from '../../capabilities'
+import { getRoleFromToken } from '../../api'
 import { FinishEventLink, needsFinish } from './FinishEvent'
 
 export const STATUS_TONE: Record<BazarStatus, BadgeTone> = { draft: 'warning', live: 'success', ended: 'neutral' }
@@ -66,6 +68,7 @@ export default function BazarEvents() {
   }, [navigate, t, i18n.language])
 
   const state = rows ? pickOverview(rows) : null
+  const canSetUpFromNewStock = useCanSetUpFromNewStock()
 
   return (
     <div className="flex flex-col gap-5 max-w-[1120px]" data-testid="bazar-events" data-state={state?.kind}>
@@ -80,6 +83,13 @@ export default function BazarEvents() {
           <UserSearch size={16} aria-hidden />
           <span>{t('bazar.customerData.link')}</span>
         </Link>
+        {canSetUpFromNewStock && (
+          <Link to="/bazar/setup" data-testid="bazar-new-stock-header"
+            className="inline-flex items-center gap-1.5 h-[42px] px-4 rounded-[10px] border border-line text-primary hover:bg-elevated font-semibold text-body">
+            <PackagePlus size={16} aria-hidden />
+            <span>{t('bazar.newStock.button')}</span>
+          </Link>
+        )}
         <Link to="/bazar/new" aria-label={t('bazar.r1.overview.newBazar')}
           className="inline-flex items-center gap-1.5 h-[42px] px-4 sm:px-[18px] rounded-[10px] bg-trace-blue hover:bg-trace-blue-hover text-white font-semibold text-body">
           <Plus size={16} aria-hidden />
@@ -503,18 +513,51 @@ function AfterHero({ ev, first }: { ev: BazarEventRow; first: boolean }) {
 
 // ── First time ───────────────────────────────────────────────────────────────
 
+/**
+ * Wizard entry — "Set up from new stock" (/bazar/setup) is offered to the OWNER of a bazar store (GET /me bazarSetup)
+ * with a connected Shopify store; the wizard is owner-only and needs the store's catalog and Traced Main.
+ */
+export function useCanSetUpFromNewStock(): boolean {
+  const caps = useCapabilities()
+  return caps.bazarSetup && caps.shopifyConnected && getRoleFromToken() === 'owner'
+}
+
 function FirstTime() {
+  const newStock = useCanSetUpFromNewStock()
+  return newStock ? <FirstTimeWithNewStock /> : <FirstTimeBlock newStock={false} />
+}
+
+/** Leads with "Set up from new stock" only when Traced Main has no available pieces; otherwise with planning. */
+function FirstTimeWithNewStock() {
+  const [status] = useBazarSetupStatus()
+  const mainEmpty = !!status && status.mainAvailable === 0
+  return <FirstTimeBlock newStock leadWithNewStock={mainEmpty} />
+}
+
+function FirstTimeBlock({ newStock, leadWithNewStock = false }: { newStock: boolean; leadWithNewStock?: boolean }) {
   const { t } = useTranslation()
+  const primary = 'w-fit h-[46px] px-5 rounded-[10px] bg-trace-blue hover:bg-trace-blue-hover text-white font-semibold flex items-center gap-1.5'
+  const secondary = 'w-fit h-[46px] px-5 rounded-[10px] border border-grey-700 text-[#F2F4F7] hover:bg-white/[0.06] font-semibold flex items-center gap-1.5'
+  const plan = (
+    <Link key="plan" to="/bazar/new" data-testid="bazar-plan-first" className={leadWithNewStock ? secondary : primary}>
+      <Plus size={16} aria-hidden />{t('bazar.r1.empty.button')}
+    </Link>
+  )
+  const setup = newStock ? (
+    <Link key="setup" to="/bazar/setup" data-testid="bazar-new-stock-empty" className={leadWithNewStock ? primary : secondary}>
+      <PackagePlus size={16} aria-hidden />{t('bazar.newStock.button')}
+    </Link>
+  ) : null
   return (
     <section className="bg-grey-900 text-[#F2F4F7] rounded-[20px] p-5 sm:p-8 flex flex-wrap gap-6 sm:gap-8" data-testid="bazar-empty">
       <div className="flex-[999_1_380px] min-w-0 flex flex-col gap-3.5">
         <span className="text-small font-bold uppercase tracking-[0.06em] text-[#93B4FF]">{t('bazar.r1.empty.eyebrow')}</span>
         <h2 className="m-0 text-[26px] leading-8 sm:text-[32px] sm:leading-[38px] font-bold tracking-[-0.02em]">{t('bazar.r1.empty.title')}</h2>
         <p className="text-body-lg text-sidebar-text">{t('bazar.r1.empty.body')}</p>
-        <Link to="/bazar/new" data-testid="bazar-plan-first"
-          className="mt-1 w-fit h-[46px] px-5 rounded-[10px] bg-trace-blue hover:bg-trace-blue-hover text-white font-semibold flex items-center gap-1.5">
-          <Plus size={16} aria-hidden />{t('bazar.r1.empty.button')}
-        </Link>
+        <div className="mt-1 flex flex-wrap gap-2.5" data-testid="bazar-empty-actions">
+          {leadWithNewStock ? [setup, plan] : [plan, setup]}
+        </div>
+        {newStock && <p className="text-small text-sidebar-text">{t('bazar.newStock.hint')}</p>}
       </div>
       <ol className="flex-[1_1_360px] min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         {[1, 2, 3, 4].map(n => (

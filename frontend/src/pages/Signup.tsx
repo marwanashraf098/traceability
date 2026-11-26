@@ -1,7 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { signup, getTenantIdFromToken } from '../api'
+import { signup, getTenantIdFromToken, getSignupConfig } from '../api'
 import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Input, Button, Checkbox } from '../components/ui'
@@ -25,7 +25,21 @@ export function readSignupIntent(): 'bazar' | undefined {
 export default function Signup() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const [intent] = useState(readSignupIntent)
+  const [intent, setIntent] = useState(readSignupIntent)
+  // Wizard entry — "I'm here for the bazar" (→ ?for=bazar, other query keys such as UTM kept) only while the server
+  // setting BAZAR_SIGNUP_ENABLED is on (public signup-config; a failed read hides the link).
+  const [bazarLink, setBazarLink] = useState(false)
+  useEffect(() => {
+    if (intent === 'bazar') return
+    let cancelled = false
+    getSignupConfig().then(c => { if (!cancelled) setBazarLink(c.bazarSignup) })
+    return () => { cancelled = true }
+  }, [intent])
+  const bazarHref = (() => {
+    const q = new URLSearchParams(window.location.search)
+    q.set('for', 'bazar')
+    return `/signup?${q.toString()}`
+  })()
 
   const [businessName, setBusinessName] = useState('')
   const [ownerName,    setOwnerName]    = useState('')
@@ -85,6 +99,12 @@ export default function Signup() {
         <div className="mb-5">
           <h2 className="text-h3 text-primary">{t('signup.title')}</h2>
           <p className="text-small text-muted mt-1">{intent === 'bazar' ? t('signup.subtitleBazar') : t('signup.subtitle')}</p>
+          {bazarLink && intent !== 'bazar' && (
+            <Link to={bazarHref} onClick={() => setIntent('bazar')} data-testid="signup-bazar-link"
+              className="inline-block mt-2 text-small text-brand hover:text-brand-hover underline underline-offset-2">
+              {t('signup.bazarLink')}
+            </Link>
+          )}
         </div>
 
         {error && (

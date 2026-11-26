@@ -19,7 +19,8 @@ import { btnPrimary, btnSecondary } from '../r3/parts'
 import { LowerTheseList } from './LowerThese'
 
 /**
- * Bazar B9b — the guided bazar setup for a store that signed up to sell at a bazar (design/bazar-v2 V2_New1–3 and the
+ * Bazar B9b — the guided bazar setup, "Set up from new stock" (wizard entry 2026-11-26: any owner of a bazar store with
+ * Shopify connected, from the Bazar page) (design/bazar-v2 V2_New1–3 and the
  * phone versions). /bazar/setup, owner only, and only while GET /bazar-setup says it's on (else → /bazar):
  *   1 Your bazar   — the same create call as /bazar/new (+ B8's online stock pair, Remove by default)
  *   2 Pick products — the Traced catalog, a stepper per size, "N in your other locations" (Shopify total − Traced Main)
@@ -91,6 +92,10 @@ export default function BazarSetupWizard() {
     return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-muted" aria-label={t('bazar.wizard.loading')} /></div>
   }
   if (!status || !status.canSetUp) return <Navigate to="/bazar" replace />
+  // Wizard entry — Traced Main is linked but Shopify isn't counting there yet and the store already has pieces: a
+  // receive here would start the count through receiving (the seed could never run after it). Nothing to resume
+  // without a batch, so the wizard stops here.
+  if (status.blocked === 'main_not_counting' && !status.batch) return <MainNotCounting />
 
   return (
     <Frame step={step!} laterTo={eventId && step !== 'done' ? `/bazar/${encodeURIComponent(eventId)}` : null}>
@@ -114,6 +119,22 @@ export default function BazarSetupWizard() {
       {step === 'ready' && eventId && <ReadyStep eventId={eventId} onBack={() => setStep('prices')} onStarted={() => setStep('done')} />}
       {step === 'done' && <DoneStep eventId={eventId} />}
     </Frame>
+  )
+}
+
+function MainNotCounting() {
+  const { t } = useTranslation()
+  return (
+    <div className="min-h-screen bg-charcoal flex items-center justify-center p-4" data-testid="bazar-setup-main-not-counting">
+      <div className="card p-6 max-w-[520px] flex flex-col gap-3">
+        <h1 className="text-h3 font-semibold text-primary">{t('bazar.newStock.blockTitle')}</h1>
+        <p className="text-body text-muted">{t('bazar.newStock.blockBody')}</p>
+        <div className="flex flex-wrap gap-2.5 pt-1">
+          <Link to="/settings?tab=connections" className={btnPrimary}>{t('bazar.newStock.blockSettings')}</Link>
+          <Link to="/bazar" className={btnSecondary}>{t('bazar.newStock.blockBack')}</Link>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -282,6 +303,7 @@ function YourBazar({ created, onNext }: { created: string | null; onNext: (id: s
           </div>
         )}
         <div className="card p-5 sm:p-6 flex flex-col gap-4 min-w-0">
+          {phone && <p className="text-small text-muted" data-testid="bazar-setup-new-stock-note">{t('bazar.wizard.bazar.nothingChanges')}</p>}
           <div className="flex flex-col">
             <h2 className="text-h4 font-bold text-primary">{t('bazar.wizard.bazar.title')}</h2>
             <span className="text-body text-muted">{t('bazar.wizard.bazar.changeLater')}</span>
@@ -422,6 +444,9 @@ function PickStep({ products, stockKnown, loadError, qty, setQty, picked, pieces
   })
   const worth = picked.reduce((s, x) => s + x.p.variants.reduce((a, v) => a + (qty[v.id] ?? 0) * Number(v.price ?? 0), 0), 0)
   const size = (title: string | null) => title ?? t('bazar.wizard.oneSize')
+  // Wizard entry — picked sizes that already have available pieces at Traced Main (warn, never block).
+  const atMainPicked = products.reduce((s, p) => s + p.variants.reduce(
+    (a, v) => a + ((qty[v.id] ?? 0) > 0 ? (v.atMain ?? 0) : 0), 0), 0)
   const other = (n: number | null) => (stockKnown || n !== null) && n !== null ? t('bazar.wizard.pick.other', { count: n }) : null
 
   function toggle(p: BazarSetupProduct, on: boolean) {
@@ -479,6 +504,7 @@ function PickStep({ products, stockKnown, loadError, qty, setQty, picked, pieces
                         <span key={v.id} className="flex flex-col gap-1">
                           <span className="text-small text-muted">
                             {size(v.title)}{other(v.otherLocations) ? ` · ${other(v.otherLocations)}` : ''}
+                            {(v.atMain ?? 0) > 0 ? ` · ${t('bazar.newStock.atMain', { count: v.atMain })}` : ''}
                           </span>
                           <Stepper value={qty[v.id] ?? 0} label={`${p.title} ${size(v.title)}`}
                                    onChange={x => setQty({ ...qty, [v.id]: x })} />
@@ -493,6 +519,12 @@ function PickStep({ products, stockKnown, loadError, qty, setQty, picked, pieces
               )
             })}
           </ul>
+          {atMainPicked > 0 && (
+            <p role="status" data-testid="bazar-setup-at-main-warning"
+               className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-body text-primary">
+              {t('bazar.newStock.atMainWarning', { count: atMainPicked })}
+            </p>
+          )}
         </div>
         {!phone && (
           <aside className="flex flex-col gap-4 lg:sticky lg:top-6">

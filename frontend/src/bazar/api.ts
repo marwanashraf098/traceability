@@ -988,9 +988,9 @@ export function newRequestId(): string {
 /** The seller's own undo window (B2 UNDO_WINDOW_SECONDS); owners / managers may undo any time while live. */
 export const SELLER_UNDO_WINDOW_MS = 120_000
 
-// ── B9b — guided bazar setup for new signups (BAZAR_SIGNUP_ENABLED only) ─────
-// Every /bazar-setup endpoint answers 404 unless the server setting is on, the store signed up to sell at a bazar and
-// bazar is on for it — the screens then show nothing of it (getBazarSetup → null).
+// ── B9b — guided bazar setup ("Set up from new stock") ───────────────────────
+// Every /bazar-setup endpoint answers 404 unless bazar is on for the store (wizard entry, 2026-11-26 — before that it
+// also needed BAZAR_SIGNUP_ENABLED and a bazar signup) — the screens then show nothing of it (getBazarSetup → null).
 
 export interface BazarSetupBatch {
   eventId: string
@@ -1014,6 +1014,13 @@ export interface BazarSetupStatus {
   on: true
   canSetUp: boolean
   batch: BazarSetupBatch | null
+  /** Wizard entry — pieces available at Traced Main (the store's own stock: plan a bazar and send them instead). */
+  mainAvailable?: number
+  /** Wizard entry — 'main_not_counting': Traced Main is linked but Shopify isn't counting there yet and the store has
+   *  pieces — the wizard can't receive ("Finish setting up Traced Main first"). */
+  blocked?: 'main_not_counting' | null
+  /** Wizard entry — false: don't show the /bazar "Bring your products" card (the store didn't come for bazars). */
+  suggestStart?: boolean
 }
 
 /** null when the guided setup isn't on for this store (404) — or can't be reached (403). */
@@ -1034,6 +1041,8 @@ export interface BazarSetupVariant {
   price: number | string | null
   /** Shopify's total minus Traced Main; null = unknown (the read failed or stopped early). */
   otherLocations: number | null
+  /** Wizard entry — pieces of this size already available at Traced Main (a warning when picked, never a block). */
+  atMain?: number
 }
 
 export interface BazarSetupProduct {

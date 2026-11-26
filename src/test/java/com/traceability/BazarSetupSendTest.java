@@ -245,11 +245,16 @@ class BazarSetupSendTest {
     // ── s5 ───────────────────────────────────────────────────────────────────
 
     @Test
-    void s5_gate_normalSignup404_bazarOff404_managerAndWorker403_otherTenantMovesNothing() throws Exception {
+    void s5_gate_normalSignupWithBazarOnPassesGate_bazarOff404_managerAndWorker403_otherTenantMovesNothing() throws Exception {
+        // Wizard entry (2026-11-26): the gate is bazar alone — a normal signup with bazar on passes it (no batch → 409
+        // NO_LIST, the send's own answer, not the gate's 404).
         String normalMail = mail("s5n");
         String normal = signup(normalMail, null);
         connect(tenantOf(normalMail));
-        assertThat(sendBatch(normal, "s5-n").getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        owner.update("UPDATE tenants SET bazar_enabled = true WHERE id = ?", tenantOf(normalMail));
+        ResponseEntity<String> n = sendBatch(normal, "s5-n");
+        assertThat(n.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(n.getBody()).contains("BAZAR_SETUP_NO_LIST");
 
         Shop s = shop("s5");
         UUID event = event(s, "s5", null);
