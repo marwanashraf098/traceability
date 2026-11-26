@@ -5,7 +5,6 @@ import com.traceability.identity.model.SignupAttribution;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.account.OnboardingProgressService;
-import com.traceability.bazar.BazarSignup;
 import com.traceability.notifications.WelcomeEmailJob;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -48,12 +47,11 @@ public class AuthService {
     private final JobScheduler jobScheduler;
     private final WelcomeEmailJob welcomeEmailJob;
     private final OnboardingProgressService onboarding;
-    private final BazarSignup bazarSignup;
 
     public AuthService(JdbcTemplate jdbc, AuthRepository repo,
                        JwtService jwt, PasswordEncoder encoder, Clock clock,
                        JobScheduler jobScheduler, WelcomeEmailJob welcomeEmailJob,
-                       OnboardingProgressService onboarding, BazarSignup bazarSignup) {
+                       OnboardingProgressService onboarding) {
         this.jdbc    = jdbc;
         this.repo    = repo;
         this.jwt     = jwt;
@@ -62,7 +60,6 @@ public class AuthService {
         this.jobScheduler     = jobScheduler;
         this.welcomeEmailJob  = welcomeEmailJob;
         this.onboarding       = onboarding;
-        this.bazarSignup      = bazarSignup;
     }
 
     // ---- signup ----
@@ -104,10 +101,9 @@ public class AuthService {
         return tokens;
     }
 
-    /** Bazar B9a — inside the signup transaction: the intent pref, then bazar on (only with BAZAR_SIGNUP_ENABLED). */
+    /** Bazar B9a — inside the signup transaction: the intent pref (bazar itself is on by default since V244). */
     private void recordBazarIntent(UUID userId, String intent) {
         onboarding.recordSignupIntent(userId, intent);
-        if (OnboardingProgressService.INTENT_BAZAR.equals(intent)) bazarSignup.enableAtSignup(userId);
     }
 
     /** A created account: the new tenant, its owner, and the id {@code createAccount}'s extra step returned. */

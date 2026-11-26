@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Bazar POS — the ONE answer to "does this tenant have bazar": {@code tenants.bazar_enabled} (V231, default false,
- * set by ops). Off → every bazar endpoint answers 404 BAZAR_NOT_ENABLED.
+ * Bazar POS — the ONE answer to "does this tenant have bazar": {@code tenants.bazar_enabled} (V231; default true
+ * since V244 — ops can still switch a tenant off). Off → every bazar endpoint answers 404 BAZAR_NOT_ENABLED.
  */
 public final class Bazar {
 

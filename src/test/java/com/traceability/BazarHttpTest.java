@@ -61,7 +61,7 @@ class BazarHttpTest {
         onTenant = UUID.randomUUID();
         offTenant = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Bazar HTTP On', true)", onTenant);
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Bazar HTTP Off')", offTenant);
+        jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Bazar HTTP Off', false)", offTenant);
         for (UUID t : new UUID[] { onTenant, offTenant }) {
             jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
                 "VALUES (gen_random_uuid(), ?, 'Main Warehouse', 'warehouse', true, true)", t);

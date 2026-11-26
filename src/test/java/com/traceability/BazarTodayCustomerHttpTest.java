@@ -70,7 +70,7 @@ class BazarTodayCustomerHttpTest {
         variantId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID(), productId = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Today HTTP On', true)", onTenant);
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Today HTTP Off')", offTenant);
+        jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Today HTTP Off', false)", offTenant);
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
             "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true)", mainId, onTenant);
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +

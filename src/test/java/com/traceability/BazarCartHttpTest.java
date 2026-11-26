@@ -68,7 +68,7 @@ class BazarCartHttpTest {
         variantId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID(), productId = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Cart HTTP On', true)", onTenant);
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cart HTTP Off')", offTenant);
+        jdbc.update("INSERT INTO tenants (id, name, bazar_enabled) VALUES (?, 'Cart HTTP Off', false)", offTenant);
         jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
             "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true)", mainId, onTenant);
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
