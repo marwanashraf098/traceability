@@ -114,6 +114,9 @@ export default function ExchangeRequestView({
             >
               <p className={cn('text-caption', inStock ? 'text-muted' : 'text-critical-text')}>
                 {t('exchangesRefunds.requests.exchange.goingOut')}
+                {detail.exchangeKind === 'replacement' && (
+                  <> · <span data-testid="exchange-same-item">{t('exchangesRefunds.requests.exchange.sameItem')}</span></>
+                )}
               </p>
               {/* 2026-11-13: always the replacement's product + variant (another product's own name, image, SKU). */}
               <div className="flex items-start gap-2.5">

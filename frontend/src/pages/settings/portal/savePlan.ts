@@ -66,6 +66,8 @@ export interface Draft {
   rules: Record<FeeKind, RuleDraft>
   waiver: boolean
   reasons: string[]
+  /** V246 — "Charge fees on defect replacements" (absent = off). */
+  replacementFees?: boolean
   /** Products whose "can't be returned" flag is being changed: variant id → the row and the new value. */
   variants: Record<string, { row: PortalVariantRow; value: boolean }>
 }
@@ -168,13 +170,19 @@ export function waiverMixed(rules: Record<FeeKind, FeeRule | null> | undefined):
 const NO_PRICING: ExchangePricing = { anyProduct: false, sameOrLowerOnly: false, maxDifference: null, freeVariantSwaps: false }
 
 /** The fee parts of a draft, from the stored fee settings (or none). */
-export function feesDraftOf(fees: CustomerFeeSettings | null): Pick<Draft, 'pricing' | 'rules' | 'waiver' | 'reasons'> {
+export function feesDraftOf(fees: CustomerFeeSettings | null): Pick<Draft, 'pricing' | 'rules' | 'waiver' | 'reasons' | 'replacementFees'> {
   return {
     pricing: pricingDraftOf(fees?.exchangePricing ?? NO_PRICING),
     rules: { exchange: ruleDraftOf(fees?.rules?.exchange ?? null), refund: ruleDraftOf(fees?.rules?.refund ?? null) },
     waiver: savedWaiver(fees?.rules),
     reasons: fees?.merchantFaultReasons ?? [],
+    replacementFees: !!fees?.replacementFees,
   }
+}
+
+/** V246 — the defect-replacement fee switch differs from what is stored. */
+export function replacementFeesEdited(fees: CustomerFeeSettings, d: Draft): boolean {
+  return !!d.replacementFees !== !!fees.replacementFees
 }
 
 export function draftOf(saved: SavedState): Draft {
@@ -249,7 +257,7 @@ export type PortalField = 'slug' | 'enabled' | 'autoApprove' | 'returnWindowDays
 export type PricingKey = 'pricing.swapTo' | 'pricing.freeSwaps' | 'pricing.sameProductRefunds' | 'pricing.priceMode'
 
 export type EditedKey = `portal.${PortalField}` | 'otherCouriers' | PricingKey
-  | 'rule.exchange' | 'rule.refund' | 'waiver' | 'reasons' | `variant.${string}`
+  | 'rule.exchange' | 'rule.refund' | 'waiver' | 'reasons' | 'replacementFees' | `variant.${string}`
 
 const blank = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null)
 
@@ -317,6 +325,7 @@ export function editedKeys(saved: SavedState, d: Draft): EditedKey[] {
     for (const k of FEE_KINDS) if (ruleEdited(fees.rules[k], d.rules[k])) out.push(`rule.${k}`)
     if (d.waiver !== savedWaiver(fees.rules) && waiverTakers(fees, d).length) out.push('waiver')
     if (!sameReasons(d.reasons, fees.merchantFaultReasons)) out.push('reasons')
+    if (replacementFeesEdited(fees, d)) out.push('replacementFees')
   }
   for (const [id, v] of Object.entries(d.variants)) if (v.value !== v.row.nonReturnable) out.push(`variant.${id}`)
   return out
@@ -324,7 +333,8 @@ export function editedKeys(saved: SavedState, d: Draft): EditedKey[] {
 
 // ── the plan ────────────────────────────────────────────────────────────────────
 
-export type Section = 'otherCouriers' | 'portal' | 'pricing' | 'ruleExchange' | 'ruleRefund' | 'reasons' | 'variants'
+export type Section = 'otherCouriers' | 'portal' | 'pricing' | 'ruleExchange' | 'ruleRefund' | 'reasons' | 'replacementFees'
+  | 'variants'
 
 export type SaveStep =
   | { section: 'otherCouriers'; kind: 'otherCouriers'; enabled: boolean }
@@ -332,6 +342,7 @@ export type SaveStep =
   | { section: 'pricing'; kind: 'pricing'; body: ExchangePricing }
   | { section: 'ruleExchange' | 'ruleRefund'; kind: 'rule'; fee: FeeKind; body: FeeRuleInput }
   | { section: 'reasons'; kind: 'reasons'; reasons: string[] }
+  | { section: 'replacementFees'; kind: 'replacementFees'; charge: boolean }
   | { section: 'variants'; kind: 'variant'; row: PortalVariantRow; value: boolean }
 
 /** A problem the browser can see before sending anything; it blocks the whole save. */
@@ -370,6 +381,9 @@ export function buildSavePlan(saved: SavedState, d: Draft, role: 'owner' | 'mana
     }
     if (!sameReasons(d.reasons, fees.merchantFaultReasons)) {
       steps.push({ section: 'reasons', kind: 'reasons', reasons: reasonOrder.filter(r => d.reasons.includes(r)) })
+    }
+    if (replacementFeesEdited(fees, d)) {
+      steps.push({ section: 'replacementFees', kind: 'replacementFees', charge: !!d.replacementFees })
     }
   }
   for (const v of Object.values(d.variants)) {
@@ -433,6 +447,12 @@ export function applyDone(saved: SavedState, draft: Draft, done: StepDone[]): { 
         const r = result as CustomerFeeSettings
         s = { ...s, fees: r }
         d = { ...d, reasons: r.merchantFaultReasons }
+        break
+      }
+      case 'replacementFees': {
+        const r = result as CustomerFeeSettings
+        s = { ...s, fees: r }
+        d = { ...d, replacementFees: !!r.replacementFees }
         break
       }
       case 'variant': {

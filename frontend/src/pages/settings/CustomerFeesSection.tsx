@@ -17,7 +17,7 @@ export { REASON_CODES } from './portal/usePortalSettingsDraft'
 const KINDS: FeeKind[] = ['exchange', 'refund']
 
 /** The fee parts of the tab's draft. */
-export type FeesDraft = Pick<Draft, 'pricing' | 'rules' | 'waiver' | 'reasons'>
+export type FeesDraft = Pick<Draft, 'pricing' | 'rules' | 'waiver' | 'reasons' | 'replacementFees'>
 
 export interface FeesEditorProps {
   saved: CustomerFeeSettings
@@ -158,6 +158,7 @@ function FeesEditor(props: FeesEditorProps) {
     <>
       <FeeRulesTable {...props} />
       <WaiverEditor {...props} />
+      <ReplacementFeesSwitch {...props} />
       <AreaOverrides overrides={props.saved.overrides} owner={props.owner} onSaved={props.onAreaFeesSaved} />
     </>
   )
@@ -456,6 +457,24 @@ function WaiverEditor({ saved, draft, onChange, owner, edited, errors }: FeesEdi
         </div>
         <ErrorLine error={errors.reasons} testId="error-reasons" />
       </fieldset>
+    </div>
+  )
+}
+
+// ── defect replacements (V246) ───────────────────────────────────────────────────
+
+/**
+ * "Charge fees on defect replacements" — a replacement (the same item again, for a damaged or wrong item) is free
+ * unless this is on; then it pays the exchange fee (the store's-fault waiver doesn't apply). Never a price difference.
+ */
+function ReplacementFeesSwitch({ draft, onChange, owner, edited, errors }: FeesEditorProps) {
+  const { t } = useTranslation()
+  return (
+    <div data-testid="replacement-fees">
+      <PricingSwitch title={t('settings.portal.fees.replacementFees.title')} help={t('settings.portal.fees.replacementFees.help')}
+        checked={!!draft.replacementFees} onChange={v => onChange(d => ({ ...d, replacementFees: v }))} disabled={!owner}
+        edited={edited.has('replacementFees')} />
+      {errors.replacementFees && <div className="px-6 pb-4"><ErrorLine error={errors.replacementFees} testId="error-replacement-fees" /></div>}
     </div>
   )
 }

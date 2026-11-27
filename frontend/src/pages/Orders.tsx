@@ -367,7 +367,10 @@ export default function Orders() {
           >
             {row.number ?? t('common.na')}
           </button>
-          {row.isExchange && <Badge tone="info" className="whitespace-nowrap font-sans" label={t('exchange.badge')} />}
+          {(row.isExchange || row.isReplacement) && (
+            <Badge tone="info" className="whitespace-nowrap font-sans"
+              label={t(row.isReplacement ? 'exchange.badgeReplacement' : 'exchange.badge')} />
+          )}
           {/* Quiet marker for fulfilled-outside-Traced orders (derivedStatus.notTraced), beside the number like
               the Exchange tag — grey, so it never shouts over the normal orders in the list. */}
           {row.derivedStatus.notTraced && <Badge tone="neutral" className="whitespace-nowrap font-sans" label={t('orders.badge.notTraced')} />}

@@ -197,6 +197,8 @@ export interface FailedProduct { productId: string; title: string; orders: numbe
 export interface SizeRow {
   size: string; soldUnits: number; share: number | null; deliveredUnits: number; returnedUnits: number
   returnRate: number | null; exchangedUnits: number
+  /** V246 — defect replacements (the same item again), apart from exchanges. */
+  replacedUnits?: number
 }
 export interface SizeCurve { sizes: SizeRow[]; unparseableUnits: number; unparseableValues: string[]; noSizeUnits: number }
 export interface BoughtTogether { variantA: string; titleA: string; variantB: string; titleB: string; orders: number }
@@ -244,6 +246,8 @@ export interface VariantStock {
   velocityPerDay: number | null; daysOfCover: number | null; sellThrough: number | null; avgPieceAgeDays: number | null
   lastSoldAt: string | null; soldUnits30: number; deliveredUnits30: number; returnsRate: number | null
   returnedUnits90: number; exchangedUnits90: number; topReturnReason: string | null; runningLow: boolean
+  /** V246 — defect replacements (the same item again), counted apart from exchanges. */
+  replacedUnits90?: number
   deadStock: boolean; stockValue: number | null; valueAtCost: boolean; shopifyAvailable: number | null
   stockUsed: number; stockSource: StockSource
 }

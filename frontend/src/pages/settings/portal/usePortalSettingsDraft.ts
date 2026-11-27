@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import {
   CustomerFeeSettings, OtherCouriersReturnsSetting, PortalSettings, PortalSettingsError, PortalVariantRow, TransferCommandError, getCustomerFees,
   getOtherCouriersReturns, getPortalSettings, getPortalVariants, getRoleFromToken, saveExchangePricing, saveFeeRule,
-  saveMerchantFaultReasons, savePortalSettings, setOtherCouriersReturns, setVariantNonReturnable,
+  saveMerchantFaultReasons, savePortalSettings, saveReplacementFees, setOtherCouriersReturns, setVariantNonReturnable,
 } from '../../../api'
 import { useCapabilities } from '../../../capabilities'
 import { useToast } from '../../../components/ui'
@@ -227,6 +227,7 @@ function exec(step: SaveStep): Promise<unknown> {
     case 'pricing': return saveExchangePricing(step.body)
     case 'rule': return saveFeeRule(step.fee, step.body)
     case 'reasons': return saveMerchantFaultReasons(step.reasons)
+    case 'replacementFees': return saveReplacementFees(step.charge)
     case 'variant': return setVariantNonReturnable(step.row.id, step.value)
   }
 }

@@ -450,9 +450,9 @@ function CaseRow({ c, onOpen, showSources = false }: { c: ReturnCase; onOpen: ()
       <td className="px-4 py-3 align-middle">
         <div className="flex flex-col gap-1">
           <span className="flex items-center gap-1.5 flex-wrap">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-[#D5DAE1] text-[#3A404C] text-[12px] font-semibold" data-testid="type-tag">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-[#D5DAE1] text-[#3A404C] text-[12px] font-semibold whitespace-nowrap" data-testid="type-tag">
               {exchange ? <Repeat2 size={12} strokeWidth={2.4} aria-hidden /> : <Undo2 size={12} strokeWidth={2.4} aria-hidden />}
-              {t(`returnsExchanges.kind.${c.kind}`)}
+              {t(c.exchangeKind === 'replacement' ? 'returnsExchanges.kind.replacement' : `returnsExchanges.kind.${c.kind}`)}
             </span>
             <bdi className="font-mono text-[14px] font-semibold text-[#141821]">{c.reference}</bdi>
           </span>
