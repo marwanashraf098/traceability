@@ -266,6 +266,19 @@ public class MainReconcileService {
         return writeAll || (d != null && writeShops.contains(d));
     }
 
+    /**
+     * Bazar U1d — would Main reconcile actually WRITE to Shopify for this tenant's store? The global switch on, the
+     * tenant's active store in the staged rollout ({@link #allowlisted}) and a write store ({@link #writeEnabled}:
+     * report-only off, a Part 1 cutoff, in write-shops and not in write-exclude). No active store → false. The same
+     * configuration the runs use — never parsed again. Keep-mode bazars ('leave') rely on this: their sales only come
+     * off Shopify through reconcile's writes (BazarService refuses 'leave' when this is false). Caller's tenant context.
+     */
+    public boolean writesFor(UUID tenantId) {
+        if (!enabled || tenantId == null) return false;
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
+        return store != null && allowlisted(store.shopDomain()) && writeEnabled(store.shopDomain());
+    }
+
     /** The effective write configuration, for the startup log (MainReconcileJob). */
     String describeWriteConfig() {
         String mode = !enabled ? "disabled"

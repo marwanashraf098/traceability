@@ -71,6 +71,20 @@ public final class BazarOnlineStock {
             HttpStatus.CONFLICT, d);
     }
 
+    /**
+     * U1d — 409: Keep showing online ('leave') isn't available because Main reconcile doesn't write for this store
+     * (MainReconcileService.writesFor) — a Keep bazar's sales would never come off Shopify. Setting 'leave' (create /
+     * reuse / change) and Mark sent on a 'leave' location answer this; the merchant picks Remove and sends.
+     */
+    public static BazarException keepUnavailable() {
+        return new BazarException(BazarException.Code.BAZAR_KEEP_UNAVAILABLE,
+            "Keep showing online isn't available for your store yet — pieces will be removed from online stock while " +
+            "they're at the bazar. Choose Remove from online stock.",
+            "خيار «إبقاؤها ظاهرة أونلاين» غير متاح لمتجرك بعد — ستُزال القطع من المخزون الأونلاين أثناء وجودها في البازار. " +
+            "اختر «إزالة من المخزون الأونلاين».",
+            HttpStatus.CONFLICT);
+    }
+
     /** 409 — the choice can't change once the stock was sent (the transfer's snapshot is final). */
     public static BazarException locked() {
         return new BazarException(BazarException.Code.BAZAR_ONLINE_STOCK_LOCKED,

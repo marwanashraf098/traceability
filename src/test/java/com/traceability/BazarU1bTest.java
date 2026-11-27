@@ -44,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
+@org.springframework.context.annotation.Import(KeepAvailableForTests.class) // U1d: Keep stays available
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BazarU1bTest {
 

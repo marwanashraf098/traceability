@@ -48,6 +48,12 @@ public class BazarController {
         return bazar.list();
     }
 
+    /** U1d — what the New bazar form may offer: {@code keep_available} (Main reconcile writes for this store). */
+    @GetMapping("/online-stock")
+    public Map<String, Object> onlineStockOptions() {
+        return bazar.onlineStockOptions();
+    }
+
     @GetMapping("/{eventId}")
     public Map<String, Object> get(@PathVariable UUID eventId) {
         return bazar.get(eventId);

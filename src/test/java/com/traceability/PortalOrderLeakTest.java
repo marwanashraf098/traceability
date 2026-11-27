@@ -599,6 +599,8 @@ class PortalOrderLeakTest {
                 "DELETE /api/v1/bazar-events/{eventId}/prices/{variantId}/override")) {
             reg(k, skip("Bazar POS B1 — bazar events, their transfer and prices; touches no orders"));
         }
+        reg("GET /api/v1/bazar-events/online-stock",
+            skip("Bazar U1d — whether Keep showing online is available (Main reconcile config + the store row); touches no orders"));
         reg("PUT /api/v1/bazar-events/{eventId}/online-stock",
             skip("Bazar B8 — a bazar's online stock choice (its event location's shopify_sync_mode); touches no orders"));
         reg("DELETE /api/v1/bazar-events/{eventId}",

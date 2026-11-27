@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check, CloudOff, Globe } from 'lucide-react'
-import { BazarError, type OnlineStock } from '../../bazar/api'
+import { BazarError, getBazarOnlineStockOptions, type OnlineStock } from '../../bazar/api'
 import { cn } from '../../components/ui'
 import { Tag } from './r1/parts'
 
@@ -13,9 +14,33 @@ import { Tag } from './r1/parts'
 
 const ORDER: OnlineStock[] = ['remove', 'leave']
 
+/**
+ * U1d — Keep showing online is offered only while Main reconcile writes for the store (the server's keep_available:
+ * the bazar detail's, else GET /bazar-events/online-stock). Unknown (an older server, a failed read) = available — the
+ * server refuses a Keep it can't honour (409 BAZAR_KEEP_UNAVAILABLE) either way.
+ */
+export function useKeepAvailable(fromDetail?: boolean): boolean {
+  const [fetched, setFetched] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (fromDetail !== undefined) return
+    let live = true
+    getBazarOnlineStockOptions()
+      .then(o => { if (live && typeof o?.keep_available === 'boolean') setFetched(o.keep_available) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [fromDetail])
+  return fromDetail ?? fetched ?? true
+}
+
+/** U1d — said under the choice while Keep isn't available. */
+function KeepUnavailableNote() {
+  const { t } = useTranslation()
+  return <p className="text-small text-muted col-span-full" data-testid="bazar-keep-unavailable">{t('bazar.u1d.keepUnavailable')}</p>
+}
+
 /** The two cards (New bazar form section 5, and Get ready's Change dialog). A radio group. */
-export function OnlineStockCards({ value, onChange, name = 'bazar-online-stock' }: {
-  value: OnlineStock; onChange: (m: OnlineStock) => void; name?: string
+export function OnlineStockCards({ value, onChange, name = 'bazar-online-stock', keepAvailable = true }: {
+  value: OnlineStock; onChange: (m: OnlineStock) => void; name?: string; keepAvailable?: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -23,13 +48,16 @@ export function OnlineStockCards({ value, onChange, name = 'bazar-online-stock' 
          data-testid="bazar-online-stock">
       {ORDER.map(m => {
         const on = value === m
+        const off = m === 'leave' && !keepAvailable
         const Ico = m === 'remove' ? CloudOff : Globe
         return (
-          <label key={m} data-testid={`online-stock-${m}`}
-            className={cn('relative flex flex-col gap-1 p-3.5 rounded-xl border cursor-pointer min-w-0',
+          <label key={m} data-testid={`online-stock-${m}`} aria-disabled={off || undefined}
+            className={cn('relative flex flex-col gap-1 p-3.5 rounded-xl border min-w-0',
+              off ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
               'has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-trace-blue',
               on ? 'border-trace-blue border-[1.5px] bg-trace-blue/[0.04]' : 'border-line bg-surface')}>
-            <input type="radio" name={name} value={m} className="sr-only" checked={on} onChange={() => onChange(m)} />
+            <input type="radio" name={name} value={m} className="sr-only" checked={on} disabled={off}
+                   onChange={() => { if (!off) onChange(m) }} />
             <span className="flex items-start justify-between">
               <span aria-hidden className="w-9 h-9 rounded-lg bg-charcoal flex items-center justify-center text-primary"><Ico size={18} /></span>
               <span aria-hidden className={cn('w-[22px] h-[22px] rounded border flex items-center justify-center shrink-0',
@@ -45,23 +73,31 @@ export function OnlineStockCards({ value, onChange, name = 'bazar-online-stock' 
           </label>
         )
       })}
+      {!keepAvailable && <KeepUnavailableNote />}
     </div>
   )
 }
 
 /** The phone pair: "Remove online · Default" / "Keep online". A radio group of two buttons. */
-export function OnlineStockPhonePair({ value, onChange }: { value: OnlineStock; onChange: (m: OnlineStock) => void }) {
+export function OnlineStockPhonePair({ value, onChange, keepAvailable = true }: {
+  value: OnlineStock; onChange: (m: OnlineStock) => void; keepAvailable?: boolean
+}) {
   const { t } = useTranslation()
   return (
     <div className="grid grid-cols-2 gap-2.5" role="radiogroup" aria-label={t('bazar.online.title')} data-testid="bazar-online-stock">
-      {ORDER.map(m => (
-        <button key={m} type="button" role="radio" aria-checked={value === m} onClick={() => onChange(m)}
-          data-testid={`online-stock-${m}`}
-          className={cn('h-12 px-3 rounded-xl border text-body font-semibold',
-            value === m ? 'border-trace-blue border-[1.5px] bg-trace-blue/[0.04] text-trace-blue' : 'border-line bg-surface text-primary')}>
-          {t(`bazar.online.${m}.phone`)}
-        </button>
-      ))}
+      {ORDER.map(m => {
+        const off = m === 'leave' && !keepAvailable
+        return (
+          <button key={m} type="button" role="radio" aria-checked={value === m} disabled={off}
+            onClick={() => { if (!off) onChange(m) }}
+            data-testid={`online-stock-${m}`}
+            className={cn('h-12 px-3 rounded-xl border text-body font-semibold', off && 'opacity-50 cursor-not-allowed',
+              value === m ? 'border-trace-blue border-[1.5px] bg-trace-blue/[0.04] text-trace-blue' : 'border-line bg-surface text-primary')}>
+            {t(`bazar.online.${m}.phone`)}
+          </button>
+        )
+      })}
+      {!keepAvailable && <KeepUnavailableNote />}
     </div>
   )
 }

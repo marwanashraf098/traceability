@@ -32,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
+@org.springframework.context.annotation.Import(KeepAvailableForTests.class) // U1d: Keep stays available
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BazarEventServiceTest {
 

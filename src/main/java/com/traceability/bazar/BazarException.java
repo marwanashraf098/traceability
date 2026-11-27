@@ -66,6 +66,8 @@ public class BazarException extends RuntimeException {
         BAZAR_NOT_ENOUGH_AT_MAIN,
         BAZAR_NOT_ON_SEND,
         BAZAR_SEND_CLOSED,
+        // U1d — Keep showing online needs Main reconcile writing for the store
+        BAZAR_KEEP_UNAVAILABLE,
         // U1c — send by count takes pieces without a label only
         BAZAR_PIECES_HAVE_LABELS,
         // B7d-2 — bring back by count
