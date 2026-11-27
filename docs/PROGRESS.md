@@ -5,7 +5,7 @@
 ## Current state
 
 **Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
-(U1c + U1d); V245; backend + frontend built, pushed NOT, merged NOT, deployed NOT).** Decisions (approved 2026-11-27, Step 0):
+(U1c + U1d); V245; merged to main 2026-11-27 as 35a19890 (migrations end at V245), NOT deployed).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a
   batch is a LIST only (scan / send by count / ✕ change the list, nothing moves); "Send these to the bazar" claims every
   piece through the existing `claimAndSend` (`transfer_pieces.batch_id`), marks the batch sent and writes the batch's
@@ -57,7 +57,12 @@ Built (2026-11-27):
 - Full backend suite after the rebase: 5034, red = ExchangeBackfillTest (allowed) + PortalPaidPriceTierTest.b1 (random
   short_code collision in its fixture) + ShopifyOAuthDay1Test.expiredState (553 s run, overlapped the frontend suite) —
   both green alone. Frontend 273 files / 2337 green (alone).
-- Not done: phone camera on the batch screen.
+- Merge run (temp worktree): tsc + vite build OK; backend 5041 — red ExchangeBackfillTest (allowed) +
+  ReturnLegScanAsTruthTest.t7 (green alone). Cause (read-only look): the test's random 5-digit order numbers collided —
+  the log shows `matchByBusinessReference: AMBIGUOUS — ref='#44793' … matched 2 orders` in that class, so the CRP leg
+  wasn't linked and the scan was labelled customer_after_delivery. Test-only (the label rule is an EXISTS, no row order
+  or clock); not fixed. Frontend 275 / 2360 green.
+- Not done: phone camera on the batch screen; t7's random order numbers (test-only flake, above).
   End event → 409 BAZAR_TOPUP_OPEN while a batch is open.
 - Tests: BazarTopupTest (9, revert-checked R1–R10), BazarTopupHttpAppUserTest (4, app_user; revert: no
   @Transactional → 404). Approved edits: BazarTransferLockTest pattern, MigrationSmokeTest 244, NotTracedBackfillTest
