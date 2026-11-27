@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main a3bda1ce
-(U1c); V245; backend + frontend built, pushed NOT, merged NOT, deployed NOT).** Decisions (approved 2026-11-27, Step 0):
+**Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
+(U1c + U1d); V245; backend + frontend built, pushed NOT, merged NOT, deployed NOT).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a
   batch is a LIST only (scan / send by count / ✕ change the list, nothing moves); "Send these to the bazar" claims every
   piece through the existing `claimAndSend` (`transfer_pieces.batch_id`), marks the batch sent and writes the batch's
@@ -41,14 +41,15 @@ Built (2026-11-27):
   `TransferShopifySync.claimBatchSend`.
 - Endpoints (owner / manager): POST `/bazar-events/{id}/batches`, GET `…/batches/current`, POST
   `…/batches/{batchId}/scan|count|remove|discard|send`. Detail adds `batches`, `open_batch`, `no_price_count`.
-  End event → 409 BAZAR_TOPUP_OPEN while a batch is open. TODO(U1d) in `BazarService.sendBatch`: a Keep batch Send at a
-  store where reconcile doesn't write must refuse BAZAR_KEEP_UNAVAILABLE.
+  End event → 409 BAZAR_TOPUP_OPEN while a batch is open. U1d: a batch Send on a Keep transfer at a store where
+  `MainReconcileService.writesFor` is false → 409 BAZAR_KEEP_UNAVAILABLE (BazarService.requireKeepAvailable, before
+  anything is claimed; nothing listed moves; Remove bazars unaffected) — BazarTopupTest.k2, undo-checked.
 - Frontend: `/bazar/:id/add-pieces` (`BazarAddPieces` → TransferScanOut with `bazar.batchId`: the batch's lines, scans
   / count / ✕ / Remove N on the batch endpoints, `BatchFooter` Send these N / Discard (second tap) / Remove-vs-Keep
   note; scanner hooks untouched). Live page: More ▾ "Add more pieces" / "Continue adding pieces (N listed)", open-batch
   banner, "N sizes have no price · Set prices" (→ Prices tab), Pieces tab "Sent in N batches" card (2+ sends). Phone
   BazarMenu "Add more pieces" for owner / manager (no camera). Strings `bazar.topup` (EN + AR, first in `bazar`).
-- Tests: BazarTopupTest (10; R1–R10 + u1 revert-checked), BazarTopupHttpAppUserTest (4, app_user; revert: no
+- Tests: BazarTopupTest (11, @Import KeepAvailableForTests; R1–R10 + u1 + k2 revert-checked), BazarTopupHttpAppUserTest (4, app_user; revert: no
   @Transactional → 404), bazarTopup.test.tsx (13; F1–F9 revert-checked). Approved edits: BazarTransferLockTest pattern,
   MigrationSmokeTest 244, NotTracedBackfillTest 189, leak-registry SKIPs, RlsCoverageTest COVERED, BazarSetupSendTest.g2
   (2 definitions + 1 delegation + 4 calls; batch send: claimAndSend + claimBatchSend only), BazarReportGuardTest
@@ -56,7 +57,7 @@ Built (2026-11-27):
 - Full backend suite after the rebase: 5034, red = ExchangeBackfillTest (allowed) + PortalPaidPriceTierTest.b1 (random
   short_code collision in its fixture) + ShopifyOAuthDay1Test.expiredState (553 s run, overlapped the frontend suite) —
   both green alone. Frontend 273 files / 2337 green (alone).
-- Not done: merge (stop before merging — asked), U1d refusal (waiting for U1d on main), phone camera on the batch screen.
+- Not done: phone camera on the batch screen.
   End event → 409 BAZAR_TOPUP_OPEN while a batch is open.
 - Tests: BazarTopupTest (9, revert-checked R1–R10), BazarTopupHttpAppUserTest (4, app_user; revert: no
   @Transactional → 404). Approved edits: BazarTransferLockTest pattern, MigrationSmokeTest 244, NotTracedBackfillTest

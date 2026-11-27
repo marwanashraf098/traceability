@@ -645,9 +645,12 @@ public class BazarService {
         UUID tenantId = requireEnabled();
         String crid = requestId(clientRequestId);
         Map<String, Object> ev = liveEvent(tenantId, eventId);
-        // TODO(U1d): once U1d is on main — a batch Send on a Keep ('leave') transfer at a store where Main reconcile
-        // doesn't write must refuse with U1d's BAZAR_KEEP_UNAVAILABLE (the same rule U1d uses for Mark sent), before
-        // anything is claimed.
+        // U1d: a Keep ('leave') transfer — its snapshot is final — at a store where Main reconcile doesn't write: the
+        // batch can't go (409 BAZAR_KEEP_UNAVAILABLE), checked before anything is claimed; nothing listed moves. The
+        // same rule as Mark sent (requireKeepAvailable → MainReconcileService.writesFor). A Remove bazar is unaffected.
+        requireKeepAvailable(tenantId, jdbc.queryForObject(
+            "SELECT shopify_sync_mode FROM transfers WHERE id = ? AND tenant_id = ?", String.class,
+            ev.get("transfer_id"), tenantId));
         TransferService.BatchSendResult r = transfers.sendBatchForBazar((UUID) ev.get("transfer_id"), batchId,
             actorUserId, crid);
         if (!r.success()) {

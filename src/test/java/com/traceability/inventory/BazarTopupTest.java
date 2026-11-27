@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.KeepAvailableForTests;
 import com.traceability.TestPostgres;
 import com.traceability.bazar.BazarDayService;
 import com.traceability.bazar.BazarEndService;
@@ -41,6 +42,8 @@ import static org.mockito.Mockito.*;
  *   r1  Remove: the batch's list moves nothing and writes nothing; Send claims exactly its N pieces once (its own claim
  *       row, its own push key ≠ the first send's), the pieces are on the bazar at once; a replay of Send changes nothing
  *   k1  Keep: a batch Send writes no claim and calls nothing
+ *   k2  U1d: a Keep batch Send where Main reconcile doesn't write → 409 BAZAR_KEEP_UNAVAILABLE, nothing listed moves;
+ *       a Remove bazar's batch at the same store still sends
  *   p1  prices: a new size gets the bulk rule's price, a size with no Shopify price stays priceless (no_price_count),
  *       an override already set is untouched
  *   e1  End event with two batches: counts, "batches", and each good leftover's +1 (first-send and batch pieces alike)
@@ -54,6 +57,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@org.springframework.context.annotation.Import(KeepAvailableForTests.class)   // U1d: Keep available (writesFor → true)
 class BazarTopupTest {
 
     @Container
@@ -84,6 +88,7 @@ class BazarTopupTest {
     @Autowired BazarEndService  end;
     @Autowired ExceptionService exceptions;
     @Autowired TransferShopifySync transferSync;
+    @Autowired MainReconcileService reconcile;   // KeepAvailableForTests' spy
     @MockBean ShopifyGateway shopify;
     @MockBean ShopifyTokenProvider tokenProvider;
 
@@ -209,6 +214,38 @@ class BazarTopupTest {
             .isEqualTo("leave");
         verify(shopify, never()).pushTransferOut(any(), any(), anyList(), any(), any(), any());
         assertThat(count("SELECT COUNT(*) FROM pieces WHERE id = ? AND status = 'out_on_transfer'", c)).isEqualTo(1);
+    }
+
+    /** Revert check: drop the requireKeepAvailable call from BazarService.sendBatch → red (the batch is sent). */
+    @Test
+    void k2_keepBatchSend_whereReconcileDoesntWrite_isRefused_nothingMoves() throws Exception {
+        String a = piece(variant), r = piece(variant);
+        Ev keep = liveBazar("K2 keep", "leave", List.of(a));
+        Ev remove = liveBazar("K2 remove", null, List.of(r));
+        String c = piece(variant), d = piece(variant);
+        UUID keepBatch = (UUID) bazar.openBatch(keep.id, owner).get("id");
+        bazar.batchScan(keep.id, keepBatch, code(c), owner);
+        UUID removeBatch = (UUID) bazar.openBatch(remove.id, owner).get("id");
+        bazar.batchScan(remove.id, removeBatch, code(d), owner);
+
+        doReturn(false).when(reconcile).writesFor(any());
+        try {
+            BazarException ex = catchThrowableOfType(() -> bazar.sendBatch(keep.id, keepBatch, "send-k2", owner),
+                BazarException.class);
+            assertThat(ex.code()).isEqualTo(BazarException.Code.BAZAR_KEEP_UNAVAILABLE);
+            assertThat(count("SELECT COUNT(*) FROM pieces WHERE id = ? AND status = 'available' AND current_location_id = ?",
+                c, main)).as("the listed piece stays at Main").isEqualTo(1);
+            assertThat(count("SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ?", keep.transfer)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT status FROM transfer_send_batches WHERE id = ?", String.class, keepBatch))
+                .isEqualTo("open");
+            assertThat(count("SELECT COUNT(*) FROM transfer_send_batch_items WHERE batch_id = ? AND removed_at IS NULL",
+                keepBatch)).isEqualTo(1);
+            // Remove bazars don't depend on reconcile writing.
+            assertThat(bazar.sendBatch(remove.id, removeBatch, "send-k2-remove", owner).get("sent")).isEqualTo(1);
+        } finally {
+            doReturn(true).when(reconcile).writesFor(any());
+        }
+        bazar.discardBatch(keep.id, keepBatch, owner);
     }
 
     // ── p1 ────────────────────────────────────────────────────────────────
