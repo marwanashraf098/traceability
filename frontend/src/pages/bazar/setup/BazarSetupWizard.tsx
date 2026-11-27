@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../../help/HelpLink'
 import { ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus, Printer, Search } from 'lucide-react'
 import {
   BazarError, createBazarEvent, getBazarEvent, getBazarSetup, getBazarSetupProducts, markBazarSent, METHOD_ORDER,
@@ -158,7 +159,10 @@ function Frame({ step, laterTo, children }: { step: Step; laterTo: string | null
                 {current <= 5 ? <>{t('bazar.wizard.stepOf', { n: current, total: 5 })} · {names[current - 1]}</> : names[4]}
               </span>
             </div>
-            {laterTo && <LaterLink to={laterTo} />}
+            <span className="flex items-center justify-between gap-3">
+              {laterTo ? <LaterLink to={laterTo} /> : <span />}
+              <HelpLink screen="bazarSetup" />
+            </span>
             <div aria-hidden className="grid grid-cols-5 gap-1.5">
               {[1, 2, 3, 4, 5].map(n => (
                 <span key={n} className={cn('h-1 rounded-sm', n < current ? 'bg-success' : n === current ? 'bg-trace-blue' : 'bg-line')} />
@@ -186,6 +190,7 @@ function Frame({ step, laterTo, children }: { step: Step; laterTo: string | null
                 )
               })}
             </ol>
+            <HelpLink screen="bazarSetup" />
             {laterTo && <LaterLink to={laterTo} />}
           </div>
         )}

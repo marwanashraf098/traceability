@@ -5,13 +5,14 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ChevronRight, MessageCircle, ThumbsUp } from 'lucide-react'
 import { Spinner } from '../../components/ui'
+import { getRoleFromToken } from '../../api'
 import { useHelpLibrary } from '../../help/loadHelp'
 import { HELP_WHATSAPP } from '../../help/topics'
 import { helpLang } from './HelpCenter'
 
 // Onboarding O6 — one help article (design/onboarding/Traced_onboarding_Help-Article): breadcrumb, title, who it's
 // for, the "Short answer" box (the article's first paragraph), the body, Related, and "Did this answer your
-// question?" — Yes only thanks you, No opens WhatsApp. Nothing is stored. (The mockup's "Check my store" box is O6b.)
+// question?" — Yes only thanks you, No opens WhatsApp (a worker — a bazar seller — is told to ask the bazar owner). Nothing is stored. (The mockup's "Check my store" box is O6b.)
 // The video slot stays hidden until an article has a video.
 
 const md: Components = {
@@ -34,7 +35,8 @@ export default function HelpArticle() {
   const { t, i18n } = useTranslation()
   const lang = helpLang(i18n.language)
   const lib = useHelpLibrary()
-  const [answer, setAnswer] = useState<'yes' | null>(null)
+  const [answer, setAnswer] = useState<'yes' | 'no' | null>(null)
+  const worker = getRoleFromToken() === 'worker'
 
   if (lib === undefined) return <div className="flex justify-center py-16"><Spinner /></div>
   if (lib === null) return <p className="text-body text-critical-text" role="alert">{t('helpCenter.loadFailed')}</p>
@@ -56,7 +58,10 @@ export default function HelpArticle() {
     <div className="max-w-[1040px] mx-auto flex flex-wrap gap-8 items-start" data-testid="help-article" data-article={a.id}>
       <article className="flex-[999_1_560px] min-w-0 flex flex-col gap-4">
         <nav aria-label={t('helpCenter.title')} className="flex flex-wrap items-center gap-1.5 text-small text-muted">
-          <Link to="/help" className="hover:text-primary">{t('helpCenter.title')}</Link>
+          {/* A worker can't open the help center (only their article), so no link for them. */}
+          {worker
+            ? <span>{t('helpCenter.title')}</span>
+            : <Link to="/help" className="hover:text-primary">{t('helpCenter.title')}</Link>}
           <ChevronRight size={14} className="rtl:-scale-x-100" aria-hidden />
           <span>{t(`helpCenter.topics.${a.topic}`)}</span>
         </nav>
@@ -86,16 +91,28 @@ export default function HelpArticle() {
             <span className="text-body text-success-text inline-flex items-center gap-1.5" role="status" data-testid="help-thanks">
               <ThumbsUp size={16} aria-hidden /> {t('helpCenter.thanks')}
             </span>
+          ) : answer === 'no' ? (
+            <span className="text-body text-secondary" role="status" data-testid="help-ask-owner">
+              {t('helpCenter.askBazarOwner')}
+            </span>
           ) : (
             <span className="flex flex-wrap gap-2">
               <button type="button" onClick={() => setAnswer('yes')} data-testid="help-yes"
                 className="h-10 px-4 rounded-lg border border-line text-body font-semibold text-primary hover:bg-elevated">
                 {t('helpCenter.yes')}
               </button>
-              <a href={HELP_WHATSAPP} target="_blank" rel="noopener noreferrer" data-testid="help-no"
-                className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-trace-blue text-white text-body font-semibold hover:bg-trace-blue-hover">
-                <MessageCircle size={16} aria-hidden /> {t('helpCenter.no')}
-              </a>
+              {/* A bazar seller (worker) asks the bazar owner — never Traced's support WhatsApp. */}
+              {worker ? (
+                <button type="button" onClick={() => setAnswer('no')} data-testid="help-no"
+                  className="h-10 px-4 rounded-lg border border-line text-body font-semibold text-primary hover:bg-elevated">
+                  {t('helpCenter.noPlain')}
+                </button>
+              ) : (
+                <a href={HELP_WHATSAPP} target="_blank" rel="noopener noreferrer" data-testid="help-no"
+                  className="h-10 inline-flex items-center gap-2 px-4 rounded-lg bg-trace-blue text-white text-body font-semibold hover:bg-trace-blue-hover">
+                  <MessageCircle size={16} aria-hidden /> {t('helpCenter.no')}
+                </a>
+              )}
             </span>
           )}
         </section>

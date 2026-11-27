@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../../help/HelpLink'
 import { ArrowLeft } from 'lucide-react'
 import {
   BazarError, getBazarEvent, listBazarDays, orderedMethods, type BazarDay, type BazarDays, type BazarEventDetail,
@@ -56,6 +57,7 @@ export default function CloseDayPage() {
             <ArrowLeft size={14} aria-hidden className="rtl:-scale-x-100" />{ev.name}
           </Link>
           <h1 className="text-[26px] leading-8 sm:text-[30px] sm:leading-9 font-bold tracking-[-0.02em] text-primary">{t('bazar.close.title')}</h1>
+          <HelpLink screen="bazarCloseDay" className="self-start" />
         </div>
         {days.length > 1 && !closed && (
           <div className="flex gap-2 flex-wrap" role="group" aria-label={t('bazar.close.pickDay')} data-testid="close-day-picker">

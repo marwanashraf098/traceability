@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../help/HelpLink'
 import { ChevronLeft, Download, Search, Trash2 } from 'lucide-react'
 import { getRoleFromToken } from '../../api'
 import {
@@ -76,6 +77,7 @@ export default function BazarCustomerDetails() {
         <p className="text-body text-muted max-w-[640px]">
           {t(isOwner ? 'bazar.customerData.introOwner' : 'bazar.customerData.introManager')}
         </p>
+        <HelpLink screen="bazarCustomers" className="self-start" />
       </div>
 
       <form onSubmit={onSearch} className="flex gap-2 items-start flex-wrap" role="search">

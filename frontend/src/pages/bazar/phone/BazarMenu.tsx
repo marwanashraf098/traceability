@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileText, Loader2, MoreVertical, Users, UserRoundCog } from 'lucide-react'
+import { BookOpen, FileText, Loader2, MoreVertical, Users, UserRoundCog } from 'lucide-react'
 import { switchPin } from '../../../api'
 import { setAccessToken } from '../../../auth'
 import { BazarError, getBazarSellerRoster, managesBazar } from '../../../bazar/api'
@@ -9,13 +9,14 @@ import { getPriceSheet } from '../../../bazar/catalog'
 import { Button, Input, Spinner } from '../../../components/ui'
 import { SellersPanel } from '../SellersPanel'
 import { Sheet } from './shared'
+import { WORKER_ARTICLES } from '../../../help/helpRegistry'
 
 type View = 'menu' | 'switch' | 'sellers' | null
 
 /**
  * Bazar POS B6b — the phone bazar header's menu: "Switch seller" (a shared phone: this event's sellers, then their
- * PIN through the existing PIN switch /auth/pin) and, for an owner / manager, "Sellers" (the same panel as the
- * computer's Sellers card).
+ * PIN through the existing PIN switch /auth/pin), "How to sell" (the seller's Help article) and, for an owner / manager,
+ * "Sellers" (the same panel as the computer's Sellers card).
  */
 export function BazarMenu({ eventId }: { eventId: string }) {
   const { t, i18n } = useTranslation()
@@ -46,6 +47,11 @@ export function BazarMenu({ eventId }: { eventId: string }) {
             {t('bazar.pick.priceSheet')}
           </button>
           {sharing === 'failed' && <p role="alert" className="text-small text-critical">{t('bazar.pick.priceSheetFailed')}</p>}
+          {/* The seller's guide — every role (it's the one Help article a worker can open). New tab: the sell screen stays. */}
+          <a href={`/help/${WORKER_ARTICLES[0]}`} target="_blank" rel="noopener noreferrer" className={item}
+             data-testid="menu-how-to-sell">
+            <BookOpen size={18} aria-hidden />{t('bazar.menu.howToSell')}
+          </a>
           {manager && (
             <button type="button" className={item} onClick={() => setView('sellers')} data-testid="menu-sellers">
               <Users size={18} aria-hidden />{t('bazar.menu.sellers')}
