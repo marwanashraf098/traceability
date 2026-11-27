@@ -409,7 +409,7 @@ class AnalyticsMoneyTest {
     }
 
     @Test
-    void refresh_deposited_dailyOnlyTheDayAfterThePayoutWeekday_with8DaySafetyNet() {
+    void refresh_deposited_dailyOnceNextCashoutDatePassed_with8DaySafetyNet() {
         T t = new T("An3-Cadence");
         wednesdayPayouts(t);
         Instant recent = ago(Duration.ofDays(10));
@@ -420,15 +420,11 @@ class AnalyticsMoneyTest {
         Leg none = t.forward(recent, "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
         set(none, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(13))));
 
-        // Friday: not the day after Wednesday — only the 8-day safety net and 'none' (12 h) go.
+        // 2026-11-27: any day — the daily deposited leg's next_cashout_date (2026-09-09) has passed, so it goes
+        // with the 8-day safety net and 'none' (12 h); the payout weekday no longer gates it.
         SettlementRefreshJob.RefreshResult fri = job(clockOn(DayOfWeek.FRIDAY), 100).refreshTenant(t.id, "key");
         assertThat(fri.payoutWeekday()).isEqualTo(3);
-        assertThat(fetched()).containsExactlyInAnyOrder(stale.tn(), none.tn());
-
-        // Thursday (the day after the payout weekday): the daily deposited leg goes.
-        clearInvocations(bosta);
-        job(clockOn(DayOfWeek.THURSDAY), 100).refreshTenant(t.id, "key");
-        assertThat(fetched()).containsExactly(daily.tn());
+        assertThat(fetched()).containsExactlyInAnyOrder(daily.tn(), stale.tn(), none.tn());
     }
 
     @Test
@@ -621,7 +617,7 @@ class AnalyticsMoneyTest {
         Map<String, Object> it = m(body, "inTransit");
         assertThat(n(it, "count")).isEqualTo(1);
         assertThat(dec(it, "value")).isEqualByComparingTo("1000.00");
-        assertThat(dec(it, "expected")).isEqualByComparingTo("600.00");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("543.00");          // 1000 x 0.6 - 57.00 fee (2026-11-27)
 
         Map<String, Object> aw = m(body, "awaitingPayout");
         assertThat(n(aw, "count")).isEqualTo(2);
@@ -835,11 +831,11 @@ class AnalyticsMoneyTest {
         assertThat(wed9.get("date")).isEqualTo("2026-09-09");
         assertThat(n(wed9, "trackedShipments")).isEqualTo(2);
         assertThat(dec(wed9, "trackedDeposited")).isEqualByComparingTo("779.10");   // a negative deposit nets
-        assertThat(dec(wed9, "bostaBatchTotal")).isEqualByComparingTo("67854.59");
-        assertThat(rows.get(0).get("bostaBatchTotal")).isNull();
-        // No shortfall / difference field — the batch covers deliveries Traced doesn't track.
-        assertThat(wed9.keySet()).containsExactlyInAnyOrder(
-            "transactionId", "date", "trackedShipments", "trackedDeposited", "bostaBatchTotal");
+        assertThat(n(wed9, "negativeDeposits")).isEqualTo(1);
+        assertThat(dec(wed9, "negativeDepositsAmount")).isEqualByComparingTo("-106.02");
+        // 2026-11-27: Bosta's batch total is no longer read — it covers deliveries Traced doesn't track.
+        assertThat(wed9.keySet()).containsExactlyInAnyOrder("transactionId", "date", "trackedShipments", "trackedDeposited",
+            "codCollected", "bostaFees", "negativeDeposits", "negativeDepositsAmount");
 
         // ...and the per-shipment rule: every tracked shipment of the batch is paid → nothing "not paid".
         assertThat(list(ok(t, "/api/v1/analytics/money/stuck"), "deliveredNotPaid")).isEmpty();
@@ -892,7 +888,8 @@ class AnalyticsMoneyTest {
         Map<String, Object> it = m(ok(t, "/api/v1/analytics/money/pipeline?period=7d"), "inTransit");
         assertThat(n(it, "count")).isEqualTo(3);
         assertThat(dec(it, "value")).isEqualByComparingTo("1085.00");
-        assertThat(dec(it, "expected")).isEqualByComparingTo("542.50");                   // × the Cairo rate, like a delivery
+        // × the Cairo rate, like a delivery, minus each leg's fee: 542.50 − (57.00 + 107.16 + 107.16) (2026-11-27)
+        assertThat(dec(it, "expected")).isEqualByComparingTo("271.18");
     }
 
     @Test

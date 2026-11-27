@@ -129,19 +129,21 @@ final class SettlementSql {
     /**
      * Delivered, not paid (slice 3 — the ONE rule, used by /money/stuck and the order finance list):
      * the leg was deposited, its settlement was refreshed within 24 hours (so "no payout" is current
-     * news, not a stale read), and two of the tenant's payout weekdays have passed since the deposit
-     * — 14 days when the weekday isn't known. {@code now} and {@code weekday} are SQL expressions
-     * (usually "?::timestamptz" / "?::int"); they are spliced in this order: now, weekday, now, now,
-     * weekday.
+     * news, not a stale read), and two of the tenant's payout days have passed since the deposit — a
+     * payout day is any of the tenant's payout weekdays ({@link #PAYOUT_WEEKDAYS}; 2026-11-27: a tenant
+     * Bosta pays on several weekdays counts each of them) — 14 days when no weekday is known.
+     * {@code now} is a timestamptz SQL expression, {@code weekdays} an int[] SQL expression (NULL or
+     * empty = unknown), usually "?::timestamptz" / "?::int[]"; they are spliced in this order: now,
+     * weekdays, now, now, weekdays.
      */
-    static String deliveredNotPaid(String s, String now, String weekday) {
+    static String deliveredNotPaid(String s, String now, String weekdays) {
         return " (" + s + ".settlement_status = 'deposited' AND " + s + ".deposited_at IS NOT NULL AND NOT " + zeroCycle(s)
             + " AND " + s + ".settlement_refreshed_at > " + now + " - interval '24 hours' "
-            + " AND CASE WHEN " + weekday + " IS NULL THEN " + s + ".deposited_at < " + now + " - interval '14 days' "
+            + " AND CASE WHEN COALESCE(cardinality(" + weekdays + "), 0) = 0 THEN " + s + ".deposited_at < " + now + " - interval '14 days' "
             + "          ELSE (SELECT COUNT(*) FROM generate_series((" + s + ".deposited_at AT TIME ZONE 'Africa/Cairo')::date + 1, "
             + "                                                    (" + now + " AT TIME ZONE 'Africa/Cairo')::date, "
             + "                                                    interval '1 day') g(d) "
-            + "                WHERE EXTRACT(ISODOW FROM g.d) = " + weekday + ") >= 2 END) ";
+            + "                WHERE EXTRACT(ISODOW FROM g.d)::int = ANY(" + weekdays + ")) >= 2 END) ";
     }
 
     /** Stuck with Bosta (slice 3): picked up, still moving, no status change for 7 days. */
@@ -180,11 +182,13 @@ final class SettlementSql {
     }
 
     /**
-     * The tenant's payout weekday (ISO, 1 = Monday) — the weekday shared by the most distinct
-     * cashout dates in the 90 days before now, when at least two dates agree; else NULL. Parameters:
-     * tenant id, now (the caller's Clock — never the database clock, so tests can fix time).
+     * The tenant's payout weekdays (ISO, 1 = Monday; 2026-11-27 — replaces the single PAYOUT_WEEKDAY):
+     * every weekday on which at least two distinct cashout dates fell in the 90 days before now, most
+     * frequent first (ties: Monday first). Empty when no weekday has two — fewer than two payouts
+     * known, or no weekday repeated — and every caller then keeps its "unknown cadence" behaviour.
+     * Parameters: tenant id, now (the caller's Clock — never the database clock, so tests can fix time).
      */
-    static final String PAYOUT_WEEKDAY = """
+    static final String PAYOUT_WEEKDAYS = """
         SELECT d FROM (
             SELECT EXTRACT(ISODOW FROM cashout_date)::int AS d, COUNT(DISTINCT cashout_date) AS n
             FROM shipments
@@ -194,6 +198,29 @@ final class SettlementSql {
         ) w
         WHERE n >= 2
         ORDER BY n DESC, d
-        LIMIT 1
         """;
+
+    /** {@link #PAYOUT_WEEKDAYS} for a tenant, as a list (empty = unknown). Runs on the caller's connection / transaction. */
+    static java.util.List<Integer> payoutWeekdays(org.springframework.jdbc.core.JdbcTemplate jdbc, java.util.UUID tenantId,
+                                                  java.time.Instant now) {
+        return jdbc.queryForList(PAYOUT_WEEKDAYS, Integer.class, tenantId, java.sql.Timestamp.from(now));
+    }
+
+    /** Binds a weekday list as an int[] parameter; an empty list binds NULL ("unknown"). */
+    static void bindWeekdays(java.sql.PreparedStatement ps, int index, java.util.List<Integer> weekdays)
+            throws java.sql.SQLException {
+        if (weekdays == null || weekdays.isEmpty()) ps.setNull(index, java.sql.Types.ARRAY);
+        else ps.setArray(index, ps.getConnection().createArrayOf("integer", weekdays.toArray()));
+    }
+
+    /** The first of the given ISO weekdays on or after {@code from}; null when none is known. */
+    static java.time.LocalDate nextPayoutDay(java.time.LocalDate from, java.util.List<Integer> weekdays) {
+        if (weekdays == null || weekdays.isEmpty()) return null;
+        java.time.LocalDate best = null;
+        for (int w : weekdays) {
+            java.time.LocalDate d = from.with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.of(w)));
+            if (best == null || d.isBefore(best)) best = d;
+        }
+        return best;
+    }
 }

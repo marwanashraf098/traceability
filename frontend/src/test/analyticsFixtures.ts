@@ -325,8 +325,10 @@ function stuck(n: number): Stuck {
 }
 
 function payouts(scale: number): Payouts {
-  const p = (date: string, id: string, n: number, amt: number, batch: number | null) => ({ transactionId: id, date, trackedShipments: Math.round(n * scale),
-    trackedDeposited: Math.round(amt * scale), bostaBatchTotal: batch == null ? null : Math.round(batch * scale) })
+  // batch: Bosta's batch total, no longer part of the API (2026-11-27) — kept as an argument so the rows stay as they were.
+  const p = (date: string, id: string, n: number, amt: number, _batch: number | null) => ({ transactionId: id, date, trackedShipments: Math.round(n * scale),
+    trackedDeposited: Math.round(amt * scale), codCollected: Math.round(amt * 1.1 * scale),
+    bostaFees: Math.round(amt * 1.1 * scale) - Math.round(amt * scale), negativeDeposits: 0, negativeDepositsAmount: 0 })
   return { range: RANGE, payouts: [p('2026-09-16', 'BST-P-21388', 201, 231150, 231150), p('2026-09-23', 'BST-P-21842', 188, 216900, 216900),
     p('2026-09-30', 'BST-P-22297', 196, 225800, 227950), p('2026-10-03', 'BST-P-22510', 12, 14000, 13200),
     p('2026-10-07', 'BST-P-22751', 171, 196650, null)] }

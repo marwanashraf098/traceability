@@ -4776,9 +4776,13 @@
       "pipe": {
         "notFulfilled": "Not yet fulfilled",
         "expectedCalc": "Expected value at the order's delivery success rate",
+        "expectedCalcPrepaid": "Expected value at the order's delivery success rate; for prepaid orders, just Bosta's fee",
+        "feesEstimatedTip": "Includes Bosta fees Bosta hasn't settled yet — Traced uses the quoted fee (or your usual fee) until it does.",
+        "feesToDeduct": "Bosta fees still to be deducted: {{amount}}",
+        "feesToDeductParts": "returns to origin {{returning}} · return pickups {{returns}} · finished, not settled yet {{finished}}",
         "faceValueCalc": "Face value (no success rate yet)",
         "inTransit": "In transit with Bosta",
-        "inTransitCalc": "Expected using each governorate's success rate",
+        "inTransitCalc": "Expected using each governorate's success rate, after Bosta fees",
         "awaiting": "Delivered, awaiting payout",
         "awaitingCalc": "Collected by Bosta, not yet sent to you",
         "bank": "In your bank",
@@ -4812,9 +4816,9 @@
         "next7": "Next 7 days",
         "days8to14": "8–14 days",
         "days15to30": "15–30 days",
-        "tip": "Awaiting payout {{awaiting}} + in transit {{transit}}",
+        "tip": "Awaiting payout {{awaiting}} + in transit {{transit}} + Bosta fees still to be deducted {{fees}}",
         "later": "{{amount}} more is expected later than 30 days.",
-        "note": "Based on Bosta's weekly payout ({{weekday}} next) and a {{lag}}-day median from delivery to payout. In-transit orders count at their expected success rate.",
+        "note": "Based on your Bosta payout days ({{weekday}} next) and a {{lag}}-day median from delivery to payout. In-transit orders count at their expected success rate, after Bosta fees; fees Bosta still has to deduct are taken off.",
         "reason": {
           "payout_cadence_unknown": "Not enough Bosta payouts yet to know your payout day.",
           "payout_lag_unknown": "Not enough paid deliveries yet to know how long payouts take."
@@ -5202,14 +5206,16 @@
         "date": "Date",
         "reference": "Reference",
         "orders": "Traced orders",
-        "amount": "Traced amount",
-        "batch": "Bosta batch total",
+        "amount": "Traced net",
+        "cod": "COD collected",
+        "fees": "Bosta fees",
+        "negativeValue": "incl. {{n}} negative: {{value}}",
         "status": "Status",
         "none": "No Bosta payouts in this period.",
-        "note": "Traced amount = what Bosta deposited for the shipments Traced tracks in that payout.",
+        "note": "Traced net = COD collected − Bosta fees, for the shipments Traced tracks in that payout. Negative deposits are shipments that only cost a fee (prepaid deliveries, returns to origin, return pickups).",
+        "mayDiffer": "Calculated per shipment from Bosta's data; may differ slightly from your Bosta statement (e.g. deliveries Traced doesn't track).",
         "paid": "Paid",
-        "scheduled": "Scheduled",
-        "untracked": "Bosta's batch also includes {{value}} from shipments not tracked in Traced"
+        "scheduled": "Scheduled"
       },
       "exchangeTag": "Exchange",
       "stuck": {

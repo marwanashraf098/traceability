@@ -29,13 +29,16 @@ const TOP_SKUS = 5
 
 // ── Cash pipeline ───────────────────────────────────────────────────────────
 
-function Stage({ step, amount, meta, calc, fill, bank = false, testId }: {
-  step: string; amount: string; meta: string; calc?: string; fill?: number | null; bank?: boolean; testId: string
+function Stage({ step, amount, meta, calc, fill, chip, bank = false, testId }: {
+  step: string; amount: string; meta: string; calc?: string; fill?: number | null; chip?: React.ReactNode; bank?: boolean; testId: string
 }) {
   return (
     <div data-testid={testId} className={cn('px-[18px] py-4 flex flex-col gap-1.5 min-w-0 relative', bank ? 'bg-[#e8f6ed]' : 'bg-surface')}>
       <span className={cn('text-[11.5px] uppercase tracking-[0.07em] font-semibold', bank ? 'text-success-text' : 'text-muted')}>{step}</span>
-      <span className={cn('font-mono font-semibold tracking-[-0.02em] leading-[1.15] break-words', bank ? 'text-success-text text-[28px]' : 'text-warning-text text-[24px]')}>{amount}</span>
+      <span className="flex flex-wrap items-center gap-2">
+        <span className={cn('font-mono font-semibold tracking-[-0.02em] leading-[1.15] break-words', bank ? 'text-success-text text-[28px]' : 'text-warning-text text-[24px]')}>{amount}</span>
+        {chip}
+      </span>
       <span className="text-[12.5px] text-neutral-text">{meta}</span>
       {calc && <span className="text-[12px] text-muted">{calc}</span>}
       {fill != null && (
@@ -51,12 +54,19 @@ function PipelineStrip({ p, noBosta }: { p: Pipeline; noBosta: boolean }) {
   const { t } = useTranslation()
   const fmt = useFmt()
   const nf = p.notFulfilled
+  // The expected total is an estimate when any Bosta fee in it is a quote or the typical fee.
+  const est = (s: { expected: number | null; feesEstimated: number }) => s.expected != null && s.feesEstimated > 0
+    ? <span data-testid="estimated-chip"><SourceChip title={t('analytics.summary.pipe.feesEstimatedTip')}>{t('analytics.chip.estimated')}</SourceChip></span>
+    : undefined
   const notFulfilled = (
     <Stage testId="stage-not-fulfilled" step={t('analytics.summary.pipe.notFulfilled')}
       amount={fmt.money(nf.expected ?? nf.value)}
       meta={t('analytics.summary.pipe.notFulfilledMeta', { count: nf.count, value: fmt.money(nf.value) })}
-      calc={nf.expected != null ? t('analytics.summary.pipe.expectedCalc') : t('analytics.summary.pipe.faceValueCalc')}
-      fill={nf.expected != null && nf.value > 0 ? nf.expected / nf.value : null} />
+      calc={nf.expected != null
+        ? (nf.prepaid > 0 ? t('analytics.summary.pipe.expectedCalcPrepaid') : t('analytics.summary.pipe.expectedCalc'))
+        : t('analytics.summary.pipe.faceValueCalc')}
+      chip={est(nf)}
+      fill={nf.expected != null && nf.value > 0 ? Math.max(0, nf.expected) / nf.value : null} />
   )
   if (noBosta) {
     return (
@@ -66,14 +76,16 @@ function PipelineStrip({ p, noBosta }: { p: Pipeline; noBosta: boolean }) {
       </div>
     )
   }
-  const it = p.inTransit, aw = p.awaitingPayout, bank = p.inYourBank
+  const it = p.inTransit, aw = p.awaitingPayout, bank = p.inYourBank, fd = p.feesToDeduct
   return (
+    <>
     <div className="col-span-full card p-0 overflow-hidden grid gap-px bg-line grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-testid="pipeline">
       {notFulfilled}
       <Stage testId="stage-in-transit" step={t('analytics.summary.pipe.inTransit')} amount={fmt.money(it.expected ?? it.value)}
         meta={t('analytics.summary.pipe.inTransitMeta', { count: it.count, value: fmt.money(it.value) })}
         calc={it.expected != null ? t('analytics.summary.pipe.inTransitCalc') : t('analytics.summary.pipe.faceValueCalc')}
-        fill={it.expected != null && it.value > 0 ? it.expected / it.value : null} />
+        chip={est(it)}
+        fill={it.expected != null && it.value > 0 ? Math.max(0, it.expected) / it.value : null} />
       <Stage testId="stage-awaiting" step={t('analytics.summary.pipe.awaiting')} amount={fmt.money(aw.deposited)}
         meta={aw.nextCashoutDate
           ? t('analytics.summary.pipe.awaitingMetaNext', { count: aw.count, date: fmt.dayLong(aw.nextCashoutDate) })
@@ -85,6 +97,16 @@ function PipelineStrip({ p, noBosta }: { p: Pipeline; noBosta: boolean }) {
         meta={t('analytics.summary.pipe.bankMeta', { count: bank.shipments, payouts: bank.payouts })}
         calc={bank.lastTransferDate ? t('analytics.summary.pipe.lastTransfer', { date: fmt.day(bank.lastTransferDate) }) : undefined} />
     </div>
+    {fd && fd.count > 0 && (
+      <div className="col-span-full text-[12.5px] text-neutral-text flex flex-wrap items-center gap-x-2 gap-y-1 -mt-2 px-1" data-testid="fees-to-deduct">
+        <b className="font-semibold text-primary">{t('analytics.summary.pipe.feesToDeduct', { amount: fmt.money(-fd.amount) })}</b>
+        <span className="text-muted">{t('analytics.summary.pipe.feesToDeductParts', {
+          returning: fmt.money(fd.returning.amount), returns: fmt.money(fd.customerReturns.amount), finished: fmt.money(fd.finishedUnsettled.amount),
+        })}</span>
+        <SourceChip title={t('analytics.summary.pipe.feesEstimatedTip')}>{t('analytics.chip.estimated')}</SourceChip>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -157,7 +179,7 @@ function ExpectedCash({ f }: { f: CashForecast }) {
     label: t(`analytics.summary.cash.${b.key}`),
     value: b.amount,
     display: fmt.money(b.amount),
-    title: t('analytics.summary.cash.tip', { awaiting: fmt.money(b.awaitingPayout), transit: fmt.money(b.inTransit) }),
+    title: t('analytics.summary.cash.tip', { awaiting: fmt.money(b.awaitingPayout), transit: fmt.money(b.inTransit), fees: fmt.money(b.fees ?? 0) }),
   }))
   return (
     <>

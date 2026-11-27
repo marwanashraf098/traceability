@@ -4,6 +4,48 @@
 
 ## Current state
 
+**Analytics payout fixes — slices 1–3 of the 2026-11-16 Step 0 (2026-11-27; branch `analytics/payout-fixes` off
+origin/main 647f0206, worktree ../traceability-payout-fixes; NO migration; approved + merged to main 2026-11-27,
+NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit since 2026-11-14, all held.
+- **Slice 1 — payout check:** `/money/payouts` no longer reads `cashout_amount` (column kept, still written); each
+  payout = Traced net (Σ deposited_amt) + codCollected (Σ cod_settled) + bostaFees (Σ bosta_fees) + negativeDeposits /
+  negativeDepositsAmount. Money page: Date (+ "Scheduled" only for a future payout), Reference, Traced orders, COD
+  collected, Bosta fees, Traced net (negative deposits as a muted line under it) + "may differ" note, EN + AR. Prod
+  BROEK showed why: Bosta's batch total was often far BELOW Traced's net (THUCOD19NOV26 batch 27,507 vs net 204,919).
+- **Slice 2 — refresh cadence:** Bosta's v2 `deliveries/search` items carry no `wallet` (prod: 0 of 2,519 stored list
+  items had a cashCycle; 1,275 have no wallet key, while all 14,213 v0 raws do) → refresh stays per shipment (v0 GET,
+  BACKGROUND, 429 = reschedule, no call in a transaction). Deposited legs are read daily once their own
+  `next_cashout_date` < today (Cairo) + the 8-day net; PAYOUT_WEEKDAY gate gone. New `refresh-max-per-run` (300) over
+  all tenants, tenant order rotates; INFO line has "N still due". `SettlementSql.PAYOUT_WEEKDAYS` = every weekday with
+  ≥ 2 payouts in 90 days (deliveredNotPaid counts any; forecast pays on the earliest; empty → old fallbacks);
+  `payoutWeekday` kept (most frequent) + `payoutWeekdays` added. BROEK pays Tue/Thu/Sun (+Wed): 379 deposited legs
+  (EGP 383,983 of its 556,628 "awaiting payout") have a next_cashout_date already passed and were never re-read.
+  Catch-up script `scripts/ops/2026-11-27-settlement-refresh-catchup.sql` (dry run default; commit=yes NOT run; never
+  calls Bosta). Prod dry-run numbers (via read-only SELECTs, the script itself not run through psql): 3,056 deposited
+  legs, 1,330 due under the new rule (29.6 min at 0.75 req/s, ~5 hourly runs), 1,936 with commit=yes (43 min).
+- **Slice 3 — fees in expected payout:** In transit = Σ(cod × rate − fee), fee = settled bosta_fees, else quote ×
+  1.14, else (no quote — BROEK 77 of 141 in transit) the tenant's typical Send fee (`TYPICAL_FEE`, avg over 90 days);
+  Stage gains fees / feesEstimated / prepaid, UI chip "estimated". Not fulfilled: prepaid (OrderFinanceService.prepaid,
+  reused) = −fee. New `pipeline.feesToDeduct` (RTO / returning / forward on a cancelled order in flight, type 25 /
+  return legs in flight, finished-unsettled except delivered-forward); type 30 in flight stays In transit (fee netted
+  there, not repeated). Cash forecast: same in-transit figure, `Bucket.fees`, `Method.feesToDeduct`. Summary copy EN +
+  AR. BROEK: in transit expected 139,763 → ≈ 124,881; ~25 prepaid open orders (≈ EGP 61,760 face) now ≈ −2,605
+  instead of ≈ +45,800; fees still to deduct ≈ 4,111 (35 returning, 3 return pickups, 1 finished).
+- **Diagnosis (no code):** BROEK has ~868 orders (not 537 any more) refused → RTO leg `returned`, Shopify
+  `cancelled_at` set, `orders.status` still new / awaiting_pickup. The Orders list / drawer read the leg (deriver →
+  "Returned", Returned tab), never that status, so the column is unused for display there; they are NOT in the
+  Cancelled tab (`o.status = 'cancelled'`) and show no "cancelled" anywhere. Pick queue excludes them (leg past created).
+- **Tests:** new `AnalyticsPayoutFixesTest` (11) + `analyticsPayoutFixes.test.tsx` (4), every rule mutation-checked
+  RED. Suite 5,051 / 8 failures: ExchangeBackfillTest (documented) + intended changes in AnalyticsMoneyTest (4),
+  AnalyticsFinancesTest (1), AnalyticsGoldenTest + GenericAnalyticsIsolationTest (money pipeline / payouts / stuck /
+  cash-forecast goldens); vitest only mo4. Approved edits applied (AnalyticsMoneyTest, AnalyticsFinancesTest transit
+  168.00 / bucket 254.00, exchange trip 271.18, mo4, fixtures); goldens re-recorded with -Dgolden.record=true after
+  the typical-fee follow-up — only money-pipeline / payouts / stuck / cash-forecast changed. Final: backend red =
+  ExchangeBackfillTest only; vitest 2,374 / 2,374; tsc + vite build clean.
+- **Next:** deploy (not done). Catch-up script: commit=yes NOT to be run (not now, not after deploy — owner's call).
+  Logged separately, out of scope: COD not-fulfilled fee deduction; the ~868 BROEK orders missing from the Orders
+  Cancelled tab.
+
 **Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
 (U1c + U1d); V245; merged to main 2026-11-27 as 35a19890 (migrations end at V245), NOT deployed).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a

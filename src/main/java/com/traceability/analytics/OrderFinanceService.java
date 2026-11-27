@@ -138,7 +138,7 @@ public class OrderFinanceService {
                    sh.cashout_txn_id, sh.deposited_amt,
                    """ + SettlementSql.zeroCycle("sh") + """
                     AS zero_cycle,
-                   """ + SettlementSql.deliveredNotPaid("sh", "?::timestamptz", "?::int") + """
+                   """ + SettlementSql.deliveredNotPaid("sh", "?::timestamptz", "?::int[]") + """
                     AS not_paid,
                    """ + SettlementSql.stuckWithBosta("sh", SettlementSql.lastChange("sh"), "?::timestamptz") + """
                     AS stuck
@@ -368,8 +368,7 @@ public class OrderFinanceService {
     /** The period's orders with their finances, newest first (placed_at DESC, id DESC). */
     List<Row> load(AnalyticsPeriod period, Instant now) {
         UUID tid = TenantContext.require();
-        Integer weekday = jdbc.query(SettlementSql.PAYOUT_WEEKDAY, rs -> rs.next() ? rs.getInt(1) : null,
-            tid, Timestamp.from(now));
+        List<Integer> weekdays = SettlementSql.payoutWeekdays(jdbc, tid, now);
         OrderFacts.Cities cities = OrderFacts.cities(jdbc);
         Timestamp t = Timestamp.from(now);
         List<Row> rows = jdbc.query(ORDERS_SQL, ps -> {
@@ -377,10 +376,10 @@ public class OrderFinanceService {
             for (int k = 0; k < 6; k++) ps.setObject(i++, tid);        // outcomes 2, returns 4
             ps.setObject(i++, tid);                                    // exchange trips
             ps.setTimestamp(i++, t);                                   // deliveredNotPaid
-            ps.setObject(i++, weekday, java.sql.Types.INTEGER);
+            SettlementSql.bindWeekdays(ps, i++, weekdays);
             ps.setTimestamp(i++, t);
             ps.setTimestamp(i++, t);
-            ps.setObject(i++, weekday, java.sql.Types.INTEGER);
+            SettlementSql.bindWeekdays(ps, i++, weekdays);
             ps.setTimestamp(i++, t);                                   // stuckWithBosta
             ps.setObject(i++, tid);                                    // deciding leg
             ps.setObject(i++, tid);                                    // the order's legs
