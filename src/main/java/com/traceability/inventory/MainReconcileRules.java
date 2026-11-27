@@ -297,7 +297,9 @@ public final class MainReconcileRules {
         "             " + TransferShopifySync.RETURN_COUNTED_SQL + " AS return_counted " +
         "      FROM transfer_pieces tp_out " +
         "      JOIN transfers t_out ON t_out.id = tp_out.transfer_id AND t_out.tenant_id = tp_out.tenant_id " +
+        // V245 (bazar top-up, approved 2026-11-27): a transfer may carry one claim per send batch — the piece's own.
         "      LEFT JOIN transfer_shopify_syncs y ON y.transfer_id = t_out.id AND y.tenant_id = t_out.tenant_id " +
+        "           AND y.batch_id IS NOT DISTINCT FROM tp_out.batch_id " +
         "      WHERE tp_out.piece_id = p.id AND tp_out.tenant_id = p.tenant_id " +
         "        AND COALESCE(tp_out.from_location_id, t_out.source_location_id) = :main " +
         "        AND t_out.status NOT IN ('preparing', 'cancelled') " +

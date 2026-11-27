@@ -4,6 +4,69 @@
 
 ## Current state
 
+**Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
+(U1c + U1d); V245; backend + frontend built, pushed NOT, merged NOT, deployed NOT).** Decisions (approved 2026-11-27, Step 0):
+- **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a
+  batch is a LIST only (scan / send by count / ✕ change the list, nothing moves); "Send these to the bazar" claims every
+  piece through the existing `claimAndSend` (`transfer_pieces.batch_id`), marks the batch sent and writes the batch's
+  claim in ONE transaction. A listed piece no longer free → nothing sent, the error names it. Why not reopen the
+  transfer (claimSend ON CONFLICT DO NOTHING + the per-transfer idempotency key = a silently missed −N; unsend of lowered
+  pieces) nor a second transfer (~80 single-transfer reads in the bazar package). Why a list and not claim-at-scan: a
+  claimed piece is sellable at once on a live bazar — sold before Send → left out of the −N.
+- **Shopify (Remove):** `transfer_shopify_syncs.batch_id`; UNIQUE(transfer_id) → one partial unique for the first send
+  (batch_id NULL) + UNIQUE(batch_id). One claim per batch (same claimSend rules, the transfer's existing mode snapshot —
+  never re-taken); push key `transferId:batch:<id>` (first send's key byte-identical). Keep: no row, as today.
+- **Approved shared-rule edits, each with its own revert-checked test:** Main reconcile's away-piece claim join matches
+  on batch; `void_hold_sync_failed` subject_key per batch (existing keys unchanged); `RETURN_COUNTED_SQL`'s seed branch
+  uses the batch's send time for a batch piece.
+- **Prices:** `ensurePrice` as the first send (rule, else Shopify's price; "No price" only with no Shopify price) +
+  a Live page warning "N sizes have no price · Set prices".
+- **End event with an open batch:** refused — "Send or discard it first".
+- Owner / manager only; ended bazar / transfer not 'sent' refused. Phone: the same screen, no camera (scanner files
+  untouched).
+- **U1c:** build now; rebase the send-by-count picker onto main once U1c merges so a count in a batch picks only pieces
+  without labels.
+- Case B (receive brand-new stock straight into a live bazar) parked until A is live.
+
+Built (2026-11-27):
+- V245 `transfer_send_batches` / `transfer_send_batch_items` (RLS NULLIF, no DELETE), `transfer_pieces.batch_id`,
+  `transfer_shopify_syncs.batch_id` + the two partial uniques. `scripts/ops/2026-10-08-transfer-shopify-repair.sql`'s
+  ON CONFLICT names the first-send predicate (same rows; approved).
+- TransferService (ONE caller BazarService): `openSendBatchForBazar`, `addScannedToBatchForBazar`,
+  `addCountToBatchForBazar`, `removeFromBatchForBazar`, `discardBatchForBazar`, `sendBatchForBazar`. The scan's piece
+  checks are shared (`resolveSendPiece`, extracted from scanOutCore unchanged); THE count picker `pickForCount` is
+  shared and carries U1c's rule (`short_code IS NULL`). A batch count: fewer without labels → SENT_PARTIAL "N added · M
+  have labels — scan them" (M = labelled at Main not on the list); none → U1c's BAZAR_PIECES_HAVE_LABELS; a replay
+  answers SENT (the partial message isn't kept). The send goes through `claimAndSend` (new `batchId` arg) then
+  `TransferShopifySync.claimBatchSend`.
+- Endpoints (owner / manager): POST `/bazar-events/{id}/batches`, GET `…/batches/current`, POST
+  `…/batches/{batchId}/scan|count|remove|discard|send`. Detail adds `batches`, `open_batch`, `no_price_count`.
+  End event → 409 BAZAR_TOPUP_OPEN while a batch is open. U1d: a batch Send on a Keep transfer at a store where
+  `MainReconcileService.writesFor` is false → 409 BAZAR_KEEP_UNAVAILABLE (BazarService.requireKeepAvailable, before
+  anything is claimed; nothing listed moves; Remove bazars unaffected) — BazarTopupTest.k2, undo-checked.
+- Frontend: `/bazar/:id/add-pieces` (`BazarAddPieces` → TransferScanOut with `bazar.batchId`: the batch's lines, scans
+  / count / ✕ / Remove N on the batch endpoints, `BatchFooter` Send these N / Discard (second tap) / Remove-vs-Keep
+  note; scanner hooks untouched). Live page: More ▾ "Add more pieces" / "Continue adding pieces (N listed)", open-batch
+  banner, "N sizes have no price · Set prices" (→ Prices tab), Pieces tab "Sent in N batches" card (2+ sends). Phone
+  BazarMenu "Add more pieces" for owner / manager (no camera). Strings `bazar.topup` (EN + AR, first in `bazar`).
+- Tests: BazarTopupTest (11, @Import KeepAvailableForTests; R1–R10 + u1 + k2 revert-checked), BazarTopupHttpAppUserTest (4, app_user; revert: no
+  @Transactional → 404), bazarTopup.test.tsx (13; F1–F9 revert-checked). Approved edits: BazarTransferLockTest pattern,
+  MigrationSmokeTest 244, NotTracedBackfillTest 189, leak-registry SKIPs, RlsCoverageTest COVERED, BazarSetupSendTest.g2
+  (2 definitions + 1 delegation + 4 calls; batch send: claimAndSend + claimBatchSend only), BazarReportGuardTest
+  (+transfer_send_batches), BazarEnabledDefaultTest (V244 among applied + column default true, no count).
+- Full backend suite after the rebase: 5034, red = ExchangeBackfillTest (allowed) + PortalPaidPriceTierTest.b1 (random
+  short_code collision in its fixture) + ShopifyOAuthDay1Test.expiredState (553 s run, overlapped the frontend suite) —
+  both green alone. Frontend 273 files / 2337 green (alone).
+- Not done: phone camera on the batch screen.
+  End event → 409 BAZAR_TOPUP_OPEN while a batch is open.
+- Tests: BazarTopupTest (9, revert-checked R1–R10), BazarTopupHttpAppUserTest (4, app_user; revert: no
+  @Transactional → 404). Approved edits: BazarTransferLockTest pattern, MigrationSmokeTest 244, NotTracedBackfillTest
+  189, leak-registry SKIPs, RlsCoverageTest COVERED.
+- Full suite 5028: red = ExchangeBackfillTest (allowed) + 3 needing approval: BazarSetupSendTest.g2 (claimAndSend
+  count), BazarReportGuardTest (BazarEndService reads transfer_send_batches), BazarEnabledDefaultTest (migrations after
+  V243 = 2).
+- Not done: frontend (batch mode of TransferScanOut, Live page button / batches / no-price warning, phone menu item),
+  rebase onto U1c (a3bda1ce), commit.
 **Help center — bazar guides (2026-11-27; branch `feat/help-bazar` off origin/main a3bda1ce (U1c merged); worktree
 `~/Documents/trace-help-bazar`; frontend only, NO migration; (a) + (b) approved, merged to main, NOT deployed; (c) = a later small branch).**
 - **(a) Articles:** 14 new, EN + AR, topic `bazar` ("Bazar" / "البازار", `helpCenter.topics.bazar`, after Orders):

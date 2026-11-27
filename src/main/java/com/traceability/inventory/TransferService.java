@@ -305,46 +305,13 @@ public class TransferService {
         UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
         String transferType          = (String) transfer.get("transfer_type");
 
-        // 2. Look up piece by barcode — same triple-match as FulfillService.scan()
-        //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code). The lookup value is
-        //    normalized (Caps Lock / Arabic layout — ScanInputNormalizer); the result echoes the raw scan.
-        String lookup = ScanInputNormalizer.normalizePiece(barcode);
-        List<Map<String, Object>> pieceRows = jdbc.queryForList(
-            "SELECT p.id, p.variant_id, p.status, p.current_location_id, p.short_code FROM pieces p " +
-            "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
-            lookup, lookup, lookup, tenantId);
-        if (pieceRows.isEmpty()) {
-            // Flexible labeling: a printed label nobody has tagged a piece with yet.
-            var unused = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup);
-            if (unused.isPresent()) {
-                return ScanOutResult.rejected(com.traceability.labels.UnusedLabels.codeFor(unused.get()),
-                    com.traceability.labels.UnusedLabels.messageEnFor(unused.get()),
-                    com.traceability.labels.UnusedLabels.messageArFor(unused.get()));
-            }
-            return ScanOutResult.rejected("PIECE_NOT_FOUND",
-                "Barcode not found in inventory",
-                "لم يتم العثور على الباركود في المخزون");
-        }
-        // Flexible labeling v1: an untagged piece (matched only by its typed internal code) can't
-        // be transferred until it's tagged.
-        if (pieceRows.get(0).get("short_code") == null) {
-            return ScanOutResult.rejected("PIECE_UNTAGGED",
-                "This piece has no barcode yet (untagged). Tag it before transferring it.",
-                "هذه القطعة بدون باركود بعد (غير مُلصقة). ألصق لها ملصقًا قبل نقلها.");
-        }
-        Map<String, Object> piece   = pieceRows.get(0);
-        String pieceId   = (String) piece.get("id");
-        UUID   variantId = (UUID)   piece.get("variant_id");
-        String status    = (String) piece.get("status");
+        // 2–3. The piece, refused exactly as before (shared with the bazar top-up list — resolveSendPiece).
+        SendPiece sp = resolveSendPiece(tenantId, barcode);
+        if (sp.rejected() != null) return sp.rejected();
+        String pieceId   = sp.pieceId();
+        UUID   variantId = sp.variantId();
         // Issue 2: where the piece leaves FROM (only pieces leaving the main warehouse are decremented).
-        UUID   fromLocationId = (UUID) piece.get("current_location_id");
-
-        // 3. WRONG_STATUS: piece must be available.
-        if (!"available".equals(status)) {
-            return ScanOutResult.rejected("WRONG_STATUS",
-                "Piece is not available (status: " + status + ")",
-                "القطعة غير متاحة (الحالة الحالية: " + status + ")");
-        }
+        UUID   fromLocationId = sp.fromLocationId();
 
         // 4–8. Claim and send (shared with the bazar's send-by-count — claimAndSend).
         Claimed claimed = claimAndSend(tenantId, transferId, destinationLocationId, pieceId, variantId, fromLocationId,
@@ -360,6 +327,60 @@ public class TransferService {
         return ScanOutResult.success(pieceId, barcode, variantId, claimed.lineId(), claimed.qtyOut());
     }
 
+    /** A piece a send-out scan may take (steps 2–3 of {@link #scanOutCore}), or the refusal. */
+    private record SendPiece(ScanOutResult rejected, String pieceId, UUID variantId, UUID fromLocationId) {
+        static SendPiece no(ScanOutResult r) { return new SendPiece(r, null, null, null); }
+    }
+
+    /**
+     * Steps 2–3 of every send-out SCAN — ONE copy, used by {@link #scanOutCore} and the bazar top-up list
+     * ({@link #addScannedToBatchForBazar}): the piece by barcode / id / short code (normalized), an unused printed label,
+     * an untagged piece (PIECE_UNTAGGED), a piece that isn't available (WRONG_STATUS).
+     */
+    private SendPiece resolveSendPiece(UUID tenantId, String barcode) {
+        // 2. Look up piece by barcode — same triple-match as FulfillService.scan()
+        //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code). The lookup value is
+        //    normalized (Caps Lock / Arabic layout — ScanInputNormalizer); the result echoes the raw scan.
+        String lookup = ScanInputNormalizer.normalizePiece(barcode);
+        List<Map<String, Object>> pieceRows = jdbc.queryForList(
+            "SELECT p.id, p.variant_id, p.status, p.current_location_id, p.short_code FROM pieces p " +
+            "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
+            lookup, lookup, lookup, tenantId);
+        if (pieceRows.isEmpty()) {
+            // Flexible labeling: a printed label nobody has tagged a piece with yet.
+            var unused = com.traceability.labels.UnusedLabels.find(jdbc, tenantId, lookup);
+            if (unused.isPresent()) {
+                return SendPiece.no(ScanOutResult.rejected(com.traceability.labels.UnusedLabels.codeFor(unused.get()),
+                    com.traceability.labels.UnusedLabels.messageEnFor(unused.get()),
+                    com.traceability.labels.UnusedLabels.messageArFor(unused.get())));
+            }
+            return SendPiece.no(ScanOutResult.rejected("PIECE_NOT_FOUND",
+                "Barcode not found in inventory",
+                "لم يتم العثور على الباركود في المخزون"));
+        }
+        // Flexible labeling v1: an untagged piece (matched only by its typed internal code) can't
+        // be transferred until it's tagged.
+        if (pieceRows.get(0).get("short_code") == null) {
+            return SendPiece.no(ScanOutResult.rejected("PIECE_UNTAGGED",
+                "This piece has no barcode yet (untagged). Tag it before transferring it.",
+                "هذه القطعة بدون باركود بعد (غير مُلصقة). ألصق لها ملصقًا قبل نقلها."));
+        }
+        Map<String, Object> piece   = pieceRows.get(0);
+        String pieceId   = (String) piece.get("id");
+        UUID   variantId = (UUID)   piece.get("variant_id");
+        String status    = (String) piece.get("status");
+        UUID   fromLocationId = (UUID) piece.get("current_location_id");
+
+        // 3. WRONG_STATUS: piece must be available.
+        if (!"available".equals(status)) {
+            return SendPiece.no(ScanOutResult.rejected("WRONG_STATUS",
+                "Piece is not available (status: " + status + ")",
+                "القطعة غير متاحة (الحالة الحالية: " + status + ")"));
+        }
+
+        return new SendPiece(null, pieceId, variantId, fromLocationId);
+    }
+
     /** The line and the line's running total after one piece was claimed and sent. */
     private record Claimed(UUID lineId, int qtyOut) {}
 
@@ -371,6 +392,13 @@ public class TransferService {
      */
     private Claimed claimAndSend(UUID tenantId, UUID transferId, UUID destinationLocationId, String pieceId,
                                  UUID variantId, UUID fromLocationId, UUID actorUserId, String meta) {
+        return claimAndSend(tenantId, transferId, destinationLocationId, pieceId, variantId, fromLocationId,
+            actorUserId, meta, null);
+    }
+
+    /** {@code batchId}: the bazar top-up batch the piece is sent in (V245; null = the transfer's first send). */
+    private Claimed claimAndSend(UUID tenantId, UUID transferId, UUID destinationLocationId, String pieceId,
+                                 UUID variantId, UUID fromLocationId, UUID actorUserId, String meta, UUID batchId) {
         // 4. Ensure the line row exists (create-if-absent, qty_out untouched — only bumped
         //    once the claim + transition below both succeed). ON CONFLICT DO UPDATE with a
         //    harmless self-assignment is the standard get-or-create-and-RETURNING idiom.
@@ -390,9 +418,9 @@ public class TransferService {
             // created_at = clock_timestamp(), not now(): a count send claims many pieces in ONE transaction, and
             // "newest added first" (remove by count) / "oldest open first" (B7a's pickPiece) must still order them.
             jdbc.update(
-                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id, created_at) " +
-                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, clock_timestamp())",
-                tenantId, transferId, lineId, pieceId, fromLocationId);
+                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id, batch_id, created_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ?, clock_timestamp())",
+                tenantId, transferId, lineId, pieceId, fromLocationId, batchId);
         } catch (DuplicateKeyException e) {
             return null;   // the transaction is aborted — see the caller
         }
@@ -491,20 +519,10 @@ public class TransferService {
         UUID main = fulfillmentLocationId(tenantId);
         UUID destination = (UUID) transfer.get("destination_location_id");
 
-        List<String> picked = jdbc.queryForList(
-            "SELECT p.id FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
-            "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NULL " +
-            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
-            "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF p SKIP LOCKED",
-            String.class, tenantId, variantId, main, quantity);
+        List<String> picked = pickForCount(tenantId, variantId, main, quantity, null);
         if (picked.isEmpty()) {
             int labelled = labelledAtMain(tenantId, variantId, main);
-            if (labelled > 0) {
-                return new CountResult(false, "PIECES_HAVE_LABELS",
-                    "These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt.",
-                    "هذه القطع عليها ملصقات — امسحها بدلًا من ذلك. إذا لم تطبع ملصقاتها من قبل، أعد طباعتها من جلسة الاستلام.",
-                    null, 0, 0, List.of(), 0, false, null, null, labelled);
-            }
+            if (labelled > 0) return piecesHaveLabels(labelled);
             return CountResult.rejected("NOT_ENOUGH_AT_MAIN", "None of this size is available at the main warehouse.",
                 "لا توجد قطع متاحة من هذا المقاس في المستودع الرئيسي.", 0);
         }
@@ -531,6 +549,15 @@ public class TransferService {
         return picked.size() < quantity ? r.partial(quantity, labelledAtMain(tenantId, variantId, main)) : r;
     }
 
+    /** U1c — none of the size without a label, {@code labelled} with one at Main: scan them (send by count and the
+     *  top-up list's count alike). */
+    private static CountResult piecesHaveLabels(int labelled) {
+        return new CountResult(false, "PIECES_HAVE_LABELS",
+            "These pieces have labels — scan them instead. If you never printed their labels, reprint them from the receipt.",
+            "هذه القطع عليها ملصقات — امسحها بدلًا من ذلك. إذا لم تطبع ملصقاتها من قبل، أعد طباعتها من جلسة الاستلام.",
+            null, 0, 0, List.of(), 0, false, null, null, labelled);
+    }
+
     /** U1c — labelled pieces of a size free to send at Main (available, a label code, on no open transfer). */
     private int labelledAtMain(UUID tenantId, UUID variantId, UUID main) {
         return jdbc.queryForObject(
@@ -538,6 +565,41 @@ public class TransferService {
             "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NOT NULL " +
             "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL)",
             Integer.class, tenantId, variantId, main);
+    }
+
+    /** Top-up: {@link #labelledAtMain}, leaving out the pieces already on the batch's list (scanned there). */
+    private int labelledAtMainNotListed(UUID tenantId, UUID variantId, UUID main, UUID batchId) {
+        return jdbc.queryForObject(
+            "SELECT count(*)::int FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
+            "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NOT NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_send_batch_items i WHERE i.batch_id = ? AND i.piece_id = p.id " +
+            "  AND i.removed_at IS NULL)",
+            Integer.class, tenantId, variantId, main, batchId);
+    }
+
+    /**
+     * THE send-by-count picker (B7d) — the bazar's send by count and the top-up list's count both use it: available
+     * AT THE MAIN WAREHOUSE, WITHOUT a label (U1c — labelled pieces are scanned), on no open transfer, oldest received
+     * first, FOR UPDATE SKIP LOCKED. {@code exceptBatchId}
+     * (top-up list): leaves out the pieces already on that batch's list.
+     */
+    private List<String> pickForCount(UUID tenantId, UUID variantId, UUID main, int quantity, UUID exceptBatchId) {
+        List<Object> args = new ArrayList<>(List.of(tenantId, variantId, main));
+        String notListed = "";
+        if (exceptBatchId != null) {
+            notListed = "AND NOT EXISTS (SELECT 1 FROM transfer_send_batch_items i WHERE i.batch_id = ? " +
+                        "AND i.piece_id = p.id AND i.removed_at IS NULL) ";
+            args.add(exceptBatchId);
+        }
+        args.add(quantity);
+        return jdbc.queryForList(
+            "SELECT p.id FROM pieces p WHERE p.tenant_id = ? AND p.variant_id = ? " +
+            "AND p.status = 'available' AND p.current_location_id = ? AND p.short_code IS NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) " +
+            notListed +
+            "ORDER BY p.created_at, p.id LIMIT ? FOR UPDATE OF p SKIP LOCKED",
+            String.class, args.toArray());
     }
 
     /** Most pieces one receipt send (B9c) moves per call; the rest stay at Main and a next call sends them. */
@@ -777,6 +839,313 @@ public class TransferService {
         List<Integer> q = jdbc.queryForList("SELECT qty_out FROM transfer_lines WHERE transfer_id = ? AND variant_id = ?",
             Integer.class, transferId, variantId);
         return q.isEmpty() ? 0 : q.get(0);
+    }
+
+    // ── Bazar top-up: send batches on a SENT bazar transfer (V245) ───────────
+
+    /**
+     * Bazar top-up (approved 2026-11-27, design B) — the bazar transfer after Mark sent takes more pieces in BATCHES on
+     * the SAME transfer. While open a batch is a LIST (transfer_send_batch_items): scan / count / remove change the list
+     * and nothing else — no piece moves, nothing reaches Shopify, the pieces stay sellable online. {@link
+     * #sendBatchForBazar} then claims every listed piece through {@link #claimAndSend} (transfer_pieces.batch_id),
+     * marks the batch sent and writes the batch's one Shopify claim ({@link TransferShopifySync#claimBatchSend}) in ONE
+     * transaction. ONLY a bazar transfer, ONLY while it is 'sent'; ONE caller: BazarService (BazarTransferLockTest).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UUID openSendBatchForBazar(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> transfer = shareBazar(transferId, tenantId);
+        if (transfer == null) throw transferNotFound();
+        if (!"sent".equals(transfer.get("status"))) throw batchTransferNotSent();
+        // One opener at a time per transfer (the one-open partial unique index is the backstop).
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenantId + ":batch-open:" + transferId);
+        List<UUID> open = jdbc.queryForList(
+            "SELECT id FROM transfer_send_batches WHERE transfer_id = ? AND tenant_id = ? AND status = 'open'",
+            UUID.class, transferId, tenantId);
+        if (!open.isEmpty()) return open.get(0);
+        return jdbc.queryForObject(
+            "INSERT INTO transfer_send_batches (tenant_id, transfer_id, batch_no, created_by) " +
+            "VALUES (?, ?, (SELECT COALESCE(MAX(batch_no), 1) + 1 FROM transfer_send_batches WHERE transfer_id = ? AND tenant_id = ?), ?) " +
+            "RETURNING id", UUID.class, tenantId, transferId, transferId, tenantId, actorUserId);
+    }
+
+    /** List one scanned piece on the open batch — the scan's own checks (resolveSendPiece), then not on any open
+     *  transfer and not on this list already. Nothing moves. ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanOutResult addScannedToBatchForBazar(UUID transferId, UUID batchId, String barcode, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        ScanOutResult closed = openBatchOrRefusal(tenantId, transferId, batchId);
+        if (closed != null) return closed;
+        SendPiece sp = resolveSendPiece(tenantId, barcode);
+        if (sp.rejected() != null) return sp.rejected();
+        if (onOpenTransfer(sp.pieceId())) {
+            return ScanOutResult.rejected("ALREADY_ON_TRANSFER", "This piece is already on a transfer.",
+                "هذه القطعة ضمن عملية نقل بالفعل.");
+        }
+        int added = jdbc.update(
+            "INSERT INTO transfer_send_batch_items (tenant_id, batch_id, piece_id, variant_id, added_by, added_via) " +
+            "VALUES (?, ?, ?, ?, ?, 'scan') ON CONFLICT (batch_id, piece_id) WHERE removed_at IS NULL DO NOTHING",
+            tenantId, batchId, sp.pieceId(), sp.variantId(), actorUserId);
+        if (added == 0) {
+            return ScanOutResult.rejected("ALREADY_IN_BATCH", "This piece is already on this batch.",
+                "هذه القطعة موجودة في هذه الدفعة بالفعل.");
+        }
+        return ScanOutResult.success(sp.pieceId(), barcode, sp.variantId(), null,
+            batchVariantCount(tenantId, batchId, sp.variantId()));
+    }
+
+    /** List {@code quantity} pieces of a size on the open batch — THE send-by-count picker ({@link #pickForCount}), all
+     *  or nothing. Retry-safe by {@code clientRequestId}. Nothing moves. ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CountResult addCountToBatchForBazar(UUID transferId, UUID batchId, UUID variantId, int quantity,
+                                               UUID actorUserId, String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-batch-add", clientRequestId);
+        List<String> done = jdbc.queryForList(
+            "SELECT piece_id FROM transfer_send_batch_items WHERE batch_id = ? AND tenant_id = ? AND add_request_id = ? " +
+            "ORDER BY added_at, id", String.class, batchId, tenantId, clientRequestId);
+        if (!done.isEmpty()) {
+            return CountResult.success(variantId, done, batchVariantCount(tenantId, batchId, variantId), true);
+        }
+        ScanOutResult closed = openBatchOrRefusal(tenantId, transferId, batchId);
+        if (closed != null) return CountResult.rejected(closed.code(), closed.messageEn(), closed.messageAr(), 0);
+        if (quantity < 1 || quantity > MAX_COUNT_MOVE) {
+            return CountResult.rejected("INVALID_QUANTITY", "Add between 1 and " + MAX_COUNT_MOVE + " pieces at a time.",
+                "أضف من 1 إلى " + MAX_COUNT_MOVE + " قطعة في المرة.", 0);
+        }
+        // U1c's rule (approved 2026-11-27 for batches): by count lists only pieces WITHOUT a label (the shared picker);
+        // fewer than asked → the ones there are, SENT_PARTIAL "N added · M have labels — scan them"; none and labelled
+        // ones there → the same PIECES_HAVE_LABELS refusal as the send by count; none at all → NOT_ENOUGH_AT_MAIN.
+        UUID main = fulfillmentLocationId(tenantId);
+        List<String> picked = pickForCount(tenantId, variantId, main, quantity, batchId);
+        if (picked.isEmpty()) {
+            int labelled = labelledAtMainNotListed(tenantId, variantId, main, batchId);
+            if (labelled > 0) return piecesHaveLabels(labelled);
+            return CountResult.rejected("NOT_ENOUGH_AT_MAIN", "None of this size is available at the main warehouse.",
+                "لا توجد قطع متاحة من هذا المقاس في المستودع الرئيسي.", 0);
+        }
+        for (String pieceId : picked) {
+            jdbc.update(
+                "INSERT INTO transfer_send_batch_items (tenant_id, batch_id, piece_id, variant_id, added_by, added_via, add_request_id) " +
+                "VALUES (?, ?, ?, ?, ?, 'count', ?)", tenantId, batchId, pieceId, variantId, actorUserId, clientRequestId);
+        }
+        CountResult r = CountResult.success(variantId, picked, batchVariantCount(tenantId, batchId, variantId), false);
+        return picked.size() < quantity
+            ? r.batchPartial(quantity, labelledAtMainNotListed(tenantId, variantId, main, batchId)) : r;
+    }
+
+    /** Take pieces off the open batch's list: one by its code, or {@code quantity} of a size, the newest listed first
+     *  (all or nothing). Retry-safe by {@code clientRequestId}. ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CountResult removeFromBatchForBazar(UUID transferId, UUID batchId, String code, UUID variantId, int quantity,
+                                               UUID actorUserId, String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-batch-remove", clientRequestId);
+        List<Map<String, Object>> done = jdbc.queryForList(
+            "SELECT piece_id, variant_id FROM transfer_send_batch_items WHERE batch_id = ? AND tenant_id = ? " +
+            "AND remove_request_id = ? ORDER BY removed_at, id", batchId, tenantId, clientRequestId);
+        if (!done.isEmpty()) {
+            UUID v = (UUID) done.get(0).get("variant_id");
+            return CountResult.success(v, done.stream().map(r -> (String) r.get("piece_id")).toList(),
+                batchVariantCount(tenantId, batchId, v), true);
+        }
+        ScanOutResult closed = openBatchOrRefusal(tenantId, transferId, batchId);
+        if (closed != null) return CountResult.rejected(closed.code(), closed.messageEn(), closed.messageAr(), 0);
+        List<Map<String, Object>> rows;
+        if (code != null && !code.isBlank()) {
+            String lookup = ScanInputNormalizer.normalizePiece(code.trim());
+            rows = jdbc.queryForList(
+                "SELECT i.id, i.piece_id, i.variant_id FROM transfer_send_batch_items i " +
+                "JOIN pieces p ON p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
+                "WHERE i.batch_id = ? AND i.tenant_id = ? AND i.removed_at IS NULL " +
+                "AND (p.barcode = ? OR p.id = ? OR p.short_code = ?) FOR UPDATE OF i",
+                batchId, tenantId, lookup, lookup, lookup);
+            if (rows.isEmpty()) {
+                return CountResult.rejected("NOT_ON_THIS_SEND", "This piece isn't on this batch.",
+                    "هذه القطعة ليست ضمن هذه الدفعة.", 0);
+            }
+        } else {
+            if (quantity < 1 || quantity > MAX_COUNT_MOVE) {
+                return CountResult.rejected("INVALID_QUANTITY", "Remove between 1 and " + MAX_COUNT_MOVE + " pieces at a time.",
+                    "احذف من 1 إلى " + MAX_COUNT_MOVE + " قطعة في المرة.", 0);
+            }
+            rows = jdbc.queryForList(
+                "SELECT i.id, i.piece_id, i.variant_id FROM transfer_send_batch_items i " +
+                "WHERE i.batch_id = ? AND i.tenant_id = ? AND i.removed_at IS NULL AND i.variant_id = ? " +
+                "ORDER BY i.added_at DESC, i.id DESC LIMIT ? FOR UPDATE OF i", batchId, tenantId, variantId, quantity);
+            if (rows.size() < quantity) {
+                int n = rows.size();
+                return CountResult.rejected("NOT_ON_THIS_SEND",
+                    "Only " + n + " of this size " + (n == 1 ? "is" : "are") + " on this batch.",
+                    "الموجود من هذا المقاس في هذه الدفعة " + n + " فقط.", n);
+            }
+        }
+        for (Map<String, Object> r : rows) {
+            jdbc.update("UPDATE transfer_send_batch_items SET removed_at = clock_timestamp(), removed_by = ?, " +
+                "remove_request_id = ? WHERE id = ? AND tenant_id = ? AND removed_at IS NULL",
+                actorUserId, clientRequestId, r.get("id"), tenantId);
+        }
+        UUID v = (UUID) rows.get(0).get("variant_id");
+        return CountResult.success(v, rows.stream().map(r -> (String) r.get("piece_id")).toList(),
+            batchVariantCount(tenantId, batchId, v), false);
+    }
+
+    /** Drop the open batch's list — nothing ever moved. ONE caller: BazarService. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void discardBatchForBazar(UUID transferId, UUID batchId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        int n = jdbc.update(
+            "UPDATE transfer_send_batches SET status = 'discarded', discarded_at = now(), discarded_by = ? " +
+            "WHERE id = ? AND transfer_id = ? AND tenant_id = ? AND status = 'open'", actorUserId, batchId, transferId, tenantId);
+        if (n == 0) throw batchNotOpen();
+    }
+
+    /**
+     * "Send these to the bazar": every listed piece, ONE transaction, all or nothing. The transfer is locked FOR UPDATE
+     * (it must still be 'sent' — End event's beginReconcile locks it too), the batch FOR UPDATE (must be open), every
+     * listed piece FOR UPDATE: one that isn't available any more or is on an open transfer → nothing is sent and the
+     * answer names it (BATCH_PIECES_CHANGED). Else each piece goes through {@link #claimAndSend} with the batch id, the
+     * batch becomes 'sent', and its Shopify claim is written ({@link TransferShopifySync#claimBatchSend} — Remove: one
+     * −N claim for exactly these pieces; Keep: nothing). Retry-safe: the same {@code clientRequestId} returns the first
+     * answer and sends nothing more. ONE caller: BazarService.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public BatchSendResult sendBatchForBazar(UUID transferId, UUID batchId, UUID actorUserId, String clientRequestId) {
+        UUID tenantId = TenantContext.require();
+        requestLock(tenantId, "bazar-batch-send", clientRequestId);
+        List<Map<String, Object>> transferRows = jdbc.queryForList(
+            "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            transferId, tenantId);
+        if (transferRows.isEmpty() || !BAZAR_TYPE.equals(transferRows.get(0).get("transfer_type"))) {
+            return BatchSendResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found", "لم يتم العثور على عملية النقل");
+        }
+        List<Map<String, Object>> batchRows = jdbc.queryForList(
+            "SELECT status, send_request_id FROM transfer_send_batches WHERE id = ? AND transfer_id = ? AND tenant_id = ? FOR UPDATE",
+            batchId, transferId, tenantId);
+        if (batchRows.isEmpty()) {
+            return BatchSendResult.rejected("BATCH_NOT_FOUND", "Batch not found.", "لم يتم العثور على الدفعة.");
+        }
+        Map<String, Object> batch = batchRows.get(0);
+        if ("sent".equals(batch.get("status")) && clientRequestId.equals(batch.get("send_request_id"))) {
+            List<Map<String, Object>> sent = jdbc.queryForList(
+                "SELECT tp.piece_id, p.variant_id FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id " +
+                "WHERE tp.batch_id = ? AND tp.tenant_id = ? ORDER BY tp.created_at, tp.id", batchId, tenantId);
+            return BatchSendResult.success(sent.stream().map(r -> (String) r.get("piece_id")).toList(),
+                distinctVariants(sent), true);
+        }
+        if (!"open".equals(batch.get("status"))) {
+            BatchSendResult.Refusal r = batchNotOpenRefusal();
+            return BatchSendResult.rejected(r.code(), r.en(), r.ar());
+        }
+        if (!"sent".equals(transferRows.get(0).get("status"))) {
+            CountResult closed = sendClosed();
+            return BatchSendResult.rejected(closed.code(), closed.messageEn(), closed.messageAr());
+        }
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT p.id, p.variant_id, p.status::text AS status, p.current_location_id, p.short_code, " +
+            "       EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = p.id AND tp.outcome IS NULL) AS on_transfer " +
+            "FROM transfer_send_batch_items i JOIN pieces p ON p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
+            "WHERE i.batch_id = ? AND i.tenant_id = ? AND i.removed_at IS NULL " +
+            "ORDER BY p.id FOR UPDATE OF p", batchId, tenantId);
+        if (items.isEmpty()) {
+            return BatchSendResult.rejected("BATCH_EMPTY", "Add at least one piece before sending.",
+                "أضف قطعة واحدة على الأقل قبل الإرسال.");
+        }
+        List<String> blocked = new ArrayList<>();
+        for (Map<String, Object> it : items) {
+            if (!"available".equals(it.get("status")) || Boolean.TRUE.equals(it.get("on_transfer"))) {
+                blocked.add(it.get("short_code") != null ? (String) it.get("short_code") : (String) it.get("id"));
+            }
+        }
+        if (!blocked.isEmpty()) {
+            return BatchSendResult.blocked(blocked);
+        }
+        UUID destination = (UUID) transferRows.get(0).get("destination_location_id");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("reason", BAZAR_TYPE);
+        m.put("by", "batch");
+        m.put("batch_id", batchId.toString());
+        m.put("client_request_id", clientRequestId);
+        String meta = writeJson(m);
+        // The pieces in the order they were listed (oldest first).
+        List<Map<String, Object>> ordered = jdbc.queryForList(
+            "SELECT i.piece_id, i.variant_id, p.current_location_id FROM transfer_send_batch_items i " +
+            "JOIN pieces p ON p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
+            "WHERE i.batch_id = ? AND i.tenant_id = ? AND i.removed_at IS NULL ORDER BY i.added_at, i.id",
+            batchId, tenantId);
+        List<String> sent = new ArrayList<>();
+        for (Map<String, Object> it : ordered) {
+            String pieceId = (String) it.get("piece_id");
+            Claimed c = claimAndSend(tenantId, transferId, destination, pieceId, (UUID) it.get("variant_id"),
+                (UUID) it.get("current_location_id"), actorUserId, meta, batchId);
+            if (c == null) {
+                throw new TransferException(TransferException.Code.TRANSFER_SEND_CONFLICT,
+                    "The stock changed while sending — nothing was sent. Try again.",
+                    "تغيّر المخزون أثناء الإرسال — لم يُرسل شيء. حاول مرة أخرى.", HttpStatus.CONFLICT);
+            }
+            sent.add(pieceId);
+        }
+        jdbc.update(
+            "UPDATE transfer_send_batches SET status = 'sent', sent_at = now(), sent_by = ?, send_request_id = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'open'", actorUserId, clientRequestId, batchId, tenantId);
+        shopifySync.claimBatchSend(tenantId, transferId, batchId);
+        return BatchSendResult.success(sent, distinctVariants(ordered), false);
+    }
+
+    /** The bazar transfer FOR SHARE (send / End event's FOR UPDATE wait for us); null when not a bazar transfer. */
+    private Map<String, Object> shareBazar(UUID transferId, UUID tenantId) {
+        return shareBazarPreparing(transferId, tenantId);
+    }
+
+    /** Null when the batch is open on a 'sent' bazar transfer (both held FOR SHARE until commit), else the refusal. */
+    private ScanOutResult openBatchOrRefusal(UUID tenantId, UUID transferId, UUID batchId) {
+        Map<String, Object> transfer = shareBazar(transferId, tenantId);
+        if (transfer == null) {
+            return ScanOutResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found", "لم يتم العثور على عملية النقل");
+        }
+        List<String> status = jdbc.queryForList(
+            "SELECT status FROM transfer_send_batches WHERE id = ? AND transfer_id = ? AND tenant_id = ? FOR SHARE",
+            String.class, batchId, transferId, tenantId);
+        if (status.isEmpty()) return ScanOutResult.rejected("BATCH_NOT_FOUND", "Batch not found.", "لم يتم العثور على الدفعة.");
+        if (!"open".equals(status.get(0))) {
+            BatchSendResult.Refusal r = batchNotOpenRefusal();
+            return ScanOutResult.rejected(r.code(), r.en(), r.ar());
+        }
+        if (!"sent".equals(transfer.get("status"))) {
+            CountResult closed = sendClosed();
+            return ScanOutResult.rejected(closed.code(), closed.messageEn(), closed.messageAr());
+        }
+        return null;
+    }
+
+    private boolean onOpenTransfer(String pieceId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM transfer_pieces tp WHERE tp.piece_id = ? AND tp.outcome IS NULL)",
+            Boolean.class, pieceId));
+    }
+
+    private int batchVariantCount(UUID tenantId, UUID batchId, UUID variantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*)::int FROM transfer_send_batch_items WHERE batch_id = ? AND tenant_id = ? AND variant_id = ? " +
+            "AND removed_at IS NULL", Integer.class, batchId, tenantId, variantId);
+        return n == null ? 0 : n;
+    }
+
+    private static BatchSendResult.Refusal batchNotOpenRefusal() {
+        return new BatchSendResult.Refusal("BATCH_NOT_OPEN", "This batch was already sent or discarded.",
+            "تم إرسال هذه الدفعة أو إلغاؤها بالفعل.");
+    }
+
+    private TransferException batchNotOpen() {
+        BatchSendResult.Refusal r = batchNotOpenRefusal();
+        return new TransferException(TransferException.Code.TRANSFER_SEND_CONFLICT, r.en(), r.ar(), HttpStatus.CONFLICT);
+    }
+
+    private TransferException batchTransferNotSent() {
+        return new TransferException(TransferException.Code.TRANSFER_SEND_CONFLICT,
+            "More pieces can be added only after the bazar's stock was sent and before it ends.",
+            "يمكن إضافة قطع أخرى فقط بعد إرسال بضاعة البازار وقبل انتهائه.", HttpStatus.CONFLICT);
     }
 
     // ── Return send-out scan (FR-22.11 / B2) ────────────────────────────────
@@ -1974,6 +2343,16 @@ public class TransferService {
             return new CountResult(success, "SENT_PARTIAL", en, ar, variantId, count, available, pieceIds, qtyOut,
                 replayed, labelledCodes, asked, labelled);
         }
+
+        /** Top-up — the batch list's partial count: "N added · M have labels — scan them" (M = labelled pieces of the
+         *  size at Main not on the list; none → only "N added"). Code SENT_PARTIAL, like the send by count. */
+        CountResult batchPartial(int asked, int labelled) {
+            int n = count;
+            String en = n + " added" + (labelled <= 0 ? "" : labelled == 1 ? " · 1 has a label — scan it" : " · " + labelled + " have labels — scan them");
+            String ar = "أُضيفت " + n + (labelled <= 0 ? "" : labelled == 1 ? " · 1 عليها ملصق — امسحها" : " · " + labelled + " عليها ملصقات — امسحها");
+            return new CountResult(success, "SENT_PARTIAL", en, ar, variantId, count, available, pieceIds, qtyOut,
+                replayed, labelledCodes, asked, labelled);
+        }
     }
 
     /** Bazar B9c — a receipt send: the pieces moved, the sizes they belong to, and how many of the receipts are left. */
@@ -1993,6 +2372,39 @@ public class TransferService {
 
         static ReceiptSendResult rejected(String code, String messageEn, String messageAr) {
             return new ReceiptSendResult(false, code, messageEn, messageAr, List.of(), List.of(), 0, false);
+        }
+    }
+
+    /** Bazar top-up — a batch send: the pieces sent and their sizes, or the listed pieces that blocked it. */
+    public record BatchSendResult(
+            boolean success,
+            String  code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            List<String> pieceIds,
+            List<UUID> variantIds,
+            @JsonProperty("blocked_codes") List<String> blockedCodes,
+            boolean replayed) {
+
+        record Refusal(String code, String en, String ar) {}
+
+        static BatchSendResult success(List<String> pieceIds, List<UUID> variantIds, boolean replayed) {
+            return new BatchSendResult(true, "SENT", null, null, pieceIds, variantIds, List.of(), replayed);
+        }
+
+        static BatchSendResult rejected(String code, String messageEn, String messageAr) {
+            return new BatchSendResult(false, code, messageEn, messageAr, List.of(), List.of(), List.of(), false);
+        }
+
+        static BatchSendResult blocked(List<String> codes) {
+            int n = codes.size();
+            return new BatchSendResult(false, "BATCH_PIECES_CHANGED",
+                (n == 1 ? "1 piece on this batch isn't" : n + " pieces on this batch aren't") +
+                    " available any more — nothing was sent. Remove " + (n == 1 ? "it" : "them") + " and send again: " +
+                    String.join(", ", codes),
+                (n == 1 ? "قطعة واحدة" : n + " قطع") + " في هذه الدفعة لم تعد متاحة — لم يُرسل شيء. احذفها ثم أرسل مرة أخرى: " +
+                    String.join("، ", codes),
+                List.of(), List.of(), codes, false);
         }
     }
 

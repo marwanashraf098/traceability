@@ -8,13 +8,15 @@ import { ScanShell } from '../components/ScanShell'
 import { PageTour, TourHelpButton } from '../tours/TourCard'
 import { Button, Spinner } from '../components/ui'
 import {
-  getTransfer, getVariantPickPlaces, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail, VariantPickPlaces,
+  getTransfer, getVariantPickPlaces, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail, TransferLine,
+  VariantPickPlaces,
 } from '../api'
 import { useCapabilities } from '../capabilities'
 import TransferCollectList from './putaway/TransferCollectList'
-import { bazarScanOut, type BazarError } from '../bazar/api'
+import { bazarScanOut, batchScan, getCurrentBazarBatch, type BazarBatch, type BazarError, type OnlineStock } from '../bazar/api'
 import { sellErrorText, variantName } from '../bazar/format'
 import { RemoveCount, RemoveScanButton, SendByCountPanel } from './bazar/SendByCount'
+import { BatchFooter } from './bazar/BatchFooter'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -24,7 +26,15 @@ import { RemoveCount, RemoveScanButton, SendByCountPanel } from './bazar/SendByC
 
 /** Bazar POS B6: the same screen drives a bazar event's linked transfer — its scans go through the bazar's own
  *  scan-out endpoint (the generic one refuses a bazar transfer) and Back / Done return to the event. */
-export interface BazarScanOutTarget { eventId: string; transferId: string }
+export interface BazarScanOutTarget {
+  eventId: string
+  transferId: string
+  /** Top-up (V245): a live bazar's open batch — the same screen lists pieces on it (nothing moves until "Send these
+   *  to the bazar"); its lines are the batch's, not the transfer's. */
+  batchId?: string
+  /** Top-up: the bazar's online stock choice (the footer's note). */
+  onlineStock?: OnlineStock
+}
 
 export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget } = {}) {
   const params = useParams<{ id: string }>()
@@ -38,13 +48,20 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
   const [loadError, setLoadError] = useState<string | null>(null)
   // Bazar B7d: a refused ✕ (piece no longer on the send).
   const [removeError, setRemoveError] = useState<string | null>(null)
+  // Top-up: the open batch's list (null once it was sent / discarded elsewhere).
+  const batchId = bazar?.batchId
+  const bazarEventId = bazar?.eventId
+  const [batch, setBatch] = useState<BazarBatch | null | undefined>(undefined)
 
   const load = useCallback(() => {
     if (!id) return Promise.resolve()
-    return getTransfer(id)
-      .then(setTransfer)
+    const readBatch = batchId && bazarEventId
+      ? getCurrentBazarBatch(bazarEventId).then(r => setBatch(r.batch && r.batch.id === batchId ? r.batch : null))
+      : Promise.resolve()
+    return Promise.all([getTransfer(id).then(setTransfer), readBatch])
+      .then(() => undefined)
       .catch(e => setLoadError(e instanceof Error ? e.message : String(e)))
-  }, [id])
+  }, [id, batchId, bazarEventId])
 
   useEffect(() => {
     load().finally(() => setLoading(false))
@@ -68,7 +85,9 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
       if (!id) return { success: false }
       // A phone scan names its relay event; the server decides whether it counts as one.
       const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
-      const send = bazar
+      const send = bazar && batchId
+        ? (_tid: string, code: string) => batchScan(bazar.eventId, batchId, code)
+        : bazar
         ? (_tid: string, code: string, relay?: string) => bazarScanOut(bazar.eventId, code, relay)
         : transfer?.transfer_mode === 'relocate_return' ? returnScanOutTransferPiece : scanOutTransferPiece
       // relocate_return's send-out leg pulls transferred_out pieces off the terminal at B
@@ -94,18 +113,25 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
   // Warehouse places S4 — with places: where to collect each line's variant at the main warehouse (S3's batch
   // places, one request for every line). Display only; re-read whenever the transfer reloads (after each scan), never
   // awaited. Not for a bring-back: its pieces are transferred_out at the other location, which holds no place.
+  // The lines shown: the transfer's, or (top-up) the batch's list as transfer lines.
+  const lines: TransferLine[] = batchId
+    ? (batch?.lines ?? []).map(l => ({ id: l.variant_id, variant_id: l.variant_id, sku: l.sku,
+        variant_title: l.variant_title ?? '', product_title: l.product_title, qty_out: l.count,
+        qty_returned_good: 0, qty_condemned: 0, qty_sold: 0, qty_lost: 0 }))
+    : transfer?.lines ?? []
+
   const { places } = useCapabilities()
   const [collect, setCollect] = useState<Map<string, VariantPickPlaces> | null>(null)
   useEffect(() => {
-    if (!places || !transfer || transfer.transfer_mode === 'relocate_return' || transfer.lines.length === 0) return
+    if (!places || !transfer || transfer.transfer_mode === 'relocate_return' || lines.length === 0) return
     let cancelled = false
-    getVariantPickPlaces(transfer.lines.map(l => l.variant_id))
+    getVariantPickPlaces(lines.map(l => l.variant_id))
       .then(r => { if (!cancelled) setCollect(new Map(r.variants.map(v => [v.variantId, v]))) })
       .catch(() => { /* keep the last list */ })
     return () => { cancelled = true }
-  }, [places, transfer])
+  }, [places, transfer, batch]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) {
+  if (loading || (batchId && batch === undefined)) {
     return (
       <div className="flex items-center justify-center h-screen bg-base">
         <Spinner size={32} />
@@ -124,7 +150,16 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
     )
   }
 
-  if (transfer.status !== 'preparing') {
+  if (batchId && batch === null) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-base gap-4 px-6 text-center" data-testid="batch-gone">
+        <p className="text-body text-primary">{t('bazar.topup.gone')}</p>
+        <Button variant="secondary" onClick={() => navigate(backTo)}>{t('transfers.scanOut.back')}</Button>
+      </div>
+    )
+  }
+
+  if (!batchId && transfer.status !== 'preparing') {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-base gap-4 px-6 text-center">
         <p className="text-danger text-body">{t('transfers.scanOut.notOpenTitle')}</p>
@@ -155,8 +190,10 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
               ? transfer.source_location_name
               : transfer.destination_location_name}
           </p>
-          <p className="text-caption text-muted">
-            {transfer.transfer_mode === 'relocate_return'
+          <p className="text-caption text-muted" data-testid={batchId ? 'batch-title' : undefined}>
+            {batchId && batch
+              ? t('bazar.topup.title', { n: batch.batch_no })
+              : transfer.transfer_mode === 'relocate_return'
               ? t('transfers.return.scanOutSubtitle')
               : t(`transfers.type.${transfer.transfer_type}`)}
           </p>
@@ -182,16 +219,16 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
       {/* Per-variant running send-out count */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {/* Bazar B7d: send N of a size without scanning — bazar mode only. */}
-        {bazar && <SendByCountPanel eventId={bazar.eventId} onSent={() => { load() }} />}
+        {bazar && <SendByCountPanel eventId={bazar.eventId} batchId={batchId} onSent={() => { load() }} />}
         <div className="space-y-2">
           <h2 className="text-caption text-muted uppercase tracking-widest">{t('transfers.scanOut.progress')}</h2>
-          {transfer.lines.length === 0 ? (
+          {lines.length === 0 ? (
             <p className="text-small text-muted">{t('transfers.scanOut.noScansYet')}</p>
           ) : (
             <div className="card overflow-hidden">
               <table className="min-w-full">
                 <tbody>
-                  {transfer.lines.map(line => (
+                  {lines.map(line => (
                     <tr key={line.id} className="tbl-row">
                       <td className="tbl-cell text-primary">
                         {line.product_title}{variantName(line.variant_title) && ` · ${variantName(line.variant_title)}`}
@@ -202,7 +239,7 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
                         <td className="tbl-cell text-end w-0 whitespace-nowrap">
                           {line.qty_out > 0 && (
                             <RemoveCount eventId={bazar.eventId} variantId={line.variant_id} max={line.qty_out}
-                                         onRemoved={() => { load() }} />
+                                         batchId={batchId} onRemoved={() => { load() }} />
                           )}
                         </td>
                       )}
@@ -215,7 +252,7 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
         </div>
 
         {collect && transfer.transfer_mode !== 'relocate_return' && (
-          <TransferCollectList lines={transfer.lines} places={collect} />
+          <TransferCollectList lines={lines} places={collect} />
         )}
 
         <div className="space-y-2">
@@ -236,7 +273,7 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
                       {entry.label}
                     </span>
                     {bazar && entry.success && (
-                      <RemoveScanButton eventId={bazar.eventId} code={entry.barcode}
+                      <RemoveScanButton eventId={bazar.eventId} code={entry.barcode} batchId={batchId}
                         onRemoved={() => { setRemoveError(null); scanner.removeRecentScan(entry.key); load() }}
                         onError={(e: BazarError) => {
                           const { title, detail } = sellErrorText(t, i18n.language, e)
@@ -251,12 +288,17 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
         </div>
       </div>
 
-      {/* Done */}
+      {/* Done — or, for a top-up batch, Send these to the bazar / Discard */}
+      {bazar && batchId && batch ? (
+        <BatchFooter eventId={bazar.eventId} batch={batch} onlineStock={bazar.onlineStock}
+                     onDone={() => navigate(`${backTo}?tab=pieces`)} onBack={() => navigate(backTo)} />
+      ) : (
       <div className="bg-panel border-t border-line px-6 py-4">
         <Button className="w-full" onClick={() => navigate(backTo)}>
           {bazar ? t('bazar.transfer.scanDone') : t('transfers.scanOut.done')}
         </Button>
       </div>
+      )}
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, FileText, Loader2, MoreVertical, Users, UserRoundCog } from 'lucide-react'
+import { BookOpen, FileText, Loader2, MoreVertical, PackagePlus, Users, UserRoundCog } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { switchPin } from '../../../api'
 import { setAccessToken } from '../../../auth'
 import { BazarError, getBazarSellerRoster, managesBazar } from '../../../bazar/api'
@@ -29,6 +30,7 @@ export function BazarMenu({ eventId }: { eventId: string }) {
     catch { setSharing('failed') }
   }
   const manager = managesBazar()
+  const navigate = useNavigate()
   const item = 'h-12 rounded-xl border border-line bg-surface px-4 font-semibold text-primary flex items-center gap-3 text-start'
   return (
     <>
@@ -52,6 +54,13 @@ export function BazarMenu({ eventId }: { eventId: string }) {
              data-testid="menu-how-to-sell">
             <BookOpen size={18} aria-hidden />{t('bazar.menu.howToSell')}
           </a>
+          {manager && (
+            // Top-up (V245): owner / manager — the same batch screen as the computer (no camera on it for now).
+            <button type="button" className={item} onClick={() => navigate(`/bazar/${eventId}/add-pieces`)}
+                    data-testid="menu-add-pieces">
+              <PackagePlus size={18} aria-hidden />{t('bazar.topup.addMore')}
+            </button>
+          )}
           {manager && (
             <button type="button" className={item} onClick={() => setView('sellers')} data-testid="menu-sellers">
               <Users size={18} aria-hidden />{t('bazar.menu.sellers')}

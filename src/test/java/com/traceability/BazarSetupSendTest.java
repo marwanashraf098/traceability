@@ -280,17 +280,24 @@ class BazarSetupSendTest {
 
     // ── g2 ───────────────────────────────────────────────────────────────────
 
-    /** claimAndSend — the one send-out writer — has exactly three callers: scan, send by count, the B9c receipt send. */
+    /** claimAndSend — the one send-out writer — has exactly four callers: scan, send by count, the B9c receipt send and
+     *  (top-up, V245) the batch send; plus its one overload delegating with no batch. */
     @Test
     void g2_claimAndSend_hasExactlyThreeCallers() throws Exception {
         String src = java.nio.file.Files.readString(java.nio.file.Path.of("src/main/java/com/traceability/inventory/TransferService.java"))
             .replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
         int calls = 0;
         for (int i = src.indexOf("claimAndSend("); i >= 0; i = src.indexOf("claimAndSend(", i + 1)) calls++;
-        assertThat(calls).as("1 definition + 3 calls").isEqualTo(4);
+        assertThat(calls).as("2 definitions (overload) + 1 delegation + 4 calls").isEqualTo(7);
         int receiptSend = src.indexOf("public ReceiptSendResult scanOutReceiptPiecesForBazar(");
         int next = src.indexOf("private int receiptPiecesLeft(", receiptSend);
         assertThat(src.substring(receiptSend, next)).contains("claimAndSend(").doesNotContain("ledger.").doesNotContain("shopify");
+        // Top-up: the batch send moves pieces only through claimAndSend, and reaches Shopify only through its claim row
+        // (claimBatchSend — the push happens after commit), never the ledger or an inventory write directly.
+        int batchSend = src.indexOf("public BatchSendResult sendBatchForBazar(");
+        int batchNext = src.indexOf("private Map<String, Object> shareBazar(", batchSend);
+        assertThat(src.substring(batchSend, batchNext)).contains("claimAndSend(").contains("shopifySync.claimBatchSend(")
+            .doesNotContain("ledger.").doesNotContain("shopifyInventory.").doesNotContain("shopifySync.push");
         // The setup itself moves nothing — it asks BazarService, the one caller of the bazar transfer entry points.
         String setup = java.nio.file.Files.readString(java.nio.file.Path.of("src/main/java/com/traceability/bazar/BazarSetupService.java"));
         assertThat(setup).contains("bazar.sendReceipts(").doesNotContain("transfers.").doesNotContain("ForBazar(");

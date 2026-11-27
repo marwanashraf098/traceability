@@ -104,7 +104,17 @@ public class TransferShopifySync {
         "         AND jsonb_exists(y.piece_ids, tp_out.piece_id)) " +
         " OR (SELECT MIN(seed.created_at) FROM shopify_inventory_adjustments seed " +
         "     WHERE seed.tenant_id = t_out.tenant_id AND seed.trigger_type = 'initial_seed' " +
-        "       AND seed.status = 'applied') > " + departedAtSql("t_out") + ")) ";
+        "       AND seed.status = 'applied') > " + pieceDepartedAtSql() + ")) ";
+
+    /**
+     * Bazar top-up (V245, approved 2026-11-27): when THIS piece left — a piece sent in a top-up batch of a bazar
+     * transfer left when its batch was sent, not when the transfer was first sent ({@link #departedAtSql}).
+     * Aliases {@code tp_out} / {@code t_out} as {@link #RETURN_COUNTED_SQL}.
+     */
+    static String pieceDepartedAtSql() {
+        return "COALESCE((SELECT b.sent_at FROM transfer_send_batches b WHERE b.id = tp_out.batch_id " +
+               "AND b.tenant_id = tp_out.tenant_id), " + departedAtSql("t_out") + ")";
+    }
 
     // ── Phase A: the claim, in the send transaction ─────────────────────────────
 
@@ -114,6 +124,27 @@ public class TransferShopifySync {
      * transfer to sent / closed; the push is registered for after its commit.
      */
     public void claimSend(UUID tenantId, UUID transferId) {
+        String mode = snapshotMode(tenantId, transferId);
+        claim(tenantId, transferId, null, mode);
+    }
+
+    /**
+     * Bazar top-up (V245): the claim of ONE batch sent on an already-sent bazar transfer — the same rules as
+     * {@link #claimSend}, over the pieces sent in that batch only, under the transfer's EXISTING mode snapshot (never
+     * taken again: the bazar's Remove / Keep choice is final at Mark sent). 'leave' → nothing. One row per batch
+     * (UNIQUE batch_id); its push key carries the batch, so Shopify never folds it into the first send. Call inside
+     * the transaction that sends the batch.
+     */
+    public void claimBatchSend(UUID tenantId, UUID transferId, UUID batchId) {
+        if (batchId == null) throw new IllegalArgumentException("batchId");
+        String mode = jdbc.queryForObject("SELECT shopify_sync_mode FROM transfers WHERE id = ? AND tenant_id = ?",
+            String.class, transferId, tenantId);
+        if (mode == null) throw new IllegalStateException("transfer " + transferId + " was never sent");
+        claim(tenantId, transferId, batchId, mode);
+    }
+
+    /** Snapshots the governing mode onto the transfer (the first send only) and returns it. */
+    private String snapshotMode(UUID tenantId, UUID transferId) {
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT tr.transfer_mode, tr.destination_location_id, tr.source_location_id, " +
             "       dl.is_fulfillment AS dest_is_main, dl.shopify_sync_mode AS dest_mode, " +
@@ -126,10 +157,15 @@ public class TransferShopifySync {
             ? (String) t.get("src_mode") : (String) t.get("dest_mode");
         jdbc.update("UPDATE transfers SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?",
             mode, transferId, tenantId);
+        return mode;
+    }
+
+    /** The claim of the first send ({@code batchId} null) or of one top-up batch. */
+    private void claim(UUID tenantId, UUID transferId, UUID batchId, String mode) {
         if ("leave".equals(mode)) return;   // Shopify unchanged: zero writes
 
         PieceShopifyRules.Setup setup = PieceShopifyRules.setup(jdbc, tenantId);
-        if (setup.mainId() == null) { skip(tenantId, transferId, null, PieceShopifyRules.NO_MAIN_WAREHOUSE, null); return; }
+        if (setup.mainId() == null) { skip(tenantId, transferId, batchId, null, PieceShopifyRules.NO_MAIN_WAREHOUSE, null); return; }
         UUID mainId = setup.mainId();
 
         // Pieces that left the MAIN warehouse on this trip (a bring-back's never did).
@@ -137,11 +173,12 @@ public class TransferShopifySync {
             "SELECT tp.piece_id, p.variant_id FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id " +
             "WHERE tp.transfer_id = ? AND tp.tenant_id = ? AND tp.from_location_id = ? " +
             "  AND (tp.outcome IS NULL OR tp.outcome = 'relocated') " +
-            "ORDER BY tp.created_at, tp.id", transferId, tenantId, mainId);
-        if (leaving.isEmpty()) { skip(tenantId, transferId, mainId, "not_from_main_warehouse", null); return; }
+            "  AND tp.batch_id IS NOT DISTINCT FROM ? " +
+            "ORDER BY tp.created_at, tp.id", transferId, tenantId, mainId, batchId);
+        if (leaving.isEmpty()) { skip(tenantId, transferId, batchId, mainId, "not_from_main_warehouse", null); return; }
         // Not linked, or linked but Shopify not counting there yet (no applied seed and no applied
         // receiving claim — PieceShopifyRules.NOT_COUNTING): nothing of Traced's is in that count.
-        if (setup.skipReason() != null) { skip(tenantId, transferId, mainId, setup.skipReason(), null); return; }
+        if (setup.skipReason() != null) { skip(tenantId, transferId, batchId, mainId, setup.skipReason(), null); return; }
 
         Map<String, Integer> deltas = new LinkedHashMap<>();
         List<String> pieceIds = new ArrayList<>();
@@ -161,13 +198,13 @@ public class TransferShopifySync {
         }
         String payload = excluded.isEmpty() ? "{}" : json(Map.of("excluded", excluded));
         if (pieceIds.isEmpty()) {
-            skip(tenantId, transferId, mainId, PieceShopifyRules.ARRIVAL_NOT_COUNTED, payload); return;
+            skip(tenantId, transferId, batchId, mainId, PieceShopifyRules.ARRIVAL_NOT_COUNTED, payload); return;
         }
         UUID syncId = jdbc.query(
-            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, deltas, piece_ids, payload) " +
-            "VALUES (?, ?, ?, 'queued', ?::jsonb, ?::jsonb, ?::jsonb) ON CONFLICT (transfer_id) DO NOTHING RETURNING id",
+            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, batch_id, location_id, status, deltas, piece_ids, payload) " +
+            "VALUES (?, ?, ?, ?, 'queued', ?::jsonb, ?::jsonb, ?::jsonb) " + onConflict(batchId) + " RETURNING id",
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-            tenantId, transferId, mainId, json(deltas), json(pieceIds), payload);
+            tenantId, transferId, batchId, mainId, json(deltas), json(pieceIds), payload);
         if (!excluded.isEmpty()) {
             log.info("Transfer {} Shopify decrement leaves out {} piece(s) whose arrival never reached Shopify",
                 transferId, excluded.size());
@@ -177,12 +214,24 @@ public class TransferShopifySync {
         }
     }
 
-    private void skip(UUID tenantId, UUID transferId, UUID locationId, String reason, String payload) {
-        log.info("Transfer {} Shopify decrement skipped: {}", transferId, reason);
+    private void skip(UUID tenantId, UUID transferId, UUID batchId, UUID locationId, String reason, String payload) {
+        log.info("Transfer {} {} Shopify decrement skipped: {}", transferId, batchId == null ? "" : "batch " + batchId, reason);
         jdbc.update(
-            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, location_id, status, reason, payload) " +
-            "VALUES (?, ?, ?, 'skipped', ?, ?::jsonb) ON CONFLICT (transfer_id) DO NOTHING",
-            tenantId, transferId, locationId, reason, payload == null ? "{}" : payload);
+            "INSERT INTO transfer_shopify_syncs (tenant_id, transfer_id, batch_id, location_id, status, reason, payload) " +
+            "VALUES (?, ?, ?, ?, 'skipped', ?, ?::jsonb) " + onConflict(batchId),
+            tenantId, transferId, batchId, locationId, reason, payload == null ? "{}" : payload);
+    }
+
+    /** V245: one claim per first send (partial unique, batch_id NULL) and one per batch. */
+    private static String onConflict(UUID batchId) {
+        return batchId == null ? "ON CONFLICT (transfer_id) WHERE batch_id IS NULL DO NOTHING"
+                               : "ON CONFLICT (batch_id) WHERE batch_id IS NOT NULL DO NOTHING";
+    }
+
+    /** The push's idempotency trigger id: the transfer for its first send (unchanged), {@code <transfer>:batch:<id>}
+     *  for a top-up — a batch must never share the first send's key (Shopify's @idempotent would drop it). */
+    static String pushTriggerId(UUID transferId, UUID batchId) {
+        return batchId == null ? transferId.toString() : transferId + ":batch:" + batchId;
     }
 
     // ── Phase B: the one attempt ────────────────────────────────────────────────
@@ -209,7 +258,7 @@ public class TransferShopifySync {
                 "UPDATE transfer_shopify_syncs SET status = 'pending', send_started_at = now(), " +
                 "    attempt_count = attempt_count + 1 " +
                 "WHERE id = ? AND tenant_id = ? AND status IN ('queued', 'failed') AND attempt_count < ? " +
-                "RETURNING transfer_id, location_id, deltas::text AS deltas",
+                "RETURNING transfer_id, batch_id, location_id, deltas::text AS deltas",
                 syncId, tenantId, MAX_ATTEMPTS);
             return rows.isEmpty() ? null : rows.get(0);
         });
@@ -244,7 +293,8 @@ public class TransferShopifySync {
             mark(tenantId, syncId, "failed", "Not sent: " + e.getMessage());
             return;
         }
-        String key = ShopifyGateway.idempotencyKey(tenantId, "transfer_out", transferId.toString(), null, p.locationGid());
+        String key = ShopifyGateway.idempotencyKey(tenantId, "transfer_out",
+            pushTriggerId(transferId, (UUID) claim.get("batch_id")), null, p.locationGid());
         try {
             shopify.pushTransferOut(p.shopDomain(), p.token(), p.deltas(), p.locationGid(),
                 "traced://transfer/" + transferId, key);

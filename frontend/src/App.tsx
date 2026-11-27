@@ -28,6 +28,7 @@ const BazarCustomerDetails = lazy(() => import('./pages/bazar/BazarCustomerDetai
 const BazarSetupWizard = lazy(() => import('./pages/bazar/setup/BazarSetupWizard'))
 const BazarEventPage  = lazy(() => import('./pages/bazar/BazarEventPage'))
 const BazarScanOut    = lazy(() => import('./pages/bazar/BazarScanOut'))
+const BazarAddPieces  = lazy(() => import('./pages/bazar/BazarAddPieces'))
 // Bazar R3: Close the day and End event as pages on the computer (in-shell). The phone keeps /close and /end.
 const BazarCloseDayPage = lazy(() => import('./pages/bazar/r3/CloseDayPage'))
 const BazarEndEventPage = lazy(() => import('./pages/bazar/r3/EndEventPage'))
@@ -711,6 +712,10 @@ export default function App() {
         </OwnerOnlyRoute></RequireAuth>} />
         <Route path="/bazar/:id/scan-out" element={<RequireAuth><OwnerOnlyRoute>
           <Suspense fallback={null}><BazarScanOut /></Suspense>
+        </OwnerOnlyRoute></RequireAuth>} />
+        {/* Top-up (V245): add pieces to a live bazar — the scan-out screen on its open batch (full-screen). */}
+        <Route path="/bazar/:id/add-pieces" element={<RequireAuth><OwnerOnlyRoute>
+          <Suspense fallback={null}><BazarAddPieces /></Suspense>
         </OwnerOnlyRoute></RequireAuth>} />
         {/* B6b: an opened seller invite (/auth/seller-invite) lands here — pick a PIN, then Sell. The expired page
             needs no sign-in. */}

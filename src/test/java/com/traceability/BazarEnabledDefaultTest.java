@@ -50,7 +50,11 @@ class BazarEnabledDefaultTest {
                 .load()
                 .migrate();
         assertThat(r.success).isTrue();
-        assertThat(r.migrationsExecuted).as("V244").isEqualTo(1);
+        // V244 ran (later migrations may run too — don't count them).
+        assertThat(r.migrations).extracting(m -> m.version).as("V244 applied").contains("244");
+        assertThat(jdbc.queryForObject("SELECT column_default FROM information_schema.columns " +
+            "WHERE table_name = 'tenants' AND column_name = 'bazar_enabled'", String.class))
+            .as("tenants.bazar_enabled defaults to true").isEqualTo("true");
 
         // d1
         assertThat(enabled(jdbc, before)).as("existing tenant switched on").isTrue();
