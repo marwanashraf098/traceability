@@ -99,21 +99,17 @@ describe('money — BROEK', () => {
     expect(drill).toHaveTextContent('EGP 2,655') // 59 refusals × EGP 45
   })
 
-  test('mo4 — payout check: every payout is Paid; a larger Bosta batch is a neutral note, never a difference', async () => {
+  test('mo4 — payout check: Traced net with its COD / fees breakdown; no Bosta batch, nothing red', async () => {
     renderAt(<MoneyPage />, '/analytics/money')
     const table = await screen.findByTestId('payouts-table')
     const rows = within(table).getAllByRole('row')
-    for (const r of rows.slice(1)) expect(r).toHaveTextContent('Paid')
-    // Batch above Traced's amount: the untracked part, as information.
-    expect(within(rows[3]).getByTestId('payout-untracked-note'))
-      .toHaveTextContent("Bosta's batch also includes EGP 2,150 from shipments not tracked in Traced")
-    expect(within(rows[3]).getByTestId('payout-untracked-note').className).not.toMatch(/critical|warning|danger|red/)
-    // Batch below Traced's amount, equal, or not reported: nothing extra.
-    for (const i of [1, 2, 4, 5]) expect(within(rows[i]).queryByTestId('payout-untracked-note')).toBeNull()
-    expect(table.textContent).not.toMatch(/short|differ/i)
+    // Past payouts are paid: no pill; Bosta's batch total is never shown or compared.
+    for (const r of rows.slice(1)) expect(within(r).getByTestId('payout-net')).toBeInTheDocument()
+    expect(screen.queryByTestId('payout-untracked-note')).toBeNull()
+    expect(table.textContent).not.toMatch(/batch|short|differ/i)
     expect(table.querySelector('[class*="critical"]')).toBeNull()
     expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual(
-      ['Date', 'Reference', 'Traced orders', 'Traced amount', 'Bosta batch total', 'Status'])
+      ['Date', 'Reference', 'Traced orders', 'COD collected', 'Bosta fees', 'Traced net'])
   })
 
   test('mo5 — stuck shipments: cash at risk, tabs per kind, the alert link opens its tab', async () => {
