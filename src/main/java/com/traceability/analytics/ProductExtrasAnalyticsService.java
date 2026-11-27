@@ -86,6 +86,7 @@ public class ProductExtrasAnalyticsService {
                    COALESCE(SUM((lf.qty - lf.returned) * lf.unit_price) FILTER (WHERE lf.outcome = 'delivered'), 0)
                                                                                         AS realized
             FROM line_facts lf
+            WHERE NOT lf.revived             -- units sold only (CancelledOrders); per_product's failed counts keep them
             GROUP BY 1, 2
         ),
         per_product AS (

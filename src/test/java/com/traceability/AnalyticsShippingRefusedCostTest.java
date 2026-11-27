@@ -365,5 +365,115 @@ class AnalyticsShippingRefusedCostTest {
 
     // ── slice 5: refused-then-cancelled orders come back ─────────────────────
 
+    @Test
+    void s5_refusedThenCancelled_isBookedAndRefused_neverRealizedOrSold_cancelledBeforePickupStaysOut() {
+        T t = new T("Refused-Cancelled");
+        UUID v = t.variant("HD-OLV-M", "300");
+        // Delivered COD order (positive control).
+        UUID ok = t.order(cairo(4, 10), "new", orderRaw(COD_GW, "601", "85.00", null));
+        t.line(ok, v, 1, 1, "650.00");
+        t.leg(ok, "delivered", deliveredPaid("735.00", "100.00", cairo(5, 9)),
+            "with_courier", iso(cairo(5, 9)), "delivered", iso(cairo(6, 13)));
+        // Refused → RTO → cancelled in Shopify: 2 units went out.
+        UUID back = refusedThenCancelled(t, v, 2, "602", "1385.00", COD_GW);
+        // Cancelled before Bosta picked it up: never left.
+        UUID early = t.order(cairo(4, 11), "cancelled", orderRaw(COD_GW, "603", "0.00",
+            "\"cancelled_at\":\"2026-11-04T15:00:00+02:00\""));
+        t.line(early, v, 1, 0, "650.00");
+        t.leg(early, "cancelled", neverPickedUp());
+        // Cancelled in Shopify BEFORE the pickup that still happened: cancelled before pickup → out.
+        UUID cancelledFirst = t.order(cairo(4, 12), "new", orderRaw(COD_GW, "604", "0.00",
+            "\"cancelled_at\":\"2026-11-04T16:00:00+02:00\""));
+        t.line(cancelledFirst, v, 1, 0, "650.00");
+        t.leg(cancelledFirst, "returned", rto("735.00", "50.00", cairo(5, 10)),
+            "with_courier", iso(cairo(5, 10)), "returned", iso(cairo(7, 10)));
+
+        Map<String, Object> rev = m(ok(t, "/api/v1/analytics/revenue/summary?" + NOV), "current");
+        assertThat(n(rev, "orders")).isEqualTo(2);
+        assertThat(dec(rev, "booked")).isEqualByComparingTo("1950.00");            // 650 + 2 × 650
+        assertThat(dec(rev, "realized")).isEqualByComparingTo("650.00");
+        assertThat(dec(m(rev, "waterfall"), "refused")).isEqualByComparingTo("1300.00");
+
+        Map<String, Object> del = m(ok(t, "/api/v1/analytics/delivery/summary?" + NOV), "current");
+        assertThat(n(del, "delivered")).isEqualTo(1);
+        assertThat(n(del, "failed")).isEqualTo(1);
+        assertThat(dec(del, "successRate")).isEqualByComparingTo("0.5");
+
+        Map<String, Object> totals = m(ok(t, "/api/v1/analytics/sales/variants?" + NOV), "totals");
+        assertThat(n(totals, "soldUnits")).isEqualTo(1);                              // refused units are not sold
+        assertThat(n(totals, "refusedUnits")).isEqualTo(2);
+        assertThat(n(totals, "refusedOrders")).isEqualTo(1);
+        assertThat(n(totals, "deliveredUnits")).isEqualTo(1);
+
+        Map<String, Object> row = orderRow(t, number(back));
+        assertThat(row.get("financialStatus")).isEqualTo("lost");
+        assertThat(n(row, "items")).isEqualTo(2);
+        assertThat(dec(row, "total")).isEqualByComparingTo("1300.00");             // shipping refunded at cancel → 0
+        assertThat(dec(row, "netToYou")).isEqualByComparingTo("-112.86");
+        List<String> names = list(ok(t, "/api/v1/analytics/orders?" + NOV + "&size=200"), "orders").stream()
+            .map(r -> (String) r.get("name")).toList();
+        assertThat(names).doesNotContain(number(early), number(cancelledFirst));
+
+        Map<String, Object> p = ok(t, "/api/v1/analytics/profit/summary?" + NOV);
+        assertThat(dec(p, "feesTotal")).isEqualByComparingTo("212.86");             // 100 + the refused order's 112.86
+        assertThat(n(m(p, "coverage"), "keptUnits")).isEqualTo(1);
+    }
+
+    @Test
+    void s5_deliveredThenCancelledInShopify_countsDelivered_butIsNeverRealized() {
+        T t = new T("Delivered-Cancelled");
+        UUID v = t.variant("HD-SND-M", "300");
+        UUID o = t.order(cairo(4, 12), "new", "{}");
+        long line = t.line(o, v, 1, 0, "650.00");
+        jdbc.update("UPDATE orders SET raw = ?::jsonb WHERE id = ?", orderRaw(COD_GW, "651", "0.00",
+            "\"cancelled_at\":\"2026-11-09T14:00:00+02:00\",\"fulfillments\":[{\"id\":1,\"status\":\"success\"," +
+            "\"line_items\":[{\"id\":" + line + ",\"quantity\":1}]}]"), o);
+        t.leg(o, "delivered", deliveredPaid("735.00", "100.00", cairo(5, 9)),
+            "with_courier", iso(cairo(5, 9)), "delivered", iso(cairo(6, 13)));
+        // Positive control: an ordinary delivered order.
+        UUID plain = t.order(cairo(4, 13), "new", orderRaw(COD_GW, "652", "85.00", null));
+        t.line(plain, v, 1, 1, "650.00");
+        t.leg(plain, "delivered", deliveredPaid("735.00", "100.00", cairo(5, 9)),
+            "with_courier", iso(cairo(5, 9)), "delivered", iso(cairo(6, 13)));
+
+        Map<String, Object> rev = m(ok(t, "/api/v1/analytics/revenue/summary?" + NOV), "current");
+        assertThat(dec(rev, "booked")).isEqualByComparingTo("1300.00");
+        assertThat(dec(rev, "realized")).isEqualByComparingTo("650.00");          // the cancelled one is a full refund
+        assertThat(n(m(ok(t, "/api/v1/analytics/delivery/summary?" + NOV), "current"), "delivered")).isEqualTo(2);
+        assertThat(n(m(ok(t, "/api/v1/analytics/profit/summary?" + NOV), "coverage"), "keptUnits")).isEqualTo(1);
+    }
+
+    @Test
+    void s5_customersToWatch_usePreRtoCod_shopifyTotalOnlyForCodGatewayOrders_perTenant() {
+        T a = new T("Watch-A");
+        UUID va = a.variant("HD-BLK-L", "300");
+        // Customer 701: two refusals, Bosta zeroed the COD on the RTO but kept originalCod.
+        refusedThenCancelled(a, va, 1, "701", "735.00", COD_GW);
+        refusedThenCancelled(a, va, 1, "701", "735.00", COD_GW);
+        // Customer 702: two refusals with no Bosta figure stored (v2-list raw), COD gateway → Shopify's total.
+        refusedThenCancelled(a, va, 1, "702", null, COD_GW);
+        refusedThenCancelled(a, va, 1, "702", null, COD_GW);
+        // Customer 703: two refusals with no Bosta figure, paid online → never a COD refusal.
+        refusedThenCancelled(a, va, 1, "703", null, CARD_GW);
+        refusedThenCancelled(a, va, 1, "703", null, CARD_GW);
+        // Customer 704: one refusal only (positive control of the minimum).
+        refusedThenCancelled(a, va, 1, "704", "735.00", COD_GW);
+
+        T b = new T("Watch-B");
+        UUID vb = b.variant("HD-BLK-L", "300");
+        refusedThenCancelled(b, vb, 1, "701", "900.00", COD_GW);                       // same Shopify customer id
+        refusedThenCancelled(b, vb, 1, "701", "900.00", COD_GW);
+        refusedThenCancelled(b, vb, 1, "701", "900.00", COD_GW);
+
+        Map<String, Object> wa = ok(a, "/api/v1/analytics/customers/watch");
+        assertThat(list(wa, "customers")).extracting(c -> n(c, "refusedCodOrders")).containsExactly(2L, 2L);
+        assertThat(n(wa, "refusedCodFromShopify")).isEqualTo(2);
+        assertThat(list(wa, "customers")).allSatisfy(c -> assertThat(dec(c, "refusedValue")).isEqualByComparingTo("1300.00"));
+
+        Map<String, Object> wb = ok(b, "/api/v1/analytics/customers/watch");
+        assertThat(list(wb, "customers")).extracting(c -> n(c, "refusedCodOrders")).containsExactly(3L);
+        assertThat(n(wb, "refusedCodFromShopify")).isZero();
+    }
+
     // ── slice 6: cost 0 = unknown ────────────────────────────────────────────
 }

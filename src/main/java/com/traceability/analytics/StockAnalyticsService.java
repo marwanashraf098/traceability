@@ -342,6 +342,7 @@ public class StockAnalyticsService {
         , sales30 AS (
             SELECT variant_id, SUM(qty) AS sold, COALESCE(SUM(qty) FILTER (WHERE outcome = 'delivered'), 0) AS delivered
             FROM line_facts
+            WHERE NOT revived                -- a refused order cancelled after pickup is not a sale (CancelledOrders)
             GROUP BY variant_id
         ),
         stock AS (

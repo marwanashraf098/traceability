@@ -1,5 +1,6 @@
 ﻿order,placed_at,customer,governorate,governorate_ar,items,total,payment,delivery_status,financial_status,bosta_fees,fees_estimated,net_to_you,refund_amount_unknown,lines,shipping
 #G143,2026-09-26 12:00,,Giza,الجيزة,1,1200.00,Other,With courier,overdue,57.00,true,,false,1200.00,
+#G95,2026-09-23 14:15,,Alexandria,الإسكندرية,2,1568.00,Manual,Delivered,refunded,163.02,true,,true,1568.00,
 #G137,2026-09-22 10:00,,Giza,الجيزة,1,1200.00,Other,Cancelled,lost,,false,,false,1200.00,
 #G91,2026-09-22 09:15,,Giza,الجيزة,2,1469.00,Card,Lost,lost,57.00,true,-57.00,false,1469.00,
 #G134,2026-09-21 10:00,,Cairo,القاهرة,1,800.00,Other,Terminated,lost,,false,,false,800.00,

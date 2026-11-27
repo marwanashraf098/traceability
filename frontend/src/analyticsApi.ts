@@ -328,7 +328,8 @@ export interface WatchedCustomer {
   orders: number; refusedCodOrders: number; deliveredOrders: number; refusedValue: number; blocked: boolean
   suggestion: string | null; blocklistLink: string | null
 }
-export interface CustomerWatch { asOf: string; minRefused: number; customers: WatchedCustomer[] }
+/** refusedCodFromShopify — refused COD-gateway orders counted with Shopify's order total (Bosta's pre-RTO COD wasn't stored). */
+export interface CustomerWatch { asOf: string; minRefused: number; customers: WatchedCustomer[]; refusedCodFromShopify: number }
 
 export const getCustomerSummary = (p: ComparedQuery, signal?: AbortSignal) =>
   get<Compared<CustomerSummary>>('/customers/summary', cq(p), signal)

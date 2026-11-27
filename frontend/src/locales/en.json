@@ -4996,7 +4996,9 @@
       "speedTip": "{{orders}} orders · success {{success}}",
       "speedNote": "Orders handed over the same day deliver at {{fast}} vs {{slow}} for 3+ days.",
       "refused_one": "{{count}} refused",
-      "refused_other": "{{count}} refused"
+      "refused_other": "{{count}} refused",
+      "watchFromShopify_one": "{{n}} refused order uses its Shopify total (cash-on-delivery order; Bosta’s amount from before the return wasn’t stored).",
+      "watchFromShopify_other": "{{n}} refused orders use their Shopify total (cash-on-delivery orders; Bosta’s amount from before the return wasn’t stored)."
     },
     "cost": {
       "coverage": "Costed: {{costed}} of {{total}} sold SKUs · {{share}} of realized revenue",

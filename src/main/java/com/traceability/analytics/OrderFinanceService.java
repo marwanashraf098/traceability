@@ -201,8 +201,8 @@ public class OrderFinanceService {
         """;
 
     /**
-     * The oldest of a variant's 10 newest orders (post-floor, not cancelled, not an internal exchange
-     * order) — the drawer's window start. Parameters: override domains, override days, tenant id ×2,
+     * The oldest of a variant's 10 newest orders (post-floor, counted by CancelledOrders, not an internal
+     * exchange order) — the drawer's window start. Parameters: override domains, override days, tenant id ×2,
      * variant id, now, limit.
      */
     private static final String VARIANT_WINDOW_SQL = """
@@ -213,7 +213,7 @@ public class OrderFinanceService {
             JOIN stores st ON st.id = o.store_id
             LEFT JOIN unnest(?::text[], ?::text[]) AS ov(shop_domain, floor_day) ON ov.shop_domain = lower(st.shop_domain)
             WHERE oi.tenant_id = ? AND o.tenant_id = ? AND oi.variant_id = ?
-              AND o.status <> 'cancelled'::order_status AND NOT o.raw_cancelled
+              AND """ + CancelledOrders.countsSql("o") + """
               AND o.external_id NOT LIKE 'internal:exchange:%'
               AND o.placed_at <= ?::timestamptz
               AND (COALESCE(st.orders_ingest_from, (ov.floor_day::date::timestamp AT TIME ZONE 'Africa/Cairo')) IS NULL

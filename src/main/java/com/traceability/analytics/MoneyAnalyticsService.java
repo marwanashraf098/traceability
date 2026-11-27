@@ -208,7 +208,7 @@ public class MoneyAnalyticsService {
     /*
      * In transit with Bosta (the pipeline's stage, shared with the cash forecast): forward legs picked
      * up and still moving, not turned Return to Origin (20), not a customer return pickup (25),
-     * post-floor, order not cancelled. An exchange trip (30) counts (2026-11-12): it carries real COD
+     * post-floor, order counted (CancelledOrders — not cancelled before pickup). An exchange trip (30) counts (2026-11-12): it carries real COD
      * (price difference / fee), valued at its city's success rate like any delivery. Columns cod,
      * city. Parameters: override domains, override days, tenant id.
      */
@@ -229,7 +229,7 @@ public class MoneyAnalyticsService {
     static String inTransitLeg(String s) {
         return " (" + s + ".shipment_leg = 'forward' AND COALESCE(" + s + ".type_code, '10') NOT IN ('20', '25') "
             + " AND " + s + ".internal_state IN ('with_courier', 'exception') "
-            + " AND fo.status <> 'cancelled'::order_status) ";
+            + " AND " + CancelledOrders.countsSql("fo") + ") ";
     }
 
     /*
@@ -728,7 +728,7 @@ public class MoneyAnalyticsService {
         List<Integer> weekdays = SettlementSql.payoutWeekdays(jdbc, tid, now);
 
         String base = " FROM shipments s" + SettlementSql.floorJoin("s") +
-            " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND fo.status <> 'cancelled'::order_status AND "
+            " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND " + CancelledOrders.countsSql("fo") + " AND "
             + SettlementSql.POST_FLOOR;
 
         List<StuckShipment> never = jdbc.query(
@@ -748,7 +748,7 @@ public class MoneyAnalyticsService {
             "       EXTRACT(DAY FROM (?::timestamptz - lc.last_change))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
             " FROM shipments s" + SettlementSql.floorJoin("s") +
             " CROSS JOIN LATERAL (SELECT " + SettlementSql.lastChange("s") + " AS last_change) lc" +
-            " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND fo.status <> 'cancelled'::order_status AND "
+            " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND " + CancelledOrders.countsSql("fo") + " AND "
             + SettlementSql.POST_FLOOR +
             "  AND " + SettlementSql.stuckWithBosta("s", "lc.last_change", "?::timestamptz") +
             "ORDER BY lc.last_change, s.tracking_number",

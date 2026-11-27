@@ -12,10 +12,11 @@ import Layout from '../components/Layout'
 import OrdersPage from '../pages/analytics/OrdersPage'
 import RevenuePage from '../pages/analytics/RevenuePage'
 import MoneyPage from '../pages/analytics/MoneyPage'
+import CustomersPage from '../pages/analytics/CustomersPage'
 import { StationProvider } from '../components/StationProvider'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { clearAnalyticsCache } from '../analytics/useAnalyticsQuery'
-import type { OrderRow, OrdersPage as OrdersPageData, ProfitSummary } from '../analyticsApi'
+import type { CustomerWatch, OrderRow, OrdersPage as OrdersPageData, ProfitSummary } from '../analyticsApi'
 
 /**
  * Analytics slices 4–6 (2026-11-27). Slice 4: Order finances' Total = lines + shipping (the shipping part on its
@@ -48,6 +49,11 @@ const PROFIT: ProfitSummary = {
   contributionProfit: 498000, contributionMargin: 0.607, shippingIncome: 81000, shippingIncomeOnCosted: 73000,
 }
 
+const WATCH: CustomerWatch = {
+  asOf: '2026-11-27T09:40:00Z', minRefused: 2, refusedCodFromShopify: 3,
+  customers: [{ customerRef: 'ref-1', displayName: 'Mostafa E.', governorate: 'Assiut', governorateAr: 'أسيوط', orders: 4,
+    refusedCodOrders: 3, deliveredOrders: 1, refusedValue: 3300, blocked: false, suggestion: 'Ask for prepayment', blocklistLink: '/blocklist' }],
+}
 
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
@@ -56,6 +62,7 @@ function useFixture(f: AnalyticsFixture) {
   stubFetchWithShellDefaults(((url: string) =>
     /\/analytics\/orders(\?|$)/.test(url) ? json(ORDERS)
       : url.includes('/analytics/profit/summary') ? json(PROFIT)
+      : url.includes('/analytics/customers/watch') ? json(WATCH)
       : base(url)) as (url: string) => unknown)
 }
 
@@ -125,4 +132,17 @@ describe('slice 4 — shipping', () => {
   })
 })
 
-describe('slices 5 + 6', () => {})
+describe('slices 5 + 6', () => {
+  test('sr5 — Customers to watch: refusals counted with the Shopify total are said so', async () => {
+    renderWithProviders(<Layout><CustomersPage /></Layout>, { initialEntries: ['/analytics/customers'] })
+    const card = await screen.findByTestId('card-watch')
+    await waitFor(() => expect(within(card).getByTestId('watch-from-shopify')).toHaveTextContent(
+      '3 refused orders use their Shopify total (cash-on-delivery orders; Bosta’s amount from before the return wasn’t stored).'))
+  })
+
+  test('sr6 — Customers to watch in Arabic', async () => {
+    renderAr(<CustomersPage />, '/analytics/customers')
+    const note = await screen.findByTestId('watch-from-shopify')
+    expect(note).toHaveTextContent('3 طلبات مرفوضة محسوبة بإجمالي شوبيفاي')
+  })
+})
