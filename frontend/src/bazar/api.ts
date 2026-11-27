@@ -63,6 +63,8 @@ export interface BazarEventDetail extends BazarEventRow {
   online_stock?: OnlineStock
   /** B8: true once the event isn't a draft or its transfer isn't being prepared — the choice can't change. */
   online_stock_locked?: boolean
+  /** U1d: false when Keep showing online isn't available (Main reconcile doesn't write for this store). */
+  keep_available?: boolean
   payment_methods: PaymentMethod[]
   seller_roles: SellerRole[]
   discount_pct: string | number | null
@@ -275,6 +277,11 @@ export interface CreateBazarEvent {
 
 export function createBazarEvent(req: CreateBazarEvent) {
   return bazarFetch<BazarEventDetail>('/bazar-events', { method: 'POST', body: JSON.stringify(req) })
+}
+
+/** U1d — what the New bazar form may offer before any bazar exists: Keep showing online or not. */
+export function getBazarOnlineStockOptions() {
+  return bazarFetch<{ keep_available: boolean }>('/bazar-events/online-stock')
 }
 
 /** B8 — change the online stock choice; only while the event is a draft and nothing was sent (409 after). */

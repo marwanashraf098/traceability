@@ -9,7 +9,7 @@ import {
   BazarError, createBazarEvent, METHOD_ORDER, type OnlineStock, type PaymentMethod, type SellerRole,
 } from '../../bazar/api'
 import {
-  BlockingBazarLink, OnlineStockCards, OnlineStockPhonePair, OnlineStockWholeLocation, blockingBazar,
+  BlockingBazarLink, OnlineStockCards, OnlineStockPhonePair, OnlineStockWholeLocation, blockingBazar, useKeepAvailable,
 } from './OnlineStock'
 import { Button, Input, Modal, cn } from '../../components/ui'
 import RangeCalendar from './r1/RangeCalendar'
@@ -117,6 +117,9 @@ export default function BazarNewEvent() {
   const [methods, setMethods] = useState<PaymentMethod[]>(['cash', 'instapay', 'card'])
   const [roles, setRoles] = useState<SellerRole[]>(['owner', 'manager', 'worker'])
   const [online, setOnline] = useState<OnlineStock>('remove')
+  // U1d: Keep showing online only while Main reconcile writes for this store.
+  const keepAvailable = useKeepAvailable()
+  useEffect(() => { if (!keepAvailable) setOnline('remove') }, [keepAvailable])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [blocking, setBlocking] = useState<{ id: string; name: string } | null>(null)
@@ -286,7 +289,7 @@ export default function BazarNewEvent() {
         </fieldset>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2"><Eyebrow>{t('bazar.online.title')}</Eyebrow></legend>
-          <OnlineStockPhonePair value={online} onChange={setOnline} />
+          <OnlineStockPhonePair value={online} onChange={setOnline} keepAvailable={keepAvailable} />
           <OnlineStockWholeLocation />
           <span className="text-small text-muted">{t(`bazar.online.${online}.desc`)}</span>
         </fieldset>
@@ -352,7 +355,7 @@ export default function BazarNewEvent() {
         </Section>
       </div>
       <Section n={5} title={t('bazar.online.title')} sub={t('bazar.online.sub')}>
-        <OnlineStockCards value={online} onChange={setOnline} />
+        <OnlineStockCards value={online} onChange={setOnline} keepAvailable={keepAvailable} />
         <OnlineStockWholeLocation />
       </Section>
 

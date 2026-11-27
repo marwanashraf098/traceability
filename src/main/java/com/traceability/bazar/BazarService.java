@@ -46,10 +46,39 @@ public class BazarService {
 
     private final BazarCatalogService catalogs;
 
+    /** U1d: whether Main reconcile writes for the tenant's store — Keep showing online needs it. */
+    private com.traceability.inventory.MainReconcileService reconcile;
+
     public BazarService(JdbcTemplate jdbc, TransferService transfers, BazarCatalogService catalogs) {
         this.jdbc      = jdbc;
         this.transfers = transfers;
         this.catalogs  = catalogs;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setMainReconcile(com.traceability.inventory.MainReconcileService reconcile) { this.reconcile = reconcile; }
+
+    /**
+     * U1d — Keep showing online ('leave') is available only while Main reconcile WRITES for this tenant's store
+     * (MainReconcileService.writesFor — the reconcile configuration itself): a Keep bazar's sales come off Shopify only
+     * through those writes. False → setting 'leave' and Mark sent on a 'leave' location answer 409
+     * BAZAR_KEEP_UNAVAILABLE; a transfer already sent is never touched.
+     */
+    public boolean keepAvailable(UUID tenantId) {
+        return reconcile != null && reconcile.writesFor(tenantId);
+    }
+
+    /** U1d — GET /bazar-events/online-stock: what the New bazar form may offer, before any bazar exists. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> onlineStockOptions() {
+        UUID tenantId = requireEnabled();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("keep_available", keepAvailable(tenantId));
+        return out;
+    }
+
+    private void requireKeepAvailable(UUID tenantId, String mode) {
+        if (BazarOnlineStock.LEAVE.equals(mode) && !keepAvailable(tenantId)) throw BazarOnlineStock.keepUnavailable();
     }
 
     // ── Create ───────────────────────────────────────────────────────────────
@@ -66,6 +95,7 @@ public class BazarService {
 
         String mode = req.shopifySyncMode() == null ? BazarOnlineStock.REMOVE : req.shopifySyncMode();
         if (!BazarOnlineStock.MODES.contains(mode)) throw BazarOnlineStock.invalidMode();
+        requireKeepAvailable(tenantId, mode);
         String name = req.name() == null ? "" : req.name().trim();
         if (name.isEmpty() || name.length() > 80) {
             throw invalid("Give the bazar a name (up to 80 characters).", "اكتب اسمًا للبازار (حتى 80 حرفًا).");
@@ -277,8 +307,11 @@ public class BazarService {
         if (!"draft".equals(ev.get("status"))) throw notDraft();
         // B8: hold the location's mode under a share lock until the send (and its snapshot, claimSend) commits —
         // the Settings switch can't change it under this send. 'leave' → claimSend writes no row (Shopify untouched).
-        jdbc.queryForList("SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR SHARE",
-            ev.get("location_id"), tenantId);
+        List<String> locMode = jdbc.queryForList(
+            "SELECT shopify_sync_mode FROM locations WHERE id = ? AND tenant_id = ? FOR SHARE",
+            String.class, ev.get("location_id"), tenantId);
+        // U1d: a Keep send only while Main reconcile writes for the store — else switch to Remove, then send.
+        if (!locMode.isEmpty()) requireKeepAvailable(tenantId, locMode.get(0));
         transfers.markSentForBazar((UUID) ev.get("transfer_id"), actorUserId);
         return detail(tenantId, eventId);
     }
@@ -297,6 +330,7 @@ public class BazarService {
         Map<String, Object> ev = event(tenantId, eventId, true);
         if ("ended".equals(ev.get("status"))) throw ended();
         if (!"draft".equals(ev.get("status"))) throw BazarOnlineStock.locked();
+        requireKeepAvailable(tenantId, mode);
         String transferStatus = jdbc.queryForObject(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ? FOR SHARE",
             String.class, ev.get("transfer_id"), tenantId);
@@ -579,6 +613,8 @@ public class BazarService {
         out.put("today", BazarSaleService.today(jdbc, tenantId, eventId, methods));
         // B3: the whole event — money that moved (payments − refunds) and revenue (sales − returns).
         out.put("totals", BazarSaleService.summary(jdbc, tenantId, eventId, methods, false));
+        // U1d: whether this store may choose Keep showing online (Main reconcile writes for it).
+        out.put("keep_available", keepAvailable(tenantId));
         return out;
     }
 

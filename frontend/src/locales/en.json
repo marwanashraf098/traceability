@@ -6812,6 +6812,9 @@
       "closeTransferToFinish": "Close the transfer to finish",
       "finishEvent": "Finish the event"
     },
+    "u1d": {
+      "keepUnavailable": "Not available for your store yet — pieces will be removed from online stock while they're at the bazar."
+    },
     "u1c": {
       "count": {
         "split": "{{n}} without labels · {{labelled}} with labels (scan them)",

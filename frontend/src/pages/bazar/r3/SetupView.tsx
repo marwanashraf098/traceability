@@ -202,7 +202,8 @@ export function SetupView({ ev, reload, onChanged }: {
       {changing && (
         <Modal title={t('bazar.online.dialogTitle')} onClose={() => setChanging(null)}>
           <div className="flex flex-col gap-4" data-testid="bazar-online-dialog">
-            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change" />
+            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change"
+                              keepAvailable={ev.keep_available !== false} />
             <OnlineStockWholeLocation location={ev.location_name} />
             {onlineError && <p role="alert" className="text-body text-critical">{onlineError}</p>}
             <BlockingBazarLink bazar={blocking} />

@@ -10,7 +10,7 @@ import {
 } from '../../../bazar/api'
 import { resetCapabilitiesCache } from '../../../capabilities'
 import { Button, Modal, cn } from '../../../components/ui'
-import { OnlineStockCards, OnlineStockPhonePair, OnlineStockTag } from '../OnlineStock'
+import { OnlineStockCards, OnlineStockPhonePair, OnlineStockTag, useKeepAvailable } from '../OnlineStock'
 import { PricesCard, priceTotals, usePriceData } from '../r3/PricesCard'
 import RangeCalendar from '../r1/RangeCalendar'
 import { cairoToday, dayCount } from '../r1/overviewState'
@@ -233,6 +233,9 @@ function YourBazar({ created, onNext }: { created: string | null; onNext: (id: s
   const [methods, setMethods] = useState<PaymentMethod[]>(['cash', 'instapay', 'card'])
   const [team, setTeam] = useState(true)
   const [online, setOnline] = useState<OnlineStock>('remove')
+  // U1d: Keep showing online only while Main reconcile writes for this store.
+  const keepAvailable = useKeepAvailable()
+  useEffect(() => { if (!keepAvailable) setOnline('remove') }, [keepAvailable])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const n = dayCount(startsOn, endsOn)
@@ -350,7 +353,7 @@ function YourBazar({ created, onNext }: { created: string | null; onNext: (id: s
               </fieldset>
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-2"><Eyebrow>{t('bazar.online.title')}</Eyebrow></legend>
-                <OnlineStockPhonePair value={online} onChange={setOnline} />
+                <OnlineStockPhonePair value={online} onChange={setOnline} keepAvailable={keepAvailable} />
                 <span className="text-small text-muted">{t(`bazar.online.${online}.desc`)}</span>
               </fieldset>
             </div>
@@ -898,7 +901,8 @@ function ReadyStep({ eventId, onBack, onStarted }: { eventId: string; onBack: ()
       {changing && (
         <Modal title={t('bazar.online.dialogTitle')} onClose={() => setChanging(null)}>
           <div className="flex flex-col gap-4" data-testid="bazar-online-dialog">
-            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change" />
+            <OnlineStockCards value={changing} onChange={setChanging} name="bazar-online-stock-change"
+                              keepAvailable={ev.keep_available !== false} />
             {onlineError && <p role="alert" className="text-body text-critical">{onlineError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setChanging(null)}>{t('bazar.form.cancel')}</Button>
