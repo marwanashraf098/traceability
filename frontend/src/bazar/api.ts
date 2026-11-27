@@ -77,6 +77,12 @@ export interface BazarEventDetail extends BazarEventRow {
   totals?: BazarTotals
   /** U1b: a draft whose transfer is preparing and never had a piece scanned out — Delete is offered. */
   deletable?: boolean
+  /** Top-up (V245): every send — batch 1 is Mark sent, then each batch sent while live. Empty before Mark sent. */
+  batches?: { batch_no: number; sent_at: string; pieces: number }[]
+  /** Top-up: the batch still being listed (nothing moved yet), if any. */
+  open_batch?: { id: string; batch_no: number; pieces: number } | null
+  /** Sizes shown for the bazar with no price yet ("N sizes have no price · Set prices"). */
+  no_price_count?: number
 }
 
 export interface BazarPriceRow {
@@ -336,6 +342,90 @@ export function removeFromSendOnce(eventId: string, what: { code: string } | { v
     : { variant_id: what.variantId, quantity: what.quantity, client_request_id: clientRequestId }
   return bazarFetch<BazarCountResult>(`${base(eventId)}/remove-from-send`, {
     method: 'POST', timeoutMs, body: JSON.stringify(body),
+  })
+}
+
+// ── Top-up: add pieces to a live bazar (V245, owner / manager) ───────────────
+
+/** One size on a batch's list. */
+export interface BazarBatchLine {
+  variant_id: string
+  sku: string | null
+  variant_title: string | null
+  product_title: string
+  count: number
+  /** Label codes of the listed pieces that carry one. */
+  codes: string[]
+}
+
+/** A batch: while 'open' it's a list — nothing moved; "Send these to the bazar" sends them all. */
+export interface BazarBatch {
+  id: string
+  batch_no: number
+  status: 'open' | 'sent' | 'discarded'
+  lines: BazarBatchLine[]
+  total: number
+}
+
+const batchPath = (eventId: string, batchId: string) => `${base(eventId)}/batches/${encodeURIComponent(batchId)}`
+
+/** Opens the bazar's batch, or returns the one already open. Live bazars only. */
+export function openBazarBatch(eventId: string) {
+  return bazarFetch<BazarBatch>(`${base(eventId)}/batches`, { method: 'POST', body: '{}' })
+}
+
+export function getCurrentBazarBatch(eventId: string) {
+  return bazarFetch<{ batch: BazarBatch | null }>(`${base(eventId)}/batches/current`)
+}
+
+/** Lists one scanned piece (like bazarScanOut: 200 with success / code; a coded refusal comes back the same way). */
+export function batchScan(eventId: string, batchId: string, barcode: string): Promise<TransferScanResult> {
+  return bazarFetch<TransferScanResult>(`${batchPath(eventId, batchId)}/scan`, {
+    method: 'POST', body: JSON.stringify({ barcode }),
+  }).catch(e => {
+    if (!(e instanceof BazarError)) throw e
+    return { success: false, code: e.code, message_en: e.messageEn, message_ar: e.messageAr, pieceId: null,
+             barcode, variantId: null, lineId: null, qtyOut: 0 }
+  })
+}
+
+/** Lists `quantity` of a size — only pieces without labels (U1c); fewer → SENT_PARTIAL "N added · M have labels". */
+export function batchCountOnce(eventId: string, batchId: string, variantId: string, quantity: number,
+                               clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarCountResult>(`${batchPath(eventId, batchId)}/count`, {
+    method: 'POST', timeoutMs,
+    body: JSON.stringify({ variant_id: variantId, quantity, client_request_id: clientRequestId }),
+  })
+}
+
+/** Takes a listed piece (`code`) or `quantity` of a size off the list. */
+export function batchRemoveOnce(eventId: string, batchId: string,
+                                what: { code: string } | { variantId: string; quantity: number },
+                                clientRequestId: string, timeoutMs: number) {
+  const body = 'code' in what
+    ? { code: what.code, client_request_id: clientRequestId }
+    : { variant_id: what.variantId, quantity: what.quantity, client_request_id: clientRequestId }
+  return bazarFetch<BazarCountResult>(`${batchPath(eventId, batchId)}/remove`, {
+    method: 'POST', timeoutMs, body: JSON.stringify(body),
+  })
+}
+
+export function discardBazarBatch(eventId: string, batchId: string) {
+  return bazarFetch<BazarEventDetail>(`${batchPath(eventId, batchId)}/discard`, { method: 'POST', body: '{}' })
+}
+
+export interface BazarBatchSent {
+  sent: number
+  piece_ids: string[]
+  replayed: boolean
+  event: BazarEventDetail
+}
+
+/** "Send these to the bazar" — retried with the SAME request id. A listed piece that changed → 409
+ *  BAZAR_BATCH_PIECES_CHANGED with details.blocked_codes; nothing was sent. */
+export function sendBazarBatchOnce(eventId: string, batchId: string, clientRequestId: string, timeoutMs: number) {
+  return bazarFetch<BazarBatchSent>(`${batchPath(eventId, batchId)}/send`, {
+    method: 'POST', timeoutMs, body: JSON.stringify({ client_request_id: clientRequestId }),
   })
 }
 

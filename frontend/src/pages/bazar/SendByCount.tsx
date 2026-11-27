@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Loader2, Minus, Plus, X } from 'lucide-react'
-import { BazarError, removeFromSendOnce, sendByCountOnce, type BazarCountResult } from '../../bazar/api'
+import {
+  BazarError, batchCountOnce, batchRemoveOnce, removeFromSendOnce, sendByCountOnce, type BazarCountResult,
+} from '../../bazar/api'
 import {
   getBazarSendStock, productSizeName, type BazarCatalog, type BazarCatalogProduct, type BazarCatalogSize,
 } from '../../bazar/catalog'
@@ -64,8 +66,10 @@ export function Status({ state, testId }: { state: CommandState<unknown>; testId
   return null
 }
 
-/** "Send by count": product → size → how many, with Main's stock and online orders' committed demand. */
-export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent: () => void }) {
+/** "Send by count": product → size → how many, with Main's stock and online orders' committed demand.
+ *  Top-up (V245): with {@code batchId} the same panel adds to that batch's LIST instead (nothing moves until the
+ *  batch is sent) — "Add N", the server's "N added · M have labels — scan them" when fewer were listed. */
+export function SendByCountPanel({ eventId, onSent, batchId }: { eventId: string; onSent: () => void; batchId?: string }) {
   const { t, i18n } = useTranslation()
   const [stock, setStock] = useState<BazarCatalog | null>(null)
   const [stockFailed, setStockFailed] = useState(false)
@@ -126,7 +130,9 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
     if (short && !confirming) { setConfirming(true); return }   // a second tap sends — the warning never blocks
     const variantId = picked.size.variant_id
     const n = qty
-    cmd.run((requestId, timeoutMs) => sendByCountOnce(eventId, variantId, n, requestId, timeoutMs))
+    cmd.run((requestId, timeoutMs) => batchId
+      ? batchCountOnce(eventId, batchId, variantId, n, requestId, timeoutMs)
+      : sendByCountOnce(eventId, variantId, n, requestId, timeoutMs))
   }
 
   return (
@@ -171,7 +177,9 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
             </p>
           )}
           <Button className="w-full" onClick={sendIt} disabled={cmd.busy || unlabelled === 0}>
-            {confirming ? t('bazar.count.sendAnyway', { count: qty }) : t('bazar.count.send', { count: qty })}
+            {batchId
+              ? (confirming ? t('bazar.topup.count.addAnyway', { count: qty }) : t('bazar.topup.count.add', { count: qty }))
+              : (confirming ? t('bazar.count.sendAnyway', { count: qty }) : t('bazar.count.send', { count: qty }))}
           </Button>
         </div>
       )}
@@ -179,7 +187,7 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
       <Status state={cmd.state} testId="send-by-count" />
       {sent != null && cmd.state.kind === 'done' && (
         <p role="status" className="text-small text-success" data-testid="send-by-count-done">
-          {t('bazar.count.sent', { count: sent })}
+          {batchId ? t('bazar.topup.count.added', { count: sent }) : t('bazar.count.sent', { count: sent })}
         </p>
       )}
       {/* U1c: fewer pieces without a label than asked — those were sent; the labelled ones are scanned. */}
@@ -198,12 +206,13 @@ export function SendByCountPanel({ eventId, onSent }: { eventId: string; onSent:
   )
 }
 
-/** "Remove N" on a line of the send (newest added first). */
-export function RemoveCount({ eventId, variantId, max, onRemoved }: {
+/** "Remove N" on a line of the send (newest added first). {@code batchId}: a line of a top-up batch's list. */
+export function RemoveCount({ eventId, variantId, max, onRemoved, batchId }: {
   eventId: string
   variantId: string
   max: number
   onRemoved: () => void
+  batchId?: string
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -245,7 +254,9 @@ export function RemoveCount({ eventId, variantId, max, onRemoved }: {
         <Button size="sm" variant="secondary" disabled={cmd.busy}
           onClick={() => {
             const n = Math.min(qty, max)
-            cmd.run((requestId, timeoutMs) => removeFromSendOnce(eventId, { variantId, quantity: n }, requestId, timeoutMs))
+            cmd.run((requestId, timeoutMs) => batchId
+              ? batchRemoveOnce(eventId, batchId, { variantId, quantity: n }, requestId, timeoutMs)
+              : removeFromSendOnce(eventId, { variantId, quantity: n }, requestId, timeoutMs))
           }}>
           {t('bazar.count.removeN', { count: Math.min(qty, max) })}
         </Button>
@@ -258,12 +269,13 @@ export function RemoveCount({ eventId, variantId, max, onRemoved }: {
   )
 }
 
-/** The ✕ on a scanned row: take that piece back off the send. */
-export function RemoveScanButton({ eventId, code, onRemoved, onError }: {
+/** The ✕ on a scanned row: take that piece back off the send (or off a top-up batch's list, {@code batchId}). */
+export function RemoveScanButton({ eventId, code, onRemoved, onError, batchId }: {
   eventId: string
   code: string
   onRemoved: () => void
   onError: (e: BazarError) => void
+  batchId?: string
 }) {
   const { t } = useTranslation()
   const cmd = useRetryingCommand<BazarCountResult>()
@@ -273,7 +285,9 @@ export function RemoveScanButton({ eventId, code, onRemoved, onError }: {
   }, [cmd.state]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <button type="button" disabled={cmd.busy} aria-label={t('bazar.count.removeScan')} data-testid="remove-scan"
-      onClick={() => cmd.run((requestId, timeoutMs) => removeFromSendOnce(eventId, { code }, requestId, timeoutMs))}
+      onClick={() => cmd.run((requestId, timeoutMs) => batchId
+        ? batchRemoveOnce(eventId, batchId, { code }, requestId, timeoutMs)
+        : removeFromSendOnce(eventId, { code }, requestId, timeoutMs))}
       className="h-8 w-8 rounded-md border border-line flex items-center justify-center text-muted hover:text-danger disabled:opacity-40">
       {cmd.busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <X size={14} aria-hidden />}
     </button>

@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup` off origin/main 25bcfbc6; V245;
-IN PROGRESS — backend first).** Decisions (approved 2026-11-27, Step 0):
+**Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main a3bda1ce
+(U1c); V245; backend + frontend built, pushed NOT, merged NOT, deployed NOT).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a
   batch is a LIST only (scan / send by count / ✕ change the list, nothing moves); "Send these to the bazar" claims every
   piece through the existing `claimAndSend` (`transfer_pieces.batch_id`), marks the batch sent and writes the batch's
@@ -28,17 +28,35 @@ IN PROGRESS — backend first).** Decisions (approved 2026-11-27, Step 0):
   without labels.
 - Case B (receive brand-new stock straight into a live bazar) parked until A is live.
 
-Backend built (uncommitted, 2026-11-27):
+Built (2026-11-27):
 - V245 `transfer_send_batches` / `transfer_send_batch_items` (RLS NULLIF, no DELETE), `transfer_pieces.batch_id`,
   `transfer_shopify_syncs.batch_id` + the two partial uniques. `scripts/ops/2026-10-08-transfer-shopify-repair.sql`'s
-  ON CONFLICT names the first-send predicate (same rows).
+  ON CONFLICT names the first-send predicate (same rows; approved).
 - TransferService (ONE caller BazarService): `openSendBatchForBazar`, `addScannedToBatchForBazar`,
   `addCountToBatchForBazar`, `removeFromBatchForBazar`, `discardBatchForBazar`, `sendBatchForBazar`. The scan's piece
-  checks are shared (`resolveSendPiece`, extracted from scanOutCore unchanged), the count picker is shared
-  (`pickForCount` — U1c's unlabelled-only rule lands here on rebase), the send goes through `claimAndSend` (new
-  `batchId` arg) then `TransferShopifySync.claimBatchSend`.
+  checks are shared (`resolveSendPiece`, extracted from scanOutCore unchanged); THE count picker `pickForCount` is
+  shared and carries U1c's rule (`short_code IS NULL`). A batch count: fewer without labels → SENT_PARTIAL "N added · M
+  have labels — scan them" (M = labelled at Main not on the list); none → U1c's BAZAR_PIECES_HAVE_LABELS; a replay
+  answers SENT (the partial message isn't kept). The send goes through `claimAndSend` (new `batchId` arg) then
+  `TransferShopifySync.claimBatchSend`.
 - Endpoints (owner / manager): POST `/bazar-events/{id}/batches`, GET `…/batches/current`, POST
   `…/batches/{batchId}/scan|count|remove|discard|send`. Detail adds `batches`, `open_batch`, `no_price_count`.
+  End event → 409 BAZAR_TOPUP_OPEN while a batch is open. TODO(U1d) in `BazarService.sendBatch`: a Keep batch Send at a
+  store where reconcile doesn't write must refuse BAZAR_KEEP_UNAVAILABLE.
+- Frontend: `/bazar/:id/add-pieces` (`BazarAddPieces` → TransferScanOut with `bazar.batchId`: the batch's lines, scans
+  / count / ✕ / Remove N on the batch endpoints, `BatchFooter` Send these N / Discard (second tap) / Remove-vs-Keep
+  note; scanner hooks untouched). Live page: More ▾ "Add more pieces" / "Continue adding pieces (N listed)", open-batch
+  banner, "N sizes have no price · Set prices" (→ Prices tab), Pieces tab "Sent in N batches" card (2+ sends). Phone
+  BazarMenu "Add more pieces" for owner / manager (no camera). Strings `bazar.topup` (EN + AR, first in `bazar`).
+- Tests: BazarTopupTest (10; R1–R10 + u1 revert-checked), BazarTopupHttpAppUserTest (4, app_user; revert: no
+  @Transactional → 404), bazarTopup.test.tsx (13; F1–F9 revert-checked). Approved edits: BazarTransferLockTest pattern,
+  MigrationSmokeTest 244, NotTracedBackfillTest 189, leak-registry SKIPs, RlsCoverageTest COVERED, BazarSetupSendTest.g2
+  (2 definitions + 1 delegation + 4 calls; batch send: claimAndSend + claimBatchSend only), BazarReportGuardTest
+  (+transfer_send_batches), BazarEnabledDefaultTest (V244 among applied + column default true, no count).
+- Full backend suite after the rebase: 5034, red = ExchangeBackfillTest (allowed) + PortalPaidPriceTierTest.b1 (random
+  short_code collision in its fixture) + ShopifyOAuthDay1Test.expiredState (553 s run, overlapped the frontend suite) —
+  both green alone. Frontend 273 files / 2337 green (alone).
+- Not done: merge (stop before merging — asked), U1d refusal (waiting for U1d on main), phone camera on the batch screen.
   End event → 409 BAZAR_TOPUP_OPEN while a batch is open.
 - Tests: BazarTopupTest (9, revert-checked R1–R10), BazarTopupHttpAppUserTest (4, app_user; revert: no
   @Transactional → 404). Approved edits: BazarTransferLockTest pattern, MigrationSmokeTest 244, NotTracedBackfillTest

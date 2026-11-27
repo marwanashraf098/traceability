@@ -7015,6 +7015,39 @@
     "alertLink": "ماذا يعني هذا؟"
   },
   "bazar": {
+    "topup": {
+      "addMore": "إضافة قطع أخرى",
+      "continue_one": "متابعة إضافة القطع ({{count}} في القائمة)",
+      "continue_other": "متابعة إضافة القطع ({{count}} في القائمة)",
+      "title": "الدفعة {{n}} · قطع للإضافة",
+      "gone": "تم إرسال هذه الدفعة أو إلغاؤها بالفعل.",
+      "send_one": "أرسل هذه القطعة إلى البازار",
+      "send_other": "أرسل هذه الـ {{count}} إلى البازار",
+      "discard": "إلغاء هذه القائمة",
+      "discardConfirm": "إلغاء؟ اضغط مرة أخرى",
+      "removeNote_one": "لا يتحرك شيء حتى ترسل. عند الإرسال تخرج هذه القطعة من المخزون أونلاين.",
+      "removeNote_other": "لا يتحرك شيء حتى ترسل. عند الإرسال تخرج هذه الـ {{count}} من المخزون أونلاين.",
+      "keepNote": "لا يتحرك شيء حتى ترسل. المخزون أونلاين يبقى كما هو.",
+      "openBanner_one": "تضيف {{count}} قطعة لهذا البازار — لم تُرسل بعد.",
+      "openBanner_other": "تضيف {{count}} قطع لهذا البازار — لم تُرسل بعد.",
+      "openBannerAction": "متابعة",
+      "noPrice_one": "{{count}} مقاس بدون سعر",
+      "noPrice_other": "{{count}} مقاسات بدون سعر",
+      "setPrices": "حدّد الأسعار",
+      "sentInBatches_one": "أُرسلت في دفعة واحدة",
+      "sentInBatches_other": "أُرسلت في {{count}} دفعات",
+      "batchN": "الدفعة {{n}}",
+      "pieces_one": "{{count}} قطعة",
+      "pieces_other": "{{count}} قطع",
+      "count": {
+        "add_one": "أضف {{count}}",
+        "add_other": "أضف {{count}}",
+        "addAnyway_one": "أضف {{count}} على أي حال",
+        "addAnyway_other": "أضف {{count}} على أي حال",
+        "added_one": "أُضيفت {{count}} إلى القائمة",
+        "added_other": "أُضيفت {{count}} إلى القائمة"
+      }
+    },
     "newStock": {
       "button": "جهّز من مخزون جديد",
       "hint": "«جهّز من مخزون جديد» بيضيف قطع لسه مش في Traced. لو موجودة في Traced بالفعل، خطّط لأول بازار وابعتها من المخزون.",

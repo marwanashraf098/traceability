@@ -6619,6 +6619,39 @@
     "alertLink": "What does this mean?"
   },
   "bazar": {
+    "topup": {
+      "addMore": "Add more pieces",
+      "continue_one": "Continue adding pieces ({{count}} listed)",
+      "continue_other": "Continue adding pieces ({{count}} listed)",
+      "title": "Batch {{n}} · pieces to add",
+      "gone": "This batch was already sent or discarded.",
+      "send_one": "Send this piece to the bazar",
+      "send_other": "Send these {{count}} to the bazar",
+      "discard": "Discard this list",
+      "discardConfirm": "Discard? Tap again",
+      "removeNote_one": "Nothing moves until you send. When sent, this piece leaves online stock.",
+      "removeNote_other": "Nothing moves until you send. When sent, these {{count}} leave online stock.",
+      "keepNote": "Nothing moves until you send. Online stock stays as it is.",
+      "openBanner_one": "You're adding {{count}} piece to this bazar — not sent yet.",
+      "openBanner_other": "You're adding {{count}} pieces to this bazar — not sent yet.",
+      "openBannerAction": "Continue",
+      "noPrice_one": "{{count}} size has no price",
+      "noPrice_other": "{{count}} sizes have no price",
+      "setPrices": "Set prices",
+      "sentInBatches_one": "Sent in {{count}} batch",
+      "sentInBatches_other": "Sent in {{count}} batches",
+      "batchN": "Batch {{n}}",
+      "pieces_one": "{{count}} piece",
+      "pieces_other": "{{count}} pieces",
+      "count": {
+        "add_one": "Add {{count}}",
+        "add_other": "Add {{count}}",
+        "addAnyway_one": "Add {{count}} anyway",
+        "addAnyway_other": "Add {{count}} anyway",
+        "added_one": "{{count}} added to the list",
+        "added_other": "{{count}} added to the list"
+      }
+    },
     "newStock": {
       "button": "Set up from new stock",
       "hint": "Set up from new stock adds pieces that aren't in Traced yet. Already have them in Traced? Plan your first bazar and send them from stock.",

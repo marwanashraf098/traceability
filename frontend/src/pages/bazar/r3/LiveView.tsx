@@ -106,6 +106,9 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
             <button type="button" className={btnSecondary} data-testid="desktop-close-day" disabled={!days?.days.length}
                     onClick={() => navigate(`/bazar/${ev.id}/close-day`)}>{closeDayLabel}</button>
             <MoreMenu label={t('bazar.r3.header.more')} items={[
+              // Top-up (V245): send more pieces to the live bazar — or continue the list already started.
+              { key: 'add-pieces', label: ev.open_batch ? t('bazar.topup.continue', { count: ev.open_batch.pieces })
+                  : t('bazar.topup.addMore'), onSelect: () => navigate(`/bazar/${ev.id}/add-pieces`) },
               { key: 'prices', label: t('bazar.prices.changePrices'), onSelect: () => setTab('prices') },
               { key: 'sellers', label: t('bazar.r3.header.inviteSellers'), onSelect: () => setTab('sellers') },
               { key: 'end', label: t('bazar.phone.endEvent'), onSelect: () => navigate(`/bazar/${ev.id}/end-event`), danger: true },
@@ -122,6 +125,25 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
             <Link to={`/bazar/${ev.id}/report`} className={btnPrimary} data-testid="view-report">{t('bazar.end.viewReport')}</Link>
           </>
         )} />
+
+      {/* Top-up: a list still open (nothing moved yet), and sizes with no price (a new size with no Shopify price). */}
+      {live && ev.open_batch && (
+        <div role="status" data-testid="bazar-open-batch"
+             className="rounded-lg border border-trace-blue/30 bg-trace-blue/5 px-4 py-3 flex items-center justify-between gap-3">
+          <span className="text-small text-primary">{t('bazar.topup.openBanner', { count: ev.open_batch.pieces })}</span>
+          <Link to={`/bazar/${ev.id}/add-pieces`} className="text-small font-semibold text-trace-blue whitespace-nowrap">
+            {t('bazar.topup.openBannerAction')}</Link>
+        </div>
+      )}
+      {live && (ev.no_price_count ?? 0) > 0 && (
+        <div role="alert" data-testid="bazar-no-price"
+             className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 flex items-center justify-between gap-3">
+          <span className="text-small font-semibold text-warning-text">
+            {t('bazar.topup.noPrice', { count: ev.no_price_count ?? 0 })}</span>
+          <button type="button" onClick={() => setTab('prices')}
+                  className="text-small font-semibold text-trace-blue whitespace-nowrap">{t('bazar.topup.setPrices')}</button>
+        </div>
+      )}
 
       <TabBar tabs={tabs} current={tab} onChange={setTab} label={t('bazar.r3.tabs.label')} />
 
@@ -533,7 +555,10 @@ function PiecesPanel({ ev, left }: { ev: BazarEventDetail; left: BazarLeftovers 
   const { t } = useTranslation()
   return (
     <div className="grid gap-5 lg:grid-cols-2 items-start">
-      <PiecesCard ev={ev} />
+      <div className="flex flex-col gap-5">
+        <PiecesCard ev={ev} />
+        <BatchesCard ev={ev} />
+      </div>
       {left && (
         <Card testId="bazar-leftovers" title={t('bazar.end.leftoversTitle')}
           end={<Link to={`/bazar/${ev.id}/end-event`} className="text-small font-semibold text-trace-blue inline-flex items-center gap-1">
@@ -543,6 +568,27 @@ function PiecesPanel({ ev, left }: { ev: BazarEventDetail; left: BazarLeftovers 
         </Card>
       )}
     </div>
+  )
+}
+
+/** Top-up: "Sent in N batches" — each send's number, time and pieces (shown once there's more than one send). */
+function BatchesCard({ ev }: { ev: BazarEventDetail }) {
+  const { t, i18n } = useTranslation()
+  const batches = ev.batches ?? []
+  if (batches.length < 2) return null
+  return (
+    <Card testId="bazar-batches" title={t('bazar.topup.sentInBatches', { count: batches.length })}>
+      <ul className="flex flex-col divide-y divide-line">
+        {batches.map(b => (
+          <li key={b.batch_no} className="flex items-center justify-between py-2 text-small">
+            <span className="text-primary">{t('bazar.topup.batchN', { n: b.batch_no })}
+              <span className="text-muted"> · {dayLabel(new Date(b.sent_at).toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }),
+                i18n.language)} {saleTime(b.sent_at)}</span></span>
+            <span className="font-mono tabular-nums text-primary">{t('bazar.topup.pieces', { count: b.pieces })}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   )
 }
 
