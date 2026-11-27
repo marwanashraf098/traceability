@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
 import { getRoleFromToken, getJwtExpiry, refreshAccessToken } from './api'
@@ -54,6 +54,7 @@ import Orders from './pages/Orders'
 import { ReceivingRoute } from './pages/receiving/GuidedReceiving'
 import HelpCenter from './pages/help/HelpCenter'
 import HelpArticle from './pages/help/HelpArticle'
+import { isWorkerArticle } from './help/helpRegistry'
 import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
@@ -281,6 +282,21 @@ export function StrictOwnerRoute({ children }: { children: React.ReactNode }) {
   if (role === 'worker') return <Navigate to="/worker-home" replace />
   if (role !== 'owner') return <Navigate to="/overview" replace />
   return <SetupGate>{children}</SetupGate>
+}
+
+/** The help center — owners / managers (a worker is sent to /worker-home). */
+export function HelpCenterRoute() {
+  return <OwnerOnlyRoute><Layout><HelpCenter /></Layout></OwnerOnlyRoute>
+}
+
+/**
+ * One help article. Owners / managers: every article. A worker: only the WORKER_ARTICLES (the bazar seller's guide);
+ * any other article sends them to /worker-home, like the help center itself.
+ */
+export function HelpArticleRoute() {
+  const { id = '' } = useParams()
+  if (getRoleFromToken() === 'worker' && isWorkerArticle(id)) return <Layout><HelpArticle /></Layout>
+  return <OwnerOnlyRoute><Layout><HelpArticle /></Layout></OwnerOnlyRoute>
 }
 
 /** /worker-home is worker-only — owner/manager land on /overview instead. */
@@ -620,27 +636,10 @@ export default function App() {
             </RequireAuth>
           }
         />
-        {/* Onboarding O6 — the help center (owner / manager; workers' "?" only replay tours). */}
-        <Route
-          path="/help"
-          element={
-            <RequireAuth>
-              <OwnerOnlyRoute>
-                <Layout><HelpCenter /></Layout>
-              </OwnerOnlyRoute>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/help/:id"
-          element={
-            <RequireAuth>
-              <OwnerOnlyRoute>
-                <Layout><HelpArticle /></Layout>
-              </OwnerOnlyRoute>
-            </RequireAuth>
-          }
-        />
+        {/* Onboarding O6 — the help center (owner / manager; workers' "?" only replay tours). A worker may open
+            only the WORKER_ARTICLES (the bazar seller's guide). */}
+        <Route path="/help" element={<RequireAuth><HelpCenterRoute /></RequireAuth>} />
+        <Route path="/help/:id" element={<RequireAuth><HelpArticleRoute /></RequireAuth>} />
         <Route
           path="/settings"
           element={

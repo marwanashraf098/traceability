@@ -4,6 +4,34 @@
 
 ## Current state
 
+**Help center — bazar guides (2026-11-27; branch `feat/help-bazar` off origin/main a3bda1ce (U1c merged); worktree
+`~/Documents/trace-help-bazar`; frontend only, NO migration; committed locally, NOT pushed, NOT merged, NOT deployed).**
+- **(a) Articles:** 14 new, EN + AR, topic `bazar` ("Bazar" / "البازار", `helpCenter.topics.bazar`, after Orders):
+  bazar-create, -get-ready, -online-stock, -send-by-count (U1c wording), -prices, -sell-laptop, -invite-sellers,
+  -seller-guide, -close-day, -end-event, -report (U1c What sold), -customer-details, -setup-new-stock, -faq. Written to
+  today's behaviour; screen texts that are wrong today (Step 0 items 2, 4, 8, 9, 11, 12, 15) are described, not quoted.
+  Said plainly: "Done, I lowered them" doesn't check Shopify; no PIN reset (lost access = a new link); no offline mode,
+  bring a hotspot; with Keep the last piece can sell online and at the bazar. Keep wording: "Shopify updates usually
+  within a few minutes after the sale". **Not yet:** the "If Keep is greyed out…" line (waits for U1d) and
+  `bazar-top-up` (waits for top-up).
+- **(b) Seller guide for workers (approved):** `WORKER_ARTICLES = ['bazar-seller-guide']` (helpRegistry). App's
+  `/help/:id` → `HelpArticleRoute`: a worker opens only that article (Layout, no SetupGate), anything else →
+  /worker-home; `/help` → `HelpCenterRoute` (unchanged rule). HelpArticle: the breadcrumb isn't a link for a worker.
+  A worker article must have no Related and no /help links (guarded). Phone bazar menu (BazarMenu, on the phone Home
+  header — the Sell screen has no menu): "How to sell" / "كيف تبيع" (`bazar.menu.howToSell`), every role, new tab.
+- **(b) Screen links:** `HelpLink` (help/HelpLink.tsx) — "Read more" (`helpCenter.readMore`), owner / manager only,
+  new tab; `SCREEN_ARTICLES` registry. On: Bazar list, New bazar (title + Online stock, phone and desktop), Close day,
+  Customer details, Sellers card, setup wizard header. **Left for after top-up:** Get ready (SetupView), Live
+  (LiveView), Prices card, Scan out / Send by count, End event / Leftovers, Report.
+- **Tests:** new `helpSellerGuide.test.tsx` (14: worker opens the guide EN / AR; refused on /help and on every other
+  article + an unknown id; owner / manager unchanged; worker article has no links; menu link; SCREEN_ARTICLES exist;
+  HelpLink by role). Revert-checked: guard loosened → s1 "every other article" red; exception removed → both "opens"
+  red. helpCenter.test 23/23 unchanged. No existing test edited. Full vitest (serial): 2,331 / 2,338 — the 7 red
+  (analyticsSummary r2, bazarB6c, bazarB7c ×2, fulfill ft5, scanKeyCapture ×2) were timeouts under load (ft5 540 s);
+  the 5 files rerun alone: 111 / 111 green.
+- **Gotcha:** a new Help article for workers must be added to `WORKER_ARTICLES` AND keep `related: []` with no
+  /help links, or a worker is sent to /worker-home from it.
+
 **Bazar U1c — small fixes from the 2026-11-26 E2E test (2026-11-26; branch `feat/bazar-u1c` off origin/main, rebased
 onto 25bcfbc6 after the wizard-entry merge; NO migration — next free still V245; pushed, NOT merged, NOT deployed).**
 - **Send by count = stock WITHOUT a label only** (`TransferService.scanOutByCountForBazar`: `short_code IS NULL`).

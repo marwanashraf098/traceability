@@ -5,6 +5,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ChevronRight, MessageCircle, ThumbsUp } from 'lucide-react'
 import { Spinner } from '../../components/ui'
+import { getRoleFromToken } from '../../api'
 import { useHelpLibrary } from '../../help/loadHelp'
 import { HELP_WHATSAPP } from '../../help/topics'
 import { helpLang } from './HelpCenter'
@@ -35,6 +36,7 @@ export default function HelpArticle() {
   const lang = helpLang(i18n.language)
   const lib = useHelpLibrary()
   const [answer, setAnswer] = useState<'yes' | null>(null)
+  const worker = getRoleFromToken() === 'worker'
 
   if (lib === undefined) return <div className="flex justify-center py-16"><Spinner /></div>
   if (lib === null) return <p className="text-body text-critical-text" role="alert">{t('helpCenter.loadFailed')}</p>
@@ -56,7 +58,10 @@ export default function HelpArticle() {
     <div className="max-w-[1040px] mx-auto flex flex-wrap gap-8 items-start" data-testid="help-article" data-article={a.id}>
       <article className="flex-[999_1_560px] min-w-0 flex flex-col gap-4">
         <nav aria-label={t('helpCenter.title')} className="flex flex-wrap items-center gap-1.5 text-small text-muted">
-          <Link to="/help" className="hover:text-primary">{t('helpCenter.title')}</Link>
+          {/* A worker can't open the help center (only their article), so no link for them. */}
+          {worker
+            ? <span>{t('helpCenter.title')}</span>
+            : <Link to="/help" className="hover:text-primary">{t('helpCenter.title')}</Link>}
           <ChevronRight size={14} className="rtl:-scale-x-100" aria-hidden />
           <span>{t(`helpCenter.topics.${a.topic}`)}</span>
         </nav>

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../help/HelpLink'
 import {
   ArrowLeft, ArrowRight, Banknote, Check, CreditCard, Crown, History, MapPin, Smartphone, UserCog, Users, type LucideIcon,
 } from 'lucide-react'
@@ -256,6 +257,7 @@ export default function BazarNewEvent() {
         <div className="flex flex-col gap-1">
           <StepsBar phone />
           <h1 className="text-[26px] leading-8 font-bold tracking-[-0.02em] text-primary">{t('bazar.r1.form.title')}</h1>
+          <HelpLink screen="bazarNew" className="self-start" />
         </div>
         {nameInput}
         <div className="card p-3.5 flex items-center gap-3">
@@ -288,6 +290,7 @@ export default function BazarNewEvent() {
           <legend className="mb-2"><Eyebrow>{t('bazar.online.title')}</Eyebrow></legend>
           <OnlineStockPhonePair value={online} onChange={setOnline} />
           <OnlineStockWholeLocation />
+          <HelpLink screen="bazarOnlineStock" className="self-start" />
           <span className="text-small text-muted">{t(`bazar.online.${online}.desc`)}</span>
         </fieldset>
         {removeNote}
@@ -317,6 +320,7 @@ export default function BazarNewEvent() {
           <ArrowLeft size={14} aria-hidden className="rtl:-scale-x-100" />{t('bazar.title')}
         </Link>
         <h1 className="text-[32px] leading-10 font-bold tracking-[-0.02em] text-primary">{t('bazar.r1.form.title')}</h1>
+        <HelpLink screen="bazarNew" className="self-start" />
       </div>
       <StepsBar phone={false} />
 
@@ -354,6 +358,7 @@ export default function BazarNewEvent() {
       <Section n={5} title={t('bazar.online.title')} sub={t('bazar.online.sub')}>
         <OnlineStockCards value={online} onChange={setOnline} />
         <OnlineStockWholeLocation />
+        <HelpLink screen="bazarOnlineStock" className="self-start" />
       </Section>
 
       {errorLine}

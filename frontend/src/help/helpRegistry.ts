@@ -74,3 +74,27 @@ export const ALERT_ARTICLES: Record<string, string> = Object.fromEntries(
 export function articleForAlert(type: string): string {
   return ALERT_ARTICLES[type] ?? 'alerts-overview'
 }
+
+/**
+ * Articles a WORKER may open (the help center and every other article stay owner / manager only). Today: the bazar
+ * seller's guide, linked from the phone bazar menu's "How to sell". A worker article must not link to another article
+ * (related: [] and no /help/ links in its body) — a worker would be sent away from it. Guard: helpSellerGuide.test.
+ */
+export const WORKER_ARTICLES: readonly string[] = ['bazar-seller-guide']
+
+export function isWorkerArticle(id: string): boolean {
+  return WORKER_ARTICLES.includes(id)
+}
+
+/** Screens with a "Read more" link (HelpLink) → the article it opens. Guard: every id exists in EN and AR, none hidden. */
+export const SCREEN_ARTICLES = {
+  bazarList: 'bazar-create',
+  bazarNew: 'bazar-create',
+  bazarOnlineStock: 'bazar-online-stock',
+  bazarSellers: 'bazar-invite-sellers',
+  bazarCloseDay: 'bazar-close-day',
+  bazarCustomers: 'bazar-customer-details',
+  bazarSetup: 'bazar-setup-new-stock',
+} as const satisfies Record<string, string>
+
+export type ScreenHelp = keyof typeof SCREEN_ARTICLES

@@ -7741,6 +7741,7 @@
       "open": "Bazar menu",
       "title": "Bazar",
       "switchSeller": "Switch seller",
+      "howToSell": "How to sell",
       "sellers": "Sellers",
       "noSellers": "No seller of this bazar has a PIN yet.",
       "rosterFailed": "The sellers didn't load.",

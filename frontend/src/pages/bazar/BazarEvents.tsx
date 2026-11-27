@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../help/HelpLink'
 import { ArrowRight, Check, ChevronRight, PackagePlus, Plus, UserSearch } from 'lucide-react'
 import {
   BazarError, currentUserId, getBazarEvent, getBazarReport, getBazarToday, listBazarDays, listBazarEvents, listBazarPrices,
@@ -76,6 +77,7 @@ export default function BazarEvents() {
         <div className="flex flex-col gap-1 min-w-0">
           <h1 className="text-[28px] leading-9 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-primary">{t('bazar.title')}</h1>
           <p className="hidden sm:block text-body text-muted">{t('bazar.r1.overview.subtitle')}</p>
+          <HelpLink screen="bazarList" className="self-start" />
         </div>
         <div className="flex items-center gap-2">
         <Link to="/bazar/customers" data-testid="bazar-customer-details-link"

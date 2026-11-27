@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { HelpLink } from '../../../help/HelpLink'
 import { SellersPanel } from '../SellersPanel'
 
 /** B6b — who sells at this event, and their one-time sign-in links (moved out of BazarEventPage in R3). */
@@ -9,6 +10,7 @@ export function SellersCard({ eventId }: { eventId: string }) {
       <div className="flex flex-col">
         <h2 className="text-body-lg font-semibold text-primary">{t('bazar.sellers.title')}</h2>
         <p className="text-small text-muted">{t('bazar.sellers.subtitle')}</p>
+        <HelpLink screen="bazarSellers" className="self-start mt-1" />
       </div>
       <SellersPanel eventId={eventId} />
     </section>
