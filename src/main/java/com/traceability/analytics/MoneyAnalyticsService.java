@@ -233,13 +233,31 @@ public class MoneyAnalyticsService {
     }
 
     /*
+     * The tenant's typical Bosta fee (incl. VAT) — for a delivery not booked yet, or a leg Bosta gave no quote
+     * for: the average fee of its
+     * forward Send legs delivered in the 90 days before now (SettlementSql.fee — settled, else the quote).
+     * Parameters: tenant id, now.
+     */
+    static final String TYPICAL_FEE = """
+        typical_fee AS (
+            SELECT AVG(""" + SettlementSql.fee("tf") + """
+                   ) AS fee
+            FROM shipments tf
+            WHERE tf.tenant_id = ? AND tf.provider = 'bosta' AND tf.shipment_leg = 'forward'
+              AND COALESCE(tf.type_code, '10') = '10' AND tf.internal_state = 'delivered'
+              AND tf.delivered_at > ?::timestamptz - interval '90 days'
+        )
+        """;
+
+    /*
      * Fees still to be deducted (FeesToDeduct): one row per category (and, for finished legs, per Cairo
      * finish day — the cash forecast places them like delivered, not-settled legs). Columns cat, day, n,
-     * amount. Parameters: override domains, override days, tenant id.
+     * amount. A leg with neither a settled fee nor a quote counts the tenant's typical Send fee. Parameters:
+     * tenant id, now (typical fee), override domains, override days, tenant id.
      */
-    static final String FEES_TO_DEDUCT = """
+    static final String FEES_TO_DEDUCT = "WITH " + TYPICAL_FEE + """
         SELECT x.cat, CASE WHEN x.cat = 'finished_unsettled' THEN (x.terminal_at AT TIME ZONE 'Africa/Cairo')::date END AS day,
-               COUNT(*) AS n, COALESCE(SUM(x.fee), 0) AS amount
+               COUNT(*) AS n, COALESCE(SUM(COALESCE(x.fee, (SELECT fee FROM typical_fee))), 0) AS amount
         FROM (
             SELECT CASE WHEN s.internal_state IN """ + SettlementSql.TERMINAL_STATES + """
                              THEN 'finished_unsettled'
@@ -265,11 +283,13 @@ public class MoneyAnalyticsService {
     record FeeRow(String category, LocalDate day, long count, BigDecimal amount) {}
 
     /** The tenant's fees still to be deducted, by category (and finish day) — shared with the cash forecast. */
-    List<FeeRow> feesToDeductRows(UUID tid) {
+    List<FeeRow> feesToDeductRows(UUID tid, Instant now) {
         return jdbc.query(FEES_TO_DEDUCT, ps -> {
-            ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
-            ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.days()));
-            ps.setObject(3, tid);
+            ps.setObject(1, tid);
+            ps.setTimestamp(2, Timestamp.from(now));
+            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+            ps.setArray(4, ps.getConnection().createArrayOf("text", overrides.days()));
+            ps.setObject(5, tid);
         }, (rs, n) -> {
             Date d = rs.getDate("day");
             return new FeeRow(rs.getString("cat"), d == null ? null : d.toLocalDate(), rs.getLong("n"),
@@ -292,21 +312,6 @@ public class MoneyAnalyticsService {
             money(ret.amount().add(crp.amount()).add(fin.amount())), ret, crp, fin);
     }
 
-    /*
-     * The tenant's typical Bosta fee (incl. VAT) for a delivery not booked yet: the average fee of its
-     * forward Send legs delivered in the 90 days before now (SettlementSql.fee — settled, else the quote).
-     * Parameters: tenant id, now.
-     */
-    static final String TYPICAL_FEE = """
-        typical_fee AS (
-            SELECT AVG(""" + SettlementSql.fee("tf") + """
-                   ) AS fee
-            FROM shipments tf
-            WHERE tf.tenant_id = ? AND tf.provider = 'bosta' AND tf.shipment_leg = 'forward'
-              AND COALESCE(tf.type_code, '10') = '10' AND tf.internal_state = 'delivered'
-              AND tf.delivered_at > ?::timestamptz - interval '90 days'
-        )
-        """;
 
     /** Awaiting payout, deposited: Bosta settled the leg into the wallet, no payout yet. */
     static final String AWAITING_DEPOSITED = " (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") + ") ";
@@ -427,7 +432,7 @@ public class MoneyAnalyticsService {
                     last == null ? null : last.toLocalDate());
             });
 
-        return new Pipeline(period.range(), now, notFulfilled, inTransit, awaiting, feesToDeduct(feesToDeductRows(tid)),
+        return new Pipeline(period.range(), now, notFulfilled, inTransit, awaiting, feesToDeduct(feesToDeductRows(tid, now)),
             bank, openOrderDays);
     }
 
@@ -468,14 +473,17 @@ public class MoneyAnalyticsService {
     /**
      * The pipeline's in-transit stage (IN_TRANSIT_LEGS) — shared with the cash forecast. 2026-11-27:
      * expected = Σ(cod × the city's success rate − the leg's Bosta fee), the fee Bosta's settled one, else
-     * the quote × 1.14 (feesEstimated counts those); a prepaid leg (cod 0) therefore counts −fee.
+     * the quote × 1.14, else (a leg with no quote — prod BROEK 2026-11-27: 77 of 141 in transit) the
+     * tenant's typical Send fee (TYPICAL_FEE); feesEstimated counts every leg not settled. A prepaid leg
+     * (cod 0) therefore counts −fee.
      */
     Stage inTransit(UUID tid, Instant now) {
-        String transitSql = "WITH " + RATES + """
+        String transitSql = "WITH " + RATES + ", " + TYPICAL_FEE + """
             SELECT COUNT(*) AS n,
                    COALESCE(SUM(t.cod), 0) AS value,
-                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall)) - COALESCE(t.fee, 0)) AS expected,
-                   COALESCE(SUM(t.fee), 0) AS fees,
+                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall))
+                       - COALESCE(t.fee, (SELECT fee FROM typical_fee), 0)) AS expected,
+                   COALESCE(SUM(COALESCE(t.fee, (SELECT fee FROM typical_fee))), 0) AS fees,
                    COUNT(*) FILTER (WHERE NOT t.settled) AS fees_estimated,
                    COUNT(*) FILTER (WHERE t.cod = 0) AS prepaid
             FROM (""" + IN_TRANSIT_LEGS + """
@@ -483,11 +491,13 @@ public class MoneyAnalyticsService {
             LEFT JOIN city_rate cr ON cr.city = t.city
             """;
         return jdbc.query(transitSql, ps -> {
-            ps.setObject(1, tid);
+            ps.setObject(1, tid);                         // rates
             ps.setTimestamp(2, Timestamp.from(now));
-            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
-            ps.setArray(4, ps.getConnection().createArrayOf("text", overrides.days()));
-            ps.setObject(5, tid);
+            ps.setObject(3, tid);                         // typical fee
+            ps.setTimestamp(4, Timestamp.from(now));
+            ps.setArray(5, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+            ps.setArray(6, ps.getConnection().createArrayOf("text", overrides.days()));
+            ps.setObject(7, tid);
         }, rs -> {
             rs.next();
             return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")),

@@ -191,9 +191,7 @@ export default function MoneyPage() {
                             <th className="tbl-header text-end">{t('analytics.money.payouts.orders')}</th>
                             <th className="tbl-header text-end">{t('analytics.money.payouts.cod')}</th>
                             <th className="tbl-header text-end">{t('analytics.money.payouts.fees')}</th>
-                            <th className="tbl-header text-end">{t('analytics.money.payouts.negative')}</th>
-                            <th className="tbl-header text-end">{t('analytics.money.payouts.amount')}</th>
-                            <th className="tbl-header text-end pe-0">{t('analytics.money.payouts.status')}</th>
+                            <th className="tbl-header text-end pe-0">{t('analytics.money.payouts.amount')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -201,21 +199,25 @@ export default function MoneyPage() {
                             const scheduled = p.date > cairoToday()
                             return (
                               <tr key={p.transactionId} className="border-b border-line last:border-0">
-                                <td className="py-[9px] ps-0 pe-2.5">{fmt.day(p.date)}</td>
+                                <td className="py-[9px] ps-0 pe-2.5">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    {fmt.day(p.date)}
+                                    {/* A past payout is paid; only a future-dated one says so. */}
+                                    {scheduled && <Pill kind="info">{t('analytics.money.payouts.scheduled')}</Pill>}
+                                  </span>
+                                </td>
                                 <td className="py-[9px] px-2.5 font-mono text-[12px]">{p.transactionId}</td>
                                 <td className="py-[9px] px-2.5 text-end tabular-nums">{fmt.num(p.trackedShipments)}</td>
                                 <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-cod">{fmt.money(p.codCollected)}</td>
                                 <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-fees">{fmt.money(-p.bostaFees)}</td>
-                                <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-negative">
-                                  {p.negativeDeposits > 0
-                                    ? t('analytics.money.payouts.negativeValue', { n: fmt.num(p.negativeDeposits), value: fmt.money(p.negativeDepositsAmount) })
-                                    : '—'}
-                                </td>
-                                <td className="py-[9px] px-2.5 text-end tabular-nums font-semibold" data-testid="payout-net">{fmt.money(p.trackedDeposited)}</td>
-                                <td className="py-[9px] ps-2.5 pe-0 text-end">
-                                  {scheduled
-                                    ? <Pill kind="info">{t('analytics.money.payouts.scheduled')}</Pill>
-                                    : <Pill kind="good">{t('analytics.money.payouts.paid')}</Pill>}
+                                <td className="py-[9px] ps-2.5 pe-0 text-end tabular-nums">
+                                  <span className="block font-semibold" data-testid="payout-net">{fmt.money(p.trackedDeposited)}</span>
+                                  {/* Negative deposits are part of the net: fee-only shipments (prepaid, RTO, return pickups). */}
+                                  {p.negativeDeposits > 0 && (
+                                    <span className="block text-[12px] text-muted whitespace-nowrap" data-testid="payout-negative">
+                                      {t('analytics.money.payouts.negativeValue', { n: fmt.num(p.negativeDeposits), value: fmt.money(p.negativeDepositsAmount) })}
+                                    </span>
+                                  )}
                                 </td>
                               </tr>
                             )

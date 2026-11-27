@@ -265,7 +265,7 @@ public class AnalyticsAlertsService {
         // finished-but-unsettled legs like delivered, not-settled legs (finish day + lag → payout day).
         long feeN = 0;
         BigDecimal feeAmt = BigDecimal.ZERO;
-        for (MoneyAnalyticsService.FeeRow r : money.feesToDeductRows(tid)) {
+        for (MoneyAnalyticsService.FeeRow r : money.feesToDeductRows(tid, now)) {
             feeN += r.count();
             feeAmt = feeAmt.add(r.amount());
             LocalDate payout = transitPayout;

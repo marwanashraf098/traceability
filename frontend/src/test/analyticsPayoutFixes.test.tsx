@@ -75,14 +75,14 @@ describe('payout check', () => {
     renderWithProviders(<Layout><MoneyPage /></Layout>, { initialEntries: ['/analytics/money'] })
     const table = await screen.findByTestId('payouts-table')
     expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual(
-      ['Date', 'Reference', 'Traced orders', 'COD collected', 'Bosta fees', 'Negative deposits', 'Traced net', 'Status'])
+      ['Date', 'Reference', 'Traced orders', 'COD collected', 'Bosta fees', 'Traced net'])
     const rows = within(table).getAllByRole('row')
     const nov18 = rows[2]
     expect(within(nov18).getByTestId('payout-cod')).toHaveTextContent('EGP 1,590')
     expect(within(nov18).getByTestId('payout-fees')).toHaveTextContent('−EGP 535')
-    expect(within(nov18).getByTestId('payout-negative')).toHaveTextContent('3 · −EGP 254')
+    expect(within(nov18).getByTestId('payout-negative')).toHaveTextContent('incl. 3 negative: −EGP 254')
     expect(within(nov18).getByTestId('payout-net')).toHaveTextContent('EGP 1,055')
-    expect(within(rows[1]).getByTestId('payout-negative')).toHaveTextContent('—')
+    expect(within(rows[1]).queryByTestId('payout-negative')).toBeNull()
     expect(table.textContent).not.toMatch(/batch/i)
     expect(screen.queryByTestId('payout-untracked-note')).toBeNull()
     expect(screen.getByTestId('card-payouts')).toHaveTextContent(
@@ -116,7 +116,7 @@ describe('payout check', () => {
     expect(within(transit).getByTestId('estimated-chip')).toHaveTextContent('estimated')
     const nf = screen.getByTestId('stage-not-fulfilled')
     expect(nf).toHaveTextContent('EGP 145')
-    expect(nf).toHaveTextContent("prepaid orders count only Bosta's fee")
+    expect(nf).toHaveTextContent("for prepaid orders, just Bosta's fee")
     expect(within(nf).getByTestId('estimated-chip')).toBeInTheDocument()
     const fees = screen.getByTestId('fees-to-deduct')
     expect(fees).toHaveTextContent('Bosta fees still to be deducted: −EGP 486')

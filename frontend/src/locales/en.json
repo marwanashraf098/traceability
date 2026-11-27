@@ -4776,7 +4776,7 @@
       "pipe": {
         "notFulfilled": "Not yet fulfilled",
         "expectedCalc": "Expected value at the order's delivery success rate",
-        "expectedCalcPrepaid": "Expected value at the order's delivery success rate; prepaid orders count only Bosta's fee",
+        "expectedCalcPrepaid": "Expected value at the order's delivery success rate; for prepaid orders, just Bosta's fee",
         "feesEstimatedTip": "Includes Bosta fees Bosta hasn't settled yet — Traced uses the quoted fee (or your usual fee) until it does.",
         "feesToDeduct": "Bosta fees still to be deducted: {{amount}}",
         "feesToDeductParts": "returns to origin {{returning}} · return pickups {{returns}} · finished, not settled yet {{finished}}",
@@ -5209,8 +5209,7 @@
         "amount": "Traced net",
         "cod": "COD collected",
         "fees": "Bosta fees",
-        "negative": "Negative deposits",
-        "negativeValue": "{{n}} · {{value}}",
+        "negativeValue": "incl. {{n}} negative: {{value}}",
         "status": "Status",
         "none": "No Bosta payouts in this period.",
         "note": "Traced net = COD collected − Bosta fees, for the shipments Traced tracks in that payout. Negative deposits are shipments that only cost a fee (prepaid deliveries, returns to origin, return pickups).",

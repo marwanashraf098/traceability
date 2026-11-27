@@ -588,4 +588,22 @@ class AnalyticsPayoutFixesTest {
         }
         assertThat(bucketFees).isEqualByComparingTo("-171.00");                         // all within 30 days
     }
+
+    @Test
+    void s3_legWithoutAQuote_countsTheTypicalFee_estimated() {
+        T t = new T("Expected-NoQuote");
+        t.bostaAccount();
+        cairoRate(t);                                                                  // typical Send fee 57.00
+        String noQuote = "{\"type\":{\"code\":10},\"cod\":1000,\"dropOffAddress\":{\"city\":{\"_id\":\"id-Cairo\",\"name\":\"Cairo\"}}}";
+        t.forward(ago(Duration.ofDays(2)), "with_courier", noQuote);                  // 600 − 57
+        t.forward(ago(Duration.ofDays(2)), "with_courier",
+                  "{\"type\":{\"code\":20},\"cod\":0,\"dropOffAddress\":{\"city\":{\"name\":\"Alexandria\"}}}"); // to deduct 57
+
+        Map<String, Object> body = ok(t, "/api/v1/analytics/money/pipeline?period=7d");
+        Map<String, Object> it = m(body, "inTransit");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("543.00");
+        assertThat(dec(it, "fees")).isEqualByComparingTo("57.00");
+        assertThat(n(it, "feesEstimated")).isEqualTo(1);
+        assertThat(dec(m(m(body, "feesToDeduct"), "returning"), "amount")).isEqualByComparingTo("57.00");
+    }
 }
