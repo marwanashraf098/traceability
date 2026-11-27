@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Defect replacement — "Replace with the same item" in the returns portal (S0–S4 + S6, 2026-11-27; branch
+`feat/defect-replacement` off origin/main d7b23d2a, worktree ../trace-replacement; V246; NOT merged, NOT deployed).**
+A customer whose item arrived damaged / faulty or wrong can ask for the SAME variant again (same size, same colour).
+- **THE rule — `portal.ReplacementRule`:** the same variant is allowed only for a defect reason, a fixed list in code
+  (`DEFECT_REASONS` = damaged, wrong_item — decision Q1; never not_as_pictured, never the per-store merchant-fault list).
+  `PortalService.validExchange` refuses the same variant for any other reason (PortalExchangeTest:203's wrong_size case
+  is unchanged); quote refuses it too. Stored as `return_requests.exchange_kind = 'replacement'` (V246; every other
+  exchange — and every existing row — is 'swap'), event metadata `exchange_kind`. Everything after submit (approve,
+  Bosta type 30, other couriers G4b, reservation, Step 5a −1, S5b return sync, Scan returns) is the exchange path,
+  unchanged — only words differ.
+- **V246:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
+  `exchange_kind = 'swap' OR type = 'exchange'` (switchToRefundAndApprove resets it to 'swap' in the same UPDATE);
+  `tenants.portal_replacement_fees` boolean NOT NULL DEFAULT false. Existing RLS + V1 table grants cover both (app_user
+  read / write tested). No orders column → no view re-create. **Count gates (MigrationSmokeTest 244 → 245,
+  NotTracedBackfillTest 189 → 190 + "V246") NOT edited — waiting for approval; they fail until then.**
+- **Pricing (Q2):** a replacement NEVER has a price difference (no charge, no refund) under any setting —
+  `PortalService.price` returns before `ExchangePricing.difference`. Fee only with "Charge fees on defect replacements"
+  ON (Settings › Returns portal › Customer fees, owner-only, `PUT /tenant/portal-settings/customer-fees/replacement-fees
+  {charge}`, audit `portal_replacement_fees_update` on a real change, shown only where fees are rolled out): then the
+  exchange rule applies WITHOUT the merchant-fault waiver (`Terms.withoutWaiver`). Off (default) → nothing priced,
+  nothing frozen, COD 0. `feePrices` skips the paid-price read for a replacement unless the fee applies.
+- **Lookup / portal:** config `replacementReasons` (only with exchanges on); each line `sameItem {inStock}`
+  (ExchangeOptions, active product only, VariantStockService available > 0 — the customer's own unit is delivered, never
+  on hand). Portal: after a defect reason, X2 shows "Replace with the same item" above "Or choose another size or colour";
+  sold out → disabled with "This exact item is out of stock right now…" (other sizes / products / back to refund still
+  work); a one-size product (no siblings) is selectable for a defect reason only (`replaceOnly`, reasons filtered), X2
+  "Get the same item again" with no size picker; review "→ Replacement (same item)", pickup copy "brings the new one and
+  collects the one you received", sent "Replacement requested". EN + AR.
+- **Merchant labels:** `exchangeKind: 'replacement'` (key only then) on the request list row, detail and Returns &
+  exchanges case A (`ReturnCaseService.addReplacementKind`, Java step after the shared query); `isReplacement: true`
+  (key only then) on the replacement order in the Orders list + detail (`ReplacementRule.REPLACEMENT_ORDERS_SQL`: a
+  request's exchanges.outbound_order_id or return_requests.replacement_order_id). UI: type tag, drawer pill, "Going out ·
+  Same item — replacement", Orders / order page badge "Replacement". Lookup shows no request type today — unchanged.
+- **Wording out:** Bosta type 30 specs "RR-…: Replacement – new: {product / variant}", returnSpecs "Defective – return:
+  {product / variant}" (booking + ExchangeService.attachForRequest; read-back doesn't check descriptions). Shopify S5b
+  line note "replacement (same item): {label}" in place of "exchanged for …".
+- **Analytics (Q6):** ProductExtras `exch` counts swaps only; `repl_v` → `VariantRow.replaced`, `SizeRow.replacedUnits`,
+  Stock `replacedUnits90` (Products table column "Replacements"); the stock returns rate counts returned + exchanged +
+  replaced.
+- **Q5 (own commit 0882f5b4):** an exchange whose price PAID is unknown (OrderLinePaidPrices NONE) charges / refunds no
+  difference (was: the full replacement price) — `Difference.unknown()`, quote `priceDifferenceUnknown: true` (key only
+  then), frozen price_difference NULL with the replacement price kept, drawer "Price difference couldn't be calculated".
+  Applies to normal exchanges. Tests: PortalUnknownPaidPriceTest (u1–u4), priceDifferenceUnknown.test.tsx (4).
+- **Tests:** PortalReplacementTest (11: r1–r9, a1, x1 app_user), portalReplacement.test.tsx (6, incl. AR/RTL),
+  replacementMerchant.test.tsx (6), portalReplacementLayout.browser.test.tsx (Chromium + WebKit, EN/AR, phone; set
+  VITE_PORTAL_SHOTS for screenshots). Revert-checked: 17 backend rules, 10 frontend rules, Q5 both sides.
+- **Not in this build (S5, after the Scan returns dead-end branch merges):** the returned piece's grading rule —
+  **Q3 decided:** reason damaged → Damaged is the primary action, Restock needs a confirm; reason wrong_item → normal
+  grading. Plus the courier-swap warning (a returned piece that belongs to a live exchange's replacement order — with the
+  same variant both ways it is physically indistinguishable; today it is accepted as customer_after_delivery, no alert).
+  Not touched here on purpose: ReturnSessionService, Returns.tsx, ReturnService restock / markDamaged, dispositionInternal.
+- **Q4:** Lookup exchange unchanged in v1 (it already allows the same variant; it is stored as 'swap').
+- **Gotchas:** merchant `locales/*.json` don't round-trip through a JSON serializer (insert keys by line); portal
+  locales do. Vite browser mode can only write screenshots inside the project (server.fs).
+
 **Encryption key rotation K2b — one-off re-encryption (2026-11-28; branch `feat/re-encryption` off origin/main
 8736f2ef, worktree ../trace-k2; NO migration; NOT deployed).** K1 is live in prod since 2026-11-28 03:53 (writes v1, V2
 key configured). K2a is env only (`APP_ENCRYPTION_WRITE_VERSION=v2` + recreate); K2b (this) runs after K2a is live.
