@@ -229,6 +229,10 @@ class PortalReplacementTest {
             assertThat(a.get("price_difference")).isNull();
             assertThat(a.get("replacement_unit_price")).isNull();
         }
+        // The same item for a non-defect reason: the quote refuses it, as submit does.
+        O ow = delivered(t, "#9498", true);
+        assertThat(portal.quote(t.slug(), (String) lookup(t, ow).get("token"), request(t, t.shirtM(), "wrong_size"))
+            .orElseThrow().outcome()).isEqualTo(PortalService.QuoteOutcome.INVALID);
         // No exchange fee rule at all → nothing, even with the toggle on.
         jdbc.update("UPDATE portal_fee_rules SET enabled = false WHERE tenant_id = ?", t.id());
         O o3 = delivered(t, "#9499", true);
