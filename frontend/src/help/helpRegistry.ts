@@ -95,6 +95,13 @@ export const SCREEN_ARTICLES = {
   bazarCloseDay: 'bazar-close-day',
   bazarCustomers: 'bazar-customer-details',
   bazarSetup: 'bazar-setup-new-stock',
+  bazarGetReady: 'bazar-get-ready',
+  bazarLive: 'bazar-sell-laptop',
+  bazarPrices: 'bazar-prices',
+  bazarScanOut: 'bazar-send-by-count',
+  bazarTopUp: 'bazar-top-up',
+  bazarEndEvent: 'bazar-end-event',
+  bazarReport: 'bazar-report',
 } as const satisfies Record<string, string>
 
 export type ScreenHelp = keyof typeof SCREEN_ARTICLES

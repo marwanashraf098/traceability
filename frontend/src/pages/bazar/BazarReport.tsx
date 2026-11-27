@@ -13,6 +13,7 @@ import { dayCount } from './r1/overviewState'
 import { amount, rangeLabel, weekdayShort } from './r1/parts'
 import { Chip, Legend, Money, StackBar, money, type ChipTone } from './r2/parts'
 import { FinishEventCallout, needsFinish } from './FinishEvent'
+import { HelpLink } from '../../help/HelpLink'
 
 // Bazar POS B5 — the event report (mockup page 1, step 10): /bazar/:id/report, in-shell (computer and phone). Read-
 // only, owner / manager. Built from GET /report only (bazar tables + the linked transfer).
@@ -101,6 +102,7 @@ function ReportView({ id, r }: { id: string; r: BazarReport }) {
         <span className="text-body text-muted">
           {r.event.location_name} · <span>{rangeLabel(r.event.starts_on, r.event.ends_on, lang)}</span>
         </span>
+        <HelpLink screen="bazarReport" className="self-start" />
       </div>
       <div className="flex items-center gap-2.5 flex-wrap" data-testid="report-downloads">
         <Button variant="secondary" onClick={() => download('orders')} loading={fileBusy === 'orders'}>

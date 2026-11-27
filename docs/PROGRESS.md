@@ -67,6 +67,23 @@ Built (2026-11-27):
   V243 = 2).
 - Not done: frontend (batch mode of TransferScanOut, Live page button / batches / no-price warning, phone menu item),
   rebase onto U1c (a3bda1ce), commit.
+**Help center — bazar guides, step (c) (2026-11-27; branch `feat/help-bazar-c` off origin/main 35a19890 (top-up V245 +
+U1d merged); worktree `~/Documents/trace-help-bazar`; frontend only, NO migration; NOT merged, NOT deployed).**
+- **New article `bazar-top-up`** ("Add pieces to a live bazar" / «إضافة قطع لبازار جارٍ»), EN + AR, in ARTICLE_ORDER
+  before bazar-end-event: More › Add more pieces (phone menu too, no camera yet), live only, owner / manager; the list
+  moves nothing (pieces can still sell online); Send all-or-nothing (Remove −N at send, Keep nothing; a changed piece →
+  nothing sent); Discard (tap twice); one list at a time; "N sizes have no price" › Set prices; End event refused while
+  a list is open; a Keep bazar after Keep became unavailable can't take more pieces (Send refused, choice locked).
+- **Keep line** on bazar-online-stock (EN + AR): "If Keep is greyed out for your store, pieces are removed from online
+  stock instead." bazar-get-ready's "you can't scan more pieces out" (untrue since top-up) now points to Add more pieces.
+- **Read more links:** Get ready (SetupView), Live page (LiveView, live only → bazar-sell-laptop), Prices card, bazar
+  scan-out (→ send by count) / top-up batch (→ bazar-top-up; TransferScanOut, bazar only — a plain transfer shows none),
+  End event, Report. SCREEN_ARTICLES +7.
+- **Tests:** new `helpBazarLinksC.test.tsx` (10; fixtures copied from bazarTopup.test, not edited); revert-checked. No
+  existing test edited.
+- **For the wording-fixes list (not changed):** a Keep bazar whose store loses Keep can't top up at all (Send 409, the
+  choice is locked after the first send) — only Discard is left.
+
 **Help center — bazar guides (2026-11-27; branch `feat/help-bazar` off origin/main a3bda1ce (U1c merged); worktree
 `~/Documents/trace-help-bazar`; frontend only, NO migration; (a) + (b) approved, merged to main, NOT deployed; (c) = a later small branch).**
 - **(a) Articles:** 14 new, EN + AR, topic `bazar` ("Bazar" / "البازار", `helpCenter.topics.bazar`, after Orders):

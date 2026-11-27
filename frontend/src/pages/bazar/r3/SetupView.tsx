@@ -20,6 +20,7 @@ import { PricesCard, priceTotals, usePriceData } from './PricesCard'
 import { SellersCard } from './SellersCard'
 import { BazarLowerChecklistLine } from '../setup/LowerThese'
 import { Card, EventHeader, StepsStrip, btnPrimary, btnSecondary } from './parts'
+import { HelpLink } from '../../../help/HelpLink'
 
 /**
  * Bazar POS B6 — the draft event: Get ready (design/bazar-v2 V2_Setup). Same actions as before: scan pieces out (the
@@ -118,6 +119,8 @@ export function SetupView({ ev, reload, onChanged }: {
             {t('bazar.r3.header.inviteSellers')}
           </button>
         </>} />
+
+      <HelpLink screen="bazarGetReady" className="self-start -mt-2" />
 
       <StepsStrip testId="bazar-setup-steps" steps={[
         { title: t('bazar.r3.setup.steps.details'), sub: `${ev.location_name} · ${rangeLabel(ev.starts_on, ev.ends_on, lang)}`, state: 'done' },

@@ -3,7 +3,7 @@ id: bazar-get-ready
 topic: bazar
 title: تجهيز البازار وإرسال البضاعة وبدؤه
 roles: [owner, manager]
-related: [bazar-create, bazar-send-by-count, bazar-prices, bazar-online-stock, bazar-invite-sellers]
+related: [bazar-create, bazar-send-by-count, bazar-prices, bazar-online-stock, bazar-top-up, bazar-invite-sellers]
 alerts: []
 screens: [/bazar/:id, /bazar/:id/scan-out]
 video:
@@ -23,7 +23,7 @@ video:
 
 ## 3. تأكيد الإرسال
 عند خروج البضاعة من المخزن، اضغط **تسجيل N قطعة كمُرسلة** وأكّد بـ **تأكيد الإرسال**. بعد ذلك:
-- لا يمكنك مسح قطع أخرى لهذا البازار؛
+- لا يمكنك مسح قطع أخرى من هنا. بعد بدء البازار استخدم **المزيد** › **إضافة قطع أخرى** — راجع [إضافة قطع لبازار جارٍ](/help/bazar-top-up)؛
 - لا يمكن تغيير اختيار **المخزون الأونلاين**؛
 - مع **إزالة من المخزون الأونلاين** تُخصم القطع من مخزونك على Shopify الآن. ومع **إبقاؤها ظاهرة أونلاين** لا يتغير مخزونك على Shopify.
 

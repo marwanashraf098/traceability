@@ -17,6 +17,7 @@ import { bazarScanOut, batchScan, getCurrentBazarBatch, type BazarBatch, type Ba
 import { sellErrorText, variantName } from '../bazar/format'
 import { RemoveCount, RemoveScanButton, SendByCountPanel } from './bazar/SendByCount'
 import { BatchFooter } from './bazar/BatchFooter'
+import { HelpLink } from '../help/HelpLink'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -197,6 +198,8 @@ export default function TransferScanOut({ bazar }: { bazar?: BazarScanOutTarget 
               ? t('transfers.return.scanOutSubtitle')
               : t(`transfers.type.${transfer.transfer_type}`)}
           </p>
+          {/* A bazar's scan-out (or top-up batch) links to its Help article; a plain transfer shows nothing. */}
+          {bazar && <HelpLink screen={batchId ? 'bazarTopUp' : 'bazarScanOut'} className="mt-1" />}
         </div>
         </div>
       </div>
