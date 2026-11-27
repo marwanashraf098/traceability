@@ -33,7 +33,7 @@ import java.util.UUID;
  * shipmentFees × 1.14; every fee figure says how many legs were estimated.
  *
  * Never a batch "shortfall": Bosta's payout batch total covers every delivery of the business, tracked
- * by Traced or not, so /payouts shows it next to Traced's part without a difference, and "delivered,
+ * by Traced or not, so /payouts shows only Traced's part (net + its breakdown, never the batch), and "delivered,
  * not paid" is judged per shipment (two payout weekdays after the deposit, refreshed within 24 h,
  * still no payout id).
  */
@@ -101,8 +101,17 @@ public class MoneyAnalyticsService {
     public record Stuck(Instant asOf, List<StuckShipment> neverPickedUp, List<StuckShipment> stuckWithBosta,
                         List<NotPaidShipment> deliveredNotPaid, Integer payoutWeekday, long unresolved) {}
 
+    /**
+     * One Bosta payout as Traced sees it (2026-11-27): Traced's net for it — Σ deposited_amt of the
+     * tenant's tracked shipments that the payout names — and how that net breaks down: the COD Bosta
+     * collected (Σ cod_settled), Bosta's fees (Σ bosta_fees, VAT included) and the negative deposits
+     * (legs that brought no COD and only cost a fee — prepaid deliveries, Return to Origin, return
+     * pickups) by count and amount. Bosta's own batch total (cashout_amount) is no longer read: it
+     * covers deliveries Traced doesn't track, so it is never compared to Traced's figure.
+     */
     public record Payout(String transactionId, LocalDate date, long trackedShipments,
-                         BigDecimal trackedDeposited, BigDecimal bostaBatchTotal) {}
+                         BigDecimal trackedDeposited, BigDecimal codCollected, BigDecimal bostaFees,
+                         long negativeDeposits, BigDecimal negativeDepositsAmount) {}
 
     public record Payouts(AnalyticsPeriod.Range range, List<Payout> payouts) {}
 
@@ -623,12 +632,17 @@ public class MoneyAnalyticsService {
         UUID tid = TenantContext.require();
         List<Payout> rows = jdbc.query(
             "SELECT s.cashout_txn_id, MAX(s.cashout_date) AS day, COUNT(*) AS n, " +
-            "       COALESCE(SUM(s.deposited_amt), 0) AS deposited, MAX(s.cashout_amount) AS batch " +
+            "       COALESCE(SUM(s.deposited_amt), 0) AS deposited, " +
+            "       COALESCE(SUM(s.cod_settled), 0) AS cod, " +
+            "       COALESCE(SUM(s.bosta_fees), 0) AS fees, " +
+            "       COUNT(*) FILTER (WHERE s.deposited_amt < 0) AS neg_n, " +
+            "       COALESCE(SUM(s.deposited_amt) FILTER (WHERE s.deposited_amt < 0), 0) AS neg_amt " +
             "FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.cashout_txn_id IS NOT NULL " +
             "  AND s.cashout_date >= ? AND s.cashout_date <= ? " +
             "GROUP BY s.cashout_txn_id ORDER BY day DESC, s.cashout_txn_id",
             (rs, n) -> new Payout(rs.getString(1), rs.getDate("day").toLocalDate(), rs.getLong("n"),
-                money(rs.getBigDecimal("deposited")), moneyOrNull(rs.getBigDecimal("batch"))),
+                money(rs.getBigDecimal("deposited")), money(rs.getBigDecimal("cod")), money(rs.getBigDecimal("fees")),
+                rs.getLong("neg_n"), money(rs.getBigDecimal("neg_amt"))),
             tid, Date.valueOf(period.from()), Date.valueOf(period.to()));
         return new Payouts(period.range(), rows);
     }

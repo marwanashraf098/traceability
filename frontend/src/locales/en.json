@@ -5202,14 +5202,17 @@
         "date": "Date",
         "reference": "Reference",
         "orders": "Traced orders",
-        "amount": "Traced amount",
-        "batch": "Bosta batch total",
+        "amount": "Traced net",
+        "cod": "COD collected",
+        "fees": "Bosta fees",
+        "negative": "Negative deposits",
+        "negativeValue": "{{n}} · {{value}}",
         "status": "Status",
         "none": "No Bosta payouts in this period.",
-        "note": "Traced amount = what Bosta deposited for the shipments Traced tracks in that payout.",
+        "note": "Traced net = COD collected − Bosta fees, for the shipments Traced tracks in that payout. Negative deposits are shipments that only cost a fee (prepaid deliveries, returns to origin, return pickups).",
+        "mayDiffer": "Calculated per shipment from Bosta's data; may differ slightly from your Bosta statement (e.g. deliveries Traced doesn't track).",
         "paid": "Paid",
-        "scheduled": "Scheduled",
-        "untracked": "Bosta's batch also includes {{value}} from shipments not tracked in Traced"
+        "scheduled": "Scheduled"
       },
       "exchangeTag": "Exchange",
       "stuck": {

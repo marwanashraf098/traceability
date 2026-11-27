@@ -133,7 +133,11 @@ export interface Stuck {
   payoutWeekday: number | null; unresolved: number
 }
 
-export interface Payout { transactionId: string; date: string; trackedShipments: number; trackedDeposited: number; bostaBatchTotal: number | null }
+/** Traced's net for one Bosta payout (Σ deposited) and its breakdown: COD collected − Bosta fees; negative deposits are fee-only legs. */
+export interface Payout {
+  transactionId: string; date: string; trackedShipments: number; trackedDeposited: number
+  codCollected: number; bostaFees: number; negativeDeposits: number; negativeDepositsAmount: number
+}
 export interface Payouts { range: Range; payouts: Payout[] }
 
 export const getPipeline = (p: PeriodParams, signal?: AbortSignal) => get<Pipeline>('/money/pipeline', periodQuery(p), signal)

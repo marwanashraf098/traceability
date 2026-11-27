@@ -189,37 +189,33 @@ export default function MoneyPage() {
                             <th className="tbl-header text-start ps-0">{t('analytics.money.payouts.date')}</th>
                             <th className="tbl-header text-start">{t('analytics.money.payouts.reference')}</th>
                             <th className="tbl-header text-end">{t('analytics.money.payouts.orders')}</th>
+                            <th className="tbl-header text-end">{t('analytics.money.payouts.cod')}</th>
+                            <th className="tbl-header text-end">{t('analytics.money.payouts.fees')}</th>
+                            <th className="tbl-header text-end">{t('analytics.money.payouts.negative')}</th>
                             <th className="tbl-header text-end">{t('analytics.money.payouts.amount')}</th>
-                            <th className="tbl-header text-end">{t('analytics.money.payouts.batch')}</th>
                             <th className="tbl-header text-end pe-0">{t('analytics.money.payouts.status')}</th>
                           </tr>
                         </thead>
                         <tbody>
                           {d.payouts.map(p => {
-                            // Bosta's batch can carry shipments Traced doesn't track (other stores, manual
-                            // shipments): that's information, never a shortfall — no difference is shown
-                            // when the batch is smaller, and nothing here is ever red.
-                            const untracked = p.bostaBatchTotal != null && p.bostaBatchTotal - p.trackedDeposited >= 0.5
-                              ? p.bostaBatchTotal - p.trackedDeposited : null
                             const scheduled = p.date > cairoToday()
                             return (
                               <tr key={p.transactionId} className="border-b border-line last:border-0">
                                 <td className="py-[9px] ps-0 pe-2.5">{fmt.day(p.date)}</td>
                                 <td className="py-[9px] px-2.5 font-mono text-[12px]">{p.transactionId}</td>
                                 <td className="py-[9px] px-2.5 text-end tabular-nums">{fmt.num(p.trackedShipments)}</td>
-                                <td className="py-[9px] px-2.5 text-end tabular-nums">{fmt.money(p.trackedDeposited)}</td>
-                                <td className="py-[9px] px-2.5 text-end tabular-nums">{p.bostaBatchTotal == null ? '—' : fmt.money(p.bostaBatchTotal)}</td>
+                                <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-cod">{fmt.money(p.codCollected)}</td>
+                                <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-fees">{fmt.money(-p.bostaFees)}</td>
+                                <td className="py-[9px] px-2.5 text-end tabular-nums" data-testid="payout-negative">
+                                  {p.negativeDeposits > 0
+                                    ? t('analytics.money.payouts.negativeValue', { n: fmt.num(p.negativeDeposits), value: fmt.money(p.negativeDepositsAmount) })
+                                    : '—'}
+                                </td>
+                                <td className="py-[9px] px-2.5 text-end tabular-nums font-semibold" data-testid="payout-net">{fmt.money(p.trackedDeposited)}</td>
                                 <td className="py-[9px] ps-2.5 pe-0 text-end">
-                                  <div className="flex flex-col items-end gap-1">
-                                    {scheduled
-                                      ? <Pill kind="info">{t('analytics.money.payouts.scheduled')}</Pill>
-                                      : <Pill kind="good">{t('analytics.money.payouts.paid')}</Pill>}
-                                    {untracked != null && (
-                                      <span className="text-[12px] text-trace-blue-hover bg-trace-blue/5 rounded px-1.5 py-0.5 whitespace-normal max-w-[260px] text-end" data-testid="payout-untracked-note">
-                                        {t('analytics.money.payouts.untracked', { value: fmt.money(untracked) })}
-                                      </span>
-                                    )}
-                                  </div>
+                                  {scheduled
+                                    ? <Pill kind="info">{t('analytics.money.payouts.scheduled')}</Pill>
+                                    : <Pill kind="good">{t('analytics.money.payouts.paid')}</Pill>}
                                 </td>
                               </tr>
                             )
@@ -228,6 +224,7 @@ export default function MoneyPage() {
                       </table>
                     </div>
                     <Note>{t('analytics.money.payouts.note')}</Note>
+                    <Note>{t('analytics.money.payouts.mayDiffer')}</Note>
                   </>
                 )}
               </QueryBlock>
