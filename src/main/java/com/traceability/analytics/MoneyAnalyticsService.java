@@ -34,7 +34,7 @@ import java.util.UUID;
  *
  * Never a batch "shortfall": Bosta's payout batch total covers every delivery of the business, tracked
  * by Traced or not, so /payouts shows only Traced's part (net + its breakdown, never the batch), and "delivered,
- * not paid" is judged per shipment (two payout weekdays after the deposit, refreshed within 24 h,
+ * not paid" is judged per shipment (two payout days after the deposit, refreshed within 24 h,
  * still no payout id).
  */
 @Service
@@ -98,8 +98,10 @@ public class MoneyAnalyticsService {
         return rs.getBoolean("is_exchange") ? Boolean.TRUE : null;
     }
 
+    /** payoutWeekday: the most frequent of payoutWeekdays (SettlementSql.PAYOUT_WEEKDAYS), null when none is known. */
     public record Stuck(Instant asOf, List<StuckShipment> neverPickedUp, List<StuckShipment> stuckWithBosta,
-                        List<NotPaidShipment> deliveredNotPaid, Integer payoutWeekday, long unresolved) {}
+                        List<NotPaidShipment> deliveredNotPaid, Integer payoutWeekday, List<Integer> payoutWeekdays,
+                        long unresolved) {}
 
     /**
      * One Bosta payout as Traced sees it (2026-11-27): Traced's net for it — Σ deposited_amt of the
@@ -557,7 +559,7 @@ public class MoneyAnalyticsService {
     public Stuck stuck() {
         UUID tid = TenantContext.require();
         Instant now = clock.instant();
-        Integer weekday = jdbc.query(SettlementSql.PAYOUT_WEEKDAY, rs -> rs.next() ? rs.getInt(1) : null, tid, Timestamp.from(now));
+        List<Integer> weekdays = SettlementSql.payoutWeekdays(jdbc, tid, now);
 
         String base = " FROM shipments s" + SettlementSql.floorJoin("s") +
             " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND fo.status <> 'cancelled'::order_status AND "
@@ -593,7 +595,7 @@ public class MoneyAnalyticsService {
             "SELECT s.tracking_number, " + LIST_ORDER_NUMBER + " AS number, (s.deposited_at AT TIME ZONE 'Africa/Cairo')::date AS dep_day, " +
             "       COALESCE(s.type_code = '30', false) AS is_exchange, " +
             "       s.deposited_amt, EXTRACT(DAY FROM (?::timestamptz - s.deposited_at))::bigint AS days" +
-            base + " AND " + SettlementSql.deliveredNotPaid("s", "?::timestamptz", "?::int") +
+            base + " AND " + SettlementSql.deliveredNotPaid("s", "?::timestamptz", "?::int[]") +
             "ORDER BY s.deposited_at, s.tracking_number",
             ps -> {
                 Timestamp t = Timestamp.from(now);
@@ -602,10 +604,10 @@ public class MoneyAnalyticsService {
                 ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.days()));
                 ps.setObject(4, tid);
                 ps.setTimestamp(5, t);
-                ps.setObject(6, weekday, java.sql.Types.INTEGER);
+                SettlementSql.bindWeekdays(ps, 6, weekdays);
                 ps.setTimestamp(7, t);
                 ps.setTimestamp(8, t);
-                ps.setObject(9, weekday, java.sql.Types.INTEGER);
+                SettlementSql.bindWeekdays(ps, 9, weekdays);
             },
             (rs, n) -> new NotPaidShipment(rs.getString(1), rs.getString(2), rs.getDate("dep_day").toLocalDate(),
                 money(rs.getBigDecimal("deposited_amt")), rs.getLong("days"), exchangeFlag(rs)));
@@ -613,7 +615,8 @@ public class MoneyAnalyticsService {
         Long unresolved = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.settlement_status = 'unresolved' " +
             "AND NOT " + SettlementSql.zeroCycle("s"), Long.class, tid);
-        return new Stuck(now, never, withBosta, notPaid, weekday, unresolved == null ? 0 : unresolved);
+        return new Stuck(now, never, withBosta, notPaid, weekdays.isEmpty() ? null : weekdays.get(0), weekdays,
+            unresolved == null ? 0 : unresolved);
     }
 
     private void stuckParams(PreparedStatement ps, Instant now, UUID tid) throws SQLException {

@@ -130,7 +130,7 @@ export interface StuckShipment { trackingNumber: string; orderNumber: string | n
 export interface NotPaidShipment { trackingNumber: string; orderNumber: string | null; depositedOn: string | null; deposited: number | null; days: number; exchange?: boolean }
 export interface Stuck {
   asOf: string; neverPickedUp: StuckShipment[]; stuckWithBosta: StuckShipment[]; deliveredNotPaid: NotPaidShipment[]
-  payoutWeekday: number | null; unresolved: number
+  payoutWeekday: number | null; payoutWeekdays: number[]; unresolved: number
 }
 
 /** Traced's net for one Bosta payout (Σ deposited) and its breakdown: COD collected − Bosta fees; negative deposits are fee-only legs. */
@@ -373,7 +373,7 @@ export interface Alerts { range: Range; asOf: string; alerts: AnalyticsAlert[] }
 export interface ForecastPart { count: number; amount: number }
 export interface InTransitPart { count: number; cod: number; expected: number; expectedPayoutDate: string | null }
 export interface ForecastMethod {
-  payoutWeekday: number; medianLagDays: number | null; lagSample: number; lagDaysUsed: number; nextPayoutDate: string | null
+  payoutWeekday: number; payoutWeekdays: number[]; medianLagDays: number | null; lagSample: number; lagDaysUsed: number; nextPayoutDate: string | null
   awaitingDeposited: ForecastPart; awaitingNotSettled: ForecastPart; inTransit: InTransitPart
 }
 export interface ForecastBucket { key: string; from: string; to: string; amount: number; awaitingPayout: number; inTransit: number }

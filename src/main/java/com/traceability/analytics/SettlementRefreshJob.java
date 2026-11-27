@@ -40,14 +40,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * monotonic rules); an unchanged one writes only the fresh raw + settlement columns.
  *
  * Eligible: the tenant's Bosta legs (any type) in a terminal state, on a post-floor order, not paid,
- * not 'unresolved', Bosta still knows the tracking number. Cadence:
+ * not 'unresolved', Bosta still knows the tracking number. Cadence ({@link #DUE}):
  *   none      — every 12 h;
- *   deposited — once a day (never a zero cash cycle — SettlementSql.zeroCycle: nothing is owed); when the tenant's payout weekday is known (the weekday most recent
- *               cashout dates share), only on the day after it, with an 8-day safety net;
+ *   deposited — (never a zero cash cycle — SettlementSql.zeroCycle: nothing is owed) once a day
+ *               while the leg's own next_cashout_date has passed (before today, Cairo) — Bosta's own
+ *               date, so a tenant paid on several weekdays is read after each of them (2026-11-27:
+ *               replaces "the day after the tenant's single payout weekday"); plus an 8-day safety
+ *               net (a deposit with no or a future next_cashout_date); a never-read deposit at once;
  *   'unresolved' (no more refreshes) only when a successful read made 45+ days after the leg
  *               finished still shows no payout; such old legs are read first, oldest first.
- * At most {@code analytics.settlement.refresh-max-per-tenant} legs per tenant per run, the
- * least recently refreshed first.
+ * At most {@code analytics.settlement.refresh-max-per-tenant} legs per tenant per run and
+ * {@code analytics.settlement.refresh-max-per-run} over all tenants (the tenant order rotates each
+ * run), the least recently refreshed first — a big backlog drains over several hourly runs at the
+ * limiter's BACKGROUND (lowest) priority instead of crowding out the status polls; each tenant's
+ * INFO line says how many legs are still due.
  *
  * Tenants come from the same owner-pool courier_accounts listing BostaStatusPollJob uses; each
  * tenant's work runs as app_user under TenantContext.runAs (RLS). No new hatch.
@@ -64,9 +70,30 @@ public class SettlementRefreshJob {
     /** A leg is 'unresolved' after a successful read this long after it finished, still unpaid. */
     static final String UNRESOLVED_AFTER = "45 days";
 
+    /** payoutWeekday: kept for the log only (the most frequent payout weekday) — the cadence no longer reads it. stillDue: legs due after this run. */
     public record RefreshResult(int markedUnresolved, int selected, int refreshed, int routed, int notFound,
                                 int failed, int newlyDeposited, int newlyPaid, boolean rateLimited,
-                                Integer payoutWeekday) {}
+                                Integer payoutWeekday, int stillDue) {}
+
+    /*
+     * THE refresh cadence (see the class comment). Parameters: today (Cairo date).
+     */
+    static final String DUE =
+        "  ( (s.settlement_status = 'none' " +
+        "     AND (s.settlement_refreshed_at IS NULL OR s.settlement_refreshed_at < now() - interval '12 hours')) " +
+        " OR (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") +
+        "     AND (s.settlement_refreshed_at IS NULL " +
+        "          OR (s.next_cashout_date < ?::date AND s.settlement_refreshed_at < now() - interval '20 hours') " +
+        "          OR s.settlement_refreshed_at < now() - interval '8 days')) ) ";
+
+    /* The eligible legs (FROM … WHERE, without the cadence). Parameters: override domains, override days, tenant id. */
+    private static final String ELIGIBLE =
+        "FROM shipments s" + SettlementSql.floorJoin("s") +
+        "CROSS JOIN LATERAL (SELECT " + SettlementSql.terminalAt("s") + " AS terminal_at) t " +
+        "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.tracking_number IS NOT NULL " +
+        "  AND s.provider_not_found_at IS NULL " +
+        "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
+        "  AND fo.status <> 'cancelled'::order_status AND " + SettlementSql.POST_FLOOR + " AND ";
 
     private record Leg(UUID id, String tn, Integer providerState, String typeValue, String status) {}
 
@@ -79,9 +106,18 @@ public class SettlementRefreshJob {
     private final AnalyticsFloorOverrides overrides;
     private final Clock clock;
     private final int maxPerTenant;
+    private final int maxPerRun;
     private final boolean enabled;
+    private final java.util.concurrent.atomic.AtomicInteger rotation = new java.util.concurrent.atomic.AtomicInteger();
     private final Map<UUID, Long> retryUntilByTenant = new ConcurrentHashMap<>();
 
+    public SettlementRefreshJob(DataSource ownerDs, JdbcTemplate jdbc, PlatformTransactionManager txm,
+                                EncryptionService encryption, BostaGateway bosta, BostaIngestionHelper ingestion,
+                                AnalyticsFloorOverrides overrides, Clock clock, int maxPerTenant, boolean enabled) {
+        this(ownerDs, jdbc, txm, encryption, bosta, ingestion, overrides, clock, maxPerTenant, Integer.MAX_VALUE, enabled);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     public SettlementRefreshJob(@FlywayDataSource DataSource ownerDs,
                                 JdbcTemplate jdbc,
                                 PlatformTransactionManager txm,
@@ -91,6 +127,7 @@ public class SettlementRefreshJob {
                                 AnalyticsFloorOverrides overrides,
                                 Clock clock,
                                 @Value("${analytics.settlement.refresh-max-per-tenant:100}") int maxPerTenant,
+                                @Value("${analytics.settlement.refresh-max-per-run:300}") int maxPerRun,
                                 @Value("${analytics.settlement.refresh-enabled:true}") boolean enabled) {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
         this.jdbc = jdbc;
@@ -101,6 +138,7 @@ public class SettlementRefreshJob {
         this.overrides = overrides;
         this.clock = clock;
         this.maxPerTenant = maxPerTenant;
+        this.maxPerRun = maxPerRun;
         this.enabled = enabled;
     }
 
@@ -108,15 +146,26 @@ public class SettlementRefreshJob {
     @Job(name = "Bosta settlement refresh")
     public void refreshAll() {
         if (!enabled) return;
-        for (Map<String, Object> row : ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS)) {
+        List<Map<String, Object>> tenants = new java.util.ArrayList<>(
+            ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS + " ORDER BY ca.tenant_id"));
+        // Rotate the start so a run's budget doesn't always go to the same tenants first.
+        if (!tenants.isEmpty()) java.util.Collections.rotate(tenants, -(rotation.getAndIncrement() % tenants.size()));
+        int budget = maxPerRun;
+        for (Map<String, Object> row : tenants) {
             UUID tenantId = (UUID) row.get("tenant_id");
+            if (budget <= 0) {
+                log.info("Settlement refresh tenant {}: run budget ({}) used up — next run", tenantId, maxPerRun);
+                continue;
+            }
             Long until = retryUntilByTenant.get(tenantId);
             if (until != null && System.currentTimeMillis() < until) {
                 log.info("Settlement refresh tenant {}: rate-limited — skipped this run", tenantId);
                 continue;
             }
             try {
-                refreshTenant(tenantId, encryption.decrypt((String) row.get("api_key_encrypted")));
+                RefreshResult r = refreshTenant(tenantId, encryption.decrypt((String) row.get("api_key_encrypted")),
+                    Math.min(maxPerTenant, budget));
+                budget -= r.selected();
             } catch (Exception e) {
                 log.warn("Settlement refresh failed for tenant {}: {}", tenantId, e.toString());
             }
@@ -125,29 +174,22 @@ public class SettlementRefreshJob {
 
     /** One tenant's run (public for tests). Logs one INFO line per run. */
     public RefreshResult refreshTenant(UUID tenantId, String apiKey) {
+        return refreshTenant(tenantId, apiKey, maxPerTenant);
+    }
+
+    /** One tenant's run with at most {@code limit} legs. Never calls Bosta inside a transaction. */
+    public RefreshResult refreshTenant(UUID tenantId, String apiKey, int limit) {
         return TenantContext.runAs(tenantId, () -> {
-            Integer weekday = tx.execute(s -> jdbc.query(SettlementSql.PAYOUT_WEEKDAY,
-                rs -> rs.next() ? rs.getInt(1) : null, tenantId, java.sql.Timestamp.from(clock.instant())));
-            int today = LocalDate.now(clock.withZone(AnalyticsPeriod.CAIRO)).getDayOfWeek().getValue();
-            boolean dayAfterPayout = weekday == null || today == (weekday % 7) + 1;
+            List<Integer> weekdays = tx.execute(s -> SettlementSql.payoutWeekdays(jdbc, tenantId, clock.instant()));
+            Integer weekday = weekdays == null || weekdays.isEmpty() ? null : weekdays.get(0);
+            java.sql.Date today = java.sql.Date.valueOf(LocalDate.now(clock.withZone(AnalyticsPeriod.CAIRO)));
 
             // Legs finished 45+ days ago go first (oldest first): they need one successful read
             // before they may become 'unresolved'. Then the least recently refreshed.
             List<Leg> queue = tx.execute(s -> jdbc.query(
                 "SELECT s.id, s.tracking_number, s.provider_state, s.raw->'type'->>'value' AS type_value, " +
                 "       s.settlement_status, t.terminal_at " +
-                "FROM shipments s" + SettlementSql.floorJoin("s") +
-                "CROSS JOIN LATERAL (SELECT " + SettlementSql.terminalAt("s") + " AS terminal_at) t " +
-                "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.tracking_number IS NOT NULL " +
-                "  AND s.provider_not_found_at IS NULL " +
-                "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
-                "  AND fo.status <> 'cancelled'::order_status AND " + SettlementSql.POST_FLOOR +
-                "  AND ( (s.settlement_status = 'none' " +
-                "         AND (s.settlement_refreshed_at IS NULL OR s.settlement_refreshed_at < now() - interval '12 hours')) " +
-                "     OR (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") +
-                "         AND (s.settlement_refreshed_at IS NULL " +
-                "              OR (? AND s.settlement_refreshed_at < now() - interval '20 hours') " +
-                "              OR s.settlement_refreshed_at < now() - interval '8 days')) ) " +
+                ELIGIBLE + DUE +
                 "ORDER BY (t.terminal_at < now() - interval '" + UNRESOLVED_AFTER + "') DESC, " +
                 "         CASE WHEN t.terminal_at < now() - interval '" + UNRESOLVED_AFTER + "' THEN t.terminal_at END ASC, " +
                 "         s.settlement_refreshed_at ASC NULLS FIRST, s.created_at ASC " +
@@ -156,8 +198,8 @@ public class SettlementRefreshJob {
                     ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
                     ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.days()));
                     ps.setObject(3, tenantId);
-                    ps.setBoolean(4, dayAfterPayout);
-                    ps.setInt(5, maxPerTenant);
+                    ps.setDate(4, today);
+                    ps.setInt(5, Math.max(limit, 0));
                 },
                 (rs, i) -> new Leg(rs.getObject("id", UUID.class), rs.getString("tracking_number"),
                     (Integer) rs.getObject("provider_state"), rs.getString("type_value"),
@@ -226,12 +268,22 @@ public class SettlementRefreshJob {
                 "  AND s.settlement_verified_at >= " + SettlementSql.terminalAt("s") + " + interval '" + UNRESOLVED_AFTER + "'",
                 tenantId));
 
+            // Progress: what is still due after this run (the backlog the next runs drain).
+            Integer stillDue = tx.execute(s -> jdbc.query("SELECT COUNT(*) " + ELIGIBLE + DUE,
+                ps -> {
+                    ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+                    ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.days()));
+                    ps.setObject(3, tenantId);
+                    ps.setDate(4, today);
+                }, rs -> { rs.next(); return rs.getInt(1); }));
+
             RefreshResult r = new RefreshResult(unresolved == null ? 0 : unresolved, queue.size(), refreshed,
-                routed, notFound, failed, newlyDeposited, newlyPaid, rateLimited, weekday);
+                routed, notFound, failed, newlyDeposited, newlyPaid, rateLimited, weekday,
+                stillDue == null ? 0 : stillDue);
             log.info("Settlement refresh tenant {}: {} leg(s) refreshed of {} selected ({} status change(s) " +
                 "sent through the poll pipeline), {} newly deposited, {} newly paid, {} newly unresolved, " +
-                "{} not found, {} failed, {} rate limit(s) (429)", tenantId, refreshed, queue.size(), routed,
-                newlyDeposited, newlyPaid, r.markedUnresolved(), notFound, failed, limited);
+                "{} not found, {} failed, {} rate limit(s) (429), {} still due", tenantId, refreshed, queue.size(), routed,
+                newlyDeposited, newlyPaid, r.markedUnresolved(), notFound, failed, limited, r.stillDue());
             return r;
         });
     }

@@ -1,7 +1,11 @@
 package com.traceability;
 
 import com.traceability.analytics.AnalyticsFloorOverrides;
+import com.traceability.analytics.SettlementRefreshJob;
 import com.traceability.identity.JwtService;
+import com.traceability.integrations.bosta.BostaDelivery;
+import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.integrations.bosta.BostaIngestionHelper;
 import com.traceability.integrations.bosta.ShipmentSettlement;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
@@ -13,6 +17,8 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -26,10 +32,14 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 /**
  * Analytics payout fixes (2026-11-27) — slice 1: the payout check shows Traced's net per payout and its
- * breakdown (COD collected, Bosta fees, negative deposits), never Bosta's batch total. Realistic
+ * breakdown (COD collected, Bosta fees, negative deposits), never Bosta's batch total. Slice 2: the
+ * settlement refresh reads a deposited leg once its own next_cashout_date passed (no single payout
+ * weekday), under a per-run cap; "delivered, not paid" and the cash forecast use every payout weekday. Realistic
  * fixtures: bare 10-digit tracking numbers, settlement columns written by the real writer from a
  * Bosta-shaped wallet.
  */
@@ -64,6 +74,7 @@ class AnalyticsPayoutFixesTest {
     @Autowired JwtService jwt;
     @Autowired EncryptionService encryption;
     @Autowired AnalyticsFloorOverrides floorOverrides;
+    @Autowired PlatformTransactionManager txm;
 
     @AfterEach
     void clearContext() {
@@ -277,5 +288,166 @@ class AnalyticsPayoutFixesTest {
         assertThat(dec(pb, "codCollected")).isEqualByComparingTo("3140.00");
         assertThat(dec(pb, "trackedDeposited")).isEqualByComparingTo("2856.98");
         assertThat(dec(pb, "negativeDepositsAmount")).isEqualByComparingTo("-77.52");
+    }
+
+    // ── slice 2: refresh cadence + payout weekdays ───────────────────────────
+
+    final BostaGateway bosta = mock(BostaGateway.class);
+    final BostaIngestionHelper ingestion = mock(BostaIngestionHelper.class);
+
+    SettlementRefreshJob job(Clock clock, int perTenant, int perRun) {
+        return new SettlementRefreshJob(
+            new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()),
+            jdbc, txm, encryption, bosta, ingestion, floorOverrides, clock, perTenant, perRun, true);
+    }
+
+    /** Bosta answers with exactly what we hold (same state, type, wallet). */
+    void bostaEchoesStored() {
+        when(bosta.fetchDelivery(anyString(), anyString())).thenAnswer(inv -> {
+            String tn = inv.getArgument(1);
+            String raw = jdbc.queryForObject("SELECT raw::text FROM shipments WHERE tracking_number = ?", String.class, tn);
+            return BostaDelivery.fromRaw(tn, ShipmentSettlementTest.json(raw));
+        });
+    }
+
+    List<String> fetched() {
+        List<String> tns = new ArrayList<>();
+        mockingDetails(bosta).getInvocations().stream()
+            .filter(i -> i.getMethod().getName().equals("fetchDelivery"))
+            .forEach(i -> tns.add((String) i.getArguments()[1]));
+        return tns;
+    }
+
+    static LocalDate today() {
+        return LocalDate.now(CAIRO);
+    }
+
+    /** A deposited COD Send (deposit = cod − fee) whose cash cycle says Bosta pays it on {@code next}. */
+    static String deposited(LocalDate depositDay, LocalDate next) {
+        return "{\"type\":{\"code\":10},\"state\":{\"code\":45},\"cod\":640,\"wallet\":{\"cashCycle\":{\"_id\":" + SEQ.incrementAndGet() +
+               ",\"deposited_at\":\"" + depositDay.atTime(10, 0).atZone(CAIRO).toInstant() + "\",\"deposited_amt\":554.50," +
+               "\"cod\":\"640.00\",\"bosta_fees\":\"85.50\"},\"cashout\":{\"next_cashout_date\":" +
+               (next == null ? "null" : "\"" + next + "T00:00:00.000Z\"") + "}}}";
+    }
+
+    /**
+     * Bosta pays this tenant on two weekdays: {@code top} (3 payouts in the last 90 days — the old single
+     * "payout weekday") and {@code second} (2 payouts). Each paid leg was delivered 3 days before its payout.
+     */
+    void payoutsOn(T t, DayOfWeek top, DayOfWeek second) {
+        LocalDate base = today().minusDays(1);
+        List<LocalDate> days = new ArrayList<>();
+        LocalDate d = base.with(java.time.temporal.TemporalAdjusters.previousOrSame(top));
+        for (int i = 0; i < 3; i++) days.add(d.minusWeeks(i));
+        d = base.with(java.time.temporal.TemporalAdjusters.previousOrSame(second));
+        for (int i = 0; i < 2; i++) days.add(d.minusWeeks(i));
+        for (LocalDate day : days) {
+            String txn = day.getDayOfWeek().toString().substring(0, 3) + "COD" + day;
+            Leg l = t.forward(day.minusDays(10).atTime(12, 0).atZone(CAIRO).toInstant(), "delivered",
+                paid(10, "500.00", "70.00", txn, null));
+            set(l, "cashout_date = ?, delivered_at = ?", java.sql.Date.valueOf(day),
+                ts(day.minusDays(3).atTime(14, 0).atZone(CAIRO).toInstant()));
+        }
+    }
+
+    @Test
+    void s2_refresh_depositedReadOnceItsNextCashoutDatePassed_anyWeekday_plus8DaySafetyNet() {
+        T t = new T("Refresh-NextCashout");
+        // Paid on two weekdays; today is never "the day after" the top one, so the old rule read nothing daily.
+        DayOfWeek top = today().plusDays(3).getDayOfWeek();
+        payoutsOn(t, top, today().plusDays(1).getDayOfWeek());
+        Instant placed = ago(Duration.ofDays(12));
+        Leg passed = t.forward(placed, "delivered", deposited(today().minusDays(6), today().minusDays(1)));
+        set(passed, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(21))));
+        Leg justRead = t.forward(placed, "delivered", deposited(today().minusDays(6), today().minusDays(1)));
+        set(justRead, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(3))));                      // once a day
+        Leg future = t.forward(placed, "delivered", deposited(today().minusDays(2), today().plusDays(2)));
+        set(future, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(21))));                       // not yet
+        Leg payDayToday = t.forward(placed, "delivered", deposited(today().minusDays(3), today()));
+        set(payDayToday, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(21))));                  // tomorrow
+        Leg stale = t.forward(placed, "delivered", deposited(today().minusDays(12), today().plusDays(2)));
+        set(stale, "settlement_refreshed_at = ?", ts(ago(Duration.ofDays(9))));                          // safety net
+        Leg neverRead = t.forward(placed, "returned", deposited(today().minusDays(2), today().plusDays(2)));
+        bostaEchoesStored();
+
+        SettlementRefreshJob.RefreshResult r = job(Clock.system(CAIRO), 100, 300).refreshTenant(t.id, "key");
+        assertThat(fetched()).containsExactlyInAnyOrder(passed.tn(), stale.tn(), neverRead.tn());
+        assertThat(r.payoutWeekday()).isEqualTo(top.getValue());
+        assertThat(r.stillDue()).isZero();
+    }
+
+    @Test
+    void s2_refresh_runCap_drainsABacklogOverSeveralRuns_rotatingTenants() {
+        T a = new T("Refresh-CapA");
+        T b = new T("Refresh-CapB");
+        a.bostaAccount();
+        b.bostaAccount();
+        List<String> all = new ArrayList<>();
+        for (T t : List.of(a, b)) {
+            for (int i = 0; i < 3; i++) {
+                all.add(t.forward(ago(Duration.ofDays(9)), "delivered",
+                    deposited(today().minusDays(5), today().minusDays(2))).tn());
+            }
+        }
+        // Only these two tenants carry an active Bosta account in this class's database.
+        jdbc.update("UPDATE courier_accounts SET status = 'disconnected' WHERE tenant_id NOT IN (?, ?)", a.id, b.id);
+        bostaEchoesStored();
+        SettlementRefreshJob job = job(Clock.system(CAIRO), 2, 3);
+
+        job.refreshAll();                      // run 1: 3 legs at most over both tenants, ≤ 2 per tenant
+        assertThat(fetched()).hasSize(3);
+        job.refreshAll();                      // run 2: the rest
+        job.refreshAll();                      // run 3: nothing left
+        assertThat(fetched()).containsExactlyInAnyOrderElementsOf(all);
+    }
+
+    @Test
+    void s2_deliveredNotPaid_countsEveryPayoutWeekday() {
+        T t = new T("NotPaid-TwoWeekdays");
+        DayOfWeek top = today().plusDays(3).getDayOfWeek();        // last one: today − 4
+        DayOfWeek second = today().plusDays(1).getDayOfWeek();     // last one: today − 6
+        payoutsOn(t, top, second);
+        // Deposited a week ago: one payout day of each weekday has passed since (two in all), still not paid.
+        Leg late = t.forward(ago(Duration.ofDays(12)), "delivered", deposited(today().minusDays(7), today().minusDays(6)));
+        set(late, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(1))));
+        // Deposited three days ago: no payout day has passed yet.
+        Leg recent = t.forward(ago(Duration.ofDays(6)), "delivered", deposited(today().minusDays(3), today().plusDays(1)));
+        set(recent, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(1))));
+
+        Map<String, Object> body = ok(t, "/api/v1/analytics/money/stuck");
+        assertThat(list(body, "deliveredNotPaid")).extracting(r -> r.get("trackingNumber")).containsExactly(late.tn());
+        assertThat(n(body, "payoutWeekday")).isEqualTo(top.getValue());
+        assertThat(body.get("payoutWeekdays")).isEqualTo(List.of(top.getValue(), second.getValue()));
+    }
+
+    @Test
+    void s2_deliveredNotPaid_fewerThanTwoPayouts_keeps14DayFallback() {
+        T t = new T("NotPaid-Unknown");
+        Leg one = t.forward(ago(Duration.ofDays(30)), "delivered", paid(10, "500.00", "70.00", "WEDCOD04NOV26", null));
+        set(one, "cashout_date = ?", java.sql.Date.valueOf(today().minusDays(20)));
+        Leg old = t.forward(ago(Duration.ofDays(25)), "delivered", deposited(today().minusDays(15), today().minusDays(10)));
+        set(old, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(1))));
+        Leg young = t.forward(ago(Duration.ofDays(15)), "delivered", deposited(today().minusDays(10), today().minusDays(5)));
+        set(young, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(1))));
+
+        Map<String, Object> body = ok(t, "/api/v1/analytics/money/stuck");
+        assertThat(list(body, "deliveredNotPaid")).extracting(r -> r.get("trackingNumber")).containsExactly(old.tn());
+        assertThat(body.get("payoutWeekday")).isNull();
+        assertThat(body.get("payoutWeekdays")).isEqualTo(List.of());
+        assertThat(ok(t, "/api/v1/analytics/cash-forecast").get("reason")).isEqualTo("payout_cadence_unknown");
+    }
+
+    @Test
+    void s2_cashForecast_nextPayoutIsTheEarliestPayoutWeekday() {
+        T t = new T("Forecast-TwoWeekdays");
+        DayOfWeek top = today().plusDays(3).getDayOfWeek();
+        DayOfWeek second = today().plusDays(1).getDayOfWeek();
+        payoutsOn(t, top, second);
+        t.forward(ago(Duration.ofDays(4)), "delivered", deposited(today().minusDays(2), today().plusDays(1)));
+
+        Map<String, Object> method = m(m(ok(t, "/api/v1/analytics/cash-forecast"), "forecast"), "method");
+        assertThat(method.get("nextPayoutDate")).isEqualTo(today().plusDays(1).toString());
+        assertThat(n(method, "payoutWeekday")).isEqualTo(top.getValue());
+        assertThat(method.get("payoutWeekdays")).isEqualTo(List.of(top.getValue(), second.getValue()));
     }
 }
