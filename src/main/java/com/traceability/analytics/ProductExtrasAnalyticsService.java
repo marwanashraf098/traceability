@@ -27,7 +27,8 @@ public class ProductExtrasAnalyticsService {
     public record FailedProduct(UUID productId, String title, long orders, long failedOrders, BigDecimal failureRate) {}
 
     public record SizeRow(String size, long soldUnits, BigDecimal share, long deliveredUnits, long returnedUnits,
-                          BigDecimal returnRate, long exchangedUnits, long replacedUnits) {
+                          BigDecimal returnRate, long exchangedUnits,
+                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT) long replacedUnits) {
         public SizeRow(String size, long soldUnits, BigDecimal share, long deliveredUnits, long returnedUnits,
                        BigDecimal returnRate, long exchangedUnits) {
             this(size, soldUnits, share, deliveredUnits, returnedUnits, returnRate, exchangedUnits, 0);
@@ -243,7 +244,7 @@ public class ProductExtrasAnalyticsService {
     /** V246: {@code exchanged} = swaps only; {@code replaced} = defect replacements (the same item again), apart. */
     public record VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
                       long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
-                      boolean hasSizeOption, long replaced) {
+                      boolean hasSizeOption, @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT) long replaced) {
         public VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
                           long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
                           boolean hasSizeOption) {

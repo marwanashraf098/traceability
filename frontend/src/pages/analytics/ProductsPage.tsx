@@ -95,7 +95,7 @@ export default function ProductsPage() {
         case 'age': return r.stock?.avgPieceAgeDays ?? null
         case 'ret': return r.sale.returnRate
         case 'exch': return r.stock?.exchangedUnits90 ?? null
-        case 'repl': return r.stock?.replacedUnits90 ?? null
+        case 'repl': return r.stock?.replacedUnits90 ?? 0
         case 'fail': return r.sale.refusalRate
         case 'abc': return r.abc?.abcClass ?? null
         default: return null

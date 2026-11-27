@@ -117,7 +117,8 @@ public class StockAnalyticsService {
                                long soldUnits30, long deliveredUnits30, BigDecimal returnsRate,
                                long returnedUnits90, long exchangedUnits90, String topReturnReason,
                                boolean runningLow, boolean deadStock, BigDecimal stockValue, boolean valueAtCost,
-                               Integer shopifyAvailable, long stockUsed, String stockSource, long replacedUnits90) {
+                               Integer shopifyAvailable, long stockUsed, String stockSource,
+                               @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT) long replacedUnits90) {
         public VariantStock(UUID variantId, String productTitle, String variantTitle, String sku,
                             long onHand, long comingBack, BigDecimal velocityPerDay, BigDecimal daysOfCover,
                             BigDecimal sellThrough, BigDecimal avgPieceAgeDays, Instant lastSoldAt,
