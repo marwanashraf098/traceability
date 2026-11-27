@@ -19,6 +19,7 @@ import { Chip, Money, StackBar } from '../r2/parts'
 import { PricesCard, usePriceData } from './PricesCard'
 import { SellersCard } from './SellersCard'
 import { Card, EventHeader, MoreMenu, TabBar, btnPrimary, btnSecondary, isObj, minutesAgo, useOptional, type TabDef } from './parts'
+import { HelpLink } from '../../../help/HelpLink'
 
 // Bazar POS B6 — a live (or ended) event, restyled in R3 (design/bazar-v2 V2_Event / V2_EventPhone): the header with
 // Close today / More ▾ / Start selling, and tabs — Today, Sales, Days & cash, Pieces, Prices, Sellers. Same reads as
@@ -125,6 +126,7 @@ export function LiveView({ ev, reload }: { ev: BazarEventDetail; reload: () => P
             <Link to={`/bazar/${ev.id}/report`} className={btnPrimary} data-testid="view-report">{t('bazar.end.viewReport')}</Link>
           </>
         )} />
+      {live && <HelpLink screen="bazarLive" className="self-start -mt-2" />}
 
       {/* Top-up: a list still open (nothing moved yet), and sizes with no price (a new size with no Shopify price). */}
       {live && ev.open_batch && (

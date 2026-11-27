@@ -34,7 +34,7 @@ export const ARTICLE_ORDER: string[] = [
   'places-setup', 'put-away', 'place-stickers', 'find-piece',
   'orders-tabs', 'orders-edited-in-shopify', 'tracked-vs-not-tracked',
   'bazar-create', 'bazar-get-ready', 'bazar-online-stock', 'bazar-send-by-count', 'bazar-prices', 'bazar-sell-laptop',
-  'bazar-invite-sellers', 'bazar-seller-guide', 'bazar-close-day', 'bazar-end-event', 'bazar-report', 'bazar-customer-details',
+  'bazar-invite-sellers', 'bazar-seller-guide', 'bazar-close-day', 'bazar-top-up', 'bazar-end-event', 'bazar-report', 'bazar-customer-details',
   'bazar-setup-new-stock', 'bazar-faq',
   'roles', 'tablet-setup', 'pin-switch', 'logout-devices',
   'scanner-wrong-letters', 'missed-scans', 'phone-wont-pair', 'emails-junk',

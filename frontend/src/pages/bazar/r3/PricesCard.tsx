@@ -9,6 +9,7 @@ import { toNumber, variantName } from '../../../bazar/format'
 import { Input, Spinner, cn } from '../../../components/ui'
 import { amount } from '../r1/parts'
 import { Chip } from '../r2/parts'
+import { HelpLink } from '../../../help/HelpLink'
 
 // Bazar POS B1 / B3 prices — moved out of BazarEventPage in the R3 restyle (design/bazar-v2 V2_Setup) and shared by
 // Get ready and the live page's Prices tab. Same calls, same rules: whole pounds, the rule then the per-variant
@@ -92,6 +93,7 @@ export function PricesCard({ ev, data, live }: { ev: BazarEventDetail; data: Pri
       <div className="flex flex-col">
         <h2 className="text-body-lg font-semibold text-primary">{t('bazar.prices.title')}</h2>
         <span className="text-small text-muted">{t('bazar.r3.prices.sub')}</span>
+        <HelpLink screen="bazarPrices" className="self-start mt-1" />
       </div>
 
       <div className="flex items-center gap-2 flex-wrap self-start rounded-xl border border-line bg-charcoal px-2.5 py-2">

@@ -3,7 +3,7 @@ id: bazar-online-stock
 topic: bazar
 title: "Online stock: Remove or Keep"
 roles: [owner, manager]
-related: [bazar-create, bazar-get-ready, bazar-end-event, bazar-faq]
+related: [bazar-create, bazar-get-ready, bazar-top-up, bazar-end-event, bazar-faq]
 alerts: []
 screens: [/bazar/new, /bazar/:id]
 video:
@@ -21,6 +21,8 @@ video:
 - Nothing changes in Shopify when the stock is sent. Online customers still see these pieces.
 - When a piece sells at the bazar, Shopify updates usually within a few minutes after the sale. An undone sale, a return or a piece marked lost updates Shopify the same way.
 - **The last piece can sell online and at the bazar.** Both see it as available until the bazar sale reaches Shopify. **Tip:** use Keep for stock you have plenty of.
+
+If Keep is greyed out for your store, pieces are removed from online stock instead.
 
 ## Changing the choice
 The choice belongs to the location: every bazar held there uses it. Change it on the bazar's page from the **Online stock** row › **Change**, until you mark the stock as sent. After that it is fixed for this bazar.

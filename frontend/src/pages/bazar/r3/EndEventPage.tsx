@@ -11,6 +11,7 @@ import { EndEventPanel, LeftoversPanel } from '../Leftovers'
 import { amount } from '../r1/parts'
 import { Chip } from '../r2/parts'
 import { StepsStrip, cairoDateTime } from './parts'
+import { HelpLink } from '../../../help/HelpLink'
 
 /**
  * Bazar R3 — /bazar/:id/end-event: End the event as a page on the computer (design/bazar-v2 V2_EndEvent), in the
@@ -60,6 +61,7 @@ export default function EndEventPage() {
             <h1 className="text-[26px] leading-8 sm:text-[30px] sm:leading-9 font-bold tracking-[-0.02em] text-primary">{t('bazar.end.title')}</h1>
             {ended && ev.ended_at && <Chip tone="neutral" testId="end-stopped">{t('bazar.r2.end.sellingStopped', { time: cairoDateTime(ev.ended_at, lang) })}</Chip>}
           </div>
+          <HelpLink screen="bazarEndEvent" className="self-start" />
         </div>
         <dl className="flex gap-6" data-testid="end-header-totals">
           {ev.totals?.revenue != null && <Total value={amount(ev.totals.revenue)} label={t('bazar.r3.end.egp')} />}

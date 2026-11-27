@@ -3,7 +3,7 @@ id: bazar-get-ready
 topic: bazar
 title: Get ready, send and start a bazar
 roles: [owner, manager]
-related: [bazar-create, bazar-send-by-count, bazar-prices, bazar-online-stock, bazar-invite-sellers]
+related: [bazar-create, bazar-send-by-count, bazar-prices, bazar-online-stock, bazar-top-up, bazar-invite-sellers]
 alerts: []
 screens: [/bazar/:id, /bazar/:id/scan-out]
 video:
@@ -23,7 +23,7 @@ Use the **Bazar prices** card — see [Set bazar prices](/help/bazar-prices).
 
 ## 3. Mark as sent
 When the stock leaves the warehouse, press **Mark N pieces as sent** and confirm with **Mark as sent**. After that:
-- you can't scan more pieces out for this bazar;
+- you can't scan more pieces out here. Once the bazar is live, use **More** › **Add more pieces** — see [Add pieces to a live bazar](/help/bazar-top-up);
 - the **Online stock** choice can't be changed;
 - with **Remove from online stock**, the pieces come off your Shopify stock now. With **Keep showing online**, your Shopify stock doesn't change.
 
