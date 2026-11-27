@@ -86,6 +86,14 @@ export function CostNote({ coverage, sync, testId = 'cost-note' }: {
       {t('analytics.cost.coverage', {
         costed: fmt.num(coverage.variantsCosted), total: fmt.num(coverage.variantsSold), share: fmt.pct(coverage.costedRevenueShare, 0),
       })}
+      {/* A cost of 0 in Shopify is unknown, like none: those SKUs stay out of margin and profit. */}
+      {coverage.costUnknownVariants > 0 && (
+        <span data-testid={`${testId}-unknown`}>
+          {' · '}{t('analytics.cost.unknown', {
+            count: coverage.costUnknownVariants, skus: fmt.num(coverage.costUnknownVariants), units: fmt.num(coverage.costUnknownUnits),
+          })}
+        </span>
+      )}
     </p>
   )
 }

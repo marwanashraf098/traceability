@@ -5004,7 +5004,9 @@
       "coverage": "Costed: {{costed}} of {{total}} sold SKUs · {{share}} of realized revenue",
       "missing": "Add cost per item in Shopify to see margins.",
       "accessDenied": "Shopify didn't let Traced read cost per item (access denied). Reconnect the store with inventory access to see margins.",
-      "readError": "Traced couldn't read costs from Shopify on its last try; margins appear after the next successful sync."
+      "readError": "Traced couldn't read costs from Shopify on its last try; margins appear after the next successful sync.",
+      "unknown_one": "cost unknown for {{skus}} SKU ({{units}} units) — left out of margin",
+      "unknown_other": "cost unknown for {{skus}} SKUs ({{units}} units) — left out of margin"
     },
     "labels": {
       "channel": {

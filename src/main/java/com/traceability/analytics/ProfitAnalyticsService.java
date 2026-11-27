@@ -13,7 +13,7 @@ import static com.traceability.analytics.AnalyticsSql.rate;
 
 /**
  * Analytics slice 10 — margin and profit, from variants.unit_cost (Shopify's cost when the read pass
- * stored it, EGP only, or a manual cost). Owner-only (controller). Costed / total is ALWAYS returned:
+ * stored it, EGP only, or a manual cost; a cost of 0 is unknown — UnitCost, decision (e) 2026-11-27). Owner-only (controller). Costed / total is ALWAYS returned:
  * every cost figure covers costed lines only; with nothing costed they are null and the screen says
  * "needs cost per item in Shopify".
  *
@@ -38,8 +38,14 @@ import static com.traceability.analytics.AnalyticsSql.rate;
 @Service
 public class ProfitAnalyticsService {
 
+    /**
+     * Costed = UnitCost.known (decision (e): a cost of 0 is unknown, like none). costUnknownVariants /
+     * costUnknownUnits — the sold variants and kept units with no known cost, left out of every margin and
+     * profit figure (the screen says "cost unknown").
+     */
     public record Coverage(long variantsSold, long variantsCosted, long keptUnits, long costedUnits,
-                           BigDecimal realizedTotal, BigDecimal realizedCosted, BigDecimal costedRevenueShare) {}
+                           BigDecimal realizedTotal, BigDecimal realizedCosted, BigDecimal costedRevenueShare,
+                           long costUnknownVariants, long costUnknownUnits) {}
 
     /**
      * shippingIncome — every delivered order's shipping (shown on its own line); shippingIncomeOnCosted —
@@ -135,7 +141,7 @@ public class ProfitAnalyticsService {
     record Row(UUID variantId, String productTitle, String variantTitle, String sku, String ptype, BigDecimal unitCost,
                long kept, BigDecimal realized, BigDecimal cogs, BigDecimal ship, BigDecimal other, BigDecimal shipIncome) {
         boolean costed() {
-            return unitCost != null;
+            return UnitCost.known(unitCost);
         }
     }
 
@@ -164,7 +170,8 @@ public class ProfitAnalyticsService {
                 costedRev = costedRev.add(r.realized());
             }
         }
-        return new Coverage(sold, costed, kept, costedUnits, money(all), money(costedRev), rate(costedRev, all));
+        return new Coverage(sold, costed, kept, costedUnits, money(all), money(costedRev), rate(costedRev, all),
+            sold - costed, kept - costedUnits);
     }
 
     @Transactional(readOnly = true)
@@ -229,7 +236,7 @@ public class ProfitAnalyticsService {
             BigDecimal before = r.realized().add(r.shipIncome()).subtract(r.ship()).subtract(r.other());
             BigDecimal net = r.costed() ? before.subtract(OrderFacts.nz(r.cogs())) : null;
             out.add(new SkuProfit(r.variantId(), r.productTitle(), r.variantTitle(), r.sku(), r.ptype(), r.costed(),
-                r.unitCost() == null ? null : money(r.unitCost()), r.kept(), money(r.realized()),
+                r.costed() ? money(r.unitCost()) : null, r.kept(), money(r.realized()),
                 r.costed() ? money(OrderFacts.nz(r.cogs())) : null, money(r.ship()), money(r.other()), money(before),
                 net == null ? null : money(net), net == null ? null : rate(net, r.realized()), money(r.shipIncome())));
         }

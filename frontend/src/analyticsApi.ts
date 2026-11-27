@@ -408,6 +408,8 @@ export const getCashForecast = (signal?: AbortSignal) => get<CashForecast>('/cas
 export interface CostCoverage {
   variantsSold: number; variantsCosted: number; keptUnits: number; costedUnits: number
   realizedTotal: number; realizedCosted: number; costedRevenueShare: number | null
+  /** Sold SKUs / kept units with no known cost (none, or 0 in Shopify) — left out of margin and profit. */
+  costUnknownVariants: number; costUnknownUnits: number
 }
 export interface ProfitSummary {
   range: Range; coverage: CostCoverage; cogs: number | null; grossProfit: number | null; grossMargin: number | null

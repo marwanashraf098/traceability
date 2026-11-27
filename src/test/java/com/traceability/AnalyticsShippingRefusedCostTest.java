@@ -476,4 +476,37 @@ class AnalyticsShippingRefusedCostTest {
     }
 
     // ── slice 6: cost 0 = unknown ────────────────────────────────────────────
+
+    @Test
+    void s6_costZeroIsUnknown_likeNull_outOfMarginProfitAndStockValue() {
+        T t = new T("Cost-Zero");
+        UUID real = t.variant("HD-REAL", "300");
+        UUID zero = t.variant("HD-ZERO", "0");
+        UUID none = t.variant("HD-NONE", null);
+        for (UUID v : List.of(real, zero, none)) {
+            UUID o = t.order(cairo(10, 12), "new", orderRaw(COD_GW, String.valueOf(SEQ.incrementAndGet()), "0.00", null));
+            t.line(o, v, 1, 1, "650.00");
+            t.leg(o, "delivered", deliveredPaid("650.00", "0.00", cairo(11, 9)));
+            t.piece(v);
+        }
+
+        Map<String, Object> p = ok(t, "/api/v1/analytics/profit/summary?" + NOV);
+        Map<String, Object> cov = m(p, "coverage");
+        assertThat(n(cov, "variantsSold")).isEqualTo(3);
+        assertThat(n(cov, "variantsCosted")).isEqualTo(1);
+        assertThat(n(cov, "costUnknownVariants")).isEqualTo(2);
+        assertThat(n(cov, "costUnknownUnits")).isEqualTo(2);
+        assertThat(dec(p, "grossMargin")).isEqualByComparingTo("0.5385");          // (650 − 300) ÷ 650, never 100 %
+        assertThat(dec(p, "grossProfit")).isEqualByComparingTo("350.00");
+
+        Map<String, Object> zeroSku = list(ok(t, "/api/v1/analytics/profit/skus?" + NOV), "skus").stream()
+            .filter(s -> "HD-ZERO".equals(s.get("sku"))).findFirst().orElseThrow();
+        assertThat(zeroSku.get("costed")).isEqualTo(false);
+        assertThat(zeroSku.get("unitCost")).isNull();
+        assertThat(zeroSku.get("trueNet")).isNull();
+
+        Map<String, Object> stock = ok(t, "/api/v1/analytics/stock/summary?" + NOV);
+        assertThat(dec(stock, "valueAtCost")).isEqualByComparingTo("300.00");
+        assertThat(n(stock, "costedVariants")).isEqualTo(1);
+    }
 }

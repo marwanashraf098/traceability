@@ -145,4 +145,16 @@ describe('slices 5 + 6', () => {
     const note = await screen.findByTestId('watch-from-shopify')
     expect(note).toHaveTextContent('3 طلبات مرفوضة محسوبة بإجمالي شوبيفاي')
   })
+
+  test('sr7 — cost 0 = unknown: the cost note counts the SKUs and units left out of margin', async () => {
+    renderWithProviders(<Layout><RevenuePage /></Layout>, { initialEntries: ['/analytics/revenue'] })
+    const unknown = await screen.findByTestId('margin-cost-note-unknown')
+    expect(unknown).toHaveTextContent('cost unknown for 2 SKUs (160 units) — left out of margin')
+  })
+
+  test('sr8 — cost unknown in Arabic', async () => {
+    renderAr(<RevenuePage />, '/analytics/revenue')
+    const unknown = await screen.findByTestId('margin-cost-note-unknown')
+    expect(unknown).toHaveTextContent('التكلفة غير معروفة لمنتجين (160 قطعة)')
+  })
 })

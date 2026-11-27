@@ -28,7 +28,8 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *   received at   — pieces.created_at (a piece is created by receiving: InventoryLedger.batchReceive);
  *   age           — whole days since received;
  *   value         — at selling price (variants.price) always; at cost (variants.unit_cost) over costed
- *                   variants only, null when none is costed (with costed / total variant counts);
+ *                   variants only (UnitCost: a cost of 0 is unknown, like none), null when none is costed
+ *                   (with costed / total variant counts);
  *   coming back   — pieces in return_in_transit or return_pending_inspection (on their way back
  *                   to sellable stock);
  *   trip          — a piece event moving it from packed / awaiting_pickup / reserved into with_courier
@@ -256,9 +257,9 @@ public class StockAnalyticsService {
     private static final String SUMMARY_SQL = """
         SELECT COUNT(*) FILTER (WHERE p.status = 'available')                                         AS in_wh,
                COALESCE(SUM(v.price) FILTER (WHERE p.status = 'available'), 0)                         AS value_price,
-               SUM(v.unit_cost) FILTER (WHERE p.status = 'available' AND v.unit_cost IS NOT NULL)      AS value_cost,
+               SUM(v.unit_cost) FILTER (WHERE p.status = 'available' AND v.unit_cost > 0)      AS value_cost,
                COUNT(DISTINCT p.variant_id) FILTER (WHERE p.status = 'available')                      AS variants_in_stock,
-               COUNT(DISTINCT p.variant_id) FILTER (WHERE p.status = 'available' AND v.unit_cost IS NOT NULL)
+               COUNT(DISTINCT p.variant_id) FILTER (WHERE p.status = 'available' AND v.unit_cost > 0)
                                                                                                         AS variants_costed,
                AVG(a.age) FILTER (WHERE p.status = 'available')                                        AS avg_age,
                COUNT(*) FILTER (WHERE p.status = 'available' AND a.age <= 30)                         AS b1,
@@ -271,8 +272,8 @@ public class StockAnalyticsService {
                COALESCE(SUM(v.price) FILTER (WHERE p.status = 'available' AND a.age > 90), 0)         AS v4,
                COUNT(*) FILTER (WHERE p.status = 'on_hold')                                            AS on_hold,
                COUNT(*) FILTER (WHERE p.status = 'damaged')                                            AS damaged,
-               SUM(v.unit_cost) FILTER (WHERE p.status = 'damaged' AND v.unit_cost IS NOT NULL)        AS damaged_cost,
-               COUNT(*) FILTER (WHERE p.status = 'damaged' AND v.unit_cost IS NOT NULL)                AS damaged_costed
+               SUM(v.unit_cost) FILTER (WHERE p.status = 'damaged' AND v.unit_cost > 0)        AS damaged_cost,
+               COUNT(*) FILTER (WHERE p.status = 'damaged' AND v.unit_cost > 0)                AS damaged_costed
         FROM pieces p
         JOIN variants v ON v.id = p.variant_id
         CROSS JOIN LATERAL (SELECT floor(EXTRACT(EPOCH FROM (?::timestamptz - p.created_at)) / 86400)::int AS age) a
@@ -295,8 +296,8 @@ public class StockAnalyticsService {
             "WHERE p.tenant_id = ? AND p.status = 'available' GROUP BY 1, 2 ORDER BY n DESC, name, id",
             (rs, i) -> new LocationCount(rs.getObject("id", UUID.class), rs.getString("name"), rs.getLong("n")), tid);
         Valued lost = jdbc.query(
-            "SELECT COUNT(*) AS n, SUM(v.unit_cost) FILTER (WHERE v.unit_cost IS NOT NULL) AS cost, " +
-            "       COUNT(*) FILTER (WHERE v.unit_cost IS NOT NULL) AS costed " +
+            "SELECT COUNT(*) AS n, SUM(v.unit_cost) FILTER (WHERE v.unit_cost > 0) AS cost, " +
+            "       COUNT(*) FILTER (WHERE v.unit_cost > 0) AS costed " +
             "FROM piece_events e JOIN pieces p ON p.id = e.piece_id JOIN variants v ON v.id = p.variant_id " +
             "WHERE e.tenant_id = ? AND e.to_status IN ('lost', 'destroyed') " +
             "  AND e.from_status IS DISTINCT FROM e.to_status " +
@@ -427,7 +428,7 @@ public class StockAnalyticsService {
             long delivered90 = ret == null ? 0 : ret.deliveredUnits();
             boolean runningLow = delivered > 0 && cover.compareTo(RUNNING_LOW_DAYS) <= 0;
             boolean dead = stock > 0 && (lastSold == null || lastSold.isBefore(deadBefore));
-            boolean atCost = cost != null;
+            boolean atCost = UnitCost.known(cost);
             BigDecimal value = money(BigDecimal.valueOf(stock).multiply(atCost ? cost : price == null ? BigDecimal.ZERO : price));
             out.add(new VariantStock(id, (String) r[1], (String) r[2], (String) r[3], onHand, comingBack, velocity,
                 cover, sellThrough, age, lastSold, sold, delivered, AnalyticsSql.rate(returned + exchanged, delivered90),
@@ -489,7 +490,7 @@ public class StockAnalyticsService {
             return new Restock(false, now, "none", "pieces", s.supplierLeadDays(), s.coverDays(), VELOCITY_DAYS, List.of());
         }
         Map<UUID, BigDecimal> costs = new HashMap<>();
-        jdbc.query("SELECT id, unit_cost FROM variants WHERE tenant_id = ? AND unit_cost IS NOT NULL",
+        jdbc.query("SELECT id, unit_cost FROM variants WHERE tenant_id = ? AND unit_cost > 0",
             rs -> { costs.put(rs.getObject("id", UUID.class), rs.getBigDecimal("unit_cost")); }, tid);
         List<RestockItem> items = new ArrayList<>();
         for (VariantStock v : loadVariants(tid, now, trust.low())) {
