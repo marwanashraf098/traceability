@@ -5,8 +5,8 @@
 ## Current state
 
 **Analytics payout fixes — slices 1–3 of the 2026-11-16 Step 0 (2026-11-27; branch `analytics/payout-fixes` off
-origin/main 647f0206, worktree ../traceability-payout-fixes; NO migration; NOT merged, NOT deployed; existing-test
-edits AWAITING APPROVAL).** Step 0 findings re-checked: no analytics / settlement commit since 2026-11-14, all held.
+origin/main 647f0206, worktree ../traceability-payout-fixes; NO migration; approved + merged to main 2026-11-27,
+NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit since 2026-11-14, all held.
 - **Slice 1 — payout check:** `/money/payouts` no longer reads `cashout_amount` (column kept, still written); each
   payout = Traced net (Σ deposited_amt) + codCollected (Σ cod_settled) + bostaFees (Σ bosta_fees) + negativeDeposits /
   negativeDepositsAmount. Money page: Date (+ "Scheduled" only for a future payout), Reference, Traced orders, COD
@@ -38,10 +38,13 @@ edits AWAITING APPROVAL).** Step 0 findings re-checked: no analytics / settlemen
 - **Tests:** new `AnalyticsPayoutFixesTest` (11) + `analyticsPayoutFixes.test.tsx` (4), every rule mutation-checked
   RED. Suite 5,051 / 8 failures: ExchangeBackfillTest (documented) + intended changes in AnalyticsMoneyTest (4),
   AnalyticsFinancesTest (1), AnalyticsGoldenTest + GenericAnalyticsIsolationTest (money pipeline / payouts / stuck /
-  cash-forecast goldens); vitest only mo4. Proposed edits (not applied) in the session report; goldens to re-record
-  with -Dgolden.record=true once approved.
-- **Next:** approval of the existing-test edits + golden re-record → merge; deploy; then optionally the catch-up
-  commit=yes. Follow-up candidate: COD not-fulfilled orders still don't deduct a fee (spec scoped prepaid only).
+  cash-forecast goldens); vitest only mo4. Approved edits applied (AnalyticsMoneyTest, AnalyticsFinancesTest transit
+  168.00 / bucket 254.00, exchange trip 271.18, mo4, fixtures); goldens re-recorded with -Dgolden.record=true after
+  the typical-fee follow-up — only money-pipeline / payouts / stuck / cash-forecast changed. Final: backend red =
+  ExchangeBackfillTest only; vitest 2,374 / 2,374; tsc + vite build clean.
+- **Next:** deploy (not done). Catch-up script: commit=yes NOT to be run (not now, not after deploy — owner's call).
+  Logged separately, out of scope: COD not-fulfilled fee deduction; the ~868 BROEK orders missing from the Orders
+  Cancelled tab.
 
 **Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
 (U1c + U1d); V245; merged to main 2026-11-27 as 35a19890 (migrations end at V245), NOT deployed).** Decisions (approved 2026-11-27, Step 0):
