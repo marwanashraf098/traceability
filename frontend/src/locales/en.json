@@ -2492,6 +2492,7 @@
         "newPrice": "New item",
         "priceDifference": "Price difference",
         "differenceFloored": "Cheaper same-product swaps aren't refunded (Settings → Returns portal).",
+        "differenceUnknown": "Price difference couldn't be calculated — the price paid isn't known, so none was charged or refunded.",
         "owed": "Owed to the customer: {{amount}}. Record the payment once the old item is back."
       }
     }

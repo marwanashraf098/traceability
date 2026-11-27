@@ -179,6 +179,8 @@ export interface FeeQuote {
   paidPrice?: string | null
   replacementPrice?: string | null
   priceDifference?: string | null
+  /** Q5 — present (true) only when the price paid isn't known: no difference is charged or paid back. */
+  priceDifferenceUnknown?: boolean
   /** What the store owes the customer (the replacement costs less than they paid, after the fee). */
   customerOwed?: string | null
   /** Why this exchange can't be sent as chosen. */

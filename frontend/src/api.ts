@@ -3992,6 +3992,8 @@ export interface RequestAmounts {
   paidPrice?: string | null
   replacementPrice?: string | null
   priceDifference?: string | null
+  /** Q5 — present (true) only when the difference applied but the price paid wasn't known: none charged or refunded. */
+  priceDifferenceUnknown?: boolean
   customerOwed?: string | null
   nothingOwed: boolean
   overriddenAt: string | null

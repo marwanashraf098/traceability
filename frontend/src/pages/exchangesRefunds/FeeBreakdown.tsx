@@ -71,10 +71,16 @@ export default function FeeBreakdown({ detail, onChanged }: { detail: ReturnRequ
       </div>
       <dl className="space-y-1 text-body">
         {diff == null ? (
-          <div className="flex justify-between gap-4">
-            <dt className="text-secondary">{t(`${k}.itemValue`)}</dt>
-            <dd dir="ltr" data-testid="fee-item-value">{money(a.itemValue)}</dd>
-          </div>
+          <>
+            <div className="flex justify-between gap-4">
+              <dt className="text-secondary">{t(`${k}.itemValue`)}</dt>
+              <dd dir="ltr" data-testid="fee-item-value">{money(a.itemValue)}</dd>
+            </div>
+            {/* Q5: the difference applied but the price paid wasn't known — none was charged or refunded. */}
+            {!refund && a.priceDifferenceUnknown && (
+              <p className="text-small text-warning-text" data-testid="fee-difference-unknown">{t(`${k}.differenceUnknown`)}</p>
+            )}
+          </>
         ) : (
           <>
             <div className="flex justify-between gap-4">

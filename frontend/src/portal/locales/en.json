@@ -289,6 +289,7 @@
     "nothingToPay": "Nothing to pay",
     "owedNote": "The store will pay you back. We'll ask how you'd like to receive it.",
     "differenceFloored": "A cheaper size or colour of the same item isn't refunded.",
+    "differenceUnknown": "We couldn't work out a price difference for this item, so none is added.",
     "blocked": {
       "approximate_price": "This item can only be swapped for another size or colour online.",
       "same_or_lower_only": "This store only exchanges for items at the same price or lower.",

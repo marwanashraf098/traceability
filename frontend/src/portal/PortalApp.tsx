@@ -1415,6 +1415,8 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       </section>
     )
   }
+  // Q5: the difference applied but the price paid isn't known — none is added (the fee-only layout below says so).
+  const differenceUnknown = !refund && q.priceDifferenceUnknown === true
   return (
     <section className="pp-card" data-testid="fee-summary" aria-labelledby="pp-fee-title">
       <div className="pp-eyebrow" id="pp-fee-title">{t(refund ? 'fees.refundTitle' : 'fees.exchangeTitle')}</div>
@@ -1441,6 +1443,7 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       {q.feeWaived && <p className="pp-item__sub">{t('fees.waivedNote')}</p>}
       {refund && q.nothingOwed && <p className="pp-item__sub" data-testid="fee-nothing-owed">{t('fees.nothingOwed')}</p>}
       {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub" data-testid="fee-pay-note">{q.codBy === 'bosta' ? t('fees.bostaCollects', { amount: money(q.collect) }) : t('fees.exchangePayNote')}</p>}
+      {differenceUnknown && <p className="pp-item__sub" data-testid="fee-difference-unknown">{t('fees.differenceUnknown')}</p>}
       {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
       {q.blocked && (
         <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">

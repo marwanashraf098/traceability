@@ -66,6 +66,11 @@ public class RequestAmounts {
             m.put("paidPrice", plain(a.get("original_unit_price")));
             m.put("replacementPrice", plain(a.get("replacement_unit_price")));
             m.put("priceDifference", plain(a.get("price_difference")));
+            // Q5 (2026-11-27): the difference applied but the price paid wasn't known — none was charged or paid back
+            // (frozen as a replacement price with no difference). Present only then: "couldn't be calculated".
+            if ("exchange".equals(a.get("fee_kind")) && a.get("replacement_unit_price") != null && a.get("price_difference") == null) {
+                m.put("priceDifferenceUnknown", true);
+            }
             m.put("customerOwed", plain(a.get("customer_owed")));
             m.put("nothingOwed", a.get("refund_due") != null && ((BigDecimal) a.get("refund_due")).signum() == 0);
             m.put("overriddenAt", a.get("overridden_at") == null ? null : a.get("overridden_at").toString());

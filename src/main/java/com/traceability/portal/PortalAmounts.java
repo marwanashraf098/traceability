@@ -91,11 +91,21 @@ public final class PortalAmounts {
         public Difference(BigDecimal paidPrice, BigDecimal replacementPrice) { this(paidPrice, replacementPrice, false); }
 
         /**
+         * 2026-11-27 (Q5): the price paid isn't known (OrderLinePaidPrices NONE) — the difference can't be calculated,
+         * so none is charged or paid back (before: the paid price counted as 0 and the customer was charged the
+         * replacement's full price). The quote flags it ({@code priceDifferenceUnknown}); the frozen row keeps the
+         * replacement price with a NULL price_difference, and the merchant sees "couldn't be calculated".
+         */
+        public boolean unknown() { return paidPrice == null; }
+
+        /**
          * The difference that is charged or paid back. {@code floorAtZero} (a same-product swap while the store's
          * "Same-product swaps can refund the customer" is off): a lower new price never pays the customer back — 0.
+         * An unknown paid price ({@link #unknown}): 0 — nothing is charged or paid back.
          */
         BigDecimal amount() {
-            BigDecimal d = replacementPrice.subtract(paidPrice == null ? BigDecimal.ZERO : paidPrice).setScale(2, RoundingMode.HALF_UP);
+            if (unknown()) return BigDecimal.ZERO.setScale(2);
+            BigDecimal d = replacementPrice.subtract(paidPrice).setScale(2, RoundingMode.HALF_UP);
             return floorAtZero ? d.max(BigDecimal.ZERO.setScale(2)) : d;
         }
     }
@@ -110,7 +120,8 @@ public final class PortalAmounts {
                         boolean feeWaived, String waiveReason, BigDecimal refundDue, BigDecimal collect, List<Line> lines,
                         Difference difference, BigDecimal customerOwed) {
 
-        public BigDecimal priceDifference() { return difference == null ? null : difference.amount(); }
+        /** The signed difference; null when none applies or when it can't be calculated (Q5: paid price unknown). */
+        public BigDecimal priceDifference() { return difference == null || difference.unknown() ? null : difference.amount(); }
 
         /** The same quote with its lines keyed by {@code keys} (in order) — the item ids, once stored. */
         public Quote rekey(List<String> keys) {
@@ -157,6 +168,8 @@ public final class PortalAmounts {
                 m.put("replacementPrice", plain(difference.replacementPrice()));
                 m.put("priceDifference", plain(priceDifference()));
                 m.put("customerOwed", plain(customerOwed));
+                // Q5: present only when the price paid isn't known — no difference charged or paid back.
+                if (difference.unknown()) m.put("priceDifferenceUnknown", true);
             }
             List<Map<String, Object>> ls = new ArrayList<>();
             for (Line l : lines) {
