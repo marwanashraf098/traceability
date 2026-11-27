@@ -90,14 +90,18 @@ export const getSalesCities = (p: PeriodParams, signal?: AbortSignal) =>
 
 // ── s3 money ─────────────────────────────────────────────────────────────────
 
-export interface Stage { count: number; value: number; expected: number | null }
+/** expected: net of Bosta's fees (2026-11-27); feesEstimated > 0 = some fee is a quote / the typical fee → the total is an estimate. prepaid: orders / legs that bring only a fee. */
+export interface Stage { count: number; value: number; expected: number | null; fees: number; feesEstimated: number; prepaid: number }
+export interface FeePart { count: number; amount: number }
+/** Bosta fees still to be deducted from future payouts (legs no other stage nets). Always an estimate. */
+export interface FeesToDeduct { count: number; amount: number; returning: FeePart; customerReturns: FeePart; finishedUnsettled: FeePart }
 export interface AwaitingPayout {
   count: number; deposited: number; nextCashoutDate: string | null
   deliveredNotYetSettled: number; deliveredNotYetSettledEstimate: number | null
 }
 export interface InBank { shipments: number; deposited: number; payouts: number; lastTransferDate: string | null }
 export interface Pipeline {
-  range: Range; asOf: string; notFulfilled: Stage; inTransit: Stage; awaitingPayout: AwaitingPayout
+  range: Range; asOf: string; notFulfilled: Stage; inTransit: Stage; awaitingPayout: AwaitingPayout; feesToDeduct: FeesToDeduct
   inYourBank: InBank; openOrderDays: number
 }
 
@@ -371,12 +375,13 @@ export interface AnalyticsAlert {
 export interface Alerts { range: Range; asOf: string; alerts: AnalyticsAlert[] }
 
 export interface ForecastPart { count: number; amount: number }
-export interface InTransitPart { count: number; cod: number; expected: number; expectedPayoutDate: string | null }
+export interface InTransitPart { count: number; cod: number; expected: number; expectedPayoutDate: string | null; fees: number; feesEstimated: number }
 export interface ForecastMethod {
   payoutWeekday: number; payoutWeekdays: number[]; medianLagDays: number | null; lagSample: number; lagDaysUsed: number; nextPayoutDate: string | null
-  awaitingDeposited: ForecastPart; awaitingNotSettled: ForecastPart; inTransit: InTransitPart
+  awaitingDeposited: ForecastPart; awaitingNotSettled: ForecastPart; inTransit: InTransitPart; feesToDeduct: ForecastPart
 }
-export interface ForecastBucket { key: string; from: string; to: string; amount: number; awaitingPayout: number; inTransit: number }
+/** amount = awaitingPayout + inTransit + fees (fees ≤ 0: Bosta fees still to be deducted). */
+export interface ForecastBucket { key: string; from: string; to: string; amount: number; awaitingPayout: number; inTransit: number; fees: number }
 export interface CashForecast {
   asOf: string; today: string; reason: 'payout_cadence_unknown' | 'payout_lag_unknown' | null
   forecast: { buckets: ForecastBucket[]; later: number; method: ForecastMethod } | null

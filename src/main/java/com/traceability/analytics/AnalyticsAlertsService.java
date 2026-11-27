@@ -19,7 +19,8 @@ import static com.traceability.analytics.AnalyticsSql.money;
 /**
  * Analytics slice 7 — the Summary's "Needs attention" list and the cash forecast. Owner-only
  * (controller). Every figure is built on an existing definition: the s3 stuck / not-paid lists, the
- * s5 governorate grouping and success rate, the s3 pipeline's in-transit stage and city rates.
+ * s5 governorate grouping and success rate, the s3 pipeline's in-transit stage and city rates (net of
+ * Bosta's fees) and its fees still to be deducted (2026-11-27).
  */
 @Service
 public class AnalyticsAlertsService {
@@ -49,15 +50,18 @@ public class AnalyticsAlertsService {
 
     public record Part(long count, BigDecimal amount) {}
 
-    public record InTransitPart(long count, BigDecimal cod, BigDecimal expected, LocalDate expectedPayoutDate) {}
+    /** expected: net of Bosta's fees (MoneyAnalyticsService.inTransit); fees / feesEstimated as there. */
+    public record InTransitPart(long count, BigDecimal cod, BigDecimal expected, LocalDate expectedPayoutDate,
+                                BigDecimal fees, long feesEstimated) {}
 
     /** payoutWeekday: the most frequent of payoutWeekdays (SettlementSql.PAYOUT_WEEKDAYS). */
     public record Method(int payoutWeekday, List<Integer> payoutWeekdays, BigDecimal medianLagDays, long lagSample, int lagDaysUsed,
                          LocalDate nextPayoutDate, Part awaitingDeposited, Part awaitingNotSettled,
-                         InTransitPart inTransit) {}
+                         InTransitPart inTransit, Part feesToDeduct) {}
 
+    /** amount = awaitingPayout + inTransit + fees; fees ≤ 0 — Bosta fees still to be deducted (MoneyAnalyticsService.FeesToDeduct). */
     public record Bucket(String key, LocalDate from, LocalDate to, BigDecimal amount, BigDecimal awaitingPayout,
-                         BigDecimal inTransit) {}
+                         BigDecimal inTransit, BigDecimal fees) {}
 
     public record Forecast(List<Bucket> buckets, BigDecimal later, Method method) {}
 
@@ -228,7 +232,7 @@ public class AnalyticsAlertsService {
         long lagSample = (Long) lag[1];
 
         LocalDate nextPayout = SettlementSql.nextPayoutDay(today, weekdays);
-        BigDecimal[] awaiting = zeros(), transit = zeros();
+        BigDecimal[] awaiting = zeros(), transit = zeros(), fees = zeros();
         BigDecimal[] later = {BigDecimal.ZERO};
 
         long[] depN = {0}, notN = {0};
@@ -257,14 +261,31 @@ public class AnalyticsAlertsService {
         LocalDate transitPayout = SettlementSql.nextPayoutDay(today.plusDays(lagDays), weekdays);
         if (inTransit.expected() != null) place(transit, later, today, transitPayout, inTransit.expected());
 
+        // Fees still to be deducted (the pipeline's figure): in-flight legs at the in-transit payout day,
+        // finished-but-unsettled legs like delivered, not-settled legs (finish day + lag → payout day).
+        long feeN = 0;
+        BigDecimal feeAmt = BigDecimal.ZERO;
+        for (MoneyAnalyticsService.FeeRow r : money.feesToDeductRows(tid)) {
+            feeN += r.count();
+            feeAmt = feeAmt.add(r.amount());
+            LocalDate payout = transitPayout;
+            if (r.day() != null) {
+                LocalDate expected = r.day().plusDays(lagDays);
+                payout = SettlementSql.nextPayoutDay(expected.isBefore(today) ? today : expected, weekdays);
+            }
+            place(fees, later, today, payout, r.amount().negate());
+        }
+
         List<Bucket> buckets = new ArrayList<>();
         for (int i = 0; i < BUCKETS.length; i++) {
             buckets.add(new Bucket(BUCKET_KEYS[i], today.plusDays(BUCKETS[i][0]), today.plusDays(BUCKETS[i][1]),
-                money(awaiting[i].add(transit[i])), money(awaiting[i]), money(transit[i])));
+                money(awaiting[i].add(transit[i]).add(fees[i])), money(awaiting[i]), money(transit[i]), money(fees[i])));
         }
         Method method = new Method(weekdays.get(0), weekdays, median, lagSample, lagDays, nextPayout,
             new Part(depN[0], money(depAmt[0])), new Part(notN[0], money(notAmt[0])),
-            new InTransitPart(inTransit.count(), inTransit.value(), inTransit.expected(), transitPayout));
+            new InTransitPart(inTransit.count(), inTransit.value(), inTransit.expected(), transitPayout,
+                inTransit.fees(), inTransit.feesEstimated()),
+            new Part(feeN, money(feeAmt)));
         return new CashForecast(now, today, null, new Forecast(buckets, money(later[0]), method));
     }
 

@@ -48,7 +48,27 @@ public class MoneyAnalyticsService {
 
     // ── Response records ────────────────────────────────────────────────────
 
-    public record Stage(long count, BigDecimal value, BigDecimal expected) {}
+    /**
+     * A pipeline stage. value: face value (order value / COD). expected: what should reach the bank —
+     * 2026-11-27: net of Bosta's fees (fees, the fees deducted; feesEstimated, how many of them are a quote
+     * or the tenant's typical fee rather than Bosta's settled figure — the UI marks the total "estimated"
+     * when it is > 0). prepaid: orders / legs paid before shipping, which bring only a fee (cod 0).
+     */
+    public record Stage(long count, BigDecimal value, BigDecimal expected, BigDecimal fees, long feesEstimated,
+                        long prepaid) {}
+
+    /** A count and an amount. */
+    public record FeePart(long count, BigDecimal amount) {}
+
+    /**
+     * Bosta fees still to be deducted from future payouts (2026-11-27) — fees of legs no other stage
+     * already nets: in-flight legs bringing no COD (returning / Return to Origin, and forward legs on a
+     * cancelled order), in-flight customer return pickups (type 25 / return legs), and finished legs Bosta
+     * hasn't settled that aren't "delivered, awaiting payout". Always estimates (unsettled: quote × 1.14).
+     * Exchange trips (type 30) in flight are In transit and already net their fee there.
+     */
+    public record FeesToDeduct(long count, BigDecimal amount, FeePart returning, FeePart customerReturns,
+                               FeePart finishedUnsettled) {}
 
     public record AwaitingPayout(long count, BigDecimal deposited, LocalDate nextCashoutDate,
                                  long deliveredNotYetSettled, BigDecimal deliveredNotYetSettledEstimate) {}
@@ -56,7 +76,8 @@ public class MoneyAnalyticsService {
     public record InBank(long shipments, BigDecimal deposited, long payouts, LocalDate lastTransferDate) {}
 
     public record Pipeline(AnalyticsPeriod.Range range, Instant asOf, Stage notFulfilled, Stage inTransit,
-                           AwaitingPayout awaitingPayout, InBank inYourBank, int openOrderDays) {}
+                           AwaitingPayout awaitingPayout, FeesToDeduct feesToDeduct, InBank inYourBank,
+                           int openOrderDays) {}
 
     public record FeeFigure(long legs, BigDecimal amount, long estimatedCount) {}
 
@@ -193,13 +214,99 @@ public class MoneyAnalyticsService {
      */
     static final String IN_TRANSIT_LEGS = """
                 SELECT """ + SettlementSql.cod("s") + """
-                        AS cod, s.city_name AS city
+                        AS cod, s.city_name AS city,
+                       """ + SettlementSql.fee("s") + """
+                        AS fee,
+                       """ + SettlementSql.settled("s") + """
+                        AS settled
                 FROM shipments s""" + SettlementSql.floorJoin("s") + """
-                WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25')
-                  AND s.internal_state IN ('with_courier', 'exception')
-                  AND fo.status <> 'cancelled'::order_status
-                  AND """ + SettlementSql.POST_FLOOR;
+                WHERE s.tenant_id = ? AND s.provider = 'bosta' AND """ + inTransitLeg("s");
+
+    /**
+     * THE in-transit leg (the pipeline's stage, the cash forecast): see IN_TRANSIT_LEGS. Needs
+     * {@link SettlementSql#floorJoin}'s fo alias.
+     */
+    static String inTransitLeg(String s) {
+        return " (" + s + ".shipment_leg = 'forward' AND COALESCE(" + s + ".type_code, '10') NOT IN ('20', '25') "
+            + " AND " + s + ".internal_state IN ('with_courier', 'exception') "
+            + " AND fo.status <> 'cancelled'::order_status) ";
+    }
+
+    /*
+     * Fees still to be deducted (FeesToDeduct): one row per category (and, for finished legs, per Cairo
+     * finish day — the cash forecast places them like delivered, not-settled legs). Columns cat, day, n,
+     * amount. Parameters: override domains, override days, tenant id.
+     */
+    static final String FEES_TO_DEDUCT = """
+        SELECT x.cat, CASE WHEN x.cat = 'finished_unsettled' THEN (x.terminal_at AT TIME ZONE 'Africa/Cairo')::date END AS day,
+               COUNT(*) AS n, COALESCE(SUM(x.fee), 0) AS amount
+        FROM (
+            SELECT CASE WHEN s.internal_state IN """ + SettlementSql.TERMINAL_STATES + """
+                             THEN 'finished_unsettled'
+                        WHEN s.type_code = '25' OR s.shipment_leg = 'return' THEN 'customer_returns'
+                        ELSE 'returning' END AS cat,
+                   """ + SettlementSql.fee("s") + """
+                    AS fee,
+                   """ + SettlementSql.terminalAt("s") + """
+                    AS terminal_at
+            FROM shipments s""" + SettlementSql.floorJoin("s") + """
+            WHERE s.tenant_id = ? AND s.provider = 'bosta' AND """ + SettlementSql.POST_FLOOR + """
+              AND NOT """ + SettlementSql.settled("s") + """
+              AND ( (s.internal_state IN ('with_courier', 'exception', 'returning') AND NOT """ + inTransitLeg("s") + """
+                    )
+                 OR (s.internal_state IN """ + SettlementSql.TERMINAL_STATES + """
+                     AND s.settlement_status = 'none' AND """ + SettlementSql.charged("s") + """
+                     AND NOT (s.internal_state = 'delivered' AND s.shipment_leg = 'forward')) )
+        ) x
+        GROUP BY 1, 2
+        """;
+
+    /** One FEES_TO_DEDUCT row. */
+    record FeeRow(String category, LocalDate day, long count, BigDecimal amount) {}
+
+    /** The tenant's fees still to be deducted, by category (and finish day) — shared with the cash forecast. */
+    List<FeeRow> feesToDeductRows(UUID tid) {
+        return jdbc.query(FEES_TO_DEDUCT, ps -> {
+            ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+            ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.days()));
+            ps.setObject(3, tid);
+        }, (rs, n) -> {
+            Date d = rs.getDate("day");
+            return new FeeRow(rs.getString("cat"), d == null ? null : d.toLocalDate(), rs.getLong("n"),
+                money(rs.getBigDecimal("amount")));
+        });
+    }
+
+    static FeesToDeduct feesToDeduct(List<FeeRow> rows) {
+        Map<String, long[]> n = new LinkedHashMap<>();
+        Map<String, BigDecimal> a = new LinkedHashMap<>();
+        for (String c : List.of("returning", "customer_returns", "finished_unsettled")) { n.put(c, new long[1]); a.put(c, BigDecimal.ZERO); }
+        for (FeeRow r : rows) {
+            n.get(r.category())[0] += r.count();
+            a.merge(r.category(), r.amount(), BigDecimal::add);
+        }
+        FeePart ret = new FeePart(n.get("returning")[0], money(a.get("returning")));
+        FeePart crp = new FeePart(n.get("customer_returns")[0], money(a.get("customer_returns")));
+        FeePart fin = new FeePart(n.get("finished_unsettled")[0], money(a.get("finished_unsettled")));
+        return new FeesToDeduct(ret.count() + crp.count() + fin.count(),
+            money(ret.amount().add(crp.amount()).add(fin.amount())), ret, crp, fin);
+    }
+
+    /*
+     * The tenant's typical Bosta fee (incl. VAT) for a delivery not booked yet: the average fee of its
+     * forward Send legs delivered in the 90 days before now (SettlementSql.fee — settled, else the quote).
+     * Parameters: tenant id, now.
+     */
+    static final String TYPICAL_FEE = """
+        typical_fee AS (
+            SELECT AVG(""" + SettlementSql.fee("tf") + """
+                   ) AS fee
+            FROM shipments tf
+            WHERE tf.tenant_id = ? AND tf.provider = 'bosta' AND tf.shipment_leg = 'forward'
+              AND COALESCE(tf.type_code, '10') = '10' AND tf.internal_state = 'delivered'
+              AND tf.delivered_at > ?::timestamptz - interval '90 days'
+        )
+        """;
 
     /** Awaiting payout, deposited: Bosta settled the leg into the wallet, no payout yet. */
     static final String AWAITING_DEPOSITED = " (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") + ") ";
@@ -217,7 +324,7 @@ public class MoneyAnalyticsService {
 
         // Not fulfilled + in transit: order values (slice-1 sold lines over the open window), each
         // order's expected value at its city's success rate.
-        String stagesSql = SalesAnalyticsService.soldLines(false) + ", " + RATES + """
+        String stagesSql = SalesAnalyticsService.soldLines(false) + ", " + RATES + ", " + TYPICAL_FEE + """
             , open_orders AS (
                 SELECT l.order_id, SUM(l.revenue) AS value FROM lines l
                 JOIN merchant_orders o ON o.id = l.order_id
@@ -230,7 +337,12 @@ public class MoneyAnalyticsService {
             leg AS (
                 SELECT DISTINCT ON (s.order_id) s.order_id, s.internal_state,
                        s.type_code AS type_code,
-                       s.city_name AS city
+                       s.city_name AS city,
+                       COALESCE(s.cod_amount, s.raw_cod) AS leg_cod,
+                       """ + SettlementSql.fee("s") + """
+                        AS fee,
+                       """ + SettlementSql.settled("s") + """
+                        AS settled
                 FROM shipments s
                 JOIN open_orders oo ON oo.order_id = s.order_id
                 WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
@@ -242,7 +354,9 @@ public class MoneyAnalyticsService {
             ),
             not_fulfilled AS (
                 SELECT oo.order_id, oo.value,
-                       oo.value * COALESCE(cr.rate, (SELECT rate FROM overall)) AS expected
+                       COALESCE(cr.rate, (SELECT rate FROM overall)) AS rate,
+                       leg.order_id IS NOT NULL AS has_leg, leg.leg_cod, o.payment_group,
+                       leg.fee AS leg_fee, COALESCE(leg.settled, false) AS leg_settled
                 FROM open_orders oo
                 JOIN merchant_orders o ON o.id = oo.order_id
                 LEFT JOIN leg ON leg.order_id = oo.order_id
@@ -250,20 +364,19 @@ public class MoneyAnalyticsService {
                 LEFT JOIN city_rate cr ON cr.city = COALESCE(leg.city, pv.city)
                 WHERE leg.order_id IS NULL OR leg.internal_state IN ('created', 'terminated', 'cancelled')
             )
-            SELECT COUNT(*) AS n, COALESCE(SUM(value), 0) AS value, SUM(expected) AS expected
-            FROM not_fulfilled
+            SELECT nf.*, (SELECT fee FROM typical_fee) AS typical_fee
+            FROM not_fulfilled nf
             """;
         Stage notFulfilled = jdbc.query(stagesSql, ps -> {
             int i = soldLineParams(ps, tid, open);
             ps.setObject(i++, tid);                       // rates
             ps.setTimestamp(i++, Timestamp.from(now));
+            ps.setObject(i++, tid);                       // typical fee
+            ps.setTimestamp(i++, Timestamp.from(now));
             ps.setObject(i++, tid);                       // leg
             ps.setArray(i++, ps.getConnection().createArrayOf("text", PROVINCE_TO_BOSTA_CITY.keySet().toArray(new String[0])));
             ps.setArray(i, ps.getConnection().createArrayOf("text", PROVINCE_TO_BOSTA_CITY.values().toArray(new String[0])));
-        }, rs -> {
-            rs.next();
-            return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")));
-        });
+        }, MoneyAnalyticsService::notFulfilledStage);
 
         // In transit with Bosta: forward legs picked up and still moving (not turned RTO).
         Stage inTransit = inTransit(tid, now);
@@ -314,15 +427,57 @@ public class MoneyAnalyticsService {
                     last == null ? null : last.toLocalDate());
             });
 
-        return new Pipeline(period.range(), now, notFulfilled, inTransit, awaiting, bank, openOrderDays);
+        return new Pipeline(period.range(), now, notFulfilled, inTransit, awaiting, feesToDeduct(feesToDeductRows(tid)),
+            bank, openOrderDays);
     }
 
-    /** The pipeline's in-transit stage (IN_TRANSIT_LEGS) at the city success rates — shared with the cash forecast. */
+    /**
+     * Not yet fulfilled (2026-11-27): a COD order is expected at its value × its city's success rate (as
+     * before); a PREPAID order (OrderFinanceService.prepaid — the deciding Bosta leg's COD is 0, else a
+     * Card payment) brings no more cash, only Bosta's fee: −(its leg's fee, else the tenant's typical
+     * fee). expected is null while no success rate is known (face value is shown then).
+     */
+    private static Stage notFulfilledStage(java.sql.ResultSet rs) throws SQLException {
+        long n = 0, prepaid = 0, estimated = 0;
+        BigDecimal value = BigDecimal.ZERO, expected = BigDecimal.ZERO, fees = BigDecimal.ZERO;
+        boolean rateKnown = true;
+        while (rs.next()) {
+            n++;
+            BigDecimal v = rs.getBigDecimal("value") == null ? BigDecimal.ZERO : rs.getBigDecimal("value");
+            value = value.add(v);
+            if (OrderFinanceService.prepaid(rs.getBoolean("has_leg"), rs.getBigDecimal("leg_cod"), rs.getString("payment_group"))) {
+                prepaid++;
+                BigDecimal fee = rs.getBigDecimal("leg_fee");
+                boolean settled = fee != null && rs.getBoolean("leg_settled");
+                if (fee == null) fee = rs.getBigDecimal("typical_fee");
+                if (!settled) estimated++;
+                if (fee != null) {
+                    fees = fees.add(fee);
+                    expected = expected.subtract(fee);
+                }
+            } else {
+                BigDecimal rate = rs.getBigDecimal("rate");
+                if (rate == null) rateKnown = false;
+                else expected = expected.add(v.multiply(rate));
+            }
+        }
+        return new Stage(n, money(value), rateKnown && n > 0 ? money(expected) : null,
+            money(fees), estimated, prepaid);
+    }
+
+    /**
+     * The pipeline's in-transit stage (IN_TRANSIT_LEGS) — shared with the cash forecast. 2026-11-27:
+     * expected = Σ(cod × the city's success rate − the leg's Bosta fee), the fee Bosta's settled one, else
+     * the quote × 1.14 (feesEstimated counts those); a prepaid leg (cod 0) therefore counts −fee.
+     */
     Stage inTransit(UUID tid, Instant now) {
         String transitSql = "WITH " + RATES + """
             SELECT COUNT(*) AS n,
                    COALESCE(SUM(t.cod), 0) AS value,
-                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall))) AS expected
+                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall)) - COALESCE(t.fee, 0)) AS expected,
+                   COALESCE(SUM(t.fee), 0) AS fees,
+                   COUNT(*) FILTER (WHERE NOT t.settled) AS fees_estimated,
+                   COUNT(*) FILTER (WHERE t.cod = 0) AS prepaid
             FROM (""" + IN_TRANSIT_LEGS + """
             ) t
             LEFT JOIN city_rate cr ON cr.city = t.city
@@ -335,7 +490,8 @@ public class MoneyAnalyticsService {
             ps.setObject(5, tid);
         }, rs -> {
             rs.next();
-            return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")));
+            return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")),
+                money(rs.getBigDecimal("fees")), rs.getLong("fees_estimated"), rs.getLong("prepaid"));
         });
     }
 

@@ -39,7 +39,9 @@ import static org.mockito.Mockito.*;
  * Analytics payout fixes (2026-11-27) — slice 1: the payout check shows Traced's net per payout and its
  * breakdown (COD collected, Bosta fees, negative deposits), never Bosta's batch total. Slice 2: the
  * settlement refresh reads a deposited leg once its own next_cashout_date passed (no single payout
- * weekday), under a per-run cap; "delivered, not paid" and the cash forecast use every payout weekday. Realistic
+ * weekday), under a per-run cap; "delivered, not paid" and the cash forecast use every payout weekday.
+ * Slice 3: expected payouts count Bosta's fees (in transit, prepaid not-fulfilled orders, fees still to be
+ * deducted), the same numbers in the cash forecast. Realistic
  * fixtures: bare 10-digit tracking numbers, settlement columns written by the real writer from a
  * Bosta-shaped wallet.
  */
@@ -135,6 +137,15 @@ class AnalyticsPayoutFixesTest {
         UUID order(Instant placedAt, String status, String gateway) {
             UUID o = UUID.randomUUID();
             String raw = gateway == null ? "{}" : "{\"payment_gateway_names\":[\"" + gateway + "\"]}";
+            jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, raw) " +
+                        "VALUES (?, ?, ?, ?, ?, ?::order_status, ?, ?::jsonb)",
+                        o, id, store, "gid://shopify/Order/" + SEQ.incrementAndGet(), "#" + (SEQ.get() % 100000),
+                        status, Timestamp.from(placedAt), raw);
+            return o;
+        }
+
+        UUID orderRaw(Instant placedAt, String status, String raw) {
+            UUID o = UUID.randomUUID();
             jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, raw) " +
                         "VALUES (?, ?, ?, ?, ?, ?::order_status, ?, ?::jsonb)",
                         o, id, store, "gid://shopify/Order/" + SEQ.incrementAndGet(), "#" + (SEQ.get() % 100000),
@@ -449,5 +460,132 @@ class AnalyticsPayoutFixesTest {
         assertThat(method.get("nextPayoutDate")).isEqualTo(today().plusDays(1).toString());
         assertThat(n(method, "payoutWeekday")).isEqualTo(top.getValue());
         assertThat(method.get("payoutWeekdays")).isEqualTo(List.of(top.getValue(), second.getValue()));
+    }
+
+    // ── slice 3: expected payout counts fees ─────────────────────────────────
+
+    /** An unsettled Bosta leg: type, COD, quoted shipmentFees (fee estimate = quote × 1.14), drop-off city. */
+    static String quoted(int type, int cod, int quote, String city) {
+        return "{\"type\":{\"code\":" + type + "},\"cod\":" + cod + ",\"shipmentFees\":" + quote +
+               ",\"dropOffAddress\":{\"city\":{\"_id\":\"id-" + city + "\",\"name\":\"" + city + "\"}}," +
+               "\"wallet\":{\"cashCycle\":null,\"cashout\":{\"next_cashout_date\":null}}}";
+    }
+
+    static final String CAIRO_COD = "{\"payment_gateway_names\":[\"Cash on Delivery (COD)\"],\"shipping_address\":{\"province_code\":\"C\"}}";
+    static final String CAIRO_CARD = "{\"payment_gateway_names\":[\"Paymob\"],\"shipping_address\":{\"province_code\":\"C\"}}";
+
+    /** Cairo's success rate 3 / 5 = 0.6 (3 delivered, 1 refused RTO, 1 lost); typical Send fee 57.00 (quote 50). */
+    void cairoRate(T t) {
+        Instant recent = ago(Duration.ofDays(3));
+        for (int i = 0; i < 3; i++) {
+            Leg d = t.forward(recent, "delivered", quoted(10, 500, 50, "Cairo"));
+            set(d, "delivered_at = ?", ts(ago(Duration.ofDays(2))));
+        }
+        t.forward(recent, "returned", quoted(20, 0, 50, "Cairo"));          // finished, not settled: 57.00 to deduct
+        t.forward(recent, "lost", quoted(10, 500, 50, "Cairo"));            // finished, not settled: 57.00 to deduct
+    }
+
+    @Test
+    void s3_pipeline_inTransitNetsFees_prepaidNotFulfilledCountsOnlyTheFee_feesStillToBeDeducted() {
+        T t = new T("Expected-Fees");
+        t.bostaAccount();
+        UUID v = t.variant("FEE-1");
+        Instant recent = ago(Duration.ofDays(3));
+        cairoRate(t);
+
+        // In transit (Cairo, 0.6): a COD Send, a prepaid Send (cod 0) and an exchange trip collecting 150.
+        t.forward(recent, "with_courier", quoted(10, 1000, 50, "Cairo"));   // 600 − 57.00
+        t.forward(recent, "with_courier", quoted(10, 0, 60, "Cairo"));      //   0 − 68.40
+        t.forward(recent, "with_courier", quoted(30, 150, 80, "Cairo"));    //  90 − 91.20
+
+        // Not fulfilled: COD, no leg (200 × 0.6); Card, no leg (−typical fee 57.00); a booked leg with
+        // COD 0 (prepaid by Bosta's own figure: −68.40); a Card order whose leg collects COD (Bosta decides: × 0.6).
+        UUID cod = t.orderRaw(recent, "new", CAIRO_COD);
+        t.line(cod, v, 1, "200.00");
+        UUID card = t.orderRaw(recent, "new", CAIRO_CARD);
+        t.line(card, v, 1, "300.00");
+        UUID prepaidLeg = t.orderRaw(recent, "new", CAIRO_COD);
+        t.line(prepaidLeg, v, 1, "250.00");
+        t.leg(prepaidLeg, "forward", "created", quoted(10, 0, 60, "Cairo"));
+        UUID cardWithCod = t.orderRaw(recent, "new", CAIRO_CARD);
+        t.line(cardWithCod, v, 1, "250.00");
+        t.leg(cardWithCod, "forward", "created", quoted(10, 250, 50, "Cairo"));
+
+        // Fees still to be deducted (Alexandria — kept out of Cairo's rate):
+        t.forward(recent, "with_courier", quoted(20, 0, 50, "Alexandria"));                // RTO in flight      57.00
+        t.forward(recent, "returning", quoted(10, 700, 40, "Alexandria"));                 // returning           45.60
+        t.leg(t.orderRaw(recent, "cancelled", "{}"), "forward", "with_courier",
+              quoted(10, 900, 50, "Alexandria"));                                          // refused, order cancelled 57.00
+        t.leg(t.order(recent), "return", "with_courier", quoted(25, 0, 93, "Alexandria")); // return pickup       106.02
+        t.leg(t.order(recent), "return", "delivered", quoted(25, 0, 93, "Alexandria"));    // finished, unsettled 106.02
+        // Not counted: settled legs, delivered forward legs awaiting payout, legs never picked up.
+        t.forward(recent, "returned", SettlementPayloads.RTO_DEPOSITED);
+        t.forward(recent, "created", quoted(10, 400, 50, "Alexandria"));
+
+        Map<String, Object> body = ok(t, "/api/v1/analytics/money/pipeline?period=7d");
+        Map<String, Object> it = m(body, "inTransit");
+        assertThat(n(it, "count")).isEqualTo(3);
+        assertThat(dec(it, "value")).isEqualByComparingTo("1150.00");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("473.40");
+        assertThat(dec(it, "fees")).isEqualByComparingTo("216.60");
+        assertThat(n(it, "feesEstimated")).isEqualTo(3);
+        assertThat(n(it, "prepaid")).isEqualTo(1);
+
+        Map<String, Object> nf = m(body, "notFulfilled");
+        assertThat(n(nf, "count")).isEqualTo(4);
+        assertThat(dec(nf, "value")).isEqualByComparingTo("1000.00");
+        assertThat(dec(nf, "expected")).isEqualByComparingTo("144.60");      // 120 − 57 − 68.40 + 150
+        assertThat(n(nf, "prepaid")).isEqualTo(2);
+        assertThat(dec(nf, "fees")).isEqualByComparingTo("125.40");
+        assertThat(n(nf, "feesEstimated")).isEqualTo(2);
+
+        Map<String, Object> fd = m(body, "feesToDeduct");
+        assertThat(n(m(fd, "returning"), "count")).isEqualTo(3);
+        assertThat(dec(m(fd, "returning"), "amount")).isEqualByComparingTo("159.60");
+        assertThat(n(m(fd, "customerReturns"), "count")).isEqualTo(1);
+        assertThat(dec(m(fd, "customerReturns"), "amount")).isEqualByComparingTo("106.02");
+        assertThat(n(m(fd, "finishedUnsettled"), "count")).isEqualTo(3);            // Cairo RTO, Cairo lost, the CRP
+        assertThat(dec(m(fd, "finishedUnsettled"), "amount")).isEqualByComparingTo("220.02");
+        assertThat(n(fd, "count")).isEqualTo(7);
+        assertThat(dec(fd, "amount")).isEqualByComparingTo("485.64");
+    }
+
+    @Test
+    void s3_inTransit_settledFeeIsUsed_notTheQuote_andIsNotEstimated() {
+        T t = new T("Expected-SettledFee");
+        t.bostaAccount();
+        cairoRate(t);
+        Leg l = t.forward(ago(Duration.ofDays(2)), "with_courier", quoted(10, 1000, 50, "Cairo"));
+        set(l, "settlement_status = 'deposited', bosta_fees = 61.56");                // Bosta's own figure
+        Map<String, Object> it = m(ok(t, "/api/v1/analytics/money/pipeline?period=7d"), "inTransit");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("538.44");
+        assertThat(dec(it, "fees")).isEqualByComparingTo("61.56");
+        assertThat(n(it, "feesEstimated")).isZero();
+    }
+
+    @Test
+    void s3_cashForecast_usesTheSameFees() {
+        T t = new T("Forecast-Fees");
+        t.bostaAccount();
+        payoutsOn(t, today().plusDays(3).getDayOfWeek(), today().plusDays(1).getDayOfWeek());
+        cairoRate(t);                                                                  // + 2 finished unsettled: 114.00
+        Instant recent = ago(Duration.ofDays(2));
+        t.forward(recent, "with_courier", quoted(10, 1000, 50, "Cairo"));             // in transit 600 − 57
+        t.forward(recent, "with_courier", quoted(20, 0, 50, "Alexandria"));           // to deduct 57.00
+
+        Map<String, Object> pipeline = ok(t, "/api/v1/analytics/money/pipeline?period=7d");
+        Map<String, Object> f = m(ok(t, "/api/v1/analytics/cash-forecast"), "forecast");
+        Map<String, Object> method = m(f, "method");
+        assertThat(dec(m(method, "inTransit"), "expected")).isEqualByComparingTo(dec(m(pipeline, "inTransit"), "expected"));
+        assertThat(dec(m(method, "inTransit"), "expected")).isEqualByComparingTo("543.00");
+        assertThat(dec(m(method, "inTransit"), "fees")).isEqualByComparingTo("57.00");
+        assertThat(dec(m(method, "feesToDeduct"), "amount")).isEqualByComparingTo(dec(m(pipeline, "feesToDeduct"), "amount"));
+        assertThat(dec(m(method, "feesToDeduct"), "amount")).isEqualByComparingTo("171.00");
+        BigDecimal bucketFees = BigDecimal.ZERO;
+        for (Map<String, Object> b : list(f, "buckets")) {
+            bucketFees = bucketFees.add(dec(b, "fees"));
+            assertThat(dec(b, "amount")).isEqualByComparingTo(dec(b, "awaitingPayout").add(dec(b, "inTransit")).add(dec(b, "fees")));
+        }
+        assertThat(bucketFees).isEqualByComparingTo("-171.00");                         // all within 30 days
     }
 }
