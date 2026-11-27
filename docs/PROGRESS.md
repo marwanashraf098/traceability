@@ -5,7 +5,7 @@
 ## Current state
 
 **Help center — bazar guides (2026-11-27; branch `feat/help-bazar` off origin/main a3bda1ce (U1c merged); worktree
-`~/Documents/trace-help-bazar`; frontend only, NO migration; committed locally, NOT pushed, NOT merged, NOT deployed).**
+`~/Documents/trace-help-bazar`; frontend only, NO migration; (a) + (b) approved, merged to main, NOT deployed; (c) = a later small branch).**
 - **(a) Articles:** 14 new, EN + AR, topic `bazar` ("Bazar" / "البازار", `helpCenter.topics.bazar`, after Orders):
   bazar-create, -get-ready, -online-stock, -send-by-count (U1c wording), -prices, -sell-laptop, -invite-sellers,
   -seller-guide, -close-day, -end-event, -report (U1c What sold), -customer-details, -setup-new-stock, -faq. Written to
@@ -19,11 +19,16 @@
   /worker-home; `/help` → `HelpCenterRoute` (unchanged rule). HelpArticle: the breadcrumb isn't a link for a worker.
   A worker article must have no Related and no /help links (guarded). Phone bazar menu (BazarMenu, on the phone Home
   header — the Sell screen has no menu): "How to sell" / "كيف تبيع" (`bazar.menu.howToSell`), every role, new tab.
+  "Did this answer your question?" → No: a worker gets a plain "No" button that shows "Ask the bazar owner." /
+  «اسأل صاحب البازار.» (`helpCenter.noPlain`, `helpCenter.askBazarOwner`) — never Traced's support WhatsApp; owners /
+  managers keep "No, chat with us" → WhatsApp.
+- **Wording-fixes list (later, not changed):** send-by-count note still says "with or without barcodes" after U1c;
+  the Arabic Shopify-block screen says «الإعدادات › الربط» but the Settings tab is «الاتصالات».
 - **(b) Screen links:** `HelpLink` (help/HelpLink.tsx) — "Read more" (`helpCenter.readMore`), owner / manager only,
   new tab; `SCREEN_ARTICLES` registry. On: Bazar list, New bazar (title + Online stock, phone and desktop), Close day,
   Customer details, Sellers card, setup wizard header. **Left for after top-up:** Get ready (SetupView), Live
   (LiveView), Prices card, Scan out / Send by count, End event / Leftovers, Report.
-- **Tests:** new `helpSellerGuide.test.tsx` (14: worker opens the guide EN / AR; refused on /help and on every other
+- **Tests:** new `helpSellerGuide.test.tsx` (17 cases, 18 runs — + worker No EN / AR (revert-checked), owner / manager No → WhatsApp; worker opens the guide EN / AR; refused on /help and on every other
   article + an unknown id; owner / manager unchanged; worker article has no links; menu link; SCREEN_ARTICLES exist;
   HelpLink by role). Revert-checked: guard loosened → s1 "every other article" red; exception removed → both "opens"
   red. helpCenter.test 23/23 unchanged. No existing test edited. Full vitest (serial): 2,331 / 2,338 — the 7 red

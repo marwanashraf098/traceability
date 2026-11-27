@@ -11,6 +11,7 @@ import { ToastProvider } from '../components/ui'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { LIBRARY } from '../help/content'
+import { HELP_WHATSAPP } from '../help/topics'
 import { SCREEN_ARTICLES, WORKER_ARTICLES, isWorkerArticle } from '../help/helpRegistry'
 import { HelpLink } from '../help/HelpLink'
 import { HelpArticleRoute, HelpCenterRoute } from '../App'
@@ -63,6 +64,30 @@ describe('s1 a worker opens only the seller guide', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(LIBRARY[lng]['bazar-seller-guide'].title)
     expect(screen.queryAllByRole('link').filter(l => l.getAttribute('href') === '/help')).toEqual([])
     expect(screen.queryByTestId('worker-home')).toBeNull()
+  })
+
+  test.each([['en', 'No', 'Ask the bazar owner.'], ['ar', 'لا', 'اسأل صاحب البازار.']] as const)(
+    'a worker\'s "No" (%s) says ask the bazar owner, never Traced\'s WhatsApp', async (lng, no, ask) => {
+      setAccessToken(token('worker'))
+      const user = userEvent.setup()
+      renderAt('/help/bazar-seller-guide', lng)
+      const btn = await screen.findByTestId('help-no')
+      expect(btn.tagName).toBe('BUTTON')
+      expect(btn).not.toHaveAttribute('href')
+      expect(btn).toHaveTextContent(no)
+      expect(screen.queryAllByRole('link').filter(l => /wa\.me|whatsapp/i.test(l.getAttribute('href') ?? ''))).toEqual([])
+      await user.click(btn)
+      expect(screen.getByTestId('help-ask-owner')).toHaveTextContent(ask)
+    })
+
+  test.each(['owner', 'manager'] as const)('%s keeps "No, chat with us" → Traced\'s WhatsApp', async role => {
+    setAccessToken(token(role))
+    renderAt('/help/bazar-seller-guide')
+    const link = await screen.findByTestId('help-no')
+    expect(link.tagName).toBe('A')
+    expect(link).toHaveAttribute('href', HELP_WHATSAPP)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveTextContent('No, chat with us')
   })
 
   test('a worker is refused on /help', async () => {

@@ -6610,6 +6610,8 @@
     "helpful": "Did this answer your question?",
     "yes": "Yes",
     "no": "No, chat with us",
+    "noPlain": "No",
+    "askBazarOwner": "Ask the bazar owner.",
     "thanks": "Thanks — glad it helped.",
     "notFound": "We couldn't find this answer.",
     "back": "Back to the help center",
