@@ -725,7 +725,7 @@ class AnalyticsFinancesTest {
         assertThat(dec(m(method, "awaitingNotSettled"), "amount")).isEqualByComparingTo("143.00");   // 200 − 50 × 1.14
         Map<String, Object> transit = m(method, "inTransit");
         assertThat(n(transit, "count")).isEqualTo(1);
-        assertThat(dec(transit, "expected")).isEqualByComparingTo("225.00");                         // 300 × 75 %
+        assertThat(dec(transit, "expected")).isEqualByComparingTo("168.00");                         // 300 × 75 % − 57.00 fee (2026-11-27)
 
         LocalDate today = today();
         LocalDate nextWed = today.with(TemporalAdjusters.nextOrSame(DayOfWeek.WEDNESDAY));
@@ -734,7 +734,8 @@ class AnalyticsFinancesTest {
         assertThat(transit.get("expectedPayoutDate")).isEqualTo(laggedWed.toString());
         BigDecimal[] expected = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         expected[bucket(today, nextWed)] = expected[bucket(today, nextWed)].add(new BigDecimal("100.00"));
-        expected[bucket(today, laggedWed)] = expected[bucket(today, laggedWed)].add(new BigDecimal("368.00"));   // 143 + 225
+        // 143 + 168 − 57.00: the refused Giza leg's unsettled fee is still to be deducted (2026-11-27).
+        expected[bucket(today, laggedWed)] = expected[bucket(today, laggedWed)].add(new BigDecimal("254.00"));
         List<Map<String, Object>> buckets = list(f, "buckets");
         assertThat(buckets).extracting(b -> b.get("key")).containsExactly("next7", "days8to14", "days15to30");
         for (int i = 0; i < 3; i++) assertThat(dec(buckets.get(i), "amount")).isEqualByComparingTo(expected[i]);

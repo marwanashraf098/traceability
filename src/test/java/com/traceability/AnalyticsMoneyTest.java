@@ -888,7 +888,8 @@ class AnalyticsMoneyTest {
         Map<String, Object> it = m(ok(t, "/api/v1/analytics/money/pipeline?period=7d"), "inTransit");
         assertThat(n(it, "count")).isEqualTo(3);
         assertThat(dec(it, "value")).isEqualByComparingTo("1085.00");
-        assertThat(dec(it, "expected")).isEqualByComparingTo("542.50");                   // × the Cairo rate, like a delivery
+        // × the Cairo rate, like a delivery, minus each leg's fee: 542.50 − (57.00 + 107.16 + 107.16) (2026-11-27)
+        assertThat(dec(it, "expected")).isEqualByComparingTo("271.18");
     }
 
     @Test
