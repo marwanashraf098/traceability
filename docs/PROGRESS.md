@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Analytics shipping / refused-then-cancelled / cost 0 — slices 4–6 of the 2026-11-16 Step 0 (2026-11-27; branch
+`analytics/shipping-refused-cost` off main d7b23d2a, worktree ../traceability-shipping-cost; MIGRATION V247 (approved;
+V246 is reserved for the returns-link-unit branch — re-check both free on main AND prod before merge; out-of-order
+is on); NOT merged, NOT deployed).** Step 0 re-checked: only the payout-fixes commits touched analytics since 11-14;
+numbers moved — BROEK now ~869 refused→RTO→cancelled orders (1,472 across tenants), 955 refused forward legs.
+- **Slice 4 — shipping (decisions (a)(b)):** V247 `orders.shipping_charged` STORED generated =
+  `analytics_num(raw #>> '{current_shipping_price_set,shop_money,amount}')` (NULL = unknown, never 0); both order views
+  re-created identical apart from the appended column (pg_get_viewdef diff checked). Prod coverage 40,678 / 40,719
+  (41 unknown: 14 GraphQL-shaped raws, 27 no raw). current_shipping nets shipping refunds on 62 / 68 non-cancelled
+  orders with one; the 6 others are voided COD orders (nothing collected, none delivered) → no query correction.
+  Rewrite timed on a 191 MB copy with real fsync: 7.7 s (prod 295 MB → est. ~12 s, allow 30–60 s on Supabase I/O;
+  ACCESS EXCLUSIVE on orders — deploy at a quiet hour). Order finances Total = lines + shipping (rows: lines,
+  shipping; CSV appends lines, shipping); Profit: shippingIncome (delivered orders only) in contribution and SKU true
+  net, its own KPI on Revenue and a line under Money's contribution.
+- **Slice 5 — CancelledOrders (decision (c)), the ONE cancelled rule:** out only when cancelled before Bosta's pickup
+  (time-checked against Shopify cancelled_at); revived lines booked at the fulfilled units, outcome refused, fees
+  in Profit, never units sold (Products & SKUs, stock velocity, size curve, daily units) and never realized (a
+  delivered-then-cancelled order = full refund → its SKU's return rate counts it; 10 such orders on prod). Money
+  in-transit / stuck use it (raw-cancelled never-picked-up legs leave "never picked up"). SettlementRefreshJob's
+  eligibility NOT changed (status-cancelled picked-up legs — 1 on BROEK — aren't refreshed).
+  Customers to watch (decision (d)): Bosta's `originalCod` on the stored v0 raw (BROEK 919 / 955 refused legs; equals
+  Shopify's total on 827), else live COD, else Shopify total for COD-gateway orders only (`refusedCodFromShopify`,
+  BROEK 32 of which 4 on listed customers).
+- **Slice 6 — UnitCost (decision (e)):** cost > 0 only; Profit coverage costUnknownVariants / Units + cost note; Stock
+  value at cost and the cost sync count follow it.
+- **BROEK, Oct 29 – Nov 27 (prod SELECTs):** booked orders 2,175 → 2,656, units 4,873 → 5,699 (units sold stay
+  4,873), revenue 4.59M → 5.47M; delivered 1,692, refused 64 → 545, success 96.4 % → 75.6 %; Bosta fees on those
+  orders 191k → 243k; shipping income 112k; contribution profit ≈ 89k → ≈ 68k (approx., returns ignored; mostly the 4
+  cost-0 SKUs leaving); Customers to watch 0 → 48; cost-unknown SKUs 423 → 427.
+- **Tests:** AnalyticsShippingRefusedCostTest (8) + analyticsShippingRefusedCost.test.tsx (8), 13 backend + 5 frontend
+  mutations each RED. Goldens re-recorded per slice. Existing-test edits: MigrationSmokeTest 245, NotTracedBackfillTest
+  190 (approved). Screenshots: `frontend/dev/shipping-refused-shots`.
+- **Open questions for review:** Products' "Units sold" still includes ordinary (not cancelled) refused orders' units
+  — only revived ones are left out; delivered-then-cancelled counted as returns.
+
 **Analytics payout fixes — slices 1–3 of the 2026-11-16 Step 0 (2026-11-27; branch `analytics/payout-fixes` off
 origin/main 647f0206, worktree ../traceability-payout-fixes; NO migration; approved + merged to main 2026-11-27,
 NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit since 2026-11-14, all held.
