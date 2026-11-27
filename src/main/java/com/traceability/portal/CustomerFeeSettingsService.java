@@ -60,8 +60,12 @@ public class CustomerFeeSettingsService {
         }
     }
 
+    /**
+     * {@code replacementFees} (V246): "Charge fees on defect replacements" — on: a replacement (the same item again)
+     * pays the exchange fee, without the merchant-fault waiver; off (default): it is free. Never a price difference.
+     */
     public record Settings(boolean visible, Map<String, Rule> rules, List<String> merchantFaultReasons,
-                           List<Override> overrides, ExchangePricing exchangePricing) {}
+                           List<Override> overrides, ExchangePricing exchangePricing, boolean replacementFees) {}
 
     public record Area(String id, String name, String nameAr) {}
 
@@ -100,7 +104,8 @@ public class CustomerFeeSettingsService {
 
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_exchange_any_product, portal_exchange_same_or_lower_only, portal_exchange_max_difference, " +
-            "       portal_free_variant_swaps, portal_same_product_swap_refunds, portal_merchant_fault_reasons " +
+            "       portal_free_variant_swaps, portal_same_product_swap_refunds, portal_merchant_fault_reasons, " +
+            "       portal_replacement_fees " +
             "FROM tenants WHERE id = ?", tenantId);
 
         List<Override> overrides = jdbc.query(
@@ -124,7 +129,8 @@ public class CustomerFeeSettingsService {
                 Boolean.TRUE.equals(t.get("portal_exchange_same_or_lower_only")),
                 (BigDecimal) t.get("portal_exchange_max_difference"),
                 Boolean.TRUE.equals(t.get("portal_free_variant_swaps")),
-                Boolean.TRUE.equals(t.get("portal_same_product_swap_refunds"))));
+                Boolean.TRUE.equals(t.get("portal_same_product_swap_refunds"))),
+            Boolean.TRUE.equals(t.get("portal_replacement_fees")));
     }
 
     /** Bosta cities (cityId null) or the districts of one city — names only, for the area override picker. */
@@ -202,6 +208,26 @@ public class CustomerFeeSettingsService {
         m.put("from", was);
         m.put("to", next);
         audit.record(actor, "portal_merchant_fault_reasons_update", "tenant", tenantId.toString(), m);
+        return get();
+    }
+
+    /**
+     * V246 — "Charge fees on defect replacements". Owner-only (controller); null → 400. One audit row
+     * ({@code portal_replacement_fees_update}, from / to) only on a real change. Already-frozen requests never change.
+     */
+    @Transactional
+    public Settings putReplacementFees(UUID actor, Boolean charge) {
+        UUID tenantId = TenantContext.require();
+        if (!visible()) throw CustomerFeeException.notAvailable();
+        if (charge == null) throw CustomerFeeException.replacementFees();
+        boolean before = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_replacement_fees FROM tenants WHERE id = ? FOR UPDATE", Boolean.class, tenantId));
+        if (before == charge) return get();
+        jdbc.update("UPDATE tenants SET portal_replacement_fees = ? WHERE id = ?", charge, tenantId);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("from", before);
+        m.put("to", charge);
+        audit.record(actor, "portal_replacement_fees_update", "tenant", tenantId.toString(), m);
         return get();
     }
 

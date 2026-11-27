@@ -58,7 +58,7 @@ public class ReturnRequestService {
         String statusFilter = status == null || status.isBlank() ? null : status;
         List<Map<String, Object>> rows = jdbc.query(
             "SELECT rr.id, rr.reference, o.number AS order_number, o.customer_name, rr.status::text AS status, " +
-            "       rr.created_at, rr.booking_status, rr.type, " +
+            "       rr.created_at, rr.booking_status, rr.type, rr.exchange_kind, " +
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id) AS item_count, " +
             "       (SELECT array_agg(DISTINCT i.reason_code ORDER BY i.reason_code) " +
             "          FROM return_request_items i WHERE i.request_id = rr.id) AS reason_codes, " +
@@ -94,6 +94,8 @@ public class ReturnRequestService {
                 row.put("reasonCodes", codes == null ? List.of() : Arrays.asList((String[]) codes.getArray()));
                 row.put("status", rs.getString("status"));
                 row.put("type", rs.getString("type"));
+                // V246: a defect replacement (the same item again) — key present only then.
+                if (ReplacementRule.KIND_REPLACEMENT.equals(rs.getString("exchange_kind"))) row.put("exchangeKind", ReplacementRule.KIND_REPLACEMENT);
                 row.put("bookingStatus", rs.getString("booking_status"));
                 row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
                 row.put("arrivedCount", rs.getInt("arrived_count"));
@@ -133,7 +135,7 @@ public class ReturnRequestService {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.id, rr.reference, rr.order_id, o.number AS order_number, o.customer_name, " +
-            "       rr.type, rr.status::text AS status, rr.customer_email, rr.customer_note, rr.created_at, " +
+            "       rr.type, rr.exchange_kind, rr.status::text AS status, rr.customer_email, rr.customer_note, rr.created_at, " +
             "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id, " +
             "       o.customer_phone, " +
             // Build B: the Bosta address first; Shopify's city only when the order has no address at all.
@@ -222,6 +224,8 @@ public class ReturnRequestService {
         d.put("orderNumber", r.get("order_number"));
         d.put("customerName", r.get("customer_name"));
         d.put("type", r.get("type"));
+        // V246: a defect replacement (the same item again) — key present only then.
+        if (ReplacementRule.KIND_REPLACEMENT.equals(r.get("exchange_kind"))) d.put("exchangeKind", ReplacementRule.KIND_REPLACEMENT);
         d.put("status", r.get("status"));
         d.put("email", r.get("customer_email"));
         d.put("note", r.get("customer_note"));
@@ -522,7 +526,8 @@ public class ReturnRequestService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Only a requested exchange whose customer agreed to a refund can be switched.");
         }
-        jdbc.update("UPDATE return_requests SET type = 'refund' WHERE id = ? AND tenant_id = ?", id, tenantId);
+        // V246: a replacement switched to a refund is a plain refund (the CHECK: only an exchange is a replacement).
+        jdbc.update("UPDATE return_requests SET type = 'refund', exchange_kind = 'swap' WHERE id = ? AND tenant_id = ?", id, tenantId);
         jdbc.update("UPDATE return_request_items SET replacement_variant_id = NULL WHERE request_id = ? AND tenant_id = ?",
             id, tenantId);
         requests.event(tenantId, id, "switched_to_refund", actorUserId, null);

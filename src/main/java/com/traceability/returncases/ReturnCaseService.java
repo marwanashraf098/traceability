@@ -333,6 +333,7 @@ public class ReturnCaseService {
         List<Map<String, Object>> items = new ArrayList<>();
         for (Map<String, Object> r : rows) items.add(toItem(r));
         addManualCarriers(tenantId, items);
+        addReplacementKind(tenantId, items);
         addShopifyReturns(items);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("items", items);
@@ -461,6 +462,26 @@ public class ReturnCaseService {
 
     private static ResponseStatusException bad(String field) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown " + field);
+    }
+
+    /**
+     * V246 — a defect replacement (the same item again) carries {@code exchangeKind: 'replacement'}, on those rows only
+     * (a Java step after the shared case query, which is unchanged; every other row is byte-identical).
+     */
+    private void addReplacementKind(UUID tenantId, List<Map<String, Object>> items) {
+        List<String> ids = new ArrayList<>();
+        for (Map<String, Object> m : items) {
+            if ("A".equals(m.get("caseType")) && "exchange".equals(m.get("kind"))) ids.add((String) m.get("id"));
+        }
+        if (ids.isEmpty()) return;
+        Set<String> replacements = new HashSet<>(jdbc.queryForList(
+            "SELECT id::text FROM return_requests WHERE tenant_id = ? AND id = ANY (?::uuid[]) AND exchange_kind = 'replacement'",
+            String.class, tenantId, ids.toArray(new String[0])));
+        for (Map<String, Object> m : items) {
+            if ("A".equals(m.get("caseType")) && replacements.contains((String) m.get("id"))) {
+                m.put("exchangeKind", com.traceability.portal.ReplacementRule.KIND_REPLACEMENT);
+            }
+        }
     }
 
     /**

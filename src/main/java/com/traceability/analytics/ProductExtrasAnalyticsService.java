@@ -27,7 +27,12 @@ public class ProductExtrasAnalyticsService {
     public record FailedProduct(UUID productId, String title, long orders, long failedOrders, BigDecimal failureRate) {}
 
     public record SizeRow(String size, long soldUnits, BigDecimal share, long deliveredUnits, long returnedUnits,
-                          BigDecimal returnRate, long exchangedUnits) {}
+                          BigDecimal returnRate, long exchangedUnits, long replacedUnits) {
+        public SizeRow(String size, long soldUnits, BigDecimal share, long deliveredUnits, long returnedUnits,
+                       BigDecimal returnRate, long exchangedUnits) {
+            this(size, soldUnits, share, deliveredUnits, returnedUnits, returnRate, exchangedUnits, 0);
+        }
+    }
 
     public record SizeCurve(List<SizeRow> sizes, long unparseableUnits, List<String> unparseableValues,
                             long noSizeUnits) {}
@@ -64,7 +69,7 @@ public class ProductExtrasAnalyticsService {
             FROM return_request_items rri
             JOIN return_requests rr ON rr.id = rri.request_id
             JOIN order_period op    ON op.order_id = rr.order_id
-            WHERE rri.tenant_id = ? AND rr.type = 'exchange' AND rr.status <> 'rejected'
+            WHERE rri.tenant_id = ? AND rr.type = 'exchange' AND rr.exchange_kind = 'swap' AND rr.status <> 'rejected'
             GROUP BY op.is_current, rri.variant_id
             UNION ALL
             SELECT op.is_current, x.inbound_variant_id, COUNT(*)
@@ -76,6 +81,14 @@ public class ProductExtrasAnalyticsService {
         ),
         exch_v AS (
             SELECT is_current, variant_id, SUM(units) AS units FROM exch GROUP BY is_current, variant_id
+        ),
+        repl_v AS (
+            SELECT op.is_current, rri.variant_id, COUNT(*) AS units
+            FROM return_request_items rri
+            JOIN return_requests rr ON rr.id = rri.request_id
+            JOIN order_period op    ON op.order_id = rr.order_id
+            WHERE rri.tenant_id = ? AND rr.type = 'exchange' AND rr.exchange_kind = 'replacement' AND rr.status <> 'rejected'
+            GROUP BY op.is_current, rri.variant_id
         ),
         per_variant AS (
             SELECT lf.placed_at >= ?::timestamptz                                     AS is_current,
@@ -111,7 +124,7 @@ public class ProductExtrasAnalyticsService {
             HAVING COUNT(*) >= ?
         )
         SELECT 'v' AS kind, pv.is_current, pv.variant_id, pv.sold, pv.delivered_units, pv.returned, pv.realized,
-               COALESCE(ev.units, 0) AS exchanged, v.sku, v.title AS variant_title, p.title AS product_title,
+               COALESCE(ev.units, 0) AS exchanged, COALESCE(rv.units, 0) AS replaced, v.sku, v.title AS variant_title, p.title AS product_title,
                CASE p.size_position WHEN 1 THEN v.option1 WHEN 2 THEN v.option2 WHEN 3 THEN v.option3 END AS size_raw,
                p.size_position IS NOT NULL AS has_size_option,
                NULL::uuid AS product_id, NULL::text AS title, NULL::bigint AS orders, NULL::bigint AS delivered,
@@ -120,12 +133,13 @@ public class ProductExtrasAnalyticsService {
         JOIN variants v ON v.id = pv.variant_id
         JOIN products p ON p.id = v.product_id
         LEFT JOIN exch_v ev ON ev.variant_id = pv.variant_id AND ev.is_current = pv.is_current
+        LEFT JOIN repl_v rv ON rv.variant_id = pv.variant_id AND rv.is_current = pv.is_current
         UNION ALL
-        SELECT 'p', pp.is_current, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        SELECT 'p', pp.is_current, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                pp.product_id, pp.title, pp.orders, pp.delivered, pp.failed, NULL, NULL, NULL
         FROM per_product pp
         UNION ALL
-        SELECT 'x', pr.is_current, pr.va, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        SELECT 'x', pr.is_current, pr.va, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                NULL, NULL, pr.orders, NULL, NULL, pr.vb,
                pa.title || ' — ' || COALESCE(va.title, ''), pb.title || ' — ' || COALESCE(vb.title, '')
         FROM pairs pr
@@ -156,6 +170,7 @@ public class ProductExtrasAnalyticsService {
             ps.setTimestamp(i++, curStart);          // order_period
             ps.setObject(i++, tid);                  // exch: requests
             ps.setObject(i++, tid);                  // exch: dashboard exchanges
+            ps.setObject(i++, tid);                  // repl_v: defect replacements (V246)
             ps.setTimestamp(i++, curStart);          // per_variant
             ps.setTimestamp(i++, curStart);          // per_product
             ps.setTimestamp(i++, curStart);          // order_variants
@@ -166,7 +181,8 @@ public class ProductExtrasAnalyticsService {
                 case "v" -> variants.get(current).add(new VariantRow(rs.getObject("variant_id", UUID.class),
                     rs.getLong("sold"), rs.getLong("delivered_units"), rs.getLong("returned"), rs.getBigDecimal("realized"),
                     rs.getLong("exchanged"), rs.getString("sku"), rs.getString("variant_title"),
-                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option")));
+                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option"),
+                    rs.getLong("replaced")));
                 case "p" -> {
                     long orders = rs.getLong("orders"), d = rs.getLong("delivered"), f = rs.getLong("failed");
                     if (orders >= MOST_FAILED_MIN_ORDERS) {
@@ -200,6 +216,7 @@ public class ProductExtrasAnalyticsService {
             ps.setTimestamp(i++, start);
             ps.setObject(i++, tid);
             ps.setObject(i++, tid);
+            ps.setObject(i++, tid);                           // repl_v (V246)
             ps.setTimestamp(i++, start);
             ps.setTimestamp(i++, start);
             ps.setTimestamp(i++, start);
@@ -209,7 +226,8 @@ public class ProductExtrasAnalyticsService {
                 out.add(new VariantRow(rs.getObject("variant_id", UUID.class), rs.getLong("sold"),
                     rs.getLong("delivered_units"), rs.getLong("returned"), rs.getBigDecimal("realized"),
                     rs.getLong("exchanged"), rs.getString("sku"), rs.getString("variant_title"),
-                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option")));
+                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option"),
+                    rs.getLong("replaced")));
             }
         });
         return out;
@@ -222,9 +240,17 @@ public class ProductExtrasAnalyticsService {
         return m;
     }
 
+    /** V246: {@code exchanged} = swaps only; {@code replaced} = defect replacements (the same item again), apart. */
     public record VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
                       long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
-                      boolean hasSizeOption) {}
+                      boolean hasSizeOption, long replaced) {
+        public VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
+                          long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
+                          boolean hasSizeOption) {
+            this(variantId, sold, deliveredUnits, returned, realized, exchanged, sku, variantTitle, productTitle, sizeRaw,
+                hasSizeOption, 0);
+        }
+    }
 
     /** Most-failed: highest failure rate, then most orders, top 10. Pairs: most orders, top 10. */
     static Extras extrasOf(List<VariantRow> variants, List<FailedProduct> failed, List<Pair> pairs) {
@@ -303,15 +329,16 @@ public class ProductExtrasAnalyticsService {
                     continue;
                 }
             }
-            long[] a = bySize.computeIfAbsent(size, k -> new long[4]);
+            long[] a = bySize.computeIfAbsent(size, k -> new long[5]);
             a[0] += v.sold();
             a[1] += v.deliveredUnits();
             a[2] += v.returned();
             a[3] += v.exchanged();
+            a[4] += v.replaced();
         }
         long totalSold = bySize.values().stream().mapToLong(a -> a[0]).sum();
         List<SizeRow> rows = new ArrayList<>();
-        bySize.forEach((s, a) -> rows.add(new SizeRow(s, a[0], rate(a[0], totalSold), a[1], a[2], rate(a[2], a[1]), a[3])));
+        bySize.forEach((s, a) -> rows.add(new SizeRow(s, a[0], rate(a[0], totalSold), a[1], a[2], rate(a[2], a[1]), a[3], a[4])));
         return new SizeCurve(rows, unparseable, new ArrayList<>(badValues), noSize);
     }
 }

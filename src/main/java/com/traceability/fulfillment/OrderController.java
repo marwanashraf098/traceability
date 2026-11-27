@@ -115,12 +115,36 @@ public class OrderController {
         // Orders tabs & filters (2026-10-30): what came back and its grades (OrderReturnState) — absent when nothing
         // did; the highest-priority Needs attention reason group (ExceptionService.REASON_GROUP) — absent with no alert.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) ReturnStateSummary returnState,
-        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) AttentionGroup attentionGroup) {
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) AttentionGroup attentionGroup,
+        // V246: the replacement order of a defect replacement (the same item again) — true only then, absent otherwise
+        // (every other row is byte-identical); the list's "Replacement" badge in place of "Exchange".
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean isReplacement) {
+
+        public OrderSummary(String id, String number, String customerName, String customerPhone,
+                            String status, boolean onHold, BigDecimal codAmount,
+                            Instant placedAt, String trackingNumber,
+                            String deliveryState, String exceptionReason, String bostaLinkStatus,
+                            int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached,
+                            Instant notTracedAt, boolean isExchange,
+                            OrderStatusDeriver.DerivedOrderStatus derivedStatus, OrderShippingBadge shippingBadge,
+                            List<String> attentionReasons, ReturnStateSummary returnState, AttentionGroup attentionGroup) {
+            this(id, number, customerName, customerPhone, status, onHold, codAmount, placedAt, trackingNumber,
+                deliveryState, exceptionReason, bostaLinkStatus, failedDeliveryAttempts, isDelayed, slaBreached,
+                notTracedAt, isExchange, derivedStatus, shippingBadge, attentionReasons, returnState, attentionGroup, null);
+        }
 
         OrderSummary withReturnState(ReturnStateSummary r) {
             return new OrderSummary(id, number, customerName, customerPhone, status, onHold, codAmount, placedAt,
                 trackingNumber, deliveryState, exceptionReason, bostaLinkStatus, failedDeliveryAttempts, isDelayed,
-                slaBreached, notTracedAt, isExchange, derivedStatus, shippingBadge, attentionReasons, r, attentionGroup);
+                slaBreached, notTracedAt, isExchange, derivedStatus, shippingBadge, attentionReasons, r, attentionGroup,
+                isReplacement);
+        }
+
+        OrderSummary withReplacement(boolean replacement) {
+            return new OrderSummary(id, number, customerName, customerPhone, status, onHold, codAmount, placedAt,
+                trackingNumber, deliveryState, exceptionReason, bostaLinkStatus, failedDeliveryAttempts, isDelayed,
+                slaBreached, notTracedAt, isExchange, derivedStatus, shippingBadge, attentionReasons, returnState,
+                attentionGroup, replacement ? Boolean.TRUE : null);
         }
     }
 
@@ -226,7 +250,26 @@ public class OrderController {
         // non-Bosta order). See {@link OrderCourier}. Absent for a Bosta order — its detail is byte-identical to
         // before, and the drawer reads "absent" as Bosta.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-        OrderCourier courier) {
+        OrderCourier courier,
+        // V246: the replacement order of a defect replacement — true only then, absent otherwise (byte-identical).
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        Boolean isReplacement) {
+
+        /** Before V246 — no replacement flag. */
+        public OrderDetail(String id, String number, String customerName, String customerPhone,
+                           Object address, String paymentMethod, BigDecimal codAmount,
+                           String status, boolean onHold, String holdReason,
+                           Instant placedAt, Instant createdAt,
+                           List<OrderItem> items, List<ShipmentDetail> shipments,
+                           String bostaLinkStatus, Instant notTracedAt, boolean isExchange,
+                           OrderStatusDeriver.DerivedOrderStatus derivedStatus, String shopifyOrderUrl,
+                           boolean physicallyWithCourier, OrderShippingBadge shippingBadge,
+                           List<Map<String, Object>> shopifyReturns, Map<String, Object> shippedOutsideTraced,
+                           OrderCourier courier) {
+            this(id, number, customerName, customerPhone, address, paymentMethod, codAmount, status, onHold, holdReason,
+                placedAt, createdAt, items, shipments, bostaLinkStatus, notTracedAt, isExchange, derivedStatus,
+                shopifyOrderUrl, physicallyWithCourier, shippingBadge, shopifyReturns, shippedOutsideTraced, courier, null);
+        }
 
         /** Before 2026-11-09 — no courier block. */
         public OrderDetail(String id, String number, String customerName, String customerPhone,
@@ -861,7 +904,10 @@ public class OrderController {
 
         // Return state per row — one batched read for the page (OrderReturnState.ORDER_SUMMARY_SQL).
         Map<String, ReturnStateSummary> returnStates = tx.execute(txs -> returnStates(items));
-        List<OrderSummary> rows = items.stream().map(i -> i.withReturnState(returnStates.get(i.id()))).toList();
+        // V246: which rows are a defect replacement's order — one batched read for the page (ReplacementRule).
+        Set<String> replacementOrders = tx.execute(txs -> replacementOrders(items.stream().map(OrderSummary::id).toList()));
+        List<OrderSummary> rows = items.stream().map(i -> i.withReturnState(returnStates.get(i.id())))
+            .map(i -> replacementOrders.contains(i.id()) ? i.withReplacement(true) : i).toList();
 
         OrderTabCounts counts = withCounts
             ? tx.execute(txs -> tabCounts(filters, exceptionService == null ? null : attentionByOrder))
@@ -950,6 +996,16 @@ public class OrderController {
             }
         }
         return null;
+    }
+
+    /** V246 — of {@code ids}, the orders that are a defect replacement's replacement order (ReplacementRule). */
+    private Set<String> replacementOrders(List<String> ids) {
+        if (ids.isEmpty()) return Set.of();
+        UUID tenantId = TenantContext.require();
+        String[] arr = ids.toArray(new String[0]);
+        return new HashSet<>(jdbc.queryForList(
+            "SELECT order_id::text FROM (" + com.traceability.portal.ReplacementRule.REPLACEMENT_ORDERS_SQL + ") r",
+            String.class, tenantId, arr, tenantId, arr));
     }
 
     /** OrderReturnState.ORDER_SUMMARY_SQL for the page's orders → id → summary (absent when nothing came back). */
@@ -1229,7 +1285,8 @@ public class OrderController {
                 shippingBadge(orderId),
                 new com.traceability.returncases.ShopifyReturnsView(jdbc).cardsForOrder(orderId),
                 com.traceability.inventory.ShippedOutsideTraced.offer(jdbc, TenantContext.require(), orderId),
-                courier(orderId));
+                courier(orderId),
+                replacementOrders(List.of(orderId.toString())).isEmpty() ? null : Boolean.TRUE);
         });
     }
 
