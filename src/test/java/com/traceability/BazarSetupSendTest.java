@@ -59,6 +59,7 @@ import static org.mockito.Mockito.when;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
+@org.springframework.context.annotation.Import(KeepAvailableForTests.class) // U1d: Keep stays available
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BazarSetupSendTest {
 

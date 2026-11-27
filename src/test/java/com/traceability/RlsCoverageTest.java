@@ -315,6 +315,10 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+        // Bazar U1d — one boolean, no tenant rows returned.
+        Map.entry("/api/v1/bazar-events/online-stock",
+            "Bazar U1d: returns only {keep_available} (Main reconcile writes for the caller's store) — reads the " +
+            "caller's own stores row in a read-only transaction under TenantContext + RLS; no tenant rows are returned"),
         // Wizard entry — no tenant data at all: a server setting (BAZAR_SIGNUP_ENABLED), unauthenticated, no DB read.
         Map.entry("/api/v1/public/signup-config",
             "public signup-page config: returns only the BAZAR_SIGNUP_ENABLED server setting — no DB read, no tenant data"),
