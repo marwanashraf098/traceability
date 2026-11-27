@@ -143,7 +143,15 @@ export default function OrdersPage() {
                       { key: 'customer', header: t('analytics.orders.cols.customer'), render: r => r.customer ?? '—' },
                       { key: 'gov', header: t('analytics.orders.cols.governorate'), render: r => r.governorate ? label('governorate', r.governorate.key, r.governorate.label, r.governorate.labelAr) : '—' },
                       { key: 'items', header: t('analytics.orders.cols.items'), align: 'end', render: r => fmt.num(r.items) },
-                      { key: 'total', header: t('analytics.orders.cols.total'), align: 'end', sortable: true, render: r => fmt.money(r.total) },
+                      { key: 'total', header: t('analytics.orders.cols.total'), align: 'end', sortable: true, render: r => (
+                        // Total = lines + shipping (what the customer was charged); the shipping part on its own line.
+                        <span className="inline-flex flex-col items-end">
+                          <span data-testid="order-total">{fmt.money(r.total)}</span>
+                          <span className="text-caption text-muted" data-testid="order-shipping">
+                            {r.shipping == null ? t('analytics.orders.shippingUnknown') : t('analytics.orders.inclShipping', { amount: fmt.money(r.shipping) })}
+                          </span>
+                        </span>
+                      ) },
                       { key: 'pay', header: t('analytics.orders.cols.payment'), render: r => r.paymentGroup ? label('payment', r.paymentGroup, r.paymentGroup) : '—' },
                       { key: 'delivery', header: t('analytics.orders.cols.delivery'), render: r => t(`analytics.orders.delivery.${r.deliveryStatus.label}`, { defaultValue: r.deliveryStatus.label }) },
                       { key: 'fin', header: t('analytics.orders.cols.financial'), sortable: true, render: r => <Pill kind={FIN_PILL[r.financialStatus] ?? 'neutral'}>{t(`analytics.orders.fin.${r.financialStatus}`)}</Pill> },

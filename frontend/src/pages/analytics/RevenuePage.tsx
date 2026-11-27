@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, ShoppingBag, Banknote, Percent } from 'lucide-react'
+import { BarChart3, ShoppingBag, Banknote, Percent, Truck } from 'lucide-react'
 import {
   getCustomerSummary, getProfitByType, getProfitSummary, getRevenueBreakdown, getRevenueDiscounts, getRevenueHeatmap,
   getRevenueSummary, type Breakdown, type BreakdownBy, type Compared, type DiscountRow, type RevenueSummary,
@@ -173,6 +173,11 @@ export default function RevenuePage() {
           <Kpi testId="kpi-gross-margin" icon={Percent} tone={costed ? 'good' : 'grey'} label={t('analytics.revenue.kpi.margin')} loading={!profit.data && !profit.error}
             value={costed ? fmt.pct(profit.data?.grossMargin) : '—'}
             foot={<CostNote coverage={profit.data?.coverage} sync={sync.data} testId="margin-cost-note" />} />
+          {!merchant.noBosta && (
+            // Shipping customers paid on delivered orders: its own line — counted in profit, never in revenue.
+            <Kpi testId="kpi-shipping-income" icon={Truck} tone="good" label={t('analytics.revenue.kpi.shippingIncome')} loading={!profit.data && !profit.error}
+              value={fmt.moneyK(profit.data?.shippingIncome)} foot={t('analytics.revenue.kpi.shippingIncomeFoot')} />
+          )}
         </KpiRow>
 
         {merchant.noBosta ? <ConnectBostaCard /> : (

@@ -343,7 +343,9 @@ export interface Governorate { key: string; label: string; labelAr: string | nul
 export interface DeliveryStatus { key: string; label: string }
 export interface OrderRow {
   orderId: string; name: string; placedAt: string; customer: string | null; governorate: Governorate | null
-  items: number; total: number; paymentGroup: string | null; deliveryStatus: DeliveryStatus; financialStatus: string
+  /** total = lines + shipping (what the customer was charged); shipping null = Shopify's order carries none (unknown). */
+  items: number; total: number; lines: number; shipping: number | null
+  paymentGroup: string | null; deliveryStatus: DeliveryStatus; financialStatus: string
   bostaFees: number | null; feesEstimated: boolean; netToYou: number | null; refundAmountUnknown: boolean
   /** F4 — COD Bosta collected on this order's exchanges (price difference + fee). Never in total or net; absent when none. */
   exchangeCod?: number | null
@@ -409,6 +411,8 @@ export interface CostCoverage {
 export interface ProfitSummary {
   range: Range; coverage: CostCoverage; cogs: number | null; grossProfit: number | null; grossMargin: number | null
   feesTotal: number; feesOnCosted: number | null; contributionProfit: number | null; contributionMargin: number | null
+  /** Shipping customers paid on delivered orders; the costed part is in contributionProfit. */
+  shippingIncome: number; shippingIncomeOnCosted: number | null
 }
 export interface TypeMargin {
   productType: string; keptUnits: number; costedUnits: number; realized: number; realizedCosted: number
@@ -419,6 +423,7 @@ export interface SkuProfit {
   variantId: string; productTitle: string; variantTitle: string; sku: string | null; productType: string | null
   costed: boolean; unitCost: number | null; keptUnits: number; realized: number; cogs: number | null
   shippingFees: number; otherFees: number; netBeforeCost: number; trueNet: number | null; trueNetMargin: number | null
+  shippingIncome: number
 }
 export type SkuProfitSort = 'trueNet' | 'realized' | 'margin'
 export interface ProfitSkus { range: Range; coverage: CostCoverage; sort: string; total: number; skus: SkuProfit[] }

@@ -4862,7 +4862,9 @@
         "realizedFoot": "delivered and kept",
         "share": "Realized ÷ booked",
         "shareFoot": "share of booked revenue you keep",
-        "margin": "Gross margin"
+        "margin": "Gross margin",
+        "shippingIncome": "Shipping income",
+        "shippingIncomeFoot": "Shipping customers paid on delivered orders · counted in profit, not revenue"
       },
       "waterfall": "From gross sales to money you keep",
       "waterfallDesc": "Hover a bar for details.",
@@ -5182,6 +5184,7 @@
         "perFailed": "Cost per unsuccessful delivery",
         "contribution": "Contribution profit",
         "contributionFoot": "{{pct}} after cost of goods and Bosta.",
+        "contributionShipping": "Includes {{amount}} shipping customers paid.",
         "perSuccessFoot_one": "shipping fee per delivered order · {{delivered}} delivered",
         "perSuccessFoot_other": "shipping fee per delivered order · {{delivered}} delivered",
         "perFailedFoot_one": "{{failed}} failed · {{total}} total",
@@ -5297,6 +5300,8 @@
       "refundUnknown": "refund amount unknown",
       "exchangeCod": "+ {{amount}} collected on an exchange",
       "exchangeFees": "+ {{amount}} exchange trip fee",
+      "inclShipping": "incl. {{amount}} shipping",
+      "shippingUnknown": "shipping unknown",
       "pageOf": "Page {{page}} of {{pages}} · {{total}} orders",
       "prev": "Previous",
       "next": "Next",

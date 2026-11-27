@@ -30,7 +30,7 @@ public class OrderFinanceController {
     static final int DEFAULT_MAX_EXPORT_ROWS = 50_000;
     static final String[] CSV_COLUMNS = {"order", "placed_at", "customer", "governorate", "governorate_ar", "items",
         "total", "payment", "delivery_status", "financial_status", "bosta_fees", "fees_estimated", "net_to_you",
-        "refund_amount_unknown"};
+        "refund_amount_unknown", "lines", "shipping"};
     private static final DateTimeFormatter CAIRO_TIME =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(AnalyticsPeriod.CAIRO);
 
@@ -128,7 +128,7 @@ public class OrderFinanceController {
                 text(r.governorate().label()), text(r.governorate().labelAr()), String.valueOf(r.items()),
                 num(r.total()), text(r.paymentGroup()), text(r.deliveryStatus().label()), r.financialStatus(),
                 num(r.bostaFees()), String.valueOf(r.feesEstimated()), num(r.netToYou()),
-                String.valueOf(r.refundAmountUnknown())));
+                String.valueOf(r.refundAmountUnknown()), num(r.lines()), num(r.shipping())));
             w.write("\r\n");
             if (++n % 1000 == 0) w.flush();
         }

@@ -27,8 +27,13 @@ import static com.traceability.analytics.AnalyticsSql.rate;
  *                  (type 30) is a cost of its ORIGINAL order (SettlementSql.exchangeOriginal, in "other"),
  *                  never of its internal EXC- order (never a sale) — counted once (2026-11-12); a trip with
  *                  no original found is on no sold order, as before.
- * Gross margin = (realized − COGS) ÷ realized, costed lines; contribution profit = realized − COGS −
- * fees, costed lines; true net per SKU = realized − COGS − allocated shipping − allocated other fees.
+ *   shipping income (slice 4, decision (b), 2026-11-27) = the shipping a DELIVERED order's customer paid
+ *                  (orders.shipping_charged, V247 — Shopify's current shipping price, after shipping
+ *                  discounts and refunds; unknown counts nothing), split across the order's lines by line
+ *                  value like the fees. Undelivered orders bring none (nothing was collected).
+ * Gross margin = (realized − COGS) ÷ realized, costed lines (product only); contribution profit =
+ * realized + shipping income − COGS − fees, costed lines; true net per SKU = realized + allocated
+ * shipping income − COGS − allocated shipping fees − allocated other fees.
  */
 @Service
 public class ProfitAnalyticsService {
@@ -36,9 +41,14 @@ public class ProfitAnalyticsService {
     public record Coverage(long variantsSold, long variantsCosted, long keptUnits, long costedUnits,
                            BigDecimal realizedTotal, BigDecimal realizedCosted, BigDecimal costedRevenueShare) {}
 
+    /**
+     * shippingIncome — every delivered order's shipping (shown on its own line); shippingIncomeOnCosted —
+     * the part on costed lines, the one contributionProfit adds (like feesOnCosted).
+     */
     public record Summary(AnalyticsPeriod.Range range, Coverage coverage, BigDecimal cogs, BigDecimal grossProfit,
                           BigDecimal grossMargin, BigDecimal feesTotal, BigDecimal feesOnCosted,
-                          BigDecimal contributionProfit, BigDecimal contributionMargin) {}
+                          BigDecimal contributionProfit, BigDecimal contributionMargin,
+                          BigDecimal shippingIncome, BigDecimal shippingIncomeOnCosted) {}
 
     public record TypeMargin(String productType, long keptUnits, long costedUnits, BigDecimal realized,
                              BigDecimal realizedCosted, BigDecimal cogs, BigDecimal grossMargin) {}
@@ -48,7 +58,7 @@ public class ProfitAnalyticsService {
     public record SkuProfit(UUID variantId, String productTitle, String variantTitle, String sku, String productType,
                             boolean costed, BigDecimal unitCost, long keptUnits, BigDecimal realized, BigDecimal cogs,
                             BigDecimal shippingFees, BigDecimal otherFees, BigDecimal netBeforeCost, BigDecimal trueNet,
-                            BigDecimal trueNetMargin) {}
+                            BigDecimal trueNetMargin, BigDecimal shippingIncome) {}
 
     public record Skus(AnalyticsPeriod.Range range, Coverage coverage, String sort, long total, List<SkuProfit> skus) {}
 
@@ -56,7 +66,8 @@ public class ProfitAnalyticsService {
     private static final String PROFIT_SQL = SalesAnalyticsService.soldLines(false) + SalesAnalyticsService.ORDER_OUTCOMES
         + SalesAnalyticsService.LINE_RETURNS + ", exchange_trips " + SettlementSql.EXCHANGE_TRIPS + """
         , order_val AS (
-            SELECT order_id, SUM(qty * unit_price) AS val FROM line_facts GROUP BY order_id
+            SELECT order_id, SUM(qty * unit_price) AS val, bool_or(outcome = 'delivered') AS delivered
+            FROM line_facts GROUP BY order_id
         ),
         order_fees AS (
             SELECT ov.order_id, f.shipping, f.other
@@ -93,17 +104,20 @@ public class ProfitAnalyticsService {
                    CASE WHEN lf.outcome = 'delivered' THEN lf.qty - lf.returned ELSE 0 END                  AS kept,
                    CASE WHEN lf.outcome = 'delivered' THEN (lf.qty - lf.returned) * lf.unit_price ELSE 0 END AS realized,
                    COALESCE(lf.qty * lf.unit_price / NULLIF(ov.val, 0), 0)                                    AS share,
-                   COALESCE(ofe.shipping, 0) AS o_ship, COALESCE(ofe.other, 0) AS o_other
+                   COALESCE(ofe.shipping, 0) AS o_ship, COALESCE(ofe.other, 0) AS o_other,
+                   CASE WHEN ov.delivered THEN COALESCE(mo.shipping_charged, 0) ELSE 0 END AS o_ship_income
             FROM line_facts lf
             JOIN variants v    ON v.id = lf.variant_id
             JOIN order_val ov  ON ov.order_id = lf.order_id
+            JOIN merchant_orders mo ON mo.id = lf.order_id
             LEFT JOIN order_fees ofe ON ofe.order_id = lf.order_id
         )
         SELECT pl.variant_id, v.title AS variant_title, v.sku, p.title AS product_title, p.product_type_norm AS ptype,
                MAX(pl.unit_cost) AS unit_cost,
                SUM(pl.kept) AS kept, SUM(pl.realized) AS realized,
                SUM(pl.kept * pl.unit_cost) AS cogs,
-               SUM(pl.o_ship * pl.share) AS ship, SUM(pl.o_other * pl.share) AS other
+               SUM(pl.o_ship * pl.share) AS ship, SUM(pl.o_other * pl.share) AS other,
+               SUM(pl.o_ship_income * pl.share) AS ship_income
         FROM per_line pl
         JOIN variants v ON v.id = pl.variant_id
         JOIN products p ON p.id = v.product_id
@@ -119,7 +133,7 @@ public class ProfitAnalyticsService {
     }
 
     record Row(UUID variantId, String productTitle, String variantTitle, String sku, String ptype, BigDecimal unitCost,
-               long kept, BigDecimal realized, BigDecimal cogs, BigDecimal ship, BigDecimal other) {
+               long kept, BigDecimal realized, BigDecimal cogs, BigDecimal ship, BigDecimal other, BigDecimal shipIncome) {
         boolean costed() {
             return unitCost != null;
         }
@@ -135,7 +149,7 @@ public class ProfitAnalyticsService {
         }, (rs, n) -> new Row(rs.getObject("variant_id", UUID.class), rs.getString("product_title"), rs.getString("variant_title"),
             rs.getString("sku"), rs.getString("ptype"), rs.getBigDecimal("unit_cost"), rs.getLong("kept"),
             OrderFacts.nz(rs.getBigDecimal("realized")), rs.getBigDecimal("cogs"), OrderFacts.nz(rs.getBigDecimal("ship")),
-            OrderFacts.nz(rs.getBigDecimal("other"))));
+            OrderFacts.nz(rs.getBigDecimal("other")), OrderFacts.nz(rs.getBigDecimal("ship_income"))));
     }
 
     static Coverage coverage(List<Row> rows) {
@@ -158,21 +172,25 @@ public class ProfitAnalyticsService {
         List<Row> rows = load(period);
         Coverage cov = coverage(rows);
         BigDecimal cogs = BigDecimal.ZERO, fees = BigDecimal.ZERO, feesCosted = BigDecimal.ZERO;
+        BigDecimal shipIncome = BigDecimal.ZERO, shipIncomeCosted = BigDecimal.ZERO;
         for (Row r : rows) {
             BigDecimal f = r.ship().add(r.other());
             fees = fees.add(f);
+            shipIncome = shipIncome.add(r.shipIncome());
             if (r.costed()) {
                 cogs = cogs.add(OrderFacts.nz(r.cogs()));
                 feesCosted = feesCosted.add(f);
+                shipIncomeCosted = shipIncomeCosted.add(r.shipIncome());
             }
         }
         if (cov.variantsCosted() == 0) {
-            return new Summary(period.range(), cov, null, null, null, money(fees), null, null, null);
+            return new Summary(period.range(), cov, null, null, null, money(fees), null, null, null, money(shipIncome), null);
         }
         BigDecimal gross = cov.realizedCosted().subtract(cogs);
-        BigDecimal contribution = gross.subtract(feesCosted);
+        BigDecimal contribution = gross.add(shipIncomeCosted).subtract(feesCosted);
         return new Summary(period.range(), cov, money(cogs), money(gross), rate(gross, cov.realizedCosted()), money(fees),
-            money(feesCosted), money(contribution), rate(contribution, cov.realizedCosted()));
+            money(feesCosted), money(contribution), rate(contribution, cov.realizedCosted()), money(shipIncome),
+            money(shipIncomeCosted));
     }
 
     @Transactional(readOnly = true)
@@ -208,12 +226,12 @@ public class ProfitAnalyticsService {
         List<Row> rows = load(period);
         List<SkuProfit> out = new ArrayList<>();
         for (Row r : rows) {
-            BigDecimal before = r.realized().subtract(r.ship()).subtract(r.other());
+            BigDecimal before = r.realized().add(r.shipIncome()).subtract(r.ship()).subtract(r.other());
             BigDecimal net = r.costed() ? before.subtract(OrderFacts.nz(r.cogs())) : null;
             out.add(new SkuProfit(r.variantId(), r.productTitle(), r.variantTitle(), r.sku(), r.ptype(), r.costed(),
                 r.unitCost() == null ? null : money(r.unitCost()), r.kept(), money(r.realized()),
                 r.costed() ? money(OrderFacts.nz(r.cogs())) : null, money(r.ship()), money(r.other()), money(before),
-                net == null ? null : money(net), net == null ? null : rate(net, r.realized())));
+                net == null ? null : money(net), net == null ? null : rate(net, r.realized()), money(r.shipIncome())));
         }
         Comparator<SkuProfit> c = switch (sort) {
             case "realized" -> Comparator.comparing(SkuProfit::realized).reversed();

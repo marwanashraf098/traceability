@@ -5080,7 +5080,9 @@
         "realizedFoot": "تم تسليمه والاحتفاظ به",
         "share": "المحقق ÷ المحجوز",
         "shareFoot": "نسبة ما تحتفظ به من المحجوز",
-        "margin": "هامش الربح الإجمالي"
+        "margin": "هامش الربح الإجمالي",
+        "shippingIncome": "دخل الشحن",
+        "shippingIncomeFoot": "الشحن الذي دفعه العملاء على الطلبات المسلّمة · محسوب في الربح وليس في الإيرادات"
       },
       "waterfall": "من إجمالي المبيعات إلى ما تحتفظ به",
       "waterfallDesc": "مرّر على أي عمود لرؤية التفاصيل.",
@@ -5428,6 +5430,7 @@
         "perFailed": "تكلفة التوصيل غير الناجح",
         "contribution": "ربح المساهمة",
         "contributionFoot": "{{pct}} بعد تكلفة البضاعة وبوسطة.",
+        "contributionShipping": "يشمل {{amount}} شحن دفعه العملاء.",
         "perSuccessFoot_zero": "رسوم الشحن لكل طلب مُسلَّم · لا طلبات",
         "perSuccessFoot_one": "رسوم الشحن لكل طلب مُسلَّم · طلب واحد",
         "perSuccessFoot_two": "رسوم الشحن لكل طلب مُسلَّم · طلبان",
@@ -5551,6 +5554,8 @@
       "refundUnknown": "مبلغ الاسترداد غير معروف",
       "exchangeCod": "+ {{amount}} محصّلة على استبدال",
       "exchangeFees": "+ {{amount}} رسوم رحلة استبدال",
+      "inclShipping": "شامل شحن {{amount}}",
+      "shippingUnknown": "الشحن غير معروف",
       "pageOf": "صفحة {{page}} من {{pages}} · {{total}} طلب",
       "prev": "السابق",
       "next": "التالي",
