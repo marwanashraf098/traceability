@@ -5,7 +5,8 @@
 ## Current state
 
 **Defect replacement — "Replace with the same item" in the returns portal (S0–S4 + S6, 2026-11-27; branch
-`feat/defect-replacement` off origin/main d7b23d2a, worktree ../trace-replacement; V247; NOT merged, NOT deployed).**
+`feat/defect-replacement` rebased on origin/main fa5fc468 (shipping-cost's V246 merged), worktree ../trace-replacement;
+V247 — renumbered from V246 (feat/returns-link-unit's V246 must renumber past V247); PR open, NOT merged, NOT deployed).**
 A customer whose item arrived damaged / faulty or wrong can ask for the SAME variant again (same size, same colour).
 - **THE rule — `portal.ReplacementRule`:** the same variant is allowed only for a defect reason, a fixed list in code
   (`DEFECT_REASONS` = damaged, wrong_item — decision Q1; never not_as_pictured, never the per-store merchant-fault list).
@@ -17,8 +18,8 @@ A customer whose item arrived damaged / faulty or wrong can ask for the SAME var
 - **V247:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
   `exchange_kind = 'swap' OR type = 'exchange'` (switchToRefundAndApprove resets it to 'swap' in the same UPDATE);
   `tenants.portal_replacement_fees` boolean NOT NULL DEFAULT false. Existing RLS + V1 table grants cover both (app_user
-  read / write tested). No orders column → no view re-create. **Count gates (MigrationSmokeTest 244 → 245,
-  NotTracedBackfillTest 189 → 190 + "V247") NOT edited — waiting for approval; they fail until then.**
+  read / write tested). No orders column → no view re-create. Count gates (approved 2026-11-28): MigrationSmokeTest 246 files
+  (V1–V247), NotTracedBackfillTest 191 ("+ V246 + V247").
 - **Pricing (Q2):** a replacement NEVER has a price difference (no charge, no refund) under any setting —
   `PortalService.price` returns before `ExchangePricing.difference`. Fee only with "Charge fees on defect replacements"
   ON (Settings › Returns portal › Customer fees, owner-only, `PUT /tenant/portal-settings/customer-fees/replacement-fees
@@ -50,6 +51,10 @@ A customer whose item arrived damaged / faulty or wrong can ask for the SAME var
 - **Tests:** PortalReplacementTest (11: r1–r9, a1, x1 app_user), portalReplacement.test.tsx (6, incl. AR/RTL),
   replacementMerchant.test.tsx (6), portalReplacementLayout.browser.test.tsx (Chromium + WebKit, EN/AR, phone; set
   VITE_PORTAL_SHOTS for screenshots). Revert-checked: 17 backend rules, 10 frontend rules, Q5 both sides.
+  Approved existing-test edits (2026-11-28): the count gates; one SKIP for PUT …/customer-fees/replacement-fees in
+  PortalOrderLeakTest AND ShadowOrderLeakTest (the shadow test keeps its own copy of the registry); G4a (off + on) and
+  G4b bosta-settings goldens re-recorded — only `replacementReasons` and `sameItem` added (both absent with exchanges
+  off: r1 + the unchanged g4b no-bosta golden). Analytics replacement counts are omitted when 0 (AnalyticsGoldenTest).
 - **Not in this build (S5, after the Scan returns dead-end branch merges):** the returned piece's grading rule —
   **Q3 decided:** reason damaged → Damaged is the primary action, Restock needs a confirm; reason wrong_item → normal
   grading. Plus the courier-swap warning (a returned piece that belongs to a live exchange's replacement order — with the
