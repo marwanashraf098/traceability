@@ -305,7 +305,7 @@ public class OverviewService {
             "  AND rsi.disposition_at >= ?",
             TS_MAPPER, tid, lower));
 
-        // return_needs_review (V246)
+        // return_needs_review (V247)
         all.addAll(jdbc.query(
             "SELECT rsi.disposition_at FROM return_session_items rsi " +
             "WHERE rsi.tenant_id = ? AND rsi.disposition = 'needs_review' " +

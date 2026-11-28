@@ -496,7 +496,7 @@ public class InventoryLedger {
     }
 
     /**
-     * V246 — Scan returns "This label is that unit": a piece was linked to (eventType
+     * V247 — Scan returns "This label is that unit": a piece was linked to (eventType
      * 'return_unit_linked') or unlinked from ('return_unit_unlinked') an untracked order line's unit
      * that came back in a parcel. No status change here — from_status = to_status = the piece's
      * current status (a damaged link then moves it through PieceAdjustService). Sibling-append like

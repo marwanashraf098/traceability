@@ -114,7 +114,7 @@ interface LandingSession {
   restocked_count: number
   damaged_count: number
   mismatch_count: number
-  /** V246 */
+  /** V247 */
   linked_count?: number
   needs_review_count?: number
 }
@@ -150,12 +150,12 @@ interface SessionItem {
   variant_title: string
   product_title: string
   sku: string | null
-  /** V246: 'linked' — the label is an untracked unit of a parcel; 'needs_review' — left for a manager at close. */
+  /** V247: 'linked' — the label is an untracked unit of a parcel; 'needs_review' — left for a manager at close. */
   disposition: 'pending' | 'restocked' | 'damaged' | 'mismatch' | 'linked' | 'needs_review'
   unexpected: boolean
-  /** V246 — present only when this label could be an untracked unit on a parcel scanned in this session. */
+  /** V247 — present only when this label could be an untracked unit on a parcel scanned in this session. */
   linkCandidates?: LinkCandidate[]
-  /** V246 — present only on a needs_review item: its alert was resolved ("nothing to do"). */
+  /** V247 — present only on a needs_review item: its alert was resolved ("nothing to do"). */
   reviewResolved?: boolean
   /** The piece is on an AWB scanned in this session (picks the UNEXPECTED reason text only). */
   on_scanned_awb?: boolean
@@ -231,7 +231,7 @@ interface Parcel {
   }
 }
 
-/** V246 — an untracked unit a scanned label could be (same variant, on a parcel scanned in this session). */
+/** V247 — an untracked unit a scanned label could be (same variant, on a parcel scanned in this session). */
 interface LinkCandidate {
   shipmentId: string
   awb: string
@@ -246,7 +246,7 @@ interface LinkCandidate {
   condition: 'sellable' | 'damaged' | null
 }
 
-/** V246 — a live link of this session: the label {pieceCode} IS that unit. */
+/** V247 — a live link of this session: the label {pieceCode} IS that unit. */
 interface UnitLink {
   linkId: string
   pieceId: string
@@ -314,7 +314,7 @@ interface SessionDetail {
   lastScan?: LastScan | null
   /** Q2: pieces in this session scanned on a paired phone. */
   phoneScanCount?: number
-  /** V246 — present only when the session has a live unit link. */
+  /** V247 — present only when the session has a live unit link. */
   unitLinks?: UnitLink[]
 }
 
@@ -324,7 +324,7 @@ interface CloseSummary {
   restockedCount: number
   damagedCount: number
   mismatchCount: number
-  /** V246 */
+  /** V247 */
   linkedCount?: number
   needsReviewCount?: number
   shipmentCount: number
@@ -339,7 +339,7 @@ type View =
   | { type: 'summary'; sessionId: string }
 
 export default function Returns() {
-  // V246: the return_needs_review alert opens /returns?session=<id>&piece=<id> — that session's summary, the piece
+  // V247: the return_needs_review alert opens /returns?session=<id>&piece=<id> — that session's summary, the piece
   // highlighted. Read once from the URL (no router hook: the page also renders outside a router in tests).
   const [deepLink] = useState(() => {
     const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
@@ -936,7 +936,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     }
   }
 
-  // V246 — "this label is that unit": link an unexpected piece to an untracked unit of a parcel, and its undo.
+  // V247 — "this label is that unit": link an unexpected piece to an untracked unit of a parcel, and its undo.
   // Inline buttons only (no dialog, no text field) — nothing competes with the scan input for focus.
   const [linkBusy, setLinkBusy] = useState<string | null>(null)
   const [mismatchConfirm, setMismatchConfirm] = useState<string | null>(null)
@@ -1041,7 +1041,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
     'hidden'
 
-  // V246 (Q2): only a LEGAL pending item (at return_pending_inspection) blocks closing — the backend's
+  // V247 (Q2): only a LEGAL pending item (at return_pending_inspection) blocks closing — the backend's
   // BLOCKS_CLOSE_SQL. A pending unexpected item in any other state goes to a manager ('needs_review') at close.
   const pendingItems = detail?.items.filter(i => i.disposition === 'pending' && i.status === 'return_pending_inspection') ?? []
   const reviewOnClose = detail?.items.filter(i => i.disposition === 'pending' && i.status !== 'return_pending_inspection') ?? []
@@ -1051,7 +1051,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   // Step 5 parcel view. Expected pieces / items already grouped under a parcel render
   // inside its card; anything left (older responses, plain piece scans) renders below.
   const parcels = detail?.parcels ?? []
-  // V246: a linked label is shown merged into its unit's row on the parcel card, not as a row of its own.
+  // V247: a linked label is shown merged into its unit's row on the parcel card, not as a row of its own.
   const mergedPieceIds = new Set(unitLinks.filter(l => parcels.some(pc => pc.shipmentId === l.shipmentId)).map(l => l.pieceId))
   const otherItems = (detail?.otherItems ?? detail?.items ?? []).filter(i => !(i.disposition === 'linked' && mergedPieceIds.has(i.piece_id)))
   const parcelExpectedIds = new Set(parcels.flatMap(pc => pc.expectedPieces.map(e => e.id)))
@@ -1086,7 +1086,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           if (!isPending) {
             return <DispositionedItemRow key={item.id} item={item} link={unitLinks.find(l => l.pieceId === item.piece_id)} />
           }
-          // V246: the untracked units this label could be — the link action comes first.
+          // V247: the untracked units this label could be — the link action comes first.
           const candidates = item.linkCandidates ?? []
           return (
             <div
@@ -1142,7 +1142,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                   <Button
                     variant="tertiary" size="sm"
                     loading={dispositioning === item.piece_id}
-                    // V246: when the label could be an untracked unit, "Not the real piece" asks first.
+                    // V247: when the label could be an untracked unit, "Not the real piece" asks first.
                     onClick={() => candidates.length > 0
                       ? setMismatchConfirm(item.piece_id)
                       : disposition(item.piece_id, 'mismatch')}
@@ -1399,7 +1399,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
               ? [
                   parcels.length > 0 ? t('returns.openSession.footer.parcels', { count: parcels.length }) : null,
                   scannedCount > 0 ? t('returns.openSession.footer.itemsScanned', { count: scannedCount }) : null,
-                  // V246: an unexpected row still waiting for a decision doesn't block Close, but it isn't "nothing left".
+                  // V247: an unexpected row still waiting for a decision doesn't block Close, but it isn't "nothing left".
                   reviewOnClose.length > 0
                     ? t('returns.link.needsDecisionCount', { count: reviewOnClose.length })
                     : t('returns.openSession.footer.nothingLeft'),
@@ -1493,7 +1493,7 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   onItemAction?: (itemId: string, action: 'sellable' | 'damaged' | 'undo') => void
   sessionId?: string
   onUnitAction?: (unit: ParcelUnit, action: 'sellable' | 'damaged' | 'undo') => void
-  /** V246: this session's unit links — a linked unit's row shows its label (the merged row). */
+  /** V247: this session's unit links — a linked unit's row shows its label (the merged row). */
   unitLinks?: UnitLink[]
   linkBusy?: string | null
   onUndoLink?: (pieceId: string) => void
@@ -1861,7 +1861,7 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction, link, linkBusy = fals
   busy: boolean
   canUndo: boolean
   onAction: (action: 'sellable' | 'damaged' | 'undo') => void
-  /** V246: the scanned label this unit is (the merged row) — its own Undo replaces the unit's. */
+  /** V247: the scanned label this unit is (the merged row) — its own Undo replaces the unit's. */
   link?: UnitLink
   linkBusy?: boolean
   onUndoLink?: (pieceId: string) => void
@@ -1931,7 +1931,7 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction, link, linkBusy = fals
   )
 }
 
-/** V246 (Q3 case B) — the order's Shopify fulfilment left from Traced Main: a note only, never blocking. */
+/** V247 (Q3 case B) — the order's Shopify fulfilment left from Traced Main: a note only, never blocking. */
 function ShopifyMayBeLowNote() {
   const { t } = useTranslation()
   return (
@@ -1942,7 +1942,7 @@ function ShopifyMayBeLowNote() {
   )
 }
 
-/** V246 — the units a scanned label could be, each with its link action(s). */
+/** V247 — the units a scanned label could be, each with its link action(s). */
 function LinkCandidates({ candidates, busy, onLink, testId }: {
   candidates: LinkCandidate[]
   busy: boolean
@@ -1990,7 +1990,7 @@ function candidateLine(c: LinkCandidate, t: (k: string, o?: Record<string, unkno
     t('returns.link.unitOf', { unit: c.unitNo, count: c.units })].filter(Boolean).join(' · ')
 }
 
-/** V246 — "Not the real piece" while the label could be an untracked unit: asks first (inline, no dialog). */
+/** V247 — "Not the real piece" while the label could be an untracked unit: asks first (inline, no dialog). */
 function MismatchConfirm({ candidate, busy, onConfirm, onCancel }: {
   candidate: LinkCandidate
   busy: boolean
@@ -2046,11 +2046,11 @@ function SummaryStat({ value, label, tone }: { value: number; label: string; ton
 
 function DispositionedItemRow({ item, link, highlight = false, children }: {
   item: SessionItem
-  /** V246: a linked item's unit link (its case-B note). */
+  /** V247: a linked item's unit link (its case-B note). */
   link?: UnitLink
   /** The alert deep link's piece (?piece=). */
   highlight?: boolean
-  /** V246: a manager's actions on a needs-review item (summary screen). */
+  /** V247: a manager's actions on a needs-review item (summary screen). */
   children?: React.ReactNode
 }) {
   const { t } = useTranslation()
@@ -2120,7 +2120,7 @@ interface SessionSummaryData {
   restockedCount: number
   damagedCount: number
   mismatchCount: number
-  /** V246 */
+  /** V247 */
   linkedCount?: number
   needsReviewCount?: number
   openedBy?: string | null
@@ -2137,7 +2137,7 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
   onPrimaryAction?: () => void
   primaryActionLoading?: boolean
   onBack: () => void
-  /** V246: the summary screen's own row (needs-review actions); default the read-only row. */
+  /** V247: the summary screen's own row (needs-review actions); default the read-only row. */
   renderItem?: (item: SessionItem) => React.ReactNode
 }) {
   const { t } = useTranslation()
@@ -2172,7 +2172,7 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
         <SummaryStat value={data.restockedCount} label={t('returns.openSession.restocked')} tone="success" />
         <SummaryStat value={data.damagedCount} label={t('returns.openSession.damaged')} tone="critical" />
         <SummaryStat value={data.mismatchCount} label={t('returns.openSession.mismatchLabel')} tone="warning" />
-        {/* V246: shown only when there are any (the three stats above are unchanged). */}
+        {/* V247: shown only when there are any (the three stats above are unchanged). */}
         {!!data.linkedCount && (
           <span data-testid="summary-linked"><SummaryStat value={data.linkedCount} label={t('returns.link.linkedStat')} tone="success" /></span>
         )}
@@ -2235,7 +2235,7 @@ function SessionSummaryScreen({ sessionId, onBack, highlightPieceId = null }: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  // V246: a manager settles a needs-review item here — link it / not the real piece / nothing to do.
+  // V247: a manager settles a needs-review item here — link it / not the real piece / nothing to do.
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [mismatchConfirm, setMismatchConfirm] = useState<string | null>(null)

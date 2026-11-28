@@ -93,13 +93,13 @@ public class ReturnSessionService {
     private final UntrackedParcelUnits untrackedUnits;
     /** Non-Bosta couriers G3: a generic leg scanned back becomes 'returned' — on this service's own connection. */
     private final com.traceability.courier.GenericLegTransitions genericLegs;
-    /** V246: "this label is that unit" — the candidate rule and guards, same JdbcTemplate. */
+    /** V247: "this label is that unit" — the candidate rule and guards, same JdbcTemplate. */
     private final UntrackedUnitLinks unitLinks;
-    /** V246: a damaged link moves the piece available → damaged through the one Lookup adjust path. */
+    /** V247: a damaged link moves the piece available → damaged through the one Lookup adjust path. */
     private PieceAdjustService pieceAdjust;
 
     /**
-     * V246 (Q2): THE "still blocks closing" rule for a pending item {@code i} (piece {@code p}): only a LEGAL scan —
+     * V247 (Q2): THE "still blocks closing" rule for a pending item {@code i} (piece {@code p}): only a LEGAL scan —
      * the piece is at return_pending_inspection, so restock / damaged are possible. A pending item in any other state
      * (an illegal-state scan) no longer blocks: close marks it 'needs_review' and a manager alert follows
      * (return_needs_review). Used by close() and ReturnSessionAutoCloseJob.
@@ -617,7 +617,7 @@ public class ReturnSessionService {
     private Map<String, Object> dispositionInternal(UUID sessionId, String pieceId, String disposition,
                                                     String reason, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-        // V246 (Q2): a manager settles a 'needs_review' item (left by close) as "Not the real piece" — the session
+        // V247 (Q2): a manager settles a 'needs_review' item (left by close) as "Not the real piece" — the session
         // is closed by then. The public entry already required owner / manager for mismatch.
         if ("mismatch".equals(disposition)) {
             Map<String, Object> item = jdbc.query(
@@ -843,7 +843,7 @@ public class ReturnSessionService {
                 Map.of("blockingItems", pending));
         }
 
-        // V246 (Q2): every other still-pending item (an illegal-state scan — the piece isn't at
+        // V247 (Q2): every other still-pending item (an illegal-state scan — the piece isn't at
         // return_pending_inspection) goes to a manager: 'needs_review', one return_needs_review alert each.
         // Nothing moves (no piece event, no stock, no Shopify).
         jdbc.update(
@@ -868,7 +868,7 @@ public class ReturnSessionService {
                 m.put("restockedCount",  rs.getInt("restocked_count"));
                 m.put("damagedCount",    rs.getInt("damaged_count"));
                 m.put("mismatchCount",   rs.getInt("mismatch_count"));
-                // V246: present only when there are any (the close response's existing keys are unchanged).
+                // V247: present only when there are any (the close response's existing keys are unchanged).
                 if (rs.getInt("linked_count") > 0)       m.put("linkedCount", rs.getInt("linked_count"));
                 if (rs.getInt("needs_review_count") > 0) m.put("needsReviewCount", rs.getInt("needs_review_count"));
                 return m;
@@ -1025,7 +1025,7 @@ public class ReturnSessionService {
         untrackedUnits.undo(tenantId, sessionId, shipmentId, orderItemId, unitNo, actorUserId);
     }
 
-    // ── V246: "this label is that unit" — link an unexpected piece to an untracked unit ─────
+    // ── V247: "this label is that unit" — link an unexpected piece to an untracked unit ─────
 
     /**
      * POST /returns/sessions/{sessionId}/items/{pieceId}/link-unit {shipmentId, orderItemId, unitNo, condition}: the
@@ -1303,7 +1303,7 @@ public class ReturnSessionService {
             "        FROM return_session_items i WHERE i.session_id = rs.id) AS damaged_count, " +
             "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'mismatch') " +
             "        FROM return_session_items i WHERE i.session_id = rs.id) AS mismatch_count, " +
-            // V246: linked to an untracked unit / left for a manager at close.
+            // V247: linked to an untracked unit / left for a manager at close.
             "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'linked') " +
             "        FROM return_session_items i WHERE i.session_id = rs.id) AS linked_count, " +
             "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'needs_review') " +
@@ -1313,7 +1313,7 @@ public class ReturnSessionService {
             "ORDER BY rs.opened_at DESC, rs.id DESC " +
             "LIMIT ? OFFSET ?",
             tenantId, size, (long) page * size);
-        // V246: linked_count / needs_review_count present only on a session that has any (other rows unchanged).
+        // V247: linked_count / needs_review_count present only on a session that has any (other rows unchanged).
         for (Map<String, Object> row : items) {
             if (((Number) row.get("linked_count")).longValue() == 0) row.remove("linked_count");
             if (((Number) row.get("needs_review_count")).longValue() == 0) row.remove("needs_review_count");
@@ -1359,7 +1359,7 @@ public class ReturnSessionService {
 
         Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
         result.put("items", items);
-        // V246: the session's live unit links (present only when there is one — the merged rows).
+        // V247: the session's live unit links (present only when there is one — the merged rows).
         List<Map<String, Object>> sessionLinks = unitLinks.sessionLinks(tenantId, sessionId);
         if (!sessionLinks.isEmpty()) result.put("unitLinks", sessionLinks);
         result.put("expectedPieces", expected);
@@ -1374,7 +1374,7 @@ public class ReturnSessionService {
     }
 
     /**
-     * V246 — on the item rows, only where it applies (every other row's keys are unchanged):
+     * V247 — on the item rows, only where it applies (every other row's keys are unchanged):
      * {@code linkCandidates} — the units this label could be ({@link UntrackedUnitLinks#candidates}), on a 'pending' or
      * 'needs_review' item when there is at least one; {@code reviewResolved} — on a 'needs_review' item, whether a
      * manager already marked its alert "nothing to do".
@@ -1804,7 +1804,7 @@ public class ReturnSessionService {
             "SELECT COUNT(*) FROM return_session_items " +
             "WHERE tenant_id = ? AND disposition = 'mismatch' AND disposition_at BETWEEN ? AND ?",
             Integer.class, tenantId, tsFrom, tsTo);
-        // V246: linked to an untracked unit (the piece was already in stock) / left for a manager at close.
+        // V247: linked to an untracked unit (the piece was already in stock) / left for a manager at close.
         Integer linkedCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM return_session_items " +
             "WHERE tenant_id = ? AND disposition = 'linked' AND disposition_at BETWEEN ? AND ?",
@@ -1828,7 +1828,7 @@ public class ReturnSessionService {
         result.put("restockedCount", restockedCount);
         result.put("damagedCount", damagedCount);
         result.put("mismatchCount", mismatchCount);
-        // V246: present only when there are any (the existing analytics keys are unchanged).
+        // V247: present only when there are any (the existing analytics keys are unchanged).
         if (linkedCount != null && linkedCount > 0)           result.put("linkedCount", linkedCount);
         if (needsReviewCount != null && needsReviewCount > 0) result.put("needsReviewCount", needsReviewCount);
         result.put("expectedNotScannedCount", expectedNotScannedCount);

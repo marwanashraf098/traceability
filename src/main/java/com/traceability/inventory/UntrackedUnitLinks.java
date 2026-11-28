@@ -12,7 +12,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * V246 (approved 2026-11-27, returns dead end BRK-47010-EG) — Scan returns: "this label IS that unit".
+ * V247 (approved 2026-11-27, returns dead end BRK-47010-EG) — Scan returns: "this label IS that unit".
  *
  * A parcel lists an UNTRACKED order line as unit rows ({@link UntrackedParcelUnits}); the item in the box carries a
  * Traced label of the SAME variant (e.g. it was received into stock before the return was scanned), so its scan is an

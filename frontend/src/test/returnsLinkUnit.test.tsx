@@ -9,7 +9,7 @@ import Returns from '../pages/Returns'
 import en from '../locales/en.json'
 import ar from '../locales/ar.json'
 
-// V246 — Scan returns: "this label is that unit" (BRK-47010-EG). An unexpected label of the same variant as an
+// V247 — Scan returns: "this label is that unit" (BRK-47010-EG). An unexpected label of the same variant as an
 // untracked line on a scanned parcel offers the link FIRST; "Not the real piece" asks first while a link is possible;
 // a linked label merges into its unit's row (with Undo and the case-B note); only a legal pending row blocks Close.
 

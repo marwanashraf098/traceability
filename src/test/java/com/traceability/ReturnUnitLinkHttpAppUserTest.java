@@ -30,7 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * V246 — the link-unit endpoints and the close rule over the real HTTP path, the WHOLE app as app_user (CLAUDE.md: an
+ * V247 — the link-unit endpoints and the close rule over the real HTTP path, the WHOLE app as app_user (CLAUDE.md: an
  * endpoint's isolation test runs the app as app_user), at the URLs frontend/src/pages/Returns.tsx builds.
  *
  *   h1 worker: scan the parcel's AWB, scan the unexpected label → GET carries linkCandidates; POST link-unit → 200

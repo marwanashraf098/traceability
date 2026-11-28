@@ -214,7 +214,7 @@ public class ReturnSessionController {
             principal.role());
     }
 
-    // ── V246: "this label is that unit" ──────────────────────────────────────
+    // ── V247: "this label is that unit" ──────────────────────────────────────
 
     public record LinkUnitRequest(UUID shipmentId, UUID orderItemId, Integer unitNo, String condition) {}
 

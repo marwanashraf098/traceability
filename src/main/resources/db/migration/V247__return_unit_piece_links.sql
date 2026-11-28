@@ -1,4 +1,4 @@
--- V246 — Scan returns: link an unexpected tracked piece to the untracked unit it physically is
+-- V247 — Scan returns: link an unexpected tracked piece to the untracked unit it physically is
 -- (returns dead end, BROEK BRK-47010-EG, diagnosis 2026-11-27; S1 + S2 + S3 approved 2026-11-27).
 --
 -- The case: a parcel's order line is UNTRACKED (no allocation), so the parcel lists it as unit rows.

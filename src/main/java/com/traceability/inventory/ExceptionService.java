@@ -376,7 +376,7 @@ public class ExceptionService {
         Map.entry("shopify_edit_conflict/order",               OrderLink.DIRECT),
         Map.entry("return_in_transit_stuck/piece",             OrderLink.NONE),
         Map.entry("return_mismatch/piece",                     OrderLink.NONE),
-        Map.entry("return_needs_review/piece",                 OrderLink.NONE),           // V246: a piece in a closed session
+        Map.entry("return_needs_review/piece",                 OrderLink.NONE),           // V247: a piece in a closed session
         Map.entry("exchange_needs_mapping/exchange",           OrderLink.NONE),           // carries no order
         Map.entry("exchange_unmapped_state/exchange",          OrderLink.DIRECT),         // exchanges.outbound_order_id
         Map.entry("void_hold_sync_failed/piece",               OrderLink.NONE),
@@ -2247,7 +2247,7 @@ public class ExceptionService {
      * detector — no separate persistence for this exception type.
      */
     /**
-     * V246 (Q2, approved 2026-11-27): an unexpected piece (illegal-state scan — not at return_pending_inspection) was
+     * V247 (Q2, approved 2026-11-27): an unexpected piece (illegal-state scan — not at return_pending_inspection) was
      * still undecided when its return session closed; close() marked it 'needs_review'. One alert per item, condition
      * only: it clears when a manager settles the item — links it to the untracked unit it is, or marks it "Not the real
      * piece" (the disposition leaves 'needs_review') — or resolves the alert ("nothing to do", exception_resolutions).

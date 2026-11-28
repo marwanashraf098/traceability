@@ -22,7 +22,7 @@ import java.util.UUID;
  * hostage by a session someone forgot to close.
  *
  * Eligible = status 'open', zero items that still block closing ({@link ReturnSessionService#BLOCKS_CLOSE_SQL}: a
- * pending item at return_pending_inspection — since V246 an illegal-state pending item no longer blocks; close() marks
+ * pending item at return_pending_inspection — since V247 an illegal-state pending item no longer blocks; close() marks
  * it 'needs_review' for a manager) (empty sessions included),
  * and last activity more than {@link #IDLE_HOURS} ago — last activity is the latest of
  * opened_at, any piece scan (return_session_items.scanned_at), any AWB scan
@@ -82,7 +82,7 @@ public class ReturnSessionAutoCloseJob {
         List<UUID> idle = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForList(
             "SELECT rs.id FROM return_sessions rs " +
             "WHERE rs.tenant_id = ? AND rs.status = 'open' " +
-            // V246 (Q2): the same "still blocks closing" rule as close() — a pending illegal-state item doesn't block;
+            // V247 (Q2): the same "still blocks closing" rule as close() — a pending illegal-state item doesn't block;
             // close() leaves it to a manager ('needs_review').
             "  AND NOT EXISTS (SELECT 1 FROM return_session_items i JOIN pieces p ON p.id = i.piece_id " +
             "                  WHERE i.session_id = rs.id AND " + ReturnSessionService.BLOCKS_CLOSE_SQL + ") " +

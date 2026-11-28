@@ -6,7 +6,7 @@
 
 **Scan returns dead end: link an unexpected piece to the untracked unit it is + illegal rows no longer block Close
 (2026-11-27; branch `feat/returns-link-unit`, worktree `/Users/marawan/Documents/trace-returns-link-unit`, off origin/main
-647f0206; V246; NOT merged, NOT deployed).** Diagnosis BRK-47010-EG (BROEK): an untracked line marked Arrived · to receive
+647f0206; V247; NOT merged, NOT deployed).** Diagnosis BRK-47010-EG (BROEK): an untracked line marked Arrived · to receive
 + its own tracked label of the same variant (P006819, received into stock by "po84" a minute before the session) showed
 as an UNEXPECTED row with only "Not the real piece" → mismatch, Close blocked, and the unit's Return To Receive stayed
 open (a double-count trap). Decisions (approved 2026-11-27): Q1 same variant only; Q2 illegal-state rows don't block
@@ -14,7 +14,7 @@ Close (service, UI, auto-close) — they become `needs_review` + one manager ale
 (return_pending_inspection) rows still block; "Not the real piece" stays manager-only and asks first when a link is
 possible; Q3 no Shopify +1 at link time, case B (the order's Shopify fulfilment left from Traced Main) shows "Shopify may
 be 1 low at Main" (note only); Q4 a lost piece is refused; Q5 linking never marks the line tracked.
-- **V246:** `return_session_items.disposition` CHECK + 'linked', 'needs_review'; `untracked_unit_piece_links` (intake ↔
+- **V247:** `return_session_items.disposition` CHECK + 'linked', 'needs_review'; `untracked_unit_piece_links` (intake ↔
   piece, session item, condition, created_intake, shopify_may_be_low; live-unique per intake / piece / item; RLS NULLIF;
   app_user SELECT / INSERT + UPDATE (undone_at, undone_by) only, no DELETE).
 - **`UntrackedUnitLinks`** (not a bean, ReturnSessionService's JdbcTemplate) is THE candidate rule (units of untracked
@@ -53,7 +53,7 @@ be 1 low at Main" (note only); Q4 a lost piece is refused; Q5 linking never mark
   predicate, guards, case B, unit-undo guard, damaged move, double tap, close rule, RLS, auto-close SQL, grants, the
   detector, same-variant rule, @Transactional on linkUnit; UI F1–F8. h2 (cross-tenant 404) stays green under every
   revert (several layers answer 404) — x1's RLS revert covers it.
-- **Approved existing-test edits (2026-11-28):** MigrationSmokeTest 245 ("V1–V246"), NotTracedBackfillTest + V246 → 190,
+- **Approved existing-test edits (2026-11-28):** MigrationSmokeTest 246 ("V1–V247"), NotTracedBackfillTest + V247 → 191,
   PortalOrderLeakTest + ShadowOrderLeakTest: the two link-unit POSTs (skip R_RETURNS). Nothing else in existing tests.
 - **Results vs 647f0206 (2026-11-28):** backend 5,055, red = ExchangeBackfillTest only (allowed); frontend 278 files /
   2,389 green. bazarC1 "network failure" flaked twice while another worktree's suite loaded the machine (passes
@@ -67,6 +67,8 @@ be 1 low at Main" (note only); Q4 a lost piece is refused; Q5 linking never mark
   close BROEK's open 2026-11-26 session (its only pending row is out_on_transfer) → that row becomes needs_review + an
   alert; same for any open session whose only pending rows are illegal. v1 limits: only a piece at the main warehouse can
   be linked; a damaged link isn't undone in Scan returns.
+- **Renumbered V246 → V247 (2026-11-28):** main took V246 (orders_shipping_charged, fa5fc468, on prod 03:25);
+  this branch rebased on main (8736f2ef) and takes V247 (merges first); the same-size branch moves to V248.
 
 **Encryption key rotation K1 — key ring (2026-11-28; branch `feat/encryption-key-ring` off origin/main d7b23d2a,
 worktree ../trace-k1; NO migration; merged to main 2026-11-28, NOT deployed).** Step 0 finding (prod 2026-11-27):
@@ -98,6 +100,7 @@ K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy ke
 - Exposure (Step 0): anyone with a DB copy could decrypt everything above. Recommended: rotate Bosta API keys; check
   for remaining custom-app `api_secret_encrypted` rows (rotate or upgrade to OAuth); Shopify OAuth tokens rotate on
   refresh (to confirm). Open: where DB copies exist (decides whether refund details need a formal assessment).
+
 **Analytics shipping / refused-then-cancelled / cost 0 — slices 4–6 of the 2026-11-16 Step 0 (2026-11-27; branch
 `analytics/shipping-refused-cost` off main d7b23d2a, worktree ../traceability-shipping-cost; MIGRATION V246 (approved;
 renamed from V247 once V246 was confirmed free on main and prod — feat/defect-replacement (V246 exchange_replacement_kind,
@@ -177,6 +180,7 @@ NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit si
 - **Next:** deploy (not done). Catch-up script: commit=yes NOT to be run (not now, not after deploy — owner's call).
   Logged separately, out of scope: COD not-fulfilled fee deduction; the ~868 BROEK orders missing from the Orders
   Cancelled tab.
+
 **Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
 (U1c + U1d); V245; merged to main 2026-11-27 as 35a19890 (migrations end at V245), NOT deployed).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a

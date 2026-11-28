@@ -1431,7 +1431,7 @@ public class ShipmentLinkService {
      * (an undo + re-mark is a new row, so a new key). Shared by ExceptionService.detectReturnToReceive()
      * and the Returns & exchanges case list (via ReturnCaseRules).
      *
-     * V246 (2026-11-27): a unit LINKED to a tracked piece in Scan returns (a live
+     * V247 (2026-11-27): a unit LINKED to a tracked piece in Scan returns (a live
      * untracked_unit_piece_links row) is already in stock as that piece — nothing to receive.
      */
     public static final String UNIT_TO_RECEIVE_KEY_SQL = "'unit:' || u.id::text";

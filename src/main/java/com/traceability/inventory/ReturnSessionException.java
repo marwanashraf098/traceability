@@ -22,7 +22,7 @@ public class ReturnSessionException extends RuntimeException {
         SESSION_CLOSE_BLOCKED,
         /** returns-expected-back: a mismatch decision by a role below manager (403). */
         NEEDS_MANAGER,
-        /** V246: "link this label to the untracked unit" refused — details.reason says why (EN + AR message). */
+        /** V247: "link this label to the untracked unit" refused — details.reason says why (EN + AR message). */
         LINK_REFUSED
     }
 

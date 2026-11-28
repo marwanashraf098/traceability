@@ -7,7 +7,7 @@ import { setAccessToken, clearAccessToken } from '../auth'
 import * as apiModule from '../api'
 import Returns from '../pages/Returns'
 
-// V246 (Q2) — an unexpected (illegal-state) row no longer blocks Close: the close summary says it went to a manager,
+// V247 (Q2) — an unexpected (illegal-state) row no longer blocks Close: the close summary says it went to a manager,
 // and the return_needs_review alert's link (/returns?session=…&piece=…) opens that closed session's summary with the
 // piece highlighted, where a manager links it, marks it "Not the real piece" or resolves it ("Nothing to do").
 

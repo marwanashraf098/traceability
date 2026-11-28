@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V246 (approved 2026-11-27, BRK-47010-EG) — Scan returns: link an unexpected tracked piece to the untracked unit it
+ * V247 (approved 2026-11-27, BRK-47010-EG) — Scan returns: link an unexpected tracked piece to the untracked unit it
  * physically is, and the close rule for illegal-state rows (Q2), through the real ReturnSessionService paths.
  *
  *   l1 sellable unit already marked Arrived + same-variant available piece scanned → the item carries linkCandidates;
