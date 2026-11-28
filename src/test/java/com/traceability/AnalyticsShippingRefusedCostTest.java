@@ -1,6 +1,11 @@
 package com.traceability;
 
+import com.traceability.analytics.AnalyticsFloorOverrides;
+import com.traceability.analytics.SettlementRefreshJob;
 import com.traceability.identity.JwtService;
+import com.traceability.integrations.bosta.BostaDelivery;
+import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.integrations.bosta.BostaIngestionHelper;
 import com.traceability.integrations.bosta.ShipmentSettlement;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
@@ -12,6 +17,8 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -25,6 +32,8 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 /**
  * Analytics slices 4–6 (approved 2026-11-27).
@@ -507,6 +516,58 @@ class AnalyticsShippingRefusedCostTest {
         Map<String, Object> wb = ok(b, "/api/v1/analytics/customers/watch");
         assertThat(list(wb, "customers")).extracting(c -> n(c, "refusedCodOrders")).containsExactly(3L);
         assertThat(n(wb, "refusedCodFromShopify")).isZero();
+    }
+
+    // ── SettlementRefreshJob uses rule (c) ───────────────────────────────────
+
+    @Autowired AnalyticsFloorOverrides floorOverrides;
+    @Autowired PlatformTransactionManager txm;
+
+    /** Bosta settled the leg into a cash cycle (deposited) — the payout hasn't come yet. */
+    static String depositedRto(LocalDate next, Instant collected) {
+        return "{\"type\":{\"code\":20,\"value\":\"RTO\"},\"state\":{\"code\":46},\"cod\":0,\"originalCod\":735" +
+               (collected == null ? "" : ",\"collectedFromBusiness\":\"" + iso(collected) + "\"") +
+               ",\"wallet\":{\"cashCycle\":{\"_id\":" + SEQ.incrementAndGet() +
+               ",\"deposited_at\":\"" + next.minusDays(3).atTime(10, 0).atZone(CAIRO).toInstant() + "\",\"deposited_amt\":-112.86," +
+               "\"cod\":\"0.00\",\"bosta_fees\":\"112.86\"},\"cashout\":{\"next_cashout_date\":\"" + next + "T00:00:00.000Z\"}}}";
+    }
+
+    @Test
+    void s5_settlementRefresh_readsCancelledAfterPickupLegs_neverCancelledBeforePickup() {
+        T t = new T("Refresh-Cancelled");
+        UUID v = t.variant("HD-BRN-M", "300");
+        LocalDate today = LocalDate.now(CAIRO);
+        Instant placed = Instant.now().minus(Duration.ofDays(12)), pickup = Instant.now().minus(Duration.ofDays(11));
+        // Positive control: an ordinary refused order.
+        UUID plain = t.order(placed, "new", orderRaw(COD_GW, "901", "85.00", null));
+        t.line(plain, v, 1, 1, "650.00");
+        String plainTn = t.leg(plain, "returned", depositedRto(today.minusDays(1), pickup), "with_courier", iso(pickup));
+        // Refused, then cancelled — in Traced too (status 'cancelled') — AFTER Bosta picked it up: still read.
+        UUID afterPickup = t.order(placed, "cancelled", orderRaw(COD_GW, "902", "0.00",
+            "\"cancelled_at\":\"" + iso(Instant.now().minus(Duration.ofDays(5))) + "\""));
+        t.line(afterPickup, v, 1, 0, "650.00");
+        String afterTn = t.leg(afterPickup, "returned", depositedRto(today.minusDays(1), pickup), "with_courier", iso(pickup));
+        // Cancelled before Bosta ever picked it up: never read.
+        UUID beforePickup = t.order(placed, "cancelled", orderRaw(COD_GW, "903", "0.00",
+            "\"cancelled_at\":\"" + iso(Instant.now().minus(Duration.ofDays(11))) + "\""));
+        t.line(beforePickup, v, 1, 0, "650.00");
+        String beforeTn = t.leg(beforePickup, "terminated", depositedRto(today.minusDays(1), null));
+
+        BostaGateway bosta = mock(BostaGateway.class);
+        when(bosta.fetchDelivery(anyString(), anyString())).thenAnswer(inv -> {
+            String tn = inv.getArgument(1);
+            String raw = jdbc.queryForObject("SELECT raw::text FROM shipments WHERE tracking_number = ?", String.class, tn);
+            return BostaDelivery.fromRaw(tn, ShipmentSettlementTest.json(raw));
+        });
+        SettlementRefreshJob job = new SettlementRefreshJob(
+            new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()),
+            jdbc, txm, encryption, bosta, mock(BostaIngestionHelper.class), floorOverrides, Clock.system(CAIRO), 100, 300, true);
+        job.refreshTenant(t.id, "key");
+
+        List<String> fetched = new ArrayList<>();
+        mockingDetails(bosta).getInvocations().stream().filter(i -> i.getMethod().getName().equals("fetchDelivery"))
+            .forEach(i -> fetched.add((String) i.getArguments()[1]));
+        assertThat(fetched).containsExactlyInAnyOrder(plainTn, afterTn).doesNotContain(beforeTn);
     }
 
     // ── slice 6: cost 0 = unknown ────────────────────────────────────────────

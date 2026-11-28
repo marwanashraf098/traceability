@@ -93,7 +93,9 @@ public class SettlementRefreshJob {
         "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.tracking_number IS NOT NULL " +
         "  AND s.provider_not_found_at IS NULL " +
         "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
-        "  AND fo.status <> 'cancelled'::order_status AND " + SettlementSql.POST_FLOOR + " AND ";
+        // Rule (c) (CancelledOrders): a cancelled order's legs are read only when it was cancelled AFTER Bosta's
+        // pickup — those carry real fees and settle like any other leg.
+        "  AND " + CancelledOrders.countsSql("fo") + " AND " + SettlementSql.POST_FLOOR + " AND ";
 
     private record Leg(UUID id, String tn, Integer providerState, String typeValue, String status) {}
 
