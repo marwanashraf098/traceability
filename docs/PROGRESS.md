@@ -65,8 +65,14 @@ A customer whose item arrived damaged / faulty or wrong can ask for the SAME var
   locales do. Vite browser mode can only write screenshots inside the project (server.fs).
 
 **Encryption key rotation K2b — one-off re-encryption (2026-11-28; branch `feat/re-encryption` off origin/main
-8736f2ef, worktree ../trace-k2; NO migration; NOT deployed).** K1 is live in prod since 2026-11-28 03:53 (writes v1, V2
-key configured). K2a is env only (`APP_ENCRYPTION_WRITE_VERSION=v2` + recreate); K2b (this) runs after K2a is live.
+8736f2ef; NO migration; merged to main 1ddae462; LIVE IN PROD and verified 2026-11-28).** K1 is live in prod since
+2026-11-28 03:53 (writes v1, V2 key configured). K2a is env only (`APP_ENCRYPTION_WRITE_VERSION=v2` + recreate); K2b
+(this) runs after K2a is live.
+- **Prod (Marawan confirmed, 2026-11-28):** 16:10 main 1ddae462 deployed (V247 applied with it); 16:29
+  `APP_ENCRYPTION_WRITE_VERSION=v2` live. K2b: backup `ops_backup_20261128_ciphertexts` created (165 rows,
+  `app_user_can_select = f`); apply migrated stores access 36 / refresh 31 / client_id 5 / api_secret 5,
+  courier_accounts 35, return_requests 68 — skipped_cas 0, failed 0; second apply a no-op. Legacy = 0 in every column;
+  known-bad Bosta keys 3/3 preserved; 0 "Decryption failed".
 - `security/ReEncryptionService`: tenant ids from the owner pool only; everything else per tenant under
   `TenantContext.runAs` as app_user (RLS), read tx per table, one short tx per row. Columns: stores access / refresh /
   client_id / api_secret, courier_accounts.api_key_encrypted, return_requests.refund_details_encrypted (AAD from the
@@ -90,9 +96,8 @@ key configured). K2a is env only (`APP_ENCRYPTION_WRITE_VERSION=v2` + recreate);
   → c1 red. PortalOrderLeakTest / ShadowOrderLeakTest: one registry line each (`skip(R_OPS)`, approved). Targeted 28
   classes 347 green; full suite 5081 tests — reds ExchangeBackfillTest (documented), the two registry tests (since
   fixed, green), StockTakeFoundPinTest (Testcontainers SSL connect under load ~14; green alone 16/16).
-- **Next:** K2a (env flip + recreate, check startup line + 0 "Decryption failed"), then K2b (deploy, backup, dry run,
-  apply, second apply = 0, verify, logs) — runbook in this session's report. **K3:** remove the legacy path, startup
-  refuses the zero key, `step=drop`.
+- **Next: K3 after 1–2 quiet days** (remove legacy key path + zero default, startup refuses zero/missing key, drop
+  backup table via script step=drop).
 
 **Scan returns dead end: link an unexpected piece to the untracked unit it is + illegal rows no longer block Close
 (2026-11-27; branch `feat/returns-link-unit`, worktree `/Users/marawan/Documents/trace-returns-link-unit`, off origin/main
@@ -161,7 +166,7 @@ be 1 low at Main" (note only); Q4 a lost piece is refused; Q5 linking never mark
   this branch rebased on main (8736f2ef) and takes V247 (merges first); the same-size branch moves to V248.
 
 **Encryption key rotation K1 — key ring (2026-11-28; branch `feat/encryption-key-ring` off origin/main d7b23d2a,
-worktree ../trace-k1; NO migration; merged to main 2026-11-28 (8736f2ef); live in prod since 2026-11-28 03:53).** Step 0 finding (prod 2026-11-27):
+worktree ../trace-k1; NO migration; merged to main 2026-11-28 (8736f2ef); LIVE IN PROD since 2026-11-28 03:53 — writes v1, V2 key configured, verified clean).** Step 0 finding (prod 2026-11-27):
 the prod app runs with `APP_ENCRYPTION_KEY` unset, so application.yml's 32-zero-byte default encrypts every stored
 Shopify token / custom-app secret, Bosta API key, pending-link token and refund detail — a publicly known key. Plan:
 K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy key removed, startup refuses the zero key.
@@ -181,12 +186,8 @@ K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy ke
   2 red — ExchangeBackfillTest (documented) and PortalOnDemandLookupTest.e1 (known flake); baseline only. (An earlier
   run under ~97 load from three other worktrees' suites lost PortalCustomAddressTest to a 3393 s class run; green on
   the quiet machine.)
-- **Next (K1 deploy, runbook in this session's report):** deploy code (log `v1, V2 key configured: no`), then
-  `printf '\nAPP_ENCRYPTION_KEY_V2=%s\n' "$(openssl rand -base64 32)" >> .env` on the server, `up -d
-  --force-recreate app`, verify by length / log line only, store the key offline. Never set the write version in K1.
-- **K2 (not built):** env flip to v2, then an ops re-encryption job (owner pool lists tenants, per-tenant app_user +
-  RLS, compare-and-set UPDATE, verify-before-write, dry run, counts only, `key_auth_fail_key_hash` carried over;
-  `shopify_pending_links` left to expire). **K3:** remove the legacy path once every legacy count is 0.
+- **Done:** K1 deployed (V2 key added to .env on the server, recreated, verified by length / log line only, key stored
+  offline). K2 built, deployed and verified — see the K2b entry above. **K3:** remove the legacy path (next).
 - Exposure (Step 0): anyone with a DB copy could decrypt everything above. Recommended: rotate Bosta API keys; check
   for remaining custom-app `api_secret_encrypted` rows (rotate or upgrade to OAuth); Shopify OAuth tokens rotate on
   refresh (to confirm). Open: where DB copies exist (decides whether refund details need a formal assessment).
