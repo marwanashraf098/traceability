@@ -4,8 +4,38 @@
 
 ## Current state
 
+**Encryption key rotation K2b — one-off re-encryption (2026-11-28; branch `feat/re-encryption` off origin/main
+8736f2ef, worktree ../trace-k2; NO migration; NOT deployed).** K1 is live in prod since 2026-11-28 03:53 (writes v1, V2
+key configured). K2a is env only (`APP_ENCRYPTION_WRITE_VERSION=v2` + recreate); K2b (this) runs after K2a is live.
+- `security/ReEncryptionService`: tenant ids from the owner pool only; everything else per tenant under
+  `TenantContext.runAs` as app_user (RLS), read tx per table, one short tx per row. Columns: stores access / refresh /
+  client_id / api_secret, courier_accounts.api_key_encrypted, return_requests.refund_details_encrypted (AAD from the
+  row's own tenant + id via `RefundDetailsCipher`); shopify_pending_links untouched (left to expire). Per value: skip
+  `v2:`, else decrypt → encrypt v2 → decrypt and compare; a failure aborts the whole row (counted failed). Compare-and-set
+  UPDATEs (stores: one UPDATE checking all 4 columns as read; 0 rows = skipped_cas); the courier UPDATE carries
+  `key_auth_fail_key_hash` over (`BostaKeyHealth.ciphertextHashSql`, new public helper, behaviour unchanged). Refuses
+  apply unless writes are v2; refuses a concurrent apply. Logs `REENCRYPT table= column= migrated= skipped_cas=
+  already_v2= failed=` only; errors log the exception class only. No new hatch; EncryptionService unchanged.
+- `security/OpsReEncryptionController`: `POST /api/v1/ops/re-encryption` (OpsSecretFilter + OpsSecretGuard): no body =
+  dry run (legacy / v2 counts per column); `{"apply":true}` = results + counts after; 409 unless writes are v2. Idempotent.
+- `scripts/ops/2026-11-28-k2-reencryption.sql` (psql as postgres, `-v step=backup|verify|drop`): backup creates
+  `ops_backup_20261128_ciphertexts` (every encrypted column + the Bosta key hash; REVOKE ALL from PUBLIC / app_user, RLS
+  forced, refuses if it exists, fails if app_user keeps a privilege); verify = count-only per column (pending links real
+  only when `role_bypasses_rls = t`), known-bad hash matches, backup rows; drop = K3. Commented restore block (lost V2
+  key only). Backup holds zero-key ciphertext — owner-only, dropped at K3.
+- Tests: `security/ReEncryptionTest` (9, whole app as app_user, writes v2): dry run changes nothing, every column
+  migrates and still works (Shopify token + refresh, Bosta poll with the plaintext key, refund details GET), second
+  apply no-op, CAS race, key health (known bad stays bad, healthy stays healthy), refund AAD bound to its row,
+  cross-tenant with positive control, refused at v1, endpoint. Revert-checked: carry-over removed → k1 red; CAS removed
+  → c1 red. PortalOrderLeakTest / ShadowOrderLeakTest: one registry line each (`skip(R_OPS)`, approved). Targeted 28
+  classes 347 green; full suite 5081 tests — reds ExchangeBackfillTest (documented), the two registry tests (since
+  fixed, green), StockTakeFoundPinTest (Testcontainers SSL connect under load ~14; green alone 16/16).
+- **Next:** K2a (env flip + recreate, check startup line + 0 "Decryption failed"), then K2b (deploy, backup, dry run,
+  apply, second apply = 0, verify, logs) — runbook in this session's report. **K3:** remove the legacy path, startup
+  refuses the zero key, `step=drop`.
+
 **Encryption key rotation K1 — key ring (2026-11-28; branch `feat/encryption-key-ring` off origin/main d7b23d2a,
-worktree ../trace-k1; NO migration; merged to main 2026-11-28, NOT deployed).** Step 0 finding (prod 2026-11-27):
+worktree ../trace-k1; NO migration; merged to main 2026-11-28 (8736f2ef); live in prod since 2026-11-28 03:53).** Step 0 finding (prod 2026-11-27):
 the prod app runs with `APP_ENCRYPTION_KEY` unset, so application.yml's 32-zero-byte default encrypts every stored
 Shopify token / custom-app secret, Bosta API key, pending-link token and refund detail — a publicly known key. Plan:
 K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy key removed, startup refuses the zero key.
