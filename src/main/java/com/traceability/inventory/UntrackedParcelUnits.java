@@ -217,8 +217,11 @@ public class UntrackedParcelUnits {
      * there). NULL = can be undone.
      */
     public static String arrivalUndoBlockSql(String u) {
+        // V246: a unit LINKED to a tracked piece is in stock as that piece — 'received' too (undo the link first).
         return "(CASE WHEN EXISTS (SELECT 1 FROM receipt_lines rl_u WHERE rl_u.tenant_id = " + u + ".tenant_id " +
-               "          AND rl_u.return_source = 'untracked_unit:' || " + u + ".id::text) THEN 'received' " +
+               "          AND rl_u.return_source = 'untracked_unit:' || " + u + ".id::text) " +
+               "        OR EXISTS (SELECT 1 FROM untracked_unit_piece_links lk_u WHERE lk_u.tenant_id = " + u + ".tenant_id " +
+               "          AND lk_u.intake_id = " + u + ".id AND lk_u.undone_at IS NULL) THEN 'received' " +
                "      WHEN EXISTS (SELECT 1 FROM return_sessions rs_u WHERE rs_u.id = " + u + ".return_session_id " +
                "          AND rs_u.status = 'open') THEN 'session_open' END)";
     }
@@ -276,6 +279,15 @@ public class UntrackedParcelUnits {
      * so the parcel is back to "waiting" and its Return To Receive exceptions are gone.
      */
     public void undo(UUID tenantId, UUID sessionId, UUID shipmentId, UUID orderItemId, int unitNo, UUID actorUserId) {
+        // V246: a unit linked to a piece keeps its mark until the link is undone (the link is the stock record).
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM untracked_unit_piece_links lk JOIN untracked_unit_intakes u ON u.id = lk.intake_id " +
+                "               WHERE lk.tenant_id = ? AND lk.undone_at IS NULL AND u.shipment_id = ? AND u.order_item_id = ? " +
+                "                 AND u.unit_no = ? AND u.undone_at IS NULL)",
+                Boolean.class, tenantId, shipmentId, orderItemId, unitNo))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This item is linked to a scanned label — undo the link first.");
+        }
         int undone = jdbc.update(
             "UPDATE untracked_unit_intakes SET undone_at = now(), undone_by = ? " +
             "WHERE tenant_id = ? AND shipment_id = ? AND order_item_id = ? AND unit_no = ? " +

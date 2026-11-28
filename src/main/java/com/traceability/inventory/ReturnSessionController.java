@@ -214,6 +214,37 @@ public class ReturnSessionController {
             principal.role());
     }
 
+    // ── V246: "this label is that unit" ──────────────────────────────────────
+
+    public record LinkUnitRequest(UUID shipmentId, UUID orderItemId, Integer unitNo, String condition) {}
+
+    /**
+     * Link the scanned (unexpected) piece to an untracked unit on a parcel scanned in this session — same variant only.
+     * Any session user on a pending item while the session is open; owner / manager on a needs-review item (the
+     * session may be closed) — the service checks the role. See ReturnSessionService.linkUnit().
+     */
+    @PostMapping("/sessions/{sessionId}/items/{pieceId}/link-unit")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','WORKER')")
+    public Map<String, Object> linkUnit(@PathVariable UUID sessionId, @PathVariable String pieceId,
+                                        @RequestBody LinkUnitRequest body,
+                                        @AuthenticationPrincipal CustomUserDetails principal) {
+        if (body == null || body.shipmentId() == null || body.orderItemId() == null
+                || body.unitNo() == null || body.unitNo() < 1) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "shipmentId, orderItemId and unitNo are required");
+        }
+        return sessionService.linkUnit(sessionId, pieceId, body.shipmentId(), body.orderItemId(), body.unitNo(),
+            body.condition(), principal.userId(), principal.role());
+    }
+
+    /** Undo a sellable link made in this (open) session. */
+    @PostMapping("/sessions/{sessionId}/items/{pieceId}/link-unit/undo")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER','WORKER')")
+    public Map<String, Object> undoLinkUnit(@PathVariable UUID sessionId, @PathVariable String pieceId,
+                                            @AuthenticationPrincipal CustomUserDetails principal) {
+        return sessionService.undoLinkUnit(sessionId, pieceId, principal.userId());
+    }
+
     // ── Reprint (any status — separate surface from the piece-level /pieces/{id}/label below) ──
     // Intake reprint is a DELIBERATE worker action (confirmed 2026-10-19, returns-expected-back): a
     // torn / missing sticker is found while unpacking, by whoever is unpacking. Still audited as

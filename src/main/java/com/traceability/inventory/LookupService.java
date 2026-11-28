@@ -30,6 +30,9 @@ public class LookupService {
         if ("pack".equals(eventType))              return "packed_for_order";
         if ("tracking_linked".equals(eventType))   return "tracking_linked";
         if ("return_received".equals(eventType))   return "return_received";
+        // V246 — Scan returns: the piece was linked to / unlinked from a returned untracked item (no status change).
+        if ("return_unit_linked".equals(eventType))   return "return_unit_linked";
+        if ("return_unit_unlinked".equals(eventType)) return "return_unit_unlinked";
         if ("restocked".equals(eventType))         return "restocked";
         if ("damaged".equals(eventType))           return "damaged";
         if ("handover".equals(eventType))          return "handover";

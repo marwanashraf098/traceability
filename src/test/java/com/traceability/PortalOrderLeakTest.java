@@ -425,7 +425,8 @@ class PortalOrderLeakTest {
         for (String a : List.of("close", "scan", "items/{pieceId}/disposition", "pieces/{pieceId}/reprint-label",
                                 "parcels/{shipmentId}/mark-received", "parcels/{shipmentId}/undo-mark-received",
                                 "parcels/{shipmentId}/units/arrived", "parcels/{shipmentId}/units/arrived/undo",
-                                "request-items/{itemId}/arrived", "request-items/{itemId}/arrived/undo")) {
+                                "request-items/{itemId}/arrived", "request-items/{itemId}/arrived/undo",
+                                "items/{pieceId}/link-unit", "items/{pieceId}/link-unit/undo")) {
             reg("POST /api/v1/returns/sessions/{sessionId}/" + a, skip(R_RETURNS));
         }
         reg("GET /api/v1/portal/{slug}/config",          skip(R_PORTAL));

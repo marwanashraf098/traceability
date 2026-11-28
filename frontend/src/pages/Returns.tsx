@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation, Trans } from 'react-i18next'
 import {
   X, ScanLine, Printer, RotateCcw, AlertTriangle, ClipboardCheck, WifiOff,
-  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight, CheckCircle2, Package, Smartphone,
+  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight, CheckCircle2, Package, Smartphone, Link2,
 } from 'lucide-react'
 import {
   Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner, cn,
@@ -114,6 +114,9 @@ interface LandingSession {
   restocked_count: number
   damaged_count: number
   mismatch_count: number
+  /** V246 */
+  linked_count?: number
+  needs_review_count?: number
 }
 
 interface UnassignedPiece {
@@ -147,8 +150,13 @@ interface SessionItem {
   variant_title: string
   product_title: string
   sku: string | null
-  disposition: 'pending' | 'restocked' | 'damaged' | 'mismatch'
+  /** V246: 'linked' — the label is an untracked unit of a parcel; 'needs_review' — left for a manager at close. */
+  disposition: 'pending' | 'restocked' | 'damaged' | 'mismatch' | 'linked' | 'needs_review'
   unexpected: boolean
+  /** V246 — present only when this label could be an untracked unit on a parcel scanned in this session. */
+  linkCandidates?: LinkCandidate[]
+  /** V246 — present only on a needs_review item: its alert was resolved ("nothing to do"). */
+  reviewResolved?: boolean
   /** The piece is on an AWB scanned in this session (picks the UNEXPECTED reason text only). */
   on_scanned_awb?: boolean
   damage_reason: string | null
@@ -223,6 +231,35 @@ interface Parcel {
   }
 }
 
+/** V246 — an untracked unit a scanned label could be (same variant, on a parcel scanned in this session). */
+interface LinkCandidate {
+  shipmentId: string
+  awb: string
+  orderItemId: string
+  unitNo: number
+  units: number
+  orderNumber: string | null
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  intakeId: string | null
+  condition: 'sellable' | 'damaged' | null
+}
+
+/** V246 — a live link of this session: the label {pieceCode} IS that unit. */
+interface UnitLink {
+  linkId: string
+  pieceId: string
+  pieceCode: string
+  intakeId: string
+  shipmentId: string
+  orderItemId: string
+  unitNo: number
+  condition: 'sellable' | 'damaged'
+  shopifyMayBeLow: boolean
+  canUndo: boolean
+}
+
 /** Issue 1 — one unit of an untracked order line on a parcel card. */
 interface ParcelUnit {
   orderItemId: string
@@ -277,6 +314,8 @@ interface SessionDetail {
   lastScan?: LastScan | null
   /** Q2: pieces in this session scanned on a paired phone. */
   phoneScanCount?: number
+  /** V246 — present only when the session has a live unit link. */
+  unitLinks?: UnitLink[]
 }
 
 interface CloseSummary {
@@ -285,6 +324,9 @@ interface CloseSummary {
   restockedCount: number
   damagedCount: number
   mismatchCount: number
+  /** V246 */
+  linkedCount?: number
+  needsReviewCount?: number
   shipmentCount: number
   closedAt: string
 }
@@ -297,7 +339,14 @@ type View =
   | { type: 'summary'; sessionId: string }
 
 export default function Returns() {
-  const [view, setView] = useState<View>({ type: 'landing' })
+  // V246: the return_needs_review alert opens /returns?session=<id>&piece=<id> — that session's summary, the piece
+  // highlighted. Read once from the URL (no router hook: the page also renders outside a router in tests).
+  const [deepLink] = useState(() => {
+    const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
+    return { session: q.get('session'), piece: q.get('piece') }
+  })
+  const [view, setView] = useState<View>(() =>
+    deepLink.session ? { type: 'summary', sessionId: deepLink.session } : { type: 'landing' })
 
   if (view.type === 'session') {
     // NOT Layout-wrapped — full-screen immersive scan loop, per the /fulfill precedent.
@@ -323,6 +372,7 @@ export default function Returns() {
         <SessionSummaryScreen
           key={view.sessionId}
           sessionId={view.sessionId}
+          highlightPieceId={view.sessionId === deepLink.session ? deepLink.piece : null}
           onBack={() => setView({ type: 'landing' })}
         />
       </Layout>
@@ -659,6 +709,8 @@ function dispositionSummary(s: LandingSession, t: (k: string, o?: Record<string,
   if (s.restocked_count > 0) parts.push(t('returns.landing.dispositionRestocked', { count: s.restocked_count }))
   if (s.damaged_count > 0)   parts.push(t('returns.landing.dispositionDamaged',   { count: s.damaged_count }))
   if (s.mismatch_count > 0)  parts.push(t('returns.landing.dispositionMismatch',  { count: s.mismatch_count }))
+  if ((s.linked_count ?? 0) > 0)       parts.push(t('returns.link.dispositionLinked', { count: s.linked_count }))
+  if ((s.needs_review_count ?? 0) > 0) parts.push(t('returns.link.dispositionNeedsReview', { count: s.needs_review_count }))
   return parts.length > 0 ? parts.join(' · ') : t('returns.landing.status.abandoned') === s.status ? '' : '—'
 }
 
@@ -884,6 +936,42 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     }
   }
 
+  // V246 — "this label is that unit": link an unexpected piece to an untracked unit of a parcel, and its undo.
+  // Inline buttons only (no dialog, no text field) — nothing competes with the scan input for focus.
+  const [linkBusy, setLinkBusy] = useState<string | null>(null)
+  const [mismatchConfirm, setMismatchConfirm] = useState<string | null>(null)
+  const linkUnit = async (pieceId: string, c: LinkCandidate, condition: 'sellable' | 'damaged' | null) => {
+    if (linkBusy) return
+    setLinkBusy(pieceId)
+    try {
+      await api(`/returns/sessions/${sessionId}/items/${pieceId}/link-unit`, {
+        method: 'POST',
+        body: JSON.stringify({ shipmentId: c.shipmentId, orderItemId: c.orderItemId, unitNo: c.unitNo,
+          condition: c.intakeId ? null : condition }),
+      })
+      playBeep(true)
+      setMismatchConfirm(null)
+      await load()
+    } catch (e: unknown) {
+      playBeep(false)
+      setError(errorText(e, t))
+    } finally {
+      setLinkBusy(null)
+    }
+  }
+  const undoLink = async (pieceId: string) => {
+    if (linkBusy) return
+    setLinkBusy(pieceId)
+    try {
+      await api(`/returns/sessions/${sessionId}/items/${pieceId}/link-unit/undo`, { method: 'POST' })
+      await load()
+    } catch (e: unknown) {
+      setError(errorText(e, t))
+    } finally {
+      setLinkBusy(null)
+    }
+  }
+
   // Step 6b — "Arrived" for an untracked request item (6a session endpoint), and its undo.
   const [itemBusy, setItemBusy] = useState<string | null>(null)
   const requestItemAction = async (itemId: string, action: 'sellable' | 'damaged' | 'undo') => {
@@ -953,13 +1041,19 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
     'hidden'
 
-  const pendingItems = detail?.items.filter(i => i.disposition === 'pending') ?? []
+  // V246 (Q2): only a LEGAL pending item (at return_pending_inspection) blocks closing — the backend's
+  // BLOCKS_CLOSE_SQL. A pending unexpected item in any other state goes to a manager ('needs_review') at close.
+  const pendingItems = detail?.items.filter(i => i.disposition === 'pending' && i.status === 'return_pending_inspection') ?? []
+  const reviewOnClose = detail?.items.filter(i => i.disposition === 'pending' && i.status !== 'return_pending_inspection') ?? []
   const canClose = pendingItems.length === 0
+  const unitLinks = detail?.unitLinks ?? []
 
   // Step 5 parcel view. Expected pieces / items already grouped under a parcel render
   // inside its card; anything left (older responses, plain piece scans) renders below.
   const parcels = detail?.parcels ?? []
-  const otherItems = detail?.otherItems ?? detail?.items ?? []
+  // V246: a linked label is shown merged into its unit's row on the parcel card, not as a row of its own.
+  const mergedPieceIds = new Set(unitLinks.filter(l => parcels.some(pc => pc.shipmentId === l.shipmentId)).map(l => l.pieceId))
+  const otherItems = (detail?.otherItems ?? detail?.items ?? []).filter(i => !(i.disposition === 'linked' && mergedPieceIds.has(i.piece_id)))
   const parcelExpectedIds = new Set(parcels.flatMap(pc => pc.expectedPieces.map(e => e.id)))
   const orphanExpected = (detail?.expectedPieces ?? []).filter(e => !parcelExpectedIds.has(e.id))
   const newestIncompleteId = parcels.find(pc => !pc.complete)?.shipmentId
@@ -988,9 +1082,12 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   const renderItem = (item: SessionItem) => {
           const isPending = item.disposition === 'pending'
           const isIllegal = isPending && item.status !== 'return_pending_inspection'
+          if (item.disposition === 'linked' && mergedPieceIds.has(item.piece_id)) return null
           if (!isPending) {
-            return <DispositionedItemRow key={item.id} item={item} />
+            return <DispositionedItemRow key={item.id} item={item} link={unitLinks.find(l => l.pieceId === item.piece_id)} />
           }
+          // V246: the untracked units this label could be — the link action comes first.
+          const candidates = item.linkCandidates ?? []
           return (
             <div
               key={item.id}
@@ -1010,6 +1107,15 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                     : 'returns.openSession.notOnManifest')}`}
                 </p>
                 {item.via_phone && <div className="mt-1"><ViaPhoneTag /></div>}
+                {candidates.length > 0 && (
+                  <LinkCandidates candidates={candidates} busy={linkBusy === item.piece_id}
+                    onLink={(c, condition) => linkUnit(item.piece_id, c, condition)} testId={`link-${item.piece_id}`} />
+                )}
+                {mismatchConfirm === item.piece_id && candidates.length > 0 && (
+                  <MismatchConfirm candidate={candidates[0]} busy={dispositioning === item.piece_id}
+                    onConfirm={() => { setMismatchConfirm(null); void disposition(item.piece_id, 'mismatch') }}
+                    onCancel={() => setMismatchConfirm(null)} />
+                )}
               </div>
               <Badge tone="warning" label={t('returns.openSession.needsDecision')} />
               <div className="flex gap-1.5 shrink-0">
@@ -1036,11 +1142,14 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                   <Button
                     variant="tertiary" size="sm"
                     loading={dispositioning === item.piece_id}
-                    onClick={() => disposition(item.piece_id, 'mismatch')}
+                    // V246: when the label could be an untracked unit, "Not the real piece" asks first.
+                    onClick={() => candidates.length > 0
+                      ? setMismatchConfirm(item.piece_id)
+                      : disposition(item.piece_id, 'mismatch')}
                   >
                     {t('returns.openSession.mismatch')}
                   </Button>
-                ) : isIllegal && (
+                ) : isIllegal && candidates.length === 0 && (
                   <span className="text-caption text-muted self-center" data-testid={`needs-manager-${item.piece_id}`}>
                     {t('returns.needsManager')}
                   </span>
@@ -1111,6 +1220,8 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             restockedCount: closeSummary.restockedCount,
             damagedCount: closeSummary.damagedCount,
             mismatchCount: closeSummary.mismatchCount,
+            linkedCount: closeSummary.linkedCount,
+            needsReviewCount: closeSummary.needsReviewCount,
           }}
           onPrimaryAction={startNewSession}
           primaryActionLoading={startingNew}
@@ -1247,6 +1358,9 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             onItemAction={requestItemAction}
             sessionId={sessionId}
             onUnitAction={(unit, action) => requestUnitAction(parcel, unit, action)}
+            unitLinks={unitLinks}
+            linkBusy={linkBusy}
+            onUndoLink={undoLink}
             renderExpected={renderExpected}
             renderItem={renderItem}
           />
@@ -1288,6 +1402,11 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                   t('returns.openSession.footer.nothingLeft'),
                 ].filter(Boolean).join(' · ')
               : t('returns.openSession.footer.blocked')}
+          </p>
+        )}
+        {canClose && reviewOnClose.length > 0 && (
+          <p className="text-caption text-muted text-center" data-testid="close-review-note">
+            {t('returns.link.reviewOnClose', { count: reviewOnClose.length })}
           </p>
         )}
         {!canClose && (
@@ -1358,7 +1477,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
 // restock / damaged / mismatch and reprint controls are the existing ones, unchanged. ──
 
 function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, renderExpected, renderItem,
-  itemBusy = null, onItemAction, sessionId, onUnitAction }: {
+  itemBusy = null, onItemAction, sessionId, onUnitAction, unitLinks = [], linkBusy = null, onUndoLink }: {
   parcel: Parcel
   expanded: boolean
   onToggle: (expand: boolean) => void
@@ -1371,8 +1490,13 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   onItemAction?: (itemId: string, action: 'sellable' | 'damaged' | 'undo') => void
   sessionId?: string
   onUnitAction?: (unit: ParcelUnit, action: 'sellable' | 'damaged' | 'undo') => void
+  /** V246: this session's unit links — a linked unit's row shows its label (the merged row). */
+  unitLinks?: UnitLink[]
+  linkBusy?: string | null
+  onUndoLink?: (pieceId: string) => void
 }) {
   const { t, i18n } = useTranslation()
+  const linkOf = (u: ParcelUnit) => u.intakeId ? unitLinks.find(l => l.intakeId === u.intakeId) : undefined
   const lang = i18n.language
   const isAr = lang === 'ar'
   const received = parcel.intakeOutcome === 'received_untracked'
@@ -1620,7 +1744,8 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
               <UntrackedUnitRow key={`${u.orderItemId}:${u.unitNo}`} unit={u}
                 busy={itemBusy === `${u.orderItemId}:${u.unitNo}`}
                 canUndo={!!sessionId && u.markedInSession === sessionId}
-                onAction={action => onUnitAction?.(u, action)} />
+                onAction={action => onUnitAction?.(u, action)}
+                link={linkOf(u)} linkBusy={!!linkBusy && linkBusy === linkOf(u)?.pieceId} onUndoLink={onUndoLink} />
             ))}
             {label && units.some(u => !u.onLabel) && (
               <details className="group" data-testid="parcel-units-off-label"
@@ -1633,7 +1758,8 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
                     <UntrackedUnitRow key={`${u.orderItemId}:${u.unitNo}`} unit={u}
                       busy={itemBusy === `${u.orderItemId}:${u.unitNo}`}
                       canUndo={!!sessionId && u.markedInSession === sessionId}
-                      onAction={action => onUnitAction?.(u, action)} />
+                      onAction={action => onUnitAction?.(u, action)}
+                      link={linkOf(u)} linkBusy={!!linkBusy && linkBusy === linkOf(u)?.pieceId} onUndoLink={onUndoLink} />
                   ))}
                 </div>
               </details>
@@ -1727,11 +1853,15 @@ function UntrackedItemRow({ item, busy, onAction }: {
  * so the worker marks it "Arrived · sellable / damaged". Afterwards: the outcome + Undo (a mark made
  * in this session only). Unmarked units simply didn't come back.
  */
-function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
+function UntrackedUnitRow({ unit, busy, canUndo, onAction, link, linkBusy = false, onUndoLink }: {
   unit: ParcelUnit
   busy: boolean
   canUndo: boolean
   onAction: (action: 'sellable' | 'damaged' | 'undo') => void
+  /** V246: the scanned label this unit is (the merged row) — its own Undo replaces the unit's. */
+  link?: UnitLink
+  linkBusy?: boolean
+  onUndoLink?: (pieceId: string) => void
 }) {
   const { t } = useTranslation()
   const arrived = unit.intakeId != null
@@ -1749,6 +1879,13 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
           </span>
           {arrived && unit.viaPhone && <ViaPhoneTag />}
         </p>
+        {link && (
+          <p className="text-caption text-primary flex items-center gap-1.5" data-testid="untracked-unit-linked">
+            <Link2 size={13} strokeWidth={2} className="text-trace-blue shrink-0" />
+            {t('returns.link.linkedTo', { code: link.pieceCode })}
+          </p>
+        )}
+        {link?.shopifyMayBeLow && <ShopifyMayBeLowNote />}
         {unit.onLabel && (
           <p className="text-caption font-semibold text-trace-blue" data-testid="untracked-unit-on-label">
             {t('returns.openSession.parcel.label.onLabel', { count: unit.labelQuantity ?? 1 })}
@@ -1758,12 +1895,17 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
       {arrived ? (
         <>
           <span data-testid="untracked-unit-outcome">
-            <Badge tone={unit.condition === 'damaged' ? 'critical' : 'info'}
+            <Badge tone={unit.condition === 'damaged' ? 'critical' : link ? 'success' : 'info'}
               label={t(unit.condition === 'damaged'
                 ? 'returns.openSession.parcel.untracked.arrivedDamaged'
-                : 'returns.openSession.parcel.untracked.arrivedToReceive')} />
+                : link ? 'returns.link.inStock' : 'returns.openSession.parcel.untracked.arrivedToReceive')} />
           </span>
-          {canUndo && (
+          {link ? link.canUndo && (
+            <button className="btn-outline btn" disabled={linkBusy} onClick={() => onUndoLink?.(link.pieceId)} data-testid="untracked-unit-undo-link">
+              {linkBusy && <Spinner size={16} />}
+              {t('returns.link.undo')}
+            </button>
+          ) : canUndo && (
             <button className="btn-outline btn" disabled={busy} onClick={() => onAction('undo')} data-testid="untracked-unit-undo">
               {busy && <Spinner size={16} />}
               {t('returns.openSession.parcel.untracked.undo')}
@@ -1782,6 +1924,87 @@ function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+/** V246 (Q3 case B) — the order's Shopify fulfilment left from Traced Main: a note only, never blocking. */
+function ShopifyMayBeLowNote() {
+  const { t } = useTranslation()
+  return (
+    <p className="text-caption text-warning flex items-start gap-1.5" data-testid="shopify-may-be-low">
+      <AlertTriangle size={13} strokeWidth={2} className="shrink-0 mt-0.5" />
+      <span><b>{t('returns.link.shopifyLow')}</b> — {t('returns.link.shopifyLowHint')}</span>
+    </p>
+  )
+}
+
+/** V246 — the units a scanned label could be, each with its link action(s). */
+function LinkCandidates({ candidates, busy, onLink, testId }: {
+  candidates: LinkCandidate[]
+  busy: boolean
+  onLink: (c: LinkCandidate, condition: 'sellable' | 'damaged' | null) => void
+  testId: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="mt-2 space-y-2" data-testid={testId}>
+      {candidates.map(c => (
+        <div key={`${c.shipmentId}:${c.orderItemId}:${c.unitNo}`}
+          className="rounded-lg border border-trace-blue/30 bg-trace-blue/5 px-3 py-2 flex flex-wrap items-center gap-2">
+          <Link2 size={14} strokeWidth={2} className="text-trace-blue shrink-0" />
+          <p className="text-caption text-primary flex-1 min-w-[12rem]">
+            {t('returns.link.sameItem', { line: candidateLine(c, t) })}
+            {c.intakeId && c.condition && <> · {t(c.condition === 'damaged' ? 'returns.link.markedDamaged' : 'returns.link.markedSellable')}</>}
+          </p>
+          {/* raw <button>s — Button doesn't spread data-testid */}
+          {c.intakeId ? (
+            <button className="btn-brand" disabled={busy} onClick={() => onLink(c, null)} data-testid="link-unit">
+              {busy && <Spinner size={16} />}
+              {t('returns.link.linkIt')}
+            </button>
+          ) : (
+            <>
+              <button className="btn-brand" disabled={busy} onClick={() => onLink(c, 'sellable')} data-testid="link-unit-sellable">
+                {busy && <Spinner size={16} />}
+                {t('returns.link.linkSellable')}
+              </button>
+              <button className="btn-outline btn" disabled={busy} onClick={() => onLink(c, 'damaged')} data-testid="link-unit-damaged">
+                {t('returns.link.linkDamaged')}
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** "{product / variant} · order {n} · unit i of n" — the untracked line a label could be. */
+function candidateLine(c: LinkCandidate, t: (k: string, o?: Record<string, unknown>) => string) {
+  const product = [c.productTitle, c.variantTitle].filter(Boolean).join(' / ')
+  return [product, c.orderNumber ? t('returns.link.order', { order: c.orderNumber }) : null,
+    t('returns.link.unitOf', { unit: c.unitNo, count: c.units })].filter(Boolean).join(' · ')
+}
+
+/** V246 — "Not the real piece" while the label could be an untracked unit: asks first (inline, no dialog). */
+function MismatchConfirm({ candidate, busy, onConfirm, onCancel }: {
+  candidate: LinkCandidate
+  busy: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 flex flex-wrap items-center gap-2" data-testid="mismatch-confirm">
+      <p className="text-caption text-primary flex-1 min-w-[12rem]">
+        {t('returns.link.confirmMismatch', { line: candidateLine(candidate, t) })}
+      </p>
+      <button className="btn-outline btn" disabled={busy} onClick={onConfirm} data-testid="mismatch-confirm-yes">
+        {busy && <Spinner size={16} />}
+        {t('returns.link.confirmMismatchYes')}
+      </button>
+      <button className="text-small text-muted hover:text-primary underline px-1" onClick={onCancel} data-testid="mismatch-confirm-cancel">{t('common.cancel')}</button>
     </div>
   )
 }
@@ -1818,17 +2041,36 @@ function SummaryStat({ value, label, tone }: { value: number; label: string; ton
 // ── Dispositioned item row — read-only, shared by the live scan loop's resolved
 // items AND the historical session summary below. ────────────────────────────
 
-function DispositionedItemRow({ item }: { item: SessionItem }) {
+function DispositionedItemRow({ item, link, highlight = false, children }: {
+  item: SessionItem
+  /** V246: a linked item's unit link (its case-B note). */
+  link?: UnitLink
+  /** The alert deep link's piece (?piece=). */
+  highlight?: boolean
+  /** V246: a manager's actions on a needs-review item (summary screen). */
+  children?: React.ReactNode
+}) {
   const { t } = useTranslation()
+  const d = item.disposition
+  const review = d === 'needs_review'
   return (
     <div
-      className="border border-line bg-surface rounded-xl px-3.5 py-3 flex items-center gap-3.5 opacity-85"
+      // An ordinary row keeps its exact classes (pages snapshot this row); only a needs-review / highlighted row differs.
+      className={review || highlight || children
+        ? cn('border rounded-xl px-3.5 py-3 flex flex-wrap items-center gap-3.5',
+            review ? 'border-warning/40 bg-warning/5' : 'border-line bg-surface opacity-85',
+            highlight && 'ring-2 ring-trace-blue/50')
+        : 'border border-line bg-surface rounded-xl px-3.5 py-3 flex items-center gap-3.5 opacity-85'}
       data-testid={`item-${item.piece_id}`}
     >
-      {item.disposition === 'restocked'
+      {d === 'restocked'
         ? <RotateCcw size={16} strokeWidth={2} className="text-success shrink-0" />
-        : item.disposition === 'damaged'
+        : d === 'damaged'
         ? <AlertTriangle size={16} strokeWidth={2} className="text-critical shrink-0" />
+        : d === 'linked'
+        ? <Link2 size={16} strokeWidth={2} className="text-trace-blue shrink-0" />
+        : review
+        ? <AlertTriangle size={16} strokeWidth={2} className="text-warning shrink-0" />
         : <XCircle size={16} strokeWidth={2} className="text-warning shrink-0" />}
       <div className="flex-1 min-w-0">
         <p className="text-small font-semibold text-primary truncate">{item.product_title}</p>
@@ -1836,16 +2078,29 @@ function DispositionedItemRow({ item }: { item: SessionItem }) {
           {item.barcode}
           {item.damage_reason && ` · ${t('returns.openSession.reasonPrefix', { reason: item.damage_reason })}`}
         </p>
+        {d === 'linked' && <p className="text-caption text-muted">{t('returns.link.linkedRow')}</p>}
+        {review && (
+          <p className="text-caption text-muted">
+            {item.reviewResolved ? t('returns.link.reviewResolved') : t('returns.link.reviewWhy')}
+          </p>
+        )}
+        {link?.shopifyMayBeLow && <ShopifyMayBeLowNote />}
         {item.via_phone && <div className="mt-1"><ViaPhoneTag /></div>}
       </div>
       <Badge
-        tone={item.disposition === 'restocked' ? 'success' : item.disposition === 'damaged' ? 'critical' : 'warning'}
-        label={item.disposition === 'restocked'
+        tone={d === 'restocked' ? 'success' : d === 'damaged' ? 'critical' : d === 'linked' ? 'info' : 'warning'}
+        label={d === 'restocked'
           ? t('returns.openSession.restocked')
-          : item.disposition === 'damaged'
+          : d === 'damaged'
           ? t('returns.openSession.damaged')
+          : d === 'linked'
+          ? t('returns.link.linkedBadge')
+          : review
+          ? t('returns.link.needsReview')
           : t('returns.openSession.mismatchLabel')}
       />
+      {/* A manager's actions (summary screen) on their own line under the row. */}
+      {children && <div className="basis-full">{children}</div>}
     </div>
   )
 }
@@ -1862,6 +2117,9 @@ interface SessionSummaryData {
   restockedCount: number
   damagedCount: number
   mismatchCount: number
+  /** V246 */
+  linkedCount?: number
+  needsReviewCount?: number
   openedBy?: string | null
   openedAt?: string | null
   closedAt?: string | null
@@ -1870,12 +2128,14 @@ interface SessionSummaryData {
   items?: SessionItem[]
 }
 
-function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, onBack }: {
+function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, onBack, renderItem }: {
   data: SessionSummaryData
   variant: 'post-close' | 'historical'
   onPrimaryAction?: () => void
   primaryActionLoading?: boolean
   onBack: () => void
+  /** V246: the summary screen's own row (needs-review actions); default the read-only row. */
+  renderItem?: (item: SessionItem) => React.ReactNode
 }) {
   const { t } = useTranslation()
   const fmtTime = (iso: string | null | undefined) => iso
@@ -1909,7 +2169,19 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
         <SummaryStat value={data.restockedCount} label={t('returns.openSession.restocked')} tone="success" />
         <SummaryStat value={data.damagedCount} label={t('returns.openSession.damaged')} tone="critical" />
         <SummaryStat value={data.mismatchCount} label={t('returns.openSession.mismatchLabel')} tone="warning" />
+        {/* V246: shown only when there are any (the three stats above are unchanged). */}
+        {!!data.linkedCount && (
+          <span data-testid="summary-linked"><SummaryStat value={data.linkedCount} label={t('returns.link.linkedStat')} tone="success" /></span>
+        )}
+        {!!data.needsReviewCount && (
+          <span data-testid="summary-needs-review"><SummaryStat value={data.needsReviewCount} label={t('returns.link.needsReview')} tone="warning" /></span>
+        )}
       </div>
+      {variant === 'post-close' && !!data.needsReviewCount && (
+        <p className="text-caption text-muted -mt-1" data-testid="summary-needs-review-note">
+          {t('returns.link.sentToManager', { count: data.needsReviewCount })}
+        </p>
+      )}
 
       {/* Warehouse places S4 — the ONE put-away step for returns: the session's restocked pieces (never damaged).
           Renders nothing without places, or when no restocked piece is waiting for a place. */}
@@ -1922,7 +2194,7 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
         <div className="w-full text-start space-y-2 mt-2" data-testid="summary-items">
           {data.items.length === 0
             ? <p className="text-small text-muted text-center">{t('returns.summary.noItems')}</p>
-            : data.items.map(item => <DispositionedItemRow key={item.id} item={item} />)}
+            : data.items.map(item => renderItem ? renderItem(item) : <DispositionedItemRow key={item.id} item={item} />)}
         </div>
       )}
 
@@ -1948,11 +2220,22 @@ function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, 
 // per the list-view/scan-loop split: this is a read-only "look at a record" view,
 // not an active scan loop, so it never mounts OpenSessionScreen or its inputs. ──
 
-function SessionSummaryScreen({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
+function SessionSummaryScreen({ sessionId, onBack, highlightPieceId = null }: {
+  sessionId: string
+  onBack: () => void
+  highlightPieceId?: string | null
+}) {
   const { t } = useTranslation()
+  const role = getRoleFromToken()
+  const canManage = role === 'owner' || role === 'manager'
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  // V246: a manager settles a needs-review item here — link it / not the real piece / nothing to do.
+  const [busy, setBusy] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [mismatchConfirm, setMismatchConfirm] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1961,7 +2244,63 @@ function SessionSummaryScreen({ sessionId, onBack }: { sessionId: string; onBack
       .catch((e: unknown) => { if (!cancelled) setError(errorText(e, t)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [sessionId, t])
+  }, [sessionId, t, reloadKey])
+
+  const act = async (pieceId: string, call: () => Promise<unknown>) => {
+    if (busy) return
+    setBusy(pieceId); setActionError(null)
+    try { await call(); setMismatchConfirm(null); setReloadKey(k => k + 1) }
+    catch (e: unknown) { setActionError(errorText(e, t)) }
+    finally { setBusy(null) }
+  }
+  const linkReview = (item: SessionItem, c: LinkCandidate, condition: 'sellable' | 'damaged' | null) =>
+    act(item.piece_id, () => api(`/returns/sessions/${sessionId}/items/${item.piece_id}/link-unit`, {
+      method: 'POST',
+      body: JSON.stringify({ shipmentId: c.shipmentId, orderItemId: c.orderItemId, unitNo: c.unitNo,
+        condition: c.intakeId ? null : condition }),
+    }))
+  const notRealPiece = (item: SessionItem) =>
+    act(item.piece_id, () => api(`/returns/sessions/${sessionId}/items/${item.piece_id}/disposition`, {
+      method: 'POST', body: JSON.stringify({ disposition: 'mismatch', reason: null }),
+    }))
+  const nothingToDo = (item: SessionItem) =>
+    act(item.piece_id, () => api('/exceptions/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ exceptionType: 'return_needs_review', subjectKey: `return_needs_review:item:${item.id}`,
+        note: t('returns.link.nothingToDoNote') }),
+    }))
+
+  const renderSummaryItem = (item: SessionItem) => {
+    const link = detail?.unitLinks?.find(l => l.pieceId === item.piece_id)
+    const highlight = item.piece_id === highlightPieceId
+    if (item.disposition !== 'needs_review' || !canManage || item.reviewResolved) {
+      return <DispositionedItemRow key={item.id} item={item} link={link} highlight={highlight} />
+    }
+    const candidates = item.linkCandidates ?? []
+    return (
+      <DispositionedItemRow key={item.id} item={item} highlight={highlight}>
+        {candidates.length > 0 && (
+          <LinkCandidates candidates={candidates} busy={busy === item.piece_id}
+            onLink={(c, condition) => linkReview(item, c, condition)} testId={`link-${item.piece_id}`} />
+        )}
+        {mismatchConfirm === item.piece_id && candidates.length > 0 ? (
+          <MismatchConfirm candidate={candidates[0]} busy={busy === item.piece_id}
+            onConfirm={() => notRealPiece(item)} onCancel={() => setMismatchConfirm(null)} />
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2" data-testid={`review-actions-${item.piece_id}`}>
+            <button className="btn-outline btn" disabled={busy === item.piece_id} data-testid="review-not-real"
+              onClick={() => candidates.length > 0 ? setMismatchConfirm(item.piece_id) : notRealPiece(item)}>
+              {t('returns.openSession.mismatch')}
+            </button>
+            <button className="btn-outline btn" disabled={busy === item.piece_id} data-testid="review-nothing-to-do"
+              onClick={() => nothingToDo(item)}>
+              {t('returns.link.nothingToDo')}
+            </button>
+          </div>
+        )}
+      </DispositionedItemRow>
+    )
+  }
 
   if (loading) {
     return (
@@ -1983,15 +2322,19 @@ function SessionSummaryScreen({ sessionId, onBack }: { sessionId: string; onBack
   const restockedCount = detail.items.filter(i => i.disposition === 'restocked').length
   const damagedCount   = detail.items.filter(i => i.disposition === 'damaged').length
   const mismatchCount  = detail.items.filter(i => i.disposition === 'mismatch').length
+  const linkedCount    = detail.items.filter(i => i.disposition === 'linked').length
+  const needsReviewCount = detail.items.filter(i => i.disposition === 'needs_review').length
 
   return (
     <div data-testid="session-summary-screen">
+      {actionError && <div className="max-w-sm mx-auto mb-3"><Alert tone="critical" title={actionError} /></div>}
       <SessionSummary
+        renderItem={renderSummaryItem}
         variant="historical"
         data={{
           sessionId:      detail.id,
           pieceCount:     detail.items.length,
-          restockedCount, damagedCount, mismatchCount,
+          restockedCount, damagedCount, mismatchCount, linkedCount, needsReviewCount,
           openedBy:       detail.opened_by,
           openedAt:       detail.opened_at,
           closedAt:       detail.closed_at,

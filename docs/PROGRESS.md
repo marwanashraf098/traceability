@@ -4,6 +4,70 @@
 
 ## Current state
 
+**Scan returns dead end: link an unexpected piece to the untracked unit it is + illegal rows no longer block Close
+(2026-11-27; branch `feat/returns-link-unit`, worktree `/Users/marawan/Documents/trace-returns-link-unit`, off origin/main
+647f0206; V246; NOT merged, NOT deployed).** Diagnosis BRK-47010-EG (BROEK): an untracked line marked Arrived · to receive
++ its own tracked label of the same variant (P006819, received into stock by "po84" a minute before the session) showed
+as an UNEXPECTED row with only "Not the real piece" → mismatch, Close blocked, and the unit's Return To Receive stayed
+open (a double-count trap). Decisions (approved 2026-11-27): Q1 same variant only; Q2 illegal-state rows don't block
+Close (service, UI, auto-close) — they become `needs_review` + one manager alert each; legal pending
+(return_pending_inspection) rows still block; "Not the real piece" stays manager-only and asks first when a link is
+possible; Q3 no Shopify +1 at link time, case B (the order's Shopify fulfilment left from Traced Main) shows "Shopify may
+be 1 low at Main" (note only); Q4 a lost piece is refused; Q5 linking never marks the line tracked.
+- **V246:** `return_session_items.disposition` CHECK + 'linked', 'needs_review'; `untracked_unit_piece_links` (intake ↔
+  piece, session item, condition, created_intake, shopify_may_be_low; live-unique per intake / piece / item; RLS NULLIF;
+  app_user SELECT / INSERT + UPDATE (undone_at, undone_by) only, no DELETE).
+- **`UntrackedUnitLinks`** (not a bean, ReturnSessionService's JdbcTemplate) is THE candidate rule (units of untracked
+  lines on parcels scanned in the session, same variant, no live link, not taken by a receipt line) and THE guards
+  (available, at the main warehouse, no live allocation; lost / with an order / awaiting inspection / other statuses
+  refused with their own EN + AR reason, 409 LINK_REFUSED {details.reason}).
+- **ReturnSessionService.linkUnit / undoLinkUnit** — POST `/returns/sessions/{sid}/items/{pieceId}/link-unit`
+  {shipmentId, orderItemId, unitNo, condition} and `…/link-unit/undo`. Pending item: any session user, session open;
+  needs_review item: owner / manager, closed session allowed. Writes: the intake (UntrackedParcelUnits.mark) when the
+  unit wasn't marked, the link, piece event `return_unit_linked` / `return_unit_unlinked` (InventoryLedger
+  `recordReturnUnitLink`, from = to = current status; Lookup phrases), a damaged link through
+  `PieceAdjustService.adjustPiece(…, "damaged", "other", …)` (its own trigger-3 damage move), item → 'linked'. Double tap
+  = same link. Undo: open session, sellable links only (a damaged one → Lookup Back to good). A linked unit's Arrived
+  mark can't be undone (session undo 409; drawer shows it 'received') until the link is.
+- **Return To Receive:** `ShipmentLinkService.UNIT_TO_RECEIVE_OPEN_SQL` excludes a unit with a live link.
+- **Close (Q2):** `ReturnSessionService.BLOCKS_CLOSE_SQL` (pending AND return_pending_inspection) is THE rule — close()
+  and ReturnSessionAutoCloseJob; close() marks every other pending row 'needs_review' (disposition_at / by = closer,
+  NULL for the job). New alert `return_needs_review` (MEDIUM, piece, key `return_needs_review:item:<id>`, names the piece
+  code + product + session short id, Go → `/returns?session=<sid>&piece=<pieceId>`; clears when the item is linked /
+  mismatched, or resolved "nothing to do"): ORDER_LINK NONE (no reason group — those are order-linked only), Overview timeline, Exceptions
+  label, help alerts-returns EN + AR. Mismatch from needs_review (manager) works on the closed session.
+- **Counts:** close summary (`linkedCount`, `needsReviewCount`) / list (`linked_count`, `needs_review_count`) / analytics
+  (`linkedCount`, `needsReviewCount`) — each present only when > 0, so GenericG3IsolationGoldenTest's byte-identical
+  snapshot (close, list, analytics) is unchanged.
+  getSession adds `linkCandidates` (pending / needs_review items, only when non-empty), `reviewResolved` (needs_review
+  items only) and top-level `unitLinks` (only when there is one) — every other key unchanged.
+- **Frontend (Returns.tsx; SAFETY-CRITICAL scan / refocus untouched):** link block first on the unexpected row
+  ("This is that item · sellable" / "That item · damaged", or "This is that item" for a marked unit), inline confirm on
+  "Not the real piece" while a link is possible (no dialog — nothing competes with the scan input); the linked label
+  merges into its unit's row ("Label P… is this item", "Arrived · in stock", Undo link, case-B note); canClose counts
+  only legal pending rows + "N unexpected item(s) will go to a manager"; post-close summary "Needs review" / "Linked"
+  stats; `/returns?session=…&piece=…` opens that session's summary, piece highlighted, with the manager's Link / Not the
+  real piece / Nothing to do. Strings `returns.link` EN + AR.
+- **Tests:** ReturnUnitLinkTest (11: l1–l4, g1, g2, c1, c2, a1, b1, x1 app_user), ReturnUnitLinkHttpAppUserTest (3,
+  whole app as app_user), returnsLinkUnit.test.tsx (12), returnsNeedsReview.test.tsx (7). Revert-checked: RTR
+  predicate, guards, case B, unit-undo guard, damaged move, double tap, close rule, RLS, auto-close SQL, grants, the
+  detector, same-variant rule, @Transactional on linkUnit; UI F1–F8. h2 (cross-tenant 404) stays green under every
+  revert (several layers answer 404) — x1's RLS revert covers it.
+- **Approved existing-test edits (2026-11-28):** MigrationSmokeTest 245 ("V1–V246"), NotTracedBackfillTest + V246 → 190,
+  PortalOrderLeakTest + ShadowOrderLeakTest: the two link-unit POSTs (skip R_RETURNS). Nothing else in existing tests.
+- **Results vs 647f0206 (2026-11-28):** backend 5,055, red = ExchangeBackfillTest only (allowed); frontend 278 files /
+  2,389 green. bazarC1 "network failure" flaked twice while another worktree's suite loaded the machine (passes
+  6/6 on the branch and 6/6 on 647f0206 once idle) — load flake.
+- **Open question (BROEK intake 0cef268f):** its Return To Receive can already be resolved from Alerts → Resolve (note
+  "Already in stock as P006819"), but that leaves no link and its piece's session row stays 'mismatch' with an open
+  return_mismatch alert. Smallest proper fix proposed, not built: let linkUnit accept a 'mismatch' item (owner / manager,
+  closed session) with the same guards + link table, reached from the unit's Return To Receive.
+- **Follow-ups:** BROEK's
+  intake 0cef268f and the 10 prod mismatch rows untouched (no prod data change). After deploy the auto-close job WILL
+  close BROEK's open 2026-11-26 session (its only pending row is out_on_transfer) → that row becomes needs_review + an
+  alert; same for any open session whose only pending rows are illegal. v1 limits: only a piece at the main warehouse can
+  be linked; a damaged link isn't undone in Scan returns.
+
 **Encryption key rotation K1 — key ring (2026-11-28; branch `feat/encryption-key-ring` off origin/main d7b23d2a,
 worktree ../trace-k1; NO migration; merged to main 2026-11-28, NOT deployed).** Step 0 finding (prod 2026-11-27):
 the prod app runs with `APP_ENCRYPTION_KEY` unset, so application.yml's 32-zero-byte default encrypts every stored
@@ -34,7 +98,6 @@ K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy ke
 - Exposure (Step 0): anyone with a DB copy could decrypt everything above. Recommended: rotate Bosta API keys; check
   for remaining custom-app `api_secret_encrypted` rows (rotate or upgrade to OAuth); Shopify OAuth tokens rotate on
   refresh (to confirm). Open: where DB copies exist (decides whether refund details need a formal assessment).
-
 **Analytics shipping / refused-then-cancelled / cost 0 — slices 4–6 of the 2026-11-16 Step 0 (2026-11-27; branch
 `analytics/shipping-refused-cost` off main d7b23d2a, worktree ../traceability-shipping-cost; MIGRATION V246 (approved;
 renamed from V247 once V246 was confirmed free on main and prod — feat/defect-replacement (V246 exchange_replacement_kind,
@@ -114,7 +177,6 @@ NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit si
 - **Next:** deploy (not done). Catch-up script: commit=yes NOT to be run (not now, not after deploy — owner's call).
   Logged separately, out of scope: COD not-fulfilled fee deduction; the ~868 BROEK orders missing from the Orders
   Cancelled tab.
-
 **Bazar top-up — add pieces to a live bazar (2026-11-27; branch `feat/bazar-topup`, rebased onto origin/main 3755db5b
 (U1c + U1d); V245; merged to main 2026-11-27 as 35a19890 (migrations end at V245), NOT deployed).** Decisions (approved 2026-11-27, Step 0):
 - **Design B:** the SAME bazar transfer, each top-up its own batch (`transfer_send_batches` + items, V245). While open a

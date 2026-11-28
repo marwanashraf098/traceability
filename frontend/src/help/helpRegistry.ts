@@ -54,7 +54,7 @@ export const ALERT_GROUPS: Record<string, string[]> = {
   'alerts-returns': [
     'never_received', 'return_leg_unscanned', 'return_in_transit_stuck', 'return_to_receive',
     'request_item_to_receive', 'return_link_ambiguous', 'pickup_booking_problem', 'refund_pending_overdue',
-    'return_items_overdue', 'return_mismatch',
+    'return_items_overdue', 'return_mismatch', 'return_needs_review',
   ],
   'alerts-shopify-returns-exchanges': [
     'shopify_exchange_short', 'shopify_exchange_still_waiting', 'shopify_exchange_shipped_in_shopify',

@@ -93,6 +93,19 @@ public class ReturnSessionService {
     private final UntrackedParcelUnits untrackedUnits;
     /** Non-Bosta couriers G3: a generic leg scanned back becomes 'returned' — on this service's own connection. */
     private final com.traceability.courier.GenericLegTransitions genericLegs;
+    /** V246: "this label is that unit" — the candidate rule and guards, same JdbcTemplate. */
+    private final UntrackedUnitLinks unitLinks;
+    /** V246: a damaged link moves the piece available → damaged through the one Lookup adjust path. */
+    private PieceAdjustService pieceAdjust;
+
+    /**
+     * V246 (Q2): THE "still blocks closing" rule for a pending item {@code i} (piece {@code p}): only a LEGAL scan —
+     * the piece is at return_pending_inspection, so restock / damaged are possible. A pending item in any other state
+     * (an illegal-state scan) no longer blocks: close marks it 'needs_review' and a manager alert follows
+     * (return_needs_review). Used by close() and ReturnSessionAutoCloseJob.
+     */
+    public static final String BLOCKS_CLOSE_SQL =
+        "(i.disposition = 'pending' AND p.status = 'return_pending_inspection'::piece_status)";
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
                                 ReturnService returnService, ShipmentLinkService shipmentLinkService,
@@ -105,6 +118,12 @@ public class ReturnSessionService {
         this.requests            = new ReturnRequestLifecycle(jdbc);
         this.untrackedUnits      = new UntrackedParcelUnits(jdbc);
         this.genericLegs         = new com.traceability.courier.GenericLegTransitions(jdbc, ledger);
+        this.unitLinks           = new UntrackedUnitLinks(jdbc, untrackedUnits);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPieceAdjustService(PieceAdjustService pieceAdjust) {
+        this.pieceAdjust = pieceAdjust;
     }
 
     // ── Create / open ─────────────────────────────────────────────────────────
@@ -598,6 +617,23 @@ public class ReturnSessionService {
     private Map<String, Object> dispositionInternal(UUID sessionId, String pieceId, String disposition,
                                                     String reason, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        // V246 (Q2): a manager settles a 'needs_review' item (left by close) as "Not the real piece" — the session
+        // is closed by then. The public entry already required owner / manager for mismatch.
+        if ("mismatch".equals(disposition)) {
+            Map<String, Object> item = jdbc.query(
+                "SELECT i.disposition FROM return_session_items i WHERE i.session_id = ? AND i.piece_id = ? " +
+                "AND i.tenant_id = ? FOR UPDATE",
+                rs -> rs.next() ? Map.<String, Object>of("disposition", rs.getString(1)) : null,
+                sessionId, pieceId, tenantId);
+            if (item != null && "needs_review".equals(item.get("disposition"))) {
+                jdbc.update(
+                    "UPDATE return_session_items SET disposition = 'mismatch', disposition_at = now(), disposition_by = ? " +
+                    "WHERE session_id = ? AND piece_id = ? AND tenant_id = ? AND disposition = 'needs_review'",
+                    actorUserId, sessionId, pieceId, tenantId);
+                log.warn("Return mismatch (from needs review): piece={} session={}", pieceId, sessionId);
+                return fetchItemByPiece(sessionId, pieceId, tenantId);
+            }
+        }
         requireOpen(sessionId, tenantId);
 
         if (!Set.of("restock", "damaged", "mismatch").contains(disposition)) {
@@ -795,7 +831,7 @@ public class ReturnSessionService {
             "JOIN pieces p    ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
-            "WHERE i.session_id = ? AND i.tenant_id = ? AND i.disposition = 'pending' " +
+            "WHERE i.session_id = ? AND i.tenant_id = ? AND " + BLOCKS_CLOSE_SQL + " " +
             "ORDER BY i.scanned_at ASC",
             sessionId, tenantId);
 
@@ -807,12 +843,23 @@ public class ReturnSessionService {
                 Map.of("blockingItems", pending));
         }
 
+        // V246 (Q2): every other still-pending item (an illegal-state scan — the piece isn't at
+        // return_pending_inspection) goes to a manager: 'needs_review', one return_needs_review alert each.
+        // Nothing moves (no piece event, no stock, no Shopify).
+        jdbc.update(
+            "UPDATE return_session_items i SET disposition = 'needs_review', disposition_at = now(), disposition_by = ? " +
+            "FROM pieces p WHERE p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
+            "  AND i.session_id = ? AND i.tenant_id = ? AND i.disposition = 'pending' AND NOT " + BLOCKS_CLOSE_SQL,
+            actorUserId, sessionId, tenantId);
+
         Map<String, Object> counts = jdbc.query(
             "SELECT " +
             "  COUNT(*)                                          AS piece_count, " +
             "  COUNT(*) FILTER (WHERE disposition = 'restocked') AS restocked_count, " +
             "  COUNT(*) FILTER (WHERE disposition = 'damaged')   AS damaged_count, " +
-            "  COUNT(*) FILTER (WHERE disposition = 'mismatch')  AS mismatch_count " +
+            "  COUNT(*) FILTER (WHERE disposition = 'mismatch')  AS mismatch_count, " +
+            "  COUNT(*) FILTER (WHERE disposition = 'linked')    AS linked_count, " +
+            "  COUNT(*) FILTER (WHERE disposition = 'needs_review') AS needs_review_count " +
             "FROM return_session_items WHERE session_id = ? AND tenant_id = ?",
             rs -> {
                 rs.next();
@@ -821,6 +868,9 @@ public class ReturnSessionService {
                 m.put("restockedCount",  rs.getInt("restocked_count"));
                 m.put("damagedCount",    rs.getInt("damaged_count"));
                 m.put("mismatchCount",   rs.getInt("mismatch_count"));
+                // V246: present only when there are any (the close response's existing keys are unchanged).
+                if (rs.getInt("linked_count") > 0)       m.put("linkedCount", rs.getInt("linked_count"));
+                if (rs.getInt("needs_review_count") > 0) m.put("needsReviewCount", rs.getInt("needs_review_count"));
                 return m;
             },
             sessionId, tenantId);
@@ -975,6 +1025,193 @@ public class ReturnSessionService {
         untrackedUnits.undo(tenantId, sessionId, shipmentId, orderItemId, unitNo, actorUserId);
     }
 
+    // ── V246: "this label is that unit" — link an unexpected piece to an untracked unit ─────
+
+    /**
+     * POST /returns/sessions/{sessionId}/items/{pieceId}/link-unit {shipmentId, orderItemId, unitNo, condition}: the
+     * scanned piece IS this unit of an untracked line on a parcel scanned in this session (same variant — Q1). Allowed
+     * on a 'pending' item while the session is open (any session user), or on a 'needs_review' item (owner / manager,
+     * the session may be closed). Guards: {@link UntrackedUnitLinks#refusal} (available, at the main warehouse, no live
+     * allocation; lost refused — Q4), the unit is a candidate ({@link UntrackedUnitLinks#candidates}), not linked yet,
+     * not received. A double tap on the same unit returns the same link.
+     *
+     * Writes: the unit's intake (when it wasn't marked Arrived yet — then {@code condition} is required, and it becomes
+     * the link's), the link row, the piece event 'return_unit_linked' (InventoryLedger), for a damaged unit the
+     * available → damaged move through PieceAdjustService (its own Shopify damage move), and the item → 'linked'.
+     * The unit's Return To Receive closes (ShipmentLinkService.UNIT_TO_RECEIVE_OPEN_SQL). The order line is NOT marked
+     * tracked (Q5). No Shopify +1 (Q3) — {@code shopifyMayBeLow} only says Shopify may be 1 low at Main.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> linkUnit(UUID sessionId, String pieceId, UUID shipmentId, UUID orderItemId, int unitNo,
+                                        String condition, UUID actorUserId, String actorRole) {
+        UUID tenantId = TenantContext.require();
+        List<String> st = jdbc.queryForList("SELECT status FROM return_sessions WHERE id = ? AND tenant_id = ?",
+            String.class, sessionId, tenantId);
+        if (st.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return session not found");
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT id, disposition FROM return_session_items WHERE session_id = ? AND piece_id = ? AND tenant_id = ? " +
+            "FOR UPDATE", sessionId, pieceId, tenantId);
+        if (items.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found in this session");
+        UUID itemId = (UUID) items.get(0).get("id");
+        String disposition = (String) items.get(0).get("disposition");
+        boolean manager = "owner".equalsIgnoreCase(actorRole) || "manager".equalsIgnoreCase(actorRole);
+
+        if ("linked".equals(disposition)) {
+            // Double tap: the same unit again is the same link; another unit is a 409.
+            Map<String, Object> live = liveLinkForItem(tenantId, itemId);
+            if (live != null && shipmentId.equals(live.get("shipment_id")) && orderItemId.equals(live.get("order_item_id"))
+                    && unitNo == ((Number) live.get("unit_no")).intValue()) {
+                return linkResult(tenantId, sessionId, pieceId);
+            }
+            throw UntrackedUnitLinks.refused(new UntrackedUnitLinks.Refusal("item_already_linked",
+                "This label is already linked to another item — undo that link first.",
+                "هذا الملصق مربوط بعنصر آخر — ألغِ هذا الربط أولًا."));
+        }
+        if ("needs_review".equals(disposition)) {
+            if (!manager) {
+                throw new ReturnSessionException(ReturnSessionException.Code.NEEDS_MANAGER,
+                    "This needs a manager or owner", "هذا الإجراء يحتاج إلى مدير أو مالك",
+                    HttpStatus.FORBIDDEN, Map.of());
+            }
+        } else if ("pending".equals(disposition)) {
+            if (!"open".equals(st.get(0))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Return session is not open");
+            }
+        } else {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Item already dispositioned as " + disposition);
+        }
+
+        UntrackedUnitLinks.Piece piece = unitLinks.piece(tenantId, pieceId);
+        if (piece == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        UntrackedUnitLinks.Refusal why = UntrackedUnitLinks.refusal(piece);
+        if (why != null) throw UntrackedUnitLinks.refused(why);
+
+        Map<String, Object> unit = unitLinks.candidates(tenantId, sessionId, piece).stream()
+            .filter(c -> shipmentId.toString().equals(c.get("shipmentId")) && orderItemId.toString().equals(c.get("orderItemId"))
+                && unitNo == ((Number) c.get("unitNo")).intValue())
+            .findFirst()
+            .orElseThrow(() -> UntrackedUnitLinks.refused(new UntrackedUnitLinks.Refusal("unit_not_linkable",
+                "This label can only be linked to an untracked item of the same product and size, on a parcel scanned " +
+                "in this session, that isn't linked or received yet.",
+                "يمكن ربط هذا الملصق فقط بعنصر غير متتبَّع من نفس المنتج والمقاس، في طرد ممسوح في هذه الجلسة، " +
+                "ولم يُربط أو يُستلم بعد.")));
+
+        boolean createdIntake = false;
+        String intake = (String) unit.get("intakeId");
+        if (intake == null) {
+            if (!"sellable".equals(condition) && !"damaged".equals(condition)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "condition must be sellable or damaged");
+            }
+            Map<String, Object> leg = requireScannedParcel(sessionId, shipmentId, tenantId);
+            untrackedUnits.mark(tenantId, sessionId, leg, orderItemId, unitNo, condition, actorUserId);
+            intake = jdbc.queryForObject(
+                "SELECT id::text FROM untracked_unit_intakes WHERE tenant_id = ? AND shipment_id = ? AND order_item_id = ? " +
+                "AND unit_no = ? AND undone_at IS NULL", String.class, tenantId, shipmentId, orderItemId, unitNo);
+            createdIntake = true;
+        } else {
+            String marked = (String) unit.get("condition");
+            if (condition != null && !condition.equals(marked)) {
+                throw UntrackedUnitLinks.refused(new UntrackedUnitLinks.Refusal("unit_marked_other_condition",
+                    "This item is already marked " + marked + " — undo that first to link it as " + condition + ".",
+                    "هذا العنصر مسجّل بالفعل بحالة مختلفة — ألغِ ذلك أولًا لربطه بالحالة الجديدة."));
+            }
+            condition = marked;
+        }
+
+        boolean mayBeLow = unitLinks.shopifyMayBeLow(tenantId, orderItemId);
+        int inserted = jdbc.update(
+            "INSERT INTO untracked_unit_piece_links (tenant_id, session_id, session_item_id, intake_id, piece_id, condition, " +
+            "    created_intake, shopify_may_be_low, actor_user_id) VALUES (?, ?, ?, ?::uuid, ?, ?, ?, ?, ?) " +
+            "ON CONFLICT DO NOTHING",
+            tenantId, sessionId, itemId, intake, pieceId, condition, createdIntake, mayBeLow, actorUserId);
+        if (inserted == 0) {
+            throw UntrackedUnitLinks.refused(new UntrackedUnitLinks.Refusal("already_linked",
+                "This item or this label was just linked — refresh to see it.",
+                "تم ربط هذا العنصر أو هذا الملصق للتو — حدّث الصفحة لرؤيته."));
+        }
+
+        UUID unitOrder = jdbc.queryForObject("SELECT order_id FROM order_items WHERE id = ? AND tenant_id = ?",
+            UUID.class, orderItemId, tenantId);
+        ledger.recordReturnUnitLink(pieceId, true, actorUserId, piece.locationId(), unitOrder, shipmentId,
+            linkMetadata(sessionId, intake, orderItemId, unitNo, condition));
+        if ("damaged".equals(condition)) {
+            // The one available → damaged path (Lookup's): its ledger transition + the FR-17 trigger-3 damage move.
+            pieceAdjust.adjustPiece(pieceId, "damaged", "other",
+                "Came back damaged — linked to a returned untracked item in Scan returns", actorUserId);
+        }
+        jdbc.update(
+            "UPDATE return_session_items SET disposition = 'linked', disposition_at = now(), disposition_by = ? " +
+            "WHERE id = ? AND tenant_id = ?", actorUserId, itemId, tenantId);
+        log.info("Return unit linked: piece={} session={} intake={} condition={}", pieceId, sessionId, intake, condition);
+        return linkResult(tenantId, sessionId, pieceId);
+    }
+
+    /**
+     * POST …/items/{pieceId}/link-unit/undo: while the session is open, a SELLABLE link (a damaged one moved the piece
+     * — Lookup's Back to good is the way back). The link is undone, the intake too when the link created it, the item
+     * is pending again (and the unit's Return To Receive is back), event 'return_unit_unlinked'.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> undoLinkUnit(UUID sessionId, String pieceId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT id, disposition FROM return_session_items WHERE session_id = ? AND piece_id = ? AND tenant_id = ? " +
+            "FOR UPDATE", sessionId, pieceId, tenantId);
+        if (items.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found in this session");
+        UUID itemId = (UUID) items.get(0).get("id");
+        Map<String, Object> link = "linked".equals(items.get(0).get("disposition")) ? liveLinkForItem(tenantId, itemId) : null;
+        if (link == null || !sessionId.equals(link.get("session_id"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a link made in this session can be undone.");
+        }
+        if (!"sellable".equals(link.get("condition"))) {
+            throw UntrackedUnitLinks.refused(new UntrackedUnitLinks.Refusal("damaged_link",
+                "A damaged link can't be undone here — the piece is damaged now. Use Back to good in Lookup if it was a mistake.",
+                "لا يمكن إلغاء ربط تالف هنا — القطعة تالفة الآن. استخدم «إرجاع إلى سليم» في البحث إذا كان خطأ."));
+        }
+        jdbc.update("UPDATE untracked_unit_piece_links SET undone_at = now(), undone_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND undone_at IS NULL", actorUserId, link.get("id"), tenantId);
+        UUID shipmentId = (UUID) link.get("shipment_id");
+        UUID orderItemId = (UUID) link.get("order_item_id");
+        int unitNo = ((Number) link.get("unit_no")).intValue();
+        if (Boolean.TRUE.equals(link.get("created_intake"))) {
+            untrackedUnits.undo(tenantId, sessionId, shipmentId, orderItemId, unitNo, actorUserId);
+        }
+        jdbc.update(
+            "UPDATE return_session_items SET disposition = 'pending', disposition_at = NULL, disposition_by = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND disposition = 'linked'", itemId, tenantId);
+        UUID unitOrder = jdbc.queryForObject("SELECT order_id FROM order_items WHERE id = ? AND tenant_id = ?",
+            UUID.class, orderItemId, tenantId);
+        UUID location = jdbc.queryForObject("SELECT current_location_id FROM pieces WHERE id = ? AND tenant_id = ?",
+            UUID.class, pieceId, tenantId);
+        ledger.recordReturnUnitLink(pieceId, false, actorUserId, location, unitOrder, shipmentId,
+            linkMetadata(sessionId, link.get("intake_id").toString(), orderItemId, unitNo, "sellable"));
+        return fetchItemByPiece(sessionId, pieceId, tenantId);
+    }
+
+    private Map<String, Object> liveLinkForItem(UUID tenantId, UUID itemId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT lk.id, lk.session_id, lk.intake_id, lk.condition, lk.created_intake, " +
+            "       u.shipment_id, u.order_item_id, u.unit_no " +
+            "FROM untracked_unit_piece_links lk JOIN untracked_unit_intakes u ON u.id = lk.intake_id AND u.tenant_id = lk.tenant_id " +
+            "WHERE lk.tenant_id = ? AND lk.session_item_id = ? AND lk.undone_at IS NULL",
+            tenantId, itemId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private Map<String, Object> linkResult(UUID tenantId, UUID sessionId, String pieceId) {
+        Map<String, Object> result = new LinkedHashMap<>(fetchItemByPiece(sessionId, pieceId, tenantId));
+        unitLinks.sessionLinks(tenantId, sessionId).stream()
+            .filter(l -> pieceId.equals(l.get("pieceId"))).findFirst()
+            .ifPresent(l -> result.put("unitLink", l));
+        return result;
+    }
+
+    private static String linkMetadata(UUID sessionId, String intakeId, UUID orderItemId, int unitNo, String condition) {
+        return "{\"session_id\":\"" + sessionId + "\",\"intake_id\":\"" + intakeId + "\",\"order_item_id\":\"" +
+               orderItemId + "\",\"unit_no\":" + unitNo + ",\"condition\":\"" + condition + "\"}";
+    }
+
     // ── Step 6a: untracked request items — "Arrived" in a return session ─────────
 
     /**
@@ -1065,12 +1302,22 @@ public class ReturnSessionService {
             "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'damaged') " +
             "        FROM return_session_items i WHERE i.session_id = rs.id) AS damaged_count, " +
             "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'mismatch') " +
-            "        FROM return_session_items i WHERE i.session_id = rs.id) AS mismatch_count " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS mismatch_count, " +
+            // V246: linked to an untracked unit / left for a manager at close.
+            "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'linked') " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS linked_count, " +
+            "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'needs_review') " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS needs_review_count " +
             "FROM return_sessions rs " +
             "WHERE rs.tenant_id = ? " +
             "ORDER BY rs.opened_at DESC, rs.id DESC " +
             "LIMIT ? OFFSET ?",
             tenantId, size, (long) page * size);
+        // V246: linked_count / needs_review_count present only on a session that has any (other rows unchanged).
+        for (Map<String, Object> row : items) {
+            if (((Number) row.get("linked_count")).longValue() == 0) row.remove("linked_count");
+            if (((Number) row.get("needs_review_count")).longValue() == 0) row.remove("needs_review_count");
+        }
         int total = jdbc.queryForObject(
             "SELECT COUNT(*) FROM return_sessions WHERE tenant_id = ?", Integer.class, tenantId);
 
@@ -1108,9 +1355,13 @@ public class ReturnSessionService {
             "ORDER BY i.scanned_at ASC",
             sessionId, tenantId);
         List<Map<String, Object>> expected = fetchExpectedPieces(sessionId, tenantId);
+        addLinkInfo(items, sessionId, tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
         result.put("items", items);
+        // V246: the session's live unit links (present only when there is one — the merged rows).
+        List<Map<String, Object>> sessionLinks = unitLinks.sessionLinks(tenantId, sessionId);
+        if (!sessionLinks.isEmpty()) result.put("unitLinks", sessionLinks);
         result.put("expectedPieces", expected);
         // Q2: how many of this session's pieces were scanned on a paired phone.
         result.put("phoneScanCount", items.stream().filter(i -> Boolean.TRUE.equals(i.get("via_phone"))).count());
@@ -1120,6 +1371,34 @@ public class ReturnSessionService {
             "rss.session_id = ? AND rss.tenant_id = ?", sessionId, tenantId));
         addParcelView(result, sessionId, tenantId, items, expected);
         return result;
+    }
+
+    /**
+     * V246 — on the item rows, only where it applies (every other row's keys are unchanged):
+     * {@code linkCandidates} — the units this label could be ({@link UntrackedUnitLinks#candidates}), on a 'pending' or
+     * 'needs_review' item when there is at least one; {@code reviewResolved} — on a 'needs_review' item, whether a
+     * manager already marked its alert "nothing to do".
+     */
+    private void addLinkInfo(List<Map<String, Object>> items, UUID sessionId, UUID tenantId) {
+        for (Map<String, Object> it : items) {
+            Object d = it.get("disposition");
+            if (!"pending".equals(d) && !"needs_review".equals(d)) continue;
+            if (!"available".equals(it.get("status"))) {
+                if ("needs_review".equals(d)) it.put("reviewResolved", reviewResolved(tenantId, it.get("id")));
+                continue;
+            }
+            List<Map<String, Object>> c = unitLinks.candidates(tenantId, sessionId,
+                unitLinks.piece(tenantId, (String) it.get("piece_id")));
+            if (!c.isEmpty()) it.put("linkCandidates", c);
+            if ("needs_review".equals(d)) it.put("reviewResolved", reviewResolved(tenantId, it.get("id")));
+        }
+    }
+
+    private boolean reviewResolved(UUID tenantId, Object itemId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = ? " +
+            "               AND er.exception_type = 'return_needs_review' AND er.subject_key = 'return_needs_review:item:' || ?::text)",
+            Boolean.class, tenantId, itemId.toString()));
     }
 
     /**
@@ -1525,6 +1804,15 @@ public class ReturnSessionService {
             "SELECT COUNT(*) FROM return_session_items " +
             "WHERE tenant_id = ? AND disposition = 'mismatch' AND disposition_at BETWEEN ? AND ?",
             Integer.class, tenantId, tsFrom, tsTo);
+        // V246: linked to an untracked unit (the piece was already in stock) / left for a manager at close.
+        Integer linkedCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items " +
+            "WHERE tenant_id = ? AND disposition = 'linked' AND disposition_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
+        Integer needsReviewCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items " +
+            "WHERE tenant_id = ? AND disposition = 'needs_review' AND disposition_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
 
         int neverReceivedWindowDays = jdbc.queryForObject(
             "SELECT never_received_window_days FROM tenants WHERE id = ?", Integer.class, tenantId);
@@ -1540,6 +1828,9 @@ public class ReturnSessionService {
         result.put("restockedCount", restockedCount);
         result.put("damagedCount", damagedCount);
         result.put("mismatchCount", mismatchCount);
+        // V246: present only when there are any (the existing analytics keys are unchanged).
+        if (linkedCount != null && linkedCount > 0)           result.put("linkedCount", linkedCount);
+        if (needsReviewCount != null && needsReviewCount > 0) result.put("needsReviewCount", needsReviewCount);
         result.put("expectedNotScannedCount", expectedNotScannedCount);
         result.put("unassignedPendingCount", unassignedPendingCount);
         result.put("unassignedPending", unassignedPending);
