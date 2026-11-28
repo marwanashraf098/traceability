@@ -84,12 +84,16 @@ public class CustomerAnalyticsService {
                           long orders, long refusedCodOrders, long deliveredOrders, BigDecimal refusedValue,
                           boolean blocked, String suggestion, String blocklistLink) {}
 
-    public record Watch(Instant asOf, int minRefused, List<Watched> customers) {}
+    /**
+     * refusedCodFromShopify — refused orders counted with the Shopify order total because Bosta's pre-RTO COD
+     * wasn't stored (COD-gateway orders only; see {@link #WATCH_COD_SOURCE_SQL}), across every customer considered.
+     */
+    public record Watch(Instant asOf, int minRefused, List<Watched> customers, long refusedCodFromShopify) {}
 
     /** One loaded order. */
     record CO(UUID orderId, Instant placedAt, BigDecimal booked, String outcome, String cityId, String city,
               BigDecimal returned, String key, Instant createdAt, String name, String province, Instant connectAt,
-              BigDecimal legCod, boolean blocked) {
+              BigDecimal legCod, boolean blocked, BigDecimal watchCod, String watchCodSource) {
 
         BigDecimal realized() {
             return "delivered".equals(outcome) ? booked.subtract(returned) : BigDecimal.ZERO;
@@ -132,9 +136,39 @@ public class CustomerAnalyticsService {
         }
     }
 
+    /**
+     * The COD a REFUSED order's customer was asked for (decision (d), 2026-11-27) — Bosta zeroes the COD when a
+     * shipment turns Return to Origin, so the deciding leg's current COD is 0 on every RTO. First match:
+     *   bosta_original — Bosta's originalCod on the leg's stored v0 raw (the COD before the RTO switch; prod
+     *                    BROEK 2026-11-27: on 919 of 955 refused legs, equal to Shopify's order total on 827);
+     *   bosta          — the leg's current COD while it is still > 0 (refused, not switched yet);
+     *   shopify        — no Bosta figure stored (a v2-list raw): Shopify's order total, ONLY for a COD-gateway
+     *                    order (payment_group 'COD');
+     *   none (NULL)    — not a COD refusal we can show.
+     * Raw is read only for refused orders. Aliases: om (order_money), lg (the deciding leg), o (the order).
+     */
+    static final String WATCH_COD_SOURCE_SQL = """
+        CASE WHEN om.outcome = 'refused' THEN
+            CASE WHEN analytics_num(lg.raw ->> 'originalCod') IS NOT NULL THEN 'bosta_original'
+                 WHEN COALESCE(lg.cod_amount, lg.raw_cod) > 0 THEN 'bosta'
+                 WHEN o.payment_group = 'COD'
+                      AND analytics_num(o.raw #>> '{total_price_set,shop_money,amount}') > 0 THEN 'shopify'
+            END
+        END""";
+
+    /** The value WATCH_COD_SOURCE_SQL names (same order of sources). */
+    static final String WATCH_COD_SQL = """
+        CASE WHEN om.outcome = 'refused' THEN
+            COALESCE(analytics_num(lg.raw ->> 'originalCod'),
+                     NULLIF(COALESCE(lg.cod_amount, lg.raw_cod), 0),
+                     CASE WHEN o.payment_group = 'COD'
+                          THEN analytics_num(o.raw #>> '{total_price_set,shop_money,amount}') END)
+        END""";
+
     /*
      * OrderFacts' CTEs, then per order: the customer fields, the store's connect instant, the deciding
-     * leg's COD and the blocklist flag. Parameters: the shared 13, then tenant id (first orders).
+     * leg's COD, a refused order's pre-RTO COD (WATCH_COD_SQL) and the blocklist flag. Parameters: the
+     * shared 13, then tenant id (first orders).
      */
     static final String CUSTOMERS_SQL = OrderFacts.SQL.substring(0, OrderFacts.SQL.indexOf("SELECT om.order_id, om.placed_at,"))
         + """
@@ -142,6 +176,10 @@ public class CustomerAnalyticsService {
                o.customer_key, o.customer_created_at, o.customer_name, o.ship_province AS province_code,
                COALESCE(f.floor_at, fs.first_at) AS connect_at,
                COALESCE(lg.cod_amount, lg.raw_cod) AS leg_cod,
+               """ + WATCH_COD_SQL + """
+                AS watch_cod,
+               """ + WATCH_COD_SOURCE_SQL + """
+                AS watch_cod_source,
                (o.customer_phone IS NOT NULL AND EXISTS (
                    SELECT 1 FROM blocklist b
                    WHERE b.tenant_id = o.tenant_id AND b.active
@@ -194,7 +232,7 @@ public class CustomerAnalyticsService {
             OrderFacts.nz(rs.getBigDecimal("returned_rev")), rs.getString("customer_key"),
             OrderFacts.instant(rs.getTimestamp("customer_created_at")), rs.getString("customer_name"),
             rs.getString("province_code"), OrderFacts.instant(rs.getTimestamp("connect_at")), rs.getBigDecimal("leg_cod"),
-            rs.getBoolean("blocked"));
+            rs.getBoolean("blocked"), rs.getBigDecimal("watch_cod"), rs.getString("watch_cod_source"));
     }
 
     static Map<String, Cust> customers(List<CO> orders) {
@@ -395,14 +433,17 @@ public class CustomerAnalyticsService {
         UUID tid = TenantContext.require();
         OrderFacts.Cities cities = OrderFacts.cities(jdbc);
         List<Watched> out = new ArrayList<>();
+        long fromShopify = 0;
         for (Cust c : customers(load(tid)).values()) {
             long refused = 0, delivered = 0;
             boolean blocked = false;
             BigDecimal refusedValue = BigDecimal.ZERO;
             for (CO o : c.orders()) {
-                if ("refused".equals(o.outcome()) && o.legCod() != null && o.legCod().signum() > 0) {
+                // A COD refusal: the COD Bosta asked for before the RTO switch (WATCH_COD_SQL) is > 0.
+                if ("refused".equals(o.outcome()) && o.watchCod() != null && o.watchCod().signum() > 0) {
                     refused++;
                     refusedValue = refusedValue.add(o.booked());
+                    if ("shopify".equals(o.watchCodSource())) fromShopify++;
                 }
                 if ("delivered".equals(o.outcome())) delivered++;
                 blocked |= o.blocked();
@@ -415,7 +456,8 @@ public class CustomerAnalyticsService {
         out.sort(Comparator.comparingLong(Watched::refusedCodOrders).reversed()
             .thenComparing(Comparator.comparingLong(Watched::orders).reversed())
             .thenComparing(Watched::customerRef));
-        return new Watch(clock.instant(), WATCH_MIN_REFUSED, List.copyOf(out.subList(0, Math.min(WATCH_LIMIT, out.size()))));
+        return new Watch(clock.instant(), WATCH_MIN_REFUSED, List.copyOf(out.subList(0, Math.min(WATCH_LIMIT, out.size()))),
+            fromShopify);
     }
 
     /**

@@ -147,7 +147,9 @@ export default function MoneyPage() {
               <Kpi testId="kpi-contribution" icon={Banknote} tone={costed ? 'good' : 'grey'} label={t('analytics.money.kpi.contribution')} loading={!profit.data && !profit.error}
                 value={costed ? fmt.moneyK(profit.data?.contributionProfit) : '—'}
                 foot={costed
-                  ? <>{t('analytics.money.kpi.contributionFoot', { pct: fmt.pct(profit.data?.contributionMargin, 0) })} <CostNote coverage={profit.data?.coverage} sync={sync.data} testId="contribution-cost-note" /></>
+                  ? <>{t('analytics.money.kpi.contributionFoot', { pct: fmt.pct(profit.data?.contributionMargin, 0) })}{' '}
+                    <span data-testid="contribution-shipping">{t('analytics.money.kpi.contributionShipping', { amount: fmt.money(profit.data?.shippingIncomeOnCosted) })}</span>
+                    {' '}<CostNote coverage={profit.data?.coverage} sync={sync.data} testId="contribution-cost-note" /></>
                   : <CostNote coverage={profit.data?.coverage} sync={sync.data} testId="contribution-cost-note" />} />
             </KpiRow>
 

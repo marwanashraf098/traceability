@@ -32,7 +32,10 @@ import java.util.UUID;
  * <ul>
  *   <li>placed on/after its store's analytics floor — {@code stores.orders_ingest_from}, else a
  *       configured {@link AnalyticsFloorOverrides} day, else no floor;</li>
- *   <li>not cancelled — {@code orders.status <> 'cancelled'} AND {@code raw->>'cancelled_at'} IS NULL;</li>
+ *   <li>not cancelled before Bosta picked it up — {@link CancelledOrders} (decision (c), 2026-11-27): a
+ *       cancelled order Bosta picked up first (refused → Return to Origin → cancelled in Shopify) counts,
+ *       booked at the units its fulfillments carried; its lines are flagged {@code revived} and every
+ *       "units sold" figure leaves them out;</li>
  *   <li>not an internal exchange order ({@code external_id LIKE 'internal:exchange:%'} — a replacement
  *       is not a sale);</li>
  * </ul>
@@ -128,9 +131,12 @@ public class SalesAnalyticsService {
      * price) is read from another table.
      *   bounds  — the period, [p_start, p_end).
      *   floors  — per store: orders_ingest_from, else the override day at 00:00 Cairo, else NULL.
-     *   all_lines — every cohort line, qty ≤ 0 and raw-cancelled included (only the unverified
-     *             no_restock count reads them); lines = all_lines with qty > 0 and not cancelled in
-     *             raw — the SOLD lines every figure is built on.
+     *   all_lines — every cohort line (CancelledOrders.countsSql: a cancelled order only when Bosta picked
+     *             it up first), qty ≤ 0 included (only the unverified no_restock count reads them);
+     *             revived = the line's order is cancelled (and so counted only through that rule) — its qty
+     *             is the units its fulfillments carried (CancelledOrders.shippedQtySql, Shopify zeroed
+     *             current_quantity). lines = all_lines with qty > 0 — the BOOKED lines every figure is built
+     *             on; a "units sold" figure also leaves out revived lines.
      *   lines   — sold lines, one pass. ALL TIME post-floor when allTime (the variants endpoint needs
      *             lastSoldAt), else only lines placed in the period. in_period flags the period's
      *             lines; unit_price / revenue are computed for those only (NULL otherwise).
@@ -173,7 +179,7 @@ public class SalesAnalyticsService {
                        (o.placed_at >= b.p_start AND o.placed_at < b.p_end) AS in_period,
                        (q.raw_price IS NULL) AS approximate,
                        rf.shopify_returned, rf.unverified_no_restock,
-                       NOT o.raw_cancelled AS not_cancelled,
+                       cx.cancelled AS revived,
                        up.unit_price,
                        q.qty * up.unit_price AS revenue,
                        dc.gross, dc.disc_code, dc.disc_auto
@@ -187,8 +193,11 @@ public class SalesAnalyticsService {
                            COALESCE((o.refund_lines -> oi.line_key ->> 1)::int, 0) AS shopify_returned,
                            COALESCE((o.refund_lines -> oi.line_key ->> 2)::int, 0) AS unverified_no_restock
                 ) rf
+                CROSS JOIN LATERAL (SELECT """ + CancelledOrders.cancelledSql("o") + """
+                    AS cancelled) cx
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(oi.current_qty, oi.quantity) + rf.added_back AS qty,
+                    SELECT CASE WHEN cx.cancelled THEN """ + CancelledOrders.shippedQtySql("o", "oi") + """
+                                ELSE COALESCE(oi.current_qty, oi.quantity) + rf.added_back END AS qty,
                            COALESCE(oi.original_qty, oi.quantity)                AS original_qty,
                            oi.unit_price                                         AS raw_price
                 ) q
@@ -217,12 +226,12 @@ public class SalesAnalyticsService {
                 WHERE oi.tenant_id = ?
                   AND o.tenant_id = ?
                   AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
-                  AND o.status <> 'cancelled'::order_status
+                  AND """ + CancelledOrders.countsSql("o") + """
                   AND o.external_id NOT LIKE 'internal:exchange:%%'
                   %s
             ),
             lines AS (
-                SELECT * FROM all_lines WHERE qty > 0 AND not_cancelled
+                SELECT * FROM all_lines WHERE qty > 0
             )
             """.formatted(allTime ? "" : "AND o.placed_at >= b.p_start AND o.placed_at < b.p_end");
     }
@@ -267,6 +276,18 @@ public class SalesAnalyticsService {
      * not_shipped, not a failure (approved 2026-10-08). Cancelled / terminated after pickup stays
      * other_terminal (failed).
      */
+    /**
+     * THE "units sold" rule (approved 2026-11-27): a booked line's units are SOLD unless its order was refused
+     * (outcome 'refused' — the customer turned it down, Return to Origin) or it is a counted cancelled order
+     * (CancelledOrders, {@code revived}). Refused units stay booked and show as refused, never as sold. Every
+     * "units sold" figure — Products &amp; SKUs (variants, products, daily units), stock sell-through, product
+     * extras — asks this one predicate. {@code revived} / {@code outcome} are the line's columns (line_facts, or
+     * lines joined to order_outcomes). Padded with spaces.
+     */
+    static String unitSoldSql(String revived, String outcome) {
+        return " (NOT " + revived + " AND " + outcome + " IS DISTINCT FROM 'refused') ";
+    }
+
     /**
      * Non-Bosta couriers G2 (V169 generic legs): SQL true when the order {@code orderIdExpr} has a live generic
      * (non-Bosta courier) forward leg — not terminated / cancelled. Such an order is never Bosta-decided: the
@@ -445,9 +466,12 @@ public class SalesAnalyticsService {
         ),
         line_facts AS (
             SELECT l.variant_id, l.order_id, l.qty, l.unit_price, oo.outcome,
-                   LEAST(l.qty, GREATEST(COALESCE(i.units, 0), l.shopify_returned)) AS returned,
+                   -- A counted cancelled order (CancelledOrders) is never realized: one Bosta delivered and
+                   -- Shopify then cancelled is a full refund, every unit returned.
+                   CASE WHEN l.revived AND oo.outcome = 'delivered' THEN l.qty
+                        ELSE LEAST(l.qty, GREATEST(COALESCE(i.units, 0), l.shopify_returned)) END AS returned,
                    l.placed_at, l.gross, l.disc_code, l.disc_auto, l.approximate,
-                   oo.city_id, oo.city, oo.shipment_id
+                   oo.city_id, oo.city, oo.shipment_id, l.revived
             FROM lines l
             JOIN order_outcomes oo ON oo.order_id = l.order_id
             LEFT JOIN identified i ON i.order_item_id = l.order_item_id
@@ -469,9 +493,8 @@ public class SalesAnalyticsService {
             JOIN floors f ON f.store_id = o.store_id
             WHERE oi.tenant_id = ? AND o.tenant_id = ?
               AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
-              AND o.status <> 'cancelled'::order_status
+              AND NOT """ + CancelledOrders.cancelledSql("o") + """
               AND o.external_id NOT LIKE 'internal:exchange:%'
-              AND NOT o.raw_cancelled
               AND COALESCE(oi.current_qty, oi.quantity) + COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) > 0
             GROUP BY oi.variant_id
         )
@@ -481,7 +504,10 @@ public class SalesAnalyticsService {
      * Slices 1 + 2 in ONE statement over the period's lines (slice 8 — it used to be two, the first
      * re-reading every line of all time): per variant plus the grand-total row (GROUPING SETS ()),
      * which carries the distinct order count across all variants.
-     *   sales    — sold units, gross revenue, approximate lines, orders (slice 1);
+     *   sales    — sold units, gross revenue, approximate lines, orders (slice 1), over the lines
+     *              {@link #unitSoldSql} calls sold: never a refused order's units, never a revived line
+     *              (CancelledOrders). Refused units still count in outcomes (refusedUnits), so outcome units sum
+     *              to sold units + refused units (+ a delivered-then-cancelled order's);
      *   outcomes — outcome units, returns, delivered / returned revenue (slice 2). Only a DELIVERED
      *              order's returns count as customer returns; returns on any other outcome (e.g. a
      *              Wijha order refunded in Shopify) are reported apart in returns_on_undelivered;
@@ -496,11 +522,15 @@ public class SalesAnalyticsService {
     private static final String VARIANTS_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
         , sales AS (
             SELECT GROUPING(variant_id) AS is_total, variant_id,
-                   COALESCE(SUM(qty), 0)               AS sold_units,
-                   COALESCE(SUM(revenue), 0)           AS gross_revenue,
-                   COUNT(*) FILTER (WHERE approximate) AS approximate_lines,
-                   COUNT(DISTINCT order_id)            AS orders
-            FROM lines
+                   COALESCE(SUM(qty) FILTER (WHERE """ + unitSoldSql("revived", "outcome") + """
+                   ), 0)                                                              AS sold_units,
+                   COALESCE(SUM(qty * unit_price) FILTER (WHERE """ + unitSoldSql("revived", "outcome") + """
+                   ), 0)                                                              AS gross_revenue,
+                   COUNT(*) FILTER (WHERE approximate AND """ + unitSoldSql("revived", "outcome") + """
+                   )                                                                  AS approximate_lines,
+                   COUNT(DISTINCT order_id) FILTER (WHERE """ + unitSoldSql("revived", "outcome") + """
+                   )                                                                  AS orders
+            FROM line_facts
             GROUP BY GROUPING SETS ((variant_id), ())
         ),
         outcomes AS (
@@ -518,7 +548,7 @@ public class SalesAnalyticsService {
                    COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'delivered')    AS delivered_orders,
                    COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'refused')      AS refused_orders,
                    COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'wijha')        AS wijha_orders,
-                   (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE not_cancelled)  AS unverified_no_restock
+                   (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE NOT revived)  AS unverified_no_restock
             FROM line_facts
             GROUP BY GROUPING SETS ((variant_id), ())
         ),
@@ -585,10 +615,13 @@ public class SalesAnalyticsService {
         String productOrder = sort == Sort.UNITS
             ? "pp.units DESC, pp.revenue DESC, p.title, p.id"
             : "pp.revenue DESC, pp.units DESC, p.title, p.id";
-        return soldLines(false) + """
+        return soldLines(false) + ORDER_OUTCOMES + """
             , per_variant AS (
-                SELECT variant_id, SUM(qty) AS units, SUM(revenue) AS revenue
-                FROM lines GROUP BY variant_id
+                SELECT l.variant_id, SUM(l.qty) AS units, SUM(l.revenue) AS revenue
+                FROM lines l
+                JOIN order_outcomes oo ON oo.order_id = l.order_id
+                WHERE """ + unitSoldSql("l.revived", "oo.outcome") + """
+                GROUP BY l.variant_id
             ),
             per_product AS (
                 SELECT v.product_id,
@@ -682,7 +715,7 @@ public class SalesAnalyticsService {
     @Transactional(readOnly = true)
     public ProductSalesResponse products(AnalyticsPeriod period, Sort sort, int limit) {
         UUID tid = TenantContext.require();
-        List<ProductSales> rows = jdbc.query(productsSql(sort), params(tid, period, 0, limit),
+        List<ProductSales> rows = jdbc.query(productsSql(sort), params(tid, period, 2, limit),
             (rs, i) -> new ProductSales(
                 rs.getObject("product_id", UUID.class),
                 rs.getString("title"),
@@ -709,11 +742,12 @@ public class SalesAnalyticsService {
      * order, quantity after the refund add-back > 0) per variant and Cairo placed day. soldLines' 7
      * parameters, then the variant ids (uuid[]).
      */
-    private static final String VARIANT_DAILY_SQL = soldLines(false) + """
-        SELECT variant_id, (placed_at AT TIME ZONE 'Africa/Cairo')::date AS day, SUM(qty) AS units
-        FROM lines
-        WHERE variant_id = ANY (?::uuid[])
-        GROUP BY variant_id, day
+    private static final String VARIANT_DAILY_SQL = soldLines(false) + ORDER_OUTCOMES + """
+        SELECT l.variant_id, (l.placed_at AT TIME ZONE 'Africa/Cairo')::date AS day, SUM(l.qty) AS units
+        FROM lines l
+        JOIN order_outcomes oo ON oo.order_id = l.order_id
+        WHERE l.variant_id = ANY (?::uuid[]) AND """ + unitSoldSql("l.revived", "oo.outcome") + """
+        GROUP BY l.variant_id, day
         """;
 
     /** Sold units per day for the given variants, in the order asked; unknown ids get zeros. */
@@ -726,6 +760,8 @@ public class SalesAnalyticsService {
         for (UUID id : ids) byVariant.putIfAbsent(id, new long[days.size()]);
         jdbc.query(VARIANT_DAILY_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
+            ps.setObject(i++, tid);                                    // outcomes 2
+            ps.setObject(i++, tid);
             ps.setArray(i, ps.getConnection().createArrayOf("uuid", byVariant.keySet().toArray()));
         }, rs -> {
             long[] series = byVariant.get(rs.getObject("variant_id", UUID.class));

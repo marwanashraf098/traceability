@@ -65,7 +65,7 @@ public class AnalyticsInventorySyncService {
         } finally {
             try {
                 Long costed = tx.execute(s -> jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM variants WHERE tenant_id = ? AND unit_cost IS NOT NULL", Long.class, tid));
+                    "SELECT COUNT(*) FROM variants WHERE tenant_id = ? AND unit_cost > 0", Long.class, tid));
                 out.costed = costed == null ? 0 : costed;
             } catch (RuntimeException ignored) {
                 // the count is for the log line only
@@ -241,7 +241,7 @@ public class AnalyticsInventorySyncService {
     public Status status() {
         UUID tid = TenantContext.require();
         Map<String, Object> v = jdbc.queryForMap(
-            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE unit_cost IS NOT NULL) AS costed, " +
+            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE unit_cost > 0) AS costed, " +
             "       COUNT(*) FILTER (WHERE stock_synced_at IS NOT NULL) AS stock_synced FROM variants WHERE tenant_id = ?", tid);
         List<Status> s = jdbc.query("SELECT * FROM analytics_inventory_sync WHERE tenant_id = ?", (rs, i) -> {
             Instant req = OrderFacts.instant(rs.getTimestamp("requested_at"));

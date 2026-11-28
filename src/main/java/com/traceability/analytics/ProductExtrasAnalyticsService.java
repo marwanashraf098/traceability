@@ -86,6 +86,8 @@ public class ProductExtrasAnalyticsService {
                    COALESCE(SUM((lf.qty - lf.returned) * lf.unit_price) FILTER (WHERE lf.outcome = 'delivered'), 0)
                                                                                         AS realized
             FROM line_facts lf
+            WHERE """ + SalesAnalyticsService.unitSoldSql("lf.revived", "lf.outcome") + """
+                -- units sold only; per_product's failed counts keep refused orders
             GROUP BY 1, 2
         ),
         per_product AS (

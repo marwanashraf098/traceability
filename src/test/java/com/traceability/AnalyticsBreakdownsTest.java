@@ -618,7 +618,7 @@ class AnalyticsBreakdownsTest {
         UUID shoe = t.variant(plain, "Black / 38", "{}");
         UUID nosize = t.variant(plain, "Black", "{}");
 
-        // ABC: realized m 800, xxl 150, shoe 50 → A, B, C; range refused only → C.
+        // ABC: realized m 800, xxl 150, shoe 50 → A, B, C; range refused only → not sold, not listed (unitSoldSql).
         long lm = SEQ.incrementAndGet();
         UUID om = t.order("{\"fulfillments\":[{\"created_at\":\"2026-09-10T12:00:00Z\",\"status\":\"success\"," +
             "\"line_items\":[{\"id\":" + lm + "}]}],\"refunds\":[{\"created_at\":\"2026-09-15T12:00:00Z\"," +
@@ -643,7 +643,7 @@ class AnalyticsBreakdownsTest {
         for (Map<String, Object> r : list(cur, "abc")) classes.put(UUID.fromString((String) r.get("variantId")), (String) r.get("abcClass"));
         assertThat(classes.get(m)).isEqualTo("A");
         assertThat(classes.get(xxl)).isEqualTo("B");
-        assertThat(classes.get(range)).isEqualTo("C");
+        assertThat(classes).doesNotContainKey(range);
         assertThat(list(cur, "abc").get(0).get("variantId")).isEqualTo(m.toString());
         assertThat(dec(list(cur, "abc").get(0), "share")).isEqualByComparingTo("0.8");   // 800 / 1000
         assertThat(classes.get(shoe)).isEqualTo("C");                                     // 95 % already before it
@@ -655,8 +655,8 @@ class AnalyticsBreakdownsTest {
         assertThat(n(mRow, "soldUnits")).isEqualTo(9);
         assertThat(n(mRow, "returnedUnits")).isEqualTo(1);
         assertThat(n(mRow, "exchangedUnits")).isEqualTo(1);
-        assertThat(n(curve, "unparseableUnits")).isEqualTo(1);
-        assertThat((List<Object>) curve.get("unparseableValues")).containsExactly("XL-XXL");
+        assertThat(n(curve, "unparseableUnits")).isZero();                     // XL-XXL's only unit was refused
+        assertThat((List<Object>) curve.get("unparseableValues")).isEmpty();
         assertThat(n(curve, "noSizeUnits")).isEqualTo(1);
     }
 

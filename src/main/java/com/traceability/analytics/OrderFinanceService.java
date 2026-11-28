@@ -32,7 +32,8 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *                     in the return_refunds ledger): net = collected − fees − refunded amount; with
  *                     no refund recorded, net null and refundAmountUnknown;
  *   paid            — delivered and (the COD leg has a cashout transaction or a zero cash cycle, or the order was
- *                     prepaid): net = deposited_amt (COD) or total − fees (prepaid);
+ *                     prepaid): net = deposited_amt (COD) or total − fees (prepaid); total = lines + shipping
+ *                     (slice 4), so both agree with the row's Total;
  *   overdue         — delivered and the s3 delivered-not-paid rule holds
  *                     (SettlementSql.deliveredNotPaid), or in transit with no status change for
  *                     7 days (SettlementSql.stuckWithBosta);
@@ -67,6 +68,12 @@ public class OrderFinanceService {
 
     public record DeliveryStatus(String key, String label) {}
 
+    /**
+     * total = lines (after discounts, the booked value) + shipping (slice 4, 2026-11-27): what the customer
+     * was charged. lines = the booked value alone; shipping = orders.shipping_charged (V246 — Shopify's
+     * current shipping price, after shipping discounts and refunds), null when Shopify's order carries none
+     * ("shipping unknown": total = lines then).
+     */
     public record OrderRow(UUID orderId, String name, Instant placedAt, String customer, Governorate governorate,
                            long items, BigDecimal total, String paymentGroup, DeliveryStatus deliveryStatus,
                            String financialStatus, BigDecimal bostaFees, boolean feesEstimated,
@@ -74,13 +81,15 @@ public class OrderFinanceService {
                            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
                            BigDecimal exchangeCod,
                            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                           BigDecimal exchangeFees) {
+                           BigDecimal exchangeFees,
+                           BigDecimal lines, BigDecimal shipping) {
         public OrderRow(UUID orderId, String name, Instant placedAt, String customer, Governorate governorate,
                         long items, BigDecimal total, String paymentGroup, DeliveryStatus deliveryStatus,
                         String financialStatus, BigDecimal bostaFees, boolean feesEstimated,
                         BigDecimal netToYou, boolean refundAmountUnknown, List<String> trackingNumbers) {
             this(orderId, name, placedAt, customer, governorate, items, total, paymentGroup, deliveryStatus,
-                financialStatus, bostaFees, feesEstimated, netToYou, refundAmountUnknown, trackingNumbers, null, null);
+                financialStatus, bostaFees, feesEstimated, netToYou, refundAmountUnknown, trackingNumbers, null, null,
+                total, null);
         }
     }
 
@@ -125,7 +134,7 @@ public class OrderFinanceService {
         + ", exchange_trips " + SettlementSql.EXCHANGE_TRIPS + """
         SELECT om.order_id, om.placed_at, om.booked, om.outcome, om.city_id, om.city, om.returned_rev,
                om.item_count, om.variant_ids,
-               o.number, o.customer_name, o.payment_group, o.ship_province AS province_code,
+               o.number, o.customer_name, o.payment_group, o.ship_province AS province_code, o.shipping_charged,
                lg.internal_state AS leg_state, lg.cod, lg.leg_cod, lg.leg_provider, lg.cashout_txn_id, lg.zero_cycle, lg.deposited_amt, lg.not_paid, lg.stuck,
                fe.fees, fe.fees_estimated, fe.tracking_numbers,
                rf.refunded, xc.exchange_cod, xc.exchange_fees
@@ -192,8 +201,8 @@ public class OrderFinanceService {
         """;
 
     /**
-     * The oldest of a variant's 10 newest orders (post-floor, not cancelled, not an internal exchange
-     * order) — the drawer's window start. Parameters: override domains, override days, tenant id ×2,
+     * The oldest of a variant's 10 newest orders (post-floor, counted by CancelledOrders, not an internal
+     * exchange order) — the drawer's window start. Parameters: override domains, override days, tenant id ×2,
      * variant id, now, limit.
      */
     private static final String VARIANT_WINDOW_SQL = """
@@ -204,7 +213,7 @@ public class OrderFinanceService {
             JOIN stores st ON st.id = o.store_id
             LEFT JOIN unnest(?::text[], ?::text[]) AS ov(shop_domain, floor_day) ON ov.shop_domain = lower(st.shop_domain)
             WHERE oi.tenant_id = ? AND o.tenant_id = ? AND oi.variant_id = ?
-              AND o.status <> 'cancelled'::order_status AND NOT o.raw_cancelled
+              AND """ + CancelledOrders.countsSql("o") + """
               AND o.external_id NOT LIKE 'internal:exchange:%'
               AND o.placed_at <= ?::timestamptz
               AND (COALESCE(st.orders_ingest_from, (ov.floor_day::date::timestamp AT TIME ZONE 'Africa/Cairo')) IS NULL
@@ -394,7 +403,11 @@ public class OrderFinanceService {
         String outcome = rs.getString("outcome");
         String payment = rs.getString("payment_group");
         boolean prepaid = prepaid("bosta".equals(rs.getString("leg_provider")), rs.getBigDecimal("leg_cod"), payment);
-        BigDecimal total = money(rs.getBigDecimal("booked"));
+        BigDecimal lines = money(rs.getBigDecimal("booked"));
+        BigDecimal shipping = moneyOrNull(rs.getBigDecimal("shipping_charged"));
+        // What the customer was charged: lines + shipping (slice 4). Prepaid "paid" / "refunded" use it as what
+        // was collected, so their net agrees with the row's own Total, as a COD row's deposit already does.
+        BigDecimal total = shipping == null ? lines : lines.add(shipping);
         BigDecimal fees = moneyOrNull(rs.getBigDecimal("fees"));
         BigDecimal refunded = moneyOrNull(rs.getBigDecimal("refunded"));
         boolean customerReturn = rs.getBigDecimal("returned_rev") != null && rs.getBigDecimal("returned_rev").signum() > 0;
@@ -431,7 +444,7 @@ public class OrderFinanceService {
             deliveryStatus(outcome, rs.getString("leg_state")), status, fees,
             rs.getBoolean("fees_estimated") && fees != null, net == null ? null : money(net), refundUnknown,
             List.copyOf(tracking), moneyOrNull(rs.getBigDecimal("exchange_cod")),
-            moneyOrNull(rs.getBigDecimal("exchange_fees")));
+            moneyOrNull(rs.getBigDecimal("exchange_fees")), lines, shipping);
         return new Row(out, variants);
     }
 

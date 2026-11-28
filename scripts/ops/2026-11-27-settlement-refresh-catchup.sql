@@ -17,7 +17,7 @@
 --
 -- Eligible = SettlementRefreshJob.ELIGIBLE (keep in step): Bosta leg with a tracking number Bosta
 -- still knows, terminal state, its order a merchant order (not portal pre-connect, not a shadow) that
--- isn't cancelled, placed on / after the analytics floor (stores.orders_ingest_from, else the
+-- isn't cancelled before Bosta's pickup (rule (c)), placed on / after the analytics floor (stores.orders_ingest_from, else the
 -- analytics.floor-overrides day — prod: mmi24e-fx.myshopify.com=2026-07-02), tenant with an active
 -- Bosta account; not a zero cash cycle.
 --
@@ -49,7 +49,16 @@ CROSS JOIN LATERAL (
 ) fl
 WHERE s.provider = 'bosta' AND s.tracking_number IS NOT NULL AND s.provider_not_found_at IS NULL
   AND s.internal_state IN ('delivered', 'returned', 'lost', 'terminated')
-  AND fo.status <> 'cancelled'::order_status
+  -- CancelledOrders.countsSql (rule (c)): not cancelled, or cancelled only after Bosta picked it up
+  AND (NOT (fo.status = 'cancelled'::order_status OR fo.raw_cancelled) OR COALESCE((
+        SELECT analytics_ts(fo.raw ->> 'cancelled_at') IS NULL OR analytics_ts(fo.raw ->> 'cancelled_at') >= MIN(pk.at)
+        FROM shipments cs
+        CROSS JOIN LATERAL (SELECT LEAST(cs.collected_from_business_at,
+            (SELECT MIN(ch.occurred_at) FROM shipment_status_history ch WHERE ch.shipment_id = cs.id
+             AND ch.internal_state IN ('with_courier', 'returning', 'returned', 'delivered', 'lost'))) AS at) pk
+        WHERE cs.order_id = fo.id AND cs.provider = 'bosta' AND cs.shipment_leg = 'forward'
+          AND COALESCE(cs.type_code, '10') NOT IN ('25', '30')
+        HAVING MIN(pk.at) IS NOT NULL), false))
   AND (fl.floor_at IS NULL OR fo.placed_at >= fl.floor_at)
   AND s.settlement_status = 'deposited'
   AND NOT (s.cash_cycle_id IS NOT NULL AND s.deposited_amt = 0 AND s.cashout_txn_id IS NULL)

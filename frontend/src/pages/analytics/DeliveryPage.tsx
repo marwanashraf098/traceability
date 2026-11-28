@@ -180,7 +180,7 @@ export default function DeliveryPage() {
 
             <AnalyticsCard span="s7" title={t('analytics.delivery.watch')} desc={t('analytics.delivery.watchDesc')} testId="card-watch">
               <QueryBlock q={watch} isEmpty={d => d.customers.length === 0} empty={t('analytics.delivery.watchEmpty')}>
-                {d => <WatchTable customers={d.customers} />}
+                {d => <WatchTable customers={d.customers} fromShopify={d.refusedCodFromShopify} />}
               </QueryBlock>
             </AnalyticsCard>
 

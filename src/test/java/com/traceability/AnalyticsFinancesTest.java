@@ -569,7 +569,7 @@ class AnalyticsFinancesTest {
         String csv = new String(bytes, StandardCharsets.UTF_8).substring(1);
         String[] lines = csv.split("\r\n");
         assertThat(lines[0]).isEqualTo("order,placed_at,customer,governorate,governorate_ar,items,total,payment," +
-            "delivery_status,financial_status,bosta_fees,fees_estimated,net_to_you,refund_amount_unknown");
+            "delivery_status,financial_status,bosta_fees,fees_estimated,net_to_you,refund_amount_unknown,lines,shipping");
         assertThat(lines).hasSize(5);                                                         // header + 4
         assertThat(lines[1]).startsWith(formula.number() + ",").contains(",\"'=HYPERLINK(\"\"x\"\") N.\",");
         assertThat(lines[2]).startsWith(arabic.number() + ",").contains(",منى ا.,").contains(",غير معروف,");

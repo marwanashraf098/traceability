@@ -2,13 +2,14 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { WatchedCustomer } from '../../analyticsApi'
 import { useFmt } from '../../analytics/format'
-import { Pill } from '../../components/analytics/ui'
+import { Note, Pill } from '../../components/analytics/ui'
 
 /** Customers who refused 2+ COD orders — the backend's suggestion and a link to the blocklist (Delivery, Customers). */
-export function WatchTable({ customers }: { customers: WatchedCustomer[] }) {
+export function WatchTable({ customers, fromShopify = 0 }: { customers: WatchedCustomer[]; fromShopify?: number }) {
   const { t, i18n } = useTranslation()
   const fmt = useFmt()
   return (
+    <>
     <div className="overflow-x-auto -mx-[18px] px-[18px]">
       <table className="w-full text-[13px] [&_td]:whitespace-nowrap" data-testid="watch-table">
         <thead>
@@ -44,5 +45,8 @@ export function WatchTable({ customers }: { customers: WatchedCustomer[] }) {
         </tbody>
       </table>
     </div>
+    {/* Bosta zeroes the COD on a Return to Origin: refusals use the COD before the switch, else (COD-gateway orders) Shopify's total. */}
+    {fromShopify > 0 && <span data-testid="watch-from-shopify"><Note>{t('analytics.delivery.watchFromShopify', { count: fromShopify, n: fmt.num(fromShopify) })}</Note></span>}
+    </>
   )
 }

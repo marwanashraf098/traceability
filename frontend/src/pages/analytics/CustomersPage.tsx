@@ -148,7 +148,7 @@ export default function CustomersPage() {
         <AnalyticsCard span="s12" title={t('analytics.delivery.watch')} desc={t('analytics.delivery.watchDesc')} testId="card-watch">
           {merchant.noBosta ? <CardEmpty>{t('analytics.customers.watchNeedsBosta')}</CardEmpty> : (
             <QueryBlock q={watch} isEmpty={d => d.customers.length === 0} empty={t('analytics.delivery.watchEmpty')}>
-              {d => <WatchTable customers={d.customers} />}
+              {d => <WatchTable customers={d.customers} fromShopify={d.refusedCodFromShopify} />}
             </QueryBlock>
           )}
         </AnalyticsCard>

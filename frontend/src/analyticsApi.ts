@@ -328,7 +328,8 @@ export interface WatchedCustomer {
   orders: number; refusedCodOrders: number; deliveredOrders: number; refusedValue: number; blocked: boolean
   suggestion: string | null; blocklistLink: string | null
 }
-export interface CustomerWatch { asOf: string; minRefused: number; customers: WatchedCustomer[] }
+/** refusedCodFromShopify — refused COD-gateway orders counted with Shopify's order total (Bosta's pre-RTO COD wasn't stored). */
+export interface CustomerWatch { asOf: string; minRefused: number; customers: WatchedCustomer[]; refusedCodFromShopify: number }
 
 export const getCustomerSummary = (p: ComparedQuery, signal?: AbortSignal) =>
   get<Compared<CustomerSummary>>('/customers/summary', cq(p), signal)
@@ -343,7 +344,9 @@ export interface Governorate { key: string; label: string; labelAr: string | nul
 export interface DeliveryStatus { key: string; label: string }
 export interface OrderRow {
   orderId: string; name: string; placedAt: string; customer: string | null; governorate: Governorate | null
-  items: number; total: number; paymentGroup: string | null; deliveryStatus: DeliveryStatus; financialStatus: string
+  /** total = lines + shipping (what the customer was charged); shipping null = Shopify's order carries none (unknown). */
+  items: number; total: number; lines: number; shipping: number | null
+  paymentGroup: string | null; deliveryStatus: DeliveryStatus; financialStatus: string
   bostaFees: number | null; feesEstimated: boolean; netToYou: number | null; refundAmountUnknown: boolean
   /** F4 — COD Bosta collected on this order's exchanges (price difference + fee). Never in total or net; absent when none. */
   exchangeCod?: number | null
@@ -405,10 +408,14 @@ export const getCashForecast = (signal?: AbortSignal) => get<CashForecast>('/cas
 export interface CostCoverage {
   variantsSold: number; variantsCosted: number; keptUnits: number; costedUnits: number
   realizedTotal: number; realizedCosted: number; costedRevenueShare: number | null
+  /** Sold SKUs / kept units with no known cost (none, or 0 in Shopify) — left out of margin and profit. */
+  costUnknownVariants: number; costUnknownUnits: number
 }
 export interface ProfitSummary {
   range: Range; coverage: CostCoverage; cogs: number | null; grossProfit: number | null; grossMargin: number | null
   feesTotal: number; feesOnCosted: number | null; contributionProfit: number | null; contributionMargin: number | null
+  /** Shipping customers paid on delivered orders; the costed part is in contributionProfit. */
+  shippingIncome: number; shippingIncomeOnCosted: number | null
 }
 export interface TypeMargin {
   productType: string; keptUnits: number; costedUnits: number; realized: number; realizedCosted: number
@@ -419,6 +426,7 @@ export interface SkuProfit {
   variantId: string; productTitle: string; variantTitle: string; sku: string | null; productType: string | null
   costed: boolean; unitCost: number | null; keptUnits: number; realized: number; cogs: number | null
   shippingFees: number; otherFees: number; netBeforeCost: number; trueNet: number | null; trueNetMargin: number | null
+  shippingIncome: number
 }
 export type SkuProfitSort = 'trueNet' | 'realized' | 'margin'
 export interface ProfitSkus { range: Range; coverage: CostCoverage; sort: string; total: number; skus: SkuProfit[] }

@@ -4862,7 +4862,9 @@
         "realizedFoot": "delivered and kept",
         "share": "Realized ÷ booked",
         "shareFoot": "share of booked revenue you keep",
-        "margin": "Gross margin"
+        "margin": "Gross margin",
+        "shippingIncome": "Shipping income",
+        "shippingIncomeFoot": "Shipping customers paid on delivered orders · counted in profit, not revenue"
       },
       "waterfall": "From gross sales to money you keep",
       "waterfallDesc": "Hover a bar for details.",
@@ -4994,13 +4996,17 @@
       "speedTip": "{{orders}} orders · success {{success}}",
       "speedNote": "Orders handed over the same day deliver at {{fast}} vs {{slow}} for 3+ days.",
       "refused_one": "{{count}} refused",
-      "refused_other": "{{count}} refused"
+      "refused_other": "{{count}} refused",
+      "watchFromShopify_one": "{{n}} refused order uses its Shopify total (cash-on-delivery order; Bosta’s amount from before the return wasn’t stored).",
+      "watchFromShopify_other": "{{n}} refused orders use their Shopify total (cash-on-delivery orders; Bosta’s amount from before the return wasn’t stored)."
     },
     "cost": {
       "coverage": "Costed: {{costed}} of {{total}} sold SKUs · {{share}} of realized revenue",
       "missing": "Add cost per item in Shopify to see margins.",
       "accessDenied": "Shopify didn't let Traced read cost per item (access denied). Reconnect the store with inventory access to see margins.",
-      "readError": "Traced couldn't read costs from Shopify on its last try; margins appear after the next successful sync."
+      "readError": "Traced couldn't read costs from Shopify on its last try; margins appear after the next successful sync.",
+      "unknown_one": "cost unknown for {{skus}} SKU ({{units}} units) — left out of margin",
+      "unknown_other": "cost unknown for {{skus}} SKUs ({{units}} units) — left out of margin"
     },
     "labels": {
       "channel": {
@@ -5182,6 +5188,7 @@
         "perFailed": "Cost per unsuccessful delivery",
         "contribution": "Contribution profit",
         "contributionFoot": "{{pct}} after cost of goods and Bosta.",
+        "contributionShipping": "Includes {{amount}} shipping customers paid.",
         "perSuccessFoot_one": "shipping fee per delivered order · {{delivered}} delivered",
         "perSuccessFoot_other": "shipping fee per delivered order · {{delivered}} delivered",
         "perFailedFoot_one": "{{failed}} failed · {{total}} total",
@@ -5297,6 +5304,8 @@
       "refundUnknown": "refund amount unknown",
       "exchangeCod": "+ {{amount}} collected on an exchange",
       "exchangeFees": "+ {{amount}} exchange trip fee",
+      "inclShipping": "incl. {{amount}} shipping",
+      "shippingUnknown": "shipping unknown",
       "pageOf": "Page {{page}} of {{pages}} · {{total}} orders",
       "prev": "Previous",
       "next": "Next",
