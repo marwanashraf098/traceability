@@ -72,6 +72,15 @@ public final class ShopifyReturnSyncRules {
      */
     public static String exchangeNote(String reference, String replacementLabel, java.math.BigDecimal collect,
                                       java.math.BigDecimal owed, boolean ownCourier) {
+        return exchangeNote(reference, replacementLabel, collect, owed, ownCourier, false);
+    }
+
+    /**
+     * As above; V248: a defect replacement (the same item again) says "replacement (same item): {label}" in place of
+     * "exchanged for {label}" — its line is the very variant it is replaced with. Same limits and cutting order.
+     */
+    public static String exchangeNote(String reference, String replacementLabel, java.math.BigDecimal collect,
+                                      java.math.BigDecimal owed, boolean ownCourier, boolean replacement) {
         String marker = marker(reference);
         String sep = " · ";
         String cod = collect != null && collect.signum() > 0
@@ -79,8 +88,10 @@ public final class ShopifyReturnSyncRules {
             : owed != null && owed.signum() > 0
                 ? "refund EGP " + owed.stripTrailingZeros().toPlainString() + " to customer"
                 : null;
-        String product = "exchanged for " + (replacementLabel == null || replacementLabel.isBlank()
-            ? "another item" : replacementLabel.strip());
+        String product = replacement
+            ? "replacement (same item)" + (replacementLabel == null || replacementLabel.isBlank() ? "" : ": " + replacementLabel.strip())
+            : "exchanged for " + (replacementLabel == null || replacementLabel.isBlank()
+                ? "another item" : replacementLabel.strip());
         String tail = cod == null ? "" : sep + cod;
         String full = marker + sep + product + tail + sep + EXCHANGE_WARNING;
         if (cps(full) <= NOTE_LIMIT) return full;

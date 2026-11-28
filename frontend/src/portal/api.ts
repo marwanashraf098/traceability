@@ -16,6 +16,8 @@ export interface PortalConfig {
   pickupBooking: boolean
   /** Step 5b — present (true) only when the store offers size/colour exchanges. */
   exchangesEnabled?: boolean
+  /** V248 — the reasons that allow "Replace with the same item" (present only with exchanges). */
+  replacementReasons?: string[]
   /** P1 — the store's portal font (both languages); absent from older backends → the default. */
   font?: string
   /** P2 — the refund methods the store offers; present only when it asks (never empty). */
@@ -57,6 +59,8 @@ export interface LookupLine {
   optionAxes?: OptionAxis[]
   currentOptions?: string[]
   exchangeOptions?: ExchangeOption[]
+  /** V248 — the same variant again (a defect replacement): present for an active product when exchanges are on. */
+  sameItem?: { inStock: boolean }
 }
 
 export interface PickupDistrict {
@@ -179,6 +183,8 @@ export interface FeeQuote {
   paidPrice?: string | null
   replacementPrice?: string | null
   priceDifference?: string | null
+  /** Q5 — present (true) only when the price paid isn't known: no difference is charged or paid back. */
+  priceDifferenceUnknown?: boolean
   /** What the store owes the customer (the replacement costs less than they paid, after the fee). */
   customerOwed?: string | null
   /** Why this exchange can't be sent as chosen. */

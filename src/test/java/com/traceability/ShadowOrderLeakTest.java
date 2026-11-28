@@ -452,6 +452,7 @@ class ShadowOrderLeakTest {
         reg("PUT /api/v1/tenant/portal-settings/customer-fees/rules/{kind}", skip(R_CONFIG));
         reg("PUT /api/v1/tenant/portal-settings/customer-fees/merchant-fault-reasons", skip(R_CONFIG));
         reg("PUT /api/v1/tenant/portal-settings/customer-fees/exchange-pricing", skip(R_CONFIG));
+        reg("PUT /api/v1/tenant/portal-settings/customer-fees/replacement-fees", skip(R_CONFIG));
         reg("POST /api/v1/tenant/portal-settings/customer-fees/area-overrides", skip(R_CONFIG));
         reg("PUT /api/v1/tenant/portal-settings/customer-fees/area-overrides/{id}", skip(R_CONFIG));
         reg("DELETE /api/v1/tenant/portal-settings/customer-fees/area-overrides/{id}", skip(R_CONFIG));

@@ -651,6 +651,8 @@ public class ReturnPickupBookingService {
         String product; String originalVariant; String replacementVariant; UUID replacementVariantId;
         /** F3: the replacement's OWN product title (a different-product exchange goes out as that product). */
         String replacementProduct;
+        /** V248: a defect replacement (the same item again) — the courier's two descriptions say which is which. */
+        boolean replacement;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
         JsonNode drop; JsonNode receiver; String customerName; String customerPhone;
@@ -771,6 +773,7 @@ public class ReturnPickupBookingService {
                 c.replacementVariantId = item.replacementVariantId();
                 c.replacementVariant = item.replacementVariant();
                 c.replacementProduct = item.replacementProduct();
+                c.replacement = item.replacement();
             }
             if (c.replacementVariantId != null) {
                 com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
@@ -880,13 +883,31 @@ public class ReturnPickupBookingService {
      * F3 fix: callers pass the REPLACEMENT's product title (a same-product exchange: the same title as before).
      */
     public static String exchangeOutboundDescription(String reference, String product, String replacementVariant) {
-        return truncate(reference + ": " + titled(product, replacementVariant));
+        return exchangeOutboundDescription(reference, product, replacementVariant, false);
+    }
+
+    /**
+     * V248: a defect replacement sends the same product / variant both ways, so the courier is told which is which —
+     * "RR-XXXXXX: Replacement – new: {product} / {variant}" goes out.
+     */
+    public static String exchangeOutboundDescription(String reference, String product, String replacementVariant,
+                                                     boolean replacement) {
+        return truncate(reference + ": " + (replacement ? REPLACEMENT_NEW : "") + titled(product, replacementVariant));
     }
 
     /** "{product} / {original variant}" — what comes back (returnSpecs). Shared with ExchangeService. */
     public static String exchangeReturnDescription(String product, String originalVariant) {
-        return truncate(titled(product, originalVariant));
+        return exchangeReturnDescription(product, originalVariant, false);
     }
+
+    /** V248: a defect replacement's returning item — "Defective – return: {product} / {variant}". */
+    public static String exchangeReturnDescription(String product, String originalVariant, boolean replacement) {
+        return truncate((replacement ? DEFECTIVE_RETURN : "") + titled(product, originalVariant));
+    }
+
+    /** V248 — the courier's words on a defect replacement's two descriptions. */
+    static final String REPLACEMENT_NEW = "Replacement \u2013 new: ";
+    static final String DEFECTIVE_RETURN = "Defective \u2013 return: ";
 
     private static String titled(String product, String variant) {
         return (product == null ? "" : product) + (variant != null && !variant.isBlank() ? " / " + variant : "");
@@ -898,24 +919,33 @@ public class ReturnPickupBookingService {
 
     /** The one exchanged item of an exchange request: what comes back and what goes out (F3: the replacement's OWN product). */
     public record ExchangeItem(String product, String originalVariant, UUID replacementVariantId, String replacementVariant,
-                        String replacementProduct) {
+                        String replacementProduct, boolean replacement) {
+        public ExchangeItem(String product, String originalVariant, UUID replacementVariantId, String replacementVariant,
+                            String replacementProduct) {
+            this(product, originalVariant, replacementVariantId, replacementVariant, replacementProduct, false);
+        }
+
         /** The type 30 specs description — what goes out. */
         public String outbound(String reference) {
-            return exchangeOutboundDescription(reference, replacementProduct != null ? replacementProduct : product, replacementVariant);
+            return exchangeOutboundDescription(reference, replacementProduct != null ? replacementProduct : product,
+                replacementVariant, replacement);
         }
     }
 
     public static ExchangeItem exchangeItem(JdbcTemplate jdbc, UUID requestId, UUID tenantId) {
         return jdbc.query(
             "SELECT pr.title AS product, v.title AS variant, rv.id AS replacement_id, rv.title AS replacement, " +
-            "       rpr.title AS replacement_product " +
+            "       rpr.title AS replacement_product, " +
+            "       (SELECT rr.exchange_kind = 'replacement' FROM return_requests rr " +
+            "         WHERE rr.id = i.request_id AND rr.tenant_id = i.tenant_id) AS is_replacement " +
             "FROM return_request_items i JOIN variants v ON v.id = i.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
             "LEFT JOIN products rpr ON rpr.id = rv.product_id AND rpr.tenant_id = rv.tenant_id " +
             "WHERE i.request_id = ? AND i.tenant_id = ? AND i.active ORDER BY i.created_at, i.id LIMIT 1",
             (rs, n) -> new ExchangeItem(rs.getString("product"), rs.getString("variant"),
-                rs.getObject("replacement_id", UUID.class), rs.getString("replacement"), rs.getString("replacement_product")),
+                rs.getObject("replacement_id", UUID.class), rs.getString("replacement"), rs.getString("replacement_product"),
+                rs.getBoolean("is_replacement")),
             requestId, tenantId).stream().findFirst().orElse(null);
     }
 
@@ -927,8 +957,8 @@ public class ReturnPickupBookingService {
             opt(c.drop, "floor"), opt(c.drop, "apartment"), c.cityName, c.districtId,
             name[0], name[1], receiverPhone(c),
             exchangeOutboundDescription(c.reference, c.replacementProduct != null ? c.replacementProduct : c.product,
-                c.replacementVariant),
-            exchangeReturnDescription(c.product, c.originalVariant),
+                c.replacementVariant, c.replacement),
+            exchangeReturnDescription(c.product, c.originalVariant, c.replacement),
             "Traced exchange request " + c.reference, cod);
     }
 

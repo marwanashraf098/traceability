@@ -117,7 +117,20 @@ public class StockAnalyticsService {
                                long soldUnits30, long deliveredUnits30, BigDecimal returnsRate,
                                long returnedUnits90, long exchangedUnits90, String topReturnReason,
                                boolean runningLow, boolean deadStock, BigDecimal stockValue, boolean valueAtCost,
-                               Integer shopifyAvailable, long stockUsed, String stockSource) {}
+                               Integer shopifyAvailable, long stockUsed, String stockSource,
+                               @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT) long replacedUnits90) {
+        public VariantStock(UUID variantId, String productTitle, String variantTitle, String sku,
+                            long onHand, long comingBack, BigDecimal velocityPerDay, BigDecimal daysOfCover,
+                            BigDecimal sellThrough, BigDecimal avgPieceAgeDays, Instant lastSoldAt,
+                            long soldUnits30, long deliveredUnits30, BigDecimal returnsRate,
+                            long returnedUnits90, long exchangedUnits90, String topReturnReason,
+                            boolean runningLow, boolean deadStock, BigDecimal stockValue, boolean valueAtCost,
+                            Integer shopifyAvailable, long stockUsed, String stockSource) {
+            this(variantId, productTitle, variantTitle, sku, onHand, comingBack, velocityPerDay, daysOfCover, sellThrough,
+                avgPieceAgeDays, lastSoldAt, soldUnits30, deliveredUnits30, returnsRate, returnedUnits90, exchangedUnits90,
+                topReturnReason, runningLow, deadStock, stockValue, valueAtCost, shopifyAvailable, stockUsed, stockSource, 0);
+        }
+    }
 
     public record Variants(boolean hasPieces, Instant asOf, String trustLevel, String stockSource, String sort,
                            String filter, long total, List<VariantStock> variants) {}
@@ -426,15 +439,16 @@ public class StockAnalyticsService {
             BigDecimal age = r[8] == null ? null : ((BigDecimal) r[8]).setScale(1, RoundingMode.HALF_UP);
             ProductExtrasAnalyticsService.VariantRow ret = returns.get(id);
             long returned = ret == null ? 0 : ret.returned(), exchanged = ret == null ? 0 : ret.exchanged();
+            long replaced = ret == null ? 0 : ret.replaced();   // V248: defect replacements, counted apart from swaps
             long delivered90 = ret == null ? 0 : ret.deliveredUnits();
             boolean runningLow = delivered > 0 && cover.compareTo(RUNNING_LOW_DAYS) <= 0;
             boolean dead = stock > 0 && (lastSold == null || lastSold.isBefore(deadBefore));
             boolean atCost = UnitCost.known(cost);
             BigDecimal value = money(BigDecimal.valueOf(stock).multiply(atCost ? cost : price == null ? BigDecimal.ZERO : price));
             out.add(new VariantStock(id, (String) r[1], (String) r[2], (String) r[3], onHand, comingBack, velocity,
-                cover, sellThrough, age, lastSold, sold, delivered, AnalyticsSql.rate(returned + exchanged, delivered90),
+                cover, sellThrough, age, lastSold, sold, delivered, AnalyticsSql.rate(returned + exchanged + replaced, delivered90),
                 returned, exchanged, reasons.get(id), runningLow, dead, value, atCost, shopify, stock,
-                fromShopify ? "shopify" : "pieces"));
+                fromShopify ? "shopify" : "pieces", replaced));
         }
         return out;
     }

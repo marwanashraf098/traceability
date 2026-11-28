@@ -8,6 +8,7 @@
     "pickupBooking" : true,
     "policyText" : null,
     "reasonCodes" : [ "wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other" ],
+    "replacementReasons" : [ "damaged", "wrong_item" ],
     "requirePhotos" : false,
     "returnWindowDays" : 30,
     "storeName" : "<tenant>"
@@ -35,6 +36,9 @@
         } ],
         "productTitle" : "Linen Shirt",
         "returnableQuantity" : 2,
+        "sameItem" : {
+          "inStock" : false
+        },
         "variantId" : "<v1>",
         "variantTitle" : "Sand / M"
       } ],

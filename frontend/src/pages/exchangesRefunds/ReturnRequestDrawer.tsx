@@ -293,7 +293,7 @@ function DrawerContent({
         <>
           <span className="text-body-lg font-semibold font-mono text-primary"><bdi>{detail.reference}</bdi></span>
           {detail.type === 'exchange' && (
-            <span data-testid="exchange-pill"><ExchangePill /></span>
+            <span data-testid="exchange-pill"><ExchangePill replacement={detail.exchangeKind === 'replacement'} /></span>
           )}
           <Badge tone={displayStatusTone(shownStatus(detail))} label={t(statusLabelKey(shownStatus(detail), detail.type))} />
         </>
@@ -739,12 +739,12 @@ function DrawerContent({
   )
 }
 
-/** Step 5b — the "Exchange" type pill (drawer header and Requests list). */
-export function ExchangePill() {
+/** Step 5b — the "Exchange" type pill (drawer header and Requests list). V248: "Replacement (same item)". */
+export function ExchangePill({ replacement = false }: { replacement?: boolean } = {}) {
   const { t } = useTranslation()
   return (
-    <span className="badge border bg-[#EFEAFD] text-[#5B3FC4] border-[#D9D0F7]">
-      {t('exchangesRefunds.requests.exchange.pill')}
+    <span className="badge border bg-[#EFEAFD] text-[#5B3FC4] border-[#D9D0F7]" data-replacement={replacement || undefined}>
+      {t(replacement ? 'exchangesRefunds.requests.exchange.pillReplacement' : 'exchangesRefunds.requests.exchange.pill')}
     </span>
   )
 }

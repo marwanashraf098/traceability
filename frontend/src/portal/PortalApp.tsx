@@ -134,6 +134,15 @@ export function exchangeable(line: LookupLine): boolean {
   return !line.nonReturnable && line.returnableQuantity > 0 && (line.exchangeOptions?.length ?? 0) > 0
 }
 
+/**
+ * V248 — a line that can only be replaced with the same item (no other size or colour, e.g. a one-size product): it
+ * can be chosen in exchange mode, but only for a defect reason.
+ */
+export function replaceOnly(line: LookupLine, replacementReasons: string[]): boolean {
+  return !exchangeable(line) && replacementReasons.length > 0 && !line.nonReturnable && line.returnableQuantity > 0
+    && line.sameItem != null
+}
+
 /** "mona@example.com" → "m•••@example.com". */
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf('@')
@@ -197,6 +206,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [exchangeReason, setExchangeReason] = useState('')
   const [exchangeValues, setExchangeValues] = useState<string[]>([])
   const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
+  // V248 — "Replace with the same item" chosen (only counts for a defect reason with the item in stock).
+  const [sameItemChosen, setSameItemChosen] = useState(false)
   // F3 — a replacement from ANOTHER product (the catalogue), when the store allows it; null = none chosen.
   const [otherTarget, setOtherTarget] = useState<OtherTarget | null>(null)
   const [fallbackOk, setFallbackOk] = useState(true)
@@ -307,6 +318,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       setExchangeLineId(null)
       setExchangeReason('')
       setExchangeTargetId(null)
+      setSameItemChosen(false)
       setOtherTarget(null)
       setFallbackOk(true)
       // 2026-11-08: a guessed area (original delivery without a district) is pre-selected; the customer confirms it.
@@ -364,6 +376,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const exchangeMode = exchangesOn && mode === 'exchange'
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
+  // V248 — the same item again: offered only after a defect reason (the backend's ReplacementRule decides too).
+  const replacementReasons = config?.replacementReasons ?? []
+  const sameItemOffer = exchangeMode && replacementReasons.includes(exchangeReason) ? exchangeLine?.sameItem ?? null : null
+  const replacementChosen = sameItemChosen && !!sameItemOffer?.inStock && !!exchangeLine
 
   // P2: the refund-method step — asked when the store offers methods AND owes the customer: a refund, or an
   // exchange that leaves the customer owed money (never for the refund fallback alone, 2026-11-07). Then it's
@@ -371,7 +387,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const offeredRefundMethods = (config?.refundMethods ?? []).filter(isRefundMethod)
   // F2 / F3 — the latest quote (declared here: an exchange that leaves the customer owed money asks how to pay them).
   const [feeQuote, setFeeQuote] = useState<{ key: string; quote: FeeQuote | null } | null>(null)
-  const replacementId = exchangeTarget?.variantId ?? otherTarget?.variantId ?? null
+  const replacementId = replacementChosen ? exchangeLine!.variantId : exchangeTarget?.variantId ?? otherTarget?.variantId ?? null
   const owedNow = exchangeMode && Number(feeQuote?.quote?.customerOwed ?? 0) > 0
   const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || owedNow)
   const chosenRefund = refundMethod && offeredRefundMethods.includes(refundMethod) ? refundMethod : null
@@ -465,6 +481,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setExchangeLineId(lineKey(line))
     setExchangeValues(initialValues(line))
     setExchangeTargetId(null)
+    setSameItemChosen(false)
     setOtherTarget(null)
   }
 
@@ -475,6 +492,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setExchangeValues(next)
     const option = findOption(exchangeLine, next)
     setExchangeTargetId(option && option.inStock ? option.variantId : null)
+    setSameItemChosen(false)
     setOtherTarget(null)
   }
 
@@ -698,7 +716,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         <fieldset className="pp-fieldset">
           <legend className="pp-label pp-legend">{t('x1.whichItem')}</legend>
           {order.lines.map(line => {
-            const can = exchangeable(line)
+            const only = replaceOnly(line, replacementReasons)
+            const can = exchangeable(line) || only
             const selected = exchangeLineId === lineKey(line)
             if (!can) {
               return (
@@ -723,6 +742,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                   <span className="pp-item__text">
                     <span className="pp-item__title"><bdi>{line.productTitle}</bdi></span>
                     <span className="pp-item__sub"><bdi>{optionLabel(line.currentOptions, line.variantTitle)}</bdi></span>
+                    {only && <span className="pp-item__sub" data-testid="replace-only-note">{t('x1.replaceOnlyReasons')}</span>}
                   </span>
                 </label>
                 {selected && (
@@ -733,7 +753,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                       value={exchangeReason} onChange={e => setExchangeReason(e.target.value)}
                     >
                       <option value="" disabled>{t('p2.reasonPlaceholder')}</option>
-                      {config.reasonCodes.map(code => (
+                      {config.reasonCodes.filter(code => !only || replacementReasons.includes(code)).map(code => (
                         <option key={code} value={code}>{t(`reasons.${code}`, { defaultValue: code })}</option>
                       ))}
                     </select>
@@ -766,7 +786,9 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       >
         <div className="pp-stephead">
           <div className="pp-eyebrow">{stepLabel(2)}</div>
-          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('x2.title')}</h1>
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>
+            {t(exchangeable(exchangeLine) ? 'x2.title' : 'x2.replaceTitle')}
+          </h1>
         </div>
         <section className="pp-card" data-testid="exchange-have">
           <div className="pp-item__head">
@@ -779,8 +801,15 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             </div>
           </div>
         </section>
-        <VariantPicker line={exchangeLine} values={exchangeValues} targetId={exchangeTargetId}
-          onPickValue={pickValue} onPickOption={o => { setExchangeTargetId(o.variantId); setOtherTarget(null) }} />
+        {sameItemOffer && (
+          <SameItemChoice line={exchangeLine} inStock={sameItemOffer.inStock} chosen={replacementChosen}
+            onChoose={() => { setSameItemChosen(true); setExchangeTargetId(null); setOtherTarget(null) }} />
+        )}
+        {sameItemOffer && exchangeable(exchangeLine) && <h2 className="pp-label pp-legend" data-testid="or-another">{t('x2.orAnother')}</h2>}
+        {exchangeable(exchangeLine) && (
+          <VariantPicker line={exchangeLine} values={exchangeValues} targetId={exchangeTargetId}
+            onPickValue={pickValue} onPickOption={o => { setExchangeTargetId(o.variantId); setSameItemChosen(false); setOtherTarget(null) }} />
+        )}
         {exchangeTarget && (
           <section className="pp-card" data-testid="exchange-summary">
             <div className="pp-item__title pp-item__title--sm">
@@ -799,7 +828,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         )}
         {order.exchangePricing?.anyProduct && slug && (
           <OtherProducts slug={slug} token={order.token} line={exchangeLine} lang={lang} selectedId={otherTarget?.variantId ?? null}
-            onPick={target => { setOtherTarget(target); setExchangeTargetId(null) }} />
+            onPick={target => { setOtherTarget(target); setExchangeTargetId(null); setSameItemChosen(false) }} />
         )}
         {otherTarget && (
           <section className="pp-card" data-testid="exchange-summary-other">
@@ -1027,7 +1056,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         {exchangeMode && exchangeLine && replacementId ? (
           <section className="pp-card">
             <div className="pp-card__head">
-              <div className="pp-eyebrow">{t('x3.exchanging')}</div>
+              <div className="pp-eyebrow">{t(replacementChosen ? 'x3.replacing' : 'x3.exchanging')}</div>
               <button type="button" className="pp-link" onClick={() => setStep('variant')}>{t('p3.edit')}</button>
             </div>
             <div className="pp-item__head" data-testid="summary-line">
@@ -1035,7 +1064,8 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               <div className="pp-item__text">
                 <div className="pp-item__title pp-item__title--sm">
                   <bdi>{exchangeLine.productTitle} · {optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle)}</bdi>
-                  {' → '}<bdi>{exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
+                  {' → '}<bdi>{replacementChosen ? t('x3.replacement')
+                    : exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
                     : `${otherTarget?.productTitle ?? ''} · ${otherTarget?.title ?? ''}`}</bdi>
                 </div>
                 <div className="pp-item__sub">{t(`reasons.${exchangeReason}`)}</div>
@@ -1080,8 +1110,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <div className="pp-eyebrow">{t('p3.pickup')}</div>
           <p className="pp-muted pp-small">
             {t(customChosen
-              ? (exchangeMode ? 'p3.pickupTextExchangeCustom' : 'p3.pickupTextCustom')
-              : exchangeMode ? (otherCourier ? 'p3.pickupTextExchangeOther' : 'p3.pickupTextExchange')
+              ? (exchangeMode ? (replacementChosen ? 'p3.pickupTextReplacementCustom' : 'p3.pickupTextExchangeCustom') : 'p3.pickupTextCustom')
+              : exchangeMode ? (replacementChosen
+                ? (otherCourier ? 'p3.pickupTextReplacementOther' : 'p3.pickupTextReplacement')
+                : (otherCourier ? 'p3.pickupTextExchangeOther' : 'p3.pickupTextExchange'))
               : otherCourier ? (otherCourier.carrierName ? 'p3.pickupTextOther' : 'p3.pickupText')
               : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText',
               { carrier: otherCourier?.carrierName ?? '', store })}
@@ -1273,8 +1305,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           exchange={exchangeMode && exchangeLine && replacementId ? {
             product: exchangeLine.productTitle,
             from: optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle),
-            to: exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
+            to: replacementChosen ? t('x3.replacement')
+              : exchangeTarget ? optionLabel(exchangeTarget.options, exchangeTarget.title)
               : `${otherTarget?.productTitle ?? ''} · ${otherTarget?.title ?? ''}`,
+            replacement: replacementChosen,
           } : null}
         />
       </Shell>
@@ -1415,6 +1449,8 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       </section>
     )
   }
+  // Q5: the difference applied but the price paid isn't known — none is added (the fee-only layout below says so).
+  const differenceUnknown = !refund && q.priceDifferenceUnknown === true
   return (
     <section className="pp-card" data-testid="fee-summary" aria-labelledby="pp-fee-title">
       <div className="pp-eyebrow" id="pp-fee-title">{t(refund ? 'fees.refundTitle' : 'fees.exchangeTitle')}</div>
@@ -1441,6 +1477,7 @@ function FeeSummary({ quote: q, lang }: { quote: FeeQuote; lang: PortalLang }) {
       {q.feeWaived && <p className="pp-item__sub">{t('fees.waivedNote')}</p>}
       {refund && q.nothingOwed && <p className="pp-item__sub" data-testid="fee-nothing-owed">{t('fees.nothingOwed')}</p>}
       {!refund && Number(q.collect ?? 0) > 0 && <p className="pp-item__sub" data-testid="fee-pay-note">{q.codBy === 'bosta' ? t('fees.bostaCollects', { amount: money(q.collect) }) : t('fees.exchangePayNote')}</p>}
+      {differenceUnknown && <p className="pp-item__sub" data-testid="fee-difference-unknown">{t('fees.differenceUnknown')}</p>}
       {q.approximate && <p className="pp-item__sub" data-testid="fee-approximate">{t('fees.approximate')}</p>}
       {q.blocked && (
         <div className="pp-banner pp-banner--error" role="alert" data-testid="fee-blocked">
@@ -1578,6 +1615,37 @@ function Header({
         {t('common.switchTo')}
       </button>
     </header>
+  )
+}
+
+/**
+ * V248 — "Replace with the same item": the customer's own size and colour again, for a damaged or wrong item. Out of
+ * stock → disabled with the reason; the customer can still pick another size / colour / product or go back for a refund.
+ */
+function SameItemChoice({ line, inStock, chosen, onChoose }: {
+  line: LookupLine; inStock: boolean; chosen: boolean; onChoose: () => void
+}) {
+  const { t } = useTranslation()
+  const variant = optionLabel(line.currentOptions, line.variantTitle)
+  return (
+    // Sold out: the disabled grey, but the card stays a column (pp-item--disabled would lay it out as a row).
+    <section className={'pp-card' + (chosen ? ' pp-item--selected' : '')} data-testid="same-item"
+      style={inStock ? undefined : { background: '#F1F2EF' }}>
+      <label className="pp-radioitem">
+        <input type="radio" name="pp-same-item" checked={chosen} disabled={!inStock} onChange={onChoose}
+          aria-describedby="pp-same-item-note" />
+        <Thumb src={line.imageUrl} small muted={!inStock} />
+        <span className="pp-item__text">
+          <span className="pp-item__title pp-item__title--sm">{t('x2.sameItemTitle')}</span>
+          <span className="pp-item__sub">{t('x2.sameItemSub', { variant: '' })}<bdi>{variant}</bdi></span>
+          <span id="pp-same-item-note" className={inStock ? 'pp-success-text pp-small' : 'pp-item__sub'}
+            data-testid={inStock ? 'same-item-in-stock' : 'same-item-out-of-stock'}>
+            {inStock ? t('x2.sameItemNoDifference') : t('x2.sameItemOutOfStockShort')}
+          </span>
+        </span>
+      </label>
+      {!inStock && <p className="pp-muted pp-small" role="status" data-testid="same-item-sold-out">{t('x2.sameItemOutOfStock')}</p>}
+    </section>
   )
 }
 
@@ -1849,7 +1917,7 @@ function SentScreen({
   result: SubmitResult
   email: string | null
   pickupBooking: boolean
-  exchange: { product: string; from: string; to: string } | null
+  exchange: { product: string; from: string; to: string; replacement?: boolean } | null
   /** G4b — the order went out with another courier: the exchange step names no Bosta courier. */
   otherCourier?: boolean
 }) {
@@ -1873,7 +1941,10 @@ function SentScreen({
     }
   }
 
-  const steps = exchange
+  const steps = exchange?.replacement
+    ? [t('x3.stepReview', { store }),
+       otherCourier ? t('x3.stepCourierReplacementOther', { store }) : t('x3.stepCourierReplacement'), t('x3.stepReadyReplacement')]
+    : exchange
     ? [t('x3.stepReview', { store }), otherCourier ? t('x3.stepCourierOther', { store }) : t('x3.stepCourier'), t('x3.stepReady')]
     : [
         ...(approved ? [] : [t('p4.stepReview', { store })]),
@@ -1889,7 +1960,7 @@ function SentScreen({
             <path d="M5 12.5l4.5 4.5L19 7.5" />
           </svg>
         </div>
-        <h1 className="pp-h1" tabIndex={-1} ref={headingRef}>{t(exchange ? 'x3.title' : 'p4.title')}</h1>
+        <h1 className="pp-h1" tabIndex={-1} ref={headingRef}>{t(exchange?.replacement ? 'x3.replacementTitle' : exchange ? 'x3.title' : 'p4.title')}</h1>
         {exchange ? (
           <p className="pp-lead" data-testid="sent-lead">
             <bdi>{exchange.product} · {exchange.from}</bdi>{' → '}<strong><bdi>{exchange.to}</bdi></strong>

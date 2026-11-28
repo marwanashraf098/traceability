@@ -1880,6 +1880,7 @@
     "title": "Alerts"
   },
   "exchange": {
+    "badgeReplacement": "Replacement",
     "mapping": {
       "title": "Exchange {{tracking}}",
       "outboundLabel": "Outbound",
@@ -2366,6 +2367,9 @@
         "open": "Link parcel…"
       },
       "exchange": {
+        "pillReplacement": "Replacement (same item)",
+        "sameItem": "Same item — replacement",
+        "sameItemNote": "The customer asked for the same item again (damaged or wrong item). No price difference.",
         "pill": "Exchange",
         "area": "Area",
         "comingBack": "Coming back",
@@ -2492,6 +2496,7 @@
         "newPrice": "New item",
         "priceDifference": "Price difference",
         "differenceFloored": "Cheaper same-product swaps aren't refunded (Settings → Returns portal).",
+        "differenceUnknown": "Price difference couldn't be calculated — the price paid isn't known, so none was charged or refunded.",
         "owed": "Owed to the customer: {{amount}}. Record the payment once the old item is back."
       }
     }
@@ -3239,6 +3244,10 @@
         "saveFailed": "Couldn't save. Try again."
       },
       "fees": {
+        "replacementFees": {
+          "title": "Charge fees on defect replacements",
+          "help": "When a customer asks for the same item again because theirs arrived damaged or wrong, charge the exchange fee. Off: replacements are free. A replacement never has a price difference."
+        },
         "title": "Customer fees",
         "description": "Charge customers a fee when they exchange or return an item. The fee is shown in the returns portal before they submit.",
         "ownerOnly": "Only the owner can change these.",
@@ -4387,6 +4396,7 @@
       "updated": "Updated"
     },
     "kind": {
+      "replacement": "Replacement (same item)",
       "refund": "Refund",
       "exchange": "Exchange"
     },
@@ -5369,6 +5379,7 @@
       "stockFrom": "Stock: {{source}}",
       "days": "{{value}} d",
       "cols": {
+        "replacements": "Replacements",
         "units": "Units",
         "sellThrough": "Sell-through",
         "perDay": "Per day",

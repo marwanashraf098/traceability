@@ -124,7 +124,10 @@
     "areaRequired": "Choose your area.",
     "governorateRequired": "Choose your governorate.",
     "pickupTextOther": "{{store}} arranges a pickup with {{carrier}} from the address this order was delivered to.",
-    "pickupTextExchangeOther": "{{store}} sends your new size and arranges collecting the old item from the address this order was delivered to."
+    "pickupTextExchangeOther": "{{store}} sends your new size and arranges collecting the old item from the address this order was delivered to.",
+    "pickupTextReplacement": "One Bosta courier brings the new one and collects the one you received from the address this order was delivered to.",
+    "pickupTextReplacementCustom": "One Bosta courier brings the new one and collects the one you received from the address you enter below.",
+    "pickupTextReplacementOther": "{{store}} sends the new one and arranges collecting the one you received from the address this order was delivered to."
   },
   "p4": {
     "title": "Request sent",
@@ -152,7 +155,8 @@
     "whichItem": "Which item?",
     "cantExchange": "Can't be exchanged",
     "reasonLabel": "Why are you exchanging it?",
-    "oneItem": "One item per exchange. To exchange another, send a new request afterwards."
+    "oneItem": "One item per exchange. To exchange another, send a new request afterwards.",
+    "replaceOnlyReasons": "Only for a damaged or wrong item — the same item again."
   },
   "x2": {
     "title": "Choose your new size or colour",
@@ -174,7 +178,14 @@
     "otherProductUnavailable": "We can't show other products right now. Try again in a moment.",
     "noProducts": "No other products in stock match.",
     "search": "Search products",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "sameItemTitle": "Replace with the same item",
+    "sameItemSub": "Same size and colour — {{variant}}",
+    "sameItemNoDifference": "In stock · no price difference",
+    "sameItemOutOfStock": "This exact item is out of stock right now. Choose another size or colour, or go back and choose a refund.",
+    "sameItemOutOfStockShort": "Out of stock right now",
+    "orAnother": "Or choose another size or colour",
+    "replaceTitle": "Get the same item again"
   },
   "x3": {
     "exchanging": "Exchanging",
@@ -182,7 +193,13 @@
     "stepReview": "{{store}} reviews your request.",
     "stepCourier": "One Bosta courier brings your new size and takes the old one in the same visit.",
     "stepReady": "Keep the old item ready, unworn and with its tags. Nothing to pay.",
-    "stepCourierOther": "{{store}} sends your new size and arranges collecting the old one."
+    "stepCourierOther": "{{store}} sends your new size and arranges collecting the old one.",
+    "replacementTitle": "Replacement requested",
+    "replacement": "Replacement (same item)",
+    "replacing": "Replacing",
+    "stepCourierReplacement": "One Bosta courier brings the new one and takes the one you received in the same visit.",
+    "stepCourierReplacementOther": "{{store}} sends the new one and arranges collecting the one you received.",
+    "stepReadyReplacement": "Keep the item you received ready to hand over, in its packaging if you can."
   },
   "rf": {
     "title": "How should we refund you?",
@@ -289,6 +306,7 @@
     "nothingToPay": "Nothing to pay",
     "owedNote": "The store will pay you back. We'll ask how you'd like to receive it.",
     "differenceFloored": "A cheaper size or colour of the same item isn't refunded.",
+    "differenceUnknown": "We couldn't work out a price difference for this item, so none is added.",
     "blocked": {
       "approximate_price": "This item can only be swapped for another size or colour online.",
       "same_or_lower_only": "This store only exchanges for items at the same price or lower.",

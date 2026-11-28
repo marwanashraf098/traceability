@@ -18,6 +18,9 @@ public class CustomerFeeSettingsController {
 
     public record ReasonsRequest(List<String> reasons) {}
 
+    /** V248 — "Charge fees on defect replacements". */
+    public record ReplacementFeesRequest(Boolean charge) {}
+
     private final CustomerFeeSettingsService fees;
 
     public CustomerFeeSettingsController(CustomerFeeSettingsService fees) {
@@ -50,6 +53,14 @@ public class CustomerFeeSettingsController {
     public CustomerFeeSettingsService.Settings putReasons(@RequestBody(required = false) ReasonsRequest body,
                                                           @AuthenticationPrincipal CustomUserDetails principal) {
         return fees.putMerchantFaultReasons(principal.userId(), body == null ? null : body.reasons());
+    }
+
+    /** V248 — "Charge fees on defect replacements" (owner; one audit row on a real change). */
+    @PutMapping("/replacement-fees")
+    @PreAuthorize("hasRole('OWNER')")
+    public CustomerFeeSettingsService.Settings putReplacementFees(@RequestBody(required = false) ReplacementFeesRequest body,
+                                                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        return fees.putReplacementFees(principal.userId(), body == null ? null : body.charge());
     }
 
     @PutMapping("/exchange-pricing")

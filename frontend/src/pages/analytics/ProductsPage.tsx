@@ -95,6 +95,7 @@ export default function ProductsPage() {
         case 'age': return r.stock?.avgPieceAgeDays ?? null
         case 'ret': return r.sale.returnRate
         case 'exch': return r.stock?.exchangedUnits90 ?? null
+        case 'repl': return r.stock?.replacedUnits90 ?? 0
         case 'fail': return r.sale.refusalRate
         case 'abc': return r.abc?.abcClass ?? null
         default: return null
@@ -170,6 +171,7 @@ export default function ProductsPage() {
                       ] : []),
                       { key: 'ret', header: t('analytics.products.cols.returns'), sortable: true, align: 'end', render: r => <RateCell r={r.sale.returnRate} kind="returns" /> },
                       ...(hasPieces ? [{ key: 'exch', header: t('analytics.products.cols.exchanges'), sortable: true, align: 'end' as const, render: (r: Row) => fmt.num(r.stock?.exchangedUnits90) }] : []),
+                      ...(hasPieces ? [{ key: 'repl', header: t('analytics.products.cols.replacements'), sortable: true, align: 'end' as const, render: (r: Row) => fmt.num(r.stock?.replacedUnits90 ?? 0) }] : []),
                       { key: 'fail', header: t('analytics.products.cols.failed'), sortable: true, align: 'end', render: r => <RateCell r={r.sale.refusalRate} kind="failed" /> },
                       { key: 'abc', header: t('analytics.products.cols.abc'), sortable: true, align: 'center', render: r => r.abc
                         ? <span className={cn('inline-grid place-items-center w-[22px] h-[22px] rounded-md font-bold text-[12px]', r.abc.abcClass === 'A' ? 'bg-trace-blue/10 text-trace-blue' : 'bg-elevated text-neutral-text')}>{r.abc.abcClass}</span>

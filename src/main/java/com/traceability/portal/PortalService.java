@@ -176,7 +176,11 @@ public class PortalService {
             body.put("pickupBooking", t.get("portal_pickup_booking"));
             // Step 5b: present only when the store offers exchanges (absent, not false, otherwise —
             // stores without exchanges get exactly the pre-5b config).
-            if (Boolean.TRUE.equals(t.get("portal_exchanges_enabled"))) body.put("exchangesEnabled", true);
+            if (Boolean.TRUE.equals(t.get("portal_exchanges_enabled"))) {
+                body.put("exchangesEnabled", true);
+                // V248: the reasons that allow "Replace with the same item" (ReplacementRule — present only with exchanges).
+                body.put("replacementReasons", ReplacementRule.DEFECT_REASONS);
+            }
             body.put("font", t.get("portal_font"));
             // P2: present only when the store asks how to refund (absent, not [], otherwise —
             // stores without refund methods get exactly the P1 config).
@@ -772,6 +776,10 @@ public class PortalService {
         }
         Swap swap = req.exchange() ? swapOf(tenantId, items.get(0).variantId(), req.replacementVariantId()) : null;
         if (req.exchange() && swap == null) throw new InvalidSubmission();
+        // V248: the same item again only for a defect reason (ReplacementRule) — as submit refuses it.
+        if (swap != null && swap.replacement() && !ReplacementRule.defectReason(req.lines().get(0).reasonCode())) {
+            throw new InvalidSubmission();
+        }
         Priced priced = price(tenantId, feeKind(req), items, area, swap);
         if (priced == null) return Map.of("applies", false);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -859,7 +867,10 @@ public class PortalService {
     }
 
     /** F3 — what an exchange swaps: same product or not, and the replacement's current price (null = unpriced). */
-    private record Swap(UUID original, UUID replacement, boolean sameProduct, java.math.BigDecimal replacementPrice) {}
+    private record Swap(UUID original, UUID replacementVariant, boolean sameProduct, java.math.BigDecimal replacementPrice) {
+        /** V248: the same variant out as back — a defect replacement (ReplacementRule). */
+        boolean replacement() { return ReplacementRule.sameItem(original, replacementVariant); }
+    }
 
     /** F3 — null when the replacement isn't one of the tenant's variants. */
     private Swap swapOf(UUID tenantId, UUID originalVariant, UUID replacement) {
@@ -885,11 +896,35 @@ public class PortalService {
         if (swap == null) {
             return terms.map(t -> new Priced(PortalAmounts.calculate(kind, t, fault, items, null), null)).orElse(null);
         }
+        if (swap.replacement()) {
+            // V248 (Q2): a replacement NEVER has a price difference. Its fee only with "Charge fees on defect
+            // replacements" on — then the merchant-fault waiver doesn't apply (the reason is always a defect one).
+            if (!replacementFees(tenantId) || terms.isEmpty()) return null;
+            PortalAmounts.Quote q = PortalAmounts.calculate("exchange", terms.get().withoutWaiver(), fault, items, null);
+            return new Priced(q, PortalAmounts.exchangeBlock(PortalAmounts.exchangePricing(jdbc, tenantId), true, q));
+        }
         PortalAmounts.ExchangePricing pricing = PortalAmounts.exchangePricing(jdbc, tenantId);
         PortalAmounts.Difference diff = pricing.difference(swap.sameProduct(), items.get(0).unitPrice(), swap.replacementPrice());
         if (terms.isEmpty() && diff == null) return null;
         PortalAmounts.Quote q = PortalAmounts.calculate("exchange", terms.orElse(null), fault, items, diff);
         return new Priced(q, PortalAmounts.exchangeBlock(pricing, swap.sameProduct(), q));
+    }
+
+    /** V248 — "Charge fees on defect replacements" (default off). */
+    private boolean replacementFees(UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_replacement_fees FROM tenants WHERE id = ?", Boolean.class, tenantId));
+    }
+
+    /**
+     * V248 — the submission asks for the same item again (one exchange line whose variant is the replacement); the
+     * reason is checked by validExchange / quoteInTenant. Caller's transaction and tenant.
+     */
+    private boolean asksForSameItem(UUID tenantId, UUID orderId, SubmitRequest req) {
+        if (!req.exchange() || req.lines() == null || req.lines().size() != 1 || req.lines().get(0) == null) return false;
+        SubmitLine line = req.lines().get(0);
+        UUID variant = line.orderItemId() != null ? untrackedLineVariant(tenantId, orderId, line.orderItemId()) : line.variantId();
+        return ReplacementRule.sameItem(variant, req.replacementVariantId());
     }
 
     /** F2 — the fee kind of a submission (or quote): exchange when it asks for one, else refund. */
@@ -904,9 +939,12 @@ public class PortalService {
     private PortalAmounts.Prices feePrices(UUID tenantId, UUID orderId, SubmitRequest req) {
         if (!feesOn(tenantId) || req == null) return null;
         // F3: an exchange is also priced when a price difference can apply (any product, or free swaps off).
+        // V248: a replacement has no price difference — priced only for its fee, and only when the store charges it.
         Boolean on = TenantContext.runAs(tenantId,
-            () -> tx.execute(s -> PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))
-                || req.exchange() && PortalAmounts.exchangePricing(jdbc, tenantId).active()));
+            () -> tx.execute(s -> asksForSameItem(tenantId, orderId, req)
+                ? replacementFees(tenantId) && PortalAmounts.ruleEnabled(jdbc, tenantId, "exchange")
+                : PortalAmounts.ruleEnabled(jdbc, tenantId, feeKind(req))
+                    || req.exchange() && PortalAmounts.exchangePricing(jdbc, tenantId).active()));
         if (!Boolean.TRUE.equals(on)) return null;
         return PortalAmounts.Prices.of(paidPrices.resolve(tenantId, orderId));
     }
@@ -947,6 +985,8 @@ public class PortalService {
         boolean generic = GenericPortalReturns.routeGeneric(jdbc, tenantId, orderId);
         if (generic && req.customAddressChosen()) throw new InvalidSubmission();
         UUID replacement = req.exchange() ? validExchange(tenantId, orderId, req) : null;
+        // V248: the same item again (validExchange allowed it only for a defect reason) — a replacement.
+        boolean sameItem = replacement != null && asksForSameItem(tenantId, orderId, req);
 
         // Bind pieces line by line (the same variant may appear on two lines with different reasons).
         // Step 6a: an untracked order line binds unit numbers instead (one item row per unit).
@@ -1034,9 +1074,9 @@ public class PortalService {
             "    decided_at, pickup_city_id, pickup_city_name, pickup_district_id, pickup_district_name, " +
             "    pickup_district_name_ar, refund_fallback_ok, pickup_address_source, custom_first_line, " +
             "    custom_second_line, custom_building_number, custom_floor, custom_apartment, refund_method, " +
-            "    refund_details_encrypted, refund_details_hint) " +
+            "    refund_details_encrypted, refund_details_hint, exchange_kind) " +
             "VALUES (?, ?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?, " +
-            "        ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             requestId, tenantId, orderId, replacement == null ? "refund" : "exchange",
             autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
             offer.isPresent() ? offer.get().cityId() : null,
@@ -1054,7 +1094,8 @@ public class PortalService {
             refund == null ? null : refund.method(),
             refund == null || !refund.hasDetails() ? null
                 : cipher().encrypt(tenantId, requestId, refund.toJson(refundMapper)),
-            refund == null ? null : refund.hint());
+            refund == null ? null : refund.hint(),
+            sameItem ? ReplacementRule.KIND_REPLACEMENT : ReplacementRule.KIND_SWAP);
         // P3: a line's photos attach to the request + the line's FIRST item row.
         Map<SubmitLine, UUID> firstItem = new IdentityHashMap<>();
         List<String> itemIds = new ArrayList<>();
@@ -1081,8 +1122,11 @@ public class PortalService {
         }
         requests.event(tenantId, requestId, "requested", null, replacement == null
             ? ReturnRequestLifecycle.meta("items", items.size())
-            : ReturnRequestLifecycle.meta("items", items.size(), "type", "exchange",
-                "replacement_variant_id", replacement.toString()));
+            : sameItem
+                ? ReturnRequestLifecycle.meta("items", items.size(), "type", "exchange",
+                    "replacement_variant_id", replacement.toString(), "exchange_kind", ReplacementRule.KIND_REPLACEMENT)
+                : ReturnRequestLifecycle.meta("items", items.size(), "type", "exchange",
+                    "replacement_variant_id", replacement.toString()));
         if (autoApprove) {
             requests.event(tenantId, requestId, "approved", null, ReturnRequestLifecycle.meta("auto", true));
             // G4a: approved on an order shipped with another courier → the merchant books it ('manual'); no job.
@@ -1166,6 +1210,7 @@ public class PortalService {
      * quantity 1; a replacement variant that is a DIFFERENT variant of the SAME, ACTIVE product and is in
      * stock now (VariantStockService, recomputed here — never trusted from lookup). Returns the
      * replacement variant id; anything else is the generic invalid-submission 400.
+     * V248: the SAME variant is allowed only for a defect reason (ReplacementRule) — a replacement.
      */
     private UUID validExchange(UUID tenantId, UUID orderId, SubmitRequest req) {
         if (!exchangesForOrder(tenantId, orderId)) throw new InvalidSubmission();
@@ -1176,7 +1221,8 @@ public class PortalService {
         UUID lineVariant = line == null ? null
             : line.orderItemId() != null ? untrackedLineVariant(tenantId, orderId, line.orderItemId()) : line.variantId();
         if (line == null || lineVariant == null || line.quantity() == null || line.quantity() != 1
-                || replacement == null || replacement.equals(lineVariant)) {
+                || replacement == null
+                || replacement.equals(lineVariant) && !ReplacementRule.defectReason(line.reasonCode())) {
             throw new InvalidSubmission();
         }
         Boolean sameProduct = jdbc.queryForObject(

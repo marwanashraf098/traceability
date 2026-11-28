@@ -53,6 +53,11 @@ public class CustomerFeeException extends ApiException {
             "أحد أسباب الإرجاع غير معروف.", HttpStatus.BAD_REQUEST);
     }
 
+    static CustomerFeeException replacementFees() {
+        return new CustomerFeeException("REPLACEMENT_FEES_INVALID", "Choose whether to charge fees on defect replacements.",
+            "اختر ما إذا كنت ستفرض رسومًا على استبدال المنتجات المعيبة.", HttpStatus.BAD_REQUEST);
+    }
+
     static CustomerFeeException maxDifference() {
         return new CustomerFeeException("MAX_DIFFERENCE_INVALID", "Enter a whole amount from 0 to 30,000 EGP, or leave it empty.",
             "أدخل مبلغًا صحيحًا من 0 إلى 30,000 جنيه، أو اتركه فارغًا.", HttpStatus.BAD_REQUEST);

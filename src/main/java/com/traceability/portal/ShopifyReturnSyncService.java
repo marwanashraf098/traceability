@@ -340,7 +340,7 @@ public class ShopifyReturnSyncService {
     /** S5b — the exchange's line note: the replacement (product / variant), the frozen collect, the warning. */
     private String exchangeNote(Ctx c) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT p.title AS product, v.title AS variant, rr.booking_status, " + ExchangeCod.FROZEN_SQL + " AS collect, " +
+            "SELECT p.title AS product, v.title AS variant, rr.booking_status, rr.exchange_kind, " + ExchangeCod.FROZEN_SQL + " AS collect, " +
             "       (SELECT a.customer_owed FROM return_request_amounts a WHERE a.request_id = rr.id " +
             "          AND a.tenant_id = rr.tenant_id AND a.fee_kind = 'exchange') AS owed " +
             "FROM return_requests rr " +
@@ -355,7 +355,8 @@ public class ShopifyReturnSyncService {
         String label = product == null ? variant
             : (variant == null || variant.isBlank() || "Default Title".equals(variant)) ? product : product + " / " + variant;
         return ShopifyReturnSyncRules.exchangeNote(c.reference(), label, (java.math.BigDecimal) r.get("collect"),
-            (java.math.BigDecimal) r.get("owed"), "manual".equals(r.get("booking_status")));
+            (java.math.BigDecimal) r.get("owed"), "manual".equals(r.get("booking_status")),
+            ReplacementRule.KIND_REPLACEMENT.equals(r.get("exchange_kind")));
     }
 
     private void markStuckPending(UUID tenantId, UUID requestId) {
