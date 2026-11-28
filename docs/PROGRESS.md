@@ -5,8 +5,8 @@
 ## Current state
 
 **Defect replacement — "Replace with the same item" in the returns portal (S0–S4 + S6, 2026-11-27; branch
-`feat/defect-replacement` rebased on origin/main 6a1a3d4a (returns-link-unit's V247 merged), worktree ../trace-replacement;
-V248 — renumbered V246 → V247 → V248 (main took V246 shipping-cost, V247 returns-link-unit); PR open, NOT merged, NOT deployed).**
+`feat/defect-replacement` rebased on origin/main 1ddae462 (returns-link-unit's V247 + K2b merged), worktree ../trace-replacement;
+V248 — renumbered V246 → V247 → V248 (main took V246 shipping-cost, V247 returns-link-unit; prod top 246 on 2026-11-28 15:35, V248 free; deploy AFTER returns-link-unit); PR open, NOT merged, NOT deployed).**
 A customer whose item arrived damaged / faulty or wrong can ask for the SAME variant again (same size, same colour).
 - **THE rule — `portal.ReplacementRule`:** the same variant is allowed only for a defect reason, a fixed list in code
   (`DEFECT_REASONS` = damaged, wrong_item — decision Q1; never not_as_pictured, never the per-store merchant-fault list).
