@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Encryption key rotation K1 — key ring (2026-11-28; branch `feat/encryption-key-ring` off origin/main d7b23d2a,
+worktree ../trace-k1; NO migration; merged to main 2026-11-28, NOT deployed).** Step 0 finding (prod 2026-11-27):
+the prod app runs with `APP_ENCRYPTION_KEY` unset, so application.yml's 32-zero-byte default encrypts every stored
+Shopify token / custom-app secret, Bosta API key, pending-link token and refund detail — a publicly known key. Plan:
+K1 key ring (this) → K2 writes v2 + one-off re-encryption job → K3 legacy key removed, startup refuses the zero key.
+- `EncryptionService`: prefix dispatch — `"v2:"` → `APP_ENCRYPTION_KEY_V2` only (no fallback), unprefixed → legacy key
+  only; `APP_ENCRYPTION_WRITE_VERSION` v1 (default, byte-identical writes) | v2. Startup refuses: v2 without the key;
+  V2 not Base64 / not 32 bytes / all zero / equal to the legacy key; an unknown write version. Decrypt hardened (Base64
+  inside the guard, < IV + tag refused, messages carry no plaintext / ciphertext / key, no cause chained). Startup logs
+  `Encryption key ring: write version v1|v2, V2 key configured: yes|no`. Callers unchanged; AAD unchanged.
+- application.yml `app.encryption-key-v2` (no key default) + `app.encryption-write-version` (v1); `.env.example`
+  documents both with the never-print / store-offline warning; test properties carry a test-only V2 key.
+- Tests: `security/EncryptionServiceTest` (19 — golden ciphertexts made by the pre-key-ring class with the zero key,
+  verbatim old-algorithm compatibility both ways, round trips, tamper / relabel / no-fallback, AAD, malformed input,
+  every refusal, message hygiene; revert-checked: legacy branch removed → g1 golden red, v2 branch removed → r2 red);
+  `EncryptionKeyRingV2IntegrationTest` (6, writes = v2: OAuth callback + refresh, legacy store row refresh → v2, Bosta
+  connect + status poll with v2 and legacy rows, refund details). 27 Shopify / Bosta / portal classes: 338 green with
+  writes v1 and again with `-Dapp.encryption-write-version=v2`. Full suite (writes v1, 2026-11-28, 28 min): 5077 tests,
+  2 red — ExchangeBackfillTest (documented) and PortalOnDemandLookupTest.e1 (known flake); baseline only. (An earlier
+  run under ~97 load from three other worktrees' suites lost PortalCustomAddressTest to a 3393 s class run; green on
+  the quiet machine.)
+- **Next (K1 deploy, runbook in this session's report):** deploy code (log `v1, V2 key configured: no`), then
+  `printf '\nAPP_ENCRYPTION_KEY_V2=%s\n' "$(openssl rand -base64 32)" >> .env` on the server, `up -d
+  --force-recreate app`, verify by length / log line only, store the key offline. Never set the write version in K1.
+- **K2 (not built):** env flip to v2, then an ops re-encryption job (owner pool lists tenants, per-tenant app_user +
+  RLS, compare-and-set UPDATE, verify-before-write, dry run, counts only, `key_auth_fail_key_hash` carried over;
+  `shopify_pending_links` left to expire). **K3:** remove the legacy path once every legacy count is 0.
+- Exposure (Step 0): anyone with a DB copy could decrypt everything above. Recommended: rotate Bosta API keys; check
+  for remaining custom-app `api_secret_encrypted` rows (rotate or upgrade to OAuth); Shopify OAuth tokens rotate on
+  refresh (to confirm). Open: where DB copies exist (decides whether refund details need a formal assessment).
+
 **Analytics payout fixes — slices 1–3 of the 2026-11-16 Step 0 (2026-11-27; branch `analytics/payout-fixes` off
 origin/main 647f0206, worktree ../traceability-payout-fixes; NO migration; approved + merged to main 2026-11-27,
 NOT deployed).** Step 0 findings re-checked: no analytics / settlement commit since 2026-11-14, all held.
