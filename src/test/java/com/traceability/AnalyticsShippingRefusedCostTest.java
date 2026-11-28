@@ -420,6 +420,40 @@ class AnalyticsShippingRefusedCostTest {
     }
 
     @Test
+    void s5_refusedUnitsAreNeverSold_cancelledOrNot_onProductsAndSkus() {
+        T t = new T("Refused-Not-Sold");
+        UUID v = t.variant("HD-CRM-L", "300");
+        // Delivered (positive control: sold).
+        UUID delivered = t.order(cairo(10, 10), "new", orderRaw(COD_GW, "801", "85.00", null));
+        t.line(delivered, v, 1, 1, "650.00");
+        t.leg(delivered, "delivered", deliveredPaid("735.00", "100.00", cairo(11, 9)),
+            "with_courier", iso(cairo(11, 9)), "delivered", iso(cairo(12, 13)));
+        // Still with Bosta (positive control: booked units are sold until refused).
+        UUID moving = t.order(cairo(10, 11), "new", orderRaw(COD_GW, "802", "85.00", null));
+        t.line(moving, v, 2, 2, "650.00");
+        t.leg(moving, "with_courier", "{\"type\":{\"code\":10},\"state\":{\"code\":24},\"cod\":1385,\"collectedFromBusiness\":\"" +
+            iso(cairo(11, 9)) + "\"}", "with_courier", iso(cairo(11, 9)));
+        // Refused, Return to Origin, NOT cancelled in Shopify: 3 units booked, never sold.
+        UUID refused = t.order(cairo(10, 12), "new", orderRaw(COD_GW, "803", "85.00", null));
+        t.line(refused, v, 3, 3, "650.00");
+        t.leg(refused, "returned", rto("2035.00", "112.86", cairo(11, 9)),
+            "with_courier", iso(cairo(11, 9)), "returning", iso(cairo(12, 9)), "returned", iso(cairo(14, 9)));
+        // Refused then cancelled in Shopify: 1 unit, never sold either.
+        refusedThenCancelled(t, v, 1, "804", "735.00", COD_GW);
+
+        Map<String, Object> totals = m(ok(t, "/api/v1/analytics/sales/variants?" + NOV), "totals");
+        assertThat(n(totals, "soldUnits")).isEqualTo(3);                              // 1 delivered + 2 moving
+        assertThat(n(totals, "refusedUnits")).isEqualTo(4);                           // 3 + 1, still shown as refused
+        assertThat(dec(totals, "grossRevenue")).isEqualByComparingTo("1950.00");
+        Map<String, Object> product = list(ok(t, "/api/v1/analytics/sales/products?" + NOV), "products").get(0);
+        assertThat(n(product, "soldUnits")).isEqualTo(3);
+        Map<String, Object> daily = list(ok(t, "/api/v1/analytics/sales/variants/daily?" + NOV + "&ids=" + v), "variants").get(0);
+        assertThat(n(daily, "totalUnits")).isEqualTo(3);
+        // Booked revenue still counts every booked order (Revenue page).
+        assertThat(dec(m(ok(t, "/api/v1/analytics/revenue/summary?" + NOV), "current"), "booked")).isEqualByComparingTo("4550.00");
+    }
+
+    @Test
     void s5_deliveredThenCancelledInShopify_countsDelivered_butIsNeverRealized() {
         T t = new T("Delivered-Cancelled");
         UUID v = t.variant("HD-SND-M", "300");
