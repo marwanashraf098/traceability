@@ -56,7 +56,16 @@ public class BostaKeyHealth {
 
     /** sha256 of the stored ciphertext of courier_accounts row {@code ca}. */
     static String keyHashSql(String ca) {
-        return "encode(sha256(convert_to(" + ca + ".api_key_encrypted, 'UTF8')), 'hex')";
+        return ciphertextHashSql(ca + ".api_key_encrypted");
+    }
+
+    /**
+     * THE key hash, of any SQL text expression (a column or a bind parameter {@code ?}). The K2
+     * re-encryption (security.ReEncryptionService) uses it to carry key_auth_fail_key_hash over to
+     * the new ciphertext, so a known-bad key stays known bad.
+     */
+    public static String ciphertextHashSql(String textExpr) {
+        return "encode(sha256(convert_to(" + textExpr + ", 'UTF8')), 'hex')";
     }
 
     /** THE known-bad predicate for courier_accounts row {@code ca} (true only for the key that failed). */
