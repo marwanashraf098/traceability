@@ -1430,10 +1430,15 @@ public class ShipmentLinkService {
      * Arrived as sellable, not undone, and not resolved. One exception per unit, keyed on the row id
      * (an undo + re-mark is a new row, so a new key). Shared by ExceptionService.detectReturnToReceive()
      * and the Returns & exchanges case list (via ReturnCaseRules).
+     *
+     * V247 (2026-11-27): a unit LINKED to a tracked piece in Scan returns (a live
+     * untracked_unit_piece_links row) is already in stock as that piece — nothing to receive.
      */
     public static final String UNIT_TO_RECEIVE_KEY_SQL = "'unit:' || u.id::text";
     public static final String UNIT_TO_RECEIVE_OPEN_SQL =
         "u.condition = 'sellable' AND u.undone_at IS NULL " +
+        "AND NOT EXISTS (SELECT 1 FROM untracked_unit_piece_links lk " +
+        "                WHERE lk.tenant_id = u.tenant_id AND lk.intake_id = u.id AND lk.undone_at IS NULL) " +
         "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
         "                WHERE er.tenant_id = u.tenant_id AND er.exception_type = 'return_to_receive' " +
         "                  AND er.subject_key = " + UNIT_TO_RECEIVE_KEY_SQL + ") ";

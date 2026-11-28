@@ -120,6 +120,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   shopify_edit_conflict:    { en: 'Edited In Shopify After Packing', ar: 'عُدّل في شوبيفاي بعد التغليف' },
   return_in_transit_stuck:  { en: 'Returned Piece Not Scanned',      ar: 'قطعة مرتجعة لم تُمسح' },
   return_mismatch:          { en: 'Return Mismatch',                 ar: 'مرتجع غير مطابق' },
+  return_needs_review:      { en: 'Return Needs Review',             ar: 'مرتجع بحاجة إلى مراجعة' },
   exchange_needs_mapping:   { en: 'Exchange Needs Its Items',        ar: 'الاستبدال يحتاج تحديد منتجاته' },
   exchange_unmapped_state:  { en: 'Unknown Exchange Status',         ar: 'حالة استبدال غير معروفة' },
   void_hold_sync_failed:    { en: 'Shopify Stock Update Failed',     ar: 'فشل تحديث مخزون شوبيفاي' },

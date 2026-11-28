@@ -496,6 +496,30 @@ public class InventoryLedger {
     }
 
     /**
+     * V247 — Scan returns "This label is that unit": a piece was linked to (eventType
+     * 'return_unit_linked') or unlinked from ('return_unit_unlinked') an untracked order line's unit
+     * that came back in a parcel. No status change here — from_status = to_status = the piece's
+     * current status (a damaged link then moves it through PieceAdjustService). Sibling-append like
+     * {@link #recordReturnReceived}; InventoryLedger stays the only writer of piece_events.
+     *
+     * @throws PieceNotFoundException if the piece is not visible under the current RLS context
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void recordReturnUnitLink(String pieceId, boolean linked, UUID actorUserId, UUID locationId,
+                                     UUID orderId, UUID shipmentId, String metadata) {
+        String statusDb = jdbc.query(FETCH_STATUS,
+                rs -> rs.next() ? rs.getString("status") : null,
+                pieceId);
+        if (statusDb == null) {
+            throw new PieceNotFoundException(pieceId);
+        }
+        jdbc.update(INSERT_EVENT,
+                pieceId, linked ? "return_unit_linked" : "return_unit_unlinked", actorUserId,
+                orderId, shipmentId, locationId,
+                statusDb, statusDb, metadata, null);
+    }
+
+    /**
      * Bazar POS B5: a piece taken back DAMAGED at a bazar arrives at the main warehouse. Moves current_location_id to
      * {@code locationId} ONLY while the piece is damaged and not already there (conditional UPDATE — the race guard; a
      * repeat or a piece no longer damaged moves nothing and records nothing), then writes event

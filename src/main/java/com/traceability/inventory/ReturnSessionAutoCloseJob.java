@@ -21,7 +21,9 @@ import java.util.UUID;
  * (ReturnSessionService.close() stamps shipments.return_intake_completed_at) isn't held
  * hostage by a session someone forgot to close.
  *
- * Eligible = status 'open', zero items with disposition 'pending' (empty sessions included),
+ * Eligible = status 'open', zero items that still block closing ({@link ReturnSessionService#BLOCKS_CLOSE_SQL}: a
+ * pending item at return_pending_inspection — since V247 an illegal-state pending item no longer blocks; close() marks
+ * it 'needs_review' for a manager) (empty sessions included),
  * and last activity more than {@link #IDLE_HOURS} ago — last activity is the latest of
  * opened_at, any piece scan (return_session_items.scanned_at), any AWB scan
  * (return_session_shipments.linked_at) and any disposition (disposition_at).
@@ -80,8 +82,10 @@ public class ReturnSessionAutoCloseJob {
         List<UUID> idle = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForList(
             "SELECT rs.id FROM return_sessions rs " +
             "WHERE rs.tenant_id = ? AND rs.status = 'open' " +
-            "  AND NOT EXISTS (SELECT 1 FROM return_session_items i " +
-            "                  WHERE i.session_id = rs.id AND i.disposition = 'pending') " +
+            // V247 (Q2): the same "still blocks closing" rule as close() — a pending illegal-state item doesn't block;
+            // close() leaves it to a manager ('needs_review').
+            "  AND NOT EXISTS (SELECT 1 FROM return_session_items i JOIN pieces p ON p.id = i.piece_id " +
+            "                  WHERE i.session_id = rs.id AND " + ReturnSessionService.BLOCKS_CLOSE_SQL + ") " +
             "  AND GREATEST(rs.opened_at, " +
             "        (SELECT MAX(GREATEST(i.scanned_at, COALESCE(i.disposition_at, i.scanned_at))) " +
             "           FROM return_session_items i WHERE i.session_id = rs.id), " +

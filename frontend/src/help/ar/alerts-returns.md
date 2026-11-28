@@ -4,7 +4,7 @@ topic: alerts
 title: تنبيهات المرتجعات
 roles: [owner, manager]
 related: [scan-returns, return-to-receive, untracked-returns, portal-requests]
-alerts: [never_received, return_leg_unscanned, return_in_transit_stuck, return_to_receive, request_item_to_receive, return_link_ambiguous, pickup_booking_problem, refund_pending_overdue, return_items_overdue, return_mismatch]
+alerts: [never_received, return_leg_unscanned, return_in_transit_stuck, return_to_receive, request_item_to_receive, return_link_ambiguous, pickup_booking_problem, refund_pending_overdue, return_items_overdue, return_mismatch, return_needs_review]
 screens: [/exceptions, /returns, /exchanges]
 video:
 ---
@@ -49,3 +49,7 @@ video:
 ## مرتجع غير مطابق
 
 قطعة مُسحت في جلسة إرجاع وسُجّلت كغير مطابقة لما كان متوقعًا (مثلًا ليست القطعة الصحيحة). افحصها وقرّر مصيرها، ثم عالج التنبيه.
+
+## مرتجع بحاجة إلى مراجعة
+
+مُسحت قطعة في جلسة مرتجعات دون أن تكون متوقعة، وأُغلقت الجلسة قبل أن يقرر أحد ما هي. افتح الجلسة من **الإجراء**. إذا كان الملصق هو العنصر غير المتتبَّع الذي عاد في ذلك الطرد، اختر **هذا هو العنصر**. إذا لم تكن القطعة الصحيحة، اختر **ليست القطعة الصحيحة**. إذا لم يكن هناك ما يُفعل، اختر **لا يوجد ما يُفعل**.

@@ -234,6 +234,7 @@ public class ExceptionService {
         all.addAll(detectShopifyEditConflict(tenantId));
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
         all.addAll(detectReturnSessionMismatch(tenantId));
+        all.addAll(detectReturnNeedsReview(tenantId));
         all.addAll(detectExchangeNeedsMapping(tenantId));
         all.addAll(detectExchangeUnmappedState(tenantId));
         all.addAll(detectVoidHoldSyncFailed(tenantId));
@@ -375,6 +376,7 @@ public class ExceptionService {
         Map.entry("shopify_edit_conflict/order",               OrderLink.DIRECT),
         Map.entry("return_in_transit_stuck/piece",             OrderLink.NONE),
         Map.entry("return_mismatch/piece",                     OrderLink.NONE),
+        Map.entry("return_needs_review/piece",                 OrderLink.NONE),           // V247: a piece in a closed session
         Map.entry("exchange_needs_mapping/exchange",           OrderLink.NONE),           // carries no order
         Map.entry("exchange_unmapped_state/exchange",          OrderLink.DIRECT),         // exchanges.outbound_order_id
         Map.entry("void_hold_sync_failed/piece",               OrderLink.NONE),
@@ -2244,6 +2246,32 @@ public class ExceptionService {
      * same NOT EXISTS/exception_resolutions suppression pattern as every other
      * detector — no separate persistence for this exception type.
      */
+    /**
+     * V247 (Q2, approved 2026-11-27): an unexpected piece (illegal-state scan — not at return_pending_inspection) was
+     * still undecided when its return session closed; close() marked it 'needs_review'. One alert per item, condition
+     * only: it clears when a manager settles the item — links it to the untracked unit it is, or marks it "Not the real
+     * piece" (the disposition leaves 'needs_review') — or resolves the alert ("nothing to do", exception_resolutions).
+     */
+    private List<Map<String, Object>> detectReturnNeedsReview(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'return_needs_review' AS type, 'MEDIUM' AS severity, 'piece' AS subject_type, " +
+            "       p.id AS piece_id, p.barcode, COALESCE(p.short_code, p.barcode) AS piece_code, " +
+            "       pr.title AS product_title, v.title AS variant_title, p.status::text AS piece_status, " +
+            "       rsi.session_id, rsi.disposition_at AS occurred_at, " +
+            "       'return_needs_review:item:' || rsi.id AS subject_key " +
+            "FROM return_session_items rsi " +
+            "JOIN pieces p ON p.id = rsi.piece_id AND p.tenant_id = rsi.tenant_id " +
+            "JOIN variants v ON v.id = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE rsi.tenant_id = ? AND rsi.disposition = 'needs_review' " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = rsi.tenant_id " +
+            "        AND er.exception_type = 'return_needs_review' " +
+            "        AND er.subject_key = 'return_needs_review:item:' || rsi.id) ",
+            tid);
+    }
+
     private List<Map<String, Object>> detectReturnSessionMismatch(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'return_mismatch' AS type, 'MEDIUM' AS severity, 'piece' AS subject_type, " +
@@ -2838,6 +2866,21 @@ public class ExceptionService {
                 item.put("descriptionAr", "القطعة " + b + " الممسوحة في جلسة إرجاع لم تطابق حالتها المتوقعة");
                 item.put("suggestedAction", "inspect_and_resolve");
                 item.put("actionUrl", "/returns");
+            }
+            case "return_needs_review" -> {
+                String code = str(item, "piece_code");
+                Object vt = item.get("variant_title");
+                String product = str(item, "product_title") + (vt != null ? " / " + vt : "");
+                String session = String.valueOf(item.get("session_id"));
+                String shortSession = session.length() >= 8 ? session.substring(0, 8).toUpperCase() : session;
+                item.put("descriptionEn", "Piece " + code + " (" + product + ") was scanned in return session " + shortSession +
+                    " but wasn't expected back, and the session closed without a decision. Link it to the item it is, " +
+                    "mark it not the real piece, or resolve this if there's nothing to do.");
+                item.put("descriptionAr", "القطعة " + code + " (" + product + ") مُسحت في جلسة المرتجعات " + shortSession +
+                    " دون أن تكون متوقعة، وأُغلقت الجلسة دون قرار. اربطها بالعنصر الذي تمثّله، أو سجّلها ليست القطعة الصحيحة، " +
+                    "أو عالِج هذا التنبيه إذا لم يكن هناك ما يُفعل.");
+                item.put("suggestedAction", "inspect_and_resolve");
+                item.put("actionUrl", "/returns?session=" + session + "&piece=" + str(item, "piece_id"));
             }
             case "return_leg_unscanned" -> {
                 String t = str(item, "tracking_number");

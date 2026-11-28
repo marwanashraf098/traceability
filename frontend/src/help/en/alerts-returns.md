@@ -4,7 +4,7 @@ topic: alerts
 title: Return alerts
 roles: [owner, manager]
 related: [scan-returns, return-to-receive, untracked-returns, portal-requests]
-alerts: [never_received, return_leg_unscanned, return_in_transit_stuck, return_to_receive, request_item_to_receive, return_link_ambiguous, pickup_booking_problem, refund_pending_overdue, return_items_overdue, return_mismatch]
+alerts: [never_received, return_leg_unscanned, return_in_transit_stuck, return_to_receive, request_item_to_receive, return_link_ambiguous, pickup_booking_problem, refund_pending_overdue, return_items_overdue, return_mismatch, return_needs_review]
 screens: [/exceptions, /returns, /exchanges]
 video:
 ---
@@ -49,3 +49,7 @@ Items on a booked or approved request still haven't come back. Check with the co
 ## Return Mismatch
 
 A piece scanned in a return session was marked as not matching what was expected (for example, not the real piece). Inspect it, decide what happens to it, then resolve.
+
+## Return Needs Review
+
+A piece was scanned in a return session but wasn't expected back, and the session closed before anyone decided what it is. Open the session from **Go →**. If the label is the untracked item that came back on that parcel, choose **This is that item**. If it isn't the real piece, choose **Not the real piece**. If there's nothing to do, choose **Nothing to do**.
