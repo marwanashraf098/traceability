@@ -286,7 +286,9 @@ class AnalyticsOutcomesTest {
 
     private static void assertBucketsSumToSold(Map<String, Object> m) {
         long sum = BUCKETS.stream().mapToLong(k -> n(m, k)).sum();
-        assertThat(sum).as("outcome buckets must sum to soldUnits: %s", m).isEqualTo(n(m, "soldUnits"));
+        // Refused units are never sold (SalesAnalyticsService.unitSoldSql, 2026-11-27): they keep their own bucket.
+        assertThat(sum).as("outcome buckets must sum to soldUnits + refusedUnits: %s", m)
+            .isEqualTo(n(m, "soldUnits") + n(m, "refusedUnits"));
     }
 
     // ── outcomes ─────────────────────────────────────────────────────────────
@@ -331,7 +333,7 @@ class AnalyticsOutcomesTest {
 
         Map<String, Object> body = variants(t);
         Map<String, Object> r = row(body, v);
-        assertThat(n(r, "soldUnits")).isEqualTo(23);
+        assertThat(n(r, "soldUnits")).isEqualTo(20);                         // 23 booked − 3 refused
         assertThat(n(r, "deliveredUnits")).isEqualTo(2);
         assertThat(n(r, "refusedUnits")).isEqualTo(3);
         assertThat(n(r, "inTransitUnits")).isEqualTo(3);
