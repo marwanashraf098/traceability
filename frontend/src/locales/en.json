@@ -1726,7 +1726,9 @@
       "nothingToDo": "Nothing to do",
       "nothingToDoNote": "Nothing to do — resolved from the return session summary",
       "dispositionLinked": "{{count}} linked",
-      "dispositionNeedsReview": "{{count}} need review"
+      "dispositionNeedsReview": "{{count}} need review",
+      "needsDecisionCount": "{{count}} item needs a decision",
+      "needsDecisionCount_other": "{{count}} items need a decision"
     },
     "openSession": {
       "title": "Return session",

@@ -1399,7 +1399,10 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
               ? [
                   parcels.length > 0 ? t('returns.openSession.footer.parcels', { count: parcels.length }) : null,
                   scannedCount > 0 ? t('returns.openSession.footer.itemsScanned', { count: scannedCount }) : null,
-                  t('returns.openSession.footer.nothingLeft'),
+                  // V246: an unexpected row still waiting for a decision doesn't block Close, but it isn't "nothing left".
+                  reviewOnClose.length > 0
+                    ? t('returns.link.needsDecisionCount', { count: reviewOnClose.length })
+                    : t('returns.openSession.footer.nothingLeft'),
                 ].filter(Boolean).join(' · ')
               : t('returns.openSession.footer.blocked')}
           </p>

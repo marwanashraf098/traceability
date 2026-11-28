@@ -193,6 +193,16 @@ describe('Close', () => {
     expect(screen.getByTestId('close-session-button')).not.toBeDisabled()
     expect(screen.queryByTestId('close-blocked-callout')).toBeNull()
     expect(screen.getByTestId('close-review-note')).toHaveTextContent('1 unexpected item will go to a manager for review when you close.')
+    // The footer never says "nothing left to decide" while an unexpected row still waits for a decision.
+    expect(screen.getByTestId('session-footer-summary')).toHaveTextContent('1 item needs a decision')
+    expect(screen.getByTestId('session-footer-summary')).not.toHaveTextContent('nothing left to decide')
+  })
+
+  test('the footer pluralises the count of rows still needing a decision', async () => {
+    detail = sessionDetail([unexpectedItem(), unexpectedItem({ id: 'it-2', piece_id: 'piece-2', barcode: 'P2' })], [parcel([UNIT])])
+    await openSession()
+    await screen.findByTestId('item-piece-2')
+    expect(screen.getByTestId('session-footer-summary')).toHaveTextContent('2 items need a decision')
   })
 
   test('a legal pending row (return_pending_inspection) still blocks Close', async () => {
