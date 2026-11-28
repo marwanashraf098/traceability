@@ -22,6 +22,7 @@
     "autoApprove" : false,
     "pickupBooking" : true,
     "exchangesEnabled" : true,
+    "replacementReasons" : [ "damaged", "wrong_item" ],
     "font" : "cairo",
     "requirePhotos" : false
   },
@@ -49,7 +50,10 @@
         "title" : "Sand / L",
         "options" : [ "Sand", "L" ],
         "inStock" : true
-      } ]
+      } ],
+      "sameItem" : {
+        "inStock" : false
+      }
     } ],
     "pickup" : {
       "cityId" : "FceDyHXwpSYYF9zGW",

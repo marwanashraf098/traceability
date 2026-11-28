@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Defect replacement (V246, 2026-11-27) — THE rule for "Replace with the same item" (never re-derive it):
+ * Defect replacement (V247, 2026-11-27) — THE rule for "Replace with the same item" (never re-derive it):
  * an exchange whose replacement is the SAME variant as the item coming back is allowed only for a defect reason —
  * {@link #DEFECT_REASONS}, a fixed list in code (Marawan Q1: damaged + wrong_item; not not_as_pictured, and never the
  * per-store merchant-fault list). Such a request is stored with {@code return_requests.exchange_kind = 'replacement'};

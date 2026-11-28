@@ -171,7 +171,7 @@ public class ProductExtrasAnalyticsService {
             ps.setTimestamp(i++, curStart);          // order_period
             ps.setObject(i++, tid);                  // exch: requests
             ps.setObject(i++, tid);                  // exch: dashboard exchanges
-            ps.setObject(i++, tid);                  // repl_v: defect replacements (V246)
+            ps.setObject(i++, tid);                  // repl_v: defect replacements (V247)
             ps.setTimestamp(i++, curStart);          // per_variant
             ps.setTimestamp(i++, curStart);          // per_product
             ps.setTimestamp(i++, curStart);          // order_variants
@@ -217,7 +217,7 @@ public class ProductExtrasAnalyticsService {
             ps.setTimestamp(i++, start);
             ps.setObject(i++, tid);
             ps.setObject(i++, tid);
-            ps.setObject(i++, tid);                           // repl_v (V246)
+            ps.setObject(i++, tid);                           // repl_v (V247)
             ps.setTimestamp(i++, start);
             ps.setTimestamp(i++, start);
             ps.setTimestamp(i++, start);
@@ -241,7 +241,7 @@ public class ProductExtrasAnalyticsService {
         return m;
     }
 
-    /** V246: {@code exchanged} = swaps only; {@code replaced} = defect replacements (the same item again), apart. */
+    /** V247: {@code exchanged} = swaps only; {@code replaced} = defect replacements (the same item again), apart. */
     public record VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
                       long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
                       boolean hasSizeOption, @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT) long replaced) {

@@ -439,7 +439,7 @@ public class StockAnalyticsService {
             BigDecimal age = r[8] == null ? null : ((BigDecimal) r[8]).setScale(1, RoundingMode.HALF_UP);
             ProductExtrasAnalyticsService.VariantRow ret = returns.get(id);
             long returned = ret == null ? 0 : ret.returned(), exchanged = ret == null ? 0 : ret.exchanged();
-            long replaced = ret == null ? 0 : ret.replaced();   // V246: defect replacements, counted apart from swaps
+            long replaced = ret == null ? 0 : ret.replaced();   // V247: defect replacements, counted apart from swaps
             long delivered90 = ret == null ? 0 : ret.deliveredUnits();
             boolean runningLow = delivered > 0 && cover.compareTo(RUNNING_LOW_DAYS) <= 0;
             boolean dead = stock > 0 && (lastSold == null || lastSold.isBefore(deadBefore));

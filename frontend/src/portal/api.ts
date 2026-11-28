@@ -16,7 +16,7 @@ export interface PortalConfig {
   pickupBooking: boolean
   /** Step 5b — present (true) only when the store offers size/colour exchanges. */
   exchangesEnabled?: boolean
-  /** V246 — the reasons that allow "Replace with the same item" (present only with exchanges). */
+  /** V247 — the reasons that allow "Replace with the same item" (present only with exchanges). */
   replacementReasons?: string[]
   /** P1 — the store's portal font (both languages); absent from older backends → the default. */
   font?: string
@@ -59,7 +59,7 @@ export interface LookupLine {
   optionAxes?: OptionAxis[]
   currentOptions?: string[]
   exchangeOptions?: ExchangeOption[]
-  /** V246 — the same variant again (a defect replacement): present for an active product when exchanges are on. */
+  /** V247 — the same variant again (a defect replacement): present for an active product when exchanges are on. */
   sameItem?: { inStock: boolean }
 }
 

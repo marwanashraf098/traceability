@@ -116,7 +116,7 @@ public class OrderController {
         // did; the highest-priority Needs attention reason group (ExceptionService.REASON_GROUP) — absent with no alert.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) ReturnStateSummary returnState,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) AttentionGroup attentionGroup,
-        // V246: the replacement order of a defect replacement (the same item again) — true only then, absent otherwise
+        // V247: the replacement order of a defect replacement (the same item again) — true only then, absent otherwise
         // (every other row is byte-identical); the list's "Replacement" badge in place of "Exchange".
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean isReplacement) {
 
@@ -251,11 +251,11 @@ public class OrderController {
         // before, and the drawer reads "absent" as Bosta.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
         OrderCourier courier,
-        // V246: the replacement order of a defect replacement — true only then, absent otherwise (byte-identical).
+        // V247: the replacement order of a defect replacement — true only then, absent otherwise (byte-identical).
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
         Boolean isReplacement) {
 
-        /** Before V246 — no replacement flag. */
+        /** Before V247 — no replacement flag. */
         public OrderDetail(String id, String number, String customerName, String customerPhone,
                            Object address, String paymentMethod, BigDecimal codAmount,
                            String status, boolean onHold, String holdReason,
@@ -904,7 +904,7 @@ public class OrderController {
 
         // Return state per row — one batched read for the page (OrderReturnState.ORDER_SUMMARY_SQL).
         Map<String, ReturnStateSummary> returnStates = tx.execute(txs -> returnStates(items));
-        // V246: which rows are a defect replacement's order — one batched read for the page (ReplacementRule).
+        // V247: which rows are a defect replacement's order — one batched read for the page (ReplacementRule).
         Set<String> replacementOrders = tx.execute(txs -> replacementOrders(items.stream().map(OrderSummary::id).toList()));
         List<OrderSummary> rows = items.stream().map(i -> i.withReturnState(returnStates.get(i.id())))
             .map(i -> replacementOrders.contains(i.id()) ? i.withReplacement(true) : i).toList();
@@ -998,7 +998,7 @@ public class OrderController {
         return null;
     }
 
-    /** V246 — of {@code ids}, the orders that are a defect replacement's replacement order (ReplacementRule). */
+    /** V247 — of {@code ids}, the orders that are a defect replacement's replacement order (ReplacementRule). */
     private Set<String> replacementOrders(List<String> ids) {
         if (ids.isEmpty()) return Set.of();
         UUID tenantId = TenantContext.require();

@@ -739,7 +739,7 @@ function DrawerContent({
   )
 }
 
-/** Step 5b — the "Exchange" type pill (drawer header and Requests list). V246: "Replacement (same item)". */
+/** Step 5b — the "Exchange" type pill (drawer header and Requests list). V247: "Replacement (same item)". */
 export function ExchangePill({ replacement = false }: { replacement?: boolean } = {}) {
   const { t } = useTranslation()
   return (

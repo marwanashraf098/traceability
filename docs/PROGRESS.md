@@ -5,20 +5,20 @@
 ## Current state
 
 **Defect replacement — "Replace with the same item" in the returns portal (S0–S4 + S6, 2026-11-27; branch
-`feat/defect-replacement` off origin/main d7b23d2a, worktree ../trace-replacement; V246; NOT merged, NOT deployed).**
+`feat/defect-replacement` off origin/main d7b23d2a, worktree ../trace-replacement; V247; NOT merged, NOT deployed).**
 A customer whose item arrived damaged / faulty or wrong can ask for the SAME variant again (same size, same colour).
 - **THE rule — `portal.ReplacementRule`:** the same variant is allowed only for a defect reason, a fixed list in code
   (`DEFECT_REASONS` = damaged, wrong_item — decision Q1; never not_as_pictured, never the per-store merchant-fault list).
   `PortalService.validExchange` refuses the same variant for any other reason (PortalExchangeTest:203's wrong_size case
-  is unchanged); quote refuses it too. Stored as `return_requests.exchange_kind = 'replacement'` (V246; every other
+  is unchanged); quote refuses it too. Stored as `return_requests.exchange_kind = 'replacement'` (V247; every other
   exchange — and every existing row — is 'swap'), event metadata `exchange_kind`. Everything after submit (approve,
   Bosta type 30, other couriers G4b, reservation, Step 5a −1, S5b return sync, Scan returns) is the exchange path,
   unchanged — only words differ.
-- **V246:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
+- **V247:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
   `exchange_kind = 'swap' OR type = 'exchange'` (switchToRefundAndApprove resets it to 'swap' in the same UPDATE);
   `tenants.portal_replacement_fees` boolean NOT NULL DEFAULT false. Existing RLS + V1 table grants cover both (app_user
   read / write tested). No orders column → no view re-create. **Count gates (MigrationSmokeTest 244 → 245,
-  NotTracedBackfillTest 189 → 190 + "V246") NOT edited — waiting for approval; they fail until then.**
+  NotTracedBackfillTest 189 → 190 + "V247") NOT edited — waiting for approval; they fail until then.**
 - **Pricing (Q2):** a replacement NEVER has a price difference (no charge, no refund) under any setting —
   `PortalService.price` returns before `ExchangePricing.difference`. Fee only with "Charge fees on defect replacements"
   ON (Settings › Returns portal › Customer fees, owner-only, `PUT /tenant/portal-settings/customer-fees/replacement-fees

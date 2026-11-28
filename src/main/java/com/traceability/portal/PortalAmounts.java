@@ -40,7 +40,7 @@ public final class PortalAmounts {
     /** The fee terms that apply: the rule's mode / amounts, or an area override's. {@code source}: rule | city | district. */
     public record Terms(String kind, String mode, BigDecimal amount, BigDecimal percent, BigDecimal min, BigDecimal max,
                         boolean waiveMerchantFault, String source, String cityId, String districtId) {
-        /** V246 — the same terms with the merchant-fault waiver off (a defect replacement charged its fee). */
+        /** V247 — the same terms with the merchant-fault waiver off (a defect replacement charged its fee). */
         public Terms withoutWaiver() {
             return new Terms(kind, mode, amount, percent, min, max, false, source, cityId, districtId);
         }

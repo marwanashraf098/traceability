@@ -38,7 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Defect replacement (V246, 2026-11-27) — "Replace with the same item": an exchange for the SAME variant, only for a
+ * Defect replacement (V247, 2026-11-27) — "Replace with the same item": an exchange for the SAME variant, only for a
  * defect reason (ReplacementRule: damaged, wrong_item). Fixtures as PortalExchangePricingTest (another courier, fees
  * flag on; the customer bought Linen Shirt Sand / M for EGP 900).
  *

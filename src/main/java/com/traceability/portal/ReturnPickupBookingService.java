@@ -651,7 +651,7 @@ public class ReturnPickupBookingService {
         String product; String originalVariant; String replacementVariant; UUID replacementVariantId;
         /** F3: the replacement's OWN product title (a different-product exchange goes out as that product). */
         String replacementProduct;
-        /** V246: a defect replacement (the same item again) — the courier's two descriptions say which is which. */
+        /** V247: a defect replacement (the same item again) — the courier's two descriptions say which is which. */
         boolean replacement;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
@@ -887,7 +887,7 @@ public class ReturnPickupBookingService {
     }
 
     /**
-     * V246: a defect replacement sends the same product / variant both ways, so the courier is told which is which —
+     * V247: a defect replacement sends the same product / variant both ways, so the courier is told which is which —
      * "RR-XXXXXX: Replacement – new: {product} / {variant}" goes out.
      */
     public static String exchangeOutboundDescription(String reference, String product, String replacementVariant,
@@ -900,12 +900,12 @@ public class ReturnPickupBookingService {
         return exchangeReturnDescription(product, originalVariant, false);
     }
 
-    /** V246: a defect replacement's returning item — "Defective – return: {product} / {variant}". */
+    /** V247: a defect replacement's returning item — "Defective – return: {product} / {variant}". */
     public static String exchangeReturnDescription(String product, String originalVariant, boolean replacement) {
         return truncate((replacement ? DEFECTIVE_RETURN : "") + titled(product, originalVariant));
     }
 
-    /** V246 — the courier's words on a defect replacement's two descriptions. */
+    /** V247 — the courier's words on a defect replacement's two descriptions. */
     static final String REPLACEMENT_NEW = "Replacement \u2013 new: ";
     static final String DEFECTIVE_RETURN = "Defective \u2013 return: ";
 

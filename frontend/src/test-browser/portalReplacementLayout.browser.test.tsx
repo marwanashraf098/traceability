@@ -15,7 +15,7 @@ import { ToastProvider } from '../components/ui'
 import { stubFetchWithShellDefaults } from '../test/mockShellFetch'
 import ExchangesRefunds from '../pages/ExchangesRefunds'
 
-// Defect replacement (V246) in a real browser (Chromium + WebKit), phone 390, EN/LTR and AR/RTL: the portal's
+// Defect replacement (V247) in a real browser (Chromium + WebKit), phone 390, EN/LTR and AR/RTL: the portal's
 // "Replace with the same item" (in stock and sold out), the review step and the sent screen, and the merchant's
 // "Replacement (same item)" type tag — nothing scrolls sideways and the same-item card stays inside the page.
 // Set VITE_PORTAL_SHOTS=<dir> to also save a screenshot of each state.
