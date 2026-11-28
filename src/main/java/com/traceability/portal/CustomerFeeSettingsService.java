@@ -61,7 +61,7 @@ public class CustomerFeeSettingsService {
     }
 
     /**
-     * {@code replacementFees} (V247): "Charge fees on defect replacements" — on: a replacement (the same item again)
+     * {@code replacementFees} (V248): "Charge fees on defect replacements" — on: a replacement (the same item again)
      * pays the exchange fee, without the merchant-fault waiver; off (default): it is free. Never a price difference.
      */
     public record Settings(boolean visible, Map<String, Rule> rules, List<String> merchantFaultReasons,
@@ -212,7 +212,7 @@ public class CustomerFeeSettingsService {
     }
 
     /**
-     * V247 — "Charge fees on defect replacements". Owner-only (controller); null → 400. One audit row
+     * V248 — "Charge fees on defect replacements". Owner-only (controller); null → 400. One audit row
      * ({@code portal_replacement_fees_update}, from / to) only on a real change. Already-frozen requests never change.
      */
     @Transactional

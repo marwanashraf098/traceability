@@ -66,7 +66,7 @@ export interface Draft {
   rules: Record<FeeKind, RuleDraft>
   waiver: boolean
   reasons: string[]
-  /** V247 — "Charge fees on defect replacements" (absent = off). */
+  /** V248 — "Charge fees on defect replacements" (absent = off). */
   replacementFees?: boolean
   /** Products whose "can't be returned" flag is being changed: variant id → the row and the new value. */
   variants: Record<string, { row: PortalVariantRow; value: boolean }>
@@ -180,7 +180,7 @@ export function feesDraftOf(fees: CustomerFeeSettings | null): Pick<Draft, 'pric
   }
 }
 
-/** V247 — the defect-replacement fee switch differs from what is stored. */
+/** V248 — the defect-replacement fee switch differs from what is stored. */
 export function replacementFeesEdited(fees: CustomerFeeSettings, d: Draft): boolean {
   return !!d.replacementFees !== !!fees.replacementFees
 }

@@ -6,7 +6,7 @@ import PortalApp, { replaceOnly } from '../portal/PortalApp'
 import { createPortalI18n } from '../portal/i18n'
 import type { LookupLine, LookupResult, PortalConfig } from '../portal/api'
 
-// Defect replacement (V247) — "Replace with the same item" in the returns portal.
+// Defect replacement (V248) — "Replace with the same item" in the returns portal.
 //   defect     — after "Damaged or faulty": the same-item option; chosen → review "→ Replacement (same item)", the
 //                submission's replacement is the customer's own variant, "Replacement requested"
 //   other      — after "Wrong size": no same-item option (the size picker as before)

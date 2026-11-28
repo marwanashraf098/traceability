@@ -1,4 +1,4 @@
--- V247 — Returns portal: a defect replacement (2026-11-27). A customer whose item is damaged / faulty or who received
+-- V248 — Returns portal: a defect replacement (2026-11-27). A customer whose item is damaged / faulty or who received
 -- the wrong item may ask for the SAME variant again (same size, same colour) — a "Replacement (same item)".
 --
 -- 1. return_requests.exchange_kind — 'swap' (every exchange so far: another size / colour / product) or 'replacement'

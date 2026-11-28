@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 /**
  * Step 5b — what a delivered line could be exchanged for: the OTHER variants of the same
  * product, each with its option values and whether it's in stock (available > 0 from
- * {@link VariantStockService}, the one stock derivation — no new stock term). V247: plus
+ * {@link VariantStockService}, the one stock derivation — no new stock term). V248: plus
  * {@code sameItem {inStock}} — the same variant again, a defect replacement ({@link ReplacementRule}).
  *
  * Option values: Traced stores no option columns. When the variant was ingested from a Shopify
@@ -73,7 +73,7 @@ public class ExchangeOptions {
             options.add(m);
         }
         out.put("exchangeOptions", options);
-        // V247: "Replace with the same item" — the customer's own variant, for a defect reason only (ReplacementRule;
+        // V248: "Replace with the same item" — the customer's own variant, for a defect reason only (ReplacementRule;
         // the portal shows it after such a reason, submit re-checks it). Only an active product, like every option.
         if (offerable) {
             VariantStockService.VariantStock own = stock.get(variantId);

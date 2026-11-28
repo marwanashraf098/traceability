@@ -76,7 +76,7 @@ public final class ShopifyReturnSyncRules {
     }
 
     /**
-     * As above; V247: a defect replacement (the same item again) says "replacement (same item): {label}" in place of
+     * As above; V248: a defect replacement (the same item again) says "replacement (same item): {label}" in place of
      * "exchanged for {label}" — its line is the very variant it is replaced with. Same limits and cutting order.
      */
     public static String exchangeNote(String reference, String replacementLabel, java.math.BigDecimal collect,

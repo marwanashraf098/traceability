@@ -461,7 +461,7 @@ function WaiverEditor({ saved, draft, onChange, owner, edited, errors }: FeesEdi
   )
 }
 
-// ── defect replacements (V247) ───────────────────────────────────────────────────
+// ── defect replacements (V248) ───────────────────────────────────────────────────
 
 /**
  * "Charge fees on defect replacements" — a replacement (the same item again, for a damaged or wrong item) is free

@@ -9,7 +9,7 @@ import type { CustomerFeeSettings, PortalSettings, ReturnCase } from '../api'
 import { applyDone, buildSavePlan, draftOf, editedKeys, SavedState } from '../pages/settings/portal/savePlan'
 import { REASON_CODES } from '../pages/settings/portal/usePortalSettingsDraft'
 
-// Defect replacement (V247) — the merchant side.
+// Defect replacement (V248) — the merchant side.
 //   list      — Returns & exchanges: a replacement's type tag reads "Replacement (same item)" (EN + AR); a swap "Exchange"
 //   pill      — the request drawer's pill
 //   settings  — "Charge fees on defect replacements": edited key, its own save step (owner only), saved state applied

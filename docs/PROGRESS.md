@@ -5,21 +5,21 @@
 ## Current state
 
 **Defect replacement — "Replace with the same item" in the returns portal (S0–S4 + S6, 2026-11-27; branch
-`feat/defect-replacement` rebased on origin/main fa5fc468 (shipping-cost's V246 merged), worktree ../trace-replacement;
-V247 — renumbered from V246 (feat/returns-link-unit's V246 must renumber past V247); PR open, NOT merged, NOT deployed).**
+`feat/defect-replacement` rebased on origin/main 6a1a3d4a (returns-link-unit's V247 merged), worktree ../trace-replacement;
+V248 — renumbered V246 → V247 → V248 (main took V246 shipping-cost, V247 returns-link-unit); PR open, NOT merged, NOT deployed).**
 A customer whose item arrived damaged / faulty or wrong can ask for the SAME variant again (same size, same colour).
 - **THE rule — `portal.ReplacementRule`:** the same variant is allowed only for a defect reason, a fixed list in code
   (`DEFECT_REASONS` = damaged, wrong_item — decision Q1; never not_as_pictured, never the per-store merchant-fault list).
   `PortalService.validExchange` refuses the same variant for any other reason (PortalExchangeTest:203's wrong_size case
-  is unchanged); quote refuses it too. Stored as `return_requests.exchange_kind = 'replacement'` (V247; every other
+  is unchanged); quote refuses it too. Stored as `return_requests.exchange_kind = 'replacement'` (V248; every other
   exchange — and every existing row — is 'swap'), event metadata `exchange_kind`. Everything after submit (approve,
   Bosta type 30, other couriers G4b, reservation, Step 5a −1, S5b return sync, Scan returns) is the exchange path,
   unchanged — only words differ.
-- **V247:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
+- **V248:** `return_requests.exchange_kind` text NOT NULL DEFAULT 'swap', CHECK in (swap, replacement), CHECK
   `exchange_kind = 'swap' OR type = 'exchange'` (switchToRefundAndApprove resets it to 'swap' in the same UPDATE);
   `tenants.portal_replacement_fees` boolean NOT NULL DEFAULT false. Existing RLS + V1 table grants cover both (app_user
-  read / write tested). No orders column → no view re-create. Count gates (approved 2026-11-28): MigrationSmokeTest 246 files
-  (V1–V247), NotTracedBackfillTest 191 ("+ V246 + V247").
+  read / write tested). No orders column → no view re-create. Count gates (approved 2026-11-28): MigrationSmokeTest 247 files
+  (V1–V248), NotTracedBackfillTest 192 ("+ V246 + V247 + V248").
 - **Pricing (Q2):** a replacement NEVER has a price difference (no charge, no refund) under any setting —
   `PortalService.price` returns before `ExchangePricing.difference`. Fee only with "Charge fees on defect replacements"
   ON (Settings › Returns portal › Customer fees, owner-only, `PUT /tenant/portal-settings/customer-fees/replacement-fees

@@ -135,7 +135,7 @@ export function exchangeable(line: LookupLine): boolean {
 }
 
 /**
- * V247 — a line that can only be replaced with the same item (no other size or colour, e.g. a one-size product): it
+ * V248 — a line that can only be replaced with the same item (no other size or colour, e.g. a one-size product): it
  * can be chosen in exchange mode, but only for a defect reason.
  */
 export function replaceOnly(line: LookupLine, replacementReasons: string[]): boolean {
@@ -206,7 +206,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [exchangeReason, setExchangeReason] = useState('')
   const [exchangeValues, setExchangeValues] = useState<string[]>([])
   const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
-  // V247 — "Replace with the same item" chosen (only counts for a defect reason with the item in stock).
+  // V248 — "Replace with the same item" chosen (only counts for a defect reason with the item in stock).
   const [sameItemChosen, setSameItemChosen] = useState(false)
   // F3 — a replacement from ANOTHER product (the catalogue), when the store allows it; null = none chosen.
   const [otherTarget, setOtherTarget] = useState<OtherTarget | null>(null)
@@ -376,7 +376,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const exchangeMode = exchangesOn && mode === 'exchange'
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
-  // V247 — the same item again: offered only after a defect reason (the backend's ReplacementRule decides too).
+  // V248 — the same item again: offered only after a defect reason (the backend's ReplacementRule decides too).
   const replacementReasons = config?.replacementReasons ?? []
   const sameItemOffer = exchangeMode && replacementReasons.includes(exchangeReason) ? exchangeLine?.sameItem ?? null : null
   const replacementChosen = sameItemChosen && !!sameItemOffer?.inStock && !!exchangeLine
@@ -1619,7 +1619,7 @@ function Header({
 }
 
 /**
- * V247 — "Replace with the same item": the customer's own size and colour again, for a damaged or wrong item. Out of
+ * V248 — "Replace with the same item": the customer's own size and colour again, for a damaged or wrong item. Out of
  * stock → disabled with the reason; the customer can still pick another size / colour / product or go back for a refund.
  */
 function SameItemChoice({ line, inStock, chosen, onChoose }: {

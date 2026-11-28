@@ -94,7 +94,7 @@ public class ReturnRequestService {
                 row.put("reasonCodes", codes == null ? List.of() : Arrays.asList((String[]) codes.getArray()));
                 row.put("status", rs.getString("status"));
                 row.put("type", rs.getString("type"));
-                // V247: a defect replacement (the same item again) — key present only then.
+                // V248: a defect replacement (the same item again) — key present only then.
                 if (ReplacementRule.KIND_REPLACEMENT.equals(rs.getString("exchange_kind"))) row.put("exchangeKind", ReplacementRule.KIND_REPLACEMENT);
                 row.put("bookingStatus", rs.getString("booking_status"));
                 row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
@@ -224,7 +224,7 @@ public class ReturnRequestService {
         d.put("orderNumber", r.get("order_number"));
         d.put("customerName", r.get("customer_name"));
         d.put("type", r.get("type"));
-        // V247: a defect replacement (the same item again) — key present only then.
+        // V248: a defect replacement (the same item again) — key present only then.
         if (ReplacementRule.KIND_REPLACEMENT.equals(r.get("exchange_kind"))) d.put("exchangeKind", ReplacementRule.KIND_REPLACEMENT);
         d.put("status", r.get("status"));
         d.put("email", r.get("customer_email"));
@@ -526,7 +526,7 @@ public class ReturnRequestService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Only a requested exchange whose customer agreed to a refund can be switched.");
         }
-        // V247: a replacement switched to a refund is a plain refund (the CHECK: only an exchange is a replacement).
+        // V248: a replacement switched to a refund is a plain refund (the CHECK: only an exchange is a replacement).
         jdbc.update("UPDATE return_requests SET type = 'refund', exchange_kind = 'swap' WHERE id = ? AND tenant_id = ?", id, tenantId);
         jdbc.update("UPDATE return_request_items SET replacement_variant_id = NULL WHERE request_id = ? AND tenant_id = ?",
             id, tenantId);

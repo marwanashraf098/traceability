@@ -281,7 +281,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] EX.4 [S] Settings switch for `portal_exchanges_enabled` (Step 5c)
 - [x] EX.5 [M] Step 5c: approved exchange → one Bosta EXCHANGE trip (Mode B amendment #3) + replacement in Pick & Pack; request finishes 'exchanged'
 - [x] EX.6 [S] Merchant "Change area" for exchanges offers and accepts only districts that are pickup- AND drop-off-available (Step 5c)
-- [x] EX.7 [M] Defect replacement: portal "Replace with the same item" for damaged / wrong_item (V247 exchange_kind), never a price difference, fee only with "Charge fees on defect replacements", labels / Bosta / Shopify wording / analytics apart (S0–S4)
+- [x] EX.7 [M] Defect replacement: portal "Replace with the same item" for damaged / wrong_item (V248 exchange_kind), never a price difference, fee only with "Charge fees on defect replacements", labels / Bosta / Shopify wording / analytics apart (S0–S4)
 - [x] EX.8 [S] Q5: an exchange with an unknown paid price charges no difference; quote + drawer say so
 - [ ] EX.9 [S] Defect replacement S5: returned piece grading (damaged → Damaged primary, Restock confirm) + courier-swap warning
 - [x] UT.1 [M] Step 6a: portal returns/exchanges for untracked order lines — unit-bound request items (V114), per-item Arrived (drawer + session) with undo, request_item_to_receive, canonical rule clause (backend)

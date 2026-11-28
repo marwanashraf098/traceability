@@ -465,7 +465,7 @@ public class ReturnCaseService {
     }
 
     /**
-     * V247 — a defect replacement (the same item again) carries {@code exchangeKind: 'replacement'}, on those rows only
+     * V248 — a defect replacement (the same item again) carries {@code exchangeKind: 'replacement'}, on those rows only
      * (a Java step after the shared case query, which is unchanged; every other row is byte-identical).
      */
     private void addReplacementKind(UUID tenantId, List<Map<String, Object>> items) {

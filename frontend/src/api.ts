@@ -199,7 +199,7 @@ export interface OrderSummary {
   slaBreached: boolean | null
   notTracedAt: string | null
   isExchange: boolean
-  /** V247 — true only on a defect replacement's replacement order. */
+  /** V248 — true only on a defect replacement's replacement order. */
   isReplacement?: boolean
   derivedStatus: DerivedOrderStatus
   shippingBadge: OrderShippingBadge | null
@@ -425,7 +425,7 @@ export interface OrderDetail {
   bostaLinkStatus: string | null
   notTracedAt: string | null
   isExchange: boolean
-  /** V247 — true only on a defect replacement's replacement order. */
+  /** V248 — true only on a defect replacement's replacement order. */
   isReplacement?: boolean
   derivedStatus: DerivedOrderStatus
   // Orders-rebuild pass (a), drawer "View in Shopify" — null whenever the backend
@@ -3736,7 +3736,7 @@ export interface ReturnCase {
   caseType: 'A' | 'B' | 'C' | 'S'
   id: string
   kind: 'refund' | 'exchange'
-  /** V247 — present only on a defect replacement (the same item again), case A. */
+  /** V248 — present only on a defect replacement (the same item again), case A. */
   exchangeKind?: 'replacement'
   /** RR reference (A) or Bosta tracking number (B, C). */
   reference: string
@@ -3836,7 +3836,7 @@ export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous'
 
 export interface ReturnRequestRow {
   id: string
-  /** V247 — present only on a defect replacement (the same item again). */
+  /** V248 — present only on a defect replacement (the same item again). */
   exchangeKind?: 'replacement'
   reference: string
   orderNumber: string
@@ -4012,7 +4012,7 @@ export interface RequestAmounts {
 export interface ReturnRequestDetail {
   /** F2 — absent when the request has no fee. */
   amounts?: RequestAmounts
-  /** V247 — present only on a defect replacement (the same item again). */
+  /** V248 — present only on a defect replacement (the same item again). */
   exchangeKind?: 'replacement'
   id: string
   reference: string
@@ -4326,7 +4326,7 @@ export interface CustomerFeeSettings {
   merchantFaultReasons: string[]
   overrides: FeeAreaOverride[]
   exchangePricing: ExchangePricing
-  /** V247 — "Charge fees on defect replacements": a replacement (the same item again) pays the exchange fee. */
+  /** V248 — "Charge fees on defect replacements": a replacement (the same item again) pays the exchange fee. */
   replacementFees?: boolean
 }
 
@@ -4353,7 +4353,7 @@ export function saveMerchantFaultReasons(reasons: string[]) {
   })
 }
 
-/** V247 — owner only; one audit row per real change. */
+/** V248 — owner only; one audit row per real change. */
 export function saveReplacementFees(charge: boolean) {
   return transferCommandRequest<CustomerFeeSettings>(`${CUSTOMER_FEES}/replacement-fees`, {
     method: 'PUT', body: JSON.stringify({ charge }),
