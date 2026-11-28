@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Analytics slices 4–6 (approved 2026-11-27).
- * Slice 4 — shipping: orders.shipping_charged (V247, Shopify's current shipping price after shipping discounts
+ * Slice 4 — shipping: orders.shipping_charged (V246, Shopify's current shipping price after shipping discounts
  * and refunds) makes Order finances' Total = lines + shipping (prepaid net and COD net both agree with it) and is
  * shipping income in Profit (delivered orders only).
  * Slice 5 — CancelledOrders: a cancelled order is left out only when cancelled BEFORE Bosta picked it up; a

@@ -28,7 +28,7 @@ import static com.traceability.analytics.AnalyticsSql.rate;
  *                  never of its internal EXC- order (never a sale) — counted once (2026-11-12); a trip with
  *                  no original found is on no sold order, as before.
  *   shipping income (slice 4, decision (b), 2026-11-27) = the shipping a DELIVERED order's customer paid
- *                  (orders.shipping_charged, V247 — Shopify's current shipping price, after shipping
+ *                  (orders.shipping_charged, V246 — Shopify's current shipping price, after shipping
  *                  discounts and refunds; unknown counts nothing), split across the order's lines by line
  *                  value like the fees. Undelivered orders bring none (nothing was collected).
  * Gross margin = (realized − COGS) ÷ realized, costed lines (product only); contribution profit =

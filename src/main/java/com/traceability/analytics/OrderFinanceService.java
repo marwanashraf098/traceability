@@ -70,7 +70,7 @@ public class OrderFinanceService {
 
     /**
      * total = lines (after discounts, the booked value) + shipping (slice 4, 2026-11-27): what the customer
-     * was charged. lines = the booked value alone; shipping = orders.shipping_charged (V247 — Shopify's
+     * was charged. lines = the booked value alone; shipping = orders.shipping_charged (V246 — Shopify's
      * current shipping price, after shipping discounts and refunds), null when Shopify's order carries none
      * ("shipping unknown": total = lines then).
      */

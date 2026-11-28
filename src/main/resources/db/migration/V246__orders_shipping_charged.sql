@@ -1,4 +1,4 @@
--- V247 — Analytics slice 4 (approved 2026-11-27, decision (a)): the shipping the customer actually paid.
+-- V246 — Analytics slice 4 (approved 2026-11-27, decision (a)): the shipping the customer actually paid.
 --
 -- orders.shipping_charged = Shopify's current_shipping_price_set (shop money) — the shipping price after
 -- shipping discounts, edits and refunds (prod 2026-11-27: on 62 of the 68 non-cancelled orders with a

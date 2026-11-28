@@ -109,7 +109,7 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V247 must execute (V38 was never used; V246 is reserved for another branch — 245 files)")
+                .as("all migrations V1–V246 must execute (V38 was never used — 245 files, not 246)")
                 .isEqualTo(245);
 
         try (Connection conn = DriverManager.getConnection(
